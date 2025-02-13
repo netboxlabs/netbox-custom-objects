@@ -3,6 +3,7 @@ import jsonschema
 from django.db import models
 from django.core.exceptions import ValidationError
 from django.db.models.base import DEFERRED
+from django.urls import reverse
 from netbox.models import NetBoxModel
 
 # Define JSON Schema for validation
@@ -30,35 +31,38 @@ class ServiceMappingType(NetBoxModel):
     slug = models.SlugField(max_length=100, unique=True)
     version = models.CharField(max_length=10, unique=True)
     description = models.TextField(blank=True)
-    schema = models.JSONField()
+    schema = models.JSONField(blank=True, default=dict)
 
     def __str__(self):
         return self.name
+
+    def get_absolute_url(self):
+        return reverse('plugins:netbox_service_mappings:servicemappingtype', args=[self.pk])
 
 
 class ServiceMapping(NetBoxModel):
     type = models.ForeignKey(ServiceMappingType, on_delete=models.CASCADE, related_name="mappings")
     name = models.CharField(max_length=100, unique=True)
-    data = models.JSONField()
+    data = models.JSONField(blank=True, default=dict)
 
-    def __init__(self, *args, **kwargs):
-        cls = self.__class__
-        opts = self._meta
-        _setattr = setattr
-        _DEFERRED = DEFERRED
-
-        # fields_iter = iter(opts.concrete_fields)
-        # for val, field in zip(args, fields_iter):
-        #     print(val, field)
-        #     if val is _DEFERRED:
-        #         continue
-        #     _setattr(self, field.attname, val)
-        for field_spec in ELEMENTS_SCHEMA:
-            print(field_spec)
-            if field_spec["type"] == "string":
-                field = models.CharField(max_length=field_spec["max_length"], choices=field_spec["choices"])
-                _setattr(self, field_spec["name"], field)
-        super().__init__()
+    # def __init__(self, *args, **kwargs):
+    #     cls = self.__class__
+    #     opts = self._meta
+    #     _setattr = setattr
+    #     _DEFERRED = DEFERRED
+    #
+    #     # fields_iter = iter(opts.concrete_fields)
+    #     # for val, field in zip(args, fields_iter):
+    #     #     print(val, field)
+    #     #     if val is _DEFERRED:
+    #     #         continue
+    #     #     _setattr(self, field.attname, val)
+    #     for field_spec in ELEMENTS_SCHEMA:
+    #         print(field_spec)
+    #         if field_spec["type"] == "string":
+    #             field = models.CharField(max_length=field_spec["max_length"], choices=field_spec["choices"])
+    #             _setattr(self, field_spec["name"], field)
+    #     super().__init__()
 
     def clean(self):
         """Validate JSON field against schema."""
@@ -69,3 +73,6 @@ class ServiceMapping(NetBoxModel):
 
     def __str__(self):
         return f"[{self.id}] {self.type.name}"
+
+    def get_absolute_url(self):
+        return reverse('plugins:netbox_service_mappings:servicemapping', args=[self.pk])

@@ -26,6 +26,23 @@ class ServiceMappingTypeListView(generic.ObjectListView):
     table = tables.ServiceMappingTypeTable
 
 
+@register_model_view(ServiceMappingType)
+class ServiceMappingTypeView(generic.ObjectView):
+    queryset = ServiceMappingType.objects.all()
+
+
+@register_model_view(ServiceMappingType, 'edit')
+class ServiceMappingTypeEditView(generic.ObjectEditView):
+    queryset = ServiceMappingType.objects.all()
+    form = forms.ServiceMappingTypeForm
+
+
+@register_model_view(ServiceMappingType, 'delete')
+class ServiceMappingTypeDeleteView(generic.ObjectDeleteView):
+    queryset = ServiceMappingType.objects.all()
+    default_return_url = 'plugins:netbox_service_mappings:servicemappingtype_list'
+
+
 #
 # Service Mappings
 #
@@ -37,62 +54,23 @@ class ServiceMappingListView(generic.ObjectListView):
     table = tables.ServiceMappingTable
 
 
-# @register_model_view(Branch)
-# class BranchView(generic.ObjectView):
-#     queryset = Branch.objects.all()
-#
-#     def get_extra_context(self, request, instance):
-#         qs = instance.get_changes().values_list('changed_object_type').annotate(count=Count('pk'))
-#         if instance.ready or instance.merged:
-#             stats = {
-#                 'created': {
-#                     ContentType.objects.get(pk=ct): count
-#                     for ct, count in qs.filter(action=ObjectChangeActionChoices.ACTION_CREATE)
-#                 },
-#                 'updated': {
-#                     ContentType.objects.get(pk=ct): count
-#                     for ct, count in qs.filter(action=ObjectChangeActionChoices.ACTION_UPDATE)
-#                 },
-#                 'deleted': {
-#                     ContentType.objects.get(pk=ct): count
-#                     for ct, count in qs.filter(action=ObjectChangeActionChoices.ACTION_DELETE)
-#                 },
-#             }
-#         else:
-#             stats = {}
-#
-#         latest_change = instance.get_changes().order_by('time').last()
-#         last_job = instance.jobs.order_by('created').last()
-#
-#         return {
-#             'stats': stats,
-#             'latest_change': latest_change,
-#             'last_job': last_job,
-#             'conflicts_count': ChangeDiff.objects.filter(branch=instance, conflicts__isnull=False).count(),
-#         }
-#
-#
-# @register_model_view(Branch, 'edit')
-# class BranchEditView(generic.ObjectEditView):
-#     queryset = Branch.objects.all()
-#     form = forms.BranchForm
-#
-#     def alter_object(self, obj, request, url_args, url_kwargs):
-#         if not obj.pk:
-#             obj.owner = request.user
-#         return obj
-#
-#
-# @register_model_view(Branch, 'delete')
-# class BranchDeleteView(generic.ObjectDeleteView):
-#     queryset = Branch.objects.all()
-#     default_return_url = 'plugins:netbox_branching:branch_list'
-#
-#
-# def _get_diff_count(obj):
-#     return ChangeDiff.objects.filter(branch=obj).count()
-#
-#
+@register_model_view(ServiceMapping)
+class ServiceMappingView(generic.ObjectView):
+    queryset = ServiceMapping.objects.all()
+
+
+@register_model_view(ServiceMapping, 'edit')
+class ServiceMappingEditView(generic.ObjectEditView):
+    queryset = ServiceMapping.objects.all()
+    form = forms.ServiceMappingForm
+
+
+@register_model_view(ServiceMapping, 'delete')
+class ServiceMappingDeleteView(generic.ObjectDeleteView):
+    queryset = ServiceMapping.objects.all()
+    default_return_url = 'plugins:netbox_service_mappings:servicemapping_list'
+
+
 # @register_model_view(Branch, 'diff')
 # class BranchDiffView(generic.ObjectChildrenView):
 #     queryset = Branch.objects.all()

@@ -50,17 +50,17 @@ OBJECTCHANGE_REQUEST_ID = """
 
 
 class ServiceMappingTypeTable(NetBoxTable):
-    tags = columns.TagColumn(
-        url_name='plugins:netbox_branching:branch_list'
-    )
+    # tags = columns.TagColumn(
+    #     url_name='plugins:netbox_service_mappings:servicemappingtype_list'
+    # )
 
     class Meta(NetBoxTable.Meta):
         model = ServiceMappingType
         fields = (
-            'pk', 'id', 'name', 'tags', 'created', 'last_updated',
+            'pk', 'id', 'name', 'created', 'last_updated',
         )
         default_columns = (
-            'pk', 'id', 'name', 'tags', 'created', 'last_updated',
+            'pk', 'id', 'name', 'created', 'last_updated',
         )
 
 

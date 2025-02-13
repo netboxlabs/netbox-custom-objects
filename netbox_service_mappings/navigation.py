@@ -7,18 +7,18 @@ menu = PluginMenu(
     groups=(
         (_('Mappings'), (
             PluginMenuItem(
-                link='plugins:netbox_service_mappings:service_mapping_type_list',
+                link='plugins:netbox_service_mappings:servicemappingtype_list',
                 link_text=_('Mapping Types'),
                 buttons=(
-                    # PluginMenuButton('plugins:netbox_service_mappings:mapping_add', _('Add'), 'mdi mdi-plus-thick'),
+                    PluginMenuButton('plugins:netbox_service_mappings:servicemappingtype_add', _('Add'), 'mdi mdi-plus-thick'),
                     # PluginMenuButton('plugins:netbox_service_mappings:mapping_bulk_import', _('Import'), 'mdi mdi-upload'),
                 )
             ),
             PluginMenuItem(
-                link='plugins:netbox_service_mappings:service_mapping_list',
+                link='plugins:netbox_service_mappings:servicemapping_list',
                 link_text=_('Mappings'),
                 buttons=(
-                    # PluginMenuButton('plugins:netbox_service_mappings:mapping_add', _('Add'), 'mdi mdi-plus-thick'),
+                    PluginMenuButton('plugins:netbox_service_mappings:servicemapping_add', _('Add'), 'mdi mdi-plus-thick'),
                     # PluginMenuButton('plugins:netbox_service_mappings:mapping_bulk_import', _('Import'), 'mdi mdi-upload'),
                 )
             ),
