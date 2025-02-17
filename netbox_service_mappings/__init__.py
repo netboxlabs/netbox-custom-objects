@@ -15,6 +15,7 @@ class ServiceMappingPluginConfig(PluginConfig):
     # max_version = "3.5.0"
     default_settings = {}
     required_settings = []
+    template_extensions = "template_content.template_extensions"
 
     def ready(self):
         super().ready()

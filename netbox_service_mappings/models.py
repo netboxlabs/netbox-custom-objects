@@ -1,6 +1,7 @@
 import jsonschema
 
 from django.db import models
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db.models.base import DEFERRED
 from django.urls import reverse
@@ -35,6 +36,20 @@ class ServiceMappingType(NetBoxModel):
 
     def __str__(self):
         return self.name
+
+    @property
+    def formatted_schema(self):
+        result = '<ul>'
+        for field in self.schema:
+            field_name = field['name']
+            field_type = field.get('type')
+            field_data = field
+            if field_type in ['object', 'object_list']:
+                content_type = ContentType.objects.get(app_label=field['app_label'], model=field['model'])
+                field_data = content_type
+            result += f"<li>{field_name}: {field_data}</li>"
+        result += '</ul>'
+        return result
 
     def get_absolute_url(self):
         return reverse('plugins:netbox_service_mappings:servicemappingtype', args=[self.pk])
@@ -72,7 +87,32 @@ class ServiceMapping(NetBoxModel):
             raise ValidationError(f"Invalid JSON data: {e.message}")
 
     def __str__(self):
-        return f"[{self.id}] {self.type.name}"
+        return self.name
+
+    @property
+    def formatted_data(self):
+        result = '<ul>'
+        for field in self.type.schema:
+            field_name = field['name']
+            value = self.data.get(field_name)
+            field_type = field.get('type')
+            if field_type in ['object', 'object_list']:
+                content_type = ContentType.objects.get(app_label=field['app_label'], model=field['model'])
+                model_class = content_type.model_class()
+                if field_type == 'object':
+                    instance = model_class.objects.get(pk=value['object_id'])
+                    result += f"<li>{field_name}: {instance}</li>"
+                    continue
+                if field_type == 'object_list':
+                    result += f'<li>{field_name}: <ul>'
+                    for item in value:
+                        instance = model_class.objects.get(pk=item['object_id'])
+                        result += f"<li>{instance}</li>"
+                    result += '</ul></li>'
+                    continue
+            result += f"<li>{field_name}: {value}</li>"
+        result += '</ul>'
+        return result
 
     def get_absolute_url(self):
         return reverse('plugins:netbox_service_mappings:servicemapping', args=[self.pk])
