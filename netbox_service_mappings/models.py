@@ -17,14 +17,14 @@ SCHEMA = {
     },
     "required": ["name", "port"]
 }
-ELEMENTS_SCHEMA = [
-    {"name": "str_field", "type": "string", "max_length": 100, "choices": ["A", "B", "C"]},
-    {"name": "int_field", "type": "integer", "min": 0, "max": 1000, "required": False},
-    {"name": "bool_field", "type": "bool", "default": True},
+ELEMENTS_SCHEMA = {
+    "str_field": {"type": "string", "max_length": 100, "choices": ["A", "B", "C"]},
+    "int_field": {"type": "integer", "min": 0, "max": 1000, "required": False},
+    "bool_field": {"type": "bool", "default": True},
     # {"type": "dict"},
-    {"name": "object_field", "type": "object", "content_type_id": 10, "object_id": 123},
-    {"name": "object_list_field", "type": "object_list", "content_type_id": 10, "object_id": 123},
-]
+    "object_field": {"type": "object", "app_label": "dcim", "model": "devicetype"},
+    "object_list_field": {"type": "object_list", "app_label": "dcim", "model": "device"},
+}
 
 
 class ServiceMappingType(NetBoxModel):
@@ -40,14 +40,12 @@ class ServiceMappingType(NetBoxModel):
     @property
     def formatted_schema(self):
         result = '<ul>'
-        for field in self.schema:
-            field_name = field['name']
+        for field_name, field in self.schema.items():
             field_type = field.get('type')
-            field_data = field
             if field_type in ['object', 'object_list']:
                 content_type = ContentType.objects.get(app_label=field['app_label'], model=field['model'])
-                field_data = content_type
-            result += f"<li>{field_name}: {field_data}</li>"
+                field = content_type
+            result += f"<li>{field_name}: {field}</li>"
         result += '</ul>'
         return result
 
@@ -92,8 +90,7 @@ class ServiceMapping(NetBoxModel):
     @property
     def formatted_data(self):
         result = '<ul>'
-        for field in self.type.schema:
-            field_name = field['name']
+        for field_name, field in self.type.schema.items():
             value = self.data.get(field_name)
             field_type = field.get('type')
             if field_type in ['object', 'object_list']:
