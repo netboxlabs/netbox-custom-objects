@@ -4,7 +4,7 @@
 {% load plugins %}
 {% load render_table from django_tables2 %}
 {% load i18n %}
-{% load branch_buttons %}
+{% load mapping_utils %}
 
 {% block extra_controls %}
 {% endblock %}
@@ -79,18 +79,24 @@
     <div class="col col-md-12">
       {% plugin_full_width_page object %}
 
+        <p>{{ object.data }}</p>
+
         <ul>
             {% for field in object.mapping_type.fields.all %}
                 <li>
-                    {{ field.name }}:
-                    {% if field.many %}
-                        <ul>
-                            {% for relation in field.relations.all %}
-                                <li>{{ relation.instance|linkify }}</li>
-                            {% endfor %}
-                        </ul>
+                    {{ field.label }}:
+                    {% if field.field_type == 'object' %}
+                        {% if field.many %}
+                            <ul>
+                                {% for relation in field.relations.all %}
+                                    <li>{{ relation.instance|linkify }}</li>
+                                {% endfor %}
+                            </ul>
+                        {% else %}
+                            {{ field.instance|linkify }}
+                        {% endif %}
                     {% else %}
-                        {{ field.instance|linkify }}
+                        {{ object|get_field_value:field }}
                     {% endif %}
                 </li>
             {% endfor %}

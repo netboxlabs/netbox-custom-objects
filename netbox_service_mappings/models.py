@@ -120,24 +120,30 @@ class ServiceMapping(NetBoxModel):
 
 class MappingTypeField(models.Model):
     name = models.CharField(max_length=100, unique=True)
+    label = models.CharField(max_length=100, unique=True)
     mapping_type = models.ForeignKey(ServiceMappingType, on_delete=models.CASCADE, related_name="fields")
     field_type = models.CharField(max_length=100, choices=MappingFieldTypeChoices)
+    # For non-object fields, other field attribs (such as choices, length, required) should be added here as a
+    # superset, or stored in a JSON field
+
+    content_type = models.ForeignKey(ContentType, null=True, on_delete=models.CASCADE)
     many = models.BooleanField(default=False)
 
     @property
     def instance(self):
         if self.many:
             return None
-        return self.relations.first().instance
+        if relation := self.relations.first():
+            return relation.instance
+        return None
 
 
 class MappingRelation(models.Model):
     mapping = models.ForeignKey(ServiceMapping, on_delete=models.CASCADE)
     field = models.ForeignKey(MappingTypeField, on_delete=models.CASCADE, related_name="relations")
-    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
     object_id = models.PositiveIntegerField()
 
     @property
     def instance(self):
-        model_class = self.content_type.model_class()
+        model_class = self.field.content_type.model_class()
         return model_class.objects.get(pk=self.object_id)
