@@ -6,6 +6,7 @@ from django.core.exceptions import ValidationError
 from django.db.models.base import DEFERRED
 from django.urls import reverse
 from netbox.models import NetBoxModel
+from .choices import MappingFieldTypeChoices
 
 # Define JSON Schema for validation
 SCHEMA = {
@@ -18,7 +19,7 @@ SCHEMA = {
     "required": ["name", "port"]
 }
 ELEMENTS_SCHEMA = {
-    "str_field": {"type": "string", "max_length": 100, "choices": ["A", "B", "C"]},
+    "blah": {"type": "string", "max_length": 100, "choices": ["A", "B", "C"]},
     "int_field": {"type": "integer", "min": 0, "max": 1000, "required": False},
     "bool_field": {"type": "bool", "default": True},
     # {"type": "dict"},
@@ -54,7 +55,7 @@ class ServiceMappingType(NetBoxModel):
 
 
 class ServiceMapping(NetBoxModel):
-    type = models.ForeignKey(ServiceMappingType, on_delete=models.CASCADE, related_name="mappings")
+    mapping_type = models.ForeignKey(ServiceMappingType, on_delete=models.CASCADE, related_name="mappings")
     name = models.CharField(max_length=100, unique=True)
     data = models.JSONField(blank=True, default=dict)
 
@@ -90,7 +91,7 @@ class ServiceMapping(NetBoxModel):
     @property
     def formatted_data(self):
         result = '<ul>'
-        for field_name, field in self.type.schema.items():
+        for field_name, field in self.mapping_type.schema.items():
             value = self.data.get(field_name)
             field_type = field.get('type')
             if field_type in ['object', 'object_list']:
@@ -115,3 +116,28 @@ class ServiceMapping(NetBoxModel):
 
     def get_absolute_url(self):
         return reverse('plugins:netbox_service_mappings:servicemapping', args=[self.pk])
+
+
+class MappingTypeField(models.Model):
+    name = models.CharField(max_length=100, unique=True)
+    mapping_type = models.ForeignKey(ServiceMappingType, on_delete=models.CASCADE, related_name="fields")
+    field_type = models.CharField(max_length=100, choices=MappingFieldTypeChoices)
+    many = models.BooleanField(default=False)
+
+    @property
+    def instance(self):
+        if self.many:
+            return None
+        return self.relations.first().instance
+
+
+class MappingRelation(models.Model):
+    mapping = models.ForeignKey(ServiceMapping, on_delete=models.CASCADE)
+    field = models.ForeignKey(MappingTypeField, on_delete=models.CASCADE, related_name="relations")
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
+    object_id = models.PositiveIntegerField()
+
+    @property
+    def instance(self):
+        model_class = self.content_type.model_class()
+        return model_class.objects.get(pk=self.object_id)

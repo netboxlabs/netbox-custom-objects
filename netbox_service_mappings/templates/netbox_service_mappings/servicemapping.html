@@ -22,7 +22,7 @@
           <tr>
             <th scope="row">{% trans "Type" %}</th>
             <td>
-                {{ object.type|linkify:"name" }}
+                {{ object.mapping_type|linkify:"name" }}
             </td>
           </tr>
           <tr>
@@ -78,6 +78,23 @@
   <div class="row mb-3">
     <div class="col col-md-12">
       {% plugin_full_width_page object %}
+
+        <ul>
+            {% for field in object.mapping_type.fields.all %}
+                <li>
+                    {{ field.name }}:
+                    {% if field.many %}
+                        <ul>
+                            {% for relation in field.relations.all %}
+                                <li>{{ relation.instance|linkify }}</li>
+                            {% endfor %}
+                        </ul>
+                    {% else %}
+                        {{ field.instance|linkify }}
+                    {% endif %}
+                </li>
+            {% endfor %}
+        </ul>
     </div>
   </div>
 {% endblock %}

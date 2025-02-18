@@ -23,10 +23,10 @@ class ServiceMappingTypeForm(NetBoxModelForm):
 
 class ServiceMappingForm(NetBoxModelForm):
     fieldsets = (
-        FieldSet('name', 'type', 'data', 'tags'),
+        FieldSet('name', 'mapping_type', 'data', 'tags'),
     )
     comments = CommentField()
 
     class Meta:
         model = ServiceMapping
-        fields = ('name', 'type', 'comments', 'data', 'tags')
+        fields = ('name', 'mapping_type', 'comments', 'data', 'tags')
