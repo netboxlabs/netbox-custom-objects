@@ -98,13 +98,15 @@ class ServiceMapping(NetBoxModel):
                 model_class = content_type.model_class()
                 if field_type == 'object':
                     instance = model_class.objects.get(pk=value['object_id'])
-                    result += f"<li>{field_name}: {instance}</li>"
+                    url = instance.get_absolute_url()
+                    result += f'<li>{field_name}: <a href="{url}">{instance}</a></li>'
                     continue
                 if field_type == 'object_list':
                     result += f'<li>{field_name}: <ul>'
                     for item in value:
                         instance = model_class.objects.get(pk=item['object_id'])
-                        result += f"<li>{instance}</li>"
+                        url = instance.get_absolute_url()
+                        result += f'<li><a href="{url}">{instance}</a></li>'
                     result += '</ul></li>'
                     continue
             result += f"<li>{field_name}: {value}</li>"
