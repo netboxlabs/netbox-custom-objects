@@ -141,7 +141,7 @@ class MappingTypeField(models.Model):
 class MappingRelation(models.Model):
     mapping = models.ForeignKey(ServiceMapping, on_delete=models.CASCADE)
     field = models.ForeignKey(MappingTypeField, on_delete=models.CASCADE, related_name="relations")
-    object_id = models.PositiveIntegerField()
+    object_id = models.PositiveIntegerField(db_index=True)
 
     @property
     def instance(self):
