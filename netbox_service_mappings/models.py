@@ -131,7 +131,7 @@ class MappingTypeField(models.Model):
 
     @property
     def instance(self):
-        if self.many:
+        if self.field_type != MappingFieldTypeChoices.OBJECT or self.many:
             return None
         if relation := self.relations.first():
             return relation.instance
