@@ -11,7 +11,7 @@ class ServiceMappingPluginConfig(PluginConfig):
     description = "A plugin to manage custom service mappings in NetBox"
     version = "0.1"
     base_url = "service-mappings"
-    min_version = "4.2.0"
+    min_version = "4.3.0"
     # max_version = "3.5.0"
     default_settings = {}
     required_settings = []

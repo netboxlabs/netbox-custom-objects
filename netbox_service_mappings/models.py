@@ -23,8 +23,8 @@ ELEMENTS_SCHEMA = {
     "int_field": {"type": "integer", "min": 0, "max": 1000, "required": False},
     "bool_field": {"type": "bool", "default": True},
     # {"type": "dict"},
-    "object_field": {"type": "object", "app_label": "dcim", "model": "devicetype"},
-    "object_list_field": {"type": "object_list", "app_label": "dcim", "model": "device"},
+    "device_type": {"type": "object", "app_label": "dcim", "model": "devicetype"},
+    "devices": {"type": "object_list", "app_label": "dcim", "model": "device", "autocreate": 2},
 }
 
 

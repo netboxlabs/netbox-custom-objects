@@ -86,17 +86,17 @@ class ServiceMappingTable(NetBoxTable):
     # schema_id = tables.TemplateColumn(
     #     template_code='<span class="font-monospace">{{ value }}</code>'
     # )
-    tags = columns.TagColumn(
-        url_name='plugins:netbox_branching:branch_list'
-    )
+    # tags = columns.TagColumn(
+    #     url_name='plugins:netbox_service_mappings:servicemapping_list'
+    # )
 
     class Meta(NetBoxTable.Meta):
         model = ServiceMapping
         fields = (
-            'pk', 'id', 'name', 'type', 'tags', 'created', 'last_updated',
+            'pk', 'id', 'name', 'type', 'created', 'last_updated',
         )
         default_columns = (
-            'pk', 'id', 'name', 'type', 'tags', 'created', 'last_updated',
+            'pk', 'id', 'name', 'type', 'created', 'last_updated',
         )
 
     # def render_is_active(self, value):

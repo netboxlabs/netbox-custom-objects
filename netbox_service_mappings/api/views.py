@@ -9,8 +9,8 @@ from rest_framework.viewsets import ModelViewSet
 
 from core.api.serializers import JobSerializer
 from netbox.api.viewsets import BaseViewSet, NetBoxReadOnlyModelViewSet
-from netbox_branching import filtersets
-from netbox_branching.jobs import MergeBranchJob, RevertBranchJob, SyncBranchJob
+# from netbox_branching import filtersets
+# from netbox_branching.jobs import MergeBranchJob, RevertBranchJob, SyncBranchJob
 from netbox_service_mappings.models import ServiceMapping, ServiceMappingType
 from . import serializers
 
