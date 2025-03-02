@@ -18,9 +18,42 @@ __all__ = (
 from utilities.templatetags.mptt import nested_tree
 
 
+class MappingTypeFieldSerializer(NetBoxModelSerializer):
+    url = serializers.HyperlinkedIdentityField(
+        view_name='plugins-api:netbox_service_mappings-api:mappingtypefield-detail'
+    )
+    content_type = serializers.SerializerMethodField(
+        read_only=True
+    )
+
+    class Meta:
+        model = MappingTypeField
+        fields = ('id', 'url', 'name', 'label', 'field_type', 'content_type', 'many',)
+
+    def create(self, validated_data):
+        """
+        Record the user who created the Service Mapping as its owner.
+        """
+        # validated_data['owner'] = self.context['request'].user
+        return super().create(validated_data)
+
+    def get_content_type(self, obj):
+        if obj.content_type:
+            return dict(
+                id=obj.content_type.id,
+                app_label=obj.content_type.app_label,
+                model=obj.content_type.model,
+            )
+
+
 class ServiceMappingTypeSerializer(NetBoxModelSerializer):
     url = serializers.HyperlinkedIdentityField(
         view_name='plugins-api:netbox_service_mappings-api:servicemappingtype-detail'
+    )
+    fields = MappingTypeFieldSerializer(
+        nested=True,
+        read_only=True,
+        many=True,
     )
     # owner = UserSerializer(
     #     nested=True,
@@ -95,34 +128,6 @@ class ServiceMappingSerializer(NetBoxModelSerializer):
         return result
 
 
-class MappingTypeFieldSerializer(NetBoxModelSerializer):
-    url = serializers.HyperlinkedIdentityField(
-        view_name='plugins-api:netbox_service_mappings-api:mappingtypefield-detail'
-    )
-    content_type = serializers.SerializerMethodField(
-        read_only=True
-    )
-
-    class Meta:
-        model = MappingTypeField
-        fields = ('id', 'url', 'name', 'label', 'field_type', 'content_type', 'many',)
-
-    def create(self, validated_data):
-        """
-        Record the user who created the Service Mapping as its owner.
-        """
-        # validated_data['owner'] = self.context['request'].user
-        return super().create(validated_data)
-
-    def get_content_type(self, obj):
-        if obj.content_type:
-            return dict(
-                id=obj.content_type.id,
-                app_label=obj.content_type.app_label,
-                model=obj.content_type.model,
-            )
-
-
 class MappingRelationSerializer(NetBoxModelSerializer):
     url = serializers.HyperlinkedIdentityField(
         view_name='plugins-api:netbox_service_mappings-api:mappingrelation-detail'
@@ -130,8 +135,12 @@ class MappingRelationSerializer(NetBoxModelSerializer):
     instance = serializers.SerializerMethodField(
         read_only=True
     )
-    field = serializers.SerializerMethodField(
+    field = MappingTypeFieldSerializer(
         read_only=True
+    )
+    mapping = ServiceMappingSerializer(
+        read_only=True,
+        nested=True,
     )
 
     class Meta:
@@ -139,7 +148,8 @@ class MappingRelationSerializer(NetBoxModelSerializer):
         fields = ('mapping', 'field', 'object_id', 'instance',)
 
     def get_field(self, obj):
-        return MappingTypeFieldSerializer(obj.field).data
+        context = {'request': self.context['request']}
+        return MappingTypeFieldSerializer(obj.field, context=context).data
 
     def get_instance(self, obj):
         if obj.instance:
