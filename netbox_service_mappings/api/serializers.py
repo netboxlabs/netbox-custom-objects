@@ -37,7 +37,7 @@ class ServiceMappingTypeSerializer(NetBoxModelSerializer):
     class Meta:
         model = ServiceMappingType
         fields = [
-            'id', 'url', 'name', 'description', 'tags', 'custom_fields', 'created', 'last_updated', 'schema',
+            'id', 'url', 'name', 'description', 'tags', 'created', 'last_updated', 'fields',
         ]
         brief_fields = ('id', 'url', 'name', 'description')
 
@@ -52,6 +52,9 @@ class ServiceMappingTypeSerializer(NetBoxModelSerializer):
 class ServiceMappingSerializer(NetBoxModelSerializer):
     url = serializers.HyperlinkedIdentityField(
         view_name='plugins-api:netbox_service_mappings-api:servicemapping-detail'
+    )
+    data = serializers.SerializerMethodField(
+        read_only=True
     )
     # owner = UserSerializer(
     #     nested=True,
@@ -68,7 +71,7 @@ class ServiceMappingSerializer(NetBoxModelSerializer):
     class Meta:
         model = ServiceMapping
         fields = [
-            'id', 'url', 'name', 'mapping_type', 'tags', 'custom_fields', 'created', 'last_updated', 'data',
+            'id', 'url', 'name', 'mapping_type', 'tags', 'created', 'last_updated', 'data',
         ]
         brief_fields = ('id', 'url', 'name', 'type',)
 
@@ -78,6 +81,18 @@ class ServiceMappingSerializer(NetBoxModelSerializer):
         """
         # validated_data['owner'] = self.context['request'].user
         return super().create(validated_data)
+
+    def get_data(self, obj):
+        result = {}
+        for field_name, value in obj.fields.items():
+            field = obj.mapping_type.fields.get(name=field_name)
+            if field.field_type == 'object':
+                serializer = get_serializer_for_model(field.model_class)
+                context = {'request': self.context['request']}
+                result[field.name] = serializer(value, nested=True, context=context, many=field.many).data
+                continue
+            result[field_name] = obj.get_field_value(field_name)
+        return result
 
 
 class MappingTypeFieldSerializer(NetBoxModelSerializer):
@@ -90,7 +105,7 @@ class MappingTypeFieldSerializer(NetBoxModelSerializer):
 
     class Meta:
         model = MappingTypeField
-        fields = ('name', 'label', 'field_type', 'content_type', 'many',)
+        fields = ('id', 'url', 'name', 'label', 'field_type', 'content_type', 'many',)
 
     def create(self, validated_data):
         """

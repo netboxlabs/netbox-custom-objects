@@ -5,6 +5,7 @@ from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db.models.base import DEFERRED
+from django.template.backends.django import reraise
 from django.urls import reverse
 from netbox.models import NetBoxModel
 from .choices import MappingFieldTypeChoices
@@ -118,16 +119,17 @@ class ServiceMapping(NetBoxModel):
     def fields(self):
         result = {}
         for field in self.mapping_type.fields.all():
-            result[field.name] = self.get_field_value(field)
+            result[field.name] = self.get_field_value(field.name)
         return result
 
     def get_field_value(self, field_name):
         mapping_type_field = self.mapping_type.fields.get(name=field_name)
         if mapping_type_field.field_type == 'object':
             if mapping_type_field.many:
-                object_ids = mapping_type_field.relations.values_list('pk', flat=True)
-                return mapping_type_field.model_class.objects.filter(id__in=object_ids)
-            return mapping_type_field.instance
+                object_ids = mapping_type_field.relations.values_list('object_id', flat=True)
+                return mapping_type_field.model_class.objects.filter(pk__in=object_ids)
+            object_id = mapping_type_field.relations.first().object_id
+            return mapping_type_field.model_class.objects.get(pk=object_id)
         return self.data.get(field_name)
 
     def get_absolute_url(self):
@@ -149,13 +151,13 @@ class MappingTypeField(models.Model):
     def model_class(self):
         return apps.get_model(self.content_type.app_label, self.content_type.model)
 
-    @property
-    def instance(self):
-        if self.field_type != MappingFieldTypeChoices.OBJECT or self.many:
-            return None
-        if relation := self.relations.first():
-            return relation.instance
-        return None
+    # @property
+    # def instance(self):
+    #     if self.field_type != MappingFieldTypeChoices.OBJECT or self.many:
+    #         return None
+    #     if relation := self.relations.first():
+    #         return relation.instance
+    #     return None
 
     def get_child_relations(self, instance):
         return self.relations.filter(mapping=instance)
