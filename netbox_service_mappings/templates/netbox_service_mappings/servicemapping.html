@@ -77,24 +77,29 @@
   </div>
   <div class="row mb-3">
     <div class="col col-md-12">
+    {% comment %}
       {% plugin_full_width_page object %}
 
         <p>{{ object.data }}</p>
+    {% endcomment %}
 
+        <h3>Service Mapping Data</h3>
         <ul>
             {% for field in object.mapping_type.fields.all %}
                 <li>
                     {{ field.label }}:
                     {% if field.field_type == 'object' %}
+                        {% with field_values=field|get_child_relations:object %}
                         {% if field.many %}
                             <ul>
-                                {% for relation in field.relations.all %}
+                                {% for relation in field_values.all %}
                                     <li>{{ relation.instance|linkify }}</li>
                                 {% endfor %}
                             </ul>
                         {% else %}
                             {{ field.instance|linkify }}
                         {% endif %}
+                        {% endwith %}
                     {% else %}
                         {{ object|get_field_value:field }}
                     {% endif %}

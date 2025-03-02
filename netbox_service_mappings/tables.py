@@ -93,10 +93,10 @@ class ServiceMappingTable(NetBoxTable):
     class Meta(NetBoxTable.Meta):
         model = ServiceMapping
         fields = (
-            'pk', 'id', 'name', 'type', 'created', 'last_updated',
+            'pk', 'id', 'name', 'mapping_type', 'created', 'last_updated',
         )
         default_columns = (
-            'pk', 'id', 'name', 'type', 'created', 'last_updated',
+            'pk', 'id', 'name', 'mapping_type', 'created', 'last_updated',
         )
 
     # def render_is_active(self, value):

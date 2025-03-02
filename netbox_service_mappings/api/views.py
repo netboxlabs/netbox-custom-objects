@@ -11,7 +11,7 @@ from core.api.serializers import JobSerializer
 from netbox.api.viewsets import BaseViewSet, NetBoxReadOnlyModelViewSet
 # from netbox_branching import filtersets
 # from netbox_branching.jobs import MergeBranchJob, RevertBranchJob, SyncBranchJob
-from netbox_service_mappings.models import ServiceMapping, ServiceMappingType
+from netbox_service_mappings.models import ServiceMapping, ServiceMappingType, MappingTypeField, MappingRelation
 from . import serializers
 
 
@@ -30,3 +30,13 @@ class ServiceMappingViewSet(ModelViewSet):
     queryset = ServiceMapping.objects.all()
     serializer_class = serializers.ServiceMappingSerializer
     # filterset_class = filtersets.BranchFilterSet
+
+
+class MappingTypeFieldViewSet(ModelViewSet):
+    queryset = MappingTypeField.objects.all()
+    serializer_class = serializers.MappingTypeFieldSerializer
+
+
+class MappingRelationViewSet(ModelViewSet):
+    queryset = MappingRelation.objects.all()
+    serializer_class = serializers.MappingRelationSerializer

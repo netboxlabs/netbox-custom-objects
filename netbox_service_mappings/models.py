@@ -1,6 +1,7 @@
 import jsonschema
 
 from django.db import models
+from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db.models.base import DEFERRED
@@ -31,7 +32,6 @@ ELEMENTS_SCHEMA = {
 class ServiceMappingType(NetBoxModel):
     name = models.CharField(max_length=100, unique=True)
     slug = models.SlugField(max_length=100, unique=True)
-    version = models.CharField(max_length=10, unique=True)
     description = models.TextField(blank=True)
     schema = models.JSONField(blank=True, default=dict)
 
@@ -114,6 +114,22 @@ class ServiceMapping(NetBoxModel):
         result += '</ul>'
         return result
 
+    @property
+    def fields(self):
+        result = {}
+        for field in self.mapping_type.fields.all():
+            result[field.name] = self.get_field_value(field)
+        return result
+
+    def get_field_value(self, field_name):
+        mapping_type_field = self.mapping_type.fields.get(name=field_name)
+        if mapping_type_field.field_type == 'object':
+            if mapping_type_field.many:
+                object_ids = mapping_type_field.relations.values_list('pk', flat=True)
+                return mapping_type_field.model_class.objects.filter(id__in=object_ids)
+            return mapping_type_field.instance
+        return self.data.get(field_name)
+
     def get_absolute_url(self):
         return reverse('plugins:netbox_service_mappings:servicemapping', args=[self.pk])
 
@@ -130,12 +146,19 @@ class MappingTypeField(models.Model):
     many = models.BooleanField(default=False)
 
     @property
+    def model_class(self):
+        return apps.get_model(self.content_type.app_label, self.content_type.model)
+
+    @property
     def instance(self):
         if self.field_type != MappingFieldTypeChoices.OBJECT or self.many:
             return None
         if relation := self.relations.first():
             return relation.instance
         return None
+
+    def get_child_relations(self, instance):
+        return self.relations.filter(mapping=instance)
 
 
 class MappingRelation(models.Model):
