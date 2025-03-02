@@ -1,10 +1,13 @@
+from django.contrib.contenttypes.models import ContentType
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
+from rest_framework.exceptions import ValidationError
 
 from core.choices import ObjectChangeActionChoices
 from netbox.api.exceptions import SerializerNotFound
 from netbox.api.fields import ChoiceField, ContentTypeField
 from netbox.api.serializers import NetBoxModelSerializer
+from netbox_service_mappings.choices import MappingFieldTypeChoices
 # from netbox_branching.choices import BranchEventTypeChoices, BranchStatusChoices
 from netbox_service_mappings.models import ServiceMapping, ServiceMappingType, MappingTypeField, MappingRelation
 from users.api.serializers import UserSerializer
@@ -15,26 +18,42 @@ __all__ = (
     'ServiceMappingSerializer',
 )
 
-from utilities.templatetags.mptt import nested_tree
+
+class ContentTypeSerializer(NetBoxModelSerializer):
+    class Meta:
+        model = ContentType
+        fields = ('id', 'app_label', 'model',)
 
 
 class MappingTypeFieldSerializer(NetBoxModelSerializer):
     url = serializers.HyperlinkedIdentityField(
         view_name='plugins-api:netbox_service_mappings-api:mappingtypefield-detail'
     )
-    content_type = serializers.SerializerMethodField(
-        read_only=True
-    )
+    content_type = serializers.SerializerMethodField()
+    app_label = serializers.CharField(required=False)
+    model = serializers.CharField(required=False)
 
     class Meta:
         model = MappingTypeField
-        fields = ('id', 'url', 'name', 'label', 'field_type', 'content_type', 'many',)
+        fields = (
+            'id', 'url', 'name', 'label', 'mapping_type', 'field_type', 'content_type', 'many', 'options',
+            'app_label', 'model',
+        )
+
+    def validate(self, attrs):
+        app_label = attrs.pop('app_label', None)
+        model = attrs.pop('model', None)
+        if attrs['field_type'] == 'object':
+            try:
+                attrs['content_type'] = ContentType.objects.get(app_label=app_label, model=model)
+            except ContentType.DoesNotExist:
+                raise ValidationError('Must provide valid app_label and model for object field type.')
+        return super().validate(attrs)
 
     def create(self, validated_data):
         """
         Record the user who created the Service Mapping as its owner.
         """
-        # validated_data['owner'] = self.context['request'].user
         return super().create(validated_data)
 
     def get_content_type(self, obj):
@@ -55,67 +74,73 @@ class ServiceMappingTypeSerializer(NetBoxModelSerializer):
         read_only=True,
         many=True,
     )
-    # owner = UserSerializer(
-    #     nested=True,
-    #     read_only=True
-    # )
-    # merged_by = UserSerializer(
-    #     nested=True,
-    #     read_only=True
-    # )
-    # status = ChoiceField(
-    #     choices=BranchStatusChoices
-    # )
 
     class Meta:
         model = ServiceMappingType
         fields = [
-            'id', 'url', 'name', 'description', 'tags', 'created', 'last_updated', 'fields',
+            'id', 'url', 'name', 'slug', 'description', 'tags', 'created', 'last_updated', 'fields',
         ]
         brief_fields = ('id', 'url', 'name', 'description')
 
     def create(self, validated_data):
-        """
-        Record the user who created the Service Mapping Type as its owner.
-        """
-        # validated_data['owner'] = self.context['request'].user
         return super().create(validated_data)
 
 
 class ServiceMappingSerializer(NetBoxModelSerializer):
+    relation_fields = None
+
     url = serializers.HyperlinkedIdentityField(
         view_name='plugins-api:netbox_service_mappings-api:servicemapping-detail'
     )
-    data = serializers.SerializerMethodField(
-        read_only=True
+    field_data = serializers.SerializerMethodField(
+        # read_only=True
     )
-    # owner = UserSerializer(
-    #     nested=True,
-    #     read_only=True
-    # )
-    # merged_by = UserSerializer(
-    #     nested=True,
-    #     read_only=True
-    # )
-    # status = ChoiceField(
-    #     choices=BranchStatusChoices
-    # )
 
     class Meta:
         model = ServiceMapping
         fields = [
-            'id', 'url', 'name', 'mapping_type', 'tags', 'created', 'last_updated', 'data',
+            'id', 'url', 'name', 'mapping_type', 'tags', 'created', 'last_updated', 'data', 'field_data',
         ]
         brief_fields = ('id', 'url', 'name', 'type',)
 
-    def create(self, validated_data):
-        """
-        Record the user who created the Service Mapping as its owner.
-        """
-        # validated_data['owner'] = self.context['request'].user
-        return super().create(validated_data)
+    def validate(self, attrs):
+        self.relation_fields = {}
+        for field in attrs['mapping_type'].fields.filter(field_type=MappingFieldTypeChoices.OBJECT):
+            self.relation_fields[field.name] = attrs['data'].pop(field.name, None)
+        return super().validate(attrs)
 
-    def get_data(self, obj):
+    def update_relation_fields(self, instance):
+        for field_name, value in self.relation_fields.items():
+            field = instance.mapping_type.fields.get(name=field_name)
+            if field.many:
+                MappingRelation.objects.filter(mapping=instance, field=field).exclude(object_id__in=value).delete()
+                for object_id in value:
+                    resolved_object = field.model_class.objects.get(pk=object_id)
+                    relation, _ = MappingRelation.objects.get_or_create(
+                        mapping=instance,
+                        field=field,
+                        object_id=resolved_object.id,
+                    )
+            else:
+                MappingRelation.objects.filter(mapping=instance, field=field).exclude(object_id=value).delete()
+                resolved_object = field.model_class.objects.get(pk=value)
+                relation, _ = MappingRelation.objects.get_or_create(
+                    mapping=instance,
+                    field=field,
+                    object_id=resolved_object.id,
+                )
+
+    def create(self, validated_data):
+        instance = super().create(validated_data)
+        self.update_relation_fields(instance)
+        return instance
+
+    def update(self, instance, validated_data):
+        instance = super().update(instance, validated_data)
+        self.update_relation_fields(instance)
+        return instance
+
+    def get_field_data(self, obj):
         result = {}
         for field_name, value in obj.fields.items():
             field = obj.mapping_type.fields.get(name=field_name)

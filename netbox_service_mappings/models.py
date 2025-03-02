@@ -79,12 +79,12 @@ class ServiceMapping(NetBoxModel):
     #             _setattr(self, field_spec["name"], field)
     #     super().__init__()
 
-    def clean(self):
-        """Validate JSON field against schema."""
-        try:
-            jsonschema.validate(instance=self.data, schema=SCHEMA)
-        except jsonschema.ValidationError as e:
-            raise ValidationError(f"Invalid JSON data: {e.message}")
+    # def clean(self):
+    #     """Validate JSON field against schema."""
+    #     try:
+    #         jsonschema.validate(instance=self.data, schema=SCHEMA)
+    #     except jsonschema.ValidationError as e:
+    #         raise ValidationError(f"Invalid JSON data: {e.message}")
 
     def __str__(self):
         return self.name
@@ -125,11 +125,11 @@ class ServiceMapping(NetBoxModel):
     def get_field_value(self, field_name):
         mapping_type_field = self.mapping_type.fields.get(name=field_name)
         if mapping_type_field.field_type == 'object':
-            if mapping_type_field.many:
-                object_ids = mapping_type_field.relations.values_list('object_id', flat=True)
-                return mapping_type_field.model_class.objects.filter(pk__in=object_ids)
-            object_id = mapping_type_field.relations.first().object_id
-            return mapping_type_field.model_class.objects.get(pk=object_id)
+            object_ids = MappingRelation.objects.filter(
+                mapping=self, field=mapping_type_field
+            ).values_list('object_id', flat=True)
+            field_objects = mapping_type_field.model_class.objects.filter(pk__in=object_ids)
+            return field_objects if mapping_type_field.many else field_objects.first()
         return self.data.get(field_name)
 
     def get_absolute_url(self):
@@ -141,11 +141,16 @@ class MappingTypeField(models.Model):
     label = models.CharField(max_length=100, unique=True)
     mapping_type = models.ForeignKey(ServiceMappingType, on_delete=models.CASCADE, related_name="fields")
     field_type = models.CharField(max_length=100, choices=MappingFieldTypeChoices)
+
     # For non-object fields, other field attribs (such as choices, length, required) should be added here as a
     # superset, or stored in a JSON field
+    options = models.JSONField(blank=True, default=dict)
 
-    content_type = models.ForeignKey(ContentType, null=True, on_delete=models.CASCADE)
+    content_type = models.ForeignKey(ContentType, null=True, blank=True, on_delete=models.CASCADE)
     many = models.BooleanField(default=False)
+
+    def __str__(self):
+        return self.name
 
     @property
     def model_class(self):
