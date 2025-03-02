@@ -92,16 +92,15 @@ class ServiceMappingSerializer(NetBoxModelSerializer):
     url = serializers.HyperlinkedIdentityField(
         view_name='plugins-api:netbox_service_mappings-api:servicemapping-detail'
     )
-    field_data = serializers.SerializerMethodField(
-        # read_only=True
-    )
+    field_data = serializers.SerializerMethodField()
+    mapping_type = ServiceMappingTypeSerializer(nested=True)
 
     class Meta:
         model = ServiceMapping
         fields = [
             'id', 'url', 'name', 'mapping_type', 'tags', 'created', 'last_updated', 'data', 'field_data',
         ]
-        brief_fields = ('id', 'url', 'name', 'type',)
+        brief_fields = ('id', 'url', 'name', 'mapping_type',)
 
     def validate(self, attrs):
         self.relation_fields = {}
