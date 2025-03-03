@@ -1,6 +1,21 @@
 # netbox-service-mappings
 Service Mappings plugin
 
+1. Add `netbox_service_mappings` to the end of `PLUGINS` in `configuration.py`.
+
+```python
+PLUGINS = [
+    # ...
+    'netbox_service_mappings',
+]
+```
+
+2. Run NetBox migrations:
+
+```
+$ ./manage.py migrate
+```
+
 ## API
 
 The three relevant models making up the Service Mappings system can be manipulated through CRUD operations using the 
