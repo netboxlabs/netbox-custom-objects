@@ -34,6 +34,22 @@
               {% endif %}
             </td>
           </tr>
+          {% for field in object.mapping_type.fields.all %}
+            {% if field.is_single_value %}
+              <tr>
+                <th scope="row">{{ field.label }}</th>
+                <td>
+                  {% if field.field_type == 'object' %}
+                    {% with field_values=field|get_child_relations:object %}
+                      {{ field_values.first.instance|linkify }}
+                    {% endwith %}
+                  {% else %}
+                    {{ object|get_field_value:field }}
+                  {% endif %}
+                </td>
+              </tr>
+            {% endif %}
+          {% endfor %}
         </table>
       </div>
       {% include 'inc/panels/tags.html' %}

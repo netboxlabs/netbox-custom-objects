@@ -156,6 +156,10 @@ class MappingTypeField(models.Model):
     def model_class(self):
         return apps.get_model(self.content_type.app_label, self.content_type.model)
 
+    @property
+    def is_single_value(self):
+        return self.field_type != 'object' or not self.many
+
     # @property
     # def instance(self):
     #     if self.field_type != MappingFieldTypeChoices.OBJECT or self.many:
