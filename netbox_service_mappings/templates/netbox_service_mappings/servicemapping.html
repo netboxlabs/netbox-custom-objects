@@ -90,15 +90,15 @@
                     {{ field.label }}:
                     {% if field.field_type == 'object' %}
                         {% with field_values=field|get_child_relations:object %}
-                        {% if field.many %}
-                            <ul>
-                                {% for relation in field_values.all %}
-                                    <li>{{ relation.instance|linkify }}</li>
-                                {% endfor %}
-                            </ul>
-                        {% else %}
-                            {{ field.instance|linkify }}
-                        {% endif %}
+                            {% if field.many %}
+                                <ul>
+                                    {% for relation in field_values.all %}
+                                        <li>{{ relation.instance|linkify }}</li>
+                                    {% endfor %}
+                                </ul>
+                            {% else %}
+                                {{ field_values.first.instance|linkify }}
+                            {% endif %}
                         {% endwith %}
                     {% else %}
                         {{ object|get_field_value:field }}
