@@ -1,6 +1,7 @@
 from django.contrib.contenttypes.models import ContentType
 from netbox.plugins import PluginTemplateExtension
 from .models import MappingRelation
+from utilities.jinja2 import render_jinja2
 
 __all__ = (
     'MappingSchema',
@@ -41,13 +42,19 @@ class MappingLink(PluginTemplateExtension):
         if not relations.exists():
             return ''
 
-        result = '<h2 class="card-header">Service Mappings</h2>'
-        result += '<ul>'
-        for relation in relations:
-            url = relation.mapping.get_absolute_url()
-            result += f'<li><a href="{url}">{relation.mapping}</a></li>'
-        result += '</ul>'
-        return result
+        return render_jinja2("""
+          <div class="card">
+            <h2 class="card-header">Service Mappings to this object</h2>
+            <table class="table table-hover attr-table">
+              {% for relation in relations %}
+                <tr>
+                    <th scope="row"><a href="{{ relation.mapping.get_absolute_url() }}">{{ relation.mapping }}</a></th>
+                    <td>{{ relation.mapping.id }}</td>
+                </tr>
+              {% endfor %}
+            </table>
+          </div>
+          """, {'relations': relations})
 
 
 template_extensions = (

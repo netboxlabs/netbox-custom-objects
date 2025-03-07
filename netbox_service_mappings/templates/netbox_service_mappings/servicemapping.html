@@ -59,6 +59,38 @@
     <div class="col col-md-6">
       {% include 'inc/panels/comments.html' %}
       {% plugin_right_page object %}
+    {% comment %}
+      <div class="card">
+        <h2 class="card-header">Service Mappings</h2>
+        <table class="table table-hover attr-table">
+          {% for relation in relations %}
+            <tr>
+            <th scope="row">{{ relation }}</th>
+            <td>
+                {{ relation.instance|linkify }}
+            </td>
+            </tr>
+          {% endfor %}
+        </table>
+      </div>
+    {% endcomment %}
+      {% for field in object.mapping_type.fields.all %}
+          {% if field.many %}
+            {% with field_values=field|get_child_relations:object %}
+              <div class="card">
+                <h2 class="card-header">{{ field.label }}</h2>
+                <table class="table table-hover attr-table">
+                  {% for relation in field_values.all %}
+                    <tr>
+                        <th scope="row">{{ relation.instance|linkify }}</th>
+                        <td>{{ relation.object_id }}</td>
+                    </tr>
+                  {% endfor %}
+                </table>
+              </div>
+            {% endwith %}
+          {% endif %}
+      {% endfor %}
     </div>
   </div>
   <div class="row mb-3">
@@ -67,7 +99,6 @@
       {% plugin_full_width_page object %}
 
         <p>{{ object.data }}</p>
-    {% endcomment %}
 
         <h3>Service Mapping Data</h3>
         <ul>
@@ -92,6 +123,8 @@
                 </li>
             {% endfor %}
         </ul>
+        {% endcomment %}
+
     </div>
   </div>
 {% endblock %}
