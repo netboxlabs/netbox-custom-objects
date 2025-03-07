@@ -41,6 +41,19 @@
     <div class="col col-md-6">
       {% include 'inc/panels/comments.html' %}
       {% plugin_right_page object %}
+      <div class="card">
+        <h2 class="card-header">Schema</h2>
+        <table class="table table-hover attr-table">
+            {% for field in object.fields.all %}
+            <tr>
+                <th scope="row">{{ field.label }}</th>
+                <td>{{ field.field_type }}</td>
+                <td>{% if field.field_type == "object" %}{{ field|get_field_object_type }}{% endif %}</td>
+                <td>{% if field.many %}(Many){% endif %}</td>
+            </tr>
+          {% endfor %}
+        </table>
+      </div>
     </div>
   </div>
   <div class="row mb-3">
@@ -49,7 +62,6 @@
       {% plugin_full_width_page object %}
 
         <p>{{ object.schema }}</p>
-    {% endcomment %}
 
         <h3>Schema</h3>
         <ul>
@@ -67,6 +79,7 @@
                 </li>
             {% endfor %}
         </ul>
+    {% endcomment %}
     </div>
   </div>
 {% endblock %}
