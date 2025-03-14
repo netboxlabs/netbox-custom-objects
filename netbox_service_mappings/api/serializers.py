@@ -1,17 +1,10 @@
 from django.contrib.contenttypes.models import ContentType
-from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 
-from core.choices import ObjectChangeActionChoices
-from netbox.api.exceptions import SerializerNotFound
-from netbox.api.fields import ChoiceField, ContentTypeField
 from netbox.api.serializers import NetBoxModelSerializer
 from netbox_service_mappings.choices import MappingFieldTypeChoices
-# from netbox_branching.choices import BranchEventTypeChoices, BranchStatusChoices
 from netbox_service_mappings.models import ServiceMapping, ServiceMappingType, MappingTypeField, MappingRelation
-from users.api.serializers import UserSerializer
-from utilities.api import get_serializer_for_model
 
 __all__ = (
     'ServiceMappingTypeSerializer',

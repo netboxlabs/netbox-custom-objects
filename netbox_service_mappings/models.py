@@ -3,31 +3,9 @@ import jsonschema
 from django.db import models
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import ValidationError
-from django.db.models.base import DEFERRED
-from django.template.backends.django import reraise
 from django.urls import reverse
 from netbox.models import NetBoxModel
 from .choices import MappingFieldTypeChoices
-
-# Define JSON Schema for validation
-SCHEMA = {
-    "type": "object",
-    "properties": {
-        "name": {"type": "string"},
-        "description": {"type": "string"},
-        "port": {"type": "integer", "minimum": 1, "maximum": 65535}
-    },
-    "required": ["name", "port"]
-}
-ELEMENTS_SCHEMA = {
-    "blah": {"type": "string", "max_length": 100, "choices": ["A", "B", "C"]},
-    "int_field": {"type": "integer", "min": 0, "max": 1000, "required": False},
-    "bool_field": {"type": "bool", "default": True},
-    # {"type": "dict"},
-    "device_type": {"type": "object", "app_label": "dcim", "model": "devicetype"},
-    "devices": {"type": "object_list", "app_label": "dcim", "model": "device", "autocreate": 2},
-}
 
 
 class ServiceMappingType(NetBoxModel):
@@ -59,32 +37,6 @@ class ServiceMapping(NetBoxModel):
     mapping_type = models.ForeignKey(ServiceMappingType, on_delete=models.CASCADE, related_name="mappings")
     name = models.CharField(max_length=100, unique=True)
     data = models.JSONField(blank=True, default=dict)
-
-    # def __init__(self, *args, **kwargs):
-    #     cls = self.__class__
-    #     opts = self._meta
-    #     _setattr = setattr
-    #     _DEFERRED = DEFERRED
-    #
-    #     # fields_iter = iter(opts.concrete_fields)
-    #     # for val, field in zip(args, fields_iter):
-    #     #     print(val, field)
-    #     #     if val is _DEFERRED:
-    #     #         continue
-    #     #     _setattr(self, field.attname, val)
-    #     for field_spec in ELEMENTS_SCHEMA:
-    #         print(field_spec)
-    #         if field_spec["type"] == "string":
-    #             field = models.CharField(max_length=field_spec["max_length"], choices=field_spec["choices"])
-    #             _setattr(self, field_spec["name"], field)
-    #     super().__init__()
-
-    # def clean(self):
-    #     """Validate JSON field against schema."""
-    #     try:
-    #         jsonschema.validate(instance=self.data, schema=SCHEMA)
-    #     except jsonschema.ValidationError as e:
-    #         raise ValidationError(f"Invalid JSON data: {e.message}")
 
     def __str__(self):
         return self.name
@@ -159,14 +111,6 @@ class MappingTypeField(models.Model):
     @property
     def is_single_value(self):
         return self.field_type != 'object' or not self.many
-
-    # @property
-    # def instance(self):
-    #     if self.field_type != MappingFieldTypeChoices.OBJECT or self.many:
-    #         return None
-    #     if relation := self.relations.first():
-    #         return relation.instance
-    #     return None
 
     def get_child_relations(self, instance):
         return self.relations.filter(mapping=instance)

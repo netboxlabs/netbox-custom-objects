@@ -58,28 +58,7 @@
   </div>
   <div class="row mb-3">
     <div class="col col-md-12">
-    {% comment %}
       {% plugin_full_width_page object %}
-
-        <p>{{ object.schema }}</p>
-
-        <h3>Schema</h3>
-        <ul>
-            {% for field in object.fields.all %}
-                <li>
-                    {{ field.label }}:
-                    {% if field.field_type == 'object' %}
-                        <b>{{ field|get_field_object_type }}</b>
-                        {% if field.many %}
-                            (Many)
-                        {% endif %}
-                    {% else %}
-                        {{ field.field_type }}
-                    {% endif %}
-                </li>
-            {% endfor %}
-        </ul>
-    {% endcomment %}
     </div>
   </div>
 {% endblock %}

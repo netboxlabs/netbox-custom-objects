@@ -18,7 +18,9 @@ class MappingSchema(PluginTemplateExtension):
         if not (instance := self.context['object']):
             return ''
 
-        return instance.formatted_schema
+        return ''
+        # Debug
+        # return instance.formatted_schema
 
 
 class MappingElements(PluginTemplateExtension):
@@ -28,7 +30,9 @@ class MappingElements(PluginTemplateExtension):
         if not (instance := self.context['object']):
             return ''
 
-        return instance.formatted_data
+        return ''
+        # Debug
+        # return instance.formatted_data
 
 
 class MappingLink(PluginTemplateExtension):
