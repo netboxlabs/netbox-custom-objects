@@ -5,6 +5,7 @@ from rest_framework.exceptions import ValidationError
 from netbox.api.serializers import NetBoxModelSerializer
 from netbox_service_mappings.choices import MappingFieldTypeChoices
 from netbox_service_mappings.models import ServiceMapping, ServiceMappingType, MappingTypeField, MappingRelation
+from utilities.api import get_serializer_for_model
 
 __all__ = (
     'ServiceMappingTypeSerializer',

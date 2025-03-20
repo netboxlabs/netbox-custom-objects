@@ -48,7 +48,7 @@ class MappingLink(PluginTemplateExtension):
 
         return render_jinja2("""
           <div class="card">
-            <h2 class="card-header">Service Mappings to this object</h2>
+            <h2 class="card-header">Custom Objects linking to this object</h2>
             <table class="table table-hover attr-table">
               {% for relation in relations %}
                 <tr>

@@ -14,6 +14,9 @@ class ServiceMappingType(NetBoxModel):
     description = models.TextField(blank=True)
     schema = models.JSONField(blank=True, default=dict)
 
+    class Meta:
+        verbose_name = 'Custom Object Type'
+
     def __str__(self):
         return self.name
 
@@ -37,6 +40,9 @@ class ServiceMapping(NetBoxModel):
     mapping_type = models.ForeignKey(ServiceMappingType, on_delete=models.CASCADE, related_name="mappings")
     name = models.CharField(max_length=100, unique=True)
     data = models.JSONField(blank=True, default=dict)
+
+    class Meta:
+        verbose_name = 'Custom Object'
 
     def __str__(self):
         return self.name

@@ -7,8 +7,8 @@ from .utilities import register_models
 # Plugin Configuration
 class ServiceMappingPluginConfig(PluginConfig):
     name = "netbox_service_mappings"
-    verbose_name = "Service Mappings"
-    description = "A plugin to manage custom service mappings in NetBox"
+    verbose_name = "Custom Objects"
+    description = "A plugin to manage custom objects in NetBox"
     version = "0.1"
     base_url = "service-mappings"
     min_version = "4.2.0"

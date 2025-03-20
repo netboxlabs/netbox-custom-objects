@@ -9,6 +9,7 @@ from core.filtersets import ObjectChangeFilterSet
 from core.models import ObjectChange
 from netbox.views import generic
 from utilities.views import ViewTab, register_model_view
+from utilities.tables import get_table_for_model
 from . import filtersets, forms, tables
 # from .choices import BranchStatusChoices
 # from .jobs import MergeBranchJob, RevertBranchJob, SyncBranchJob
@@ -16,7 +17,7 @@ from .models import ServiceMapping, ServiceMappingType, MappingRelation
 
 
 #
-# Service Mapping Types
+# Custom Object Types
 #
 
 class ServiceMappingTypeListView(generic.ObjectListView):
@@ -44,7 +45,7 @@ class ServiceMappingTypeDeleteView(generic.ObjectDeleteView):
 
 
 #
-# Service Mappings
+# Custom Objects
 #
 
 class ServiceMappingListView(generic.ObjectListView):
@@ -59,6 +60,8 @@ class ServiceMappingView(generic.ObjectView):
     queryset = ServiceMapping.objects.all()
 
     def get_extra_context(self, request, instance):
+
+
         content_type = ContentType.objects.get_for_model(instance)
         return {
             'relations': MappingRelation.objects.filter(field__content_type=content_type, object_id=instance.pk)
