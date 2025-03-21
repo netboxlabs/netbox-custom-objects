@@ -3,7 +3,7 @@ from django.contrib.contenttypes.models import ContentType
 
 from netbox.views import generic
 from utilities.views import ViewTab, register_model_view
-from utilities.tables import get_table_for_model
+# from utilities.tables import get_table_for_model
 from . import filtersets, forms, tables
 from .models import ServiceMapping, ServiceMappingType, MappingRelation
 
