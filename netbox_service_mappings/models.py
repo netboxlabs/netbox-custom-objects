@@ -94,7 +94,7 @@ class ServiceMapping(NetBoxModel):
         return reverse('plugins:netbox_service_mappings:servicemapping', args=[self.pk])
 
 
-class MappingTypeField(models.Model):
+class MappingTypeField(NetBoxModel):
     name = models.CharField(max_length=100, unique=True)
     label = models.CharField(max_length=100, unique=True)
     mapping_type = models.ForeignKey(ServiceMappingType, on_delete=models.CASCADE, related_name="fields")
@@ -120,6 +120,9 @@ class MappingTypeField(models.Model):
 
     def get_child_relations(self, instance):
         return self.relations.filter(mapping=instance)
+
+    def get_absolute_url(self):
+        return reverse('plugins:netbox_service_mappings:servicemappingtype', args=[self.mapping_type.pk])
 
 
 class MappingRelation(models.Model):

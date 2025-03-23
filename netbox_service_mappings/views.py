@@ -5,7 +5,7 @@ from netbox.views import generic
 from utilities.views import ViewTab, register_model_view
 # from utilities.tables import get_table_for_model
 from . import filtersets, forms, tables
-from .models import ServiceMapping, ServiceMappingType, MappingRelation
+from .models import ServiceMapping, ServiceMappingType, MappingRelation, MappingTypeField
 
 
 #
@@ -34,6 +34,15 @@ class ServiceMappingTypeEditView(generic.ObjectEditView):
 class ServiceMappingTypeDeleteView(generic.ObjectDeleteView):
     queryset = ServiceMappingType.objects.all()
     default_return_url = 'plugins:netbox_service_mappings:servicemappingtype_list'
+
+#
+# Custom Object Fields
+#
+
+@register_model_view(MappingTypeField, 'edit')
+class MappingTypeFieldEditView(generic.ObjectEditView):
+    queryset = MappingTypeField.objects.all()
+    form = forms.MappingTypeFieldForm
 
 
 #

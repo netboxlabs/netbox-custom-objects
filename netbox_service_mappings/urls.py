@@ -10,4 +10,6 @@ urlpatterns = [
     path('mappings/', views.ServiceMappingListView.as_view(), name='servicemapping_list'),
     path('mappings/add/', views.ServiceMappingEditView.as_view(), name='servicemapping_add'),
     path('mappings/<int:pk>/', include(get_model_urls('netbox_service_mappings', 'servicemapping'))),
+    path('mapping-type-fields/', include(get_model_urls('netbox_service_mappings', 'mappingtypefield', detail=False))),
+    path('mapping-type-fields/add/', views.MappingTypeFieldEditView.as_view(), name='mappingtypefield_add'),
 ]
