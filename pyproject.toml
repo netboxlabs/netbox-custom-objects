@@ -1,7 +1,7 @@
 [project]
-name = "netboxlabs-service-mappings"
+name = "netboxlabs-custom-objects"
 version = "0.1.0"
-description = "A plugin to manage custom service mappings in NetBox"
+description = "A plugin to manage custom objects in NetBox"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "PolyForm Shield License 1.0.0" }
@@ -38,10 +38,10 @@ test = ["coverage", "pytest", "pytest-cov"]
 
 [tool.setuptools]
 packages = [
-    "netbox_service_mappings",
+    "netbox_custom_objects",
 ]
-package-data = { "netbox_service_mappings" = ["**/*", "templates/**"] }
-exclude-package-data = { netbox_service_mappings = ["tests/*"] }
+package-data = { "netbox_custom_objects" = ["**/*", "templates/**"] }
+exclude-package-data = { netbox_custom_objects = ["tests/*"] }
 license-files = ["LICENSE.md"]
 
 [build-system]

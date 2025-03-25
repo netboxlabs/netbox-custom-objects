@@ -1,12 +1,12 @@
 # netbox-service-mappings
 Service Mappings plugin
 
-1. Add `netbox_service_mappings` to the end of `PLUGINS` in `configuration.py`.
+1. Add `netbox_custom_objects` to `PLUGINS` in `configuration.py`.
 
 ```python
 PLUGINS = [
     # ...
-    'netbox_service_mappings',
+    'netbox_custom_objects',
 ]
 ```
 
@@ -91,19 +91,19 @@ as shown here:
 ```
 
 !!! note
-An `object` field can point to any Service Mapping object, as well as any other existing object internal to NetBox.
-Use an `app_label` of `netbox_service_mappings` and a `model` of `servicemapping`. 
+An `object` field can point to any Custom Object, as well as any other existing object internal to NetBox.
+Use an `app_label` of `netbox_custom_objects` and a `model` of `customobject`. 
 
-### Service Mappings
+### Custom Objects
 
-Once the schema of a Service Mapping Type is defined through its list of fields, you can create Service Mappings,
-which are instances of Service Mapping Types with specific values populated into the fields defined in the schema.
-Create a Service Mapping with a POST to `/api/plugins/service-mappings/mappings/`:
+Once the schema of a Custom Object Type is defined through its list of fields, you can create Custom Objects,
+which are instances of Custom Object Types with specific values populated into the fields defined in the schema.
+Create a Custom Object with a POST to `/api/plugins/custom-objects/custom_objects/`:
 
 ```json
 {
-  "mapping_type": 9,
-  "name": "My Mapping",
+  "custom_object_type": 9,
+  "name": "My Object",
   "data": {
     "internal_id": 102,
     "device_list": [34, 1],
@@ -113,4 +113,4 @@ Create a Service Mapping with a POST to `/api/plugins/service-mappings/mappings/
 ```
 
 PATCH requests can be used to update all the above objects, as well as DELETE and GET operations, using the detail
-URL for each model, i.e. `/api/plugins/service-mappings/mappings/15/`
+URL for each model, i.e. `/api/plugins/custom-objects/custom_objects/15/`
