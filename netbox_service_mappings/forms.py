@@ -1,43 +1,44 @@
-from netbox_service_mappings.models import MappingTypeField, ServiceMapping, ServiceMappingType
+from netbox_service_mappings.models import CustomObject, CustomObjectType, CustomObjectTypeField
 
 from netbox.forms import NetBoxModelForm
 from utilities.forms.fields import CommentField
 from utilities.forms.rendering import FieldSet
 
 __all__ = (
-    'ServiceMappingTypeForm',
-    'ServiceMappingType',
+    'CustomObjectTypeForm',
+    'CustomObjectTypeFieldForm',
+    'CustomObjectType',
 )
 
 
-class ServiceMappingTypeForm(NetBoxModelForm):
+class CustomObjectTypeForm(NetBoxModelForm):
     fieldsets = (
         FieldSet('name', 'description', 'schema', 'tags'),
     )
     comments = CommentField()
 
     class Meta:
-        model = ServiceMappingType
+        model = CustomObjectType
         fields = ('name', 'description', 'comments', 'schema', 'tags')
 
 
-class MappingTypeFieldForm(NetBoxModelForm):
+class CustomObjectTypeFieldForm(NetBoxModelForm):
     fieldsets = (
-        FieldSet('name', 'label', 'mapping_type', 'field_type',),
+        FieldSet('name', 'label', 'custom_object_type', 'field_type',),
     )
     comments = CommentField()
 
     class Meta:
-        model = MappingTypeField
-        fields = ('name', 'label', 'mapping_type', 'field_type',)
+        model = CustomObjectTypeField
+        fields = ('name', 'label', 'custom_object_type', 'field_type',)
 
 
-class ServiceMappingForm(NetBoxModelForm):
+class CustomObjectForm(NetBoxModelForm):
     fieldsets = (
-        FieldSet('name', 'mapping_type', 'data', 'tags'),
+        FieldSet('name', 'custom_object_type', 'data', 'tags'),
     )
     comments = CommentField()
 
     class Meta:
-        model = ServiceMapping
-        fields = ('name', 'mapping_type', 'comments', 'data', 'tags')
+        model = CustomObject
+        fields = ('name', 'custom_object_type', 'comments', 'data', 'tags')

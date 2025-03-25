@@ -1,32 +1,33 @@
 from rest_framework.routers import APIRootView
 from rest_framework.viewsets import ModelViewSet
 
-from netbox_service_mappings.models import ServiceMapping, ServiceMappingType, MappingTypeField, MappingRelation
+from netbox_service_mappings.models import CustomObject, CustomObjectType, CustomObjectTypeField, CustomObjectRelation
 from . import serializers
+from ..views import CustomObjectTypeView
 
 
 class RootView(APIRootView):
     def get_view_name(self):
-        return 'ServiceMappings'
+        return 'CustomObjects'
 
 
-class ServiceMappingTypeViewSet(ModelViewSet):
-    queryset = ServiceMappingType.objects.all()
-    serializer_class = serializers.ServiceMappingTypeSerializer
+class CustomObjectTypeViewSet(ModelViewSet):
+    queryset = CustomObjectType.objects.all()
+    serializer_class = serializers.CustomObjectTypeSerializer
     # filterset_class = filtersets.BranchFilterSet
 
 
-class ServiceMappingViewSet(ModelViewSet):
-    queryset = ServiceMapping.objects.all()
-    serializer_class = serializers.ServiceMappingSerializer
+class CustomObjectViewSet(ModelViewSet):
+    queryset = CustomObject.objects.all()
+    serializer_class = serializers.CustomObjectSerializer
     # filterset_class = filtersets.BranchFilterSet
 
 
-class MappingTypeFieldViewSet(ModelViewSet):
-    queryset = MappingTypeField.objects.all()
-    serializer_class = serializers.MappingTypeFieldSerializer
+class CustomObjectTypeFieldViewSet(ModelViewSet):
+    queryset = CustomObjectTypeField.objects.all()
+    serializer_class = serializers.CustomObjectTypeFieldSerializer
 
 
-class MappingRelationViewSet(ModelViewSet):
-    queryset = MappingRelation.objects.all()
-    serializer_class = serializers.MappingRelationSerializer
+class CustomObjectRelationViewSet(ModelViewSet):
+    queryset = CustomObjectRelation.objects.all()
+    serializer_class = serializers.CustomObjectRelationSerializer

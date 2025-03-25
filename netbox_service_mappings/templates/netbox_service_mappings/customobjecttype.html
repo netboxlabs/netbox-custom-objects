@@ -4,11 +4,11 @@
 {% load plugins %}
 {% load render_table from django_tables2 %}
 {% load i18n %}
-{% load mapping_utils %}
+{% load custom_object_utils %}
 
 {% block extra_controls %}
     {% if perms.dcim.change_device %}
-        <a href="{% url 'plugins:netbox_service_mappings:mappingtypefield_add' %}?mapping_type={{ object.pk }}&return_url={% url 'plugins:netbox_service_mappings:servicemappingtype' pk=object.pk %}" class="btn btn-primary">
+        <a href="{% url 'plugins:netbox_service_mappings:customobjecttypefield_add' %}?custom_object_type={{ object.pk }}&return_url={% url 'plugins:netbox_service_mappings:customobjecttype' pk=object.pk %}" class="btn btn-primary">
             <i class="mdi mdi-plus-thick" aria-hidden="true"></i> {% trans "Add Field" %}
         </a>
     {% endif %}
@@ -75,7 +75,7 @@
                     {% endfor %}
                 </tr>
             </thead>
-            {% for instance in object.mappings.all %}
+            {% for instance in object.custom_objects.all %}
                 <tr>
                     <td>{{ instance|linkify }}</td>
                     {% for field in object.fields.all %}

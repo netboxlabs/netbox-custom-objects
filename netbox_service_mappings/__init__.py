@@ -10,7 +10,7 @@ class ServiceMappingPluginConfig(PluginConfig):
     verbose_name = "Custom Objects"
     description = "A plugin to manage custom objects in NetBox"
     version = "0.1"
-    base_url = "service-mappings"
+    base_url = "custom-objects"
     min_version = "4.2.0"
     # max_version = "3.5.0"
     default_settings = {}

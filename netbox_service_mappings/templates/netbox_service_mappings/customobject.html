@@ -4,7 +4,7 @@
 {% load plugins %}
 {% load render_table from django_tables2 %}
 {% load i18n %}
-{% load mapping_utils %}
+{% load custom_object_utils %}
 
 {% block extra_controls %}
 {% endblock %}
@@ -13,7 +13,7 @@
   <div class="row">
 	  <div class="col col-md-6">
       <div class="card">
-        <h5 class="card-header">{% trans "Service Mapping" %}</h5>
+        <h5 class="card-header">{% trans "Custom Objects" %}</h5>
         <table class="table table-hover attr-table">
           <tr>
             <th scope="row">{% trans "Name" %}</th>
@@ -22,7 +22,7 @@
           <tr>
             <th scope="row">{% trans "Type" %}</th>
             <td>
-                {{ object.mapping_type|linkify:"name" }}
+                {{ object.custom_object_type|linkify:"name" }}
             </td>
           </tr>
           <tr>
@@ -34,7 +34,7 @@
               {% endif %}
             </td>
           </tr>
-          {% for field in object.mapping_type.fields.all %}
+          {% for field in object.custom_object_type.fields.all %}
             {% if field.is_single_value %}
               <tr>
                 <th scope="row">{{ field.label }}</th>
@@ -59,7 +59,7 @@
     <div class="col col-md-6">
       {% include 'inc/panels/comments.html' %}
       {% plugin_right_page object %}
-      {% for field in object.mapping_type.fields.all %}
+      {% for field in object.custom_object_type.fields.all %}
           {% if field.many %}
             {% with field_values=field|get_child_relations:object %}
               <div class="card">

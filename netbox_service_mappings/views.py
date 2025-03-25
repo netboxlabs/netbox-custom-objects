@@ -5,76 +5,75 @@ from netbox.views import generic
 from utilities.views import ViewTab, register_model_view
 # from utilities.tables import get_table_for_model
 from . import filtersets, forms, tables
-from .models import ServiceMapping, ServiceMappingType, MappingRelation, MappingTypeField
+from .models import CustomObject, CustomObjectType, CustomObjectRelation, CustomObjectTypeField
 
 
 #
 # Custom Object Types
 #
 
-class ServiceMappingTypeListView(generic.ObjectListView):
-    queryset = ServiceMappingType.objects.all()
+class CustomObjectTypeListView(generic.ObjectListView):
+    queryset = CustomObjectType.objects.all()
     # filterset = filtersets.BranchFilterSet
     # filterset_form = forms.BranchFilterForm
-    table = tables.ServiceMappingTypeTable
+    table = tables.CustomObjectTypeTable
 
 
-@register_model_view(ServiceMappingType)
-class ServiceMappingTypeView(generic.ObjectView):
-    queryset = ServiceMappingType.objects.all()
+@register_model_view(CustomObjectType)
+class CustomObjectTypeView(generic.ObjectView):
+    queryset = CustomObjectType.objects.all()
 
 
-@register_model_view(ServiceMappingType, 'edit')
-class ServiceMappingTypeEditView(generic.ObjectEditView):
-    queryset = ServiceMappingType.objects.all()
-    form = forms.ServiceMappingTypeForm
+@register_model_view(CustomObjectType, 'edit')
+class CustomObjectTypeEditView(generic.ObjectEditView):
+    queryset = CustomObjectType.objects.all()
+    form = forms.CustomObjectTypeForm
 
 
-@register_model_view(ServiceMappingType, 'delete')
-class ServiceMappingTypeDeleteView(generic.ObjectDeleteView):
-    queryset = ServiceMappingType.objects.all()
-    default_return_url = 'plugins:netbox_service_mappings:servicemappingtype_list'
+@register_model_view(CustomObjectType, 'delete')
+class CustomObjectTypeDeleteView(generic.ObjectDeleteView):
+    queryset = CustomObjectType.objects.all()
+    default_return_url = 'plugins:netbox_service_mappings:customobjecttype_list'
 
 #
 # Custom Object Fields
 #
 
-@register_model_view(MappingTypeField, 'edit')
-class MappingTypeFieldEditView(generic.ObjectEditView):
-    queryset = MappingTypeField.objects.all()
-    form = forms.MappingTypeFieldForm
+@register_model_view(CustomObjectTypeField, 'edit')
+class CustomObjectTypeFieldEditView(generic.ObjectEditView):
+    queryset = CustomObjectTypeField.objects.all()
+    form = forms.CustomObjectTypeFieldForm
 
 
 #
 # Custom Objects
 #
 
-class ServiceMappingListView(generic.ObjectListView):
-    queryset = ServiceMapping.objects.all()
+class CustomObjectListView(generic.ObjectListView):
+    queryset = CustomObject.objects.all()
     # filterset = filtersets.BranchFilterSet
     # filterset_form = forms.BranchFilterForm
-    table = tables.ServiceMappingTable
+    table = tables.CustomObjectTable
 
 
-@register_model_view(ServiceMapping)
-class ServiceMappingView(generic.ObjectView):
-    queryset = ServiceMapping.objects.all()
+@register_model_view(CustomObject)
+class CustomObjectView(generic.ObjectView):
+    queryset = CustomObject.objects.all()
 
     def get_extra_context(self, request, instance):
-
-
         content_type = ContentType.objects.get_for_model(instance)
         return {
-            'relations': MappingRelation.objects.filter(field__content_type=content_type, object_id=instance.pk)
+            'relations': CustomObjectRelation.objects.filter(field__content_type=content_type, object_id=instance.pk)
         }
 
-@register_model_view(ServiceMapping, 'edit')
-class ServiceMappingEditView(generic.ObjectEditView):
-    queryset = ServiceMapping.objects.all()
-    form = forms.ServiceMappingForm
+
+@register_model_view(CustomObject, 'edit')
+class CustomObjectEditView(generic.ObjectEditView):
+    queryset = CustomObject.objects.all()
+    form = forms.CustomObjectForm
 
 
-@register_model_view(ServiceMapping, 'delete')
-class ServiceMappingDeleteView(generic.ObjectDeleteView):
-    queryset = ServiceMapping.objects.all()
-    default_return_url = 'plugins:netbox_service_mappings:servicemapping_list'
+@register_model_view(CustomObject, 'delete')
+class CustomObjectDeleteView(generic.ObjectDeleteView):
+    queryset = CustomObject.objects.all()
+    default_return_url = 'plugins:netbox_service_mappings:customobject_list'

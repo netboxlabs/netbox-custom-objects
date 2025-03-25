@@ -4,12 +4,12 @@ from utilities.urls import get_model_urls
 from . import views
 
 urlpatterns = [
-    path('mapping_types/', views.ServiceMappingTypeListView.as_view(), name='servicemappingtype_list'),
-    path('mapping_types/add/', views.ServiceMappingTypeEditView.as_view(), name='servicemappingtype_add'),
-    path('mapping_types/<int:pk>/', include(get_model_urls('netbox_service_mappings', 'servicemappingtype'))),
-    path('mappings/', views.ServiceMappingListView.as_view(), name='servicemapping_list'),
-    path('mappings/add/', views.ServiceMappingEditView.as_view(), name='servicemapping_add'),
-    path('mappings/<int:pk>/', include(get_model_urls('netbox_service_mappings', 'servicemapping'))),
-    path('mapping-type-fields/', include(get_model_urls('netbox_service_mappings', 'mappingtypefield', detail=False))),
-    path('mapping-type-fields/add/', views.MappingTypeFieldEditView.as_view(), name='mappingtypefield_add'),
+    path('custom_object_types/', views.CustomObjectTypeListView.as_view(), name='customobjecttype_list'),
+    path('custom_object_types/add/', views.CustomObjectTypeEditView.as_view(), name='customobjecttype_add'),
+    path('custom_object_types/<int:pk>/', include(get_model_urls('netbox_service_mappings', 'customobjecttype'))),
+    path('custom_objects/', views.CustomObjectListView.as_view(), name='customobject_list'),
+    path('custom_objects/add/', views.CustomObjectEditView.as_view(), name='customobject_add'),
+    path('custom_objects/<int:pk>/', include(get_model_urls('netbox_service_mappings', 'customobject'))),
+    path('custom_object_type_fields/', include(get_model_urls('netbox_service_mappings', 'customobjecttypefield', detail=False))),
+    path('custom_object_type_fields/add/', views.CustomObjectTypeFieldEditView.as_view(), name='customobjecttypefield_add'),
 ]

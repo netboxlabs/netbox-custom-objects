@@ -5,10 +5,11 @@ from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.urls import reverse
 from netbox.models import NetBoxModel
-from .choices import MappingFieldTypeChoices
+from extras.choices import CustomFieldTypeChoices
+# from .choices import MappingFieldTypeChoices
 
 
-class ServiceMappingType(NetBoxModel):
+class CustomObjectType(NetBoxModel):
     name = models.CharField(max_length=100, unique=True)
     slug = models.SlugField(max_length=100, unique=True)
     description = models.TextField(blank=True)
@@ -25,7 +26,7 @@ class ServiceMappingType(NetBoxModel):
         result = '<ul>'
         for field_name, field in self.schema.items():
             field_type = field.get('type')
-            if field_type in ['object', 'object_list']:
+            if field_type in ['object', 'multiobject']:
                 content_type = ContentType.objects.get(app_label=field['app_label'], model=field['model'])
                 field = content_type
             result += f"<li>{field_name}: {field}</li>"
@@ -33,11 +34,11 @@ class ServiceMappingType(NetBoxModel):
         return result
 
     def get_absolute_url(self):
-        return reverse('plugins:netbox_service_mappings:servicemappingtype', args=[self.pk])
+        return reverse('plugins:netbox_service_mappings:customobjecttype', args=[self.pk])
 
 
-class ServiceMapping(NetBoxModel):
-    mapping_type = models.ForeignKey(ServiceMappingType, on_delete=models.CASCADE, related_name="mappings")
+class CustomObject(NetBoxModel):
+    custom_object_type = models.ForeignKey(CustomObjectType, on_delete=models.CASCADE, related_name="custom_objects")
     name = models.CharField(max_length=100, unique=True)
     data = models.JSONField(blank=True, default=dict)
 
@@ -50,10 +51,10 @@ class ServiceMapping(NetBoxModel):
     @property
     def formatted_data(self):
         result = '<ul>'
-        for field_name, field in self.mapping_type.schema.items():
+        for field_name, field in self.custom_object_type.schema.items():
             value = self.data.get(field_name)
             field_type = field.get('type')
-            if field_type in ['object', 'object_list']:
+            if field_type in ['object', 'multiobject']:
                 content_type = ContentType.objects.get(app_label=field['app_label'], model=field['model'])
                 model_class = content_type.model_class()
                 if field_type == 'object':
@@ -61,7 +62,7 @@ class ServiceMapping(NetBoxModel):
                     url = instance.get_absolute_url()
                     result += f'<li>{field_name}: <a href="{url}">{instance}</a></li>'
                     continue
-                if field_type == 'object_list':
+                if field_type == 'multiobject':
                     result += f'<li>{field_name}: <ul>'
                     for item in value:
                         instance = model_class.objects.get(pk=item['object_id'])
@@ -76,29 +77,29 @@ class ServiceMapping(NetBoxModel):
     @property
     def fields(self):
         result = {}
-        for field in self.mapping_type.fields.all():
+        for field in self.custom_object_type.fields.all():
             result[field.name] = self.get_field_value(field.name)
         return result
 
     def get_field_value(self, field_name):
-        mapping_type_field = self.mapping_type.fields.get(name=field_name)
-        if mapping_type_field.field_type == 'object':
-            object_ids = MappingRelation.objects.filter(
-                mapping=self, field=mapping_type_field
+        custom_object_type_field = self.custom_object_type.fields.get(name=field_name)
+        if custom_object_type_field.field_type == 'object':
+            object_ids = CustomObjectRelation.objects.filter(
+                custom_object=self, field=custom_object_type_field
             ).values_list('object_id', flat=True)
-            field_objects = mapping_type_field.model_class.objects.filter(pk__in=object_ids)
-            return field_objects if mapping_type_field.many else field_objects.first()
+            field_objects = custom_object_type_field.model_class.objects.filter(pk__in=object_ids)
+            return field_objects if custom_object_type_field.many else field_objects.first()
         return self.data.get(field_name)
 
     def get_absolute_url(self):
-        return reverse('plugins:netbox_service_mappings:servicemapping', args=[self.pk])
+        return reverse('plugins:netbox_service_mappings:customobject', args=[self.pk])
 
 
-class MappingTypeField(NetBoxModel):
+class CustomObjectTypeField(NetBoxModel):
     name = models.CharField(max_length=100, unique=True)
     label = models.CharField(max_length=100, unique=True)
-    mapping_type = models.ForeignKey(ServiceMappingType, on_delete=models.CASCADE, related_name="fields")
-    field_type = models.CharField(max_length=100, choices=MappingFieldTypeChoices)
+    custom_object_type = models.ForeignKey(CustomObjectType, on_delete=models.CASCADE, related_name="fields")
+    field_type = models.CharField(max_length=100, choices=CustomFieldTypeChoices)
 
     # For non-object fields, other field attribs (such as choices, length, required) should be added here as a
     # superset, or stored in a JSON field
@@ -119,15 +120,15 @@ class MappingTypeField(NetBoxModel):
         return self.field_type != 'object' or not self.many
 
     def get_child_relations(self, instance):
-        return self.relations.filter(mapping=instance)
+        return self.relations.filter(custom_object=instance)
 
     def get_absolute_url(self):
-        return reverse('plugins:netbox_service_mappings:servicemappingtype', args=[self.mapping_type.pk])
+        return reverse('plugins:netbox_service_mappings:customobjecttype', args=[self.custom_object_type.pk])
 
 
-class MappingRelation(models.Model):
-    mapping = models.ForeignKey(ServiceMapping, on_delete=models.CASCADE)
-    field = models.ForeignKey(MappingTypeField, on_delete=models.CASCADE, related_name="relations")
+class CustomObjectRelation(models.Model):
+    custom_object = models.ForeignKey(CustomObject, on_delete=models.CASCADE)
+    field = models.ForeignKey(CustomObjectTypeField, on_delete=models.CASCADE, related_name="relations")
     object_id = models.PositiveIntegerField(db_index=True)
 
     @property

@@ -3,9 +3,9 @@ from . import views
 
 router = NetBoxRouter()
 router.APIRootView = views.RootView
-router.register('mapping-types', views.ServiceMappingTypeViewSet)
-router.register('mappings', views.ServiceMappingViewSet)
-router.register('mapping-type-fields', views.MappingTypeFieldViewSet)
+router.register('custom-object-types', views.CustomObjectTypeViewSet)
+router.register('custom-objects', views.CustomObjectViewSet)
+router.register('custom-object-type-fields', views.CustomObjectTypeFieldViewSet)
 # router.register('mapping-relations', views.MappingRelationViewSet)
 
 urlpatterns = router.urls
