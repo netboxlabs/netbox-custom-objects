@@ -26,5 +26,5 @@ def get_field_value(obj, field: CustomObjectTypeField) -> str:
 
 
 @register.filter(name="get_child_relations")
-def get_child_relations(field: CustomObjectTypeField, obj):
+def get_child_relations(obj, field: CustomObjectTypeField):
     return field.get_child_relations(obj)

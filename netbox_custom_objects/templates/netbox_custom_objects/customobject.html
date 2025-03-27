@@ -40,7 +40,7 @@
                 <th scope="row">{{ field.label }}</th>
                 <td>
                   {% if field.type == 'object' %}
-                    {% with field_values=field|get_child_relations:object %}
+                    {% with field_values=object|get_child_relations:field %}
                       {{ field_values.first.instance|linkify }}
                     {% endwith %}
                   {% else %}
@@ -61,7 +61,7 @@
       {% plugin_right_page object %}
       {% for field in object.custom_object_type.fields.all %}
           {% if field.many %}
-            {% with field_values=field|get_child_relations:object %}
+            {% with field_values=object|get_child_relations:field %}
               <div class="card">
                 <h2 class="card-header">{{ field.label }}</h2>
                 <table class="table table-hover attr-table">
