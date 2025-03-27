@@ -1,11 +1,17 @@
 import jsonschema
+import re
 
 from django.db import models
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
+from django.core.validators import RegexValidator, ValidationError
 from django.urls import reverse
+from django.utils.translation import gettext_lazy as _
 from netbox.models import NetBoxModel
-from extras.choices import CustomFieldTypeChoices
+from extras.choices import (
+    CustomFieldTypeChoices, CustomFieldFilterLogicChoices, CustomFieldUIVisibleChoices, CustomFieldUIEditableChoices
+)
+from utilities.validators import validate_regex
 # from .choices import MappingFieldTypeChoices
 
 
@@ -83,7 +89,7 @@ class CustomObject(NetBoxModel):
 
     def get_field_value(self, field_name):
         custom_object_type_field = self.custom_object_type.fields.get(name=field_name)
-        if custom_object_type_field.field_type == 'object':
+        if custom_object_type_field.type == 'object':
             object_ids = CustomObjectRelation.objects.filter(
                 custom_object=self, field=custom_object_type_field
             ).values_list('object_id', flat=True)
@@ -96,17 +102,173 @@ class CustomObject(NetBoxModel):
 
 
 class CustomObjectTypeField(NetBoxModel):
-    name = models.CharField(max_length=100, unique=True)
-    label = models.CharField(max_length=100, unique=True)
+    # name = models.CharField(max_length=100, unique=True)
+    # label = models.CharField(max_length=100, unique=True)
     custom_object_type = models.ForeignKey(CustomObjectType, on_delete=models.CASCADE, related_name="fields")
-    field_type = models.CharField(max_length=100, choices=CustomFieldTypeChoices)
+    # type = models.CharField(max_length=100, choices=CustomFieldTypeChoices)
+    # object_types = models.ManyToManyField(
+    #     to='core.ObjectType',
+    #     related_name='custom_object_types',
+    #     help_text=_('The object(s) to which this field applies.')
+    # )
+    type = models.CharField(
+        verbose_name=_('type'),
+        max_length=50,
+        choices=CustomFieldTypeChoices,
+        default=CustomFieldTypeChoices.TYPE_TEXT,
+        help_text=_('The type of data this custom field holds')
+    )
+    related_object_type = models.ForeignKey(
+        to='core.ObjectType',
+        on_delete=models.PROTECT,
+        blank=True,
+        null=True,
+        help_text=_('The type of NetBox object this field maps to (for object fields)')
+    )
+    name = models.CharField(
+        verbose_name=_('name'),
+        max_length=50,
+        unique=True,
+        help_text=_('Internal field name'),
+        validators=(
+            RegexValidator(
+                regex=r'^[a-z0-9_]+$',
+                message=_("Only alphanumeric characters and underscores are allowed."),
+                flags=re.IGNORECASE
+            ),
+            RegexValidator(
+                regex=r'__',
+                message=_("Double underscores are not permitted in custom field names."),
+                flags=re.IGNORECASE,
+                inverse_match=True
+            ),
+        )
+    )
+    label = models.CharField(
+        verbose_name=_('label'),
+        max_length=50,
+        blank=True,
+        help_text=_(
+            "Name of the field as displayed to users (if not provided, 'the field's name will be used)"
+        )
+    )
+    group_name = models.CharField(
+        verbose_name=_('group name'),
+        max_length=50,
+        blank=True,
+        help_text=_("Custom fields within the same group will be displayed together")
+    )
+    description = models.CharField(
+        verbose_name=_('description'),
+        max_length=200,
+        blank=True
+    )
+    required = models.BooleanField(
+        verbose_name=_('required'),
+        default=False,
+        help_text=_("This field is required when creating new objects or editing an existing object.")
+    )
+    unique = models.BooleanField(
+        verbose_name=_('must be unique'),
+        default=False,
+        help_text=_("The value of this field must be unique for the assigned object")
+    )
+    search_weight = models.PositiveSmallIntegerField(
+        verbose_name=_('search weight'),
+        default=1000,
+        help_text=_(
+            "Weighting for search. Lower values are considered more important. Fields with a search weight of zero "
+            "will be ignored."
+        )
+    )
+    filter_logic = models.CharField(
+        verbose_name=_('filter logic'),
+        max_length=50,
+        choices=CustomFieldFilterLogicChoices,
+        default=CustomFieldFilterLogicChoices.FILTER_LOOSE,
+        help_text=_("Loose matches any instance of a given string; exact matches the entire field.")
+    )
+    default = models.JSONField(
+        verbose_name=_('default'),
+        blank=True,
+        null=True,
+        help_text=_(
+            'Default value for the field (must be a JSON value). Encapsulate strings with double quotes (e.g. "Foo").'
+        )
+    )
+    related_object_filter = models.JSONField(
+        blank=True,
+        null=True,
+        help_text=_(
+            'Filter the object selection choices using a query_params dict (must be a JSON value).'
+            'Encapsulate strings with double quotes (e.g. "Foo").'
+        )
+    )
+    weight = models.PositiveSmallIntegerField(
+        default=100,
+        verbose_name=_('display weight'),
+        help_text=_('Fields with higher weights appear lower in a form.')
+    )
+    validation_minimum = models.BigIntegerField(
+        blank=True,
+        null=True,
+        verbose_name=_('minimum value'),
+        help_text=_('Minimum allowed value (for numeric fields)')
+    )
+    validation_maximum = models.BigIntegerField(
+        blank=True,
+        null=True,
+        verbose_name=_('maximum value'),
+        help_text=_('Maximum allowed value (for numeric fields)')
+    )
+    validation_regex = models.CharField(
+        blank=True,
+        validators=[validate_regex],
+        max_length=500,
+        verbose_name=_('validation regex'),
+        help_text=_(
+            'Regular expression to enforce on text field values. Use ^ and $ to force matching of entire string. For '
+            'example, <code>^[A-Z]{3}$</code> will limit values to exactly three uppercase letters.'
+        )
+    )
+    choice_set = models.ForeignKey(
+        to='extras.CustomFieldChoiceSet',
+        on_delete=models.PROTECT,
+        related_name='choices_for_object_type',
+        verbose_name=_('choice set'),
+        blank=True,
+        null=True
+    )
+    ui_visible = models.CharField(
+        max_length=50,
+        choices=CustomFieldUIVisibleChoices,
+        default=CustomFieldUIVisibleChoices.ALWAYS,
+        verbose_name=_('UI visible'),
+        help_text=_('Specifies whether the custom field is displayed in the UI')
+    )
+    ui_editable = models.CharField(
+        max_length=50,
+        choices=CustomFieldUIEditableChoices,
+        default=CustomFieldUIEditableChoices.YES,
+        verbose_name=_('UI editable'),
+        help_text=_('Specifies whether the custom field value can be edited in the UI')
+    )
+    is_cloneable = models.BooleanField(
+        default=False,
+        verbose_name=_('is cloneable'),
+        help_text=_('Replicate this value when cloning objects')
+    )
+    comments = models.TextField(
+        verbose_name=_('comments'),
+        blank=True
+    )
 
     # For non-object fields, other field attribs (such as choices, length, required) should be added here as a
     # superset, or stored in a JSON field
-    options = models.JSONField(blank=True, default=dict)
+    # options = models.JSONField(blank=True, default=dict)
 
-    content_type = models.ForeignKey(ContentType, null=True, blank=True, on_delete=models.CASCADE)
-    many = models.BooleanField(default=False)
+    # content_type = models.ForeignKey(ContentType, null=True, blank=True, on_delete=models.CASCADE)
+    # many = models.BooleanField(default=False)
 
     def __str__(self):
         return self.name
@@ -117,7 +279,7 @@ class CustomObjectTypeField(NetBoxModel):
 
     @property
     def is_single_value(self):
-        return self.field_type != 'object' or not self.many
+        return self.type != 'object' or not self.many
 
     def get_child_relations(self, instance):
         return self.relations.filter(custom_object=instance)

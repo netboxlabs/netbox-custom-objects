@@ -52,8 +52,8 @@
             {% for field in object.fields.all %}
             <tr>
                 <th scope="row">{{ field.label }}</th>
-                <td>{{ field.field_type }}</td>
-                <td>{% if field.field_type == "object" %}{{ field|get_field_object_type }}{% endif %}</td>
+                <td>{{ field.type }}</td>
+                <td>{% if field.type == "object" %}{{ field|get_field_object_type }}{% endif %}</td>
                 <td>{% if field.many %}(Many){% endif %}</td>
             </tr>
           {% endfor %}

@@ -42,7 +42,7 @@ class CustomObjectLink(PluginTemplateExtension):
             return ''
 
         content_type = ContentType.objects.get_for_model(instance)
-        relations = CustomObjectRelation.objects.filter(field__content_type=content_type, object_id=instance.pk)
+        relations = CustomObjectRelation.objects.filter(field__related_object_type=content_type, object_id=instance.pk)
         if not relations.exists():
             return ''
 

@@ -24,21 +24,22 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
     url = serializers.HyperlinkedIdentityField(
         view_name='plugins-api:netbox_custom_objects-api:customobjecttypefield-detail'
     )
-    content_type = serializers.SerializerMethodField()
+    # content_type = serializers.SerializerMethodField()
     app_label = serializers.CharField(required=False)
     model = serializers.CharField(required=False)
 
     class Meta:
         model = CustomObjectTypeField
         fields = (
-            'id', 'url', 'name', 'label', 'custom_object_type', 'field_type', 'content_type', 'many', 'options',
+            # 'id', 'url', 'name', 'label', 'custom_object_type', 'field_type', 'content_type', 'many', 'options',
+            'id', 'name', 'label', 'custom_object_type', 'type', 'validation_regex', 'validation_minimum', 'validation_maximum',
             'app_label', 'model',
         )
 
     def validate(self, attrs):
         app_label = attrs.pop('app_label', None)
         model = attrs.pop('model', None)
-        if attrs['field_type'] == 'object':
+        if attrs['type'] == 'object':
             try:
                 attrs['content_type'] = ContentType.objects.get(app_label=app_label, model=model)
             except ContentType.DoesNotExist:
@@ -99,7 +100,7 @@ class CustomObjectSerializer(NetBoxModelSerializer):
 
     def validate(self, attrs):
         self.relation_fields = {}
-        for field in attrs['custom_object_type'].fields.filter(field_type=CustomFieldTypeChoices.TYPE_OBJECT):
+        for field in attrs['custom_object_type'].fields.filter(type=CustomFieldTypeChoices.TYPE_OBJECT):
             self.relation_fields[field.name] = attrs['data'].pop(field.name, None)
         return super().validate(attrs)
 
@@ -138,7 +139,7 @@ class CustomObjectSerializer(NetBoxModelSerializer):
         result = {}
         for field_name, value in obj.fields.items():
             field = obj.custom_object_type.fields.get(name=field_name)
-            if field.field_type == 'object':
+            if field.type == 'object':
                 serializer = get_serializer_for_model(field.model_class)
                 context = {'request': self.context['request']}
                 result[field.name] = serializer(value, nested=True, context=context, many=field.many).data
