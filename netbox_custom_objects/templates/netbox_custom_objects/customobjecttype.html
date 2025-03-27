@@ -71,7 +71,7 @@
                 <tr>
                     <th>{{ object.name }}</th>
                     {% for field in object.fields.all %}
-                        <th>{{ field.label }}</th>
+                        <th>{{ field.label|default:field.name }}</th>
                     {% endfor %}
                 </tr>
             </thead>
