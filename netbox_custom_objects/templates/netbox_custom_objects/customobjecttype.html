@@ -80,7 +80,13 @@
                     <td>{{ instance|linkify }}</td>
                     {% for field in object.fields.all %}
                         {% if field.is_single_value %}
-                            <td>{{ instance|get_field_value:field }}</td>
+                            {% if field.type == 'object' %}
+                                {% with instance|get_child_relations:field as relations %}
+                                    <td>{{ relations.first.instance|linkify }}</td>
+                                {% endwith %}
+                            {% else %}
+                                <td>{{ instance|get_field_value:field }}</td>
+                            {% endif %}
                         {% else %}
                             {% with instance|get_child_relations:field as relations %}
                                 <td>{{ relations.count }}</td>

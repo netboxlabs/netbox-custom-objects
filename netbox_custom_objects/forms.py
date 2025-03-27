@@ -39,6 +39,7 @@ class CustomObjectTypeForm(NetBoxModelForm):
 
 
 class CustomObjectTypeFieldForm(CustomFieldForm):
+    # This field should be removed or at least "required" should be defeated
     object_types = forms.CharField(
         label=_('Object types'),
         help_text=_("The type(s) of object that have this custom field"),
