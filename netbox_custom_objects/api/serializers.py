@@ -33,7 +33,7 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
         fields = (
             # 'id', 'url', 'name', 'label', 'custom_object_type', 'field_type', 'content_type', 'many', 'options',
             'id', 'name', 'label', 'custom_object_type', 'type', 'validation_regex', 'validation_minimum', 'validation_maximum',
-            'app_label', 'model',
+            'related_object_type', 'app_label', 'model',
         )
 
     def validate(self, attrs):
@@ -41,7 +41,7 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
         model = attrs.pop('model', None)
         if attrs['type'] == 'object':
             try:
-                attrs['content_type'] = ContentType.objects.get(app_label=app_label, model=model)
+                attrs['related_object_type'] = ContentType.objects.get(app_label=app_label, model=model)
             except ContentType.DoesNotExist:
                 raise ValidationError('Must provide valid app_label and model for object field type.')
         return super().validate(attrs)
@@ -52,12 +52,12 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
         """
         return super().create(validated_data)
 
-    def get_content_type(self, obj):
-        if obj.content_type:
+    def get_related_object_type(self, obj):
+        if obj.related_object_type:
             return dict(
-                id=obj.content_type.id,
-                app_label=obj.content_type.app_label,
-                model=obj.content_type.model,
+                id=obj.related_object_type.id,
+                app_label=obj.related_object_type.app_label,
+                model=obj.related_object_type.model,
             )
 
 

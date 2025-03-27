@@ -62,10 +62,11 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
 
     class Meta:
         model = CustomObjectTypeField
-        fields = (
-            'custom_object_type', 'name', 'label', 'type', 'validation_regex', 'validation_minimum', 'validation_maximum',
-        )
-        # fields = '__all__'
+        # fields = (
+        #     'custom_object_type', 'name', 'label', 'type', 'validation_regex', 'validation_minimum', 'validation_maximum',
+        #     'related_object_type',
+        # )
+        fields = '__all__'
 
 
 class CustomObjectForm(NetBoxModelForm):

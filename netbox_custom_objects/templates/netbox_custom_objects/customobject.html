@@ -39,7 +39,7 @@
               <tr>
                 <th scope="row">{{ field.label }}</th>
                 <td>
-                  {% if field.field_type == 'object' %}
+                  {% if field.type == 'object' %}
                     {% with field_values=field|get_child_relations:object %}
                       {{ field_values.first.instance|linkify }}
                     {% endwith %}

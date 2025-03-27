@@ -7,7 +7,8 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.validators import RegexValidator, ValidationError
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
-from netbox.models import NetBoxModel
+from netbox.models import NetBoxModel, ChangeLoggedModel
+from netbox.models.features import CloningMixin, ExportTemplatesMixin
 from extras.choices import (
     CustomFieldTypeChoices, CustomFieldFilterLogicChoices, CustomFieldUIVisibleChoices, CustomFieldUIEditableChoices
 )
@@ -101,7 +102,7 @@ class CustomObject(NetBoxModel):
         return reverse('plugins:netbox_custom_objects:customobject', args=[self.pk])
 
 
-class CustomObjectTypeField(NetBoxModel):
+class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
     # name = models.CharField(max_length=100, unique=True)
     # label = models.CharField(max_length=100, unique=True)
     custom_object_type = models.ForeignKey(CustomObjectType, on_delete=models.CASCADE, related_name="fields")
@@ -275,11 +276,15 @@ class CustomObjectTypeField(NetBoxModel):
 
     @property
     def model_class(self):
-        return apps.get_model(self.content_type.app_label, self.content_type.model)
+        return apps.get_model(self.related_object_type.app_label, self.related_object_type.model)
 
     @property
     def is_single_value(self):
-        return self.type != 'object' or not self.many
+        return not self.many
+
+    @property
+    def many(self):
+        return self.type in ['multiobject', 'multiselect']
 
     def get_child_relations(self, instance):
         return self.relations.filter(custom_object=instance)
@@ -295,5 +300,5 @@ class CustomObjectRelation(models.Model):
 
     @property
     def instance(self):
-        model_class = self.field.content_type.model_class()
+        model_class = self.field.related_object_type.model_class()
         return model_class.objects.get(pk=self.object_id)

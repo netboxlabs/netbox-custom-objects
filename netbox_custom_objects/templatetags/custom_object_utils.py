@@ -14,7 +14,7 @@ register = template.Library()
 
 @register.filter(name="get_field_object_type")
 def get_field_object_type(field: CustomObjectTypeField) -> str:
-    ct = field.content_type
+    ct = field.related_object_type
     model = apps.get_model(ct.app_label, ct.model)
     label = model._meta.verbose_name
     return label
