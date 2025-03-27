@@ -100,7 +100,8 @@ class CustomObjectSerializer(NetBoxModelSerializer):
 
     def validate(self, attrs):
         self.relation_fields = {}
-        for field in attrs['custom_object_type'].fields.filter(type=CustomFieldTypeChoices.TYPE_OBJECT):
+        object_field_types = [CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT]
+        for field in attrs['custom_object_type'].fields.filter(type__in=object_field_types):
             self.relation_fields[field.name] = attrs['data'].pop(field.name, None)
         return super().validate(attrs)
 
