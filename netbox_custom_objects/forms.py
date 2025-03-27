@@ -18,13 +18,13 @@ __all__ = (
 
 class CustomObjectTypeForm(NetBoxModelForm):
     fieldsets = (
-        FieldSet('name', 'description', 'schema', 'tags'),
+        FieldSet('name', 'slug', 'description', 'schema', 'tags'),
     )
     comments = CommentField()
 
     class Meta:
         model = CustomObjectType
-        fields = ('name', 'description', 'comments', 'schema', 'tags')
+        fields = ('name', 'slug', 'description', 'comments', 'schema', 'tags')
 
 
 # class CustomObjectTypeFieldForm(NetBoxModelForm):

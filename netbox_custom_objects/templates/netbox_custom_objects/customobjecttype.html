@@ -51,7 +51,7 @@
         <table class="table table-hover attr-table">
             {% for field in object.fields.all %}
             <tr>
-                <th scope="row">{{ field.label }}</th>
+                <th scope="row">{{ field.label|default:field.name }}</th>
                 <td>{{ field.type }}</td>
                 <td>{% if field.type == "object" %}{{ field|get_field_object_type }}{% endif %}</td>
                 <td>{% if field.many %}(Many){% endif %}</td>

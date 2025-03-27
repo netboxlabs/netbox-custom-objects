@@ -129,7 +129,6 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     name = models.CharField(
         verbose_name=_('name'),
         max_length=50,
-        unique=True,
         help_text=_('Internal field name'),
         validators=(
             RegexValidator(
@@ -270,6 +269,14 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
     # content_type = models.ForeignKey(ContentType, null=True, blank=True, on_delete=models.CASCADE)
     # many = models.BooleanField(default=False)
+
+    class Meta:
+        constraints = (
+            models.UniqueConstraint(
+                fields=('name', 'custom_object_type'),
+                name='%(app_label)s_%(class)s_unique_name'
+            ),
+        )
 
     def __str__(self):
         return self.name
