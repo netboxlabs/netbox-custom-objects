@@ -83,6 +83,8 @@ class CustomObjectForm(NetBoxModelForm):
         fields = ('name', 'custom_object_type', 'comments', 'tags')
 
     def _get_custom_fields(self, content_type):
+        if self.instance.pk is None:
+            return CustomObjectTypeField.objects.none()
         return CustomObjectTypeField.objects.filter(custom_object_type=self.instance.custom_object_type).exclude(
             ui_editable=CustomFieldUIEditableChoices.HIDDEN
         )
@@ -119,7 +121,7 @@ class CustomObjectForm(NetBoxModelForm):
                     CustomObjectRelation.objects.create(custom_object=self.instance, field=customfield, object_id=object_id)
             elif customfield.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                 CustomObjectRelation.objects.filter(custom_object=self.instance, field__name=key).delete()
-                for object_id in self.cleaned_data['data'].get(key, []):
+                for object_id in self.cleaned_data['data'].get(key) or []:
                     CustomObjectRelation.objects.create(custom_object=self.instance, field=customfield, object_id=object_id)
         return super()._save_m2m()
 
