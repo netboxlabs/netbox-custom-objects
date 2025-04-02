@@ -2,14 +2,15 @@ from django.contrib.contenttypes.models import ContentType
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 
+from extras.choices import CustomFieldTypeChoices
 from netbox.api.serializers import NetBoxModelSerializer
-from netbox_service_mappings.choices import MappingFieldTypeChoices
-from netbox_service_mappings.models import ServiceMapping, ServiceMappingType, MappingTypeField, MappingRelation
+# from netbox_service_mappings.choices import MappingFieldTypeChoices
+from netbox_custom_objects.models import CustomObject, CustomObjectType, CustomObjectTypeField, CustomObjectRelation
 from utilities.api import get_serializer_for_model
 
 __all__ = (
-    'ServiceMappingTypeSerializer',
-    'ServiceMappingSerializer',
+    'CustomObjectTypeSerializer',
+    'CustomObjectSerializer',
 )
 
 
@@ -19,58 +20,59 @@ class ContentTypeSerializer(NetBoxModelSerializer):
         fields = ('id', 'app_label', 'model',)
 
 
-class MappingTypeFieldSerializer(NetBoxModelSerializer):
+class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
     url = serializers.HyperlinkedIdentityField(
-        view_name='plugins-api:netbox_service_mappings-api:mappingtypefield-detail'
+        view_name='plugins-api:netbox_custom_objects-api:customobjecttypefield-detail'
     )
-    content_type = serializers.SerializerMethodField()
+    # content_type = serializers.SerializerMethodField()
     app_label = serializers.CharField(required=False)
     model = serializers.CharField(required=False)
 
     class Meta:
-        model = MappingTypeField
+        model = CustomObjectTypeField
         fields = (
-            'id', 'url', 'name', 'label', 'mapping_type', 'field_type', 'content_type', 'many', 'options',
-            'app_label', 'model',
+            # 'id', 'url', 'name', 'label', 'custom_object_type', 'field_type', 'content_type', 'many', 'options',
+            'id', 'name', 'label', 'custom_object_type', 'type', 'validation_regex', 'validation_minimum', 'validation_maximum',
+            'related_object_type', 'app_label', 'model',
         )
 
     def validate(self, attrs):
         app_label = attrs.pop('app_label', None)
         model = attrs.pop('model', None)
-        if attrs['field_type'] == 'object':
+        if attrs['type'] == 'object':
             try:
-                attrs['content_type'] = ContentType.objects.get(app_label=app_label, model=model)
+                attrs['related_object_type'] = ContentType.objects.get(app_label=app_label, model=model)
             except ContentType.DoesNotExist:
                 raise ValidationError('Must provide valid app_label and model for object field type.')
         return super().validate(attrs)
 
     def create(self, validated_data):
         """
-        Record the user who created the Service Mapping as its owner.
+        Record the user who created the Custom Object as its owner.
         """
         return super().create(validated_data)
 
-    def get_content_type(self, obj):
-        if obj.content_type:
+    def get_related_object_type(self, obj):
+        if obj.related_object_type:
             return dict(
-                id=obj.content_type.id,
-                app_label=obj.content_type.app_label,
-                model=obj.content_type.model,
+                id=obj.related_object_type.id,
+                app_label=obj.related_object_type.app_label,
+                model=obj.related_object_type.model,
             )
 
 
-class ServiceMappingTypeSerializer(NetBoxModelSerializer):
+class CustomObjectTypeSerializer(NetBoxModelSerializer):
     url = serializers.HyperlinkedIdentityField(
-        view_name='plugins-api:netbox_service_mappings-api:servicemappingtype-detail'
+        view_name='plugins-api:netbox_custom_objects-api:customobjecttype-detail'
     )
-    fields = MappingTypeFieldSerializer(
+    fields = CustomObjectTypeFieldSerializer(
         nested=True,
         read_only=True,
         many=True,
     )
 
     class Meta:
-        model = ServiceMappingType
+        model = CustomObjectType
         fields = [
             'id', 'url', 'name', 'slug', 'description', 'tags', 'created', 'last_updated', 'fields',
         ]
@@ -80,45 +82,46 @@ class ServiceMappingTypeSerializer(NetBoxModelSerializer):
         return super().create(validated_data)
 
 
-class ServiceMappingSerializer(NetBoxModelSerializer):
+class CustomObjectSerializer(NetBoxModelSerializer):
     relation_fields = None
 
     url = serializers.HyperlinkedIdentityField(
-        view_name='plugins-api:netbox_service_mappings-api:servicemapping-detail'
+        view_name='plugins-api:netbox_custom_objects-api:customobject-detail'
     )
     field_data = serializers.SerializerMethodField()
-    mapping_type = ServiceMappingTypeSerializer(nested=True)
+    custom_object_type = CustomObjectTypeSerializer(nested=True)
 
     class Meta:
-        model = ServiceMapping
+        model = CustomObject
         fields = [
-            'id', 'url', 'name', 'mapping_type', 'tags', 'created', 'last_updated', 'data', 'field_data',
+            'id', 'url', 'name', 'custom_object_type', 'tags', 'created', 'last_updated', 'data', 'field_data',
         ]
-        brief_fields = ('id', 'url', 'name', 'mapping_type',)
+        brief_fields = ('id', 'url', 'name', 'custom_object_type',)
 
     def validate(self, attrs):
         self.relation_fields = {}
-        for field in attrs['mapping_type'].fields.filter(field_type=MappingFieldTypeChoices.OBJECT):
+        object_field_types = [CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT]
+        for field in attrs['custom_object_type'].fields.filter(type__in=object_field_types):
             self.relation_fields[field.name] = attrs['data'].pop(field.name, None)
         return super().validate(attrs)
 
     def update_relation_fields(self, instance):
         for field_name, value in self.relation_fields.items():
-            field = instance.mapping_type.fields.get(name=field_name)
+            field = instance.custom_object_type.fields.get(name=field_name)
             if field.many:
-                MappingRelation.objects.filter(mapping=instance, field=field).exclude(object_id__in=value).delete()
+                CustomObjectRelation.objects.filter(custom_object=instance, field=field).exclude(object_id__in=value).delete()
                 for object_id in value:
                     resolved_object = field.model_class.objects.get(pk=object_id)
-                    relation, _ = MappingRelation.objects.get_or_create(
-                        mapping=instance,
+                    relation, _ = CustomObjectRelation.objects.get_or_create(
+                        custom_object=instance,
                         field=field,
                         object_id=resolved_object.id,
                     )
             else:
-                MappingRelation.objects.filter(mapping=instance, field=field).exclude(object_id=value).delete()
+                CustomObjectRelation.objects.filter(custom_object=instance, field=field).exclude(object_id=value).delete()
                 resolved_object = field.model_class.objects.get(pk=value)
-                relation, _ = MappingRelation.objects.get_or_create(
-                    mapping=instance,
+                relation, _ = CustomObjectRelation.objects.get_or_create(
+                    custom_object=instance,
                     field=field,
                     object_id=resolved_object.id,
                 )
@@ -136,8 +139,8 @@ class ServiceMappingSerializer(NetBoxModelSerializer):
     def get_field_data(self, obj):
         result = {}
         for field_name, value in obj.fields.items():
-            field = obj.mapping_type.fields.get(name=field_name)
-            if field.field_type == 'object':
+            field = obj.custom_object_type.fields.get(name=field_name)
+            if field.type == 'object':
                 serializer = get_serializer_for_model(field.model_class)
                 context = {'request': self.context['request']}
                 result[field.name] = serializer(value, nested=True, context=context, many=field.many).data
@@ -146,28 +149,28 @@ class ServiceMappingSerializer(NetBoxModelSerializer):
         return result
 
 
-class MappingRelationSerializer(NetBoxModelSerializer):
+class CustomObjectRelationSerializer(NetBoxModelSerializer):
     url = serializers.HyperlinkedIdentityField(
-        view_name='plugins-api:netbox_service_mappings-api:mappingrelation-detail'
+        view_name='plugins-api:netbox_custom_objects-api:customobjectrelation-detail'
     )
     instance = serializers.SerializerMethodField(
         read_only=True
     )
-    field = MappingTypeFieldSerializer(
+    field = CustomObjectTypeFieldSerializer(
         read_only=True
     )
-    mapping = ServiceMappingSerializer(
+    custom_object = CustomObjectSerializer(
         read_only=True,
         nested=True,
     )
 
     class Meta:
-        model = MappingRelation
-        fields = ('mapping', 'field', 'object_id', 'instance',)
+        model = CustomObjectRelation
+        fields = ('custom_object', 'field', 'object_id', 'instance',)
 
     def get_field(self, obj):
         context = {'request': self.context['request']}
-        return MappingTypeFieldSerializer(obj.field, context=context).data
+        return CustomObjectTypeFieldSerializer(obj.field, context=context).data
 
     def get_instance(self, obj):
         if obj.instance:

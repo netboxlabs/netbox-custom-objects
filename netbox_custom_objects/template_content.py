@@ -1,18 +1,18 @@
 from django.contrib.contenttypes.models import ContentType
 from netbox.plugins import PluginTemplateExtension
-from .models import MappingRelation
+from .models import CustomObjectRelation
 from utilities.jinja2 import render_jinja2
 
 __all__ = (
-    'MappingSchema',
+    'CustomObjectSchema',
     'MappingElements',
     'MappingLink',
     'template_extensions',
 )
 
 
-class MappingSchema(PluginTemplateExtension):
-    models = ['netbox_service_mappings.servicemappingtype']
+class CustomObjectSchema(PluginTemplateExtension):
+    models = ['netbox_custom_objects.customobjecttype']
 
     def full_width_page(self):
         if not (instance := self.context['object']):
@@ -24,7 +24,7 @@ class MappingSchema(PluginTemplateExtension):
 
 
 class MappingElements(PluginTemplateExtension):
-    models = ['netbox_service_mappings.servicemapping']
+    models = ['netbox_custom_objects.customobject']
 
     def full_width_page(self):
         if not (instance := self.context['object']):
@@ -35,14 +35,14 @@ class MappingElements(PluginTemplateExtension):
         # return instance.formatted_data
 
 
-class MappingLink(PluginTemplateExtension):
+class CustomObjectLink(PluginTemplateExtension):
 
     def left_page(self):
         if not (instance := self.context['object']):
             return ''
 
         content_type = ContentType.objects.get_for_model(instance)
-        relations = MappingRelation.objects.filter(field__content_type=content_type, object_id=instance.pk)
+        relations = CustomObjectRelation.objects.filter(field__related_object_type=content_type, object_id=instance.pk)
         if not relations.exists():
             return ''
 
@@ -52,8 +52,8 @@ class MappingLink(PluginTemplateExtension):
             <table class="table table-hover attr-table">
               {% for relation in relations %}
                 <tr>
-                    <th scope="row"><a href="{{ relation.mapping.get_absolute_url() }}">{{ relation.mapping }}</a></th>
-                    <td>{{ relation.mapping.id }}</td>
+                    <th scope="row"><a href="{{ relation.mapping.get_absolute_url() }}">{{ relation.custom_object }}</a></th>
+                    <td>{{ relation.custom_object.id }}</td>
                 </tr>
               {% endfor %}
             </table>
@@ -62,7 +62,7 @@ class MappingLink(PluginTemplateExtension):
 
 
 template_extensions = (
-    MappingSchema,
+    CustomObjectSchema,
     MappingElements,
-    MappingLink,
+    CustomObjectLink,
 )

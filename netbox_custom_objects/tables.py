@@ -4,12 +4,12 @@ from django.utils.translation import gettext_lazy as _
 
 from core.models import ObjectChange
 from netbox.tables import NetBoxTable, columns
-from netbox_service_mappings.models import ServiceMapping, ServiceMappingType
+from netbox_custom_objects.models import CustomObject, CustomObjectType
 from utilities.templatetags.builtins.filters import placeholder
 # from .columns import ConflictsColumn, DiffColumn
 
 __all__ = (
-    'ServiceMappingTable',
+    'CustomObjectTable',
 )
 
 
@@ -49,13 +49,13 @@ OBJECTCHANGE_REQUEST_ID = """
 """
 
 
-class ServiceMappingTypeTable(NetBoxTable):
+class CustomObjectTypeTable(NetBoxTable):
     # tags = columns.TagColumn(
-    #     url_name='plugins:netbox_service_mappings:servicemappingtype_list'
+    #     url_name='plugins:netbox_service_mappings:customobjecttype_list'
     # )
 
     class Meta(NetBoxTable.Meta):
-        model = ServiceMappingType
+        model = CustomObjectType
         fields = (
             'pk', 'id', 'name', 'created', 'last_updated',
         )
@@ -64,7 +64,7 @@ class ServiceMappingTypeTable(NetBoxTable):
         )
 
 
-class ServiceMappingTable(NetBoxTable):
+class CustomObjectTable(NetBoxTable):
     # name = tables.Column(
     #     verbose_name=_('Name'),
     #     linkify=True
@@ -91,12 +91,12 @@ class ServiceMappingTable(NetBoxTable):
     # )
 
     class Meta(NetBoxTable.Meta):
-        model = ServiceMapping
+        model = CustomObject
         fields = (
-            'pk', 'id', 'name', 'mapping_type', 'created', 'last_updated',
+            'pk', 'id', 'name', 'custom_object_type', 'created', 'last_updated',
         )
         default_columns = (
-            'pk', 'id', 'name', 'mapping_type', 'created', 'last_updated',
+            'pk', 'id', 'name', 'custom_object_type', 'created', 'last_updated',
         )
 
     # def render_is_active(self, value):
