@@ -36,13 +36,21 @@ class CustomObjectTypeDeleteView(generic.ObjectDeleteView):
     default_return_url = 'plugins:netbox_custom_objects:customobjecttype_list'
 
 #
-# Custom Object Fields
+# Custom Object Type Fields
 #
 
 @register_model_view(CustomObjectTypeField, 'edit')
 class CustomObjectTypeFieldEditView(generic.ObjectEditView):
     queryset = CustomObjectTypeField.objects.all()
     form = forms.CustomObjectTypeFieldForm
+
+
+@register_model_view(CustomObjectTypeField, 'delete')
+class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
+    queryset = CustomObjectTypeField.objects.all()
+
+    def get_return_url(self, request, obj=None):
+        return obj.custom_object_type.get_absolute_url()
 
 
 #

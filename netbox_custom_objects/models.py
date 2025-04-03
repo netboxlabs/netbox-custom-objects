@@ -161,12 +161,14 @@ class CustomObject(
 
         # Validate all field values
         for field_name, value in self.custom_field_data.items():
+            # TODO: Maybe don't need to throw an error if an unknown field is in data (may have been deleted)
             try:
                 custom_field = custom_fields.get(name=field_name)
             except CustomObjectTypeField.DoesNotExist:
-                raise ValidationError(_("Unknown field name '{name}' in custom field data.").format(
-                    name=field_name
-                ))
+                # raise ValidationError(_("Unknown field name '{name}' in custom field data.").format(
+                #     name=field_name
+                # ))
+                continue
             try:
                 custom_field.validate(value)
             except ValidationError as e:
