@@ -6,9 +6,10 @@ from django.utils.translation import gettext_lazy as _
 from netbox_custom_objects.models import CustomObject, CustomObjectType, CustomObjectTypeField, CustomObjectRelation
 
 from netbox.forms import NetBoxModelForm
+from core.models import ObjectType
 from extras.choices import CustomFieldTypeChoices, CustomFieldUIEditableChoices
 from extras.forms import CustomFieldForm
-from utilities.forms.fields import CommentField, DynamicModelChoiceField
+from utilities.forms.fields import CommentField, ContentTypeChoiceField, DynamicModelChoiceField
 from utilities.forms.rendering import FieldSet
 
 __all__ = (
@@ -20,13 +21,13 @@ __all__ = (
 
 class CustomObjectTypeForm(NetBoxModelForm):
     fieldsets = (
-        FieldSet('name', 'slug', 'description', 'schema', 'tags'),
+        FieldSet('name', 'slug', 'description', 'tags'),
     )
     comments = CommentField()
 
     class Meta:
         model = CustomObjectType
-        fields = ('name', 'slug', 'description', 'comments', 'schema', 'tags')
+        fields = ('name', 'slug', 'description', 'comments', 'tags')
 
 
 # class CustomObjectTypeFieldForm(NetBoxModelForm):
@@ -52,6 +53,11 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
         required=True,
         label=_('Custom object type')
     )
+    # related_object_type = ContentTypeChoiceField(
+    #     label=_('Related object type'),
+    #     queryset=ObjectType.objects.public(),
+    #     help_text=_("Type of the related object (for object/multi-object fields only)")
+    # )
 
     fieldsets = (
         FieldSet(
