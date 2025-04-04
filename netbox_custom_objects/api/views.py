@@ -1,6 +1,7 @@
 from rest_framework.routers import APIRootView
 from rest_framework.viewsets import ModelViewSet
 
+from netbox_custom_objects import filtersets
 from netbox_custom_objects.models import CustomObject, CustomObjectType, CustomObjectTypeField, CustomObjectRelation
 from . import serializers
 from ..views import CustomObjectTypeView
@@ -20,7 +21,7 @@ class CustomObjectTypeViewSet(ModelViewSet):
 class CustomObjectViewSet(ModelViewSet):
     queryset = CustomObject.objects.all()
     serializer_class = serializers.CustomObjectSerializer
-    # filterset_class = filtersets.BranchFilterSet
+    filterset_class = filtersets.CustomObjectFilterSet
 
 
 class CustomObjectTypeFieldViewSet(ModelViewSet):
