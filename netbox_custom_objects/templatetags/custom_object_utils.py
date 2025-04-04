@@ -3,6 +3,7 @@ from django.apps import apps
 from django.utils.safestring import mark_safe
 from django.urls import reverse
 from netbox_custom_objects.models import CustomObjectTypeField
+from extras.choices import CustomFieldTypeChoices
 from utilities.object_types import object_type_name
 
 __all__ = (
@@ -12,6 +13,8 @@ __all__ = (
 
 register = template.Library()
 
+custom_field_type_verbose_names = {c[0]: c[1] for c in CustomFieldTypeChoices.CHOICES}
+
 
 @register.filter(name="get_field_object_type")
 def get_field_object_type(field: CustomObjectTypeField) -> str:
@@ -20,6 +23,11 @@ def get_field_object_type(field: CustomObjectTypeField) -> str:
     # model = apps.get_model(ct.app_label, ct.model)
     # label = model._meta.verbose_name
     # return label
+
+
+@register.filter(name="get_field_type_verbose_name")
+def get_field_type_verbose_name(field: CustomObjectTypeField) -> str:
+    return custom_field_type_verbose_names[field.type]
 
 
 @register.filter(name="get_field_value")

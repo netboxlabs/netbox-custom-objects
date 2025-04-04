@@ -52,7 +52,7 @@
             {% for field in object.fields.all %}
             <tr>
                 <th scope="row">{{ field }}</th>
-                <td>{{ field.type }}</td>
+                <td>{{ field|get_field_type_verbose_name }}</td>
                 <td>{% if field.type == "object" or field.type == "multiobject" %}{{ field|get_field_object_type }}{% endif %}</td>
                 <td>
                 <span class="btn-group dropdown">
