@@ -3,6 +3,7 @@ from django.apps import apps
 from django.utils.safestring import mark_safe
 from django.urls import reverse
 from netbox_custom_objects.models import CustomObjectTypeField
+from utilities.object_types import object_type_name
 
 __all__ = (
     'get_field_object_type',
@@ -14,10 +15,11 @@ register = template.Library()
 
 @register.filter(name="get_field_object_type")
 def get_field_object_type(field: CustomObjectTypeField) -> str:
-    ct = field.related_object_type
-    model = apps.get_model(ct.app_label, ct.model)
-    label = model._meta.verbose_name
-    return label
+    return object_type_name(field.related_object_type, include_app=True)
+    # ct = field.related_object_type
+    # model = apps.get_model(ct.app_label, ct.model)
+    # label = model._meta.verbose_name
+    # return label
 
 
 @register.filter(name="get_field_value")

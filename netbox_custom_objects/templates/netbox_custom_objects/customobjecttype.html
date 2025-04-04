@@ -53,8 +53,7 @@
             <tr>
                 <th scope="row">{{ field }}</th>
                 <td>{{ field.type }}</td>
-                <td>{% if field.type == "object" %}{{ field|get_field_object_type }}{% endif %}</td>
-                <td>{% if field.many %}(Many){% endif %}</td>
+                <td>{% if field.type == "object" or field.type == "multiobject" %}{{ field|get_field_object_type }}{% endif %}</td>
                 <td>
                 <span class="btn-group dropdown">
                     <a class="btn btn-sm btn-warning" href="{% url 'plugins:netbox_custom_objects:customobjecttypefield_edit' pk=field.pk %}?return_url={{ object.get_absolute_url }}" type="button"
