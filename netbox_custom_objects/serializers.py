@@ -4,11 +4,11 @@ from rest_framework import serializers
 
 from netbox_custom_objects.models import CustomObject
 
-# Serializers
-class CustomObjectSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = CustomObject
-        fields = ['id', 'name', 'data']
+# Serializers (unused)
+# class CustomObjectSerializer(serializers.ModelSerializer):
+#     class Meta:
+#         model = CustomObject
+#         fields = ['id', 'name', 'data']
 
 
 # class ServiceMappingElementSerializer(serializers.ModelSerializer):

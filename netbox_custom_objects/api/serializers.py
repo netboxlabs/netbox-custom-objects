@@ -94,9 +94,12 @@ class CustomObjectSerializer(NetBoxModelSerializer):
     class Meta:
         model = CustomObject
         fields = [
-            'id', 'url', 'name', 'custom_object_type', 'tags', 'created', 'last_updated', 'data', 'field_data',
+            'id', 'url', 'name', 'display', 'custom_object_type', 'tags', 'created', 'last_updated', 'data', 'field_data',
         ]
         brief_fields = ('id', 'url', 'name', 'custom_object_type',)
+
+    def get_display(self, obj):
+        return f'{obj.custom_object_type}: {obj.name}'
 
     def validate(self, attrs):
         self.relation_fields = {}

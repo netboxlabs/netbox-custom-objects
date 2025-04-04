@@ -52,7 +52,7 @@ class CustomObjectLink(PluginTemplateExtension):
             <table class="table table-hover attr-table">
               {% for relation in relations %}
                 <tr>
-                    <th scope="row"><a href="{{ relation.mapping.get_absolute_url() }}">{{ relation.custom_object }}</a></th>
+                    <th scope="row"><a href="{{ relation.custom_object.get_absolute_url() }}">{{ relation.custom_object }}</a></th>
                     <td>{{ relation.custom_object.id }}</td>
                 </tr>
               {% endfor %}
