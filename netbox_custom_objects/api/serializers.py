@@ -3,6 +3,7 @@ from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 
 from extras.choices import CustomFieldTypeChoices
+from extras.graphql.types import CustomFieldType
 from netbox.api.serializers import NetBoxModelSerializer
 # from netbox_service_mappings.choices import MappingFieldTypeChoices
 from netbox_custom_objects.models import CustomObject, CustomObjectType, CustomObjectTypeField, CustomObjectRelation
@@ -143,7 +144,7 @@ class CustomObjectSerializer(NetBoxModelSerializer):
         result = {}
         for field_name, value in obj.fields.items():
             field = obj.custom_object_type.fields.get(name=field_name)
-            if field.type == 'object':
+            if field.type in [CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT]:
                 serializer = get_serializer_for_model(field.model_class)
                 context = {'request': self.context['request']}
                 result[field.name] = serializer(value, nested=True, context=context, many=field.many).data

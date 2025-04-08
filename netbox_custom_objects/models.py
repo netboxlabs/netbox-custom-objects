@@ -77,6 +77,42 @@ class CustomObjectType(NetBoxModel):
     def get_absolute_url(self):
         return reverse('plugins:netbox_custom_objects:customobjecttype', args=[self.pk])
 
+    def create_proxy_model(
+        self, model_name, base_model, extra_fields=None, meta_options=None
+    ):
+        """Creates a dynamic proxy model."""
+        name = f'{model_name}Proxy'
+
+        attrs = {'__module__': base_model.__module__}
+        if extra_fields:
+            attrs.update(extra_fields)
+
+        meta_attrs = {'proxy': True, 'app_label': base_model._meta.app_label}
+        if meta_options:
+            meta_attrs.update(meta_options)
+
+        attrs['Meta'] = type('Meta', (), meta_attrs)
+        attrs['objects'] = ProxyManager(custom_object_type=self)
+
+        proxy_model = type(name, (base_model,), attrs)
+        return proxy_model
+
+
+class ProxyManager(models.Manager):
+    custom_object_type = None
+
+    def __init__(self, *args, **kwargs):
+        self.custom_object_type = kwargs.pop('custom_object_type', None)
+        super().__init__(*args, **kwargs)
+
+    # TODO: make this a RestrictedQuerySet
+    # def restrict(self, user, action='view'):
+    #     queryset = super().restrict(user, action=action)
+    #     return queryset.filter(custom_object_type=self.custom_object_type)
+
+    def get_queryset(self):
+        return super().get_queryset().filter(custom_object_type=self.custom_object_type)
+
 
 class CustomObject(
     BookmarksMixin,
@@ -143,7 +179,7 @@ class CustomObject(
 
     def get_field_value(self, field_name):
         custom_object_type_field = self.custom_object_type.fields.get(name=field_name)
-        if custom_object_type_field.type == 'object':
+        if custom_object_type_field.type in [CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT]:
             object_ids = CustomObjectRelation.objects.filter(
                 custom_object=self, field=custom_object_type_field
             ).values_list('object_id', flat=True)
