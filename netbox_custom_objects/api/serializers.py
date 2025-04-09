@@ -1,4 +1,5 @@
 from django.contrib.contenttypes.models import ContentType
+from django.db.models import Model, QuerySet
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 
@@ -103,10 +104,10 @@ class CustomObjectSerializer(NetBoxModelSerializer):
         return f'{obj.custom_object_type}: {obj.name}'
 
     def validate(self, attrs):
-        self.relation_fields = {}
-        object_field_types = [CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT]
-        for field in attrs['custom_object_type'].fields.filter(type__in=object_field_types):
-            self.relation_fields[field.name] = attrs['data'].pop(field.name, None)
+        # self.relation_fields = {}
+        # object_field_types = [CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT]
+        # for field in attrs['custom_object_type'].fields.filter(type__in=object_field_types):
+        #     self.relation_fields[field.name] = attrs['data'].pop(field.name, None)
         return super().validate(attrs)
 
     def update_relation_fields(self, instance):
@@ -132,24 +133,29 @@ class CustomObjectSerializer(NetBoxModelSerializer):
 
     def create(self, validated_data):
         instance = super().create(validated_data)
-        self.update_relation_fields(instance)
+        # self.update_relation_fields(instance)
         return instance
 
     def update(self, instance, validated_data):
         instance = super().update(instance, validated_data)
-        self.update_relation_fields(instance)
+        # self.update_relation_fields(instance)
         return instance
 
     def get_field_data(self, obj):
         result = {}
         for field_name, value in obj.fields.items():
-            field = obj.custom_object_type.fields.get(name=field_name)
-            if field.type in [CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT]:
-                serializer = get_serializer_for_model(field.model_class)
+            if isinstance(value, Model) or isinstance(value, QuerySet):
+                # serializer = get_serializer_for_model(field.model_class)
+                if isinstance(value, QuerySet):
+                    serializer = get_serializer_for_model(value.model)
+                    many = True
+                else:
+                    serializer = get_serializer_for_model(value._meta.model)
+                    many = False
                 context = {'request': self.context['request']}
-                result[field.name] = serializer(value, nested=True, context=context, many=field.many).data
+                result[field_name] = serializer(value, nested=True, context=context, many=many).data
                 continue
-            result[field_name] = obj.get_field_value(field_name)
+            result[field_name] = obj.data.get(field_name)
         return result
 
 

@@ -174,18 +174,15 @@ class CustomObject(
     def fields(self):
         result = {}
         for field in self.custom_object_type.fields.all():
-            result[field.name] = self.get_field_value(field.name)
+            result[field.name] = self.get_field_value(field)
         return result
 
-    def get_field_value(self, field_name):
-        custom_object_type_field = self.custom_object_type.fields.get(name=field_name)
-        if custom_object_type_field.type in [CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT]:
-            object_ids = CustomObjectRelation.objects.filter(
-                custom_object=self, field=custom_object_type_field
-            ).values_list('object_id', flat=True)
-            field_objects = custom_object_type_field.model_class.objects.filter(pk__in=object_ids)
-            return field_objects if custom_object_type_field.many else field_objects.first()
-        return self.data.get(field_name)
+    def get_field_value(self, field):
+        if field.type == CustomFieldTypeChoices.TYPE_OBJECT:
+            return field.model_class.objects.filter(pk=self.data.get(field.name))
+        if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+            return field.model_class.objects.filter(pk__in=self.data.get(field.name) or [])
+        return self.data.get(field.name)
 
     def get_absolute_url(self):
         return reverse('plugins:netbox_custom_objects:customobject', args=[self.pk])
@@ -423,7 +420,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         return self.type in ['multiobject', 'multiselect']
 
     def get_child_relations(self, instance):
-        return self.relations.filter(custom_object=instance)
+        return instance.get_field_value(self)
 
     def get_absolute_url(self):
         return reverse('plugins:netbox_custom_objects:customobjecttype', args=[self.custom_object_type.pk])

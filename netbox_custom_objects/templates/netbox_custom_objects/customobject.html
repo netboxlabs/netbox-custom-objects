@@ -41,7 +41,7 @@
                 <td>
                   {% if field.type == 'object' %}
                     {% with field_values=object|get_child_relations:field %}
-                      {{ field_values.first.instance|linkify }}
+                      {{ field_values.first|linkify }}
                     {% endwith %}
                   {% else %}
                     {{ object|get_field_value:field }}
@@ -67,8 +67,8 @@
                 <table class="table table-hover attr-table">
                   {% for relation in field_values.all %}
                     <tr>
-                        <th scope="row">{{ relation.instance|linkify }}</th>
-                        <td>{{ relation.object_id }}</td>
+                        <th scope="row">{{ relation|linkify }}</th>
+                        <td>{{ relation.id }}</td>
                     </tr>
                   {% endfor %}
                 </table>
