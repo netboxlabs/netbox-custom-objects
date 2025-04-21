@@ -41,7 +41,7 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
     def validate(self, attrs):
         app_label = attrs.pop('app_label', None)
         model = attrs.pop('model', None)
-        if attrs['type'] == 'object':
+        if attrs['type'] in [CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT]:
             try:
                 attrs['related_object_type'] = ContentType.objects.get(app_label=app_label, model=model)
             except ContentType.DoesNotExist:
