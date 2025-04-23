@@ -953,6 +953,133 @@ class CustomObjectRelation(models.Model):
         return model_class.objects.get(pk=self.object_id)
 
 
+class GeneratedModelAppsProxy:
+    """
+    A proxy class to the default apps registry. This class is needed to make our dynamic
+    models available in the options when the relation tree is built, without polluting
+    the global apps registry, meant to keep only the static models that do not change.
+
+    This permits to Django to find the reverse relation in the _relation_tree. Look into
+    django.db.models.options.py - _populate_directed_relation_graph for more
+    information.
+
+    It also allows us to register dynamic models in a separate registry and to perform
+    all the pending operations for the generated models without the need of clearing the
+    global apps registry cache.
+
+    This registry, created as needed by a generated table model, holds references to
+    other such models. It's discarded after the operation, ensuring it only exists when
+    necessary.
+    """
+
+    def __init__(self, baserow_models=None, app_label=None):
+        self.baserow_models = baserow_models or {}
+        self.baserow_app_label = app_label or "database_table"
+
+    def get_models(self, *args, **kwargs):
+        """
+        Called by django and must contain ALL the models that have been generated
+        and connected together as django will loop over every model in this list
+        and set cached properties on each. These cached django properties are then
+        used to when looking up fields, so they must include every connected model
+        that could be involved in queries and not just a sub-set of them.
+        """
+
+        return apps.get_models(*args, **kwargs) + list(self.baserow_models.values())
+
+    def register_model(self, app_label, model):
+        """
+        This is hack that prevents a generated table model and related auto created
+        models from being registered into the Django apps model registry. It tries to
+        keep separate Django's model registry from Baserow's generated models. In this
+        way we can leverage all the great features of Django's static models, while
+        still being able to generate dynamic models for tables, without polluting the
+        global ones.
+        """
+
+        # Use the RLock defined in the apps registry to prevent any thead from
+        # accessing the apps registry concurrently because it's not thread safe.
+        with self._lock:
+            model_name = model._meta.model_name.lower()
+            if not hasattr(model, "_generated_table_model"):
+                # it must be an auto created intermediary m2m model, so use a list of
+                # baserow models we can later use to resolve the pending operations.
+                if not hasattr(self, "baserow_models"):
+                    self.baserow_models = model._meta.auto_created.baserow_models
+
+            self.baserow_models[model_name] = model
+            self.do_all_pending_operations()
+            self._clear_baserow_models_cache()
+
+            # The `all_models` is a defaultdict, and will therefore have a residual
+            # empty key in with the app label because the app label is uniquely
+            # generated. This will make sure it's cleared.
+            try:
+                del apps.all_models[self.baserow_app_label]
+            except KeyError:
+                pass
+
+    def _clear_baserow_models_cache(self):
+        for model in self.baserow_models.values():
+            model._meta._expire_cache()
+
+    def do_all_pending_operations(self):
+        """
+        This method will perform all the pending operations for the generated models.
+        It will keep performing the pending operations until there are no more pending
+        operations left. It will perform a maximum of `max_iterations` to prevent
+        infinite loops and because one pending operation can trigger another pending
+        operation for another model. The number of 3 has been chosen because it's
+        the number observed to be enough to resolve all pending operations in the
+        tests.
+        """
+
+        max_iterations = 3
+        for _ in range(max_iterations):
+            # Only do pending operations of models with the same app label because
+            # if we don't do that, and the same model is generated at the same time
+            # there can be conflicts because the `model_name` will be the same. The
+            # `app_label` is uniquely generated to avoid `model_name` conflicts.
+            pending_operations_for_app_label = [
+                (app_label, model_name)
+                for app_label, model_name in list(apps._pending_operations.keys())
+                if app_label == self.baserow_app_label
+            ]
+            for _, model_name in list(pending_operations_for_app_label):
+                model = self.baserow_models[model_name]
+                apps.do_pending_operations(model)
+
+            if not pending_operations_for_app_label:
+                break
+
+    def __getattr__(self, attr):
+        return getattr(apps, attr)
+
+
+# def patch_meta_get_field(_meta):
+#     original_get_field = _meta.get_field
+#
+#     def get_field(self, field_name, *args, **kwargs):
+#         try:
+#             return original_get_field(field_name, *args, **kwargs)
+#         except DjangoFieldDoesNotExist as exc:
+#             try:
+#                 field_object = self.model.get_field_object(
+#                     field_name, include_trash=True
+#                 )
+#
+#             except ValueError:
+#                 raise exc
+#
+#             field_type = field_object["type"]
+#             field_type.after_model_generation(
+#                 field_object["field"], self.model, field_object["name"]
+#             )
+#             return original_get_field(field_name, *args, **kwargs)
+#
+#     _meta.get_field = MethodType(get_field, _meta)
+
+
 class Table(
     # HierarchicalModelMixin,
     # TrashableModelMixin,
