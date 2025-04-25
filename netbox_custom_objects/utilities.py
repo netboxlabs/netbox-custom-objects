@@ -5,6 +5,8 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 
 from django.contrib import messages
+from django.contrib.contenttypes.management import create_contenttypes
+# from django.contrib.contenttypes.models import ContentType
 from django.db.models import ForeignKey, ManyToManyField
 from django.http import HttpResponseBadRequest
 from django.urls import reverse
@@ -39,6 +41,20 @@ def register_models():
 
     model_names = {name.lower() for name in CustomObjectType.objects.all().values_list('name', flat=True)}
     registry['models']['netbox_custom_objects'] = model_names
+
+
+# def create_model(model_id):
+#
+#     table = Table.objects.get(pk=model_id)
+#     model = table.get_model()
+#     apps.register_model('netbox_custom_objects', model)
+#
+#     app_config = apps.get_app_config('netbox_custom_objects')
+#     create_contenttypes(app_config)
+#
+#     # content_type = ContentType.objects.get_for_model(model)
+#     content_type = ContentType.objects.get(pk=table.content_type_id)
+#     model = content_type.model_class()
 
 
 # def create_proxy_model(model_name, base_model, custom_object_type, extra_fields=None, meta_options=None):
