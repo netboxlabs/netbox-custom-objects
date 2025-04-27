@@ -43,10 +43,10 @@ def register_models():
     registry['models']['netbox_custom_objects'] = model_names
 
 
-# def create_model(model_id):
+# def create_model(custom_object_type_id):
 #
-#     table = Table.objects.get(pk=model_id)
-#     model = table.get_model()
+#     object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
+#     model = object_type.get_model()
 #     apps.register_model('netbox_custom_objects', model)
 #
 #     app_config = apps.get_app_config('netbox_custom_objects')

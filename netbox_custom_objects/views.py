@@ -62,6 +62,17 @@ class CustomObjectListView(generic.ObjectListView):
     # filterset = filtersets.BranchFilterSet
     # filterset_form = forms.BranchFilterForm
     table = tables.CustomObjectTable
+    # custom_object_type = None
+
+    def get_queryset(self, request):
+        custom_object_type = self.kwargs.pop('custom_object_type', None)
+        object_type = CustomObjectType.objects.get(slug=custom_object_type)
+        model = object_type.get_model()
+        return model.objects.all()
+
+    def get(self, request, custom_object_type):
+        # Necessary because get() in ObjectListView only takes request and no **kwargs
+        return super().get(request)
 
 
 @register_model_view(CustomObject)

@@ -12,4 +12,5 @@ urlpatterns = [
     path('custom_objects/<int:pk>/', include(get_model_urls('netbox_custom_objects', 'customobject'))),
     path('custom_object_type_fields/<int:pk>/', include(get_model_urls('netbox_custom_objects', 'customobjecttypefield'))),
     path('custom_object_type_fields/add/', views.CustomObjectTypeFieldEditView.as_view(), name='customobjecttypefield_add'),
+    path('<str:custom_object_type>/', views.CustomObjectListView.as_view(), name='customobject_list'),
 ]
