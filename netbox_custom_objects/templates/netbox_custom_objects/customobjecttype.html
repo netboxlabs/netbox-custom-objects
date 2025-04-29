@@ -87,7 +87,7 @@
                     {% endfor %}
                 </tr>
             </thead>
-            {% for instance in object.custom_objects.all %}
+            {% for instance in custom_objects %}
                 <tr>
                     <td>{{ instance|linkify }}</td>
                     {% for field in object.fields.all %}

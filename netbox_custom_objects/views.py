@@ -23,6 +23,10 @@ class CustomObjectTypeListView(generic.ObjectListView):
 class CustomObjectTypeView(generic.ObjectView):
     queryset = CustomObjectType.objects.all()
 
+    def get_extra_context(self, request, instance):
+        model = instance.get_model()
+        return {'custom_objects': model.objects.all()}
+
 
 @register_model_view(CustomObjectType, 'edit')
 class CustomObjectTypeEditView(generic.ObjectEditView):

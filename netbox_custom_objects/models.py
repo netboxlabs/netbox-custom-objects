@@ -62,6 +62,7 @@ class CustomObjectType(NetBoxModel):
 
     class Meta:
         verbose_name = 'Custom Object Type'
+        ordering = ('name',)
 
     def __str__(self):
         return self.name
@@ -240,6 +241,9 @@ class CustomObjectType(NetBoxModel):
     def get_database_table_name(self):
         return f"{USER_TABLE_DATABASE_NAME_PREFIX}{self.id}"
 
+    def get_verbose_name_plural(self):
+        return self.name + "s"
+
     def get_model(
         self,
         fields=None,
@@ -330,6 +334,7 @@ class CustomObjectType(NetBoxModel):
                 "app_label": app_label,
                 "ordering": ["order", "id"],
                 "indexes": indexes,
+                "verbose_name_plural": self.get_verbose_name_plural(),
             },
         )
 
@@ -338,6 +343,9 @@ class CustomObjectType(NetBoxModel):
             When the model instance is rendered to a string, then we want to return the
             primary field value in human readable format.
             """
+
+            # TODO: This is a placeholder (name might not always be present); should use "primary" logic as below
+            return self.name
 
             field = self._field_objects.get(self._primary_field_id, None)
 
