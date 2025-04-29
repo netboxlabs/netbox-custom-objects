@@ -19,9 +19,6 @@ class CustomObjectsPluginConfig(PluginConfig):
 
     def ready(self):
         super().ready()
-        # from . import constants, events, search, signal_receivers
 
-        # Register models which support service mappings
-        # register_models()
 
 config = CustomObjectsPluginConfig

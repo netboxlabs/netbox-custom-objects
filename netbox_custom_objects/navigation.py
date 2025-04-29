@@ -1,7 +1,9 @@
+from packaging import version
+
 from django.utils.translation import gettext_lazy as _
 from django.urls import reverse
 from django.apps import apps
-# from django.contrib.contenttypes.models import ContentType
+from django.conf import settings
 
 from netbox.plugins import PluginMenu, PluginMenuButton, PluginMenuItem
 
@@ -11,28 +13,9 @@ custom_object_type_plugin_menu_item = PluginMenuItem(
     link_text=_('Custom Object Types'),
     buttons=(
         PluginMenuButton('plugins:netbox_custom_objects:customobjecttype_add', _('Add'), 'mdi mdi-plus-thick'),
-        # PluginMenuButton('plugins:netbox_service_mappings:mapping_bulk_import', _('Import'), 'mdi mdi-upload'),
     )
 )
 
-static_menu = PluginMenu(
-    label='Custom Objects',
-    groups=(
-        (_('Objects'), (
-            custom_object_type_plugin_menu_item,
-            PluginMenuItem(
-                link=None,
-                url=reverse('plugins:netbox_custom_objects:customobject_list', kwargs={'custom_object_type': 'customer'}),
-                link_text=_('Custom Objects'),
-                buttons=(
-                    PluginMenuButton('plugins:netbox_custom_objects:customobject_add', _('Add'), 'mdi mdi-plus-thick'),
-                    # PluginMenuButton('plugins:netbox_service_mappings:mapping_bulk_import', _('Import'), 'mdi mdi-upload'),
-                )
-            ),
-        )),
-    ),
-    icon_class='mdi mdi-source-branch'
-)
 
 def get_menu():
     CustomObjectType = apps.get_model('netbox_custom_objects', 'CustomObjectType')
@@ -56,4 +39,15 @@ def get_menu():
         icon_class='mdi mdi-source-branch'
     )
 
-menu = get_menu
+
+current_version = version.parse(settings.RELEASE.version)
+if settings.RELEASE.version < '4.3.0':
+    menu = PluginMenu(
+        label='Custom Objects',
+        groups=(
+                (_('Object Types'), (custom_object_type_plugin_menu_item,)),
+            ),
+        icon_class='mdi mdi-source-branch'
+    )
+else:
+    menu = get_menu
