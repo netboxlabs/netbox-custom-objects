@@ -2,6 +2,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.db.models import Model, QuerySet
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
+from rest_framework.reverse import reverse
 
 from extras.choices import CustomFieldTypeChoices
 from extras.graphql.types import CustomFieldType
@@ -87,9 +88,10 @@ class CustomObjectTypeSerializer(NetBoxModelSerializer):
 class CustomObjectSerializer(NetBoxModelSerializer):
     relation_fields = None
 
-    url = serializers.HyperlinkedIdentityField(
-        view_name='plugins-api:netbox_custom_objects-api:customobject-detail'
-    )
+    # url = serializers.HyperlinkedIdentityField(
+    #     view_name='plugins-api:netbox_custom_objects-api:custom-object-detail', kwargs={'custom_object_type': 1}
+    # )
+    url = serializers.SerializerMethodField()
     field_data = serializers.SerializerMethodField()
     custom_object_type = CustomObjectTypeSerializer(nested=True)
 
@@ -144,6 +146,24 @@ class CustomObjectSerializer(NetBoxModelSerializer):
         instance = super().update(instance, validated_data)
         # self.update_relation_fields(instance)
         return instance
+
+    def get_url(self, obj):
+        """
+        Given an object, return the URL that hyperlinks to the object.
+
+        May raise a `NoReverseMatch` if the `view_name` and `lookup_field`
+        attributes are not configured to correctly match the URL conf.
+        """
+        # Unsaved objects will not yet have a valid URL.
+        if hasattr(obj, 'pk') and obj.pk in (None, ''):
+            return None
+
+        view_name = 'plugins-api:netbox_custom_objects-api:custom-object-detail'
+        lookup_value = getattr(obj, 'pk')
+        kwargs = {'pk': lookup_value, 'custom_object_type': obj.custom_object_type.name.lower()}
+        request = self.context['request']
+        format = self.context.get('format')
+        return reverse(view_name, kwargs=kwargs, request=request, format=format)
 
     def get_field_data(self, obj):
         result = {}

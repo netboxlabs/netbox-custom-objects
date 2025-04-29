@@ -27,7 +27,7 @@ class CustomObjectViewSet(ModelViewSet):
         return self.serializer_class
 
     def get_queryset(self):
-        custom_object_type = CustomObjectType.objects.get(slug=self.kwargs['custom_object_type'])
+        custom_object_type = CustomObjectType.objects.get(name__iexact=self.kwargs['custom_object_type'])
         model = custom_object_type.get_model()
         return model.objects.all()
 
