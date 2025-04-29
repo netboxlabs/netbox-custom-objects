@@ -398,6 +398,7 @@ class CustomObjectType(NetBoxModel):
             default=1,
         )
         field_attrs["custom_object_type"] = models.ForeignKey('netbox_custom_objects.CustomObjectType', on_delete=models.CASCADE)
+        field_attrs["name"] = models.CharField(max_length=100, unique=True)
 
         attrs.update(**field_attrs)
 

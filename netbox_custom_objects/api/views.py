@@ -21,7 +21,15 @@ class CustomObjectTypeViewSet(ModelViewSet):
 class CustomObjectViewSet(ModelViewSet):
     queryset = CustomObject.objects.all()
     serializer_class = serializers.CustomObjectSerializer
-    filterset_class = filtersets.CustomObjectFilterSet
+    # filterset_class = filtersets.CustomObjectFilterSet
+
+    def get_serializer_class(self):
+        return self.serializer_class
+
+    def get_queryset(self):
+        custom_object_type = CustomObjectType.objects.get(slug=self.kwargs['custom_object_type'])
+        model = custom_object_type.get_model()
+        return model.objects.all()
 
 
 class CustomObjectTypeFieldViewSet(ModelViewSet):

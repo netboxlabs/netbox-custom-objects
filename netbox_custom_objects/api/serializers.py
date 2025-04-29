@@ -132,8 +132,12 @@ class CustomObjectSerializer(NetBoxModelSerializer):
                 )
 
     def create(self, validated_data):
-        instance = super().create(validated_data)
+        # instance = super().create(validated_data)
         # self.update_relation_fields(instance)
+
+        model = validated_data['custom_object_type'].get_model()
+        instance = model.objects.create(**validated_data)
+
         return instance
 
     def update(self, instance, validated_data):
@@ -143,19 +147,19 @@ class CustomObjectSerializer(NetBoxModelSerializer):
 
     def get_field_data(self, obj):
         result = {}
-        for field_name, value in obj.fields.items():
-            if isinstance(value, Model) or isinstance(value, QuerySet):
-                # serializer = get_serializer_for_model(field.model_class)
-                if isinstance(value, QuerySet):
-                    serializer = get_serializer_for_model(value.model)
-                    many = True
-                else:
-                    serializer = get_serializer_for_model(value._meta.model)
-                    many = False
-                context = {'request': self.context['request']}
-                result[field_name] = serializer(value, nested=True, context=context, many=many).data
-                continue
-            result[field_name] = obj.data.get(field_name)
+        # for field_name, value in obj.fields.items():
+        #     if isinstance(value, Model) or isinstance(value, QuerySet):
+        #         # serializer = get_serializer_for_model(field.model_class)
+        #         if isinstance(value, QuerySet):
+        #             serializer = get_serializer_for_model(value.model)
+        #             many = True
+        #         else:
+        #             serializer = get_serializer_for_model(value._meta.model)
+        #             many = False
+        #         context = {'request': self.context['request']}
+        #         result[field_name] = serializer(value, nested=True, context=context, many=many).data
+        #         continue
+        #     result[field_name] = obj.data.get(field_name)
         return result
 
 
