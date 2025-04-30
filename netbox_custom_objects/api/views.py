@@ -31,6 +31,9 @@ class CustomObjectViewSet(ModelViewSet):
         model = custom_object_type.get_model()
         return model.objects.all()
 
+    def list(self, request, *args, **kwargs):
+        return super().list(request, *args, **kwargs)
+
 
 class CustomObjectTypeFieldViewSet(ModelViewSet):
     queryset = CustomObjectTypeField.objects.all()

@@ -1,6 +1,8 @@
 {% extends 'generic/object.html' %}
 {% load static %}
+{% load buttons %}
 {% load helpers %}
+{% load perms %}
 {% load plugins %}
 {% load render_table from django_tables2 %}
 {% load i18n %}
@@ -8,6 +10,33 @@
 
 {% block extra_controls %}
 {% endblock %}
+
+{% block breadcrumbs %}
+  <li class="breadcrumb-item">
+{#    <a href="{% url object|viewname:'list' %}">{{ object|meta:'verbose_name_plural'|bettertitle }}</a>#}
+  </li>
+{% endblock breadcrumbs %}
+
+{# Add/edit/delete/etc. buttons #}
+{% block control-buttons %}
+
+  {# Default buttons #}
+  {% if perms.extras.add_bookmark and object.bookmarks %}
+    {% bookmark_button object %}
+  {% endif %}
+  {% if perms.extras.add_subscription and object.subscriptions %}
+{#    {% subscribe_button object %}#}
+  {% endif %}
+  {% if request.user|can_add:object %}
+{#        {% clone_button object %}#}
+  {% endif %}
+  {% if request.user|can_change:object %}
+{#        {% edit_button object %}#}
+  {% endif %}
+  {% if request.user|can_delete:object %}
+{#    {% delete_button object %}#}
+  {% endif %}
+{% endblock control-buttons %}
 
 {% block content %}
   <div class="row">

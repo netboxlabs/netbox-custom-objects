@@ -241,8 +241,11 @@ class CustomObjectType(NetBoxModel):
     def get_database_table_name(self):
         return f"{USER_TABLE_DATABASE_NAME_PREFIX}{self.id}"
 
+    def get_verbose_name(self):
+        return self.name.lower()
+
     def get_verbose_name_plural(self):
-        return self.name + "s"
+        return self.name.lower() + "s"
 
     def get_model(
         self,
@@ -334,6 +337,7 @@ class CustomObjectType(NetBoxModel):
                 "app_label": app_label,
                 "ordering": ["order", "id"],
                 "indexes": indexes,
+                # "verbose_name": self.get_verbose_name(),
                 "verbose_name_plural": self.get_verbose_name_plural(),
             },
         )
@@ -357,7 +361,7 @@ class CustomObjectType(NetBoxModel):
             )
 
         def get_absolute_url(self):
-            return ''
+            return reverse('plugins:netbox_custom_objects:customobject', kwargs={'pk': self.pk, 'custom_object_type': self.custom_object_type.name.lower()})
 
         attrs = {
             "Meta": meta,
@@ -407,6 +411,7 @@ class CustomObjectType(NetBoxModel):
         )
         field_attrs["custom_object_type"] = models.ForeignKey('netbox_custom_objects.CustomObjectType', on_delete=models.CASCADE)
         field_attrs["name"] = models.CharField(max_length=100, unique=True)
+        field_attrs["legs"] = models.IntegerField(default=4)
 
         attrs.update(**field_attrs)
 

@@ -1,5 +1,6 @@
 from django.contrib import messages
 from django.contrib.contenttypes.models import ContentType
+from django.shortcuts import get_object_or_404
 
 from netbox.views import generic
 from utilities.views import ViewTab, register_model_view
@@ -82,6 +83,13 @@ class CustomObjectListView(generic.ObjectListView):
 @register_model_view(CustomObject)
 class CustomObjectView(generic.ObjectView):
     queryset = CustomObject.objects.all()
+
+    def get_object(self, **kwargs):
+        custom_object_type = self.kwargs.pop('custom_object_type', None)
+        object_type = CustomObjectType.objects.get(slug=custom_object_type)
+        model = object_type.get_model()
+        kwargs.pop('custom_object_type', None)
+        return get_object_or_404(model.objects.all(), **kwargs)
 
     def get_extra_context(self, request, instance):
         content_type = ContentType.objects.get_for_model(instance)

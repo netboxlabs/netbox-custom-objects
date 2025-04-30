@@ -5,6 +5,7 @@ from django.urls import reverse
 from django.apps import apps
 from django.conf import settings
 
+from utilities.string import title
 from netbox.plugins import PluginMenu, PluginMenuButton, PluginMenuItem
 
 
@@ -25,9 +26,9 @@ def get_menu():
         menu_items.append(PluginMenuItem(
             link=None,
             url=reverse('plugins:netbox_custom_objects:customobject_list', kwargs={'custom_object_type': custom_object_type.name.lower()}),
-            link_text=_(model._meta.verbose_name_plural),
+            link_text=_(title(model._meta.verbose_name_plural)),
             buttons=(
-                PluginMenuButton('plugins:netbox_custom_objects:customobject_add', _('Add'), 'mdi mdi-plus-thick'),
+                # PluginMenuButton('plugins:netbox_custom_objects:customobject_add', _('Add'), 'mdi mdi-plus-thick'),
             )
         ))
     return PluginMenu(
@@ -41,7 +42,7 @@ def get_menu():
 
 
 current_version = version.parse(settings.RELEASE.version)
-if settings.RELEASE.version < '4.3.0':
+if current_version < version.parse('4.2.0'):
     menu = PluginMenu(
         label='Custom Objects',
         groups=(
