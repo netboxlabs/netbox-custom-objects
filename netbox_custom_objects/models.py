@@ -50,6 +50,7 @@ from utilities.templatetags.builtins.filters import render_markdown
 from utilities.validators import validate_regex
 # from .choices import MappingFieldTypeChoices
 from extras.models.customfields import SEARCH_TYPES
+from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
 
 USER_TABLE_DATABASE_NAME_PREFIX = "custom_objects_"
 
@@ -233,6 +234,16 @@ class CustomObjectType(NetBoxModel):
         #         verbose_name=field.name,
         #     )
 
+        for field in fields:
+            field_type = FIELD_TYPE_CLASS[field.type]()
+            # field_type = field_type_registry.get_by_model(field)
+
+            field_attrs[field.name] = field_type.get_model_field(
+                field,
+                # db_column=field.db_column,
+                # verbose_name=field.name,
+            )
+
         return field_attrs
 
     def get_collision_safe_order_id_idx_name(self):
@@ -411,7 +422,7 @@ class CustomObjectType(NetBoxModel):
         )
         field_attrs["custom_object_type"] = models.ForeignKey('netbox_custom_objects.CustomObjectType', on_delete=models.CASCADE)
         field_attrs["name"] = models.CharField(max_length=100, unique=True)
-        field_attrs["legs"] = models.IntegerField(default=4)
+        # field_attrs["legs"] = models.IntegerField(default=4)
 
         attrs.update(**field_attrs)
 
@@ -1289,6 +1300,44 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
         elif self.required:
             raise ValidationError(_("Required field cannot be empty."))
+
+    @classmethod
+    def from_db(cls, db, field_names, values):
+        instance = super().from_db(db, field_names, values)
+
+        # save original values, when model is loaded from database,
+        # in a separate attribute on the model
+        instance._loaded_values = dict(zip(field_names, values))
+        instance._original = cls(**instance._loaded_values)
+        return instance
+
+    @property
+    def original(self):
+        return self._original
+        # return self.__class__(**self._loaded_values)
+
+    def save(self, *args, **kwargs):
+        field_type = FIELD_TYPE_CLASS[self.type]()
+        model_field = field_type.get_model_field(self)
+        model = self.custom_object_type.get_model()
+        model_field.contribute_to_class(model, self.name)
+        with connection.schema_editor() as schema_editor:
+            if self._state.adding:
+                schema_editor.add_field(model, model_field)
+            else:
+                old_field = field_type.get_model_field(self.original)
+                old_field.contribute_to_class(model, self.name)
+                schema_editor.alter_field(model, old_field, model_field)
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        field_type = FIELD_TYPE_CLASS[self.type]()
+        model_field = field_type.get_model_field(self)
+        model = self.custom_object_type.get_model()
+        model_field.contribute_to_class(model, self.name)
+        with connection.schema_editor() as schema_editor:
+            schema_editor.remove_field(model, model_field)
+        super().delete(*args, **kwargs)
 
 
 class CustomObjectRelation(models.Model):

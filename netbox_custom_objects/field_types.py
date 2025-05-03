@@ -1,0 +1,84 @@
+from enum import Enum
+from django.db import models
+
+from extras.choices import CustomFieldTypeChoices
+
+
+class FieldType:
+
+    def get_model_field(self, field, **kwargs):
+        raise NotImplementedError
+
+
+class TextFieldType(FieldType):
+    def get_model_field(self, field, **kwargs):
+        return models.CharField(**kwargs)
+
+
+class LongTextFieldType(FieldType):
+    ...
+
+
+class IntegerFieldType(FieldType):
+    def get_model_field(self, field, **kwargs):
+        # TODO: handle all args for IntegerField
+        kwargs.update({'default': field.default})
+        return models.IntegerField(null=True, **kwargs)
+
+
+class DecimalFieldType(FieldType):
+    ...
+
+
+class BooleanFieldType(FieldType):
+    ...
+
+
+class DateFieldType(FieldType):
+    ...
+
+
+class DateTimeFieldType(FieldType):
+    ...
+
+
+class URLFieldType(FieldType):
+    ...
+
+
+class JSONFieldType(FieldType):
+    ...
+
+
+class SelectFieldType(FieldType):
+    ...
+
+
+class MultiSelectFieldType(FieldType):
+    ...
+
+
+class ObjectFieldType(FieldType):
+    def get_model_field(self, field, **kwargs):
+        return models.IntegerField(**kwargs)
+
+
+class MultiObjectFieldType(FieldType):
+    ...
+
+
+FIELD_TYPE_CLASS = {
+    CustomFieldTypeChoices.TYPE_TEXT: TextFieldType,
+    CustomFieldTypeChoices.TYPE_LONGTEXT: LongTextFieldType,
+    CustomFieldTypeChoices.TYPE_INTEGER: IntegerFieldType,
+    CustomFieldTypeChoices.TYPE_DECIMAL: DecimalFieldType,
+    CustomFieldTypeChoices.TYPE_BOOLEAN: BooleanFieldType,
+    CustomFieldTypeChoices.TYPE_DATE: DateFieldType,
+    CustomFieldTypeChoices.TYPE_DATETIME: DateTimeFieldType,
+    CustomFieldTypeChoices.TYPE_URL: URLFieldType,
+    CustomFieldTypeChoices.TYPE_JSON: JSONFieldType,
+    CustomFieldTypeChoices.TYPE_SELECT: SelectFieldType,
+    CustomFieldTypeChoices.TYPE_MULTISELECT: MultiSelectFieldType,
+    CustomFieldTypeChoices.TYPE_OBJECT: ObjectFieldType,
+    CustomFieldTypeChoices.TYPE_MULTIOBJECT: MultiObjectFieldType,
+}

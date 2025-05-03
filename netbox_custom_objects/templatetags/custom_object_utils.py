@@ -32,7 +32,7 @@ def get_field_type_verbose_name(field: CustomObjectTypeField) -> str:
 
 @register.filter(name="get_field_value")
 def get_field_value(obj, field: CustomObjectTypeField) -> str:
-    return str(obj.data.get(field.name))
+    return getattr(obj, field.name)
 
 
 @register.filter(name="get_child_relations")
