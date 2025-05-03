@@ -1,5 +1,6 @@
 from enum import Enum
 from django.db import models
+from rest_framework import serializers
 
 from extras.choices import CustomFieldTypeChoices
 
@@ -9,17 +10,36 @@ class FieldType:
     def get_model_field(self, field, **kwargs):
         raise NotImplementedError
 
+    def get_serializer_field(self, field, **kwargs):
+        raise NotImplementedError
+
 
 class TextFieldType(FieldType):
+
     def get_model_field(self, field, **kwargs):
+        kwargs.update({'max_length': field.default})
         return models.CharField(**kwargs)
 
+    def get_serializer_field(self, field, **kwargs):
+        required = kwargs.get("required", False)
+        validators = kwargs.pop("validators", None) or []
+        # validators.append(self.validator)
+        return serializers.CharField(
+            **{
+                "required": required,
+                "allow_null": not required,
+                "allow_blank": not required,
+                "validators": validators,
+                **kwargs,
+            }
+        )
 
 class LongTextFieldType(FieldType):
     ...
 
 
 class IntegerFieldType(FieldType):
+
     def get_model_field(self, field, **kwargs):
         # TODO: handle all args for IntegerField
         kwargs.update({'default': field.default})

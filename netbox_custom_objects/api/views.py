@@ -22,14 +22,15 @@ class CustomObjectViewSet(ModelViewSet):
     queryset = CustomObject.objects.all()
     serializer_class = serializers.CustomObjectSerializer
     # filterset_class = filtersets.CustomObjectFilterSet
+    model = None
 
     def get_serializer_class(self):
-        return self.serializer_class
+        return serializers.get_serializer_class(self.model)
 
     def get_queryset(self):
         custom_object_type = CustomObjectType.objects.get(name__iexact=self.kwargs['custom_object_type'])
-        model = custom_object_type.get_model()
-        return model.objects.all()
+        self.model = custom_object_type.get_model()
+        return self.model.objects.all()
 
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)

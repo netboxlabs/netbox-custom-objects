@@ -211,3 +211,53 @@ class CustomObjectRelationSerializer(NetBoxModelSerializer):
             serializer = get_serializer_for_model(obj.instance)
             context = {'request': self.context['request']}
             return serializer(obj.instance, nested=True, context=context).data
+
+
+def get_serializer_class(model):
+    # apps = GeneratedModelAppsProxy(manytomany_models, app_label)
+    meta = type(
+        "Meta",
+        (),
+        {
+            "model": model,
+            "fields": "__all__",
+            # "apps": apps,
+            # "managed": managed,
+            # "db_table": self.get_database_table_name(),
+            # "app_label": app_label,
+            # "ordering": ["order", "id"],
+            # "indexes": indexes,
+            # "verbose_name": self.get_verbose_name(),
+            # "verbose_name_plural": self.get_verbose_name_plural(),
+        },
+    )
+
+    attrs = {
+        "Meta": meta,
+        "__module__": "database.serializers",
+        # An indication that the model is a generated table model.
+        # "_generated_table_model": True,
+        # "baserow_table": self,
+        # "baserow_table_id": self.id,
+        # "baserow_models": apps.baserow_models,
+        # We are using our own table model manager to implement some queryset
+        # helpers.
+        # "objects": models.Manager(),
+        # "objects": RestrictedQuerySet.as_manager(),
+        # "objects_and_trash": TableModelTrashAndObjectsManager(),
+        # "__str__": __str__,
+        # "get_absolute_url": get_absolute_url,
+    }
+
+    serializer = type(
+        f"{model._meta.object_name}Serializer",
+        (
+            # GeneratedTableModel,
+            # TrashableModelMixin,
+            # CreatedAndUpdatedOnMixin,
+            serializers.ModelSerializer,
+        ),
+        attrs,
+    )
+
+    return serializer
