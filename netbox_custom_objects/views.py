@@ -116,6 +116,10 @@ class CustomObjectEditView(generic.ObjectEditView):
     #     self.form = self.get_form(model)
     #     return result
 
+    def get_queryset(self, request):
+        model = self.object._meta.model
+        return model.objects.all()
+
     def get_object(self, **kwargs):
         if self.object:
             return self.object
