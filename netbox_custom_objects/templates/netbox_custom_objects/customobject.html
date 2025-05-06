@@ -1,6 +1,6 @@
 {% extends 'generic/object.html' %}
 {% load static %}
-{% load buttons %}
+{% load custom_object_buttons %}
 {% load helpers %}
 {% load perms %}
 {% load plugins %}
@@ -22,7 +22,7 @@
 
   {# Default buttons #}
   {% if perms.extras.add_bookmark and object.bookmarks %}
-    {% bookmark_button object %}
+    {% custom_object_bookmark_button object %}
   {% endif %}
   {% if perms.extras.add_subscription and object.subscriptions %}
 {#    {% subscribe_button object %}#}
@@ -31,7 +31,7 @@
 {#        {% clone_button object %}#}
   {% endif %}
   {% if request.user|can_change:object %}
-{#        {% edit_button object %}#}
+    {% custom_object_edit_button object %}
   {% endif %}
   {% if request.user|can_delete:object %}
 {#    {% delete_button object %}#}

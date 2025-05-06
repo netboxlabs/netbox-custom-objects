@@ -319,6 +319,7 @@ class CustomObjectType(NetBoxModel):
             # model is generated at the same time, the pending operations can be
             # executed in a wrong order. A unique app_label isolated in that case.
             app_label = str(uuid.uuid4()) + "_database_table"
+            # app_label = 'netbox_custom_objects'
 
         filtered = field_names is not None or field_ids is not None
         model_name = self.get_table_model_name(self.pk)

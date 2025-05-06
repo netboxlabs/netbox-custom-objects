@@ -88,8 +88,8 @@ class CustomObjectView(generic.ObjectView):
         custom_object_type = self.kwargs.pop('custom_object_type', None)
         object_type = CustomObjectType.objects.get(slug=custom_object_type)
         model = object_type.get_model()
-        kwargs.pop('custom_object_type', None)
-        return get_object_or_404(model.objects.all(), **kwargs)
+        # kwargs.pop('custom_object_type', None)
+        return get_object_or_404(model.objects.all(), **self.kwargs)
 
     def get_extra_context(self, request, instance):
         content_type = ContentType.objects.get_for_model(instance)
@@ -102,6 +102,76 @@ class CustomObjectView(generic.ObjectView):
 class CustomObjectEditView(generic.ObjectEditView):
     queryset = CustomObject.objects.all()
     form = forms.CustomObjectForm
+    object = None
+
+    def setup(self, request, *args, **kwargs):
+        super().setup(request, *args, **kwargs)
+        self.object = self.get_object()
+        model = self.object._meta.model
+        self.form = self.get_form(model)
+
+    # def dispatch(self, request, *args, **kwargs):
+    #     result = super().dispatch(request, *args, **kwargs)
+    #     model = self.get_object()._meta.model
+    #     self.form = self.get_form(model)
+    #     return result
+
+    def get_object(self, **kwargs):
+        if self.object:
+            return self.object
+        custom_object_type = self.kwargs.pop('custom_object_type', None)
+        object_type = CustomObjectType.objects.get(slug=custom_object_type)
+        model = object_type.get_model()
+        return get_object_or_404(model.objects.all(), **self.kwargs)
+
+    def get_form(self, model):
+        # apps = GeneratedModelAppsProxy(manytomany_models, app_label)
+        meta = type(
+            "Meta",
+            (),
+            {
+                "model": model,
+                "fields": "__all__",
+                # "apps": apps,
+                # "managed": managed,
+                # "db_table": self.get_database_table_name(),
+                # "app_label": app_label,
+                # "ordering": ["order", "id"],
+                # "indexes": indexes,
+                # "verbose_name": self.get_verbose_name(),
+                # "verbose_name_plural": self.get_verbose_name_plural(),
+            },
+        )
+
+        attrs = {
+            "Meta": meta,
+            "__module__": "database.forms",
+            # An indication that the model is a generated table model.
+            # "_generated_table_model": True,
+            # "baserow_table": self,
+            # "baserow_table_id": self.id,
+            # "baserow_models": apps.baserow_models,
+            # We are using our own table model manager to implement some queryset
+            # helpers.
+            # "objects": models.Manager(),
+            # "objects": RestrictedQuerySet.as_manager(),
+            # "objects_and_trash": TableModelTrashAndObjectsManager(),
+            # "__str__": __str__,
+            # "get_absolute_url": get_absolute_url,
+        }
+
+        form = type(
+            f"{model._meta.object_name}Form",
+            (
+                # GeneratedTableModel,
+                # TrashableModelMixin,
+                # CreatedAndUpdatedOnMixin,
+                forms.NetBoxModelForm,
+            ),
+            attrs,
+        )
+
+        return form
 
 
 @register_model_view(CustomObject, 'delete')

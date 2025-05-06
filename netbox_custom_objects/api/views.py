@@ -24,6 +24,10 @@ class CustomObjectViewSet(ModelViewSet):
     # filterset_class = filtersets.CustomObjectFilterSet
     model = None
 
+    # def get_view_name(self):
+    #     custom_object_type = CustomObjectType.objects.get(name__iexact=self.kwargs['custom_object_type'])
+    #     return custom_object_type.name
+
     def get_serializer_class(self):
         return serializers.get_serializer_class(self.model)
 

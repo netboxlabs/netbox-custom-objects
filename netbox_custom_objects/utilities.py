@@ -13,6 +13,7 @@ from django.urls import reverse
 from django.apps import apps
 
 from netbox.plugins import get_plugin_config
+from netbox.plugins import PluginConfig
 from netbox.registry import registry
 from netbox.utils import register_request_processor
 # from netbox_custom_objects.models import CustomObject, CustomObjectType
@@ -20,6 +21,7 @@ from netbox.utils import register_request_processor
 
 __all__ = (
     'register_models',
+    'get_viewname',
 )
 
 def register_models():
@@ -87,3 +89,34 @@ class ListHandler(logging.Handler):
     def emit(self, record):
         self.queue.append(self.format(record))
 
+
+def get_viewname(model, action=None, rest_api=False):
+    """
+    Return the view name for the given model and action, if valid.
+
+    :param model: The model or instance to which the view applies
+    :param action: A string indicating the desired action (if any); e.g. "add" or "list"
+    :param rest_api: A boolean indicating whether this is a REST API view
+    """
+    # is_plugin = isinstance(model._meta.app_config, PluginConfig)
+    # app_label = model._meta.app_label
+    # model_name = model._meta.model_name
+    is_plugin = True
+    app_label = 'netbox_custom_objects'
+    model_name = 'customobject'
+
+    if rest_api:
+        viewname = f'{app_label}-api:{model_name}'
+        if is_plugin:
+            viewname = f'plugins-api:{viewname}'
+        if action:
+            viewname = f'{viewname}-{action}'
+
+    else:
+        viewname = f'{app_label}:{model_name}'
+        if is_plugin:
+            viewname = f'plugins:{viewname}'
+        if action:
+            viewname = f'{viewname}_{action}'
+
+    return viewname
