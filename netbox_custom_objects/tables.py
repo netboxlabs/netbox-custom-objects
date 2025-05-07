@@ -100,7 +100,7 @@ class CustomObjectActionsColumn(columns.ActionsColumn):
         for idx, (action, attrs) in enumerate(self.actions.items()):
             permission = get_permission_for_model(model, attrs.permission)
             if attrs.permission is None or user.has_perm(permission):
-                url = reverse(get_viewname(model, action), kwargs={'pk': record.pk})
+                url = reverse(get_viewname(model, action), kwargs={'pk': record.pk, 'custom_object_type': record.custom_object_type.name.lower()})
 
                 # Render a separate button if a) only one action exists, or b) if split_actions is True
                 if len(self.actions) == 1 or (self.split_actions and idx == 0):
