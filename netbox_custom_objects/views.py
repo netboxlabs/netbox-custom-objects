@@ -85,6 +85,9 @@ class CustomObjectListView(generic.ObjectListView):
             {
                 "model": data.model,
                 "fields": fields,
+                "attrs": {
+                    "class": "table table-hover object-list",
+                }
             },
         )
 
