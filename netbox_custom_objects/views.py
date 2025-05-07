@@ -6,6 +6,7 @@ from netbox.views import generic
 from utilities.views import ViewTab, register_model_view
 # from utilities.tables import get_table_for_model
 from . import filtersets, forms, tables
+from netbox_custom_objects.tables import CustomObjectTable
 from .models import CustomObject, CustomObjectType, CustomObjectRelation, CustomObjectTypeField
 
 
@@ -63,10 +64,10 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
 #
 
 class CustomObjectListView(generic.ObjectListView):
-    queryset = CustomObject.objects.all()
+    # queryset = CustomObject.objects.all()
     # filterset = filtersets.BranchFilterSet
     # filterset_form = forms.BranchFilterForm
-    table = tables.CustomObjectTable
+    # table = tables.CustomObjectTable
     # custom_object_type = None
 
     def get_queryset(self, request):
@@ -74,6 +75,32 @@ class CustomObjectListView(generic.ObjectListView):
         object_type = CustomObjectType.objects.get(slug=custom_object_type)
         model = object_type.get_model()
         return model.objects.all()
+
+    def get_table(self, data, request, bulk_actions=True):
+        fields = [field.name for field in data.model._meta.fields]
+
+        meta = type(
+            "Meta",
+            (),
+            {
+                "model": data.model,
+                "fields": fields,
+            },
+        )
+
+        attrs = {
+            "Meta": meta,
+            "__module__": "database.tables",
+        }
+
+        self.table = type(
+            f"{data.model._meta.object_name}Table",
+            (
+                CustomObjectTable,
+            ),
+            attrs,
+        )
+        return super().get_table(data, request, bulk_actions=bulk_actions)
 
     def get(self, request, custom_object_type):
         # Necessary because get() in ObjectListView only takes request and no **kwargs
@@ -129,47 +156,23 @@ class CustomObjectEditView(generic.ObjectEditView):
         return get_object_or_404(model.objects.all(), **self.kwargs)
 
     def get_form(self, model):
-        # apps = GeneratedModelAppsProxy(manytomany_models, app_label)
         meta = type(
             "Meta",
             (),
             {
                 "model": model,
                 "fields": "__all__",
-                # "apps": apps,
-                # "managed": managed,
-                # "db_table": self.get_database_table_name(),
-                # "app_label": app_label,
-                # "ordering": ["order", "id"],
-                # "indexes": indexes,
-                # "verbose_name": self.get_verbose_name(),
-                # "verbose_name_plural": self.get_verbose_name_plural(),
             },
         )
 
         attrs = {
             "Meta": meta,
             "__module__": "database.forms",
-            # An indication that the model is a generated table model.
-            # "_generated_table_model": True,
-            # "baserow_table": self,
-            # "baserow_table_id": self.id,
-            # "baserow_models": apps.baserow_models,
-            # We are using our own table model manager to implement some queryset
-            # helpers.
-            # "objects": models.Manager(),
-            # "objects": RestrictedQuerySet.as_manager(),
-            # "objects_and_trash": TableModelTrashAndObjectsManager(),
-            # "__str__": __str__,
-            # "get_absolute_url": get_absolute_url,
         }
 
         form = type(
             f"{model._meta.object_name}Form",
             (
-                # GeneratedTableModel,
-                # TrashableModelMixin,
-                # CreatedAndUpdatedOnMixin,
                 forms.NetBoxModelForm,
             ),
             attrs,

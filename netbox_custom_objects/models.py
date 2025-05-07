@@ -45,6 +45,7 @@ from utilities.forms.fields import (
 )
 from utilities.forms.utils import add_blank_choice
 from utilities.forms.widgets import APISelect, APISelectMultiple, DatePicker, DateTimePicker
+from utilities.string import title
 from utilities.querysets import RestrictedQuerySet
 from utilities.templatetags.builtins.filters import render_markdown
 from utilities.validators import validate_regex
@@ -82,6 +83,9 @@ class CustomObjectType(NetBoxModel):
 
     def get_absolute_url(self):
         return reverse('plugins:netbox_custom_objects:customobjecttype', args=[self.pk])
+
+    def get_list_url(self):
+        return reverse('plugins:netbox_custom_objects:customobject_list', kwargs={'custom_object_type': self.name.lower()})
 
     def create_proxy_model(
         self, model_name, base_model, extra_fields=None, meta_options=None
@@ -257,6 +261,9 @@ class CustomObjectType(NetBoxModel):
 
     def get_verbose_name_plural(self):
         return self.name.lower() + "s"
+
+    def get_title_case_name_plural(self):
+        return title(self.name) + "s"
 
     def get_model(
         self,
