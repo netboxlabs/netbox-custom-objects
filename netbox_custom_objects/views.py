@@ -2,11 +2,13 @@ from django.contrib import messages
 from django.contrib.contenttypes.models import ContentType
 from django.shortcuts import get_object_or_404
 
+from netbox.forms import NetBoxModelFilterSetForm
 from netbox.views import generic
 from utilities.views import ViewTab, register_model_view
 # from utilities.tables import get_table_for_model
 from . import filtersets, forms, tables
 from netbox_custom_objects.tables import CustomObjectTable
+from netbox.filtersets import BaseFilterSet, ChangeLoggedModelFilterSet, NetBoxModelFilterSet
 from .models import CustomObject, CustomObjectType, CustomObjectRelation, CustomObjectTypeField
 
 
@@ -70,11 +72,72 @@ class CustomObjectListView(generic.ObjectListView):
     # table = tables.CustomObjectTable
     # custom_object_type = None
 
+    def setup(self, request, *args, **kwargs):
+        super().setup(request, *args, **kwargs)
+        self.queryset = self.get_queryset(request)
+        self.filterset = self.get_filterset()
+        self.filterset_form = self.get_filterset_form()
+
     def get_queryset(self, request):
+        if self.queryset:
+            return self.queryset
         custom_object_type = self.kwargs.pop('custom_object_type', None)
         object_type = CustomObjectType.objects.get(slug=custom_object_type)
         model = object_type.get_model()
         return model.objects.all()
+
+    def get_filterset(self):
+        model = self.queryset.model
+        fields = [field.name for field in model._meta.fields]
+
+        meta = type(
+            "Meta",
+            (),
+            {
+                "model": model,
+                "fields": fields,
+            },
+        )
+
+        attrs = {
+            "Meta": meta,
+            "__module__": "database.filtersets",
+        }
+
+        return type(
+            f"{model._meta.object_name}FilterSet",
+            (
+                BaseFilterSet,  # TODO: Should be a NetBoxModelFilterSet
+            ),
+            attrs,
+        )
+
+    def get_filterset_form(self):
+        model = self.queryset.model
+        fields = [field.name for field in model._meta.fields]
+
+        meta = type(
+            "Meta",
+            (),
+            {
+                "model": model,
+                "fields": fields,
+            },
+        )
+
+        attrs = {
+            "model": model,
+            # "Meta": meta,
+            "__module__": "database.filterset_forms",
+        }
+
+        return type(
+            f"{model._meta.object_name}FilterForm",
+            (
+                NetBoxModelFilterSetForm,
+            ),
+            attrs,
+        )
 
     def get_table(self, data, request, bulk_actions=True):
         fields = [field.name for field in data.model._meta.fields]
