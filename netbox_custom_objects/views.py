@@ -1,12 +1,13 @@
 from django.contrib import messages
 from django.contrib.contenttypes.models import ContentType
+from django.db.models.expressions import field_types
 from django.shortcuts import get_object_or_404
 
 from netbox.forms import NetBoxModelFilterSetForm
 from netbox.views import generic
 from utilities.views import ViewTab, register_model_view
 # from utilities.tables import get_table_for_model
-from . import filtersets, forms, tables
+from . import filtersets, forms, tables, field_types
 from netbox_custom_objects.tables import CustomObjectTable
 from netbox.filtersets import BaseFilterSet, ChangeLoggedModelFilterSet, NetBoxModelFilterSet
 from .models import CustomObject, CustomObjectType, CustomObjectRelation, CustomObjectTypeField
@@ -70,7 +71,7 @@ class CustomObjectListView(generic.ObjectListView):
     # filterset = filtersets.BranchFilterSet
     # filterset_form = forms.BranchFilterForm
     # table = tables.CustomObjectTable
-    # custom_object_type = None
+    custom_object_type = None
 
     def setup(self, request, *args, **kwargs):
         super().setup(request, *args, **kwargs)
@@ -82,8 +83,8 @@ class CustomObjectListView(generic.ObjectListView):
         if self.queryset:
             return self.queryset
         custom_object_type = self.kwargs.pop('custom_object_type', None)
-        object_type = CustomObjectType.objects.get(slug=custom_object_type)
-        model = object_type.get_model()
+        self.custom_object_type = CustomObjectType.objects.get(name__iexact=custom_object_type)
+        model = self.custom_object_type.get_model()
         return model.objects.all()
 
     def get_filterset(self):
@@ -116,20 +117,28 @@ class CustomObjectListView(generic.ObjectListView):
         model = self.queryset.model
         fields = [field.name for field in model._meta.fields]
 
-        meta = type(
-            "Meta",
-            (),
-            {
-                "model": model,
-                "fields": fields,
-            },
-        )
+        # meta = type(
+        #     "Meta",
+        #     (),
+        #     {
+        #         "model": model,
+        #         "fields": fields,
+        #     },
+        # )
 
         attrs = {
             "model": model,
             # "Meta": meta,
             "__module__": "database.filterset_forms",
         }
+
+        for field in self.custom_object_type.fields.all():
+            print(field)
+            field_type = field_types.FIELD_TYPE_CLASS[field.type]()
+            try:
+                attrs[field.name] = field_type.get_filterform_field(field)
+            except NotImplementedError:
+                print(f'{field.name} field is not supported')
 
         return type(
             f"{model._meta.object_name}FilterForm",
@@ -179,7 +188,7 @@ class CustomObjectView(generic.ObjectView):
 
     def get_object(self, **kwargs):
         custom_object_type = self.kwargs.pop('custom_object_type', None)
-        object_type = CustomObjectType.objects.get(slug=custom_object_type)
+        object_type = CustomObjectType.objects.get(name__iexact=custom_object_type)
         model = object_type.get_model()
         # kwargs.pop('custom_object_type', None)
         return get_object_or_404(model.objects.all(), **self.kwargs)
@@ -217,7 +226,7 @@ class CustomObjectEditView(generic.ObjectEditView):
         if self.object:
             return self.object
         custom_object_type = self.kwargs.pop('custom_object_type', None)
-        object_type = CustomObjectType.objects.get(slug=custom_object_type)
+        object_type = CustomObjectType.objects.get(name__iexact=custom_object_type)
         model = object_type.get_model()
         return get_object_or_404(model.objects.all(), **self.kwargs)
 
