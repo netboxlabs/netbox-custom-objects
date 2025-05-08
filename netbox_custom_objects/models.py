@@ -338,9 +338,10 @@ class CustomObjectType(NetBoxModel):
         # columns. If `USE_PG_FULLTEXT_SEARCH` is enabled, which
         # it is by default, we'll include a GIN index on the table's
         # `tsvector` column.
+        # TODO: Add other fields with "index" specified
         indexes = [
             models.Index(
-                fields=["order", "id"],
+                fields=["id"],
                 name=self.get_collision_safe_order_id_idx_name(),
             )
         ]
@@ -354,7 +355,7 @@ class CustomObjectType(NetBoxModel):
                 "managed": managed,
                 "db_table": self.get_database_table_name(),
                 "app_label": app_label,
-                "ordering": ["order", "id"],
+                "ordering": ["id"],
                 "indexes": indexes,
                 # "verbose_name": self.get_verbose_name(),
                 "verbose_name_plural": self.get_verbose_name_plural(),
@@ -422,12 +423,12 @@ class CustomObjectType(NetBoxModel):
         # to ensure any other model fields added to this same model are __init__ed
         # after we've fixed the global DjangoModelFieldClass.creation_counter
         # above.
-        field_attrs["order"] = models.DecimalField(
-            max_digits=40,
-            decimal_places=20,
-            editable=False,
-            default=1,
-        )
+        # field_attrs["order"] = models.DecimalField(
+        #     max_digits=40,
+        #     decimal_places=20,
+        #     editable=False,
+        #     default=1,
+        # )
         field_attrs["custom_object_type"] = models.ForeignKey('netbox_custom_objects.CustomObjectType', on_delete=models.CASCADE)
         field_attrs["name"] = models.CharField(max_length=100, unique=True)
         # field_attrs["legs"] = models.IntegerField(default=4)
