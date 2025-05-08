@@ -190,9 +190,13 @@ def custom_object_export_button(context, model):
 
 
 @register.inclusion_tag('buttons/bulk_edit.html', takes_context=True)
-def custom_object_bulk_edit_button(context, model, action='bulk_edit', query_params=None):
+def custom_object_bulk_edit_button(context, model, custom_object_type, action='bulk_edit', query_params=None):
     try:
-        url = reverse(get_viewname(model, action))
+        viewname = get_viewname(model, action)
+        url = reverse(
+            viewname, kwargs={'custom_object_type': custom_object_type.name.lower()}
+        )
+
         if query_params:
             url = f'{url}?{query_params.urlencode()}'
     except NoReverseMatch:
@@ -205,9 +209,12 @@ def custom_object_bulk_edit_button(context, model, action='bulk_edit', query_par
 
 
 @register.inclusion_tag('buttons/bulk_delete.html', takes_context=True)
-def custom_object_bulk_delete_button(context, model, action='bulk_delete', query_params=None):
+def custom_object_bulk_delete_button(context, model, custom_object_type, action='bulk_delete', query_params=None):
     try:
-        url = reverse(get_viewname(model, action))
+        viewname = get_viewname(model, action)
+        url = reverse(
+            viewname, kwargs={'custom_object_type': custom_object_type.name.lower()}
+        )
         if query_params:
             url = f'{url}?{query_params.urlencode()}'
     except NoReverseMatch:

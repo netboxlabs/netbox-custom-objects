@@ -1,0 +1,13 @@
+{% extends "generic/object_list.html" %}
+{% load custom_object_buttons %}
+
+{% block bulk_buttons %}
+  <div class="bulk-action-buttons">
+    {% if 'bulk_edit' in actions %}
+      {% custom_object_bulk_edit_button model custom_object_type query_params=request.GET %}
+    {% endif %}
+    {% if 'bulk_delete' in actions %}
+      {% custom_object_bulk_delete_button model custom_object_type query_params=request.GET %}
+    {% endif %}
+  </div>
+{% endblock %}

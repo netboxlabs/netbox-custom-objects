@@ -72,6 +72,7 @@ class CustomObjectListView(generic.ObjectListView):
     # filterset_form = forms.BranchFilterForm
     # table = tables.CustomObjectTable
     custom_object_type = None
+    template_name = 'netbox_custom_objects/custom_object_list.html'
 
     def setup(self, request, *args, **kwargs):
         super().setup(request, *args, **kwargs)
@@ -115,7 +116,7 @@ class CustomObjectListView(generic.ObjectListView):
 
     def get_filterset_form(self):
         model = self.queryset.model
-        fields = [field.name for field in model._meta.fields]
+        # fields = [field.name for field in model._meta.fields]
 
         # meta = type(
         #     "Meta",
@@ -133,7 +134,6 @@ class CustomObjectListView(generic.ObjectListView):
         }
 
         for field in self.custom_object_type.fields.all():
-            print(field)
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
             try:
                 attrs[field.name] = field_type.get_filterform_field(field)
@@ -181,6 +181,11 @@ class CustomObjectListView(generic.ObjectListView):
         # Necessary because get() in ObjectListView only takes request and no **kwargs
         return super().get(request)
 
+    def get_extra_context(self, request):
+        return {
+            'custom_object_type': self.custom_object_type,
+        }
+
 
 @register_model_view(CustomObject)
 class CustomObjectView(generic.ObjectView):
@@ -202,8 +207,10 @@ class CustomObjectView(generic.ObjectView):
 
 @register_model_view(CustomObject, 'edit')
 class CustomObjectEditView(generic.ObjectEditView):
-    queryset = CustomObject.objects.all()
-    form = forms.CustomObjectForm
+    # queryset = CustomObject.objects.all()
+    # form = forms.CustomObjectForm
+    form = None
+    queryset = None
     object = None
 
     def setup(self, request, *args, **kwargs):
@@ -260,3 +267,31 @@ class CustomObjectEditView(generic.ObjectEditView):
 class CustomObjectDeleteView(generic.ObjectDeleteView):
     queryset = CustomObject.objects.all()
     default_return_url = 'plugins:netbox_custom_objects:customobject_list'
+
+
+@register_model_view(CustomObject, 'bulk_edit', path='edit', detail=False)
+class CustomObjectBulkEditView(generic.BulkEditView):
+    queryset = None
+    filterset = None
+    table = None
+    form = None
+
+    def setup(self, request, *args, **kwargs):
+        super().setup(request, *args, **kwargs)
+        self.queryset = self.get_queryset(request)
+        self.filterset = self.get_filterset()
+        self.filterset_form = self.get_filterset_form()
+
+
+@register_model_view(CustomObject, 'bulk_delete', path='delete', detail=False)
+class CustomObjectBulkDeleteView(generic.BulkDeleteView):
+    queryset = None
+    filterset = None
+    table = None
+    form = None
+
+    def setup(self, request, *args, **kwargs):
+        super().setup(request, *args, **kwargs)
+        self.queryset = self.get_queryset(request)
+        self.filterset = self.get_filterset()
+        self.filterset_form = self.get_filterset_form()
