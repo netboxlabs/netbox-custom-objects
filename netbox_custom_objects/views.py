@@ -67,7 +67,7 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
 # Custom Objects
 #
 
-class CustomObjectTableMixin:
+class CustomObjectTableMixin(TableMixin):
     def get_table(self, data, request, bulk_actions=True):
         fields = [field.name for field in data.model._meta.fields]
 
@@ -293,7 +293,7 @@ class CustomObjectDeleteView(generic.ObjectDeleteView):
 
 
 @register_model_view(CustomObject, 'bulk_edit', path='edit', detail=False)
-class CustomObjectBulkEditView(CustomObjectTableMixin, TableMixin, generic.BulkEditView):
+class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
     queryset = None
     custom_object_type = None
     table = None
@@ -338,14 +338,21 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, TableMixin, generic.BulkE
 
 
 @register_model_view(CustomObject, 'bulk_delete', path='delete', detail=False)
-class CustomObjectBulkDeleteView(generic.BulkDeleteView):
+class CustomObjectBulkDeleteView(CustomObjectTableMixin, generic.BulkDeleteView):
     queryset = None
-    filterset = None
+    custom_object_type = None
     table = None
     form = None
 
     def setup(self, request, *args, **kwargs):
         super().setup(request, *args, **kwargs)
         self.queryset = self.get_queryset(request)
-        self.filterset = self.get_filterset()
-        self.filterset_form = self.get_filterset_form()
+        self.table = self.get_table(self.queryset, request).__class__
+
+    def get_queryset(self, request):
+        if self.queryset:
+            return self.queryset
+        custom_object_type = self.kwargs.pop('custom_object_type', None)
+        self.custom_object_type = CustomObjectType.objects.get(name__iexact=custom_object_type)
+        model = self.custom_object_type.get_model()
+        return model.objects.all()
