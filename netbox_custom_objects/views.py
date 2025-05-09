@@ -238,6 +238,9 @@ class CustomObjectEditView(generic.ObjectEditView):
         custom_object_type = self.kwargs.pop('custom_object_type', None)
         object_type = CustomObjectType.objects.get(name__iexact=custom_object_type)
         model = object_type.get_model()
+        if not kwargs:
+            # We're creating a new object
+            return model()
         return get_object_or_404(model.objects.all(), **self.kwargs)
 
     def get_form(self, model):

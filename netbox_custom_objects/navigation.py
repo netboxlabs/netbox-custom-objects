@@ -28,7 +28,12 @@ def get_menu():
             url=reverse('plugins:netbox_custom_objects:customobject_list', kwargs={'custom_object_type': custom_object_type.name.lower()}),
             link_text=_(title(model._meta.verbose_name_plural)),
             buttons=(
-                # PluginMenuButton('plugins:netbox_custom_objects:customobject_add', _('Add'), 'mdi mdi-plus-thick'),
+                PluginMenuButton(
+                    None,
+                    _('Add'),
+                    'mdi mdi-plus-thick',
+                    url=reverse('plugins:netbox_custom_objects:customobject_add', kwargs={'custom_object_type': custom_object_type.name.lower()}),
+                ),
             )
         ))
     return PluginMenu(

@@ -146,9 +146,12 @@ def custom_object_sync_button(instance):
 #
 
 @register.inclusion_tag('buttons/add.html')
-def custom_object_add_button(model, action='add'):
+def custom_object_add_button(model, custom_object_type, action='add'):
     try:
-        url = reverse(get_viewname(model, action))
+        viewname = get_viewname(model, action)
+        url = reverse(
+            viewname, kwargs={'custom_object_type': custom_object_type.name.lower()}
+        )
     except NoReverseMatch:
         url = None
 
