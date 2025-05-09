@@ -3,8 +3,9 @@ from django.contrib.contenttypes.models import ContentType
 from django.db.models.expressions import field_types
 from django.shortcuts import get_object_or_404
 
-from netbox.forms import NetBoxModelFilterSetForm
+from netbox.forms import NetBoxModelFilterSetForm, NetBoxModelBulkEditForm
 from netbox.views import generic
+from netbox.views.generic.mixins import TableMixin
 from utilities.views import ViewTab, register_model_view
 # from utilities.tables import get_table_for_model
 from . import filtersets, forms, tables, field_types
@@ -270,17 +271,87 @@ class CustomObjectDeleteView(generic.ObjectDeleteView):
 
 
 @register_model_view(CustomObject, 'bulk_edit', path='edit', detail=False)
-class CustomObjectBulkEditView(generic.BulkEditView):
+class CustomObjectBulkEditView(TableMixin, generic.BulkEditView):
     queryset = None
-    filterset = None
+    custom_object_type = None
     table = None
     form = None
 
     def setup(self, request, *args, **kwargs):
         super().setup(request, *args, **kwargs)
         self.queryset = self.get_queryset(request)
-        self.filterset = self.get_filterset()
-        self.filterset_form = self.get_filterset_form()
+        self.form = self.get_form(self.queryset)
+        self.table = self.get_table(self.queryset, request).__class__
+
+    def get_queryset(self, request):
+        if self.queryset:
+            return self.queryset
+        custom_object_type = self.kwargs.pop('custom_object_type', None)
+        self.custom_object_type = CustomObjectType.objects.get(name__iexact=custom_object_type)
+        model = self.custom_object_type.get_model()
+        return model.objects.all()
+
+    def get_form(self, queryset):
+        meta = type(
+            "Meta",
+            (),
+            {
+                "model": queryset.model,
+                "fields": "__all__",
+            },
+        )
+
+        attrs = {
+            # "Meta": meta,
+            "model": queryset.model,
+            "__module__": "database.forms",
+        }
+
+        for field in self.custom_object_type.fields.all():
+            field_type = field_types.FIELD_TYPE_CLASS[field.type]()
+            try:
+                attrs[field.name] = field_type.get_bulk_edit_form_field(field)
+            except NotImplementedError:
+                print(f'{field.name} field is not supported')
+
+        form = type(
+            f"{queryset.model._meta.object_name}BulkEditForm",
+            (
+                NetBoxModelBulkEditForm,
+            ),
+            attrs,
+        )
+
+        return form
+
+    def get_table(self, data, request, bulk_actions=True):
+        fields = [field.name for field in data.model._meta.fields]
+
+        meta = type(
+            "Meta",
+            (),
+            {
+                "model": data.model,
+                "fields": fields,
+                "attrs": {
+                    "class": "table table-hover object-list",
+                }
+            },
+        )
+
+        attrs = {
+            "Meta": meta,
+            "__module__": "database.tables",
+        }
+
+        self.table = type(
+            f"{data.model._meta.object_name}Table",
+            (
+                CustomObjectTable,
+            ),
+            attrs,
+        )
+        return super().get_table(data, request, bulk_actions=bulk_actions)
 
 
 @register_model_view(CustomObject, 'bulk_delete', path='delete', detail=False)

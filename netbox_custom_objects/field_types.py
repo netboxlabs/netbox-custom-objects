@@ -17,6 +17,9 @@ class FieldType:
     def get_filterform_field(self, field, **kwargs):
         raise NotImplementedError
 
+    def get_bulk_edit_form_field(self, field, **kwargs):
+        raise NotImplementedError
+
 
 class TextFieldType(FieldType):
 
@@ -36,6 +39,12 @@ class TextFieldType(FieldType):
                 "validators": validators,
                 **kwargs,
             }
+        )
+
+    def get_bulk_edit_form_field(self, field, **kwargs):
+        return forms.CharField(
+            max_length=200,
+            required=False,
         )
 
     def get_filterform_field(self, field, **kwargs):
