@@ -67,7 +67,38 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
 # Custom Objects
 #
 
-class CustomObjectListView(generic.ObjectListView):
+class CustomObjectTableMixin:
+    def get_table(self, data, request, bulk_actions=True):
+        fields = [field.name for field in data.model._meta.fields]
+
+        meta = type(
+            "Meta",
+            (),
+            {
+                "model": data.model,
+                "fields": fields,
+                "attrs": {
+                    "class": "table table-hover object-list",
+                }
+            },
+        )
+
+        attrs = {
+            "Meta": meta,
+            "__module__": "database.tables",
+        }
+
+        self.table = type(
+            f"{data.model._meta.object_name}Table",
+            (
+                CustomObjectTable,
+            ),
+            attrs,
+        )
+        return super().get_table(data, request, bulk_actions=bulk_actions)
+
+
+class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
     # queryset = CustomObject.objects.all()
     # filterset = filtersets.BranchFilterSet
     # filterset_form = forms.BranchFilterForm
@@ -148,35 +179,6 @@ class CustomObjectListView(generic.ObjectListView):
             ),
             attrs,
         )
-
-    def get_table(self, data, request, bulk_actions=True):
-        fields = [field.name for field in data.model._meta.fields]
-
-        meta = type(
-            "Meta",
-            (),
-            {
-                "model": data.model,
-                "fields": fields,
-                "attrs": {
-                    "class": "table table-hover object-list",
-                }
-            },
-        )
-
-        attrs = {
-            "Meta": meta,
-            "__module__": "database.tables",
-        }
-
-        self.table = type(
-            f"{data.model._meta.object_name}Table",
-            (
-                CustomObjectTable,
-            ),
-            attrs,
-        )
-        return super().get_table(data, request, bulk_actions=bulk_actions)
 
     def get(self, request, custom_object_type):
         # Necessary because get() in ObjectListView only takes request and no **kwargs
@@ -266,12 +268,29 @@ class CustomObjectEditView(generic.ObjectEditView):
 
 @register_model_view(CustomObject, 'delete')
 class CustomObjectDeleteView(generic.ObjectDeleteView):
-    queryset = CustomObject.objects.all()
+    queryset = None
+    object = None
     default_return_url = 'plugins:netbox_custom_objects:customobject_list'
+
+    def setup(self, request, *args, **kwargs):
+        super().setup(request, *args, **kwargs)
+        self.object = self.get_object()
+
+    def get_queryset(self, request):
+        model = self.object._meta.model
+        return model.objects.all()
+
+    def get_object(self, **kwargs):
+        if self.object:
+            return self.object
+        custom_object_type = self.kwargs.pop('custom_object_type', None)
+        object_type = CustomObjectType.objects.get(name__iexact=custom_object_type)
+        model = object_type.get_model()
+        return get_object_or_404(model.objects.all(), **self.kwargs)
 
 
 @register_model_view(CustomObject, 'bulk_edit', path='edit', detail=False)
-class CustomObjectBulkEditView(TableMixin, generic.BulkEditView):
+class CustomObjectBulkEditView(CustomObjectTableMixin, TableMixin, generic.BulkEditView):
     queryset = None
     custom_object_type = None
     table = None
@@ -292,17 +311,7 @@ class CustomObjectBulkEditView(TableMixin, generic.BulkEditView):
         return model.objects.all()
 
     def get_form(self, queryset):
-        meta = type(
-            "Meta",
-            (),
-            {
-                "model": queryset.model,
-                "fields": "__all__",
-            },
-        )
-
         attrs = {
-            # "Meta": meta,
             "model": queryset.model,
             "__module__": "database.forms",
         }
@@ -323,35 +332,6 @@ class CustomObjectBulkEditView(TableMixin, generic.BulkEditView):
         )
 
         return form
-
-    def get_table(self, data, request, bulk_actions=True):
-        fields = [field.name for field in data.model._meta.fields]
-
-        meta = type(
-            "Meta",
-            (),
-            {
-                "model": data.model,
-                "fields": fields,
-                "attrs": {
-                    "class": "table table-hover object-list",
-                }
-            },
-        )
-
-        attrs = {
-            "Meta": meta,
-            "__module__": "database.tables",
-        }
-
-        self.table = type(
-            f"{data.model._meta.object_name}Table",
-            (
-                CustomObjectTable,
-            ),
-            attrs,
-        )
-        return super().get_table(data, request, bulk_actions=bulk_actions)
 
 
 @register_model_view(CustomObject, 'bulk_delete', path='delete', detail=False)
