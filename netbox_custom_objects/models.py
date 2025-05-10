@@ -388,8 +388,8 @@ class CustomObjectType(NetBoxModel):
             "__module__": "database.models",
             # An indication that the model is a generated table model.
             "_generated_table_model": True,
-            "baserow_table": self,
-            "baserow_table_id": self.id,
+            "custom_object_type": self,
+            "custom_object_type_id": self.id,
             "baserow_models": apps.baserow_models,
             # We are using our own table model manager to implement some queryset
             # helpers.
@@ -429,7 +429,7 @@ class CustomObjectType(NetBoxModel):
         #     editable=False,
         #     default=1,
         # )
-        field_attrs["custom_object_type"] = models.ForeignKey('netbox_custom_objects.CustomObjectType', on_delete=models.CASCADE)
+        # field_attrs["custom_object_type"] = models.ForeignKey('netbox_custom_objects.CustomObjectType', on_delete=models.CASCADE)
         field_attrs["name"] = models.CharField(max_length=100, unique=True)
         # field_attrs["legs"] = models.IntegerField(default=4)
 
