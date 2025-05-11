@@ -69,9 +69,7 @@
                 <th scope="row">{{ field }}</th>
                 <td>
                   {% if field.type == 'object' %}
-                    {% with field_values=object|get_child_relations:field %}
-                      {{ field_values.first|linkify }}
-                    {% endwith %}
+                    {{ object|get_field_value:field|linkify }}
                   {% else %}
                     {{ object|get_field_value:field }}
                   {% endif %}

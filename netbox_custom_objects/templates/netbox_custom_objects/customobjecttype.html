@@ -93,9 +93,7 @@
                     {% for field in object.fields.all %}
                         {% if field.is_single_value %}
                             {% if field.type == 'object' %}
-                                {% with instance|get_child_relations:field as relations %}
-                                    <td>{{ relations.first|linkify }}</td>
-                                {% endwith %}
+                                <td>{{ instance|get_field_value:field|linkify }}</td>
                             {% else %}
                                 <td>{{ instance|get_field_value:field }}</td>
                             {% endif %}

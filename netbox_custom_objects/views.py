@@ -103,6 +103,7 @@ class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
     # filterset = filtersets.BranchFilterSet
     # filterset_form = forms.BranchFilterForm
     # table = tables.CustomObjectTable
+    queryset = None
     custom_object_type = None
     template_name = 'netbox_custom_objects/custom_object_list.html'
 
@@ -115,7 +116,7 @@ class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
     def get_queryset(self, request):
         if self.queryset:
             return self.queryset
-        custom_object_type = self.kwargs.pop('custom_object_type', None)
+        custom_object_type = self.kwargs.get('custom_object_type', None)
         self.custom_object_type = CustomObjectType.objects.get(name__iexact=custom_object_type)
         model = self.custom_object_type.get_model()
         return model.objects.all()
@@ -308,7 +309,7 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
     def get_queryset(self, request):
         if self.queryset:
             return self.queryset
-        custom_object_type = self.kwargs.pop('custom_object_type', None)
+        custom_object_type = self.kwargs.get('custom_object_type', None)
         self.custom_object_type = CustomObjectType.objects.get(name__iexact=custom_object_type)
         model = self.custom_object_type.get_model()
         return model.objects.all()

@@ -1,6 +1,8 @@
 from enum import Enum
+from django.contrib.contenttypes.models import ContentType
 from django.db import models
 from django import forms
+from django.apps import apps
 from rest_framework import serializers
 
 from extras.choices import CustomFieldTypeChoices
@@ -106,7 +108,17 @@ class MultiSelectFieldType(FieldType):
 
 class ObjectFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        return models.IntegerField(**kwargs)
+        # return models.IntegerField(**kwargs)
+        # content_type = ContentType.objects.get_for_model(instance)
+        content_type = ContentType.objects.get(pk=field.related_object_type_id)
+        to_model = content_type.model_class()._meta.object_name
+        to_ct = f'{content_type.app_label}.{to_model}'
+        model = apps.get_model(to_ct)
+        f = models.ForeignKey(model, null=True, blank=True, on_delete=models.CASCADE)
+        return f
+
+    def get_filterform_field(self, field, **kwargs):
+        return None
 
 
 class MultiObjectFieldType(FieldType):
