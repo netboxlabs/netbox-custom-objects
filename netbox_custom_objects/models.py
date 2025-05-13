@@ -1,4 +1,6 @@
 import decimal
+from copy import deepcopy
+
 import jsonschema
 import json
 import re
@@ -354,7 +356,7 @@ class CustomObjectType(NetBoxModel):
                 "apps": apps,
                 "managed": managed,
                 "db_table": self.get_database_table_name(),
-                "app_label": app_label,
+                "app_label": 'netbox_custom_objects',
                 "ordering": ["id"],
                 "indexes": indexes,
                 # "verbose_name": self.get_verbose_name(),
@@ -399,6 +401,7 @@ class CustomObjectType(NetBoxModel):
             "__str__": __str__,
             "get_absolute_url": get_absolute_url,
         }
+        base_attrs = deepcopy(attrs)
 
         # use_cache = (
         #     use_cache
@@ -432,6 +435,19 @@ class CustomObjectType(NetBoxModel):
         # field_attrs["custom_object_type"] = models.ForeignKey('netbox_custom_objects.CustomObjectType', on_delete=models.CASCADE)
         field_attrs["name"] = models.CharField(max_length=100, unique=True)
         # field_attrs["legs"] = models.IntegerField(default=4)
+
+        # TODO: remove probably
+        base_model = type(
+            str(model_name),
+            (
+                # GeneratedTableModel,
+                # TrashableModelMixin,
+                # CreatedAndUpdatedOnMixin,
+                models.Model,
+            ),
+            base_attrs,
+        )
+        apps.register_model('netbox_custom_objects', base_model)
 
         attrs.update(**field_attrs)
 
@@ -1330,6 +1346,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         model_field = field_type.get_model_field(self)
         model = self.custom_object_type.get_model()
         model_field.contribute_to_class(model, self.name)
+        # apps.register_model('netbox_custom_objects', model)
         with connection.schema_editor() as schema_editor:
             if self._state.adding:
                 schema_editor.add_field(model, model_field)
@@ -1344,6 +1361,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         model_field = field_type.get_model_field(self)
         model = self.custom_object_type.get_model()
         model_field.contribute_to_class(model, self.name)
+        # apps.register_model('netbox_custom_objects', model)
         with connection.schema_editor() as schema_editor:
             schema_editor.remove_field(model, model_field)
         super().delete(*args, **kwargs)

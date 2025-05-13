@@ -98,9 +98,9 @@
                                 <td>{{ instance|get_field_value:field }}</td>
                             {% endif %}
                         {% else %}
-                            {% with instance|get_child_relations:field as relations %}
-                                <td>{{ relations.count }}</td>
-                            {% endwith %}
+{#                            {% with instance|get_child_relations:field as relations %}#}
+{#                                <td>{{ relations.count }}</td>#}
+{#                            {% endwith %}#}
                         {% endif %}
 {#                        <td>{% if field.field_type == "object" %}{{ field|get_field_object_type }}{% endif %}</td>#}
 {#                        <td>{% if field.many %}(Many){% endif %}</td>#}

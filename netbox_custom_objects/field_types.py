@@ -6,6 +6,7 @@ from django.apps import apps
 from rest_framework import serializers
 
 from extras.choices import CustomFieldTypeChoices
+from utilities.forms.widgets import DatePicker, DateTimePicker
 
 
 class FieldType:
@@ -17,6 +18,9 @@ class FieldType:
         raise NotImplementedError
 
     def get_filterform_field(self, field, **kwargs):
+        raise NotImplementedError
+
+    def get_form_field(self, field, **kwargs):
         raise NotImplementedError
 
     def get_bulk_edit_form_field(self, field, **kwargs):
@@ -58,7 +62,8 @@ class TextFieldType(FieldType):
 
 
 class LongTextFieldType(FieldType):
-    ...
+    def get_model_field(self, field, **kwargs):
+        return models.TextField(null=True, **kwargs)
 
 
 class IntegerFieldType(FieldType):
@@ -75,27 +80,50 @@ class IntegerFieldType(FieldType):
         )
 
 class DecimalFieldType(FieldType):
-    ...
+    def get_model_field(self, field, **kwargs):
+        return models.DecimalField(
+            null=True,
+            max_digits=8,
+            decimal_places=2,
+            **kwargs,
+        )
 
 
 class BooleanFieldType(FieldType):
-    ...
+    def get_model_field(self, field, **kwargs):
+        return models.BooleanField(null=True, **kwargs)
 
 
 class DateFieldType(FieldType):
-    ...
+    def get_model_field(self, field, **kwargs):
+        return models.DateField(null=True, **kwargs)
+
+    def get_form_field(self, field, **kwargs):
+        return forms.DateField(
+            required=False,
+            widget=DatePicker()
+        )
 
 
 class DateTimeFieldType(FieldType):
-    ...
+    def get_model_field(self, field, **kwargs):
+        return models.DateTimeField(null=True, **kwargs)
+
+    def get_form_field(self, field, **kwargs):
+        return forms.DateTimeField(
+            required=False,
+            widget=DateTimePicker()
+        )
 
 
 class URLFieldType(FieldType):
-    ...
+    def get_model_field(self, field, **kwargs):
+        return models.URLField(null=True, **kwargs)
 
 
 class JSONFieldType(FieldType):
-    ...
+    def get_model_field(self, field, **kwargs):
+        return models.JSONField(null=True, **kwargs)
 
 
 class SelectFieldType(FieldType):
@@ -122,7 +150,17 @@ class ObjectFieldType(FieldType):
 
 
 class MultiObjectFieldType(FieldType):
-    ...
+    def get_model_field(self, field, **kwargs):
+        content_type = ContentType.objects.get(pk=field.related_object_type_id)
+        to_model = content_type.model_class()._meta.object_name
+        to_ct = f'{content_type.app_label}.{to_model}'
+        model = apps.get_model(to_ct)
+        f = models.ManyToManyField(model, related_name=field.custom_object_type.name.lower() + 's')
+        # f = models.ManyToOneRel(model, related_name=field.custom_object_type.name.lower() + 's')
+        return f
+
+    def get_filterform_field(self, field, **kwargs):
+        return None
 
 
 FIELD_TYPE_CLASS = {

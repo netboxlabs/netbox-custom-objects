@@ -1,3 +1,4 @@
+from django.apps import apps
 from django.contrib import messages
 from django.contrib.contenttypes.models import ContentType
 from django.db.models.expressions import field_types
@@ -202,11 +203,11 @@ class CustomObjectView(generic.ObjectView):
         # kwargs.pop('custom_object_type', None)
         return get_object_or_404(model.objects.all(), **self.kwargs)
 
-    def get_extra_context(self, request, instance):
-        content_type = ContentType.objects.get_for_model(instance)
-        return {
-            'relations': CustomObjectRelation.objects.filter(field__related_object_type=content_type, object_id=instance.pk)
-        }
+    # def get_extra_context(self, request, instance):
+    #     content_type = ContentType.objects.get_for_model(instance)
+    #     return {
+    #         'relations': CustomObjectRelation.objects.filter(field__related_object_type=content_type, object_id=instance.pk)
+    #     }
 
 
 @register_model_view(CustomObject, 'edit')
@@ -258,6 +259,13 @@ class CustomObjectEditView(generic.ObjectEditView):
             "Meta": meta,
             "__module__": "database.forms",
         }
+
+        for field in self.object.custom_object_type.fields.all():
+            field_type = field_types.FIELD_TYPE_CLASS[field.type]()
+            try:
+                attrs[field.name] = field_type.get_form_field(field)
+            except NotImplementedError:
+                print(f'{field.name} field is not supported')
 
         form = type(
             f"{model._meta.object_name}Form",
