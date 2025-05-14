@@ -1,4 +1,3 @@
-from enum import Enum
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
 from django import forms
@@ -136,8 +135,24 @@ class SelectFieldType(FieldType):
         )
 
 
+class MultipleChoiceField(models.JSONField):
+    choices = None
+
+    def __init__(self, *args, choices=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.choices = choices
+
+    def formfield(self, **kwargs):
+        return forms.MultipleChoiceField(choices=self.choices, **kwargs)
+
+    def clean(self, value, model_instance):
+        # TODO: More validation
+        return value
+
+
 class MultiSelectFieldType(FieldType):
-    ...
+    def get_model_field(self, field, **kwargs):
+        return MultipleChoiceField(null=True, choices=field.choices, **kwargs)
 
 
 class ObjectFieldType(FieldType):

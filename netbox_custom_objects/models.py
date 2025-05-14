@@ -805,7 +805,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
     @property
     def many(self):
-        return self.type in ['multiobject', 'multiselect']
+        return self.type in ['multiobject']
 
     def get_child_relations(self, instance):
         return instance.get_field_value(self)
