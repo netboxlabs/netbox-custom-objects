@@ -1,4 +1,5 @@
 from django.contrib.contenttypes.models import ContentType
+from django.contrib.postgres.fields import ArrayField
 from django.db import models
 from django import forms
 from django.apps import apps
@@ -135,24 +136,16 @@ class SelectFieldType(FieldType):
         )
 
 
-class MultipleChoiceField(models.JSONField):
-    choices = None
-
-    def __init__(self, *args, choices=None, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.choices = choices
-
-    def formfield(self, **kwargs):
-        return forms.MultipleChoiceField(choices=self.choices, **kwargs)
-
-    def clean(self, value, model_instance):
-        # TODO: More validation
-        return value
-
-
 class MultiSelectFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        return MultipleChoiceField(null=True, choices=field.choices, **kwargs)
+        return ArrayField(
+            base_field=models.CharField(max_length=50, choices=field.choices),
+            null=True,
+            **kwargs,
+        )
+
+    def get_form_field(self, field, **kwargs):
+        return forms.MultipleChoiceField(choices=field.choices, **kwargs)
 
 
 class ObjectFieldType(FieldType):
