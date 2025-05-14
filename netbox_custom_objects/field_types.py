@@ -127,7 +127,13 @@ class JSONFieldType(FieldType):
 
 
 class SelectFieldType(FieldType):
-    ...
+    def get_model_field(self, field, **kwargs):
+        return models.CharField(
+            max_length=100,
+            choices=field.choices,
+            null=True,
+            **kwargs,
+        )
 
 
 class MultiSelectFieldType(FieldType):

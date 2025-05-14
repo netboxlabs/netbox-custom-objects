@@ -1,7 +1,9 @@
+import django_filters
 from django.apps import apps
 from django.contrib import messages
 from django.contrib.contenttypes.models import ContentType
 from django.db.models.expressions import field_types
+from django.db.models import JSONField
 from django.shortcuts import get_object_or_404
 
 from netbox.forms import NetBoxModelFilterSetForm, NetBoxModelBulkEditForm
@@ -132,6 +134,15 @@ class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
             {
                 "model": model,
                 "fields": fields,
+                # TODO: overrides should come from FieldType
+                "filter_overrides": {
+                    JSONField: {
+                        'filter_class': django_filters.CharFilter,
+                        'extra': lambda f: {
+                            'lookup_expr': 'icontains',
+                        },
+                    },
+                }
             },
         )
 
