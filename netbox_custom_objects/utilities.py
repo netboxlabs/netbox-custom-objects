@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 from django.contrib import messages
 from django.contrib.contenttypes.management import create_contenttypes
+from django.db import models, connection
+from django.db.models.fields.related_descriptors import create_forward_many_to_many_manager
 # from django.contrib.contenttypes.models import ContentType
 from django.db.models import ForeignKey, ManyToManyField
 from django.http import HttpResponseBadRequest
@@ -120,3 +122,104 @@ def get_viewname(model, action=None, rest_api=False):
             viewname = f'{viewname}_{action}'
 
     return viewname
+
+
+# TODO: Not needed
+def attach_dynamic_many_to_many_field(
+    *,
+    model,
+    related_model,
+    field_name: str,
+    through_table_name: str,
+    app_label: str = "dynamic_models",
+    from_field_name: str = None,
+    to_field_name: str = None,
+    install_property: bool = True,
+    auto_create_table: bool = True,
+    db_constraint: bool = True,
+):
+    """
+    Dynamically attaches a working ManyToManyField to a model with a custom through model.
+
+    Automatically sets through_fields, patches rel.field with required methods,
+    and optionally installs the manager as a property.
+    """
+
+    # Step 1: Define FK names
+    from_field_name = from_field_name or f"{model.__name__.lower()}_fk"
+    to_field_name = to_field_name or f"{related_model.__name__.lower()}_fk"
+
+    # Step 2: Create the through model
+    through_model = type(
+        f"Through_{model.__name__}_{related_model.__name__}",
+        (models.Model,),
+        {
+            "__module__": "dynamic.models",
+            from_field_name: models.ForeignKey(model, on_delete=models.CASCADE, db_constraint=db_constraint),
+            to_field_name: models.ForeignKey(related_model, on_delete=models.CASCADE, db_constraint=db_constraint),
+            "Meta": type("Meta", (), {
+                "managed": False,
+                "db_table": through_table_name,
+                "app_label": app_label,
+            }),
+        }
+    )
+
+    through_fields = (from_field_name, to_field_name)
+
+    # Step 3: Create and attach the M2M field (disabling reverse access)
+    m2m_field = models.ManyToManyField(
+        to=related_model,
+        through=through_model,
+        through_fields=through_fields,
+        related_name='+',
+        related_query_name='+',
+        blank=True,
+        db_constraint=db_constraint,
+    )
+    m2m_field.contribute_to_class(model, field_name)
+
+    # Step 4: Patch rel.field to provide required methods
+    rel = m2m_field.remote_field
+
+    class FieldWrapper:
+        def __init__(self, original_field, source_field_name, target_field_name):
+            self._field = original_field
+            self.name = original_field.name
+            self._related_query_name = original_field.related_query_name
+            self._source_field_name = source_field_name
+            self._target_field_name = target_field_name
+
+        def related_query_name(self):
+            return self._related_query_name()
+
+        def m2m_field_name(self):
+            return self._source_field_name
+
+        def m2m_reverse_field_name(self):
+            return self._target_field_name
+
+    source_field_name, target_field_name = through_fields
+    rel.field = FieldWrapper(m2m_field, source_field_name, target_field_name)
+
+    # Step 5: Optionally create DB table
+    if auto_create_table:
+        with connection.schema_editor() as editor:
+            editor.create_model(through_model)
+
+    # Step 6: Optionally attach property-based manager
+    if install_property:
+        def make_m2m_property(field):
+            def get_manager(instance):
+                rel = field.remote_field
+                manager_cls = create_forward_many_to_many_manager(
+                    superclass=rel.model._default_manager.__class__,
+                    rel=rel,
+                    reverse=False
+                )
+                return manager_cls(instance)
+            return property(get_manager)
+
+        setattr(model, field_name, make_m2m_property(m2m_field))
+
+    return m2m_field, through_model

@@ -13,6 +13,7 @@ from django.conf import settings
 from django.db import models, connection
 from django.db.models import F, Func, Value, QuerySet
 from django.db.models.expressions import RawSQL
+from django.db.models.fields.related_descriptors import create_forward_many_to_many_manager
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.contenttypes.management import create_contenttypes
@@ -56,6 +57,107 @@ from extras.models.customfields import SEARCH_TYPES
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
 
 USER_TABLE_DATABASE_NAME_PREFIX = "custom_objects_"
+
+
+# TODO: Remove
+def attach_dynamic_many_to_many_field(
+    *,
+    model,
+    related_model,
+    field_name: str,
+    through_table_name: str,
+    app_label: str = "dynamic_models",
+    from_field_name: str = None,
+    to_field_name: str = None,
+    install_property: bool = True,
+    auto_create_table: bool = True,
+    db_constraint: bool = True,
+):
+    """
+    Dynamically attaches a working ManyToManyField to a model with a custom through model.
+
+    Automatically sets through_fields, patches rel.field with required methods,
+    and optionally installs the manager as a property.
+    """
+
+    # Step 1: Define FK names
+    from_field_name = from_field_name or f"{model.__name__.lower()}_fk"
+    to_field_name = to_field_name or f"{related_model.__name__.lower()}_fk"
+
+    # Step 2: Create the through model
+    through_model = type(
+        f"Through_{model.__name__}_{related_model.__name__}",
+        (models.Model,),
+        {
+            "__module__": "dynamic.models",
+            from_field_name: models.ForeignKey(model, on_delete=models.CASCADE, db_constraint=db_constraint),
+            to_field_name: models.ForeignKey(related_model, on_delete=models.CASCADE, db_constraint=db_constraint),
+            "Meta": type("Meta", (), {
+                "managed": False,
+                "db_table": through_table_name,
+                "app_label": app_label,
+            }),
+        }
+    )
+
+    through_fields = (from_field_name, to_field_name)
+
+    # Step 3: Create and attach the M2M field (disabling reverse access)
+    m2m_field = models.ManyToManyField(
+        to=related_model,
+        through=through_model,
+        through_fields=through_fields,
+        related_name='+',
+        related_query_name='+',
+        blank=True,
+        db_constraint=db_constraint,
+    )
+    m2m_field.contribute_to_class(model, field_name)
+
+    # Step 4: Patch rel.field to provide required methods
+    rel = m2m_field.remote_field
+
+    class FieldWrapper:
+        def __init__(self, original_field, source_field_name, target_field_name):
+            self._field = original_field
+            self.name = original_field.name
+            self._related_query_name = original_field.related_query_name
+            self._source_field_name = source_field_name
+            self._target_field_name = target_field_name
+
+        def related_query_name(self):
+            return self._related_query_name()
+
+        def m2m_field_name(self):
+            return self._source_field_name
+
+        def m2m_reverse_field_name(self):
+            return self._target_field_name
+
+    source_field_name, target_field_name = through_fields
+    rel.field = FieldWrapper(m2m_field, source_field_name, target_field_name)
+
+    # Step 5: Optionally create DB table
+    if auto_create_table:
+        with connection.schema_editor() as editor:
+            editor.create_model(through_model)
+
+    # Step 6: Optionally attach property-based manager
+    if install_property:
+        def make_m2m_property(field):
+            def get_manager(instance):
+                rel = field.remote_field
+                manager_cls = create_forward_many_to_many_manager(
+                    superclass=rel.model._default_manager.__class__,
+                    rel=rel,
+                    reverse=False
+                )
+                return manager_cls(instance)
+            return property(get_manager)
+
+        setattr(model, field_name, make_m2m_property(m2m_field))
+
+    return m2m_field, through_model
 
 
 class CustomObjectType(NetBoxModel):
@@ -243,6 +345,17 @@ class CustomObjectType(NetBoxModel):
         for field in fields:
             field_type = FIELD_TYPE_CLASS[field.type]()
             # field_type = field_type_registry.get_by_model(field)
+            field_name = field.name
+
+            field_attrs["_field_objects"][field.id] = {
+                "field": field,
+                "type": field_type,
+                "name": field_name,
+                "custom_object_type_id": self.id,
+            }
+            # TODO: Add "primary" support
+            # if field.primary:
+            #     field_attrs["_primary_field_id"] = field.id
 
             field_attrs[field.name] = field_type.get_model_field(
                 field,
@@ -251,6 +364,22 @@ class CustomObjectType(NetBoxModel):
             )
 
         return field_attrs
+
+    # @baserow_trace(tracer)
+    def _after_model_generation(self, attrs, model):
+        # In some situations the field can only be added once the model class has been
+        # generated. So for each field we will call the after_model_generation with
+        # the generated model as argument in order to do this. This is for example used
+        # by the link row field. It can also be used to make other changes to the
+        # class.
+        all_field_objects = {
+            **attrs["_field_objects"],
+            **attrs["_trashed_field_objects"],
+        }
+        for field_object in all_field_objects.values():
+            field_object["type"].after_model_generation(
+                field_object["field"], model, field_object["name"]
+            )
 
     def get_collision_safe_order_id_idx_name(self):
         return f"tbl_order_id_{self.id}_idx"
@@ -401,7 +530,7 @@ class CustomObjectType(NetBoxModel):
             "__str__": __str__,
             "get_absolute_url": get_absolute_url,
         }
-        base_attrs = deepcopy(attrs)
+        # base_attrs = deepcopy(attrs)
 
         # use_cache = (
         #     use_cache
@@ -437,17 +566,17 @@ class CustomObjectType(NetBoxModel):
         # field_attrs["legs"] = models.IntegerField(default=4)
 
         # TODO: remove probably
-        base_model = type(
-            str(model_name),
-            (
-                # GeneratedTableModel,
-                # TrashableModelMixin,
-                # CreatedAndUpdatedOnMixin,
-                models.Model,
-            ),
-            base_attrs,
-        )
-        apps.register_model('netbox_custom_objects', base_model)
+        # base_model = type(
+        #     str(model_name),
+        #     (
+        #         # GeneratedTableModel,
+        #         # TrashableModelMixin,
+        #         # CreatedAndUpdatedOnMixin,
+        #         models.Model,
+        #     ),
+        #     base_attrs,
+        # )
+        # apps.register_model('netbox_custom_objects', base_model)
 
         attrs.update(**field_attrs)
 
@@ -455,9 +584,6 @@ class CustomObjectType(NetBoxModel):
         model = type(
             str(model_name),
             (
-                # GeneratedTableModel,
-                # TrashableModelMixin,
-                # CreatedAndUpdatedOnMixin,
                 models.Model,
             ),
             attrs,

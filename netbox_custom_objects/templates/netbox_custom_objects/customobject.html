@@ -88,7 +88,6 @@
       {% plugin_right_page object %}
       {% for field in object.custom_object_type.fields.all %}
           {% if field.many %}
-              {% comment %}
             {% with field_values=object|get_child_relations:field %}
               <div class="card">
                 <h2 class="card-header">{{ field }}</h2>
@@ -102,7 +101,6 @@
                 </table>
               </div>
             {% endwith %}
-              {% endcomment %}
           {% endif %}
       {% endfor %}
     </div>

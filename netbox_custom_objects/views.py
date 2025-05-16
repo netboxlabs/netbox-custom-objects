@@ -5,7 +5,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
 from django.db.models.expressions import field_types
 from django.db.models import JSONField
-from django.shortcuts import get_object_or_404
+from django.shortcuts import get_object_or_404, render
 
 from netbox.forms import NetBoxModelFilterSetForm, NetBoxModelBulkEditForm
 from netbox.views import generic
@@ -91,6 +91,13 @@ class CustomObjectTableMixin(TableMixin):
             "Meta": meta,
             "__module__": "database.tables",
         }
+
+        for field in self.custom_object_type.fields.all():
+            field_type = field_types.FIELD_TYPE_CLASS[field.type]()
+            try:
+                attrs[field.name] = field_type.get_table_column_field(field)
+            except NotImplementedError:
+                print(f'{field.name} field is not supported')
 
         self.table = type(
             f"{data.model._meta.object_name}Table",
@@ -277,6 +284,7 @@ class CustomObjectEditView(generic.ObjectEditView):
         attrs = {
             "Meta": meta,
             "__module__": "database.forms",
+            "_errors": None,
         }
 
         for field in self.object.custom_object_type.fields.all():
@@ -284,7 +292,7 @@ class CustomObjectEditView(generic.ObjectEditView):
             try:
                 attrs[field.name] = field_type.get_form_field(field)
             except NotImplementedError:
-                print(f'{field.name} field is not supported')
+                print(f'get_form: {field.name} field is not supported')
 
         form = type(
             f"{model._meta.object_name}Form",
