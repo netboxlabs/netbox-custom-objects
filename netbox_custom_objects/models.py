@@ -1489,7 +1489,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         model_field.contribute_to_class(model, self.name)
         # apps.register_model('netbox_custom_objects', model)
         with connection.schema_editor() as schema_editor:
+            if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+                through_model = apps.get_model('netbox_custom_objects', self._through_model_name)
+                schema_editor.delete_model(through_model)
             schema_editor.remove_field(model, model_field)
+
         super().delete(*args, **kwargs)
 
 

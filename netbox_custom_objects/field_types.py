@@ -444,6 +444,49 @@ class MultiObjectFieldType(FieldType):
                 if table_name not in tables:
                     schema_editor.create_model(through_model)
 
+    # TODO: Probably not needed
+    def remove_field(self, field, model, field_name):
+        """
+        Remove the through table when the field is deleted.
+        """
+        from django.db import connection
+
+        # Recreate the through model to get its meta info
+        through_table_name = f"custom_objects_{field.custom_object_type_id}_{field.name}"
+        through_model_name = f'Through_{through_table_name}'
+        
+        class Meta:
+            db_table = through_table_name
+            app_label = 'netbox_custom_objects'
+            managed = True
+
+        attrs = {
+            '__module__': 'netbox_custom_objects.models',
+            'Meta': Meta,
+            'id': models.AutoField(primary_key=True),
+            'source': models.ForeignKey(
+                model,
+                on_delete=models.CASCADE,
+                db_column='source_id'
+            ),
+            'target': models.ForeignKey(
+                field._to_model,
+                on_delete=models.CASCADE,
+                db_column='target_id'
+            )
+        }
+        
+        through = type(through_model_name, (models.Model,), attrs)
+        
+        # Delete the through table using schema editor
+        with connection.schema_editor() as schema_editor:
+            # Check if table exists first
+            table_name = through._meta.db_table
+            with connection.cursor() as cursor:
+                tables = connection.introspection.table_names(cursor)
+                if table_name in tables:
+                    schema_editor.delete_model(through)
+
 
 FIELD_TYPE_CLASS = {
     CustomFieldTypeChoices.TYPE_TEXT: TextFieldType,
