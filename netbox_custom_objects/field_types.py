@@ -3,12 +3,14 @@ import django_tables2 as tables
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
 from django.db import models
-from django.db.models.fields.related import ManyToManyDescriptor
+from django.db.models.fields.related import (
+    ManyToManyDescriptor,
+    ManyToManyField,
+)
+from django.db.models.manager import Manager
 from django import forms
 from django.apps import apps
 from rest_framework import serializers
-from django.db.models.fields.related_descriptors import create_forward_many_to_many_manager
-from django.db.models.manager import Manager
 
 from extras.choices import CustomFieldTypeChoices
 from utilities.forms.widgets import DatePicker, DateTimePicker
@@ -175,14 +177,15 @@ class ObjectFieldType(FieldType):
 
 
 class CustomManyToManyManager(Manager):
-    def __init__(self, instance=None):
+    def __init__(self, instance=None, field_name=None):
         super().__init__()
         self.instance = instance
-        self.model = self.instance._meta.get_field('multiobject_field').remote_field.model
-        self.field = instance._meta.get_field('multiobject_field')
+        self.field_name = field_name
+        self.field = instance._meta.get_field(self.field_name)
+        self.model = self.field.remote_field.model
         self.through = self.field.remote_field.through
         self.core_filters = {'source_id': instance.pk}
-        self.prefetch_cache_name = self.field.name
+        self.prefetch_cache_name = self.field_name
 
     def get_prefetch_queryset(self, instances, queryset=None):
         if queryset is None:
@@ -225,18 +228,18 @@ class CustomManyToManyManager(Manager):
         )
 
     def get_queryset(self):
-        # TODO: See if this can be optimized
-        # TODO: Remove or tighten try-except
-        try:
-            # Get the IDs from the through table
-            target_ids = self.through.objects.filter(
+        # Create a base queryset for the target model
+        base_qs = self.model.objects.all()
+        
+        # Join through the through table using a subquery
+        qs = base_qs.filter(
+            pk__in=self.through.objects.filter(
                 source_id=self.instance.pk
             ).values_list('target_id', flat=True)
-            
-            # Return full model objects
-            return self.model.objects.filter(id__in=target_ids)
-        except Exception:
-            return super().get_queryset()
+        )
+
+        # Add default ordering by pk
+        return qs.order_by('pk')
 
     def add(self, *objs):
         for obj in objs:
@@ -272,10 +275,10 @@ class CustomManyToManyDescriptor(ManyToManyDescriptor):
         if instance is None:
             return self
 
-        return CustomManyToManyManager(instance=instance)
+        return CustomManyToManyManager(instance=instance, field_name=self.field.name)
 
     def get_prefetch_queryset(self, instances, queryset=None):
-        manager = CustomManyToManyManager(instances[0])
+        manager = CustomManyToManyManager(instances[0], self.field.name)
         return manager.get_prefetch_queryset(instances, queryset)
 
     def is_cached(self, instance):
@@ -329,11 +332,18 @@ class MultiObjectFieldType(FieldType):
         model_name = field.custom_object_type.get_table_model_name(field.custom_object_type.pk).lower()
         to_model = content_type.model_class()
         through_table_name = f"custom_objects_{field.custom_object_type_id}_{field.name}"
+        through_model_name = f'Through_{through_table_name}'
         
-        # Create the through model first
+        # Store the information needed for after_model_generation
+        field._through_table_name = through_table_name
+        field._through_model_name = through_model_name
+        field._to_model = to_model
+        
+        # Create a temporary through model
         class Meta:
             db_table = through_table_name
             app_label = 'netbox_custom_objects'
+            managed = True
 
         attrs = {
             '__module__': 'netbox_custom_objects.models',
@@ -342,23 +352,21 @@ class MultiObjectFieldType(FieldType):
             'source': models.ForeignKey(
                 'netbox_custom_objects.CustomObject',
                 on_delete=models.CASCADE,
-                related_name='+',
                 db_column='source_id'
             ),
             'target': models.ForeignKey(
                 to_model,
                 on_delete=models.CASCADE,
-                related_name='+',
                 db_column='target_id'
             )
         }
         
-        through = type(f'Through_{through_table_name}', (models.Model,), attrs)
+        temp_through = type(f'Temp{through_model_name}', (models.Model,), attrs)
         
-        # Now create the M2M field using our custom field class
+        # Create the M2M field using our custom field class
         m2m_field = CustomManyToManyField(
             to=to_model,
-            through=through,
+            through=temp_through,
             through_fields=('source', 'target'),
             blank=True,
             related_name='+',
@@ -374,18 +382,67 @@ class MultiObjectFieldType(FieldType):
         return None
 
     def get_table_column_field(self, field, **kwargs):
-        min_reviews = tables.Column(
-            # verbose_name=_('Minimum reviews')
-        )
         return tables.ManyToManyColumn(
             linkify_item=True,
-            orderable=False,
-            # verbose_name=_('Reviewer Groups')
+            orderable=False
         )
 
     def after_model_generation(self, instance, model, field_name):
+        from django.db import connection
+
         model_name = model._meta.model_name
         model.baserow_models[model_name] = model
+
+        # Get the field instance
+        field = model._meta.get_field(field_name)
+        
+        # Create the through model
+        class Meta:
+            db_table = instance._through_table_name
+            app_label = 'netbox_custom_objects'
+            managed = True
+            unique_together = ('source', 'target')
+
+        attrs = {
+            '__module__': 'netbox_custom_objects.models',
+            'Meta': Meta,
+            'id': models.AutoField(primary_key=True),
+            'source': models.ForeignKey(
+                model,
+                on_delete=models.CASCADE,
+                related_name='+',
+                db_column='source_id'
+            ),
+            'target': models.ForeignKey(
+                instance._to_model,
+                on_delete=models.CASCADE,
+                related_name='+',
+                db_column='target_id'
+            )
+        }
+        
+        # Create and register the through model
+        through = type(instance._through_model_name, (models.Model,), attrs)
+        
+        # Register the model with Django's app registry
+        try:
+            through_model = apps.get_model('netbox_custom_objects', instance._through_model_name)
+        except LookupError:
+            apps.register_model('netbox_custom_objects', through)
+            through_model = through
+        
+        # Update the M2M field's through model
+        field.remote_field.through = through_model
+        field.remote_field.model = instance._to_model
+        
+        # Create the through table directly using schema editor
+        with connection.schema_editor() as schema_editor:
+            # Check if table exists first
+            table_name = through_model._meta.db_table
+            with connection.cursor() as cursor:
+                tables = connection.introspection.table_names(cursor)
+                if table_name not in tables:
+                    schema_editor.create_model(through_model)
 
 
 FIELD_TYPE_CLASS = {

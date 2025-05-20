@@ -591,8 +591,8 @@ class CustomObjectType(NetBoxModel):
 
         # patch_meta_get_field(model._meta)
 
-        # if not manytomany_models:
-        #     self._after_model_generation(attrs, model)
+        if not manytomany_models:
+            self._after_model_generation(attrs, model)
 
         return model
 
