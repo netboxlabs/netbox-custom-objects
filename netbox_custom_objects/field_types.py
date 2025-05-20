@@ -39,6 +39,9 @@ class FieldType:
     def after_model_generation(self, instance, model, field_name):
         ...
 
+    def create_m2m_table(self, instance, model, field_name):
+        ...
+
 
 class TextFieldType(FieldType):
 
@@ -361,7 +364,7 @@ class MultiObjectFieldType(FieldType):
             )
         }
         
-        temp_through = type(f'Temp{through_model_name}', (models.Model,), attrs)
+        temp_through = type(f'{through_model_name}', (models.Model,), attrs)
         
         # Create the M2M field using our custom field class
         m2m_field = CustomManyToManyField(
@@ -388,6 +391,9 @@ class MultiObjectFieldType(FieldType):
         )
 
     def after_model_generation(self, instance, model, field_name):
+        ...
+
+    def create_m2m_table(self, instance, model, field_name):
         from django.db import connection
 
         model_name = model._meta.model_name
@@ -395,7 +401,7 @@ class MultiObjectFieldType(FieldType):
 
         # Get the field instance
         field = model._meta.get_field(field_name)
-        
+
         # Create the through model
         class Meta:
             db_table = instance._through_table_name
@@ -425,6 +431,7 @@ class MultiObjectFieldType(FieldType):
         through = type(instance._through_model_name, (models.Model,), attrs)
         
         # Register the model with Django's app registry
+        apps = model._meta.apps
         try:
             through_model = apps.get_model('netbox_custom_objects', instance._through_model_name)
         except LookupError:

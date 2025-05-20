@@ -1476,6 +1476,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         with connection.schema_editor() as schema_editor:
             if self._state.adding:
                 schema_editor.add_field(model, model_field)
+                if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+                    field_type.create_m2m_table(self, model, self.name)
             else:
                 old_field = field_type.get_model_field(self.original)
                 old_field.contribute_to_class(model, self.name)
@@ -1490,6 +1492,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         # apps.register_model('netbox_custom_objects', model)
         with connection.schema_editor() as schema_editor:
             if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+                apps = model._meta.apps
                 through_model = apps.get_model('netbox_custom_objects', self._through_model_name)
                 schema_editor.delete_model(through_model)
             schema_editor.remove_field(model, model_field)
