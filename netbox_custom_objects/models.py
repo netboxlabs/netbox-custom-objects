@@ -11,7 +11,7 @@ import django_filters
 from django import forms
 from django.conf import settings
 from django.db import models, connection
-from django.db.models import F, Func, Value, QuerySet
+from django.db.models import F, Func, Value, Q, QuerySet
 from django.db.models.expressions import RawSQL
 from django.db.models.fields.related_descriptors import create_forward_many_to_many_manager
 from django.apps import apps
@@ -22,6 +22,7 @@ from django.urls import reverse
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
+from core.models.contenttypes import ObjectTypeManager
 from netbox.models import NetBoxModel, ChangeLoggedModel
 from netbox.models.features import (
     BookmarksMixin,
@@ -36,6 +37,7 @@ from netbox.models.features import (
     TagsMixin,
     EventRulesMixin,
 )
+from netbox.registry import registry
 from extras.choices import (
     CustomFieldTypeChoices, CustomFieldFilterLogicChoices, CustomFieldUIVisibleChoices, CustomFieldUIEditableChoices
 )
@@ -1636,3 +1638,28 @@ class GeneratedModelAppsProxy:
 #             return original_get_field(field_name, *args, **kwargs)
 #
 #     _meta.get_field = MethodType(get_field, _meta)
+
+
+class CustomObjectObjectTypeManager(ObjectTypeManager):
+
+    def public(self):
+        """
+        Filter the base queryset to return only ContentTypes corresponding to "public" models; those which are listed
+        in registry['models'] and intended for reference by other objects.
+        """
+        q = Q()
+        model_registry = deepcopy(registry['models'])
+        model_registry['netbox_custom_objects'] = self.get_queryset().values_list('model', flat=True)
+        for app_label, models in model_registry.items():
+            q |= Q(app_label=app_label, model__in=models)
+        return self.get_queryset().filter(q)
+
+
+class CustomObjectObjectType(ContentType):
+    """
+    Wrap Django's native ContentType model to use our custom manager.
+    """
+    objects = CustomObjectObjectTypeManager()
+
+    class Meta:
+        proxy = True

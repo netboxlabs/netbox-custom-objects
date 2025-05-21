@@ -3,8 +3,9 @@ import json
 from django import forms
 from django.utils.translation import gettext_lazy as _
 
-from netbox_custom_objects.models import CustomObject, CustomObjectType, CustomObjectTypeField, CustomObjectRelation
-
+from netbox_custom_objects.models import (
+    CustomObject, CustomObjectType, CustomObjectTypeField, CustomObjectRelation, CustomObjectObjectType
+)
 from netbox.forms import NetBoxModelForm
 from core.models import ObjectType
 from extras.choices import CustomFieldTypeChoices, CustomFieldUIEditableChoices
@@ -53,11 +54,11 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
         required=True,
         label=_('Custom object type')
     )
-    # related_object_type = ContentTypeChoiceField(
-    #     label=_('Related object type'),
-    #     queryset=ObjectType.objects.public(),
-    #     help_text=_("Type of the related object (for object/multi-object fields only)")
-    # )
+    related_object_type = ContentTypeChoiceField(
+        label=_('Related object type'),
+        queryset=CustomObjectObjectType.objects.public(),
+        help_text=_("Type of the related object (for object/multi-object fields only)")
+    )
 
     fieldsets = (
         FieldSet(

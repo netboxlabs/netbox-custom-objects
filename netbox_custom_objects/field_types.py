@@ -169,9 +169,18 @@ class ObjectFieldType(FieldType):
         # return models.IntegerField(**kwargs)
         # content_type = ContentType.objects.get_for_model(instance)
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
-        to_model = content_type.model_class()._meta.object_name
-        to_ct = f'{content_type.app_label}.{to_model}'
-        model = apps.get_model(to_ct)
+        to_model = content_type.model
+
+        # TODO: Handle pointing to object of same type (avoid infinite loop)
+        if content_type.app_label == 'netbox_custom_objects':
+            from netbox_custom_objects.models import CustomObjectType
+            custom_object_type_id = content_type.model.replace('table', '').replace('model', '')
+            custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
+            model = custom_object_type.get_model()
+        else:
+            # to_model = content_type.model_class()._meta.object_name
+            to_ct = f'{content_type.app_label}.{to_model}'
+            model = apps.get_model(to_ct)
         f = models.ForeignKey(model, null=True, blank=True, on_delete=models.CASCADE)
         return f
 
