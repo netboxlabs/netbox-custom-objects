@@ -12,6 +12,7 @@ from extras.choices import CustomFieldTypeChoices, CustomFieldUIEditableChoices
 from extras.forms import CustomFieldForm
 from utilities.forms.fields import CommentField, ContentTypeChoiceField, DynamicModelChoiceField
 from utilities.forms.rendering import FieldSet
+from utilities.object_types import object_type_name
 
 __all__ = (
     'CustomObjectTypeForm',
@@ -22,13 +23,13 @@ __all__ = (
 
 class CustomObjectTypeForm(NetBoxModelForm):
     fieldsets = (
-        FieldSet('name', 'slug', 'description', 'tags'),
+        FieldSet('name', 'description', 'tags'),
     )
     comments = CommentField()
 
     class Meta:
         model = CustomObjectType
-        fields = ('name', 'slug', 'description', 'comments', 'tags')
+        fields = ('name', 'description', 'comments', 'tags')
 
 
 # class CustomObjectTypeFieldForm(NetBoxModelForm):
@@ -40,6 +41,21 @@ class CustomObjectTypeForm(NetBoxModelForm):
 #     class Meta:
 #         model = CustomObjectTypeField
 #         fields = ('name', 'label', 'custom_object_type', 'field_type',)
+
+
+class CustomContentTypeChoiceField(ContentTypeChoiceField):
+
+    def label_from_instance(self, obj):
+        if obj.app_label == 'netbox_custom_objects':
+            try:
+                custom_object_type = CustomObjectType.objects.get(content_type=obj)
+                return f'Custom Objects > {custom_object_type.name}'
+            except CustomObjectType.DoesNotExist:
+                pass
+        try:
+            return object_type_name(obj)
+        except AttributeError:
+            return super().label_from_instance(obj)
 
 
 class CustomObjectTypeFieldForm(CustomFieldForm):
@@ -54,7 +70,7 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
         required=True,
         label=_('Custom object type')
     )
-    related_object_type = ContentTypeChoiceField(
+    related_object_type = CustomContentTypeChoiceField(
         label=_('Related object type'),
         queryset=CustomObjectObjectType.objects.public(),
         help_text=_("Type of the related object (for object/multi-object fields only)")

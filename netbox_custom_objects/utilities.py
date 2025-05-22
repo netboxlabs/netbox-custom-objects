@@ -3,6 +3,7 @@ import logging
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
+from utilities.string import title
 
 from django.contrib import messages
 from django.contrib.contenttypes.management import create_contenttypes
@@ -24,6 +25,7 @@ from netbox.utils import register_request_processor
 __all__ = (
     'register_models',
     'get_viewname',
+    'object_type_name',
 )
 
 def register_models():
@@ -223,3 +225,19 @@ def attach_dynamic_many_to_many_field(
         setattr(model, field_name, make_m2m_property(m2m_field))
 
     return m2m_field, through_model
+
+
+# def object_type_name(object_type, include_app=True):
+#     """
+#     Return a human-friendly ObjectType name (e.g. "DCIM > Site").
+#     """
+#     try:
+#         meta = object_type.model_class()._meta
+#         app_label = title(meta.app_config.verbose_name)
+#         model_name = title(meta.verbose_name)
+#         if include_app:
+#             return f'{app_label} > {model_name}'
+#         return model_name
+#     except AttributeError:
+#         # Model does not exist
+#         return f'{object_type.app_label} > {object_type.model}'

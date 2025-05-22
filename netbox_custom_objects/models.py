@@ -164,9 +164,10 @@ def attach_dynamic_many_to_many_field(
 
 class CustomObjectType(NetBoxModel):
     name = models.CharField(max_length=100, unique=True)
-    slug = models.SlugField(max_length=100, unique=True)
+    # slug = models.SlugField(max_length=100, unique=True)
     description = models.TextField(blank=True)
     schema = models.JSONField(blank=True, default=dict)
+    content_type = models.ForeignKey(ContentType, null=True, blank=True, on_delete=models.SET_NULL)
 
     class Meta:
         verbose_name = 'Custom Object Type'
@@ -608,10 +609,17 @@ class CustomObjectType(NetBoxModel):
             schema_editor.create_model(model)
 
     def save(self, *args, **kwargs):
-        needs_db_create = self.pk is None
+        # needs_db_create = self.pk is None
+        needs_db_create = self._state.adding
         super().save(*args, **kwargs)
         if needs_db_create:
             self.create_model()
+
+    def delete(self, *args, **kwargs):
+        model = self.get_model()
+        super().delete(*args, **kwargs)
+        with connection.schema_editor() as schema_editor:
+            schema_editor.delete_model(model)
 
 
 class ProxyManager(models.Manager):
@@ -1649,6 +1657,7 @@ class CustomObjectObjectTypeManager(ObjectTypeManager):
         """
         q = Q()
         model_registry = deepcopy(registry['models'])
+        # TODO: Filter this better
         model_registry['netbox_custom_objects'] = self.get_queryset().values_list('model', flat=True)
         for app_label, models in model_registry.items():
             q |= Q(app_label=app_label, model__in=models)

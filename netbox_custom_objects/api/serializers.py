@@ -77,7 +77,7 @@ class CustomObjectTypeSerializer(NetBoxModelSerializer):
     class Meta:
         model = CustomObjectType
         fields = [
-            'id', 'url', 'name', 'slug', 'description', 'tags', 'created', 'last_updated', 'fields',
+            'id', 'url', 'name', 'description', 'tags', 'created', 'last_updated', 'fields',
         ]
         brief_fields = ('id', 'url', 'name', 'description')
 
