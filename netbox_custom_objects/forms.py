@@ -102,6 +102,12 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
             self.fields['custom_object_type'].disabled = True
             self.fields['related_object_type'].disabled = True
 
+    def clean_related_object_type(self):
+        # TODO: Figure out how to do recursive M2M relations and remove this constraint
+        if self.cleaned_data['related_object_type'] == self.cleaned_data['custom_object_type'].content_type:
+            raise forms.ValidationError("Cannot create a foreign-key relation with custom objects of the same type.")
+        return self.cleaned_data['related_object_type']
+
 
 class CustomObjectForm(NetBoxModelForm):
     fieldsets = (
