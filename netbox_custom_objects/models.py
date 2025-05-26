@@ -1656,12 +1656,11 @@ class CustomObjectObjectTypeManager(ObjectTypeManager):
         in registry['models'] and intended for reference by other objects.
         """
         q = Q()
-        model_registry = deepcopy(registry['models'])
-        # TODO: Filter this better
-        model_registry['netbox_custom_objects'] = self.get_queryset().values_list('model', flat=True)
-        for app_label, models in model_registry.items():
+        for app_label, models in registry['models'].items():
             q |= Q(app_label=app_label, model__in=models)
-        return self.get_queryset().filter(q)
+        # Add CTs of custom object models, but not the "through" tables
+        q |= Q(app_label='netbox_custom_objects')
+        return self.get_queryset().filter(q).exclude(app_label='netbox_custom_objects', model__startswith='through')
 
 
 class CustomObjectObjectType(ContentType):
