@@ -97,9 +97,10 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        # Disable changing the custom object type of a field
+        # Disable changing the custom object type or related object type of a field
         if self.instance.pk:
             self.fields['custom_object_type'].disabled = True
+            self.fields['related_object_type'].disabled = True
 
 
 class CustomObjectForm(NetBoxModelForm):
