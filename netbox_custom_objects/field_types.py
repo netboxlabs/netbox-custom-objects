@@ -349,18 +349,25 @@ class MultiObjectFieldType(FieldType):
             managed = True
             unique_together = ('source', 'target')
 
+        # Check if this is a self-referential M2M
+        content_type = ContentType.objects.get(pk=field.related_object_type_id)
+        is_self_referential = (
+            content_type.app_label == 'netbox_custom_objects' and
+            field.custom_object_type.content_type == content_type
+        )
+
         attrs = {
             '__module__': 'netbox_custom_objects.models',
             'Meta': Meta,
             'id': models.AutoField(primary_key=True),
             'source': models.ForeignKey(
-                model or 'netbox_custom_objects.CustomObject',
+                'self' if is_self_referential else (model or 'netbox_custom_objects.CustomObject'),
                 on_delete=models.CASCADE,
                 related_name='+',
                 db_column='source_id'
             ),
             'target': models.ForeignKey(
-                'netbox_custom_objects.CustomObject',  # Use base model as temporary reference
+                'self' if is_self_referential else 'netbox_custom_objects.CustomObject',
                 on_delete=models.CASCADE,
                 related_name='+',
                 db_column='target_id'
@@ -371,13 +378,20 @@ class MultiObjectFieldType(FieldType):
 
     def get_model_field(self, field, **kwargs):
         """
-        Creates the M2M field with a temporary base model reference
+        Creates the M2M field with appropriate model references
         """
+        # Check if this is a self-referential M2M
+        content_type = ContentType.objects.get(pk=field.related_object_type_id)
+        is_self_referential = (
+            content_type.app_label == 'netbox_custom_objects' and
+            field.custom_object_type.content_type == content_type
+        )
+
         through = self.get_through_model(field)
 
-        # Create the M2M field using our custom field class with a temporary reference
+        # For self-referential fields, use 'self' as the target
         m2m_field = CustomManyToManyField(
-            to='netbox_custom_objects.CustomObject',  # Use base model as temporary reference
+            to='self' if is_self_referential else 'netbox_custom_objects.CustomObject',
             through=through,
             through_fields=('source', 'target'),
             blank=True,
@@ -385,8 +399,9 @@ class MultiObjectFieldType(FieldType):
             related_query_name='+'
         )
         
-        # Store the content type ID for later resolution
+        # Store metadata for later resolution
         m2m_field._custom_object_type_id = field.related_object_type_id
+        m2m_field._is_self_referential = is_self_referential
         
         return m2m_field
 
@@ -407,6 +422,15 @@ class MultiObjectFieldType(FieldType):
         After both models are generated, update the field's remote model references
         """
         field = model._meta.get_field(field_name)
+        
+        # Skip model resolution for self-referential fields
+        if getattr(field, '_is_self_referential', False):
+            field.remote_field.model = model
+            through_model = field.remote_field.through
+            through_model._meta.get_field('target').remote_field.model = model
+            through_model._meta.get_field('target').related_model = model
+            return
+
         content_type = ContentType.objects.get(pk=instance.related_object_type_id)
         
         # Now we can safely resolve the target model
@@ -436,16 +460,19 @@ class MultiObjectFieldType(FieldType):
 
         # Get the field instance
         field = model._meta.get_field(field_name)
-        content_type = ContentType.objects.get(pk=instance.related_object_type_id)
 
-        # Get the actual target model
-        if content_type.app_label == 'netbox_custom_objects':
-            from netbox_custom_objects.models import CustomObjectType
-            custom_object_type_id = content_type.model.replace('table', '').replace('model', '')
-            custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
-            to_model = custom_object_type.get_model()
+        # For self-referential fields, use the current model
+        if getattr(field, '_is_self_referential', False):
+            to_model = model
         else:
-            to_model = content_type.model_class()
+            content_type = ContentType.objects.get(pk=instance.related_object_type_id)
+            if content_type.app_label == 'netbox_custom_objects':
+                from netbox_custom_objects.models import CustomObjectType
+                custom_object_type_id = content_type.model.replace('table', '').replace('model', '')
+                custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
+                to_model = custom_object_type.get_model()
+            else:
+                to_model = content_type.model_class()
 
         # Create the through model with actual model references
         through = self.get_through_model(instance, model)
