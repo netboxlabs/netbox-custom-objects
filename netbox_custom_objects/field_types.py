@@ -340,10 +340,9 @@ class CustomManyToManyField(models.ManyToManyField):
 
 class MultiObjectFieldType(FieldType):
     def get_through_model(self, field, model=None):
-        content_type = ContentType.objects.get(pk=field.related_object_type_id)
-        to_model = content_type.model_class()
-
-        # Create the through model
+        """
+        Creates a through model with deferred model references
+        """
         class Meta:
             db_table = field.through_table_name
             app_label = 'netbox_custom_objects'
@@ -361,7 +360,7 @@ class MultiObjectFieldType(FieldType):
                 db_column='source_id'
             ),
             'target': models.ForeignKey(
-                to_model,
+                'netbox_custom_objects.CustomObject',  # Use base model as temporary reference
                 on_delete=models.CASCADE,
                 related_name='+',
                 db_column='target_id'
@@ -371,20 +370,23 @@ class MultiObjectFieldType(FieldType):
         return type(field.through_model_name, (models.Model,), attrs)
 
     def get_model_field(self, field, **kwargs):
-        content_type = ContentType.objects.get(pk=field.related_object_type_id)
-        to_model = content_type.model_class()
-
+        """
+        Creates the M2M field with a temporary base model reference
+        """
         through = self.get_through_model(field)
 
-        # Create the M2M field using our custom field class
+        # Create the M2M field using our custom field class with a temporary reference
         m2m_field = CustomManyToManyField(
-            to=to_model,
+            to='netbox_custom_objects.CustomObject',  # Use base model as temporary reference
             through=through,
             through_fields=('source', 'target'),
             blank=True,
             related_name='+',
             related_query_name='+'
         )
+        
+        # Store the content type ID for later resolution
+        m2m_field._custom_object_type_id = field.related_object_type_id
         
         return m2m_field
 
@@ -401,22 +403,54 @@ class MultiObjectFieldType(FieldType):
         )
 
     def after_model_generation(self, instance, model, field_name):
-        ...
+        """
+        After both models are generated, update the field's remote model references
+        """
+        field = model._meta.get_field(field_name)
+        content_type = ContentType.objects.get(pk=instance.related_object_type_id)
+        
+        # Now we can safely resolve the target model
+        if content_type.app_label == 'netbox_custom_objects':
+            from netbox_custom_objects.models import CustomObjectType
+            custom_object_type_id = content_type.model.replace('table', '').replace('model', '')
+            custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
+            to_model = custom_object_type.get_model()
+        else:
+            to_ct = f'{content_type.app_label}.{content_type.model}'
+            to_model = apps.get_model(to_ct)
+
+        # Update the M2M field's model references
+        field.remote_field.model = to_model
+        
+        # Update through model's target field
+        through_model = field.remote_field.through
+        target_field = through_model._meta.get_field('target')
+        target_field.remote_field.model = to_model
+        target_field.related_model = to_model
 
     def create_m2m_table(self, instance, model, field_name):
+        """
+        Creates the actual M2M table after models are fully generated
+        """
         from django.db import connection
-
-        model_name = model._meta.model_name
-        model.baserow_models[model_name] = model
 
         # Get the field instance
         field = model._meta.get_field(field_name)
-
         content_type = ContentType.objects.get(pk=instance.related_object_type_id)
-        to_model = content_type.model_class()
-        
-        # Create and register the through model
+
+        # Get the actual target model
+        if content_type.app_label == 'netbox_custom_objects':
+            from netbox_custom_objects.models import CustomObjectType
+            custom_object_type_id = content_type.model.replace('table', '').replace('model', '')
+            custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
+            to_model = custom_object_type.get_model()
+        else:
+            to_model = content_type.model_class()
+
+        # Create the through model with actual model references
         through = self.get_through_model(instance, model)
+        through._meta.get_field('target').remote_field.model = to_model
+        through._meta.get_field('target').related_model = to_model
         
         # Register the model with Django's app registry
         apps = model._meta.apps
@@ -425,14 +459,13 @@ class MultiObjectFieldType(FieldType):
         except LookupError:
             apps.register_model('netbox_custom_objects', through)
             through_model = through
-        
-        # Update the M2M field's through model
+
+        # Update the M2M field's through model and target model
         field.remote_field.through = through_model
         field.remote_field.model = to_model
         
-        # Create the through table directly using schema editor
+        # Create the through table
         with connection.schema_editor() as schema_editor:
-            # Check if table exists first
             table_name = through_model._meta.db_table
             with connection.cursor() as cursor:
                 tables = connection.introspection.table_names(cursor)
