@@ -339,46 +339,47 @@ class CustomManyToManyField(models.ManyToManyField):
 
 
 class MultiObjectFieldType(FieldType):
-    def get_model_field(self, field, **kwargs):
+    def get_through_model(self, field, model=None):
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
-        model_name = field.custom_object_type.get_table_model_name(field.custom_object_type.pk).lower()
         to_model = content_type.model_class()
-        through_table_name = f"custom_objects_{field.custom_object_type_id}_{field.name}"
-        through_model_name = f'Through_{through_table_name}'
-        
-        # Store the information needed for after_model_generation
-        field._through_table_name = through_table_name
-        field._through_model_name = through_model_name
-        field._to_model = to_model
-        
-        # Create a temporary through model
+
+        # Create the through model
         class Meta:
-            db_table = through_table_name
+            db_table = field.through_table_name
             app_label = 'netbox_custom_objects'
             managed = True
+            unique_together = ('source', 'target')
 
         attrs = {
             '__module__': 'netbox_custom_objects.models',
             'Meta': Meta,
             'id': models.AutoField(primary_key=True),
             'source': models.ForeignKey(
-                'netbox_custom_objects.CustomObject',
+                model or 'netbox_custom_objects.CustomObject',
                 on_delete=models.CASCADE,
+                related_name='+',
                 db_column='source_id'
             ),
             'target': models.ForeignKey(
                 to_model,
                 on_delete=models.CASCADE,
+                related_name='+',
                 db_column='target_id'
             )
         }
-        
-        temp_through = type(f'{through_model_name}', (models.Model,), attrs)
-        
+
+        return type(field.through_model_name, (models.Model,), attrs)
+
+    def get_model_field(self, field, **kwargs):
+        content_type = ContentType.objects.get(pk=field.related_object_type_id)
+        to_model = content_type.model_class()
+
+        through = self.get_through_model(field)
+
         # Create the M2M field using our custom field class
         m2m_field = CustomManyToManyField(
             to=to_model,
-            through=temp_through,
+            through=through,
             through_fields=('source', 'target'),
             blank=True,
             related_name='+',
@@ -411,45 +412,23 @@ class MultiObjectFieldType(FieldType):
         # Get the field instance
         field = model._meta.get_field(field_name)
 
-        # Create the through model
-        class Meta:
-            db_table = instance._through_table_name
-            app_label = 'netbox_custom_objects'
-            managed = True
-            unique_together = ('source', 'target')
-
-        attrs = {
-            '__module__': 'netbox_custom_objects.models',
-            'Meta': Meta,
-            'id': models.AutoField(primary_key=True),
-            'source': models.ForeignKey(
-                model,
-                on_delete=models.CASCADE,
-                related_name='+',
-                db_column='source_id'
-            ),
-            'target': models.ForeignKey(
-                instance._to_model,
-                on_delete=models.CASCADE,
-                related_name='+',
-                db_column='target_id'
-            )
-        }
+        content_type = ContentType.objects.get(pk=instance.related_object_type_id)
+        to_model = content_type.model_class()
         
         # Create and register the through model
-        through = type(instance._through_model_name, (models.Model,), attrs)
+        through = self.get_through_model(instance, model)
         
         # Register the model with Django's app registry
         apps = model._meta.apps
         try:
-            through_model = apps.get_model('netbox_custom_objects', instance._through_model_name)
+            through_model = apps.get_model('netbox_custom_objects', instance.through_model_name)
         except LookupError:
             apps.register_model('netbox_custom_objects', through)
             through_model = through
         
         # Update the M2M field's through model
         field.remote_field.through = through_model
-        field.remote_field.model = instance._to_model
+        field.remote_field.model = to_model
         
         # Create the through table directly using schema editor
         with connection.schema_editor() as schema_editor:
@@ -459,49 +438,6 @@ class MultiObjectFieldType(FieldType):
                 tables = connection.introspection.table_names(cursor)
                 if table_name not in tables:
                     schema_editor.create_model(through_model)
-
-    # TODO: Probably not needed
-    def remove_field(self, field, model, field_name):
-        """
-        Remove the through table when the field is deleted.
-        """
-        from django.db import connection
-
-        # Recreate the through model to get its meta info
-        through_table_name = f"custom_objects_{field.custom_object_type_id}_{field.name}"
-        through_model_name = f'Through_{through_table_name}'
-        
-        class Meta:
-            db_table = through_table_name
-            app_label = 'netbox_custom_objects'
-            managed = True
-
-        attrs = {
-            '__module__': 'netbox_custom_objects.models',
-            'Meta': Meta,
-            'id': models.AutoField(primary_key=True),
-            'source': models.ForeignKey(
-                model,
-                on_delete=models.CASCADE,
-                db_column='source_id'
-            ),
-            'target': models.ForeignKey(
-                field._to_model,
-                on_delete=models.CASCADE,
-                db_column='target_id'
-            )
-        }
-        
-        through = type(through_model_name, (models.Model,), attrs)
-        
-        # Delete the through table using schema editor
-        with connection.schema_editor() as schema_editor:
-            # Check if table exists first
-            table_name = through._meta.db_table
-            with connection.cursor() as cursor:
-                tables = connection.introspection.table_names(cursor)
-                if table_name in tables:
-                    schema_editor.delete_model(through)
 
 
 FIELD_TYPE_CLASS = {

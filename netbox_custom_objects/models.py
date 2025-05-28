@@ -265,85 +265,9 @@ class CustomObjectType(NetBoxModel):
             else:
                 fields_query = fields_query.filter(name__in=field_names)
 
-        # if isinstance(fields_query, QuerySet):
-        #     fields_query = specific_iterator(
-        #         fields_query,
-        #         per_content_type_queryset_hook=(
-        #             lambda model, queryset: field_type_registry.get_by_model(
-        #                 model
-        #             ).enhance_field_queryset(queryset, model)
-        #         ),
-        #     )
-
         # Create a combined list of fields that must be added and belong to the this
         # table.
         fields = list(fields) + [field for field in fields_query]
-
-        # If there are duplicate field names we have to store them in a list so we
-        # know later which ones are duplicate.
-        duplicate_field_names = []
-        already_included_field_names = set([f.name for f in fields])
-
-        # We will have to add each field to with the correct field name and model
-        # field to the attribute list in order for the model to work.
-        # while len(fields) > 0:
-        #     field = fields.pop(0)
-        #     trashed = field.trashed
-        #     field = field.specific
-        #     field_type = field_type_registry.get_by_model(field)
-        #     field_name = field.db_column
-        #
-        #     if filtered and add_dependencies:
-        #         from netbox_custom_objects.baserow.handler import (
-        #             FieldDependencyHandler,
-        #         )
-        #
-        #         direct_dependencies = (
-        #             FieldDependencyHandler.get_same_table_dependencies(field)
-        #         )
-        #         for f in direct_dependencies:
-        #             if f.name not in already_included_field_names:
-        #                 fields.append(f)
-        #                 already_included_field_names.add(f.name)
-        #
-        #     # If attribute_names is True we will not use 'field_{id}' as attribute
-        #     # name, but we will rather use a name the user provided.
-        #     if attribute_names:
-        #         field_name = field.model_attribute_name
-        #         if trashed:
-        #             field_name = f"trashed_{field_name}"
-        #         # If the field name already exists we will append '_field_{id}' to
-        #         # each entry that is a duplicate.
-        #         if field_name in field_attrs:
-        #             duplicate_field_names.append(field_name)
-        #             replaced_field_name = (
-        #                 f"{field_name}_{field_attrs[field_name].db_column}"
-        #             )
-        #             field_attrs[replaced_field_name] = field_attrs.pop(field_name)
-        #         if field_name in duplicate_field_names:
-        #             field_name = f"{field_name}_{field.db_column}"
-        #
-        #     field_objects_dict = (
-        #         "_trashed_field_objects" if trashed else "_field_objects"
-        #     )
-        #     # Add the generated objects and information to the dict that
-        #     # optionally can be returned. We exclude trashed fields here so they
-        #     # are not displayed by baserow anywhere.
-        #     field_attrs[field_objects_dict][field.id] = {
-        #         "field": field,
-        #         "type": field_type,
-        #         "name": field_name,
-        #     }
-        #     if field.primary:
-        #         field_attrs["_primary_field_id"] = field.id
-        #     # Add the field to the attribute dict that is used to generate the
-        #     # model. All the kwargs that are passed to the `get_model_field`
-        #     # method are going to be passed along to the model field.
-        #     field_attrs[field_name] = field_type.get_model_field(
-        #         field,
-        #         db_column=field.db_column,
-        #         verbose_name=field.name,
-        #     )
 
         for field in fields:
             field_type = FIELD_TYPE_CLASS[field.type]()
@@ -368,7 +292,6 @@ class CustomObjectType(NetBoxModel):
 
         return field_attrs
 
-    # @baserow_trace(tracer)
     def _after_model_generation(self, attrs, model):
         # In some situations the field can only be added once the model class has been
         # generated. So for each field we will call the after_model_generation with
@@ -502,9 +425,7 @@ class CustomObjectType(NetBoxModel):
             primary field value in human readable format.
             """
 
-            # TODO: This is a placeholder (name might not always be present); should use "primary" logic as below
-            return self.name
-
+            # TODO: Primary field logic
             field = self._field_objects.get(self._primary_field_id, None)
 
             if not field:
@@ -533,16 +454,6 @@ class CustomObjectType(NetBoxModel):
             "__str__": __str__,
             "get_absolute_url": get_absolute_url,
         }
-        # base_attrs = deepcopy(attrs)
-
-        # use_cache = (
-        #     use_cache
-        #     and len(fields) == 0
-        #     and field_ids is None
-        #     and add_dependencies is True
-        #     and attribute_names is False
-        #     and not settings.BASEROW_DISABLE_MODEL_CACHE
-        # )
 
         field_attrs = self._fetch_and_generate_field_attrs(
             add_dependencies,
@@ -553,33 +464,7 @@ class CustomObjectType(NetBoxModel):
             filtered,
         )
 
-        # We have to add the order field after reading the potentially cached values
-        # as those cached model fields will have a cached creation_counter and we need
-        # to ensure any other model fields added to this same model are __init__ed
-        # after we've fixed the global DjangoModelFieldClass.creation_counter
-        # above.
-        # field_attrs["order"] = models.DecimalField(
-        #     max_digits=40,
-        #     decimal_places=20,
-        #     editable=False,
-        #     default=1,
-        # )
-        # field_attrs["custom_object_type"] = models.ForeignKey('netbox_custom_objects.CustomObjectType', on_delete=models.CASCADE)
         field_attrs["name"] = models.CharField(max_length=100, unique=True)
-        # field_attrs["legs"] = models.IntegerField(default=4)
-
-        # TODO: remove probably
-        # base_model = type(
-        #     str(model_name),
-        #     (
-        #         # GeneratedTableModel,
-        #         # TrashableModelMixin,
-        #         # CreatedAndUpdatedOnMixin,
-        #         models.Model,
-        #     ),
-        #     base_attrs,
-        # )
-        # apps.register_model('netbox_custom_objects', base_model)
 
         attrs.update(**field_attrs)
 
@@ -1480,6 +1365,14 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         return self._original
         # return self.__class__(**self._loaded_values)
 
+    @property
+    def through_table_name(self):
+        return f"custom_objects_{self.custom_object_type_id}_{self.name}"
+
+    @property
+    def through_model_name(self):
+        return f'Through_{self.through_table_name}'
+
     def save(self, *args, **kwargs):
         field_type = FIELD_TYPE_CLASS[self.type]()
         model_field = field_type.get_model_field(self)
@@ -1506,7 +1399,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         with connection.schema_editor() as schema_editor:
             if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                 apps = model._meta.apps
-                through_model = apps.get_model('netbox_custom_objects', self._through_model_name)
+                through_model = apps.get_model('netbox_custom_objects', self.through_model_name)
                 schema_editor.delete_model(through_model)
             schema_editor.remove_field(model, model_field)
 
