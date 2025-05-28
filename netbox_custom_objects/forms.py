@@ -78,8 +78,9 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
 
     fieldsets = (
         FieldSet(
-            'custom_object_type', 'name', 'label', 'group_name', 'description', 'type', 'required', 'unique', 'default',
-            name=_('Custom Field')
+            'custom_object_type', 'primary', 'name', 'label', 'group_name', 'description', 'type', 'required',
+            'unique', 'default',
+            name=_('Field')
         ),
         FieldSet(
             'search_weight', 'filter_logic', 'ui_visible', 'ui_editable', 'weight', 'is_cloneable', name=_('Behavior')
@@ -100,7 +101,8 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
         # Disable changing the custom object type or related object type of a field
         if self.instance.pk:
             self.fields['custom_object_type'].disabled = True
-            self.fields['related_object_type'].disabled = True
+            if 'related_object_type' in self.fields:
+                self.fields['related_object_type'].disabled = True
 
     def clean_related_object_type(self):
         # TODO: Figure out how to do recursive M2M relations and remove this constraint
