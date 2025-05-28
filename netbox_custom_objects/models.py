@@ -604,6 +604,7 @@ class CustomObjectType(NetBoxModel):
         apps.register_model('netbox_custom_objects', model)
         app_config = apps.get_app_config('netbox_custom_objects')
         create_contenttypes(app_config)
+        self.content_type_id = ContentType.objects.get_for_model(model).id
 
         with connection.schema_editor() as schema_editor:
             schema_editor.create_model(model)
@@ -614,9 +615,11 @@ class CustomObjectType(NetBoxModel):
         super().save(*args, **kwargs)
         if needs_db_create:
             self.create_model()
+            super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
         model = self.get_model()
+        self.content_type.delete()
         super().delete(*args, **kwargs)
         with connection.schema_editor() as schema_editor:
             schema_editor.delete_model(model)
