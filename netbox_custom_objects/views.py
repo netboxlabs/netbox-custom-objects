@@ -18,59 +18,6 @@ from netbox.filtersets import BaseFilterSet, ChangeLoggedModelFilterSet, NetBoxM
 from .models import CustomObject, CustomObjectType, CustomObjectRelation, CustomObjectTypeField
 
 
-#
-# Custom Object Types
-#
-
-class CustomObjectTypeListView(generic.ObjectListView):
-    queryset = CustomObjectType.objects.all()
-    # filterset = filtersets.BranchFilterSet
-    # filterset_form = forms.BranchFilterForm
-    table = tables.CustomObjectTypeTable
-
-
-@register_model_view(CustomObjectType)
-class CustomObjectTypeView(generic.ObjectView):
-    queryset = CustomObjectType.objects.all()
-
-    def get_extra_context(self, request, instance):
-        model = instance.get_model()
-        return {'custom_objects': model.objects.all()}
-
-
-@register_model_view(CustomObjectType, 'edit')
-class CustomObjectTypeEditView(generic.ObjectEditView):
-    queryset = CustomObjectType.objects.all()
-    form = forms.CustomObjectTypeForm
-
-
-@register_model_view(CustomObjectType, 'delete')
-class CustomObjectTypeDeleteView(generic.ObjectDeleteView):
-    queryset = CustomObjectType.objects.all()
-    default_return_url = 'plugins:netbox_custom_objects:customobjecttype_list'
-
-#
-# Custom Object Type Fields
-#
-
-@register_model_view(CustomObjectTypeField, 'edit')
-class CustomObjectTypeFieldEditView(generic.ObjectEditView):
-    queryset = CustomObjectTypeField.objects.all()
-    form = forms.CustomObjectTypeFieldForm
-
-
-@register_model_view(CustomObjectTypeField, 'delete')
-class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
-    queryset = CustomObjectTypeField.objects.all()
-
-    def get_return_url(self, request, obj=None):
-        return obj.custom_object_type.get_absolute_url()
-
-
-#
-# Custom Objects
-#
-
 class CustomObjectTableMixin(TableMixin):
     def get_table(self, data, request, bulk_actions=True):
         fields = [field.name for field in data.model._meta.fields]
@@ -108,6 +55,69 @@ class CustomObjectTableMixin(TableMixin):
         )
         return super().get_table(data, request, bulk_actions=bulk_actions)
 
+
+#
+# Custom Object Types
+#
+
+class CustomObjectTypeListView(generic.ObjectListView):
+    queryset = CustomObjectType.objects.all()
+    # filterset = filtersets.BranchFilterSet
+    # filterset_form = forms.BranchFilterForm
+    table = tables.CustomObjectTypeTable
+
+
+@register_model_view(CustomObjectType)
+class CustomObjectTypeView(CustomObjectTableMixin, generic.ObjectView):
+    queryset = CustomObjectType.objects.all()
+
+    def get_table(self, data, request, bulk_actions=True):
+        self.custom_object_type = self.get_object(**self.kwargs)
+        model = self.custom_object_type.get_model()
+        data = model.objects.all()
+        return super().get_table(data, request, bulk_actions=False)
+
+    def get_extra_context(self, request, instance):
+        model = instance.get_model()
+        return {
+            'custom_objects': model.objects.all(),
+            'table': self.get_table(self.queryset, request),
+        }
+
+
+@register_model_view(CustomObjectType, 'edit')
+class CustomObjectTypeEditView(generic.ObjectEditView):
+    queryset = CustomObjectType.objects.all()
+    form = forms.CustomObjectTypeForm
+
+
+@register_model_view(CustomObjectType, 'delete')
+class CustomObjectTypeDeleteView(generic.ObjectDeleteView):
+    queryset = CustomObjectType.objects.all()
+    default_return_url = 'plugins:netbox_custom_objects:customobjecttype_list'
+
+
+#
+# Custom Object Type Fields
+#
+
+@register_model_view(CustomObjectTypeField, 'edit')
+class CustomObjectTypeFieldEditView(generic.ObjectEditView):
+    queryset = CustomObjectTypeField.objects.all()
+    form = forms.CustomObjectTypeFieldForm
+
+
+@register_model_view(CustomObjectTypeField, 'delete')
+class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
+    queryset = CustomObjectTypeField.objects.all()
+
+    def get_return_url(self, request, obj=None):
+        return obj.custom_object_type.get_absolute_url()
+
+
+#
+# Custom Objects
+#
 
 class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
     # queryset = CustomObject.objects.all()

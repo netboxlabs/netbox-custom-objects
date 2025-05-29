@@ -88,6 +88,8 @@
               {% endif %}
             </div>
           </h2>
+          {% include 'htmx/table.html' %}
+      {% comment %}
         <table class="table table-hover attr-table">
             <thead>
                 <tr>
@@ -118,6 +120,7 @@
                 </tr>
             {% endfor %}
         </table>
+      {% endcomment %}
       </div>
     </div>
   </div>
