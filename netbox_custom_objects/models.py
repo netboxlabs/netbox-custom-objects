@@ -68,6 +68,8 @@ class CustomObjectType(NetBoxModel):
     description = models.TextField(blank=True)
     schema = models.JSONField(blank=True, default=dict)
     content_type = models.ForeignKey(ContentType, null=True, blank=True, on_delete=models.SET_NULL)
+    # verbose_name = models.CharField(max_length=100)
+    verbose_name_plural = models.CharField(max_length=100)
 
     class Meta:
         verbose_name = 'Custom Object Type'
@@ -213,14 +215,15 @@ class CustomObjectType(NetBoxModel):
     def get_database_table_name(self):
         return f"{USER_TABLE_DATABASE_NAME_PREFIX}{self.id}"
 
+    @property
+    def title_case_name_plural(self):
+        return title(self.name) + "s"
+
     def get_verbose_name(self):
-        return self.name.lower()
+        return self.name
 
     def get_verbose_name_plural(self):
-        return self.name.lower() + "s"
-
-    def get_title_case_name_plural(self):
-        return title(self.name) + "s"
+        return self.verbose_name_plural or self.title_case_name_plural
 
     def get_model(
         self,

@@ -23,14 +23,16 @@ __all__ = (
 
 
 class CustomObjectTypeForm(NetBoxModelForm):
+    verbose_name_plural = forms.CharField(label=_("Readable plural name"), max_length=100, required=False)
+
     fieldsets = (
-        FieldSet('name', 'description', 'tags'),
+        FieldSet('name', 'verbose_name_plural', 'description', 'tags'),
     )
     comments = CommentField()
 
     class Meta:
         model = CustomObjectType
-        fields = ('name', 'description', 'comments', 'tags')
+        fields = ('name', 'verbose_name_plural', 'description', 'comments', 'tags')
 
 
 # class CustomObjectTypeFieldForm(NetBoxModelForm):

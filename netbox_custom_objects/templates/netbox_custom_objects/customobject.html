@@ -5,6 +5,7 @@
 {% load perms %}
 {% load plugins %}
 {% load render_table from django_tables2 %}
+{% load tabs %}
 {% load i18n %}
 {% load custom_object_utils %}
 
@@ -38,11 +39,22 @@
   {% endif %}
 {% endblock control-buttons %}
 
+{% block tabs %}
+  <ul class="nav nav-tabs" role="presentation">
+    {# Primary tab #}
+    <li class="nav-item">
+      <a class="nav-link{% if not tab %} active{% endif %}" href="{{ object.get_absolute_url }}">{{ object.custom_object_type.get_verbose_name }}</a>
+    </li>
+
+    {# Include tabs for registered model views #}
+    {% model_view_tabs object %}
+  </ul>
+{% endblock tabs %}
+
 {% block content %}
   <div class="row">
 	  <div class="col col-md-6">
       <div class="card">
-        <h5 class="card-header">{% trans "Custom Objects" %}</h5>
         <table class="table table-hover attr-table">
           <tr>
             <th scope="row">{% trans "Name" %}</th>
