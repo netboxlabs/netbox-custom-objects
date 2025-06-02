@@ -19,6 +19,7 @@ from netbox.plugins import get_plugin_config
 from netbox.plugins import PluginConfig
 from netbox.registry import registry
 from netbox.utils import register_request_processor
+from netbox_custom_objects.constants import APP_LABEL
 # from netbox_custom_objects.models import CustomObject, CustomObjectType
 # from netbox_custom_objects.models import ProxyManager
 
@@ -35,7 +36,7 @@ def register_models():
     # Register all models which support change logging and are not exempt
     custom_object_models = defaultdict(list)
 
-    CustomObjectType = apps.get_model('netbox_custom_objects', 'CustomObjectType')
+    CustomObjectType = apps.get_model(APP_LABEL, 'CustomObjectType')
 
     # Register additional included models
     # TODO: Allow plugins to declare additional models?
@@ -46,7 +47,7 @@ def register_models():
         custom_object_models['custom_objects'].append(custom_object_type.name)
 
     model_names = {name.lower() for name in CustomObjectType.objects.all().values_list('name', flat=True)}
-    registry['models']['netbox_custom_objects'] = model_names
+    registry['models'][APP_LABEL] = model_names
 
 
 # def create_model(custom_object_type_id):
@@ -106,7 +107,7 @@ def get_viewname(model, action=None, rest_api=False):
     # app_label = model._meta.app_label
     # model_name = model._meta.model_name
     is_plugin = True
-    app_label = 'netbox_custom_objects'
+    app_label = APP_LABEL
     model_name = 'customobject'
 
     if rest_api:

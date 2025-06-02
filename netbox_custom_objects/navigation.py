@@ -7,6 +7,7 @@ from django.conf import settings
 
 from utilities.string import title
 from netbox.plugins import PluginMenu, PluginMenuButton, PluginMenuItem
+from netbox_custom_objects.constants import APP_LABEL
 
 
 custom_object_type_plugin_menu_item = PluginMenuItem(
@@ -19,20 +20,20 @@ custom_object_type_plugin_menu_item = PluginMenuItem(
 
 
 def get_menu():
-    CustomObjectType = apps.get_model('netbox_custom_objects', 'CustomObjectType')
+    CustomObjectType = apps.get_model(APP_LABEL, 'CustomObjectType')
     menu_items = []
     for custom_object_type in CustomObjectType.objects.all():
         model = custom_object_type.get_model()
         menu_items.append(PluginMenuItem(
             link=None,
-            url=reverse('plugins:netbox_custom_objects:customobject_list', kwargs={'custom_object_type': custom_object_type.name.lower()}),
+            url=reverse(f'plugins:{APP_LABEL}:customobject_list', kwargs={'custom_object_type': custom_object_type.name.lower()}),
             link_text=_(title(model._meta.verbose_name_plural)),
             buttons=(
                 PluginMenuButton(
                     None,
                     _('Add'),
                     'mdi mdi-plus-thick',
-                    url=reverse('plugins:netbox_custom_objects:customobject_add', kwargs={'custom_object_type': custom_object_type.name.lower()}),
+                    url=reverse(f'plugins:{APP_LABEL}:customobject_add', kwargs={'custom_object_type': custom_object_type.name.lower()}),
                 ),
             )
         ))
@@ -47,7 +48,7 @@ def get_menu():
 
 
 current_version = version.parse(settings.RELEASE.version)
-if current_version < version.parse('4.4.0'):
+if current_version < version.parse('4.2.0'):
     menu = PluginMenu(
         label='Custom Objects',
         groups=(

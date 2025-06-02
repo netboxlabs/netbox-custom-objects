@@ -13,6 +13,7 @@ from extras.forms import CustomFieldForm
 from utilities.forms.fields import CommentField, ContentTypeChoiceField, DynamicModelChoiceField
 from utilities.forms.rendering import FieldSet
 from utilities.object_types import object_type_name
+from netbox_custom_objects.constants import APP_LABEL
 
 __all__ = (
     'CustomObjectTypeForm',
@@ -46,7 +47,7 @@ class CustomObjectTypeForm(NetBoxModelForm):
 class CustomContentTypeChoiceField(ContentTypeChoiceField):
 
     def label_from_instance(self, obj):
-        if obj.app_label == 'netbox_custom_objects':
+        if obj.app_label == APP_LABEL:
             try:
                 custom_object_type = CustomObjectType.objects.get(content_type=obj)
                 return f'Custom Objects > {custom_object_type.name}'

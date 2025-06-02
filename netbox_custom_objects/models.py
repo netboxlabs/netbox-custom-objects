@@ -57,109 +57,9 @@ from utilities.validators import validate_regex
 # from .choices import MappingFieldTypeChoices
 from extras.models.customfields import SEARCH_TYPES
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
+from netbox_custom_objects.constants import APP_LABEL
 
 USER_TABLE_DATABASE_NAME_PREFIX = "custom_objects_"
-
-
-# # TODO: Remove
-# def attach_dynamic_many_to_many_field(
-#     *,
-#     model,
-#     related_model,
-#     field_name: str,
-#     through_table_name: str,
-#     app_label: str = "dynamic_models",
-#     from_field_name: str = None,
-#     to_field_name: str = None,
-#     install_property: bool = True,
-#     auto_create_table: bool = True,
-#     db_constraint: bool = True,
-# ):
-#     """
-#     Dynamically attaches a working ManyToManyField to a model with a custom through model.
-#
-#     Automatically sets through_fields, patches rel.field with required methods,
-#     and optionally installs the manager as a property.
-#     """
-#
-#     # Step 1: Define FK names
-#     from_field_name = from_field_name or f"{model.__name__.lower()}_fk"
-#     to_field_name = to_field_name or f"{related_model.__name__.lower()}_fk"
-#
-#     # Step 2: Create the through model
-#     through_model = type(
-#         f"Through_{model.__name__}_{related_model.__name__}",
-#         (models.Model,),
-#         {
-#             "__module__": "dynamic.models",
-#             from_field_name: models.ForeignKey(model, on_delete=models.CASCADE, db_constraint=db_constraint),
-#             to_field_name: models.ForeignKey(related_model, on_delete=models.CASCADE, db_constraint=db_constraint),
-#             "Meta": type("Meta", (), {
-#                 "managed": False,
-#                 "db_table": through_table_name,
-#                 "app_label": app_label,
-#             }),
-#         }
-#     )
-#
-#     through_fields = (from_field_name, to_field_name)
-#
-#     # Step 3: Create and attach the M2M field (disabling reverse access)
-#     m2m_field = models.ManyToManyField(
-#         to=related_model,
-#         through=through_model,
-#         through_fields=through_fields,
-#         related_name='+',
-#         related_query_name='+',
-#         blank=True,
-#         db_constraint=db_constraint,
-#     )
-#     m2m_field.contribute_to_class(model, field_name)
-#
-#     # Step 4: Patch rel.field to provide required methods
-#     rel = m2m_field.remote_field
-#
-#     class FieldWrapper:
-#         def __init__(self, original_field, source_field_name, target_field_name):
-#             self._field = original_field
-#             self.name = original_field.name
-#             self._related_query_name = original_field.related_query_name
-#             self._source_field_name = source_field_name
-#             self._target_field_name = target_field_name
-#
-#         def related_query_name(self):
-#             return self._related_query_name()
-#
-#         def m2m_field_name(self):
-#             return self._source_field_name
-#
-#         def m2m_reverse_field_name(self):
-#             return self._target_field_name
-#
-#     source_field_name, target_field_name = through_fields
-#     rel.field = FieldWrapper(m2m_field, source_field_name, target_field_name)
-#
-#     # Step 5: Optionally create DB table
-#     if auto_create_table:
-#         with connection.schema_editor() as editor:
-#             editor.create_model(through_model)
-#
-#     # Step 6: Optionally attach property-based manager
-#     if install_property:
-#         def make_m2m_property(field):
-#             def get_manager(instance):
-#                 rel = field.remote_field
-#                 manager_cls = create_forward_many_to_many_manager(
-#                     superclass=rel.model._default_manager.__class__,
-#                     rel=rel,
-#                     reverse=False
-#                 )
-#                 return manager_cls(instance)
-#             return property(get_manager)
-#
-#         setattr(model, field_name, make_m2m_property(m2m_field))
-#
-#     return m2m_field, through_model
 
 
 class CustomObjectType(NetBoxModel):
@@ -411,7 +311,7 @@ class CustomObjectType(NetBoxModel):
                 "apps": apps,
                 "managed": managed,
                 "db_table": self.get_database_table_name(),
-                "app_label": 'netbox_custom_objects',
+                "app_label": APP_LABEL,
                 "ordering": ["id"],
                 "indexes": indexes,
                 # "verbose_name": self.get_verbose_name(),
@@ -487,8 +387,8 @@ class CustomObjectType(NetBoxModel):
 
     def create_model(self):
         model = self.get_model()
-        apps.register_model('netbox_custom_objects', model)
-        app_config = apps.get_app_config('netbox_custom_objects')
+        apps.register_model(APP_LABEL, model)
+        app_config = apps.get_app_config(APP_LABEL)
         create_contenttypes(app_config)
         self.content_type_id = ContentType.objects.get_for_model(model).id
 
@@ -1383,7 +1283,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         model_field = field_type.get_model_field(self)
         model = self.custom_object_type.get_model()
         model_field.contribute_to_class(model, self.name)
-        # apps.register_model('netbox_custom_objects', model)
+        # apps.register_model(APP_LABEL, model)
         with connection.schema_editor() as schema_editor:
             if self._state.adding:
                 schema_editor.add_field(model, model_field)
@@ -1400,11 +1300,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         model_field = field_type.get_model_field(self)
         model = self.custom_object_type.get_model()
         model_field.contribute_to_class(model, self.name)
-        # apps.register_model('netbox_custom_objects', model)
+        # apps.register_model(APP_LABEL, model)
         with connection.schema_editor() as schema_editor:
             if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                 apps = model._meta.apps
-                through_model = apps.get_model('netbox_custom_objects', self.through_model_name)
+                through_model = apps.get_model(APP_LABEL, self.through_model_name)
                 schema_editor.delete_model(through_model)
             schema_editor.remove_field(model, model_field)
 
@@ -1560,8 +1460,8 @@ class CustomObjectObjectTypeManager(ObjectTypeManager):
         for app_label, models in registry['models'].items():
             q |= Q(app_label=app_label, model__in=models)
         # Add CTs of custom object models, but not the "through" tables
-        q |= Q(app_label='netbox_custom_objects')
-        return self.get_queryset().filter(q).exclude(app_label='netbox_custom_objects', model__startswith='through')
+        q |= Q(app_label=APP_LABEL)
+        return self.get_queryset().filter(q).exclude(app_label=APP_LABEL, model__startswith='through')
 
 
 class CustomObjectObjectType(ContentType):

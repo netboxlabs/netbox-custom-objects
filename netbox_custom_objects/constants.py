@@ -4,3 +4,5 @@ INCLUDE_MODELS = (
     'dcim.cablepath',
     'extras.cachedvalue',
 )
+
+APP_LABEL = 'netbox_custom_objects'

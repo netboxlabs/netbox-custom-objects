@@ -14,6 +14,7 @@ from rest_framework import serializers
 
 from extras.choices import CustomFieldTypeChoices
 from utilities.forms.widgets import DatePicker, DateTimePicker
+from netbox_custom_objects.constants import APP_LABEL
 
 
 class FieldType:
@@ -172,7 +173,7 @@ class ObjectFieldType(FieldType):
         to_model = content_type.model
 
         # TODO: Handle pointing to object of same type (avoid infinite loop)
-        if content_type.app_label == 'netbox_custom_objects':
+        if content_type.app_label == APP_LABEL:
             from netbox_custom_objects.models import CustomObjectType
             custom_object_type_id = content_type.model.replace('table', '').replace('model', '')
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
@@ -345,14 +346,14 @@ class MultiObjectFieldType(FieldType):
         """
         class Meta:
             db_table = field.through_table_name
-            app_label = 'netbox_custom_objects'
+            app_label = APP_LABEL
             managed = True
             unique_together = ('source', 'target')
 
         # Check if this is a self-referential M2M
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
         is_self_referential = (
-            content_type.app_label == 'netbox_custom_objects' and
+            content_type.app_label == APP_LABEL and
             field.custom_object_type.content_type == content_type
         )
 
@@ -383,7 +384,7 @@ class MultiObjectFieldType(FieldType):
         # Check if this is a self-referential M2M
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
         is_self_referential = (
-            content_type.app_label == 'netbox_custom_objects' and
+            content_type.app_label == APP_LABEL and
             field.custom_object_type.content_type == content_type
         )
 
@@ -434,7 +435,7 @@ class MultiObjectFieldType(FieldType):
         content_type = ContentType.objects.get(pk=instance.related_object_type_id)
         
         # Now we can safely resolve the target model
-        if content_type.app_label == 'netbox_custom_objects':
+        if content_type.app_label == APP_LABEL:
             from netbox_custom_objects.models import CustomObjectType
             custom_object_type_id = content_type.model.replace('table', '').replace('model', '')
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
@@ -466,7 +467,7 @@ class MultiObjectFieldType(FieldType):
             to_model = model
         else:
             content_type = ContentType.objects.get(pk=instance.related_object_type_id)
-            if content_type.app_label == 'netbox_custom_objects':
+            if content_type.app_label == APP_LABEL:
                 from netbox_custom_objects.models import CustomObjectType
                 custom_object_type_id = content_type.model.replace('table', '').replace('model', '')
                 custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
@@ -482,9 +483,9 @@ class MultiObjectFieldType(FieldType):
         # Register the model with Django's app registry
         apps = model._meta.apps
         try:
-            through_model = apps.get_model('netbox_custom_objects', instance.through_model_name)
+            through_model = apps.get_model(APP_LABEL, instance.through_model_name)
         except LookupError:
-            apps.register_model('netbox_custom_objects', through)
+            apps.register_model(APP_LABEL, through)
             through_model = through
 
         # Update the M2M field's through model and target model
