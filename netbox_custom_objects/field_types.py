@@ -205,7 +205,10 @@ class MultiSelectFieldType(FieldType):
         )
 
     def get_form_field(self, field, **kwargs):
-        return forms.MultipleChoiceField(choices=field.choices, **kwargs)
+        return forms.MultipleChoiceField(choices=field.choices, required=False, **kwargs)
+
+    def get_bulk_edit_form_field(self, field, **kwargs):
+        return forms.MultipleChoiceField(choices=field.choices, required=False, **kwargs)
 
 
 class ObjectFieldType(FieldType):
