@@ -278,7 +278,7 @@ class CustomObjectType(NetBoxModel):
             if not field:
                 return f"unnamed row {self.id}"
 
-            return getattr(self, field["name"]) or str(self.id)
+            return str(getattr(self, field["name"])) or str(self.id)
             # return field["type"].get_human_readable_value(
             #     getattr(self, field["name"]), field
             # )
@@ -304,7 +304,7 @@ class CustomObjectType(NetBoxModel):
         }
 
         field_attrs = self._fetch_and_generate_field_attrs(fields)
-        field_attrs["name"] = models.CharField(max_length=100, unique=True)
+        # field_attrs["name"] = models.CharField(max_length=100, unique=True)
 
         attrs.update(**field_attrs)
 
