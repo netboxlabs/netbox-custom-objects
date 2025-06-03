@@ -122,12 +122,7 @@ class CustomObjectType(NetBoxModel):
 
     def _fetch_and_generate_field_attrs(
         self,
-        add_dependencies,
-        attribute_names,
-        field_ids,
-        field_names,
         fields,
-        filtered,
     ):
         field_attrs = {
             "_primary_field_id": -1,
@@ -150,22 +145,6 @@ class CustomObjectType(NetBoxModel):
             # .select_related("table", "content_type")
             .all()
         )
-
-        # If the field ids are provided we must only fetch the fields of which the
-        # ids are in that list.
-        if isinstance(field_ids, list):
-            if len(field_ids) == 0:
-                fields_query = []
-            else:
-                fields_query = fields_query.filter(pk__in=field_ids)
-
-        # If the field names are provided we must only fetch the fields of which the
-        # user defined name is in that list.
-        if isinstance(field_names, list):
-            if len(field_names) == 0:
-                fields_query = []
-            else:
-                fields_query = fields_query.filter(name__in=field_names)
 
         # Create a combined list of fields that must be added and belong to the this
         # table.
@@ -228,14 +207,7 @@ class CustomObjectType(NetBoxModel):
     def get_model(
         self,
         fields=None,
-        field_ids=None,
-        field_names=None,
-        attribute_names=False,
         manytomany_models=None,
-        add_dependencies=True,
-        managed=False,
-        use_cache=True,
-        force_add_tsvectors: bool = False,
         app_label = None,
     ):
         """
@@ -244,33 +216,10 @@ class CustomObjectType(NetBoxModel):
 
         :param fields: Extra table field instances that need to be added the model.
         :type fields: list
-        :param field_ids: If provided only the fields with the ids in the list will be
-            added to the model. This can be done to improve speed if for example only a
-            single field needs to be mutated.
-        :type field_ids: None or list
-        :param field_names: If provided only the fields with the names in the list
-            will be added to the model. This can be done to improve speed if for
-            example only a single field needs to be mutated.
-        :type field_names: None or list
-        :param attribute_names: If True, the model attributes will be based on the
-            field name instead of the field id.
-        :type attribute_names: bool
         :param manytomany_models: In some cases with related fields a model has to be
             generated in order to generate that model. In order to prevent a
             recursion loop we cache the generated models and pass those along.
         :type manytomany_models: dict
-        :param add_dependencies: When True will ensure any direct field dependencies
-            are included in the model. Otherwise, only the exact fields you specify
-            will be added to the model.
-        :param managed: Whether the created model should be managed by Django or not.
-            Only in very specific limited situations should this be enabled as
-            generally Baserow itself manages most aspects of returned generated models.
-        :type managed: bool
-        :param use_cache: Indicates whether a cached model can be used.
-        :type use_cache: bool
-        :param force_add_tsvectors: gtIndicates that we want to forcibly add the table's
-            `tsvector` columns.
-        :type force_add_tsvectors: bool
         :param app_label: In some cases with related fields, the related models must
             have the same app_label. If passed along in this parameter, then the
             generated model will use that one instead of generating a unique one.
@@ -288,16 +237,11 @@ class CustomObjectType(NetBoxModel):
             app_label = str(uuid.uuid4()) + "_database_table"
             # app_label = 'netbox_custom_objects'
 
-        filtered = field_names is not None or field_ids is not None
         model_name = self.get_table_model_name(self.pk)
 
         if fields is None:
             fields = []
 
-        # By default, we create an index on the `order` and `id`
-        # columns. If `USE_PG_FULLTEXT_SEARCH` is enabled, which
-        # it is by default, we'll include a GIN index on the table's
-        # `tsvector` column.
         # TODO: Add other fields with "index" specified
         indexes = [
             models.Index(
@@ -312,7 +256,7 @@ class CustomObjectType(NetBoxModel):
             (),
             {
                 "apps": apps,
-                "managed": managed,
+                "managed": False,
                 "db_table": self.get_database_table_name(),
                 "app_label": APP_LABEL,
                 "ordering": ["id"],
@@ -349,7 +293,7 @@ class CustomObjectType(NetBoxModel):
             "_generated_table_model": True,
             "custom_object_type": self,
             "custom_object_type_id": self.id,
-            "baserow_models": apps.baserow_models,
+            "dynamic_models": apps.dynamic_models,
             # We are using our own table model manager to implement some queryset
             # helpers.
             # "objects": models.Manager(),
@@ -359,15 +303,7 @@ class CustomObjectType(NetBoxModel):
             "get_absolute_url": get_absolute_url,
         }
 
-        field_attrs = self._fetch_and_generate_field_attrs(
-            add_dependencies,
-            attribute_names,
-            field_ids,
-            field_names,
-            fields,
-            filtered,
-        )
-
+        field_attrs = self._fetch_and_generate_field_attrs(fields)
         field_attrs["name"] = models.CharField(max_length=100, unique=True)
 
         attrs.update(**field_attrs)
@@ -1331,22 +1267,14 @@ class GeneratedModelAppsProxy:
     models available in the options when the relation tree is built, without polluting
     the global apps registry, meant to keep only the static models that do not change.
 
-    This permits to Django to find the reverse relation in the _relation_tree. Look into
-    django.db.models.options.py - _populate_directed_relation_graph for more
-    information.
-
-    It also allows us to register dynamic models in a separate registry and to perform
-    all the pending operations for the generated models without the need of clearing the
-    global apps registry cache.
-
     This registry, created as needed by a generated table model, holds references to
-    other such models. It's discarded after the operation, ensuring it only exists when
-    necessary.
+    dynamically generated models. It's discarded after the operation, ensuring it only
+    exists when necessary.
     """
 
-    def __init__(self, baserow_models=None, app_label=None):
-        self.baserow_models = baserow_models or {}
-        self.baserow_app_label = app_label or "database_table"
+    def __init__(self, dynamic_models=None, app_label=None):
+        self.dynamic_models = dynamic_models or {}
+        self.dynamic_app_label = app_label or "database_table"
 
     def get_models(self, *args, **kwargs):
         """
@@ -1357,17 +1285,9 @@ class GeneratedModelAppsProxy:
         that could be involved in queries and not just a sub-set of them.
         """
 
-        return apps.get_models(*args, **kwargs) + list(self.baserow_models.values())
+        return apps.get_models(*args, **kwargs) + list(self.dynamic_models.values())
 
     def register_model(self, app_label, model):
-        """
-        This is hack that prevents a generated table model and related auto created
-        models from being registered into the Django apps model registry. It tries to
-        keep separate Django's model registry from Baserow's generated models. In this
-        way we can leverage all the great features of Django's static models, while
-        still being able to generate dynamic models for tables, without polluting the
-        global ones.
-        """
 
         # Use the RLock defined in the apps registry to prevent any thead from
         # accessing the apps registry concurrently because it's not thread safe.
@@ -1375,24 +1295,24 @@ class GeneratedModelAppsProxy:
             model_name = model._meta.model_name.lower()
             if not hasattr(model, "_generated_table_model"):
                 # it must be an auto created intermediary m2m model, so use a list of
-                # baserow models we can later use to resolve the pending operations.
-                if not hasattr(self, "baserow_models"):
-                    self.baserow_models = model._meta.auto_created.baserow_models
+                # dynamic models we can later use to resolve the pending operations.
+                if not hasattr(self, "dynamic_models"):
+                    self.dynamic_models = model._meta.auto_created.dynamic_models
 
-            self.baserow_models[model_name] = model
+            self.dynamic_models[model_name] = model
             self.do_all_pending_operations()
-            self._clear_baserow_models_cache()
+            self._clear_dynamic_models_cache()
 
             # The `all_models` is a defaultdict, and will therefore have a residual
             # empty key in with the app label because the app label is uniquely
             # generated. This will make sure it's cleared.
             try:
-                del apps.all_models[self.baserow_app_label]
+                del apps.all_models[self.dynamic_app_label]
             except KeyError:
                 pass
 
-    def _clear_baserow_models_cache(self):
-        for model in self.baserow_models.values():
+    def _clear_dynamic_models_cache(self):
+        for model in self.dynamic_models.values():
             model._meta._expire_cache()
 
     def do_all_pending_operations(self):
@@ -1415,10 +1335,10 @@ class GeneratedModelAppsProxy:
             pending_operations_for_app_label = [
                 (app_label, model_name)
                 for app_label, model_name in list(apps._pending_operations.keys())
-                if app_label == self.baserow_app_label
+                if app_label == self.dynamic_app_label
             ]
             for _, model_name in list(pending_operations_for_app_label):
-                model = self.baserow_models[model_name]
+                model = self.dynamic_models[model_name]
                 apps.do_pending_operations(model)
 
             if not pending_operations_for_app_label:
