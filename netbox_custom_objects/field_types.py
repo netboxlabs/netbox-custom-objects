@@ -13,6 +13,7 @@ from django.apps import apps
 from rest_framework import serializers
 
 from extras.choices import CustomFieldTypeChoices
+from utilities.forms.fields import DynamicModelMultipleChoiceField
 from utilities.forms.widgets import DatePicker, DateTimePicker
 from netbox_custom_objects.constants import APP_LABEL
 
@@ -48,7 +49,7 @@ class TextFieldType(FieldType):
 
     def get_model_field(self, field, **kwargs):
         kwargs.update({'max_length': field.default})
-        return models.CharField(null=True, **kwargs)
+        return models.CharField(null=True, blank=True, **kwargs)
 
     def get_serializer_field(self, field, **kwargs):
         required = kwargs.get("required", False)
@@ -80,7 +81,14 @@ class TextFieldType(FieldType):
 
 class LongTextFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        return models.TextField(null=True, **kwargs)
+        return models.TextField(null=True, blank=True, **kwargs)
+
+    def get_bulk_edit_form_field(self, field, **kwargs):
+        return forms.CharField(
+            label=field,
+            widget=forms.Textarea(),
+            required=False,
+        )
 
 
 class IntegerFieldType(FieldType):
@@ -88,7 +96,7 @@ class IntegerFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
         # TODO: handle all args for IntegerField
         kwargs.update({'default': field.default})
-        return models.IntegerField(null=True, **kwargs)
+        return models.IntegerField(null=True, blank=True, **kwargs)
 
     def get_filterform_field(self, field, **kwargs):
         return forms.IntegerField(
@@ -96,26 +104,47 @@ class IntegerFieldType(FieldType):
             required=False,
         )
 
+    def get_bulk_edit_form_field(self, field, **kwargs):
+        return forms.IntegerField(required=False)
+
+
 class DecimalFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
         return models.DecimalField(
             null=True,
+            blank=True,
             max_digits=8,
             decimal_places=2,
             **kwargs,
         )
 
+    def get_bulk_edit_form_field(self, field, **kwargs):
+        return forms.DecimalField(
+            max_digits=8,
+            decimal_places=2,
+            required=False,
+        )
+
 
 class BooleanFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        return models.BooleanField(null=True, **kwargs)
+        return models.BooleanField(null=True, blank=True, **kwargs)
+
+    def get_bulk_edit_form_field(self, field, **kwargs):
+        return forms.BooleanField(required=False)
 
 
 class DateFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        return models.DateField(null=True, **kwargs)
+        return models.DateField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, **kwargs):
+        return forms.DateField(
+            required=False,
+            widget=DatePicker()
+        )
+
+    def get_bulk_edit_form_field(self, field, **kwargs):
         return forms.DateField(
             required=False,
             widget=DatePicker()
@@ -124,9 +153,15 @@ class DateFieldType(FieldType):
 
 class DateTimeFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        return models.DateTimeField(null=True, **kwargs)
+        return models.DateTimeField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, **kwargs):
+        return forms.DateTimeField(
+            required=False,
+            widget=DateTimePicker()
+        )
+
+    def get_bulk_edit_form_field(self, field, **kwargs):
         return forms.DateTimeField(
             required=False,
             widget=DateTimePicker()
@@ -137,10 +172,16 @@ class URLFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
         return models.URLField(null=True, **kwargs)
 
+    def get_bulk_edit_form_field(self, field, **kwargs):
+        return forms.URLField(required=False)
+
 
 class JSONFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
         return models.JSONField(null=True, **kwargs)
+
+    def get_bulk_edit_form_field(self, field, **kwargs):
+        return forms.JSONField(required=False)
 
 
 class SelectFieldType(FieldType):
@@ -187,6 +228,26 @@ class ObjectFieldType(FieldType):
 
     def get_filterform_field(self, field, **kwargs):
         return None
+
+    # def get_bulk_edit_form_field(self, field, **kwargs):
+    #     content_type = ContentType.objects.get(pk=field.related_object_type_id)
+    #     to_model = content_type.model
+    #
+    #     # TODO: Handle pointing to object of same type (avoid infinite loop)
+    #     if content_type.app_label == APP_LABEL:
+    #         from netbox_custom_objects.models import CustomObjectType
+    #         custom_object_type_id = content_type.model.replace('table', '').replace('model', '')
+    #         custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
+    #         model = custom_object_type.get_model()
+    #     else:
+    #         # to_model = content_type.model_class()._meta.object_name
+    #         to_ct = f'{content_type.app_label}.{to_model}'
+    #         model = apps.get_model(to_ct)
+    #
+    #     return DynamicModelMultipleChoiceField(
+    #         queryset=model.objects.all(),
+    #         label='Policy',
+    #     )
 
 
 class CustomManyToManyManager(Manager):

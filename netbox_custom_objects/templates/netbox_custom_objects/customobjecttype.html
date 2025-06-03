@@ -79,7 +79,7 @@
       {% plugin_full_width_page object %}
       <div class="card">
         <h2 class="card-header">
-          <a href="{{ object.get_list_url }}">{{ object.get_title_case_name_plural }}</a>
+          <a href="{{ object.get_list_url }}">{{ object.get_verbose_name_plural }}</a>
             <div class="card-actions">
               {% if request.user|can_add:object %}
                 <a href="{% url 'plugins:netbox_custom_objects:customobject_add' custom_object_type=object.name.lower %}?return_url={{ object.get_absolute_url }}" class="btn btn-ghost-primary btn-sm">

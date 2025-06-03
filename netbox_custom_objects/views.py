@@ -44,7 +44,7 @@ class CustomObjectTableMixin(TableMixin):
             try:
                 attrs[field.name] = field_type.get_table_column_field(field)
             except NotImplementedError:
-                print(f'{field.name} field is not supported')
+                print(f'table mixin: {field.name} field is not supported')
 
         self.table = type(
             f"{data.model._meta.object_name}Table",
@@ -208,7 +208,7 @@ class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
             try:
                 attrs[field.name] = field_type.get_filterform_field(field)
             except NotImplementedError:
-                print(f'{field.name} field is not supported')
+                print(f'list view: {field.name} field is not supported')
 
         return type(
             f"{model._meta.object_name}FilterForm",
@@ -370,7 +370,7 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
             try:
                 attrs[field.name] = field_type.get_bulk_edit_form_field(field)
             except NotImplementedError:
-                print(f'{field.name} field is not supported')
+                print(f'bulk edit form: {field.name} field is not supported')
 
         form = type(
             f"{queryset.model._meta.object_name}BulkEditForm",
