@@ -48,7 +48,7 @@ def get_menu():
 
 
 current_version = version.parse(settings.RELEASE.version)
-if current_version < version.parse('4.2.0'):
+if current_version < version.parse('4.4.0'):
     menu = PluginMenu(
         label='Custom Objects',
         groups=(
