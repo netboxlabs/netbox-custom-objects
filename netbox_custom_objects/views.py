@@ -250,6 +250,7 @@ class CustomObjectView(generic.ObjectView):
 class CustomObjectEditView(generic.ObjectEditView):
     # queryset = CustomObject.objects.all()
     # form = forms.CustomObjectForm
+    template_name = 'netbox_custom_objects/customobject_edit.html'
     form = None
     queryset = None
     object = None
@@ -300,7 +301,11 @@ class CustomObjectEditView(generic.ObjectEditView):
         for field in self.object.custom_object_type.fields.all():
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
             try:
-                attrs[field.name] = field_type.get_form_field(field)
+                attrs[field.name] = field_type.get_form_field(
+                    field,
+                    label=field.label or None,
+                    required=field.required,
+                )
             except NotImplementedError:
                 print(f'get_form: {field.name} field is not supported')
 
@@ -368,7 +373,11 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
         for field in self.custom_object_type.fields.all():
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
             try:
-                attrs[field.name] = field_type.get_bulk_edit_form_field(field)
+                attrs[field.name] = field_type.get_form_field(
+                    field,
+                    label=field.label or None,
+                    required=False,
+                )
             except NotImplementedError:
                 print(f'bulk edit form: {field.name} field is not supported')
 

@@ -29,7 +29,7 @@ class FieldType:
     def get_filterform_field(self, field, **kwargs):
         raise NotImplementedError
 
-    def get_form_field(self, field, **kwargs):
+    def get_form_field(self, field, required, label, **kwargs):
         raise NotImplementedError
 
     def get_bulk_edit_form_field(self, field, **kwargs):
@@ -83,6 +83,9 @@ class LongTextFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
         return models.TextField(null=True, blank=True, **kwargs)
 
+    def get_form_field(self, field, required, label, **kwargs):
+        return field.to_form_field()
+
     def get_bulk_edit_form_field(self, field, **kwargs):
         return forms.CharField(
             label=field,
@@ -104,8 +107,8 @@ class IntegerFieldType(FieldType):
             required=False,
         )
 
-    def get_bulk_edit_form_field(self, field, **kwargs):
-        return forms.IntegerField(required=False)
+    def get_form_field(self, field, **kwargs):
+        return field.to_form_field()
 
 
 class DecimalFieldType(FieldType):
@@ -118,20 +121,21 @@ class DecimalFieldType(FieldType):
             **kwargs,
         )
 
-    def get_bulk_edit_form_field(self, field, **kwargs):
-        return forms.DecimalField(
-            max_digits=8,
-            decimal_places=2,
-            required=False,
-        )
+    def get_form_field(self, field, **kwargs):
+        return field.to_form_field()
+        # return forms.DecimalField(
+        #     max_digits=8,
+        #     decimal_places=2,
+        #     required=False,
+        # )
 
 
 class BooleanFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
         return models.BooleanField(null=True, blank=True, **kwargs)
 
-    def get_bulk_edit_form_field(self, field, **kwargs):
-        return forms.BooleanField(required=False)
+    def get_form_field(self, field, **kwargs):
+        return field.to_form_field()
 
 
 class DateFieldType(FieldType):
@@ -139,16 +143,17 @@ class DateFieldType(FieldType):
         return models.DateField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, **kwargs):
-        return forms.DateField(
-            required=False,
-            widget=DatePicker()
-        )
+        return field.to_form_field()
+        # return forms.DateField(
+        #     required=False,
+        #     widget=DatePicker()
+        # )
 
-    def get_bulk_edit_form_field(self, field, **kwargs):
-        return forms.DateField(
-            required=False,
-            widget=DatePicker()
-        )
+    # def get_bulk_edit_form_field(self, field, **kwargs):
+    #     return forms.DateField(
+    #         required=False,
+    #         widget=DatePicker()
+    #     )
 
 
 class DateTimeFieldType(FieldType):
@@ -156,32 +161,40 @@ class DateTimeFieldType(FieldType):
         return models.DateTimeField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, **kwargs):
-        return forms.DateTimeField(
-            required=False,
-            widget=DateTimePicker()
-        )
+        return field.to_form_field()
+        # return forms.DateTimeField(
+        #     required=required,
+        #     label=label,
+        #     widget=DateTimePicker()
+        # )
 
-    def get_bulk_edit_form_field(self, field, **kwargs):
-        return forms.DateTimeField(
-            required=False,
-            widget=DateTimePicker()
-        )
+    # def get_bulk_edit_form_field(self, field, **kwargs):
+    #     return forms.DateTimeField(
+    #         required=False,
+    #         widget=DateTimePicker()
+    #     )
 
 
 class URLFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
         return models.URLField(null=True, blank=True, **kwargs)
 
-    def get_bulk_edit_form_field(self, field, **kwargs):
-        return forms.URLField(required=False)
+    def get_form_field(self, field, **kwargs):
+        return field.to_form_field()
+
+    # def get_bulk_edit_form_field(self, field, **kwargs):
+    #     return forms.URLField(required=False)
 
 
 class JSONFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
         return models.JSONField(null=True, blank=True, **kwargs)
 
-    def get_bulk_edit_form_field(self, field, **kwargs):
-        return forms.JSONField(required=False)
+    def get_form_field(self, field, **kwargs):
+        return field.to_form_field()
+
+    # def get_bulk_edit_form_field(self, field, **kwargs):
+    #     return forms.JSONField(required=False)
 
 
 class SelectFieldType(FieldType):
@@ -194,6 +207,9 @@ class SelectFieldType(FieldType):
             **kwargs,
         )
 
+    def get_form_field(self, field, **kwargs):
+        return field.to_form_field()
+
 
 class MultiSelectFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
@@ -205,10 +221,15 @@ class MultiSelectFieldType(FieldType):
         )
 
     def get_form_field(self, field, **kwargs):
-        return forms.MultipleChoiceField(choices=field.choices, required=False, **kwargs)
+        return field.to_form_field()
+
+    # def get_form_field(self, field, required, label, **kwargs):
+    #     return forms.MultipleChoiceField(
+    #         choices=field.choices, required=required, label=label, **kwargs
+    #     )
 
     def get_bulk_edit_form_field(self, field, **kwargs):
-        return forms.MultipleChoiceField(choices=field.choices, required=False, **kwargs)
+        return forms.MultipleChoiceField(choices=field.choices, required=required, label=label, **kwargs)
 
 
 class ObjectFieldType(FieldType):
