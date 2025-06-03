@@ -170,7 +170,7 @@ class DateTimeFieldType(FieldType):
 
 class URLFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        return models.URLField(null=True, **kwargs)
+        return models.URLField(null=True, blank=True, **kwargs)
 
     def get_bulk_edit_form_field(self, field, **kwargs):
         return forms.URLField(required=False)
@@ -178,7 +178,7 @@ class URLFieldType(FieldType):
 
 class JSONFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        return models.JSONField(null=True, **kwargs)
+        return models.JSONField(null=True, blank=True, **kwargs)
 
     def get_bulk_edit_form_field(self, field, **kwargs):
         return forms.JSONField(required=False)
@@ -190,6 +190,7 @@ class SelectFieldType(FieldType):
             max_length=100,
             choices=field.choices,
             null=True,
+            blank=True,
             **kwargs,
         )
 
@@ -199,6 +200,7 @@ class MultiSelectFieldType(FieldType):
         return ArrayField(
             base_field=models.CharField(max_length=50, choices=field.choices),
             null=True,
+            blank=True,
             **kwargs,
         )
 
