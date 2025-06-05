@@ -50,11 +50,13 @@ class CustomContentTypeChoiceField(ContentTypeChoiceField):
 
     def label_from_instance(self, obj):
         if obj.app_label == APP_LABEL:
-            try:
-                custom_object_type = CustomObjectType.objects.get(content_type=obj)
-                return f'Custom Objects > {custom_object_type.name}'
-            except CustomObjectType.DoesNotExist:
-                pass
+            custom_object_type_id = obj.model.replace('table', '').replace('model', '')
+            if custom_object_type_id.isdigit():
+                try:
+                    custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
+                    return f'Custom Objects > {custom_object_type.name}'
+                except CustomObjectType.DoesNotExist:
+                    pass
         try:
             return object_type_name(obj)
         except AttributeError:

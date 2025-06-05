@@ -439,9 +439,10 @@ class MultiObjectFieldType(FieldType):
 
         # Check if this is a self-referential M2M
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
+        custom_object_type_id = content_type.model.replace('table', '').replace('model', '')
         is_self_referential = (
             content_type.app_label == APP_LABEL and
-            field.custom_object_type.content_type == content_type
+            field.custom_object_type.id == custom_object_type_id
         )
 
         attrs = {
@@ -470,9 +471,11 @@ class MultiObjectFieldType(FieldType):
         """
         # Check if this is a self-referential M2M
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
+        custom_object_type_id = content_type.model.replace('table', '').replace('model', '')
+
         is_self_referential = (
             content_type.app_label == APP_LABEL and
-            field.custom_object_type.content_type == content_type
+            field.custom_object_type.id == custom_object_type_id
         )
 
         through = self.get_through_model(field)

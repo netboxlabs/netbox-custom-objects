@@ -67,9 +67,9 @@ class CustomObjectType(NetBoxModel):
     # slug = models.SlugField(max_length=100, unique=True)
     description = models.TextField(blank=True)
     schema = models.JSONField(blank=True, default=dict)
-    content_type = models.ForeignKey(ContentType, null=True, blank=True, on_delete=models.SET_NULL)
+    # content_type = models.ForeignKey(ContentType, null=True, blank=True, on_delete=models.SET_NULL)
     # verbose_name = models.CharField(max_length=100)
-    verbose_name_plural = models.CharField(max_length=100)
+    verbose_name_plural = models.CharField(max_length=100, blank=True)
 
     class Meta:
         verbose_name = 'Custom Object Type'
@@ -329,7 +329,7 @@ class CustomObjectType(NetBoxModel):
         apps.register_model(APP_LABEL, model)
         app_config = apps.get_app_config(APP_LABEL)
         create_contenttypes(app_config)
-        self.content_type_id = ContentType.objects.get_for_model(model).id
+        # self.content_type_id = ContentType.objects.get_for_model(model).id
 
         with connection.schema_editor() as schema_editor:
             schema_editor.create_model(model)
@@ -340,11 +340,12 @@ class CustomObjectType(NetBoxModel):
         super().save(*args, **kwargs)
         if needs_db_create:
             self.create_model()
-            super().save(*args, **kwargs)
+            # super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
         model = self.get_model()
-        self.content_type.delete()
+        # self.content_type.delete()
+        ContentType.objects.get(app_label=APP_LABEL, model=self.get_table_model_name(self.id).lower()).delete()
         super().delete(*args, **kwargs)
         with connection.schema_editor() as schema_editor:
             schema_editor.delete_model(model)
