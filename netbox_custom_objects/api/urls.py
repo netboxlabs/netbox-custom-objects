@@ -19,7 +19,7 @@ custom_object_detail = views.CustomObjectViewSet.as_view({
 router = NetBoxRouter()
 router.APIRootView = views.RootView
 router.register('custom-object-types', views.CustomObjectTypeViewSet)
-router.register('custom-objects', views.CustomObjectViewSet)
+# router.register('custom-objects', views.CustomObjectViewSet)
 router.register('custom-object-type-fields', views.CustomObjectTypeFieldViewSet)
 # router.register('mapping-relations', views.MappingRelationViewSet)
 

@@ -1,3 +1,4 @@
+from django.http import Http404
 from rest_framework.routers import APIRootView
 from rest_framework.viewsets import ModelViewSet
 
@@ -32,7 +33,10 @@ class CustomObjectViewSet(ModelViewSet):
         return serializers.get_serializer_class(self.model)
 
     def get_queryset(self):
-        custom_object_type = CustomObjectType.objects.get(name__iexact=self.kwargs['custom_object_type'])
+        try:
+            custom_object_type = CustomObjectType.objects.get(name__iexact=self.kwargs['custom_object_type'])
+        except CustomObjectType.DoesNotExist:
+            raise Http404
         self.model = custom_object_type.get_model()
         return self.model.objects.all()
 
