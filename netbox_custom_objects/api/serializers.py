@@ -35,7 +35,7 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
         model = CustomObjectTypeField
         fields = (
             # 'id', 'url', 'name', 'label', 'custom_object_type', 'field_type', 'content_type', 'many', 'options',
-            'id', 'name', 'label', 'custom_object_type', 'type', 'primary',
+            'id', 'name', 'label', 'custom_object_type', 'type', 'primary', 'default', 'choice_set',
             'validation_regex', 'validation_minimum', 'validation_maximum',
             'related_object_type', 'app_label', 'model',
         )
@@ -48,6 +48,9 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
                 attrs['related_object_type'] = ContentType.objects.get(app_label=app_label, model=model)
             except ContentType.DoesNotExist:
                 raise ValidationError('Must provide valid app_label and model for object field type.')
+        if attrs['type'] in [CustomFieldTypeChoices.TYPE_SELECT, CustomFieldTypeChoices.TYPE_MULTISELECT]:
+            if not attrs.get('choice_set', None):
+                raise ValidationError('Must provide choice_set with valid PK for select field type.')
         return super().validate(attrs)
 
     def create(self, validated_data):

@@ -48,7 +48,7 @@ class FieldType:
 class TextFieldType(FieldType):
 
     def get_model_field(self, field, **kwargs):
-        kwargs.update({'max_length': field.default})
+        kwargs.update({'default': field.default})
         return models.CharField(null=True, blank=True, **kwargs)
 
     def get_serializer_field(self, field, **kwargs):
@@ -81,6 +81,7 @@ class TextFieldType(FieldType):
 
 class LongTextFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
+        kwargs.update({'default': field.default})
         return models.TextField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, required, label, **kwargs):
@@ -113,6 +114,7 @@ class IntegerFieldType(FieldType):
 
 class DecimalFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
+        kwargs.update({'default': field.default})
         return models.DecimalField(
             null=True,
             blank=True,
@@ -132,6 +134,7 @@ class DecimalFieldType(FieldType):
 
 class BooleanFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
+        kwargs.update({'default': field.default})
         return models.BooleanField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, **kwargs):
@@ -140,6 +143,7 @@ class BooleanFieldType(FieldType):
 
 class DateFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
+        kwargs.update({'default': field.default})
         return models.DateField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, **kwargs):
@@ -158,6 +162,7 @@ class DateFieldType(FieldType):
 
 class DateTimeFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
+        kwargs.update({'default': field.default})
         return models.DateTimeField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, **kwargs):
@@ -177,6 +182,7 @@ class DateTimeFieldType(FieldType):
 
 class URLFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
+        kwargs.update({'default': field.default})
         return models.URLField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, **kwargs):
@@ -188,6 +194,7 @@ class URLFieldType(FieldType):
 
 class JSONFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
+        kwargs.update({'default': field.default})
         return models.JSONField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, **kwargs):
@@ -199,6 +206,7 @@ class JSONFieldType(FieldType):
 
 class SelectFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
+        kwargs.update({'default': field.default})
         return models.CharField(
             max_length=100,
             choices=field.choices,
@@ -213,6 +221,7 @@ class SelectFieldType(FieldType):
 
 class MultiSelectFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
+        kwargs.update({'default': field.default})
         return ArrayField(
             base_field=models.CharField(max_length=50, choices=field.choices),
             null=True,
@@ -238,6 +247,7 @@ class ObjectFieldType(FieldType):
         # content_type = ContentType.objects.get_for_model(instance)
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
         to_model = content_type.model
+        kwargs.update({'default': field.default})
 
         # TODO: Handle pointing to object of same type (avoid infinite loop)
         if content_type.app_label == APP_LABEL:
@@ -249,7 +259,7 @@ class ObjectFieldType(FieldType):
             # to_model = content_type.model_class()._meta.object_name
             to_ct = f'{content_type.app_label}.{to_model}'
             model = apps.get_model(to_ct)
-        f = models.ForeignKey(model, null=True, blank=True, on_delete=models.CASCADE)
+        f = models.ForeignKey(model, null=True, blank=True, on_delete=models.CASCADE, **kwargs)
         return f
 
     def get_filterform_field(self, field, **kwargs):
@@ -472,6 +482,8 @@ class MultiObjectFieldType(FieldType):
         # Check if this is a self-referential M2M
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
         custom_object_type_id = content_type.model.replace('table', '').replace('model', '')
+        # TODO: Default does not auto-populate, to new or existing objects (should it?)
+        kwargs.update({'default': field.default})
 
         is_self_referential = (
             content_type.app_label == APP_LABEL and
@@ -487,7 +499,8 @@ class MultiObjectFieldType(FieldType):
             through_fields=('source', 'target'),
             blank=True,
             related_name='+',
-            related_query_name='+'
+            related_query_name='+',
+            **kwargs,
         )
         
         # Store metadata for later resolution
