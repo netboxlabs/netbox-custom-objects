@@ -35,7 +35,8 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
         model = CustomObjectTypeField
         fields = (
             # 'id', 'url', 'name', 'label', 'custom_object_type', 'field_type', 'content_type', 'many', 'options',
-            'id', 'name', 'label', 'custom_object_type', 'type', 'validation_regex', 'validation_minimum', 'validation_maximum',
+            'id', 'name', 'label', 'custom_object_type', 'type', 'primary',
+            'validation_regex', 'validation_minimum', 'validation_maximum',
             'related_object_type', 'app_label', 'model',
         )
 
