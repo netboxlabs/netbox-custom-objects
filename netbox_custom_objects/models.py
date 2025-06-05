@@ -120,6 +120,10 @@ class CustomObjectType(NetBoxModel):
     def get_table_model_name(cls, table_id):
         return f"Table{table_id}Model"
 
+    @property
+    def content_type(self):
+        return ContentType.objects.get(app_label=APP_LABEL, model=self.get_table_model_name(self.id).lower())
+
     def _fetch_and_generate_field_attrs(
         self,
         fields,
