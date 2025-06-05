@@ -78,6 +78,10 @@
                 <td>
                   {% if field.type == 'object' %}
                     {{ object|get_field_value:field|linkify }}
+                  {% elif field.type == 'longtext' %}
+                    {{ object|get_field_value:field|markdown }}
+                  {% elif field.type == 'json' %}
+                    {{ object|get_field_value:field|json }}
                   {% else %}
                     {{ object|get_field_value:field }}
                   {% endif %}
