@@ -5,7 +5,7 @@ from .utilities import register_models
 
 
 # Plugin Configuration
-class ServiceMappingPluginConfig(PluginConfig):
+class CustomObjectsPluginConfig(PluginConfig):
     name = "netbox_custom_objects"
     verbose_name = "Custom Objects"
     description = "A plugin to manage custom objects in NetBox"
@@ -19,9 +19,6 @@ class ServiceMappingPluginConfig(PluginConfig):
 
     def ready(self):
         super().ready()
-        # from . import constants, events, search, signal_receivers
 
-        # Register models which support service mappings
-        # register_models()
 
-config = ServiceMappingPluginConfig
+config = CustomObjectsPluginConfig

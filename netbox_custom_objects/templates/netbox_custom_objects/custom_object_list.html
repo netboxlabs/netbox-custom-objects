@@ -1,0 +1,30 @@
+{% extends "generic/object_list.html" %}
+{% load plugins %}
+{% load custom_object_buttons %}
+
+{% block controls %}
+  <div class="btn-list">
+    {% plugin_list_buttons model %}
+    {% block extra_controls %}{% endblock %}
+    {% if 'add' in actions %}
+      {% custom_object_add_button model custom_object_type %}
+    {% endif %}
+    {% if 'bulk_import' in actions %}
+      {% custom_object_import_button model %}
+    {% endif %}
+    {% if 'export' in actions %}
+      {% custom_object_export_button model %}
+    {% endif %}
+  </div>
+{% endblock controls %}
+
+{% block bulk_buttons %}
+  <div class="bulk-action-buttons">
+    {% if 'bulk_edit' in actions %}
+      {% custom_object_bulk_edit_button model custom_object_type query_params=request.GET %}
+    {% endif %}
+    {% if 'bulk_delete' in actions %}
+      {% custom_object_bulk_delete_button model custom_object_type query_params=request.GET %}
+    {% endif %}
+  </div>
+{% endblock %}

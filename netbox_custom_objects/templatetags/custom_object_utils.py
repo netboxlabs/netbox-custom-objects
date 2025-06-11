@@ -3,7 +3,7 @@ from django.apps import apps
 from django.utils.safestring import mark_safe
 from django.urls import reverse
 from netbox_custom_objects.models import CustomObjectTypeField
-from extras.choices import CustomFieldTypeChoices
+from extras.choices import CustomFieldTypeChoices, CustomFieldUIVisibleChoices
 from utilities.object_types import object_type_name
 
 __all__ = (
@@ -32,9 +32,23 @@ def get_field_type_verbose_name(field: CustomObjectTypeField) -> str:
 
 @register.filter(name="get_field_value")
 def get_field_value(obj, field: CustomObjectTypeField) -> str:
-    return str(obj.data.get(field.name))
+    return getattr(obj, field.name)
+
+
+@register.filter(name="get_field_is_ui_visible")
+def get_field_is_ui_visible(obj, field: CustomObjectTypeField) -> bool:
+    if field.ui_visible == CustomFieldUIVisibleChoices.ALWAYS:
+        return True
+    if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+        field_value = getattr(obj, field.name).exists()
+    else:
+        field_value = getattr(obj, field.name)
+    if field.ui_visible == CustomFieldUIVisibleChoices.IF_SET and field_value:
+        return True
+    return False
 
 
 @register.filter(name="get_child_relations")
 def get_child_relations(obj, field: CustomObjectTypeField):
-    return field.get_child_relations(obj)
+    return getattr(obj, field.name).all()
+    # return field.get_child_relations(obj)

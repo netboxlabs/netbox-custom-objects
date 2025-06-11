@@ -3,14 +3,17 @@ import json
 from django import forms
 from django.utils.translation import gettext_lazy as _
 
-from netbox_custom_objects.models import CustomObject, CustomObjectType, CustomObjectTypeField, CustomObjectRelation
-
+from netbox_custom_objects.models import (
+    CustomObject, CustomObjectType, CustomObjectTypeField, CustomObjectRelation, CustomObjectObjectType
+)
 from netbox.forms import NetBoxModelForm
 from core.models import ObjectType
 from extras.choices import CustomFieldTypeChoices, CustomFieldUIEditableChoices
 from extras.forms import CustomFieldForm
 from utilities.forms.fields import CommentField, ContentTypeChoiceField, DynamicModelChoiceField
 from utilities.forms.rendering import FieldSet
+from utilities.object_types import object_type_name
+from netbox_custom_objects.constants import APP_LABEL
 
 __all__ = (
     'CustomObjectTypeForm',
@@ -20,14 +23,16 @@ __all__ = (
 
 
 class CustomObjectTypeForm(NetBoxModelForm):
+    verbose_name_plural = forms.CharField(label=_("Readable plural name"), max_length=100, required=False)
+
     fieldsets = (
-        FieldSet('name', 'slug', 'description', 'tags'),
+        FieldSet('name', 'verbose_name_plural', 'description', 'tags'),
     )
     comments = CommentField()
 
     class Meta:
         model = CustomObjectType
-        fields = ('name', 'slug', 'description', 'comments', 'tags')
+        fields = ('name', 'verbose_name_plural', 'description', 'comments', 'tags')
 
 
 # class CustomObjectTypeFieldForm(NetBoxModelForm):
@@ -39,6 +44,23 @@ class CustomObjectTypeForm(NetBoxModelForm):
 #     class Meta:
 #         model = CustomObjectTypeField
 #         fields = ('name', 'label', 'custom_object_type', 'field_type',)
+
+
+class CustomContentTypeChoiceField(ContentTypeChoiceField):
+
+    def label_from_instance(self, obj):
+        if obj.app_label == APP_LABEL:
+            custom_object_type_id = obj.model.replace('table', '').replace('model', '')
+            if custom_object_type_id.isdigit():
+                try:
+                    custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
+                    return f'Custom Objects > {custom_object_type.name}'
+                except CustomObjectType.DoesNotExist:
+                    pass
+        try:
+            return object_type_name(obj)
+        except AttributeError:
+            return super().label_from_instance(obj)
 
 
 class CustomObjectTypeFieldForm(CustomFieldForm):
@@ -53,16 +75,17 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
         required=True,
         label=_('Custom object type')
     )
-    # related_object_type = ContentTypeChoiceField(
-    #     label=_('Related object type'),
-    #     queryset=ObjectType.objects.public(),
-    #     help_text=_("Type of the related object (for object/multi-object fields only)")
-    # )
+    related_object_type = CustomContentTypeChoiceField(
+        label=_('Related object type'),
+        queryset=CustomObjectObjectType.objects.public(),
+        help_text=_("Type of the related object (for object/multi-object fields only)")
+    )
 
     fieldsets = (
         FieldSet(
-            'custom_object_type', 'name', 'label', 'group_name', 'description', 'type', 'required', 'unique', 'default',
-            name=_('Custom Field')
+            'custom_object_type', 'primary', 'name', 'label', 'group_name', 'description', 'type', 'required',
+            'unique', 'default',
+            name=_('Field')
         ),
         FieldSet(
             'search_weight', 'filter_logic', 'ui_visible', 'ui_editable', 'weight', 'is_cloneable', name=_('Behavior')
@@ -80,10 +103,28 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        # Disable changing the custom object type of a field
+        # Disable changing the custom object type or related object type of a field
         if self.instance.pk:
             self.fields['custom_object_type'].disabled = True
+            if 'related_object_type' in self.fields:
+                self.fields['related_object_type'].disabled = True
 
+    def clean_related_object_type(self):
+        # TODO: Figure out how to do recursive M2M relations and remove this constraint
+        if self.cleaned_data['related_object_type'] == self.cleaned_data['custom_object_type'].content_type:
+            raise forms.ValidationError("Cannot create a foreign-key relation with custom objects of the same type.")
+        return self.cleaned_data['related_object_type']
+
+    def save(self, commit=True):
+        obj = super().save(commit=commit)
+        if obj.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT and obj.default:
+            qs = obj.related_object_type.model_class().objects.filter(pk__in=obj.default)
+            model = obj.custom_object_type.get_model()
+            for model_object in model.objects.all():
+                model_field = getattr(model_object, obj.name)
+                if not model_field.exists():
+                    model_field.set(qs)
+        return obj
 
 class CustomObjectForm(NetBoxModelForm):
     fieldsets = (

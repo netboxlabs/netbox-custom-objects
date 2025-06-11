@@ -1,24 +1,61 @@
 {% extends 'generic/object.html' %}
 {% load static %}
+{% load custom_object_buttons %}
 {% load helpers %}
+{% load perms %}
 {% load plugins %}
 {% load render_table from django_tables2 %}
+{% load tabs %}
 {% load i18n %}
 {% load custom_object_utils %}
 
 {% block extra_controls %}
 {% endblock %}
 
+{% block breadcrumbs %}
+  <li class="breadcrumb-item">
+{#    <a href="{% url object|viewname:'list' %}">{{ object|meta:'verbose_name_plural'|bettertitle }}</a>#}
+  </li>
+{% endblock breadcrumbs %}
+
+{# Add/edit/delete/etc. buttons #}
+{% block control-buttons %}
+
+  {# Default buttons #}
+  {% if perms.extras.add_bookmark and object.bookmarks %}
+    {% custom_object_bookmark_button object %}
+  {% endif %}
+  {% if perms.extras.add_subscription and object.subscriptions %}
+{#    {% subscribe_button object %}#}
+  {% endif %}
+  {% if request.user|can_add:object %}
+{#        {% clone_button object %}#}
+  {% endif %}
+  {% if request.user|can_change:object %}
+    {% custom_object_edit_button object %}
+  {% endif %}
+  {% if request.user|can_delete:object %}
+{#    {% delete_button object %}#}
+  {% endif %}
+{% endblock control-buttons %}
+
+{% block tabs %}
+  <ul class="nav nav-tabs" role="presentation">
+    {# Primary tab #}
+    <li class="nav-item">
+      <a class="nav-link{% if not tab %} active{% endif %}" href="{{ object.get_absolute_url }}">{{ object.custom_object_type.get_verbose_name }}</a>
+    </li>
+
+    {# Include tabs for registered model views #}
+    {% model_view_tabs object %}
+  </ul>
+{% endblock tabs %}
+
 {% block content %}
   <div class="row">
 	  <div class="col col-md-6">
       <div class="card">
-        <h5 class="card-header">{% trans "Custom Objects" %}</h5>
         <table class="table table-hover attr-table">
-          <tr>
-            <th scope="row">{% trans "Name" %}</th>
-            <td>{{ object.name }}</td>
-          </tr>
           <tr>
             <th scope="row">{% trans "Type" %}</th>
             <td>
@@ -35,20 +72,18 @@
             </td>
           </tr>
           {% for field in object.custom_object_type.fields.all %}
-            {% if field.is_single_value %}
-              <tr>
-                <th scope="row">{{ field }}</th>
-                <td>
-                  {% if field.type == 'object' %}
-                    {% with field_values=object|get_child_relations:field %}
-                      {{ field_values.first.instance|linkify }}
+            {% with is_visible_in_ui=object|get_field_is_ui_visible:field %}
+              {% if field.is_single_value and is_visible_in_ui %}
+                <tr>
+                  <th scope="row">{{ field }}</th>
+                  <td>
+                    {% with customfield=field value=object|get_field_value:field %}
+                      {% include "builtins/customfield_value.html" %}
                     {% endwith %}
-                  {% else %}
-                    {{ object|get_field_value:field }}
-                  {% endif %}
-                </td>
-              </tr>
-            {% endif %}
+                  </td>
+                </tr>
+              {% endif %}
+            {% endwith %}
           {% endfor %}
         </table>
       </div>
@@ -61,18 +96,20 @@
       {% plugin_right_page object %}
       {% for field in object.custom_object_type.fields.all %}
           {% if field.many %}
-            {% with field_values=object|get_child_relations:field %}
-              <div class="card">
-                <h2 class="card-header">{{ field }}</h2>
-                <table class="table table-hover attr-table">
-                  {% for relation in field_values.all %}
-                    <tr>
-                        <th scope="row">{{ relation.instance|linkify }}</th>
-                        <td>{{ relation.object_id }}</td>
-                    </tr>
-                  {% endfor %}
-                </table>
-              </div>
+            {% with field_values=object|get_child_relations:field is_visible_in_ui=object|get_field_is_ui_visible:field %}
+              {% if is_visible_in_ui %}
+                <div class="card">
+                  <h2 class="card-header">{{ field }}</h2>
+                  <table class="table table-hover attr-table">
+                    {% for relation in field_values.all %}
+                      <tr>
+                        <th scope="row">{{ relation|linkify }}</th>
+                        <td>{{ relation.id }}</td>
+                      </tr>
+                    {% endfor %}
+                  </table>
+                </div>
+              {% endif %}
             {% endwith %}
           {% endif %}
       {% endfor %}
