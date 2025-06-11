@@ -22,7 +22,7 @@ from .models import CustomObject, CustomObjectType, CustomObjectRelation, Custom
 class CustomObjectTableMixin(TableMixin):
     def get_table(self, data, request, bulk_actions=True):
         model_fields = self.custom_object_type.fields.all()
-        fields = [
+        fields = ['id'] + [
             field.name for field in model_fields if field.ui_visible != CustomFieldUIVisibleChoices.HIDDEN
         ]
 
