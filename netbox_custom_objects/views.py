@@ -7,6 +7,7 @@ from django.db.models.expressions import field_types
 from django.db.models import JSONField
 from django.shortcuts import get_object_or_404, render
 
+from extras.choices import CustomFieldUIVisibleChoices
 from netbox.forms import NetBoxModelFilterSetForm, NetBoxModelBulkEditForm
 from netbox.views import generic
 from netbox.views.generic.mixins import TableMixin
@@ -20,7 +21,10 @@ from .models import CustomObject, CustomObjectType, CustomObjectRelation, Custom
 
 class CustomObjectTableMixin(TableMixin):
     def get_table(self, data, request, bulk_actions=True):
-        fields = [field.name for field in data.model._meta.fields]
+        model_fields = self.custom_object_type.fields.all()
+        fields = [
+            field.name for field in model_fields if field.ui_visible != CustomFieldUIVisibleChoices.HIDDEN
+        ]
 
         meta = type(
             "Meta",
@@ -39,7 +43,9 @@ class CustomObjectTableMixin(TableMixin):
             "__module__": "database.tables",
         }
 
-        for field in self.custom_object_type.fields.all():
+        for field in model_fields:
+            if field.ui_visible == CustomFieldUIVisibleChoices.HIDDEN:
+                continue
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
             try:
                 attrs[field.name] = field_type.get_table_column_field(field)

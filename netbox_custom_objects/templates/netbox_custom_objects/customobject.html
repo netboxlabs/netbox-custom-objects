@@ -72,16 +72,18 @@
             </td>
           </tr>
           {% for field in object.custom_object_type.fields.all %}
-            {% if field.is_single_value %}
-              <tr>
-                <th scope="row">{{ field }}</th>
-                <td>
+            {% with is_visible_in_ui=object|get_field_is_ui_visible:field %}
+              {% if field.is_single_value and is_visible_in_ui %}
+                <tr>
+                  <th scope="row">{{ field }}</th>
+                  <td>
                     {% with customfield=field value=object|get_field_value:field %}
-                        {% include "builtins/customfield_value.html" %}
+                      {% include "builtins/customfield_value.html" %}
                     {% endwith %}
-                </td>
-              </tr>
-            {% endif %}
+                  </td>
+                </tr>
+              {% endif %}
+            {% endwith %}
           {% endfor %}
         </table>
       </div>
@@ -94,18 +96,20 @@
       {% plugin_right_page object %}
       {% for field in object.custom_object_type.fields.all %}
           {% if field.many %}
-            {% with field_values=object|get_child_relations:field %}
-              <div class="card">
-                <h2 class="card-header">{{ field }}</h2>
-                <table class="table table-hover attr-table">
-                  {% for relation in field_values.all %}
-                    <tr>
+            {% with field_values=object|get_child_relations:field is_visible_in_ui=object|get_field_is_ui_visible:field %}
+              {% if is_visible_in_ui %}
+                <div class="card">
+                  <h2 class="card-header">{{ field }}</h2>
+                  <table class="table table-hover attr-table">
+                    {% for relation in field_values.all %}
+                      <tr>
                         <th scope="row">{{ relation|linkify }}</th>
                         <td>{{ relation.id }}</td>
-                    </tr>
-                  {% endfor %}
-                </table>
-              </div>
+                      </tr>
+                    {% endfor %}
+                  </table>
+                </div>
+              {% endif %}
             {% endwith %}
           {% endif %}
       {% endfor %}
