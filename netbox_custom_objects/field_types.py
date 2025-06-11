@@ -51,6 +51,9 @@ class TextFieldType(FieldType):
         kwargs.update({'default': field.default})
         return models.CharField(null=True, blank=True, **kwargs)
 
+    def get_form_field(self, field, required, label, **kwargs):
+        return field.to_form_field()
+
     def get_serializer_field(self, field, **kwargs):
         required = kwargs.get("required", False)
         validators = kwargs.pop("validators", None) or []
@@ -261,6 +264,9 @@ class ObjectFieldType(FieldType):
             model = apps.get_model(to_ct)
         f = models.ForeignKey(model, null=True, blank=True, on_delete=models.CASCADE, **kwargs)
         return f
+
+    def get_form_field(self, field, required, label, **kwargs):
+        return field.to_form_field()
 
     def get_filterform_field(self, field, **kwargs):
         return None
@@ -510,7 +516,7 @@ class MultiObjectFieldType(FieldType):
         return m2m_field
 
     def get_form_field(self, field, **kwargs):
-        return None
+        return field.to_form_field()
 
     def get_filterform_field(self, field, **kwargs):
         return None

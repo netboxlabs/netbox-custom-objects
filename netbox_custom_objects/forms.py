@@ -115,6 +115,16 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
             raise forms.ValidationError("Cannot create a foreign-key relation with custom objects of the same type.")
         return self.cleaned_data['related_object_type']
 
+    def save(self, commit=True):
+        obj = super().save(commit=commit)
+        if obj.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT and obj.default:
+            qs = obj.related_object_type.model_class().objects.filter(pk__in=obj.default)
+            model = obj.custom_object_type.get_model()
+            for model_object in model.objects.all():
+                model_field = getattr(model_object, obj.name)
+                if not model_field.exists():
+                    model_field.set(qs)
+        return obj
 
 class CustomObjectForm(NetBoxModelForm):
     fieldsets = (
