@@ -1,4 +1,5 @@
 import django_tables2 as tables
+import uuid
 
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
@@ -16,6 +17,7 @@ from extras.choices import CustomFieldTypeChoices
 from utilities.forms.fields import DynamicModelMultipleChoiceField
 from utilities.forms.widgets import DatePicker, DateTimePicker
 from netbox_custom_objects.constants import APP_LABEL
+from netbox_custom_objects.utilities import AppsProxy
 
 
 class FieldType:
@@ -447,11 +449,20 @@ class MultiObjectFieldType(FieldType):
         """
         Creates a through model with deferred model references
         """
-        class Meta:
-            db_table = field.through_table_name
-            app_label = APP_LABEL
-            managed = True
-            unique_together = ('source', 'target')
+        # TODO: Register through model in AppsProxy to avoid "model was already registered" warnings
+        # app_label = str(uuid.uuid4()) + "_database_table"
+        # apps = AppsProxy(dynamic_models=None, app_label=app_label)
+        meta = type(
+            "Meta",
+            (),
+            {
+                "db_table": field.through_table_name,
+                "app_label": APP_LABEL,
+                "apps": apps,
+                "managed": True,
+                "unique_together": ('source', 'target'),
+            }
+        )
 
         # Check if this is a self-referential M2M
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
@@ -463,7 +474,7 @@ class MultiObjectFieldType(FieldType):
 
         attrs = {
             '__module__': 'netbox_custom_objects.models',
-            'Meta': Meta,
+            'Meta': meta,
             'id': models.AutoField(primary_key=True),
             'source': models.ForeignKey(
                 'self' if is_self_referential else (model or 'netbox_custom_objects.CustomObject'),
@@ -590,7 +601,11 @@ class MultiObjectFieldType(FieldType):
         through._meta.get_field('target').related_model = to_model
         
         # Register the model with Django's app registry
-        apps = model._meta.apps
+        # apps = model._meta.apps
+
+        if app_label is None:
+            app_label = str(uuid.uuid4()) + "_database_table"
+        apps = AppsProxy(dynamic_models=None, app_label=app_label)
         try:
             through_model = apps.get_model(APP_LABEL, instance.through_model_name)
         except LookupError:

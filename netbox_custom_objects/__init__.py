@@ -1,7 +1,6 @@
 from django.conf import settings
 
 from netbox.plugins import PluginConfig
-from .utilities import register_models
 
 
 # Plugin Configuration
