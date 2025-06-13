@@ -56,6 +56,16 @@
                 <td>{{ field|get_field_type_verbose_name }}</td>
                 <td>{% if field.type == "object" or field.type == "multiobject" %}{{ field|get_field_object_type }}{% endif %}</td>
                 <td>
+                    {% if field.primary %}
+                        <i
+                          class="mdi mdi-text text-primary"
+                          data-bs-toggle="tooltip"
+                          data-bs-placement="right"
+                          title="Primary name field"
+                        ></i>
+                    {% endif %}
+                </td>
+                <td>
                 <span class="btn-group dropdown">
                     <a class="btn btn-sm btn-warning" href="{% url 'plugins:netbox_custom_objects:customobjecttypefield_edit' pk=field.pk %}?return_url={{ object.get_absolute_url }}" type="button"
                        aria-label="{attrs.title}"><i class="mdi mdi-pencil"></i></a>

@@ -134,20 +134,10 @@ class CustomObjectType(NetBoxModel):
             # An object containing the table fields, field types and the chosen
             # names with the table field id as key.
             "_field_objects": {},
-            # An object containing the trashed table fields, field types and the
-            # chosen names with the table field id as key.
             "_trashed_field_objects": {},
         }
-        # Construct a query to fetch all the fields of that table. We need to
-        # include any trashed fields so the created model still has them present
-        # as the column is still actually there. If the model did not have the
-        # trashed field attributes then model.objects.create will fail as the
-        # trashed columns will be given null values by django triggering not null
-        # constraints in the database.
         fields_query = (
             self.fields(manager="objects")
-            # self.fields(manager="objects_and_trash")
-            # .select_related("table", "content_type")
             .all()
         )
 
@@ -179,11 +169,6 @@ class CustomObjectType(NetBoxModel):
         return field_attrs
 
     def _after_model_generation(self, attrs, model):
-        # In some situations the field can only be added once the model class has been
-        # generated. So for each field we will call the after_model_generation with
-        # the generated model as argument in order to do this. This is for example used
-        # by the link row field. It can also be used to make other changes to the
-        # class.
         all_field_objects = {
             **attrs["_field_objects"],
             **attrs["_trashed_field_objects"],
@@ -234,13 +219,7 @@ class CustomObjectType(NetBoxModel):
         """
 
         if app_label is None:
-            # Generate a unique app_label to make the generation of the model thread
-            # safe. Related fields generate pending operations in the `apps`
-            # registry, but they're identified by the model class name. If the same
-            # model is generated at the same time, the pending operations can be
-            # executed in a wrong order. A unique app_label isolated in that case.
             app_label = str(uuid.uuid4()) + "_database_table"
-            # app_label = 'netbox_custom_objects'
 
         model_name = self.get_table_model_name(self.pk)
 
@@ -272,21 +251,14 @@ class CustomObjectType(NetBoxModel):
         )
 
         def __str__(self):
-            """
-            When the model instance is rendered to a string, then we want to return the
-            primary field value in human readable format.
-            """
-
-            # TODO: Primary field logic
-            field = self._field_objects.get(self._primary_field_id, None)
-
-            if not field:
+            # Find the field with primary=True and return that field's "name" as the name of the object
+            primary_field = self._field_objects.get(self._primary_field_id, None)
+            primary_field_value = None
+            if primary_field:
+                primary_field_value = getattr(self, primary_field["name"])
+            if not primary_field_value:
                 return f"unnamed row {self.id}"
-
-            return str(getattr(self, field["name"])) or str(self.id)
-            # return field["type"].get_human_readable_value(
-            #     getattr(self, field["name"]), field
-            # )
+            return str(primary_field_value) or str(self.id)
 
         def get_absolute_url(self):
             return reverse('plugins:netbox_custom_objects:customobject', kwargs={'pk': self.pk, 'custom_object_type': self.custom_object_type.name.lower()})

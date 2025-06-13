@@ -115,6 +115,19 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
             raise forms.ValidationError("Cannot create a foreign-key relation with custom objects of the same type.")
         return self.cleaned_data['related_object_type']
 
+    def clean_primary(self):
+        primary_fields = self.cleaned_data['custom_object_type'].fields.filter(primary=True)
+        if self.cleaned_data['primary']:
+            primary_fields.update(primary=False)
+        else:
+            if self.instance:
+                other_primary_fields = primary_fields.exclude(pk=self.instance.id)
+            else:
+                other_primary_fields = primary_fields
+            if not other_primary_fields.exists():
+                return True
+        return self.cleaned_data['primary']
+
     def save(self, commit=True):
         obj = super().save(commit=commit)
         if obj.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT and obj.default:
