@@ -601,11 +601,11 @@ class MultiObjectFieldType(FieldType):
         through._meta.get_field('target').related_model = to_model
         
         # Register the model with Django's app registry
-        # apps = model._meta.apps
+        apps = model._meta.apps
 
-        if app_label is None:
-            app_label = str(uuid.uuid4()) + "_database_table"
-        apps = AppsProxy(dynamic_models=None, app_label=app_label)
+        # if app_label is None:
+        #     app_label = str(uuid.uuid4()) + "_database_table"
+        # apps = AppsProxy(dynamic_models=None, app_label=app_label)
         try:
             through_model = apps.get_model(APP_LABEL, instance.through_model_name)
         except LookupError:
