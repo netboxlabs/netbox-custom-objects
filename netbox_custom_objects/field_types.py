@@ -267,8 +267,8 @@ class ObjectFieldType(FieldType):
         f = models.ForeignKey(model, null=True, blank=True, on_delete=models.CASCADE, **kwargs)
         return f
 
-    def get_form_field(self, field, required, label, **kwargs):
-        return field.to_form_field()
+    # def get_form_field(self, field, required, label, **kwargs):
+    #     return field.to_form_field()
 
     def get_filterform_field(self, field, **kwargs):
         return None
