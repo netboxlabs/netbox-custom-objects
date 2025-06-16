@@ -526,8 +526,8 @@ class MultiObjectFieldType(FieldType):
         
         return m2m_field
 
-    def get_form_field(self, field, **kwargs):
-        return field.to_form_field()
+    # def get_form_field(self, field, **kwargs):
+    #     return field.to_form_field()
 
     def get_filterform_field(self, field, **kwargs):
         return None
