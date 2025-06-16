@@ -858,6 +858,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         return value
 
     def to_form_field(self, set_initial=True, enforce_required=True, enforce_visibility=True, for_csv_import=False):
+        # TODO: Move all this logic to field_types.py get_form_field methods
         """
         Return a form field suitable for setting a CustomField's value for an object.
 
@@ -951,6 +952,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         # Object
         elif self.type == CustomFieldTypeChoices.TYPE_OBJECT:
             model = self.related_object_type.model_class()
+            if not model:
+                custom_object_model_name = self.related_object_type.name
+                custom_object_type_id = custom_object_model_name.replace('table', '').replace('model', '')
+                custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
+                model = custom_object_type.get_model()
             field_class = CSVModelChoiceField if for_csv_import else DynamicModelChoiceField
             kwargs = {
                 'queryset': model.objects.all(),
@@ -1004,6 +1010,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         return field
 
     def to_filter(self, lookup_expr=None):
+        # TODO: Move all this logic to field_types.py get_filterform_field methods
         """
         Return a django_filters Filter instance suitable for this field type.
 
