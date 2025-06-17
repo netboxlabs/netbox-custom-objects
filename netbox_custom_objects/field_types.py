@@ -26,6 +26,7 @@ from utilities.forms.fields import (
     CSVChoiceField, CSVModelChoiceField, CSVModelMultipleChoiceField, CSVMultipleChoiceField, DynamicChoiceField,
     DynamicModelChoiceField, DynamicModelMultipleChoiceField, DynamicMultipleChoiceField, JSONField, LaxURLField,
 )
+from netbox_custom_objects.fields import CustomObjectDynamicModelChoiceField
 from utilities.templatetags.builtins.filters import render_markdown
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.utilities import AppsProxy
@@ -361,8 +362,28 @@ class ObjectFieldType(FieldType):
         f = models.ForeignKey(model, null=True, blank=True, on_delete=models.CASCADE, **kwargs)
         return f
 
-    # def get_form_field(self, field, required, label, **kwargs):
-    #     return field.to_form_field()
+    # TODO: This logic is migrated from to_form_field, but currently does not work with custom objects as
+    #  the related_object_type (selected value is not recognized as an isinstance of the related model object)
+    # def get_form_field(self, field, for_csv_import=False, **kwargs):
+    #     # return field.to_form_field()
+    #     model = field.related_object_type.model_class()
+    #     if not model:
+    #         CustomObjectType = apps.get_model('netbox_custom_objects.CustomObjectType')
+    #         custom_object_model_name = field.related_object_type.name
+    #         custom_object_type_id = custom_object_model_name.replace('table', '').replace('model', '')
+    #         custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
+    #         model = custom_object_type.get_model()
+    #     field_class = CSVModelChoiceField if for_csv_import else CustomObjectDynamicModelChoiceField
+    #     kwargs = {
+    #         'queryset': model.objects.all(),
+    #         'required': field.required,
+    #         'initial': field.default,
+    #     }
+    #     if not for_csv_import:
+    #         kwargs['query_params'] = field.related_object_filter
+    #         kwargs['selector'] = True
+    #
+    #     return field_class(**kwargs)
 
     def get_filterform_field(self, field, **kwargs):
         return None

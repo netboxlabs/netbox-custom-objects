@@ -27,7 +27,7 @@ router.register('custom-object-type-fields', views.CustomObjectTypeFieldViewSet)
 
 urlpatterns = [
     path('', include(router.urls)),
-    path('<str:custom_object_type>/', custom_object_list, name='custom-object-list'),
-    path('<str:custom_object_type>/<int:pk>/', custom_object_detail, name='custom-object-detail'),
+    path('<str:custom_object_type>/', custom_object_list, name='customobject-list'),
+    path('<str:custom_object_type>/<int:pk>/', custom_object_detail, name='customobject-detail'),
 ]
 # urlpatterns = format_suffix_patterns(urlpatterns, allowed=['json', 'html'])
