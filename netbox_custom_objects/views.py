@@ -307,11 +307,7 @@ class CustomObjectEditView(generic.ObjectEditView):
         for field in self.object.custom_object_type.fields.all():
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
             try:
-                attrs[field.name] = field_type.get_form_field(
-                    field,
-                    label=field.label or None,
-                    required=field.required,
-                )
+                attrs[field.name] = field_type.get_annotated_form_field(field)
             except NotImplementedError:
                 print(f'get_form: {field.name} field is not supported')
 
@@ -379,11 +375,7 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
         for field in self.custom_object_type.fields.all():
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
             try:
-                attrs[field.name] = field_type.get_form_field(
-                    field,
-                    label=field.label or None,
-                    required=False,
-                )
+                attrs[field.name] = field_type.get_annotated_form_field(field)
             except NotImplementedError:
                 print(f'bulk edit form: {field.name} field is not supported')
 
