@@ -58,6 +58,7 @@ from utilities.validators import validate_regex
 from extras.models.customfields import SEARCH_TYPES
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
 from netbox_custom_objects.constants import APP_LABEL
+from netbox_custom_objects.utilities import AppsProxy
 
 USER_TABLE_DATABASE_NAME_PREFIX = "custom_objects_"
 
@@ -133,20 +134,10 @@ class CustomObjectType(NetBoxModel):
             # An object containing the table fields, field types and the chosen
             # names with the table field id as key.
             "_field_objects": {},
-            # An object containing the trashed table fields, field types and the
-            # chosen names with the table field id as key.
             "_trashed_field_objects": {},
         }
-        # Construct a query to fetch all the fields of that table. We need to
-        # include any trashed fields so the created model still has them present
-        # as the column is still actually there. If the model did not have the
-        # trashed field attributes then model.objects.create will fail as the
-        # trashed columns will be given null values by django triggering not null
-        # constraints in the database.
         fields_query = (
             self.fields(manager="objects")
-            # self.fields(manager="objects_and_trash")
-            # .select_related("table", "content_type")
             .all()
         )
 
@@ -178,11 +169,6 @@ class CustomObjectType(NetBoxModel):
         return field_attrs
 
     def _after_model_generation(self, attrs, model):
-        # In some situations the field can only be added once the model class has been
-        # generated. So for each field we will call the after_model_generation with
-        # the generated model as argument in order to do this. This is for example used
-        # by the link row field. It can also be used to make other changes to the
-        # class.
         all_field_objects = {
             **attrs["_field_objects"],
             **attrs["_trashed_field_objects"],
@@ -233,13 +219,7 @@ class CustomObjectType(NetBoxModel):
         """
 
         if app_label is None:
-            # Generate a unique app_label to make the generation of the model thread
-            # safe. Related fields generate pending operations in the `apps`
-            # registry, but they're identified by the model class name. If the same
-            # model is generated at the same time, the pending operations can be
-            # executed in a wrong order. A unique app_label isolated in that case.
             app_label = str(uuid.uuid4()) + "_database_table"
-            # app_label = 'netbox_custom_objects'
 
         model_name = self.get_table_model_name(self.pk)
 
@@ -254,7 +234,7 @@ class CustomObjectType(NetBoxModel):
             )
         ]
 
-        apps = GeneratedModelAppsProxy(manytomany_models, app_label)
+        apps = AppsProxy(manytomany_models, app_label)
         meta = type(
             "Meta",
             (),
@@ -271,21 +251,14 @@ class CustomObjectType(NetBoxModel):
         )
 
         def __str__(self):
-            """
-            When the model instance is rendered to a string, then we want to return the
-            primary field value in human readable format.
-            """
-
-            # TODO: Primary field logic
-            field = self._field_objects.get(self._primary_field_id, None)
-
-            if not field:
+            # Find the field with primary=True and return that field's "name" as the name of the object
+            primary_field = self._field_objects.get(self._primary_field_id, None)
+            primary_field_value = None
+            if primary_field:
+                primary_field_value = getattr(self, primary_field["name"])
+            if not primary_field_value:
                 return f"unnamed row {self.id}"
-
-            return str(getattr(self, field["name"])) or str(self.id)
-            # return field["type"].get_human_readable_value(
-            #     getattr(self, field["name"]), field
-            # )
+            return str(primary_field_value) or str(self.id)
 
         def get_absolute_url(self):
             return reverse('plugins:netbox_custom_objects:customobject', kwargs={'pk': self.pk, 'custom_object_type': self.custom_object_type.name.lower()})
@@ -885,6 +858,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         return value
 
     def to_form_field(self, set_initial=True, enforce_required=True, enforce_visibility=True, for_csv_import=False):
+        # TODO: Move all this logic to field_types.py get_form_field methods
         """
         Return a form field suitable for setting a CustomField's value for an object.
 
@@ -978,6 +952,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         # Object
         elif self.type == CustomFieldTypeChoices.TYPE_OBJECT:
             model = self.related_object_type.model_class()
+            if not model:
+                custom_object_model_name = self.related_object_type.name
+                custom_object_type_id = custom_object_model_name.replace('table', '').replace('model', '')
+                custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
+                model = custom_object_type.get_model()
             field_class = CSVModelChoiceField if for_csv_import else DynamicModelChoiceField
             kwargs = {
                 'queryset': model.objects.all(),
@@ -1031,6 +1010,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         return field
 
     def to_filter(self, lookup_expr=None):
+        # TODO: Move all this logic to field_types.py get_filterform_field methods
         """
         Return a django_filters Filter instance suitable for this field type.
 
@@ -1264,117 +1244,6 @@ class CustomObjectRelation(models.Model):
     def instance(self):
         model_class = self.field.related_object_type.model_class()
         return model_class.objects.get(pk=self.object_id)
-
-
-class GeneratedModelAppsProxy:
-    """
-    A proxy class to the default apps registry. This class is needed to make our dynamic
-    models available in the options when the relation tree is built, without polluting
-    the global apps registry, meant to keep only the static models that do not change.
-
-    This registry, created as needed by a generated table model, holds references to
-    dynamically generated models. It's discarded after the operation, ensuring it only
-    exists when necessary.
-    """
-
-    def __init__(self, dynamic_models=None, app_label=None):
-        self.dynamic_models = dynamic_models or {}
-        self.dynamic_app_label = app_label or "database_table"
-
-    def get_models(self, *args, **kwargs):
-        """
-        Called by django and must contain ALL the models that have been generated
-        and connected together as django will loop over every model in this list
-        and set cached properties on each. These cached django properties are then
-        used to when looking up fields, so they must include every connected model
-        that could be involved in queries and not just a sub-set of them.
-        """
-
-        return apps.get_models(*args, **kwargs) + list(self.dynamic_models.values())
-
-    def register_model(self, app_label, model):
-
-        # Use the RLock defined in the apps registry to prevent any thead from
-        # accessing the apps registry concurrently because it's not thread safe.
-        with self._lock:
-            model_name = model._meta.model_name.lower()
-            if not hasattr(model, "_generated_table_model"):
-                # it must be an auto created intermediary m2m model, so use a list of
-                # dynamic models we can later use to resolve the pending operations.
-                if not hasattr(self, "dynamic_models"):
-                    self.dynamic_models = model._meta.auto_created.dynamic_models
-
-            self.dynamic_models[model_name] = model
-            self.do_all_pending_operations()
-            self._clear_dynamic_models_cache()
-
-            # The `all_models` is a defaultdict, and will therefore have a residual
-            # empty key in with the app label because the app label is uniquely
-            # generated. This will make sure it's cleared.
-            try:
-                del apps.all_models[self.dynamic_app_label]
-            except KeyError:
-                pass
-
-    def _clear_dynamic_models_cache(self):
-        for model in self.dynamic_models.values():
-            model._meta._expire_cache()
-
-    def do_all_pending_operations(self):
-        """
-        This method will perform all the pending operations for the generated models.
-        It will keep performing the pending operations until there are no more pending
-        operations left. It will perform a maximum of `max_iterations` to prevent
-        infinite loops and because one pending operation can trigger another pending
-        operation for another model. The number of 3 has been chosen because it's
-        the number observed to be enough to resolve all pending operations in the
-        tests.
-        """
-
-        max_iterations = 3
-        for _ in range(max_iterations):
-            # Only do pending operations of models with the same app label because
-            # if we don't do that, and the same model is generated at the same time
-            # there can be conflicts because the `model_name` will be the same. The
-            # `app_label` is uniquely generated to avoid `model_name` conflicts.
-            pending_operations_for_app_label = [
-                (app_label, model_name)
-                for app_label, model_name in list(apps._pending_operations.keys())
-                if app_label == self.dynamic_app_label
-            ]
-            for _, model_name in list(pending_operations_for_app_label):
-                model = self.dynamic_models[model_name]
-                apps.do_pending_operations(model)
-
-            if not pending_operations_for_app_label:
-                break
-
-    def __getattr__(self, attr):
-        return getattr(apps, attr)
-
-
-# def patch_meta_get_field(_meta):
-#     original_get_field = _meta.get_field
-#
-#     def get_field(self, field_name, *args, **kwargs):
-#         try:
-#             return original_get_field(field_name, *args, **kwargs)
-#         except DjangoFieldDoesNotExist as exc:
-#             try:
-#                 field_object = self.model.get_field_object(
-#                     field_name, include_trash=True
-#                 )
-#
-#             except ValueError:
-#                 raise exc
-#
-#             field_type = field_object["type"]
-#             field_type.after_model_generation(
-#                 field_object["field"], self.model, field_object["name"]
-#             )
-#             return original_get_field(field_name, *args, **kwargs)
-#
-#     _meta.get_field = MethodType(get_field, _meta)
 
 
 class CustomObjectObjectTypeManager(ObjectTypeManager):

@@ -50,7 +50,7 @@ class CustomObjectTableMixin(TableMixin):
             try:
                 attrs[field.name] = field_type.get_table_column_field(field)
             except NotImplementedError:
-                print(f'table mixin: {field.name} field is not supported')
+                print(f'table mixin: {field.name} field is not implemented; using a default column')
 
         self.table = type(
             f"{data.model._meta.object_name}Table",

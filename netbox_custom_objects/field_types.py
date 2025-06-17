@@ -1,4 +1,5 @@
 import django_tables2 as tables
+import uuid
 
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
@@ -16,6 +17,7 @@ from extras.choices import CustomFieldTypeChoices
 from utilities.forms.fields import DynamicModelMultipleChoiceField
 from utilities.forms.widgets import DatePicker, DateTimePicker
 from netbox_custom_objects.constants import APP_LABEL
+from netbox_custom_objects.utilities import AppsProxy
 
 
 class FieldType:
@@ -48,7 +50,7 @@ class FieldType:
 class TextFieldType(FieldType):
 
     def get_model_field(self, field, **kwargs):
-        kwargs.update({'default': field.default})
+        kwargs.update({'default': field.default, 'unique': field.unique})
         return models.CharField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, required, label, **kwargs):
@@ -84,7 +86,7 @@ class TextFieldType(FieldType):
 
 class LongTextFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        kwargs.update({'default': field.default})
+        kwargs.update({'default': field.default, 'unique': field.unique})
         return models.TextField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, required, label, **kwargs):
@@ -102,7 +104,7 @@ class IntegerFieldType(FieldType):
 
     def get_model_field(self, field, **kwargs):
         # TODO: handle all args for IntegerField
-        kwargs.update({'default': field.default})
+        kwargs.update({'default': field.default, 'unique': field.unique})
         return models.IntegerField(null=True, blank=True, **kwargs)
 
     def get_filterform_field(self, field, **kwargs):
@@ -117,7 +119,7 @@ class IntegerFieldType(FieldType):
 
 class DecimalFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        kwargs.update({'default': field.default})
+        kwargs.update({'default': field.default, 'unique': field.unique})
         return models.DecimalField(
             null=True,
             blank=True,
@@ -137,7 +139,7 @@ class DecimalFieldType(FieldType):
 
 class BooleanFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        kwargs.update({'default': field.default})
+        kwargs.update({'default': field.default, 'unique': field.unique})
         return models.BooleanField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, **kwargs):
@@ -146,7 +148,7 @@ class BooleanFieldType(FieldType):
 
 class DateFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        kwargs.update({'default': field.default})
+        kwargs.update({'default': field.default, 'unique': field.unique})
         return models.DateField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, **kwargs):
@@ -165,7 +167,7 @@ class DateFieldType(FieldType):
 
 class DateTimeFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        kwargs.update({'default': field.default})
+        kwargs.update({'default': field.default, 'unique': field.unique})
         return models.DateTimeField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, **kwargs):
@@ -185,7 +187,7 @@ class DateTimeFieldType(FieldType):
 
 class URLFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        kwargs.update({'default': field.default})
+        kwargs.update({'default': field.default, 'unique': field.unique})
         return models.URLField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, **kwargs):
@@ -197,7 +199,7 @@ class URLFieldType(FieldType):
 
 class JSONFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        kwargs.update({'default': field.default})
+        kwargs.update({'default': field.default, 'unique': field.unique})
         return models.JSONField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, **kwargs):
@@ -209,7 +211,7 @@ class JSONFieldType(FieldType):
 
 class SelectFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        kwargs.update({'default': field.default})
+        kwargs.update({'default': field.default, 'unique': field.unique})
         return models.CharField(
             max_length=100,
             choices=field.choices,
@@ -224,7 +226,7 @@ class SelectFieldType(FieldType):
 
 class MultiSelectFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        kwargs.update({'default': field.default})
+        kwargs.update({'default': field.default, 'unique': field.unique})
         return ArrayField(
             base_field=models.CharField(max_length=50, choices=field.choices),
             null=True,
@@ -250,7 +252,7 @@ class ObjectFieldType(FieldType):
         # content_type = ContentType.objects.get_for_model(instance)
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
         to_model = content_type.model
-        kwargs.update({'default': field.default})
+        kwargs.update({'default': field.default, 'unique': field.unique})
 
         # TODO: Handle pointing to object of same type (avoid infinite loop)
         if content_type.app_label == APP_LABEL:
@@ -265,8 +267,8 @@ class ObjectFieldType(FieldType):
         f = models.ForeignKey(model, null=True, blank=True, on_delete=models.CASCADE, **kwargs)
         return f
 
-    def get_form_field(self, field, required, label, **kwargs):
-        return field.to_form_field()
+    # def get_form_field(self, field, required, label, **kwargs):
+    #     return field.to_form_field()
 
     def get_filterform_field(self, field, **kwargs):
         return None
@@ -447,11 +449,20 @@ class MultiObjectFieldType(FieldType):
         """
         Creates a through model with deferred model references
         """
-        class Meta:
-            db_table = field.through_table_name
-            app_label = APP_LABEL
-            managed = True
-            unique_together = ('source', 'target')
+        # TODO: Register through model in AppsProxy to avoid "model was already registered" warnings
+        # app_label = str(uuid.uuid4()) + "_database_table"
+        # apps = AppsProxy(dynamic_models=None, app_label=app_label)
+        meta = type(
+            "Meta",
+            (),
+            {
+                "db_table": field.through_table_name,
+                "app_label": APP_LABEL,
+                "apps": apps,
+                "managed": True,
+                "unique_together": ('source', 'target'),
+            }
+        )
 
         # Check if this is a self-referential M2M
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
@@ -463,7 +474,7 @@ class MultiObjectFieldType(FieldType):
 
         attrs = {
             '__module__': 'netbox_custom_objects.models',
-            'Meta': Meta,
+            'Meta': meta,
             'id': models.AutoField(primary_key=True),
             'source': models.ForeignKey(
                 'self' if is_self_referential else (model or 'netbox_custom_objects.CustomObject'),
@@ -489,7 +500,7 @@ class MultiObjectFieldType(FieldType):
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
         custom_object_type_id = content_type.model.replace('table', '').replace('model', '')
         # TODO: Default does not auto-populate, to new or existing objects (should it?)
-        kwargs.update({'default': field.default})
+        kwargs.update({'default': field.default, 'unique': field.unique})
 
         is_self_referential = (
             content_type.app_label == APP_LABEL and
@@ -515,8 +526,8 @@ class MultiObjectFieldType(FieldType):
         
         return m2m_field
 
-    def get_form_field(self, field, **kwargs):
-        return field.to_form_field()
+    # def get_form_field(self, field, **kwargs):
+    #     return field.to_form_field()
 
     def get_filterform_field(self, field, **kwargs):
         return None
@@ -591,6 +602,10 @@ class MultiObjectFieldType(FieldType):
         
         # Register the model with Django's app registry
         apps = model._meta.apps
+
+        # if app_label is None:
+        #     app_label = str(uuid.uuid4()) + "_database_table"
+        # apps = AppsProxy(dynamic_models=None, app_label=app_label)
         try:
             through_model = apps.get_model(APP_LABEL, instance.through_model_name)
         except LookupError:
