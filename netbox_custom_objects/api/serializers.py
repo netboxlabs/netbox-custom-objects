@@ -8,7 +8,7 @@ from extras.choices import CustomFieldTypeChoices
 from extras.graphql.types import CustomFieldType
 from netbox.api.serializers import NetBoxModelSerializer
 # from netbox_service_mappings.choices import MappingFieldTypeChoices
-from netbox_custom_objects.models import CustomObject, CustomObjectType, CustomObjectTypeField, CustomObjectRelation
+from netbox_custom_objects.models import CustomObject, CustomObjectType, CustomObjectTypeField
 from utilities.api import get_serializer_for_model
 
 __all__ = (
@@ -117,25 +117,8 @@ class CustomObjectSerializer(NetBoxModelSerializer):
         return super().validate(attrs)
 
     def update_relation_fields(self, instance):
-        for field_name, value in self.relation_fields.items():
-            field = instance.custom_object_type.fields.get(name=field_name)
-            if field.many:
-                CustomObjectRelation.objects.filter(custom_object=instance, field=field).exclude(object_id__in=value).delete()
-                for object_id in value:
-                    resolved_object = field.model_class.objects.get(pk=object_id)
-                    relation, _ = CustomObjectRelation.objects.get_or_create(
-                        custom_object=instance,
-                        field=field,
-                        object_id=resolved_object.id,
-                    )
-            else:
-                CustomObjectRelation.objects.filter(custom_object=instance, field=field).exclude(object_id=value).delete()
-                resolved_object = field.model_class.objects.get(pk=value)
-                relation, _ = CustomObjectRelation.objects.get_or_create(
-                    custom_object=instance,
-                    field=field,
-                    object_id=resolved_object.id,
-                )
+        # TODO: Implement this
+        pass
 
     def create(self, validated_data):
         # instance = super().create(validated_data)
@@ -185,36 +168,6 @@ class CustomObjectSerializer(NetBoxModelSerializer):
         #         continue
         #     result[field_name] = obj.data.get(field_name)
         return result
-
-
-class CustomObjectRelationSerializer(NetBoxModelSerializer):
-    url = serializers.HyperlinkedIdentityField(
-        view_name='plugins-api:netbox_custom_objects-api:customobjectrelation-detail'
-    )
-    instance = serializers.SerializerMethodField(
-        read_only=True
-    )
-    field = CustomObjectTypeFieldSerializer(
-        read_only=True
-    )
-    custom_object = CustomObjectSerializer(
-        read_only=True,
-        nested=True,
-    )
-
-    class Meta:
-        model = CustomObjectRelation
-        fields = ('custom_object', 'field', 'object_id', 'instance',)
-
-    def get_field(self, obj):
-        context = {'request': self.context['request']}
-        return CustomObjectTypeFieldSerializer(obj.field, context=context).data
-
-    def get_instance(self, obj):
-        if obj.instance:
-            serializer = get_serializer_for_model(obj.instance)
-            context = {'request': self.context['request']}
-            return serializer(obj.instance, nested=True, context=context).data
 
 
 def get_serializer_class(model):

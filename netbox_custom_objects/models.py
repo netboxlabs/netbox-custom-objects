@@ -1235,17 +1235,6 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         super().delete(*args, **kwargs)
 
 
-class CustomObjectRelation(models.Model):
-    custom_object = models.ForeignKey(CustomObject, on_delete=models.CASCADE)
-    field = models.ForeignKey(CustomObjectTypeField, on_delete=models.CASCADE, related_name="relations")
-    object_id = models.PositiveIntegerField(db_index=True)
-
-    @property
-    def instance(self):
-        model_class = self.field.related_object_type.model_class()
-        return model_class.objects.get(pk=self.object_id)
-
-
 class CustomObjectObjectTypeManager(ObjectTypeManager):
 
     def public(self):
