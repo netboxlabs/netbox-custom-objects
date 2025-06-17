@@ -145,6 +145,9 @@ class LongTextFieldType(FieldType):
             required=False,
         )
 
+    def render_table_column(self, value):
+        return render_markdown(value)
+
 
 class IntegerFieldType(FieldType):
 
@@ -336,6 +339,9 @@ class MultiSelectFieldType(FieldType):
     #     return forms.MultipleChoiceField(
     #         choices=field.choices, required=required, label=label, **kwargs
     #     )
+
+    def render_table_column(self, value):
+        return ", ".join(value)
 
     def get_bulk_edit_form_field(self, field, **kwargs):
         return forms.MultipleChoiceField(choices=field.choices, required=required, label=label, **kwargs)

@@ -51,6 +51,12 @@ class CustomObjectTableMixin(TableMixin):
                 attrs[field.name] = field_type.get_table_column_field(field)
             except NotImplementedError:
                 print(f'table mixin: {field.name} field is not implemented; using a default column')
+            # Define a method "render_table_column" method on any FieldType to customize output
+            # See https://django-tables2.readthedocs.io/en/latest/pages/custom-data.html#table-render-foo-methods
+            try:
+                attrs[f'render_{field.name}'] = field_type.render_table_column
+            except AttributeError:
+                pass
 
         self.table = type(
             f"{data.model._meta.object_name}Table",
