@@ -6,12 +6,12 @@ from django.db import migrations
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('netbox_custom_objects', '0001_initial'),
+        ("netbox_custom_objects", "0001_initial"),
     ]
 
     operations = [
         migrations.AlterModelOptions(
-            name='customobjecttype',
-            options={'ordering': ('name',)},
+            name="customobjecttype",
+            options={"ordering": ("name",)},
         ),
     ]

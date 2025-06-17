@@ -6,13 +6,16 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('netbox_custom_objects', '0003_customobjectobjecttype_remove_customobjecttype_slug_and_more'),
+        (
+            "netbox_custom_objects",
+            "0003_customobjectobjecttype_remove_customobjecttype_slug_and_more",
+        ),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='customobjecttypefield',
-            name='primary',
+            model_name="customobjecttypefield",
+            name="primary",
             field=models.BooleanField(default=False),
         ),
     ]
