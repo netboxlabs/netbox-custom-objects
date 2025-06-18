@@ -521,6 +521,10 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     )
     comments = models.TextField(verbose_name=_("comments"), blank=True)
 
+    clone_fields = (
+        'custom_object_type',
+    )
+
     # For non-object fields, other field attribs (such as choices, length, required) should be added here as a
     # superset, or stored in a JSON field
     # options = models.JSONField(blank=True, default=dict)
