@@ -242,8 +242,6 @@ class CustomObjectView(generic.ObjectView):
 
 @register_model_view(CustomObject, "edit")
 class CustomObjectEditView(generic.ObjectEditView):
-    # queryset = CustomObject.objects.all()
-    # form = forms.CustomObjectForm
     template_name = "netbox_custom_objects/customobject_edit.html"
     form = None
     queryset = None
