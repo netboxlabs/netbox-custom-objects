@@ -9,9 +9,9 @@ from netbox.views import generic
 from netbox.views.generic.mixins import TableMixin
 from utilities.views import register_model_view
 
-from . import forms, tables, field_types
 from netbox_custom_objects.tables import CustomObjectTable
-from netbox.filtersets import BaseFilterSet
+
+from . import field_types, forms, tables
 from .models import CustomObject, CustomObjectType, CustomObjectTypeField
 
 
@@ -48,11 +48,13 @@ class CustomObjectTableMixin(TableMixin):
             try:
                 attrs[field.name] = field_type.get_table_column_field(field)
             except NotImplementedError:
-                print(f'table mixin: {field.name} field is not implemented; using a default column')
+                print(
+                    f"table mixin: {field.name} field is not implemented; using a default column"
+                )
             # Define a method "render_table_column" method on any FieldType to customize output
             # See https://django-tables2.readthedocs.io/en/latest/pages/custom-data.html#table-render-foo-methods
             try:
-                attrs[f'render_{field.name}'] = field_type.render_table_column
+                attrs[f"render_{field.name}"] = field_type.render_table_column
             except AttributeError:
                 pass
 
@@ -232,9 +234,9 @@ class CustomObjectView(generic.ObjectView):
         return get_object_or_404(model.objects.all(), **self.kwargs)
 
     def get_extra_context(self, request, instance):
-        fields = instance.custom_object_type.fields.all().order_by('weight')
+        fields = instance.custom_object_type.fields.all().order_by("weight")
         return {
-            'fields': fields,
+            "fields": fields,
         }
 
 

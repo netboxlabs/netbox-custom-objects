@@ -5,9 +5,8 @@ from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from rest_framework.reverse import reverse
 
-from extras.choices import CustomFieldTypeChoices
-from netbox.api.serializers import NetBoxModelSerializer
-from netbox_custom_objects.models import CustomObject, CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.models import (CustomObject, CustomObjectType,
+                                          CustomObjectTypeField)
 
 __all__ = (
     "CustomObjectTypeSerializer",

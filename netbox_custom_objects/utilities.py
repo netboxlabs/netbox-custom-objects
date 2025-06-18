@@ -2,7 +2,6 @@ from django.apps import apps
 
 from netbox_custom_objects.constants import APP_LABEL
 
-
 __all__ = (
     "AppsProxy",
     "get_viewname",

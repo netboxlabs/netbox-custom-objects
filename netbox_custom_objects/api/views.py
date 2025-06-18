@@ -2,7 +2,9 @@ from django.http import Http404
 from rest_framework.routers import APIRootView
 from rest_framework.viewsets import ModelViewSet
 
-from netbox_custom_objects.models import CustomObject, CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.models import (CustomObject, CustomObjectType,
+                                          CustomObjectTypeField)
+
 from . import serializers
 
 

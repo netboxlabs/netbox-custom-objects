@@ -1,26 +1,26 @@
 import django_tables2 as tables
-
+from django import forms
+from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
 from django.core.validators import RegexValidator, ValidationError
 from django.db import models
 from django.db.models.fields.related import ManyToManyDescriptor
 from django.db.models.manager import Manager
-from django import forms
-from django.apps import apps
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
-from rest_framework import serializers
-
 from extras.choices import CustomFieldTypeChoices, CustomFieldUIEditableChoices
+from rest_framework import serializers
+from utilities.forms.fields import (CSVChoiceField, CSVMultipleChoiceField,
+                                    DynamicChoiceField,
+                                    DynamicMultipleChoiceField, JSONField,
+                                    LaxURLField)
 from utilities.forms.utils import add_blank_choice
-from utilities.forms.widgets import APISelect, APISelectMultiple, DatePicker, DateTimePicker
-from utilities.forms.fields import (
-    CSVChoiceField, CSVMultipleChoiceField, DynamicChoiceField,
-    DynamicMultipleChoiceField, JSONField, LaxURLField,
-)
+from utilities.forms.widgets import (APISelect, APISelectMultiple, DatePicker,
+                                     DateTimePicker)
 from utilities.templatetags.builtins.filters import render_markdown
+
 from netbox_custom_objects.constants import APP_LABEL
 
 
@@ -74,12 +74,16 @@ class TextFieldType(FieldType):
             validators = [
                 RegexValidator(
                     regex=field.validation_regex,
-                    message=mark_safe(_("Values must match this regex: <code>{regex}</code>").format(
-                        regex=escape(field.validation_regex)
-                    ))
+                    message=mark_safe(
+                        _("Values must match this regex: <code>{regex}</code>").format(
+                            regex=escape(field.validation_regex)
+                        )
+                    ),
                 )
             ]
-        return forms.CharField(required=field.required, initial=field.default, validators=validators)
+        return forms.CharField(
+            required=field.required, initial=field.default, validators=validators
+        )
 
     def get_serializer_field(self, field, **kwargs):
         required = kwargs.get("required", False)
@@ -121,12 +125,19 @@ class LongTextFieldType(FieldType):
             validators = [
                 RegexValidator(
                     regex=field.validation_regex,
-                    message=mark_safe(_("Values must match this regex: <code>{regex}</code>").format(
-                        regex=escape(field.validation_regex)
-                    ))
+                    message=mark_safe(
+                        _("Values must match this regex: <code>{regex}</code>").format(
+                            regex=escape(field.validation_regex)
+                        )
+                    ),
                 )
             ]
-        return forms.CharField(widget=widget, required=field.required, initial=field.default, validators=validators)
+        return forms.CharField(
+            widget=widget,
+            required=field.required,
+            initial=field.default,
+            validators=validators,
+        )
 
     def get_bulk_edit_form_field(self, field, **kwargs):
         return forms.CharField(
@@ -157,8 +168,9 @@ class IntegerFieldType(FieldType):
             required=field.required,
             initial=field.default,
             min_value=field.validation_minimum,
-            max_value=field.validation_maximum
+            max_value=field.validation_maximum,
         )
+
 
 class DecimalFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
@@ -178,7 +190,7 @@ class DecimalFieldType(FieldType):
             max_digits=12,
             decimal_places=4,
             min_value=field.validation_minimum,
-            max_value=field.validation_maximum
+            max_value=field.validation_maximum,
         )
 
 
@@ -189,12 +201,14 @@ class BooleanFieldType(FieldType):
 
     def get_form_field(self, field, **kwargs):
         choices = (
-            (None, '---------'),
-            (True, _('True')),
-            (False, _('False')),
+            (None, "---------"),
+            (True, _("True")),
+            (False, _("False")),
         )
         return forms.NullBooleanField(
-            required=field.required, initial=field.default, widget=forms.Select(choices=choices)
+            required=field.required,
+            initial=field.default,
+            widget=forms.Select(choices=choices),
         )
 
 
@@ -204,7 +218,9 @@ class DateFieldType(FieldType):
         return models.DateField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, **kwargs):
-        return forms.DateField(required=field.required, initial=field.default, widget=DatePicker())
+        return forms.DateField(
+            required=field.required, initial=field.default, widget=DatePicker()
+        )
 
     # def get_bulk_edit_form_field(self, field, **kwargs):
     #     return forms.DateField(
@@ -219,7 +235,9 @@ class DateTimeFieldType(FieldType):
         return models.DateTimeField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, **kwargs):
-        return forms.DateTimeField(required=field.required, initial=field.default, widget=DateTimePicker())
+        return forms.DateTimeField(
+            required=field.required, initial=field.default, widget=DateTimePicker()
+        )
 
     # def get_bulk_edit_form_field(self, field, **kwargs):
     #     return forms.DateTimeField(
@@ -234,8 +252,9 @@ class URLFieldType(FieldType):
         return models.URLField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, **kwargs):
-        return LaxURLField(assume_scheme='https', required=field.required, initial=field.default)
-
+        return LaxURLField(
+            assume_scheme="https", required=field.required, initial=field.default
+        )
 
 
 class JSONFieldType(FieldType):
@@ -244,7 +263,10 @@ class JSONFieldType(FieldType):
         return models.JSONField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, **kwargs):
-        return JSONField(required=field.required, initial=json.dumps(field.default) if field.default else None)
+        return JSONField(
+            required=field.required,
+            initial=json.dumps(field.default) if field.default else None,
+        )
 
 
 class SelectFieldType(FieldType):
@@ -272,7 +294,9 @@ class SelectFieldType(FieldType):
 
         if for_csv_import:
             field_class = CSVChoiceField
-            return field_class(choices=choices, required=field.required, initial=initial)
+            return field_class(
+                choices=choices, required=field.required, initial=initial
+            )
         else:
             field_class = DynamicChoiceField
             widget_class = APISelect
@@ -280,7 +304,9 @@ class SelectFieldType(FieldType):
                 choices=choices,
                 required=field.required,
                 initial=initial,
-                widget=widget_class(api_url=f'/api/extras/custom-field-choice-sets/{field.choice_set.pk}/choices/')
+                widget=widget_class(
+                    api_url=f"/api/extras/custom-field-choice-sets/{field.choice_set.pk}/choices/"
+                ),
             )
 
 
@@ -308,7 +334,9 @@ class MultiSelectFieldType(FieldType):
 
         if for_csv_import:
             field_class = CSVMultipleChoiceField
-            return field_class(choices=choices, required=field.required, initial=initial)
+            return field_class(
+                choices=choices, required=field.required, initial=initial
+            )
         else:
             field_class = DynamicMultipleChoiceField
             widget_class = APISelectMultiple
@@ -316,7 +344,9 @@ class MultiSelectFieldType(FieldType):
                 choices=choices,
                 required=field.required,
                 initial=initial,
-                widget=widget_class(api_url=f'/api/extras/custom-field-choice-sets/{field.choice_set.pk}/choices/')
+                widget=widget_class(
+                    api_url=f"/api/extras/custom-field-choice-sets/{field.choice_set.pk}/choices/"
+                ),
             )
 
     # def get_form_field(self, field, required, label, **kwargs):
