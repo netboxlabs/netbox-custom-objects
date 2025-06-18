@@ -11,9 +11,7 @@ class CustomObjectSchema(PluginTemplateExtension):
     models = ["netbox_custom_objects.customobjecttype"]
 
     def full_width_page(self):
-        if not (instance := self.context["object"]):
-            return ""
-
+        # TODO: Implement this
         return ""
 
 
@@ -21,9 +19,7 @@ class MappingElements(PluginTemplateExtension):
     models = ["netbox_custom_objects.customobject"]
 
     def full_width_page(self):
-        if not (instance := self.context["object"]):
-            return ""
-
+        # TODO: Implement this
         return ""
 
 
