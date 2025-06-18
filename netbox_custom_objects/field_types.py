@@ -1,14 +1,26 @@
 import django_tables2 as tables
-from django import forms
-from django.apps import apps
+
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
+from django.core.validators import RegexValidator, ValidationError
 from django.db import models
 from django.db.models.fields.related import ManyToManyDescriptor
 from django.db.models.manager import Manager
-from extras.choices import CustomFieldTypeChoices
+from django import forms
+from django.apps import apps
+from django.utils.html import escape
+from django.utils.safestring import mark_safe
+from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
+from extras.choices import CustomFieldTypeChoices, CustomFieldUIEditableChoices
+from utilities.forms.utils import add_blank_choice
+from utilities.forms.widgets import APISelect, APISelectMultiple, DatePicker, DateTimePicker
+from utilities.forms.fields import (
+    CSVChoiceField, CSVMultipleChoiceField, DynamicChoiceField,
+    DynamicMultipleChoiceField, JSONField, LaxURLField,
+)
+from utilities.templatetags.builtins.filters import render_markdown
 from netbox_custom_objects.constants import APP_LABEL
 
 
@@ -23,8 +35,21 @@ class FieldType:
     def get_filterform_field(self, field, **kwargs):
         raise NotImplementedError
 
-    def get_form_field(self, field, required, label, **kwargs):
+    def get_form_field(self, field, **kwargs):
         raise NotImplementedError
+
+    def get_annotated_form_field(self, field, enforce_visibility=True, **kwargs):
+        form_field = self.get_form_field(field, **kwargs)
+        form_field.model = field
+        form_field.label = str(field)
+        if field.description:
+            form_field.help_text = render_markdown(field.description)
+
+        # Annotate read-only fields
+        if enforce_visibility and field.ui_editable != CustomFieldUIEditableChoices.YES:
+            form_field.disabled = True
+
+        return form_field
 
     def get_bulk_edit_form_field(self, field, **kwargs):
         raise NotImplementedError
@@ -43,8 +68,18 @@ class TextFieldType(FieldType):
         kwargs.update({"default": field.default, "unique": field.unique})
         return models.CharField(null=True, blank=True, **kwargs)
 
-    def get_form_field(self, field, required, label, **kwargs):
-        return field.to_form_field()
+    def get_form_field(self, field, **kwargs):
+        validators = []
+        if field.validation_regex:
+            validators = [
+                RegexValidator(
+                    regex=field.validation_regex,
+                    message=mark_safe(_("Values must match this regex: <code>{regex}</code>").format(
+                        regex=escape(field.validation_regex)
+                    ))
+                )
+            ]
+        return forms.CharField(required=field.required, initial=field.default, validators=validators)
 
     def get_serializer_field(self, field, **kwargs):
         required = kwargs.get("required", False)
@@ -80,7 +115,18 @@ class LongTextFieldType(FieldType):
         return models.TextField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, required, label, **kwargs):
-        return field.to_form_field()
+        widget = forms.Textarea
+        validators = None
+        if field.validation_regex:
+            validators = [
+                RegexValidator(
+                    regex=field.validation_regex,
+                    message=mark_safe(_("Values must match this regex: <code>{regex}</code>").format(
+                        regex=escape(field.validation_regex)
+                    ))
+                )
+            ]
+        return forms.CharField(widget=widget, required=field.required, initial=field.default, validators=validators)
 
     def get_bulk_edit_form_field(self, field, **kwargs):
         return forms.CharField(
@@ -88,6 +134,9 @@ class LongTextFieldType(FieldType):
             widget=forms.Textarea(),
             required=False,
         )
+
+    def render_table_column(self, value):
+        return render_markdown(value)
 
 
 class IntegerFieldType(FieldType):
@@ -104,8 +153,12 @@ class IntegerFieldType(FieldType):
         )
 
     def get_form_field(self, field, **kwargs):
-        return field.to_form_field()
-
+        return forms.IntegerField(
+            required=field.required,
+            initial=field.default,
+            min_value=field.validation_minimum,
+            max_value=field.validation_maximum
+        )
 
 class DecimalFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
@@ -119,12 +172,14 @@ class DecimalFieldType(FieldType):
         )
 
     def get_form_field(self, field, **kwargs):
-        return field.to_form_field()
-        # return forms.DecimalField(
-        #     max_digits=8,
-        #     decimal_places=2,
-        #     required=False,
-        # )
+        return forms.DecimalField(
+            required=field.required,
+            initial=field.default,
+            max_digits=12,
+            decimal_places=4,
+            min_value=field.validation_minimum,
+            max_value=field.validation_maximum
+        )
 
 
 class BooleanFieldType(FieldType):
@@ -133,7 +188,14 @@ class BooleanFieldType(FieldType):
         return models.BooleanField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, **kwargs):
-        return field.to_form_field()
+        choices = (
+            (None, '---------'),
+            (True, _('True')),
+            (False, _('False')),
+        )
+        return forms.NullBooleanField(
+            required=field.required, initial=field.default, widget=forms.Select(choices=choices)
+        )
 
 
 class DateFieldType(FieldType):
@@ -142,7 +204,13 @@ class DateFieldType(FieldType):
         return models.DateField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, **kwargs):
-        return field.to_form_field()
+        return forms.DateField(required=field.required, initial=field.default, widget=DatePicker())
+
+    # def get_bulk_edit_form_field(self, field, **kwargs):
+    #     return forms.DateField(
+    #         required=False,
+    #         widget=DatePicker()
+    #     )
 
 
 class DateTimeFieldType(FieldType):
@@ -151,7 +219,13 @@ class DateTimeFieldType(FieldType):
         return models.DateTimeField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, **kwargs):
-        return field.to_form_field()
+        return forms.DateTimeField(required=field.required, initial=field.default, widget=DateTimePicker())
+
+    # def get_bulk_edit_form_field(self, field, **kwargs):
+    #     return forms.DateTimeField(
+    #         required=False,
+    #         widget=DateTimePicker()
+    #     )
 
 
 class URLFieldType(FieldType):
@@ -160,7 +234,8 @@ class URLFieldType(FieldType):
         return models.URLField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, **kwargs):
-        return field.to_form_field()
+        return LaxURLField(assume_scheme='https', required=field.required, initial=field.default)
+
 
 
 class JSONFieldType(FieldType):
@@ -169,7 +244,7 @@ class JSONFieldType(FieldType):
         return models.JSONField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, **kwargs):
-        return field.to_form_field()
+        return JSONField(required=field.required, initial=json.dumps(field.default) if field.default else None)
 
 
 class SelectFieldType(FieldType):
@@ -183,8 +258,30 @@ class SelectFieldType(FieldType):
             **kwargs,
         )
 
-    def get_form_field(self, field, **kwargs):
-        return field.to_form_field()
+    def get_form_field(self, field, for_csv_import=False, **kwargs):
+        choices = field.choice_set.choices
+        default_choice = field.default if field.default in field.choices else None
+
+        if not field.required or default_choice is None:
+            choices = add_blank_choice(choices)
+
+        # Set the initial value to the first available choice (if any)
+        initial = field.default
+        if default_choice:
+            initial = default_choice
+
+        if for_csv_import:
+            field_class = CSVChoiceField
+            return field_class(choices=choices, required=field.required, initial=initial)
+        else:
+            field_class = DynamicChoiceField
+            widget_class = APISelect
+            return field_class(
+                choices=choices,
+                required=field.required,
+                initial=initial,
+                widget=widget_class(api_url=f'/api/extras/custom-field-choice-sets/{field.choice_set.pk}/choices/')
+            )
 
 
 class MultiSelectFieldType(FieldType):
@@ -197,8 +294,38 @@ class MultiSelectFieldType(FieldType):
             **kwargs,
         )
 
-    def get_form_field(self, field, **kwargs):
-        return field.to_form_field()
+    def get_form_field(self, field, for_csv_import=False, **kwargs):
+        choices = field.choice_set.choices
+        default_choice = field.default if field.default in field.choices else None
+
+        if not field.required or default_choice is None:
+            choices = add_blank_choice(choices)
+
+        # Set the initial value to the first available choice (if any)
+        initial = field.default
+        if default_choice:
+            initial = default_choice
+
+        if for_csv_import:
+            field_class = CSVMultipleChoiceField
+            return field_class(choices=choices, required=field.required, initial=initial)
+        else:
+            field_class = DynamicMultipleChoiceField
+            widget_class = APISelectMultiple
+            return field_class(
+                choices=choices,
+                required=field.required,
+                initial=initial,
+                widget=widget_class(api_url=f'/api/extras/custom-field-choice-sets/{field.choice_set.pk}/choices/')
+            )
+
+    # def get_form_field(self, field, required, label, **kwargs):
+    #     return forms.MultipleChoiceField(
+    #         choices=field.choices, required=required, label=label, **kwargs
+    #     )
+
+    def render_table_column(self, value):
+        return ", ".join(value)
 
     def get_bulk_edit_form_field(self, field, **kwargs):
         return forms.MultipleChoiceField(
@@ -229,6 +356,29 @@ class ObjectFieldType(FieldType):
             model, null=True, blank=True, on_delete=models.CASCADE, **kwargs
         )
         return f
+
+    # TODO: This logic is migrated from to_form_field, but currently does not work with custom objects as
+    #  the related_object_type (selected value is not recognized as an isinstance of the related model object)
+    # def get_form_field(self, field, for_csv_import=False, **kwargs):
+    #     # return field.to_form_field()
+    #     model = field.related_object_type.model_class()
+    #     if not model:
+    #         CustomObjectType = apps.get_model('netbox_custom_objects.CustomObjectType')
+    #         custom_object_model_name = field.related_object_type.name
+    #         custom_object_type_id = custom_object_model_name.replace('table', '').replace('model', '')
+    #         custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
+    #         model = custom_object_type.get_model()
+    #     field_class = CSVModelChoiceField if for_csv_import else CustomObjectDynamicModelChoiceField
+    #     kwargs = {
+    #         'queryset': model.objects.all(),
+    #         'required': field.required,
+    #         'initial': field.default,
+    #     }
+    #     if not for_csv_import:
+    #         kwargs['query_params'] = field.related_object_filter
+    #         kwargs['selector'] = True
+    #
+    #     return field_class(**kwargs)
 
     def get_filterform_field(self, field, **kwargs):
         return None

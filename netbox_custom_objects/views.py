@@ -9,9 +9,9 @@ from netbox.views import generic
 from netbox.views.generic.mixins import TableMixin
 from utilities.views import register_model_view
 
+from . import forms, tables, field_types
 from netbox_custom_objects.tables import CustomObjectTable
-
-from . import field_types, forms, tables
+from netbox.filtersets import BaseFilterSet
 from .models import CustomObject, CustomObjectType, CustomObjectTypeField
 
 
@@ -48,9 +48,13 @@ class CustomObjectTableMixin(TableMixin):
             try:
                 attrs[field.name] = field_type.get_table_column_field(field)
             except NotImplementedError:
-                print(
-                    f"table mixin: {field.name} field is not implemented; using a default column"
-                )
+                print(f'table mixin: {field.name} field is not implemented; using a default column')
+            # Define a method "render_table_column" method on any FieldType to customize output
+            # See https://django-tables2.readthedocs.io/en/latest/pages/custom-data.html#table-render-foo-methods
+            try:
+                attrs[f'render_{field.name}'] = field_type.render_table_column
+            except AttributeError:
+                pass
 
         self.table = type(
             f"{data.model._meta.object_name}Table",
@@ -227,11 +231,11 @@ class CustomObjectView(generic.ObjectView):
         # kwargs.pop('custom_object_type', None)
         return get_object_or_404(model.objects.all(), **self.kwargs)
 
-    # def get_extra_context(self, request, instance):
-    #     content_type = ContentType.objects.get_for_model(instance)
-    #     return {
-    #         'relations': CustomObjectRelation.objects.filter(field__related_object_type=content_type, object_id=instance.pk)
-    #     }
+    def get_extra_context(self, request, instance):
+        fields = instance.custom_object_type.fields.all().order_by('weight')
+        return {
+            'fields': fields,
+        }
 
 
 @register_model_view(CustomObject, "edit")
@@ -283,11 +287,7 @@ class CustomObjectEditView(generic.ObjectEditView):
         for field in self.object.custom_object_type.fields.all():
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
             try:
-                attrs[field.name] = field_type.get_form_field(
-                    field,
-                    label=field.label or None,
-                    required=field.required,
-                )
+                attrs[field.name] = field_type.get_annotated_form_field(field)
             except NotImplementedError:
                 print(f"get_form: {field.name} field is not supported")
 
@@ -355,11 +355,7 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
         for field in self.custom_object_type.fields.all():
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
             try:
-                attrs[field.name] = field_type.get_form_field(
-                    field,
-                    label=field.label or None,
-                    required=False,
-                )
+                attrs[field.name] = field_type.get_annotated_form_field(field)
             except NotImplementedError:
                 print(f"bulk edit form: {field.name} field is not supported")
 

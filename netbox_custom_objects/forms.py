@@ -2,6 +2,11 @@ import json
 
 from django import forms
 from django.utils.translation import gettext_lazy as _
+
+from netbox_custom_objects.models import (
+    CustomObject, CustomObjectType, CustomObjectTypeField, CustomObjectObjectType
+)
+from netbox.forms import NetBoxModelForm
 from extras.choices import CustomFieldTypeChoices, CustomFieldUIEditableChoices
 from extras.forms import CustomFieldForm
 from netbox.forms import NetBoxModelForm

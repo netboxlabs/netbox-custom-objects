@@ -31,7 +31,7 @@ class CustomObjectLink(PluginTemplateExtension):
 
     def left_page(self):
         # TODO: Implement this
-        return ""
+        return ''
 
 
 template_extensions = (
