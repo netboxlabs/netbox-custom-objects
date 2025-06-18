@@ -57,6 +57,21 @@ from netbox_custom_objects.utilities import AppsProxy
 
 USER_TABLE_DATABASE_NAME_PREFIX = "custom_objects_"
 
+class CustomObject(
+    # BookmarksMixin,
+    ChangeLoggingMixin,
+    # CloningMixin,
+    # CustomLinksMixin,
+    # CustomValidationMixin,
+    # ExportTemplatesMixin,
+    # JournalingMixin,
+    # NotificationsMixin,
+    TagsMixin,
+    # EventRulesMixin,
+    models.Model,
+):
+    objects = RestrictedQuerySet.as_manager()
+
 
 class CustomObjectType(NetBoxModel):
     name = models.CharField(max_length=100, unique=True)
@@ -290,7 +305,7 @@ class CustomObjectType(NetBoxModel):
         # Create the model class.
         model = type(
             str(model_name),
-            (models.Model,),
+            (CustomObject,),
             attrs,
         )
 
@@ -342,133 +357,6 @@ class ProxyManager(models.Manager):
 
     def get_queryset(self):
         return super().get_queryset().filter(custom_object_type=self.custom_object_type)
-
-
-class CustomObject(
-    BookmarksMixin,
-    ChangeLoggingMixin,
-    CloningMixin,
-    # CustomFieldsMixin,
-    CustomLinksMixin,
-    CustomValidationMixin,
-    ExportTemplatesMixin,
-    JournalingMixin,
-    NotificationsMixin,
-    TagsMixin,
-    EventRulesMixin,
-    models.Model,
-):
-    custom_object_type = models.ForeignKey(
-        CustomObjectType, on_delete=models.CASCADE, related_name="custom_objects"
-    )
-    name = models.CharField(max_length=100, unique=True)
-    data = models.JSONField(blank=True, default=dict)
-
-    objects = RestrictedQuerySet.as_manager()
-
-    class Meta:
-        verbose_name = "Custom Object"
-
-    def __str__(self):
-        return self.name
-
-    @property
-    def formatted_data(self):
-        result = "<ul>"
-        for field_name, field in self.custom_object_type.schema.items():
-            value = self.data.get(field_name)
-            field_type = field.get("type")
-            if field_type in ["object", "multiobject"]:
-                content_type = ContentType.objects.get(
-                    app_label=field["app_label"], model=field["model"]
-                )
-                model_class = content_type.model_class()
-                if field_type == "object":
-                    instance = model_class.objects.get(pk=value["object_id"])
-                    url = instance.get_absolute_url()
-                    result += f'<li>{field_name}: <a href="{url}">{instance}</a></li>'
-                    continue
-                if field_type == "multiobject":
-                    result += f"<li>{field_name}: <ul>"
-                    for item in value:
-                        instance = model_class.objects.get(pk=item["object_id"])
-                        url = instance.get_absolute_url()
-                        result += f'<li><a href="{url}">{instance}</a></li>'
-                    result += "</ul></li>"
-                    continue
-            result += f"<li>{field_name}: {value}</li>"
-        result += "</ul>"
-        return result
-
-    @property
-    def custom_field_data(self):
-        return self.data
-
-    @property
-    def fields(self):
-        result = {}
-        for field in self.custom_object_type.fields.all():
-            result[field.name] = self.get_field_value(field)
-        return result
-
-    def get_field_value(self, field):
-        if field.type == CustomFieldTypeChoices.TYPE_OBJECT:
-            return field.model_class.objects.filter(pk=self.data.get(field.name))
-        if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-            return field.model_class.objects.filter(
-                pk__in=self.data.get(field.name) or []
-            )
-        return self.data.get(field.name)
-
-    def get_absolute_url(self):
-        return reverse("plugins:netbox_custom_objects:customobject", args=[self.pk])
-
-    def clean(self):
-        super().clean()
-
-        custom_fields = CustomObjectTypeField.objects.filter(
-            custom_object_type=self.custom_object_type
-        )
-
-        # Validate all field values
-        for field_name, value in self.custom_field_data.items():
-            # TODO: Maybe don't need to throw an error if an unknown field is in data (may have been deleted)
-            try:
-                custom_field = custom_fields.get(name=field_name)
-            except CustomObjectTypeField.DoesNotExist:
-                # raise ValidationError(_("Unknown field name '{name}' in custom field data.").format(
-                #     name=field_name
-                # ))
-                continue
-            try:
-                custom_field.validate(value)
-            except ValidationError as e:
-                raise ValidationError(
-                    _("Invalid value for custom field '{name}': {error}").format(
-                        name=field_name, error=e.message
-                    )
-                )
-
-            # Validate uniqueness if enforced
-            # TODO: change this to validate uniqueness per custom_object
-            if custom_field.unique and value not in CUSTOMFIELD_EMPTY_VALUES:
-                if (
-                    self._meta.model.objects.exclude(pk=self.pk)
-                    .filter(**{f"custom_field_data__{field_name}": value})
-                    .exists()
-                ):
-                    raise ValidationError(
-                        _("Custom field '{name}' must have a unique value.").format(
-                            name=field_name
-                        )
-                    )
-
-        # Check for missing required values
-        for cf in custom_fields:
-            if cf.required and cf.name not in self.custom_field_data:
-                raise ValidationError(
-                    _("Missing required custom field '{name}'.").format(name=cf.name)
-                )
 
 
 class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
