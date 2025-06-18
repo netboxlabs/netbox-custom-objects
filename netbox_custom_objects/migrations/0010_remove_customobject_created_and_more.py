@@ -12,19 +12,11 @@ class Migration(migrations.Migration):
     operations = [
         migrations.RemoveField(
             model_name="customobject",
-            name="created",
-        ),
-        migrations.RemoveField(
-            model_name="customobject",
             name="custom_object_type",
         ),
         migrations.RemoveField(
             model_name="customobject",
             name="data",
-        ),
-        migrations.RemoveField(
-            model_name="customobject",
-            name="last_updated",
         ),
         migrations.RemoveField(
             model_name="customobject",
