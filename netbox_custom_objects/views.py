@@ -16,7 +16,7 @@ from utilities.views import ViewTab, register_model_view
 from . import filtersets, forms, tables, field_types
 from netbox_custom_objects.tables import CustomObjectTable
 from netbox.filtersets import BaseFilterSet, ChangeLoggedModelFilterSet, NetBoxModelFilterSet
-from .models import CustomObject, CustomObjectType, CustomObjectRelation, CustomObjectTypeField
+from .models import CustomObject, CustomObjectType, CustomObjectTypeField
 
 
 class CustomObjectTableMixin(TableMixin):

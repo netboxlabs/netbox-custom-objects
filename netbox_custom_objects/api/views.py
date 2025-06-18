@@ -3,7 +3,7 @@ from rest_framework.routers import APIRootView
 from rest_framework.viewsets import ModelViewSet
 
 from netbox_custom_objects import filtersets
-from netbox_custom_objects.models import CustomObject, CustomObjectType, CustomObjectTypeField, CustomObjectRelation
+from netbox_custom_objects.models import CustomObject, CustomObjectType, CustomObjectTypeField
 from . import serializers
 from ..views import CustomObjectTypeView
 
@@ -47,8 +47,3 @@ class CustomObjectViewSet(ModelViewSet):
 class CustomObjectTypeFieldViewSet(ModelViewSet):
     queryset = CustomObjectTypeField.objects.all()
     serializer_class = serializers.CustomObjectTypeFieldSerializer
-
-
-class CustomObjectRelationViewSet(ModelViewSet):
-    queryset = CustomObjectRelation.objects.all()
-    serializer_class = serializers.CustomObjectRelationSerializer

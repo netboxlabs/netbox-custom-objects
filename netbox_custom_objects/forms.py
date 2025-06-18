@@ -4,7 +4,7 @@ from django import forms
 from django.utils.translation import gettext_lazy as _
 
 from netbox_custom_objects.models import (
-    CustomObject, CustomObjectType, CustomObjectTypeField, CustomObjectRelation, CustomObjectObjectType
+    CustomObject, CustomObjectType, CustomObjectTypeField, CustomObjectObjectType
 )
 from netbox.forms import NetBoxModelForm
 from core.models import ObjectType
@@ -180,16 +180,6 @@ class CustomObjectForm(NetBoxModelForm):
         return super().clean()
 
     def _save_m2m(self):
-        for cf_name, customfield in self.custom_fields.items():
-            key = cf_name[3:]
-            if customfield.type == CustomFieldTypeChoices.TYPE_OBJECT:
-                CustomObjectRelation.objects.filter(custom_object=self.instance, field__name=key).delete()
-                if object_id := self.cleaned_data['data'][key]:
-                    CustomObjectRelation.objects.create(custom_object=self.instance, field=customfield, object_id=object_id)
-            elif customfield.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                CustomObjectRelation.objects.filter(custom_object=self.instance, field__name=key).delete()
-                for object_id in self.cleaned_data['data'].get(key) or []:
-                    CustomObjectRelation.objects.create(custom_object=self.instance, field=customfield, object_id=object_id)
         return super()._save_m2m()
 
     def save(self, commit=True):
