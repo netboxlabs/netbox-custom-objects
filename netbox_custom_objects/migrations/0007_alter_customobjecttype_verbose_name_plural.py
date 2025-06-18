@@ -6,13 +6,13 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('netbox_custom_objects', '0006_remove_customobjecttype_verbose_name'),
+        ("netbox_custom_objects", "0006_remove_customobjecttype_verbose_name"),
     ]
 
     operations = [
         migrations.AlterField(
-            model_name='customobjecttype',
-            name='verbose_name_plural',
+            model_name="customobjecttype",
+            name="verbose_name_plural",
             field=models.CharField(blank=True, max_length=100),
         ),
     ]

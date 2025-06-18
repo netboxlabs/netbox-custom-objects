@@ -1,29 +1,27 @@
 import django_filters
-from django.apps import apps
-from django.contrib import messages
-from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
-from django.db.models.expressions import field_types
 from django.db.models import JSONField
-from django.shortcuts import get_object_or_404, render
-
+from django.shortcuts import get_object_or_404
 from extras.choices import CustomFieldUIVisibleChoices
-from netbox.forms import NetBoxModelFilterSetForm, NetBoxModelBulkEditForm
+from netbox.filtersets import BaseFilterSet
+from netbox.forms import NetBoxModelBulkEditForm, NetBoxModelFilterSetForm
 from netbox.views import generic
 from netbox.views.generic.mixins import TableMixin
-from utilities.views import ViewTab, register_model_view
-# from utilities.tables import get_table_for_model
-from . import filtersets, forms, tables, field_types
+from utilities.views import register_model_view
+
 from netbox_custom_objects.tables import CustomObjectTable
-from netbox.filtersets import BaseFilterSet, ChangeLoggedModelFilterSet, NetBoxModelFilterSet
+
+from . import field_types, forms, tables
 from .models import CustomObject, CustomObjectType, CustomObjectTypeField
 
 
 class CustomObjectTableMixin(TableMixin):
     def get_table(self, data, request, bulk_actions=True):
         model_fields = self.custom_object_type.fields.all()
-        fields = ['id'] + [
-            field.name for field in model_fields if field.ui_visible != CustomFieldUIVisibleChoices.HIDDEN
+        fields = ["id"] + [
+            field.name
+            for field in model_fields
+            if field.ui_visible != CustomFieldUIVisibleChoices.HIDDEN
         ]
 
         meta = type(
@@ -34,7 +32,7 @@ class CustomObjectTableMixin(TableMixin):
                 "fields": fields,
                 "attrs": {
                     "class": "table table-hover object-list",
-                }
+                },
             },
         )
 
@@ -50,19 +48,19 @@ class CustomObjectTableMixin(TableMixin):
             try:
                 attrs[field.name] = field_type.get_table_column_field(field)
             except NotImplementedError:
-                print(f'table mixin: {field.name} field is not implemented; using a default column')
+                print(
+                    f"table mixin: {field.name} field is not implemented; using a default column"
+                )
             # Define a method "render_table_column" method on any FieldType to customize output
             # See https://django-tables2.readthedocs.io/en/latest/pages/custom-data.html#table-render-foo-methods
             try:
-                attrs[f'render_{field.name}'] = field_type.render_table_column
+                attrs[f"render_{field.name}"] = field_type.render_table_column
             except AttributeError:
                 pass
 
         self.table = type(
             f"{data.model._meta.object_name}Table",
-            (
-                CustomObjectTable,
-            ),
+            (CustomObjectTable,),
             attrs,
         )
         return super().get_table(data, request, bulk_actions=bulk_actions)
@@ -72,10 +70,9 @@ class CustomObjectTableMixin(TableMixin):
 # Custom Object Types
 #
 
+
 class CustomObjectTypeListView(generic.ObjectListView):
     queryset = CustomObjectType.objects.all()
-    # filterset = filtersets.BranchFilterSet
-    # filterset_form = forms.BranchFilterForm
     table = tables.CustomObjectTypeTable
 
 
@@ -92,34 +89,35 @@ class CustomObjectTypeView(CustomObjectTableMixin, generic.ObjectView):
     def get_extra_context(self, request, instance):
         model = instance.get_model()
         return {
-            'custom_objects': model.objects.all(),
-            'table': self.get_table(self.queryset, request),
+            "custom_objects": model.objects.all(),
+            "table": self.get_table(self.queryset, request),
         }
 
 
-@register_model_view(CustomObjectType, 'edit')
+@register_model_view(CustomObjectType, "edit")
 class CustomObjectTypeEditView(generic.ObjectEditView):
     queryset = CustomObjectType.objects.all()
     form = forms.CustomObjectTypeForm
 
 
-@register_model_view(CustomObjectType, 'delete')
+@register_model_view(CustomObjectType, "delete")
 class CustomObjectTypeDeleteView(generic.ObjectDeleteView):
     queryset = CustomObjectType.objects.all()
-    default_return_url = 'plugins:netbox_custom_objects:customobjecttype_list'
+    default_return_url = "plugins:netbox_custom_objects:customobjecttype_list"
 
 
 #
 # Custom Object Type Fields
 #
 
-@register_model_view(CustomObjectTypeField, 'edit')
+
+@register_model_view(CustomObjectTypeField, "edit")
 class CustomObjectTypeFieldEditView(generic.ObjectEditView):
     queryset = CustomObjectTypeField.objects.all()
     form = forms.CustomObjectTypeFieldForm
 
 
-@register_model_view(CustomObjectTypeField, 'delete')
+@register_model_view(CustomObjectTypeField, "delete")
 class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
     queryset = CustomObjectTypeField.objects.all()
 
@@ -131,14 +129,11 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
 # Custom Objects
 #
 
+
 class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
-    # queryset = CustomObject.objects.all()
-    # filterset = filtersets.BranchFilterSet
-    # filterset_form = forms.BranchFilterForm
-    # table = tables.CustomObjectTable
     queryset = None
     custom_object_type = None
-    template_name = 'netbox_custom_objects/custom_object_list.html'
+    template_name = "netbox_custom_objects/custom_object_list.html"
 
     def setup(self, request, *args, **kwargs):
         super().setup(request, *args, **kwargs)
@@ -149,8 +144,10 @@ class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
     def get_queryset(self, request):
         if self.queryset:
             return self.queryset
-        custom_object_type = self.kwargs.get('custom_object_type', None)
-        self.custom_object_type = CustomObjectType.objects.get(name__iexact=custom_object_type)
+        custom_object_type = self.kwargs.get("custom_object_type", None)
+        self.custom_object_type = CustomObjectType.objects.get(
+            name__iexact=custom_object_type
+        )
         model = self.custom_object_type.get_model()
         return model.objects.all()
 
@@ -168,18 +165,18 @@ class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
                 # These are placeholders; should use different logic
                 "filter_overrides": {
                     JSONField: {
-                        'filter_class': django_filters.CharFilter,
-                        'extra': lambda f: {
-                            'lookup_expr': 'icontains',
+                        "filter_class": django_filters.CharFilter,
+                        "extra": lambda f: {
+                            "lookup_expr": "icontains",
                         },
                     },
                     ArrayField: {
-                        'filter_class': django_filters.CharFilter,
-                        'extra': lambda f: {
-                            'lookup_expr': 'icontains',
+                        "filter_class": django_filters.CharFilter,
+                        "extra": lambda f: {
+                            "lookup_expr": "icontains",
                         },
                     },
-                }
+                },
             },
         )
 
@@ -190,28 +187,15 @@ class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
 
         return type(
             f"{model._meta.object_name}FilterSet",
-            (
-                BaseFilterSet,  # TODO: Should be a NetBoxModelFilterSet
-            ),
+            (BaseFilterSet,),  # TODO: Should be a NetBoxModelFilterSet
             attrs,
         )
 
     def get_filterset_form(self):
         model = self.queryset.model
-        # fields = [field.name for field in model._meta.fields]
-
-        # meta = type(
-        #     "Meta",
-        #     (),
-        #     {
-        #         "model": model,
-        #         "fields": fields,
-        #     },
-        # )
 
         attrs = {
             "model": model,
-            # "Meta": meta,
             "__module__": "database.filterset_forms",
         }
 
@@ -220,13 +204,11 @@ class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
             try:
                 attrs[field.name] = field_type.get_filterform_field(field)
             except NotImplementedError:
-                print(f'list view: {field.name} field is not supported')
+                print(f"list view: {field.name} field is not supported")
 
         return type(
             f"{model._meta.object_name}FilterForm",
-            (
-                NetBoxModelFilterSetForm,
-            ),
+            (NetBoxModelFilterSetForm,),
             attrs,
         )
 
@@ -236,7 +218,7 @@ class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
 
     def get_extra_context(self, request):
         return {
-            'custom_object_type': self.custom_object_type,
+            "custom_object_type": self.custom_object_type,
         }
 
 
@@ -245,24 +227,24 @@ class CustomObjectView(generic.ObjectView):
     queryset = CustomObject.objects.all()
 
     def get_object(self, **kwargs):
-        custom_object_type = self.kwargs.pop('custom_object_type', None)
+        custom_object_type = self.kwargs.pop("custom_object_type", None)
         object_type = CustomObjectType.objects.get(name__iexact=custom_object_type)
         model = object_type.get_model()
         # kwargs.pop('custom_object_type', None)
         return get_object_or_404(model.objects.all(), **self.kwargs)
 
     def get_extra_context(self, request, instance):
-        fields = instance.custom_object_type.fields.all().order_by('weight')
+        fields = instance.custom_object_type.fields.all().order_by("weight")
         return {
-            'fields': fields,
+            "fields": fields,
         }
 
 
-@register_model_view(CustomObject, 'edit')
+@register_model_view(CustomObject, "edit")
 class CustomObjectEditView(generic.ObjectEditView):
     # queryset = CustomObject.objects.all()
     # form = forms.CustomObjectForm
-    template_name = 'netbox_custom_objects/customobject_edit.html'
+    template_name = "netbox_custom_objects/customobject_edit.html"
     form = None
     queryset = None
     object = None
@@ -273,12 +255,6 @@ class CustomObjectEditView(generic.ObjectEditView):
         model = self.object._meta.model
         self.form = self.get_form(model)
 
-    # def dispatch(self, request, *args, **kwargs):
-    #     result = super().dispatch(request, *args, **kwargs)
-    #     model = self.get_object()._meta.model
-    #     self.form = self.get_form(model)
-    #     return result
-
     def get_queryset(self, request):
         model = self.object._meta.model
         return model.objects.all()
@@ -286,10 +262,10 @@ class CustomObjectEditView(generic.ObjectEditView):
     def get_object(self, **kwargs):
         if self.object:
             return self.object
-        custom_object_type = self.kwargs.pop('custom_object_type', None)
+        custom_object_type = self.kwargs.pop("custom_object_type", None)
         object_type = CustomObjectType.objects.get(name__iexact=custom_object_type)
         model = object_type.get_model()
-        if not self.kwargs.get('pk', None):
+        if not self.kwargs.get("pk", None):
             # We're creating a new object
             return model()
         return get_object_or_404(model.objects.all(), **self.kwargs)
@@ -315,24 +291,22 @@ class CustomObjectEditView(generic.ObjectEditView):
             try:
                 attrs[field.name] = field_type.get_annotated_form_field(field)
             except NotImplementedError:
-                print(f'get_form: {field.name} field is not supported')
+                print(f"get_form: {field.name} field is not supported")
 
         form = type(
             f"{model._meta.object_name}Form",
-            (
-                forms.NetBoxModelForm,
-            ),
+            (forms.NetBoxModelForm,),
             attrs,
         )
 
         return form
 
 
-@register_model_view(CustomObject, 'delete')
+@register_model_view(CustomObject, "delete")
 class CustomObjectDeleteView(generic.ObjectDeleteView):
     queryset = None
     object = None
-    default_return_url = 'plugins:netbox_custom_objects:customobject_list'
+    default_return_url = "plugins:netbox_custom_objects:customobject_list"
 
     def setup(self, request, *args, **kwargs):
         super().setup(request, *args, **kwargs)
@@ -345,13 +319,13 @@ class CustomObjectDeleteView(generic.ObjectDeleteView):
     def get_object(self, **kwargs):
         if self.object:
             return self.object
-        custom_object_type = self.kwargs.pop('custom_object_type', None)
+        custom_object_type = self.kwargs.pop("custom_object_type", None)
         object_type = CustomObjectType.objects.get(name__iexact=custom_object_type)
         model = object_type.get_model()
         return get_object_or_404(model.objects.all(), **self.kwargs)
 
 
-@register_model_view(CustomObject, 'bulk_edit', path='edit', detail=False)
+@register_model_view(CustomObject, "bulk_edit", path="edit", detail=False)
 class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
     queryset = None
     custom_object_type = None
@@ -367,8 +341,10 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
     def get_queryset(self, request):
         if self.queryset:
             return self.queryset
-        custom_object_type = self.kwargs.get('custom_object_type', None)
-        self.custom_object_type = CustomObjectType.objects.get(name__iexact=custom_object_type)
+        custom_object_type = self.kwargs.get("custom_object_type", None)
+        self.custom_object_type = CustomObjectType.objects.get(
+            name__iexact=custom_object_type
+        )
         model = self.custom_object_type.get_model()
         return model.objects.all()
 
@@ -383,20 +359,18 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
             try:
                 attrs[field.name] = field_type.get_annotated_form_field(field)
             except NotImplementedError:
-                print(f'bulk edit form: {field.name} field is not supported')
+                print(f"bulk edit form: {field.name} field is not supported")
 
         form = type(
             f"{queryset.model._meta.object_name}BulkEditForm",
-            (
-                NetBoxModelBulkEditForm,
-            ),
+            (NetBoxModelBulkEditForm,),
             attrs,
         )
 
         return form
 
 
-@register_model_view(CustomObject, 'bulk_delete', path='delete', detail=False)
+@register_model_view(CustomObject, "bulk_delete", path="delete", detail=False)
 class CustomObjectBulkDeleteView(CustomObjectTableMixin, generic.BulkDeleteView):
     queryset = None
     custom_object_type = None
@@ -411,7 +385,9 @@ class CustomObjectBulkDeleteView(CustomObjectTableMixin, generic.BulkDeleteView)
     def get_queryset(self, request):
         if self.queryset:
             return self.queryset
-        custom_object_type = self.kwargs.pop('custom_object_type', None)
-        self.custom_object_type = CustomObjectType.objects.get(name__iexact=custom_object_type)
+        custom_object_type = self.kwargs.pop("custom_object_type", None)
+        self.custom_object_type = CustomObjectType.objects.get(
+            name__iexact=custom_object_type
+        )
         model = self.custom_object_type.get_model()
         return model.objects.all()

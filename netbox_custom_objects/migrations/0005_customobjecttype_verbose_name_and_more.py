@@ -6,20 +6,20 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('netbox_custom_objects', '0004_customobjecttypefield_primary'),
+        ("netbox_custom_objects", "0004_customobjecttypefield_primary"),
     ]
 
     operations = [
         migrations.AddField(
-            model_name='customobjecttype',
-            name='verbose_name',
-            field=models.CharField(default='', max_length=100),
+            model_name="customobjecttype",
+            name="verbose_name",
+            field=models.CharField(default="", max_length=100),
             preserve_default=False,
         ),
         migrations.AddField(
-            model_name='customobjecttype',
-            name='verbose_name_plural',
-            field=models.CharField(default='', max_length=100),
+            model_name="customobjecttype",
+            name="verbose_name_plural",
+            field=models.CharField(default="", max_length=100),
             preserve_default=False,
         ),
     ]

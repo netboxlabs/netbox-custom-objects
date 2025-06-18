@@ -1,35 +1,27 @@
 import django_tables2 as tables
-import json
-import uuid
-
+from django import forms
+from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
 from django.core.validators import RegexValidator, ValidationError
 from django.db import models
-from django.db.models.fields.related import (
-    ManyToManyDescriptor,
-    ManyToManyField,
-)
+from django.db.models.fields.related import ManyToManyDescriptor
 from django.db.models.manager import Manager
-from django import forms
-from django.apps import apps
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
-from rest_framework import serializers
-
 from extras.choices import CustomFieldTypeChoices, CustomFieldUIEditableChoices
+from rest_framework import serializers
+from utilities.forms.fields import (CSVChoiceField, CSVMultipleChoiceField,
+                                    DynamicChoiceField,
+                                    DynamicMultipleChoiceField, JSONField,
+                                    LaxURLField)
 from utilities.forms.utils import add_blank_choice
-from utilities.forms.fields import DynamicModelMultipleChoiceField
-from utilities.forms.widgets import APISelect, APISelectMultiple, DatePicker, DateTimePicker
-from utilities.forms.fields import (
-    CSVChoiceField, CSVModelChoiceField, CSVModelMultipleChoiceField, CSVMultipleChoiceField, DynamicChoiceField,
-    DynamicModelChoiceField, DynamicModelMultipleChoiceField, DynamicMultipleChoiceField, JSONField, LaxURLField,
-)
-from netbox_custom_objects.fields import CustomObjectDynamicModelChoiceField
+from utilities.forms.widgets import (APISelect, APISelectMultiple, DatePicker,
+                                     DateTimePicker)
 from utilities.templatetags.builtins.filters import render_markdown
+
 from netbox_custom_objects.constants import APP_LABEL
-from netbox_custom_objects.utilities import AppsProxy
 
 
 class FieldType:
@@ -65,17 +57,15 @@ class FieldType:
     def get_table_column_field(self, field, **kwargs):
         raise NotImplementedError
 
-    def after_model_generation(self, instance, model, field_name):
-        ...
+    def after_model_generation(self, instance, model, field_name): ...
 
-    def create_m2m_table(self, instance, model, field_name):
-        ...
+    def create_m2m_table(self, instance, model, field_name): ...
 
 
 class TextFieldType(FieldType):
 
     def get_model_field(self, field, **kwargs):
-        kwargs.update({'default': field.default, 'unique': field.unique})
+        kwargs.update({"default": field.default, "unique": field.unique})
         return models.CharField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, **kwargs):
@@ -84,12 +74,16 @@ class TextFieldType(FieldType):
             validators = [
                 RegexValidator(
                     regex=field.validation_regex,
-                    message=mark_safe(_("Values must match this regex: <code>{regex}</code>").format(
-                        regex=escape(field.validation_regex)
-                    ))
+                    message=mark_safe(
+                        _("Values must match this regex: <code>{regex}</code>").format(
+                            regex=escape(field.validation_regex)
+                        )
+                    ),
                 )
             ]
-        return forms.CharField(required=field.required, initial=field.default, validators=validators)
+        return forms.CharField(
+            required=field.required, initial=field.default, validators=validators
+        )
 
     def get_serializer_field(self, field, **kwargs):
         required = kwargs.get("required", False)
@@ -121,7 +115,7 @@ class TextFieldType(FieldType):
 
 class LongTextFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        kwargs.update({'default': field.default, 'unique': field.unique})
+        kwargs.update({"default": field.default, "unique": field.unique})
         return models.TextField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, required, label, **kwargs):
@@ -131,12 +125,19 @@ class LongTextFieldType(FieldType):
             validators = [
                 RegexValidator(
                     regex=field.validation_regex,
-                    message=mark_safe(_("Values must match this regex: <code>{regex}</code>").format(
-                        regex=escape(field.validation_regex)
-                    ))
+                    message=mark_safe(
+                        _("Values must match this regex: <code>{regex}</code>").format(
+                            regex=escape(field.validation_regex)
+                        )
+                    ),
                 )
             ]
-        return forms.CharField(widget=widget, required=field.required, initial=field.default, validators=validators)
+        return forms.CharField(
+            widget=widget,
+            required=field.required,
+            initial=field.default,
+            validators=validators,
+        )
 
     def get_bulk_edit_form_field(self, field, **kwargs):
         return forms.CharField(
@@ -153,7 +154,7 @@ class IntegerFieldType(FieldType):
 
     def get_model_field(self, field, **kwargs):
         # TODO: handle all args for IntegerField
-        kwargs.update({'default': field.default, 'unique': field.unique})
+        kwargs.update({"default": field.default, "unique": field.unique})
         return models.IntegerField(null=True, blank=True, **kwargs)
 
     def get_filterform_field(self, field, **kwargs):
@@ -167,12 +168,13 @@ class IntegerFieldType(FieldType):
             required=field.required,
             initial=field.default,
             min_value=field.validation_minimum,
-            max_value=field.validation_maximum
+            max_value=field.validation_maximum,
         )
+
 
 class DecimalFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        kwargs.update({'default': field.default, 'unique': field.unique})
+        kwargs.update({"default": field.default, "unique": field.unique})
         return models.DecimalField(
             null=True,
             blank=True,
@@ -188,33 +190,37 @@ class DecimalFieldType(FieldType):
             max_digits=12,
             decimal_places=4,
             min_value=field.validation_minimum,
-            max_value=field.validation_maximum
+            max_value=field.validation_maximum,
         )
 
 
 class BooleanFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        kwargs.update({'default': field.default, 'unique': field.unique})
+        kwargs.update({"default": field.default, "unique": field.unique})
         return models.BooleanField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, **kwargs):
         choices = (
-            (None, '---------'),
-            (True, _('True')),
-            (False, _('False')),
+            (None, "---------"),
+            (True, _("True")),
+            (False, _("False")),
         )
         return forms.NullBooleanField(
-            required=field.required, initial=field.default, widget=forms.Select(choices=choices)
+            required=field.required,
+            initial=field.default,
+            widget=forms.Select(choices=choices),
         )
 
 
 class DateFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        kwargs.update({'default': field.default, 'unique': field.unique})
+        kwargs.update({"default": field.default, "unique": field.unique})
         return models.DateField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, **kwargs):
-        return forms.DateField(required=field.required, initial=field.default, widget=DatePicker())
+        return forms.DateField(
+            required=field.required, initial=field.default, widget=DatePicker()
+        )
 
     # def get_bulk_edit_form_field(self, field, **kwargs):
     #     return forms.DateField(
@@ -225,11 +231,13 @@ class DateFieldType(FieldType):
 
 class DateTimeFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        kwargs.update({'default': field.default, 'unique': field.unique})
+        kwargs.update({"default": field.default, "unique": field.unique})
         return models.DateTimeField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, **kwargs):
-        return forms.DateTimeField(required=field.required, initial=field.default, widget=DateTimePicker())
+        return forms.DateTimeField(
+            required=field.required, initial=field.default, widget=DateTimePicker()
+        )
 
     # def get_bulk_edit_form_field(self, field, **kwargs):
     #     return forms.DateTimeField(
@@ -240,32 +248,30 @@ class DateTimeFieldType(FieldType):
 
 class URLFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        kwargs.update({'default': field.default, 'unique': field.unique})
+        kwargs.update({"default": field.default, "unique": field.unique})
         return models.URLField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, **kwargs):
-        return LaxURLField(assume_scheme='https', required=field.required, initial=field.default)
-
-
-    # def get_bulk_edit_form_field(self, field, **kwargs):
-    #     return forms.URLField(required=False)
+        return LaxURLField(
+            assume_scheme="https", required=field.required, initial=field.default
+        )
 
 
 class JSONFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        kwargs.update({'default': field.default, 'unique': field.unique})
+        kwargs.update({"default": field.default, "unique": field.unique})
         return models.JSONField(null=True, blank=True, **kwargs)
 
     def get_form_field(self, field, **kwargs):
-        return JSONField(required=field.required, initial=json.dumps(field.default) if field.default else None)
-
-    # def get_bulk_edit_form_field(self, field, **kwargs):
-    #     return forms.JSONField(required=False)
+        return JSONField(
+            required=field.required,
+            initial=json.dumps(field.default) if field.default else None,
+        )
 
 
 class SelectFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        kwargs.update({'default': field.default, 'unique': field.unique})
+        kwargs.update({"default": field.default, "unique": field.unique})
         return models.CharField(
             max_length=100,
             choices=field.choices,
@@ -288,7 +294,9 @@ class SelectFieldType(FieldType):
 
         if for_csv_import:
             field_class = CSVChoiceField
-            return field_class(choices=choices, required=field.required, initial=initial)
+            return field_class(
+                choices=choices, required=field.required, initial=initial
+            )
         else:
             field_class = DynamicChoiceField
             widget_class = APISelect
@@ -296,13 +304,15 @@ class SelectFieldType(FieldType):
                 choices=choices,
                 required=field.required,
                 initial=initial,
-                widget=widget_class(api_url=f'/api/extras/custom-field-choice-sets/{field.choice_set.pk}/choices/')
+                widget=widget_class(
+                    api_url=f"/api/extras/custom-field-choice-sets/{field.choice_set.pk}/choices/"
+                ),
             )
 
 
 class MultiSelectFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        kwargs.update({'default': field.default, 'unique': field.unique})
+        kwargs.update({"default": field.default, "unique": field.unique})
         return ArrayField(
             base_field=models.CharField(max_length=50, choices=field.choices),
             null=True,
@@ -324,7 +334,9 @@ class MultiSelectFieldType(FieldType):
 
         if for_csv_import:
             field_class = CSVMultipleChoiceField
-            return field_class(choices=choices, required=field.required, initial=initial)
+            return field_class(
+                choices=choices, required=field.required, initial=initial
+            )
         else:
             field_class = DynamicMultipleChoiceField
             widget_class = APISelectMultiple
@@ -332,7 +344,9 @@ class MultiSelectFieldType(FieldType):
                 choices=choices,
                 required=field.required,
                 initial=initial,
-                widget=widget_class(api_url=f'/api/extras/custom-field-choice-sets/{field.choice_set.pk}/choices/')
+                widget=widget_class(
+                    api_url=f"/api/extras/custom-field-choice-sets/{field.choice_set.pk}/choices/"
+                ),
             )
 
     # def get_form_field(self, field, required, label, **kwargs):
@@ -344,28 +358,33 @@ class MultiSelectFieldType(FieldType):
         return ", ".join(value)
 
     def get_bulk_edit_form_field(self, field, **kwargs):
-        return forms.MultipleChoiceField(choices=field.choices, required=required, label=label, **kwargs)
+        return forms.MultipleChoiceField(
+            choices=field.choices, required=required, label=label, **kwargs
+        )
 
 
 class ObjectFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        # return models.IntegerField(**kwargs)
-        # content_type = ContentType.objects.get_for_model(instance)
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
         to_model = content_type.model
-        kwargs.update({'default': field.default, 'unique': field.unique})
+        kwargs.update({"default": field.default, "unique": field.unique})
 
         # TODO: Handle pointing to object of same type (avoid infinite loop)
         if content_type.app_label == APP_LABEL:
             from netbox_custom_objects.models import CustomObjectType
-            custom_object_type_id = content_type.model.replace('table', '').replace('model', '')
+
+            custom_object_type_id = content_type.model.replace("table", "").replace(
+                "model", ""
+            )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
             model = custom_object_type.get_model()
         else:
             # to_model = content_type.model_class()._meta.object_name
-            to_ct = f'{content_type.app_label}.{to_model}'
+            to_ct = f"{content_type.app_label}.{to_model}"
             model = apps.get_model(to_ct)
-        f = models.ForeignKey(model, null=True, blank=True, on_delete=models.CASCADE, **kwargs)
+        f = models.ForeignKey(
+            model, null=True, blank=True, on_delete=models.CASCADE, **kwargs
+        )
         return f
 
     # TODO: This logic is migrated from to_form_field, but currently does not work with custom objects as
@@ -394,26 +413,6 @@ class ObjectFieldType(FieldType):
     def get_filterform_field(self, field, **kwargs):
         return None
 
-    # def get_bulk_edit_form_field(self, field, **kwargs):
-    #     content_type = ContentType.objects.get(pk=field.related_object_type_id)
-    #     to_model = content_type.model
-    #
-    #     # TODO: Handle pointing to object of same type (avoid infinite loop)
-    #     if content_type.app_label == APP_LABEL:
-    #         from netbox_custom_objects.models import CustomObjectType
-    #         custom_object_type_id = content_type.model.replace('table', '').replace('model', '')
-    #         custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
-    #         model = custom_object_type.get_model()
-    #     else:
-    #         # to_model = content_type.model_class()._meta.object_name
-    #         to_ct = f'{content_type.app_label}.{to_model}'
-    #         model = apps.get_model(to_ct)
-    #
-    #     return DynamicModelMultipleChoiceField(
-    #         queryset=model.objects.all(),
-    #         label='Policy',
-    #     )
-
 
 class CustomManyToManyManager(Manager):
     def __init__(self, instance=None, field_name=None):
@@ -423,7 +422,7 @@ class CustomManyToManyManager(Manager):
         self.field = instance._meta.get_field(self.field_name)
         self.model = self.field.remote_field.model
         self.through = self.field.remote_field.through
-        self.core_filters = {'source_id': instance.pk}
+        self.core_filters = {"source_id": instance.pk}
         self.prefetch_cache_name = self.field_name
 
     def get_prefetch_queryset(self, instances, queryset=None):
@@ -433,13 +432,10 @@ class CustomManyToManyManager(Manager):
         # Get all the target IDs for these instances in a single query
         through_queryset = self.through.objects.filter(
             source_id__in=[obj.pk for obj in instances]
-        ).values_list('source_id', 'target_id')
+        ).values_list("source_id", "target_id")
 
         # Build a mapping of instance PKs to their related objects
-        rel_obj_cache = {
-            source_id: []
-            for source_id in [obj.pk for obj in instances]
-        }
+        rel_obj_cache = {source_id: [] for source_id in [obj.pk for obj in instances]}
         target_ids = set()
         for source_id, target_id in through_queryset:
             rel_obj_cache[source_id].append(target_id)
@@ -460,7 +456,9 @@ class CustomManyToManyManager(Manager):
         return (
             target_queryset,  # queryset containing all the related objects
             lambda obj: obj.pk,  # function to get the related object ID
-            lambda obj: rel_obj_cache[obj.pk],  # function to get the list of related objects
+            lambda obj: rel_obj_cache[
+                obj.pk
+            ],  # function to get the list of related objects
             False,  # single related object (False for M2M)
             self.prefetch_cache_name,  # cache name
             False,  # is a descriptor (False for M2M)
@@ -469,29 +467,27 @@ class CustomManyToManyManager(Manager):
     def get_queryset(self):
         # Create a base queryset for the target model
         base_qs = self.model.objects.all()
-        
+
         # Join through the through table using a subquery
         qs = base_qs.filter(
-            pk__in=self.through.objects.filter(
-                source_id=self.instance.pk
-            ).values_list('target_id', flat=True)
+            pk__in=self.through.objects.filter(source_id=self.instance.pk).values_list(
+                "target_id", flat=True
+            )
         )
 
         # Add default ordering by pk
-        return qs.order_by('pk')
+        return qs.order_by("pk")
 
     def add(self, *objs):
         for obj in objs:
             self.through.objects.get_or_create(
-                source_id=self.instance.pk,
-                target_id=obj.pk
+                source_id=self.instance.pk, target_id=obj.pk
             )
 
     def remove(self, *objs):
         for obj in objs:
             self.through.objects.filter(
-                source_id=self.instance.pk,
-                target_id=obj.pk
+                source_id=self.instance.pk, target_id=obj.pk
             ).delete()
 
     def clear(self):
@@ -540,10 +536,10 @@ class CustomManyToManyField(models.ManyToManyField):
         self.concrete = False
 
     def m2m_field_name(self):
-        return 'source_id'
+        return "source_id"
 
     def m2m_reverse_field_name(self):
-        return 'target_id'
+        return "target_id"
 
     def get_foreign_related_value(self, instance):
         """Get the related value for the instance."""
@@ -581,34 +577,40 @@ class MultiObjectFieldType(FieldType):
                 "app_label": APP_LABEL,
                 "apps": apps,
                 "managed": True,
-                "unique_together": ('source', 'target'),
-            }
+                "unique_together": ("source", "target"),
+            },
         )
 
         # Check if this is a self-referential M2M
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
-        custom_object_type_id = content_type.model.replace('table', '').replace('model', '')
+        custom_object_type_id = content_type.model.replace("table", "").replace(
+            "model", ""
+        )
         is_self_referential = (
-            content_type.app_label == APP_LABEL and
-            field.custom_object_type.id == custom_object_type_id
+            content_type.app_label == APP_LABEL
+            and field.custom_object_type.id == custom_object_type_id
         )
 
         attrs = {
-            '__module__': 'netbox_custom_objects.models',
-            'Meta': meta,
-            'id': models.AutoField(primary_key=True),
-            'source': models.ForeignKey(
-                'self' if is_self_referential else (model or 'netbox_custom_objects.CustomObject'),
+            "__module__": "netbox_custom_objects.models",
+            "Meta": meta,
+            "id": models.AutoField(primary_key=True),
+            "source": models.ForeignKey(
+                (
+                    "self"
+                    if is_self_referential
+                    else (model or "netbox_custom_objects.CustomObject")
+                ),
                 on_delete=models.CASCADE,
-                related_name='+',
-                db_column='source_id'
+                related_name="+",
+                db_column="source_id",
             ),
-            'target': models.ForeignKey(
-                'self' if is_self_referential else 'netbox_custom_objects.CustomObject',
+            "target": models.ForeignKey(
+                "self" if is_self_referential else "netbox_custom_objects.CustomObject",
                 on_delete=models.CASCADE,
-                related_name='+',
-                db_column='target_id'
-            )
+                related_name="+",
+                db_column="target_id",
+            ),
         }
 
         return type(field.through_model_name, (models.Model,), attrs)
@@ -619,78 +621,77 @@ class MultiObjectFieldType(FieldType):
         """
         # Check if this is a self-referential M2M
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
-        custom_object_type_id = content_type.model.replace('table', '').replace('model', '')
+        custom_object_type_id = content_type.model.replace("table", "").replace(
+            "model", ""
+        )
         # TODO: Default does not auto-populate, to new or existing objects (should it?)
-        kwargs.update({'default': field.default, 'unique': field.unique})
+        kwargs.update({"default": field.default, "unique": field.unique})
 
         is_self_referential = (
-            content_type.app_label == APP_LABEL and
-            field.custom_object_type.id == custom_object_type_id
+            content_type.app_label == APP_LABEL
+            and field.custom_object_type.id == custom_object_type_id
         )
 
         through = self.get_through_model(field)
 
         # For self-referential fields, use 'self' as the target
         m2m_field = CustomManyToManyField(
-            to='self' if is_self_referential else 'netbox_custom_objects.CustomObject',
+            to="self" if is_self_referential else "netbox_custom_objects.CustomObject",
             through=through,
-            through_fields=('source', 'target'),
+            through_fields=("source", "target"),
             blank=True,
-            related_name='+',
-            related_query_name='+',
+            related_name="+",
+            related_query_name="+",
             **kwargs,
         )
-        
+
         # Store metadata for later resolution
         m2m_field._custom_object_type_id = field.related_object_type_id
         m2m_field._is_self_referential = is_self_referential
-        
-        return m2m_field
 
-    # def get_form_field(self, field, **kwargs):
-    #     return field.to_form_field()
+        return m2m_field
 
     def get_filterform_field(self, field, **kwargs):
         return None
 
     def get_table_column_field(self, field, **kwargs):
-        return tables.ManyToManyColumn(
-            linkify_item=True,
-            orderable=False
-        )
+        return tables.ManyToManyColumn(linkify_item=True, orderable=False)
 
     def after_model_generation(self, instance, model, field_name):
         """
         After both models are generated, update the field's remote model references
         """
         field = model._meta.get_field(field_name)
-        
+
         # Skip model resolution for self-referential fields
-        if getattr(field, '_is_self_referential', False):
+        if getattr(field, "_is_self_referential", False):
             field.remote_field.model = model
             through_model = field.remote_field.through
-            through_model._meta.get_field('target').remote_field.model = model
-            through_model._meta.get_field('target').related_model = model
+            through_model._meta.get_field("target").remote_field.model = model
+            through_model._meta.get_field("target").related_model = model
             return
 
         content_type = ContentType.objects.get(pk=instance.related_object_type_id)
-        
+
         # Now we can safely resolve the target model
         if content_type.app_label == APP_LABEL:
             from netbox_custom_objects.models import CustomObjectType
-            custom_object_type_id = content_type.model.replace('table', '').replace('model', '')
+
+            custom_object_type_id = content_type.model.replace("table", "").replace(
+                "model", ""
+            )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
             to_model = custom_object_type.get_model()
         else:
-            to_ct = f'{content_type.app_label}.{content_type.model}'
+            to_ct = f"{content_type.app_label}.{content_type.model}"
             to_model = apps.get_model(to_ct)
 
         # Update the M2M field's model references
         field.remote_field.model = to_model
-        
+
         # Update through model's target field
         through_model = field.remote_field.through
-        target_field = through_model._meta.get_field('target')
+        target_field = through_model._meta.get_field("target")
         target_field.remote_field.model = to_model
         target_field.related_model = to_model
 
@@ -704,23 +705,28 @@ class MultiObjectFieldType(FieldType):
         field = model._meta.get_field(field_name)
 
         # For self-referential fields, use the current model
-        if getattr(field, '_is_self_referential', False):
+        if getattr(field, "_is_self_referential", False):
             to_model = model
         else:
             content_type = ContentType.objects.get(pk=instance.related_object_type_id)
             if content_type.app_label == APP_LABEL:
                 from netbox_custom_objects.models import CustomObjectType
-                custom_object_type_id = content_type.model.replace('table', '').replace('model', '')
-                custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
+
+                custom_object_type_id = content_type.model.replace("table", "").replace(
+                    "model", ""
+                )
+                custom_object_type = CustomObjectType.objects.get(
+                    pk=custom_object_type_id
+                )
                 to_model = custom_object_type.get_model()
             else:
                 to_model = content_type.model_class()
 
         # Create the through model with actual model references
         through = self.get_through_model(instance, model)
-        through._meta.get_field('target').remote_field.model = to_model
-        through._meta.get_field('target').related_model = to_model
-        
+        through._meta.get_field("target").remote_field.model = to_model
+        through._meta.get_field("target").related_model = to_model
+
         # Register the model with Django's app registry
         apps = model._meta.apps
 
@@ -736,7 +742,7 @@ class MultiObjectFieldType(FieldType):
         # Update the M2M field's through model and target model
         field.remote_field.through = through_model
         field.remote_field.model = to_model
-        
+
         # Create the through table
         with connection.schema_editor() as schema_editor:
             table_name = through_model._meta.db_table

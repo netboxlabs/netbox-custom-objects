@@ -1,31 +1,10 @@
-import datetime
-import logging
-from collections import defaultdict
-from contextlib import contextmanager, nullcontext
-from dataclasses import dataclass
-from utilities.string import title
-
-from django.contrib import messages
-from django.contrib.contenttypes.management import create_contenttypes
-from django.db import models, connection
-from django.db.models.fields.related_descriptors import create_forward_many_to_many_manager
-# from django.contrib.contenttypes.models import ContentType
-from django.db.models import ForeignKey, ManyToManyField
-from django.http import HttpResponseBadRequest
-from django.urls import reverse
 from django.apps import apps
 
-from netbox.plugins import get_plugin_config
-from netbox.plugins import PluginConfig
-from netbox.registry import registry
-from netbox.utils import register_request_processor
 from netbox_custom_objects.constants import APP_LABEL
-# from netbox_custom_objects.models import CustomObject, CustomObjectType
-# from netbox_custom_objects.models import ProxyManager
 
 __all__ = (
-    'AppsProxy',
-    'get_viewname',
+    "AppsProxy",
+    "get_viewname",
 )
 
 
@@ -85,25 +64,22 @@ def get_viewname(model, action=None, rest_api=False):
     :param action: A string indicating the desired action (if any); e.g. "add" or "list"
     :param rest_api: A boolean indicating whether this is a REST API view
     """
-    # is_plugin = isinstance(model._meta.app_config, PluginConfig)
-    # app_label = model._meta.app_label
-    # model_name = model._meta.model_name
     is_plugin = True
     app_label = APP_LABEL
-    model_name = 'customobject'
+    model_name = "customobject"
 
     if rest_api:
-        viewname = f'{app_label}-api:{model_name}'
+        viewname = f"{app_label}-api:{model_name}"
         if is_plugin:
-            viewname = f'plugins-api:{viewname}'
+            viewname = f"plugins-api:{viewname}"
         if action:
-            viewname = f'{viewname}-{action}'
+            viewname = f"{viewname}-{action}"
 
     else:
-        viewname = f'{app_label}:{model_name}'
+        viewname = f"{app_label}:{model_name}"
         if is_plugin:
-            viewname = f'plugins:{viewname}'
+            viewname = f"plugins:{viewname}"
         if action:
-            viewname = f'{viewname}_{action}'
+            viewname = f"{viewname}_{action}"
 
     return viewname
