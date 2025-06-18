@@ -251,11 +251,11 @@ class CustomObjectView(generic.ObjectView):
         # kwargs.pop('custom_object_type', None)
         return get_object_or_404(model.objects.all(), **self.kwargs)
 
-    # def get_extra_context(self, request, instance):
-    #     content_type = ContentType.objects.get_for_model(instance)
-    #     return {
-    #         'relations': CustomObjectRelation.objects.filter(field__related_object_type=content_type, object_id=instance.pk)
-    #     }
+    def get_extra_context(self, request, instance):
+        fields = instance.custom_object_type.fields.all().order_by('weight')
+        return {
+            'fields': fields,
+        }
 
 
 @register_model_view(CustomObject, 'edit')
