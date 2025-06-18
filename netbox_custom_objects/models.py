@@ -66,7 +66,7 @@ class CustomObject(
     # ExportTemplatesMixin,
     # JournalingMixin,
     # NotificationsMixin,
-    # TagsMixin,
+    TagsMixin,
     # EventRulesMixin,
     models.Model,
 ):
