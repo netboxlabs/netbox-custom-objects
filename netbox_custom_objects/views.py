@@ -105,6 +105,11 @@ class CustomObjectTypeDeleteView(generic.ObjectDeleteView):
     queryset = CustomObjectType.objects.all()
     default_return_url = "plugins:netbox_custom_objects:customobjecttype_list"
 
+    def _get_dependent_objects(self, obj):
+        dependent_objects = super()._get_dependent_objects(obj)
+        model = obj.get_model()
+        dependent_objects[model] = list(model.objects.all())
+        return dependent_objects
 
 #
 # Custom Object Type Fields
@@ -228,7 +233,7 @@ class CustomObjectView(generic.ObjectView):
 
     def get_object(self, **kwargs):
         custom_object_type = self.kwargs.pop("custom_object_type", None)
-        object_type = CustomObjectType.objects.get(name__iexact=custom_object_type)
+        object_type = get_object_or_404(CustomObjectType, name__iexact=custom_object_type)
         model = object_type.get_model()
         # kwargs.pop('custom_object_type', None)
         return get_object_or_404(model.objects.all(), **self.kwargs)
@@ -261,7 +266,7 @@ class CustomObjectEditView(generic.ObjectEditView):
         if self.object:
             return self.object
         custom_object_type = self.kwargs.pop("custom_object_type", None)
-        object_type = CustomObjectType.objects.get(name__iexact=custom_object_type)
+        object_type = get_object_or_404(CustomObjectType, name__iexact=custom_object_type)
         model = object_type.get_model()
         if not self.kwargs.get("pk", None):
             # We're creating a new object
@@ -318,7 +323,7 @@ class CustomObjectDeleteView(generic.ObjectDeleteView):
         if self.object:
             return self.object
         custom_object_type = self.kwargs.pop("custom_object_type", None)
-        object_type = CustomObjectType.objects.get(name__iexact=custom_object_type)
+        object_type = get_object_or_404(CustomObjectType, name__iexact=custom_object_type)
         model = object_type.get_model()
         return get_object_or_404(model.objects.all(), **self.kwargs)
 
