@@ -26,6 +26,9 @@ from netbox_custom_objects.constants import APP_LABEL
 
 class FieldType:
 
+    def get_display_value(self, instance, field_name):
+        return getattr(instance, field_name)
+
     def get_model_field(self, field, **kwargs):
         raise NotImplementedError
 
@@ -311,6 +314,9 @@ class SelectFieldType(FieldType):
 
 
 class MultiSelectFieldType(FieldType):
+    def get_display_value(self, instance, field_name):
+        return ", ".join(getattr(instance, field_name, []))
+
     def get_model_field(self, field, **kwargs):
         kwargs.update({"default": field.default, "unique": field.unique})
         return ArrayField(

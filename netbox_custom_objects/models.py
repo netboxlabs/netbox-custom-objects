@@ -274,9 +274,10 @@ class CustomObjectType(NetBoxModel):
             primary_field = self._field_objects.get(self._primary_field_id, None)
             primary_field_value = None
             if primary_field:
-                primary_field_value = getattr(self, primary_field["name"])
+                field_type = FIELD_TYPE_CLASS[primary_field["field"].type]()
+                primary_field_value = field_type.get_display_value(self, primary_field["name"])
             if not primary_field_value:
-                return f"unnamed row {self.id}"
+                return f"{self.custom_object_type.name} {self.id}"
             return str(primary_field_value) or str(self.id)
 
         def get_absolute_url(self):
