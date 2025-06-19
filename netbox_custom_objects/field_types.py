@@ -11,7 +11,6 @@ from django.utils.html import escape
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
 from extras.choices import CustomFieldTypeChoices, CustomFieldUIEditableChoices
-from rest_framework import serializers
 from utilities.api import get_serializer_for_model
 from utilities.forms.fields import (CSVChoiceField, CSVMultipleChoiceField,
                                     DynamicChoiceField,
@@ -20,7 +19,7 @@ from utilities.forms.fields import (CSVChoiceField, CSVMultipleChoiceField,
 from utilities.forms.utils import add_blank_choice
 from utilities.forms.widgets import (APISelect, APISelectMultiple, DatePicker,
                                      DateTimePicker)
-from utilities.templatetags.builtins.filters import render_markdown
+from utilities.templatetags.builtins.filters import linkify, render_markdown
 
 from netbox_custom_objects.constants import APP_LABEL
 
@@ -413,6 +412,9 @@ class ObjectFieldType(FieldType):
 
     def get_filterform_field(self, field, **kwargs):
         return None
+
+    def render_table_column(self, value):
+        return linkify(value)
 
     def get_serializer_field(self, field, **kwargs):
         related_model_class = field.related_object_type.model_class()
