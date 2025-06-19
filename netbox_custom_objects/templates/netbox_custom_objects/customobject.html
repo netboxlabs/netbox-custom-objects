@@ -104,7 +104,6 @@
                     {% for relation in field_values.all %}
                       <tr>
                         <th scope="row">{{ relation|linkify }}</th>
-                        <td>{{ relation.id }}</td>
                       </tr>
                     {% endfor %}
                   </table>
