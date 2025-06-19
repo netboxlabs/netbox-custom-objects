@@ -42,10 +42,7 @@ class CustomContentTypeChoiceField(ContentTypeChoiceField):
             custom_object_type_id = obj.model.replace("table", "").replace("model", "")
             if custom_object_type_id.isdigit():
                 try:
-                    custom_object_type = CustomObjectType.objects.get(
-                        pk=custom_object_type_id
-                    )
-                    return f"Custom Objects > {custom_object_type.name}"
+                    return CustomObjectType.get_content_type_label(custom_object_type_id)
                 except CustomObjectType.DoesNotExist:
                     pass
         try:

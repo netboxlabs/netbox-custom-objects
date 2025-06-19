@@ -46,6 +46,7 @@ from utilities.forms.fields import (CSVChoiceField, CSVModelChoiceField,
 from utilities.forms.utils import add_blank_choice
 from utilities.forms.widgets import (APISelect, APISelectMultiple, DatePicker,
                                      DateTimePicker)
+from utilities.object_types import object_type_name
 from utilities.querysets import RestrictedQuerySet
 from utilities.string import title
 from utilities.templatetags.builtins.filters import render_markdown
@@ -204,6 +205,13 @@ class CustomObjectType(NetBoxModel):
 
     def get_verbose_name_plural(self):
         return self.verbose_name_plural or self.title_case_name_plural
+
+    @staticmethod
+    def get_content_type_label(custom_object_type_id):
+        custom_object_type = CustomObjectType.objects.get(
+            pk=custom_object_type_id
+        )
+        return f"Custom Objects > {custom_object_type.name}"
 
     def get_model(
         self,
@@ -588,6 +596,13 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         if self.choice_set:
             return self.choice_set.choices
         return []
+
+    @property
+    def related_object_type_label(self):
+        if self.related_object_type.app_label == APP_LABEL:
+            custom_object_type_id = self.related_object_type.model.replace("table", "").replace("model", "")
+            return CustomObjectType.get_content_type_label(custom_object_type_id)
+        return object_type_name(self.related_object_type, include_app=True)
 
     def get_ui_visible_color(self):
         return CustomFieldUIVisibleChoices.colors.get(self.ui_visible)

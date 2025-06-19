@@ -1,12 +1,14 @@
 from django import template
 from extras.choices import CustomFieldTypeChoices, CustomFieldUIVisibleChoices
-from utilities.object_types import object_type_name
 
 from netbox_custom_objects.models import CustomObjectTypeField
 
 __all__ = (
     "get_field_object_type",
+    "get_field_type_verbose_name",
     "get_field_value",
+    "get_field_is_ui_visible",
+    "get_child_relations",
 )
 
 register = template.Library()
@@ -16,7 +18,7 @@ custom_field_type_verbose_names = {c[0]: c[1] for c in CustomFieldTypeChoices.CH
 
 @register.filter(name="get_field_object_type")
 def get_field_object_type(field: CustomObjectTypeField) -> str:
-    return object_type_name(field.related_object_type, include_app=True)
+    return field.related_object_type_label
 
 
 @register.filter(name="get_field_type_verbose_name")
