@@ -150,7 +150,7 @@ class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
         if self.queryset:
             return self.queryset
         custom_object_type = self.kwargs.get("custom_object_type", None)
-        self.custom_object_type = CustomObjectType.objects.get(
+        self.custom_object_type = get_object_or_404(CustomObjectType,
             name__iexact=custom_object_type
         )
         model = self.custom_object_type.get_model()
