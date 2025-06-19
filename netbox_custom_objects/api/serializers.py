@@ -5,8 +5,8 @@ from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from rest_framework.reverse import reverse
 
-from netbox_custom_objects.models import (CustomObject, CustomObjectType,
-                                          CustomObjectTypeField)
+from netbox_custom_objects import field_types
+from netbox_custom_objects.models import CustomObject, CustomObjectType, CustomObjectTypeField
 
 __all__ = (
     "CustomObjectTypeSerializer",
@@ -195,6 +195,7 @@ class CustomObjectSerializer(NetBoxModelSerializer):
 
 
 def get_serializer_class(model):
+    model_fields = model.custom_object_type.fields.all()
     meta = type(
         "Meta",
         (),
@@ -208,6 +209,13 @@ def get_serializer_class(model):
         "Meta": meta,
         "__module__": "database.serializers",
     }
+
+    for field in model_fields:
+        field_type = field_types.FIELD_TYPE_CLASS[field.type]()
+        try:
+            attrs[field.name] = field_type.get_serializer_field(field)
+        except NotImplementedError:
+            print(f"serializer: {field.name} field is not implemented; using a default serializer field")
 
     serializer = type(
         f"{model._meta.object_name}Serializer",

@@ -12,6 +12,7 @@ from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
 from extras.choices import CustomFieldTypeChoices, CustomFieldUIEditableChoices
 from rest_framework import serializers
+from utilities.api import get_serializer_for_model
 from utilities.forms.fields import (CSVChoiceField, CSVMultipleChoiceField,
                                     DynamicChoiceField,
                                     DynamicMultipleChoiceField, JSONField,
@@ -85,19 +86,19 @@ class TextFieldType(FieldType):
             required=field.required, initial=field.default, validators=validators
         )
 
-    def get_serializer_field(self, field, **kwargs):
-        required = kwargs.get("required", False)
-        validators = kwargs.pop("validators", None) or []
-        # validators.append(self.validator)
-        return serializers.CharField(
-            **{
-                "required": required,
-                "allow_null": not required,
-                "allow_blank": not required,
-                "validators": validators,
-                **kwargs,
-            }
-        )
+    # def get_serializer_field(self, field, **kwargs):
+    #     required = kwargs.get("required", False)
+    #     validators = kwargs.pop("validators", None) or []
+    #     # validators.append(self.validator)
+    #     return serializers.CharField(
+    #         **{
+    #             "required": required,
+    #             "allow_null": not required,
+    #             "allow_blank": not required,
+    #             "validators": validators,
+    #             **kwargs,
+    #         }
+    #     )
 
     def get_bulk_edit_form_field(self, field, **kwargs):
         return forms.CharField(
@@ -413,6 +414,13 @@ class ObjectFieldType(FieldType):
     def get_filterform_field(self, field, **kwargs):
         return None
 
+    def get_serializer_field(self, field, **kwargs):
+        related_model_class = field.related_object_type.model_class()
+        if not related_model_class:
+            raise NotImplementedError("Custom object serializers not implemented")
+        serializer = get_serializer_for_model(related_model_class)
+        return serializer(required=field.required, nested=True)
+
 
 class CustomManyToManyManager(Manager):
     def __init__(self, instance=None, field_name=None):
@@ -656,6 +664,13 @@ class MultiObjectFieldType(FieldType):
 
     def get_table_column_field(self, field, **kwargs):
         return tables.ManyToManyColumn(linkify_item=True, orderable=False)
+
+    def get_serializer_field(self, field, **kwargs):
+        related_model_class = field.related_object_type.model_class()
+        if not related_model_class:
+            raise NotImplementedError("Custom object serializers not implemented")
+        serializer = get_serializer_for_model(related_model_class)
+        return serializer(required=field.required, nested=True, many=True)
 
     def after_model_generation(self, instance, model, field_name):
         """
