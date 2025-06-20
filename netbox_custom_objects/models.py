@@ -15,6 +15,7 @@ from django.core.validators import RegexValidator, ValidationError
 from django.db import connection, models
 from django.db.models import F, Func, Q, Value
 from django.db.models.expressions import RawSQL
+from django.db.models.functions import Lower
 from django.urls import reverse
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
@@ -83,6 +84,13 @@ class CustomObjectType(NetBoxModel):
     class Meta:
         verbose_name = "Custom Object Type"
         ordering = ("name",)
+        constraints = [
+            models.UniqueConstraint(
+                Lower('name'),
+                name='%(app_label)s_%(class)s_name',
+                violation_error_message=_("A Custom Object Type with this name already exists.")
+            ),
+        ]
 
     def __str__(self):
         return self.name
