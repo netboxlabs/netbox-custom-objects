@@ -121,9 +121,9 @@ class LongTextFieldType(FieldType):
         kwargs.update({"default": field.default, "unique": field.unique})
         return models.TextField(null=True, blank=True, **kwargs)
 
-    def get_form_field(self, field, required, label, **kwargs):
+    def get_form_field(self, field, **kwargs):
         widget = forms.Textarea
-        validators = None
+        validators = []
         if field.validation_regex:
             validators = [
                 RegexValidator(
