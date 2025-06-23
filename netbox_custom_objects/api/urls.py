@@ -18,8 +18,8 @@ custom_object_detail = views.CustomObjectViewSet.as_view(
 
 class CustomObjectsAPIRootView(APIView):
     """
-    Extends the get method of DRF's APIRootView to handle a tuple value for url_name, which is interpreted to get
-    the name of each custom object type available at startup time
+    This is the root of the NetBox Custom Objects plugin API. Custom Object Types defined at application startup
+    are listed by lowercased name; e.g. `/api/plugins/custom-objects/cat/`.
     """
     _ignore_model_permissions = True
     schema = None  # exclude from schema
