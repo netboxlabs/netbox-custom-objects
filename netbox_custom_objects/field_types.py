@@ -315,7 +315,7 @@ class SelectFieldType(FieldType):
 
 class MultiSelectFieldType(FieldType):
     def get_display_value(self, instance, field_name):
-        return ", ".join(getattr(instance, field_name, []))
+        return ", ".join(getattr(instance, field_name) or [])
 
     def get_model_field(self, field, **kwargs):
         kwargs.update({"default": field.default, "unique": field.unique})

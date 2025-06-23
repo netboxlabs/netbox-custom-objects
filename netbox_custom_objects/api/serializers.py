@@ -119,6 +119,7 @@ class CustomObjectTypeSerializer(NetBoxModelSerializer):
         return super().create(validated_data)
 
 
+# TODO: Remove or reduce to a stub (not needed as all custom object serializers are generated via get_serializer_class)
 class CustomObjectSerializer(NetBoxModelSerializer):
     relation_fields = None
 
@@ -179,7 +180,7 @@ class CustomObjectSerializer(NetBoxModelSerializer):
         if hasattr(obj, "pk") and obj.pk in (None, ""):
             return None
 
-        view_name = "plugins-api:netbox_custom_objects-api:custom-object-detail"
+        view_name = "plugins-api:netbox_custom_objects-api:customobject-detail"
         lookup_value = getattr(obj, "pk")
         kwargs = {
             "pk": lookup_value,
@@ -205,9 +206,26 @@ def get_serializer_class(model):
         },
     )
 
+    def get_url(self, obj):
+        # Unsaved objects will not yet have a valid URL.
+        if hasattr(obj, "pk") and obj.pk in (None, ""):
+            return None
+
+        view_name = "plugins-api:netbox_custom_objects-api:customobject-detail"
+        lookup_value = getattr(obj, "pk")
+        kwargs = {
+            "pk": lookup_value,
+            "custom_object_type": obj.custom_object_type.name.lower(),
+        }
+        request = self.context["request"]
+        format = self.context.get("format")
+        return reverse(view_name, kwargs=kwargs, request=request, format=format)
+
     attrs = {
         "Meta": meta,
         "__module__": "database.serializers",
+        "url": serializers.SerializerMethodField(),
+        "get_url": get_url,
     }
 
     for field in model_fields:
