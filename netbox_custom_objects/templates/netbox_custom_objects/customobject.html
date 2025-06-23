@@ -35,7 +35,7 @@
     {% custom_object_edit_button object %}
   {% endif %}
   {% if request.user|can_delete:object %}
-{#    {% delete_button object %}#}
+    {% custom_object_delete_button object %}
   {% endif %}
 {% endblock control-buttons %}
 
