@@ -124,13 +124,15 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
         )
         if self.cleaned_data["primary"]:
             primary_fields.update(primary=False)
-        else:
-            if self.instance:
-                other_primary_fields = primary_fields.exclude(pk=self.instance.id)
-            else:
-                other_primary_fields = primary_fields
-            if not other_primary_fields.exists():
-                return True
+        # It should be possible to have NO primary fields set on an object, and thus for its name to appear
+        # as the default of e.g. "Cat 1"; therefore don't try to guarantee that a primary is set
+        # else:
+        #     if self.instance:
+        #         other_primary_fields = primary_fields.exclude(pk=self.instance.id)
+        #     else:
+        #         other_primary_fields = primary_fields
+        #     if not other_primary_fields.exists():
+        #         return True
         return self.cleaned_data["primary"]
 
     def save(self, commit=True):
