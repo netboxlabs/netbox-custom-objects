@@ -22,6 +22,11 @@ class CustomObjectViewSet(ModelViewSet):
     serializer_class = serializers.CustomObjectSerializer
     model = None
 
+    def get_view_name(self):
+        if self.model:
+            return self.model.custom_object_type.name
+        return super().get_view_name()
+
     def get_serializer_class(self):
         return serializers.get_serializer_class(self.model)
 

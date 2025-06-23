@@ -21,6 +21,9 @@ class CustomObjectsAPIRootView(APIView):
     This is the root of the NetBox Custom Objects plugin API. Custom Object Types defined at application startup
     are listed by lowercased name; e.g. `/api/plugins/custom-objects/cat/`.
     """
+    def get_view_name(self):
+        return "Custom Objects API Root"
+
     _ignore_model_permissions = True
     schema = None  # exclude from schema
     api_root_dict = None
