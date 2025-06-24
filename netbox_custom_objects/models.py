@@ -552,6 +552,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             ),
         )
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._name = self.__dict__.get("name")
+        self._original_name = self.name
+
     def __str__(self):
         return self.label or self.name.replace("_", " ").capitalize()
 
@@ -581,12 +586,6 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     @property
     def docs_url(self):
         return f"{settings.STATIC_URL}docs/models/extras/customfield/"
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        # Cache instance's original name so we can check later whether it has changed
-        self._name = self.__dict__.get("name")
 
     @property
     def search_type(self):
@@ -1079,7 +1078,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     field_type.create_m2m_table(self, model, self.name)
             else:
                 old_field = field_type.get_model_field(self.original)
-                old_field.contribute_to_class(model, self.name)
+                old_field.contribute_to_class(model, self._original_name)
                 schema_editor.alter_field(model, old_field, model_field)
         super().save(*args, **kwargs)
 
