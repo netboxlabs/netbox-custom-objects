@@ -1,7 +1,7 @@
 from django.db.models import Q
 from netbox.filtersets import NetBoxModelFilterSet
 
-from .models import *
+from .models import CustomObject
 
 __all__ = ("CustomObjectFilterSet",)
 

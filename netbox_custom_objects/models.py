@@ -28,7 +28,7 @@ from extras.constants import CUSTOMFIELD_EMPTY_VALUES
 from extras.models.customfields import SEARCH_TYPES
 from netbox.models import ChangeLoggedModel, NetBoxModel
 from netbox.models.features import (BookmarksMixin, ChangeLoggingMixin,
-                                    CloningMixin, CustomFieldsMixin,
+                                    CloningMixin,
                                     CustomLinksMixin, CustomValidationMixin,
                                     EventRulesMixin, ExportTemplatesMixin,
                                     JournalingMixin, NotificationsMixin,
@@ -1107,8 +1107,8 @@ class CustomObjectObjectTypeManager(ObjectTypeManager):
         in registry['models'] and intended for reference by other objects.
         """
         q = Q()
-        for app_label, models in registry["models"].items():
-            q |= Q(app_label=app_label, model__in=models)
+        for app_label, model_list in registry["models"].items():
+            q |= Q(app_label=app_label, model__in=model_list)
         # Add CTs of custom object models, but not the "through" tables
         q |= Q(app_label=APP_LABEL)
         return (
