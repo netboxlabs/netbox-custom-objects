@@ -16,6 +16,7 @@ custom_object_detail = views.CustomObjectViewSet.as_view(
 )
 
 
+# TODO: Figure out a way to populate browseable API dynamically during runtime
 class CustomObjectsAPIRootView(APIView):
     """
     This is the root of the NetBox Custom Objects plugin API. Custom Object Types defined at application startup
@@ -75,8 +76,8 @@ class CustomObjectsRouter(NetBoxRouter):
         return self.APIRootView.as_view(api_root_dict=api_root_dict)
 
 
-router = CustomObjectsRouter()
-router.APIRootView = CustomObjectsAPIRootView
+router = NetBoxRouter()
+router.APIRootView = views.RootView
 router.register("custom-object-types", views.CustomObjectTypeViewSet)
 router.register("custom-object-type-fields", views.CustomObjectTypeFieldViewSet)
 
