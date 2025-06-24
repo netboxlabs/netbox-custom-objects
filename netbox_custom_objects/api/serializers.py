@@ -5,8 +5,8 @@ from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from rest_framework.reverse import reverse
 
-from netbox_custom_objects.models import (CustomObject, CustomObjectType,
-                                          CustomObjectTypeField)
+from netbox_custom_objects import field_types
+from netbox_custom_objects.models import CustomObject, CustomObjectType, CustomObjectTypeField
 
 __all__ = (
     "CustomObjectTypeSerializer",
@@ -119,6 +119,7 @@ class CustomObjectTypeSerializer(NetBoxModelSerializer):
         return super().create(validated_data)
 
 
+# TODO: Remove or reduce to a stub (not needed as all custom object serializers are generated via get_serializer_class)
 class CustomObjectSerializer(NetBoxModelSerializer):
     relation_fields = None
 
@@ -179,7 +180,7 @@ class CustomObjectSerializer(NetBoxModelSerializer):
         if hasattr(obj, "pk") and obj.pk in (None, ""):
             return None
 
-        view_name = "plugins-api:netbox_custom_objects-api:custom-object-detail"
+        view_name = "plugins-api:netbox_custom_objects-api:customobject-detail"
         lookup_value = getattr(obj, "pk")
         kwargs = {
             "pk": lookup_value,
@@ -195,6 +196,7 @@ class CustomObjectSerializer(NetBoxModelSerializer):
 
 
 def get_serializer_class(model):
+    model_fields = model.custom_object_type.fields.all()
     meta = type(
         "Meta",
         (),
@@ -204,10 +206,34 @@ def get_serializer_class(model):
         },
     )
 
+    def get_url(self, obj):
+        # Unsaved objects will not yet have a valid URL.
+        if hasattr(obj, "pk") and obj.pk in (None, ""):
+            return None
+
+        view_name = "plugins-api:netbox_custom_objects-api:customobject-detail"
+        lookup_value = getattr(obj, "pk")
+        kwargs = {
+            "pk": lookup_value,
+            "custom_object_type": obj.custom_object_type.name.lower(),
+        }
+        request = self.context["request"]
+        format = self.context.get("format")
+        return reverse(view_name, kwargs=kwargs, request=request, format=format)
+
     attrs = {
         "Meta": meta,
         "__module__": "database.serializers",
+        "url": serializers.SerializerMethodField(),
+        "get_url": get_url,
     }
+
+    for field in model_fields:
+        field_type = field_types.FIELD_TYPE_CLASS[field.type]()
+        try:
+            attrs[field.name] = field_type.get_serializer_field(field)
+        except NotImplementedError:
+            print(f"serializer: {field.name} field is not implemented; using a default serializer field")
 
     serializer = type(
         f"{model._meta.object_name}Serializer",

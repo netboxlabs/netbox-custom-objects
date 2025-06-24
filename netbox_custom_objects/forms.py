@@ -11,7 +11,7 @@ from utilities.forms.rendering import FieldSet
 from utilities.object_types import object_type_name
 
 from netbox_custom_objects.constants import APP_LABEL
-from netbox_custom_objects.models import (CustomObject, CustomObjectObjectType,
+from netbox_custom_objects.models import (CustomObjectObjectType,
                                           CustomObjectType,
                                           CustomObjectTypeField)
 
@@ -42,10 +42,7 @@ class CustomContentTypeChoiceField(ContentTypeChoiceField):
             custom_object_type_id = obj.model.replace("table", "").replace("model", "")
             if custom_object_type_id.isdigit():
                 try:
-                    custom_object_type = CustomObjectType.objects.get(
-                        pk=custom_object_type_id
-                    )
-                    return f"Custom Objects > {custom_object_type.name}"
+                    return CustomObjectType.get_content_type_label(custom_object_type_id)
                 except CustomObjectType.DoesNotExist:
                     pass
         try:
@@ -127,13 +124,15 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
         )
         if self.cleaned_data["primary"]:
             primary_fields.update(primary=False)
-        else:
-            if self.instance:
-                other_primary_fields = primary_fields.exclude(pk=self.instance.id)
-            else:
-                other_primary_fields = primary_fields
-            if not other_primary_fields.exists():
-                return True
+        # It should be possible to have NO primary fields set on an object, and thus for its name to appear
+        # as the default of e.g. "Cat 1"; therefore don't try to guarantee that a primary is set
+        # else:
+        #     if self.instance:
+        #         other_primary_fields = primary_fields.exclude(pk=self.instance.id)
+        #     else:
+        #         other_primary_fields = primary_fields
+        #     if not other_primary_fields.exists():
+        #         return True
         return self.cleaned_data["primary"]
 
     def save(self, commit=True):
@@ -148,51 +147,3 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
                 if not model_field.exists():
                     model_field.set(qs)
         return obj
-
-
-class CustomObjectForm(NetBoxModelForm):
-    fieldsets = (FieldSet("name", "custom_object_type", "tags"),)
-    comments = CommentField()
-
-    class Meta:
-        model = CustomObject
-        fields = ("name", "custom_object_type", "comments", "tags")
-
-    def _get_custom_fields(self, content_type):
-        if self.instance.pk is None:
-            return CustomObjectTypeField.objects.none()
-        return CustomObjectTypeField.objects.filter(
-            custom_object_type=self.instance.custom_object_type
-        ).exclude(ui_editable=CustomFieldUIEditableChoices.HIDDEN)
-
-    def clean(self):
-
-        # Save custom field data on instance
-        new_data = {}
-        for cf_name, customfield in self.custom_fields.items():
-            if cf_name not in self.fields:
-                # Custom fields may be absent when performing bulk updates via import
-                continue
-            key = cf_name[3:]  # Strip "cf_" from field name
-            value = self.cleaned_data.get(cf_name)
-
-            # Convert "empty" values to null
-            if value in self.fields[cf_name].empty_values:
-                new_data[key] = None
-            else:
-                if (
-                    customfield.type == CustomFieldTypeChoices.TYPE_JSON
-                    and type(value) is str
-                ):
-                    value = json.loads(value)
-                new_data[key] = customfield.serialize(value)
-
-            self.cleaned_data["data"] = new_data
-
-        return super().clean()
-
-    def _save_m2m(self):
-        return super()._save_m2m()
-
-    def save(self, commit=True):
-        return super().save(commit=commit)

@@ -13,7 +13,7 @@ from django.utils.html import escape
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
 from extras.choices import CustomFieldTypeChoices, CustomFieldUIEditableChoices
-from rest_framework import serializers
+from utilities.api import get_serializer_for_model
 from utilities.forms.fields import (CSVChoiceField, CSVMultipleChoiceField,
                                     DynamicChoiceField,
                                     DynamicMultipleChoiceField, JSONField,
@@ -21,12 +21,15 @@ from utilities.forms.fields import (CSVChoiceField, CSVMultipleChoiceField,
 from utilities.forms.utils import add_blank_choice
 from utilities.forms.widgets import (APISelect, APISelectMultiple, DatePicker,
                                      DateTimePicker)
-from utilities.templatetags.builtins.filters import render_markdown
+from utilities.templatetags.builtins.filters import linkify, render_markdown
 
 from netbox_custom_objects.constants import APP_LABEL
 
 
 class FieldType:
+
+    def get_display_value(self, instance, field_name):
+        return getattr(instance, field_name)
 
     def get_model_field(self, field, **kwargs):
         raise NotImplementedError
@@ -53,8 +56,8 @@ class FieldType:
 
         return form_field
 
-    def get_bulk_edit_form_field(self, field, **kwargs):
-        raise NotImplementedError
+    # def get_bulk_edit_form_field(self, field, **kwargs):
+    #     raise NotImplementedError
 
     def get_table_column_field(self, field, **kwargs):
         raise NotImplementedError
@@ -87,25 +90,25 @@ class TextFieldType(FieldType):
             required=field.required, initial=field.default, validators=validators
         )
 
-    def get_serializer_field(self, field, **kwargs):
-        required = kwargs.get("required", False)
-        validators = kwargs.pop("validators", None) or []
-        # validators.append(self.validator)
-        return serializers.CharField(
-            **{
-                "required": required,
-                "allow_null": not required,
-                "allow_blank": not required,
-                "validators": validators,
-                **kwargs,
-            }
-        )
+    # def get_serializer_field(self, field, **kwargs):
+    #     required = kwargs.get("required", False)
+    #     validators = kwargs.pop("validators", None) or []
+    #     # validators.append(self.validator)
+    #     return serializers.CharField(
+    #         **{
+    #             "required": required,
+    #             "allow_null": not required,
+    #             "allow_blank": not required,
+    #             "validators": validators,
+    #             **kwargs,
+    #         }
+    #     )
 
-    def get_bulk_edit_form_field(self, field, **kwargs):
-        return forms.CharField(
-            max_length=200,
-            required=False,
-        )
+    # def get_bulk_edit_form_field(self, field, **kwargs):
+    #     return forms.CharField(
+    #         max_length=200,
+    #         required=False,
+    #     )
 
     def get_filterform_field(self, field, **kwargs):
         return forms.CharField(
@@ -120,9 +123,9 @@ class LongTextFieldType(FieldType):
         kwargs.update({"default": field.default, "unique": field.unique})
         return models.TextField(null=True, blank=True, **kwargs)
 
-    def get_form_field(self, field, required, label, **kwargs):
+    def get_form_field(self, field, **kwargs):
         widget = forms.Textarea
-        validators = None
+        validators = []
         if field.validation_regex:
             validators = [
                 RegexValidator(
@@ -141,12 +144,12 @@ class LongTextFieldType(FieldType):
             validators=validators,
         )
 
-    def get_bulk_edit_form_field(self, field, **kwargs):
-        return forms.CharField(
-            label=field,
-            widget=forms.Textarea(),
-            required=False,
-        )
+    # def get_bulk_edit_form_field(self, field, **kwargs):
+    #     return forms.CharField(
+    #         label=field,
+    #         widget=forms.Textarea(),
+    #         required=False,
+    #     )
 
     def render_table_column(self, value):
         return render_markdown(value)
@@ -313,6 +316,9 @@ class SelectFieldType(FieldType):
 
 
 class MultiSelectFieldType(FieldType):
+    def get_display_value(self, instance, field_name):
+        return ", ".join(getattr(instance, field_name) or [])
+
     def get_model_field(self, field, **kwargs):
         kwargs.update({"default": field.default, "unique": field.unique})
         return ArrayField(
@@ -416,6 +422,16 @@ class ObjectFieldType(FieldType):
 
     def get_filterform_field(self, field, **kwargs):
         return None
+
+    def render_table_column(self, value):
+        return linkify(value)
+
+    def get_serializer_field(self, field, **kwargs):
+        related_model_class = field.related_object_type.model_class()
+        if not related_model_class:
+            raise NotImplementedError("Custom object serializers not implemented")
+        serializer = get_serializer_for_model(related_model_class)
+        return serializer(required=field.required, nested=True)
 
 
 class CustomManyToManyManager(Manager):
@@ -660,6 +676,13 @@ class MultiObjectFieldType(FieldType):
 
     def get_table_column_field(self, field, **kwargs):
         return tables.ManyToManyColumn(linkify_item=True, orderable=False)
+
+    def get_serializer_field(self, field, **kwargs):
+        related_model_class = field.related_object_type.model_class()
+        if not related_model_class:
+            raise NotImplementedError("Custom object serializers not implemented")
+        serializer = get_serializer_for_model(related_model_class)
+        return serializer(required=field.required, nested=True, many=True)
 
     def after_model_generation(self, instance, model, field_name):
         """

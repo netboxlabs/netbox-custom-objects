@@ -91,10 +91,15 @@ def custom_object_edit_button(instance):
     }
 
 
-@register.inclusion_tag("buttons/delete.html")
+@register.inclusion_tag("buttons/custom_objects_delete.html")
 def custom_object_delete_button(instance):
     viewname = get_viewname(instance, "delete")
-    url = reverse(viewname, kwargs={"pk": instance.pk})
+    url = reverse(
+        viewname, kwargs={
+            "pk": instance.pk,
+            "custom_object_type": instance.custom_object_type.name.lower(),
+        },
+    )
 
     return {
         "url": url,

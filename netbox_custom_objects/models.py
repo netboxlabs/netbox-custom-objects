@@ -46,6 +46,7 @@ from utilities.forms.fields import (CSVChoiceField, CSVModelChoiceField,
 from utilities.forms.utils import add_blank_choice
 from utilities.forms.widgets import (APISelect, APISelectMultiple, DatePicker,
                                      DateTimePicker)
+from utilities.object_types import object_type_name
 from utilities.querysets import RestrictedQuerySet
 from utilities.string import title
 from utilities.templatetags.builtins.filters import render_markdown
@@ -56,6 +57,21 @@ from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
 from netbox_custom_objects.utilities import AppsProxy
 
 USER_TABLE_DATABASE_NAME_PREFIX = "custom_objects_"
+
+class CustomObject(
+    # BookmarksMixin,
+    ChangeLoggingMixin,
+    # CloningMixin,
+    # CustomLinksMixin,
+    # CustomValidationMixin,
+    # ExportTemplatesMixin,
+    # JournalingMixin,
+    # NotificationsMixin,
+    TagsMixin,
+    # EventRulesMixin,
+    models.Model,
+):
+    objects = RestrictedQuerySet.as_manager()
 
 
 class CustomObjectType(NetBoxModel):
@@ -190,6 +206,13 @@ class CustomObjectType(NetBoxModel):
     def get_verbose_name_plural(self):
         return self.verbose_name_plural or self.title_case_name_plural
 
+    @staticmethod
+    def get_content_type_label(custom_object_type_id):
+        custom_object_type = CustomObjectType.objects.get(
+            pk=custom_object_type_id
+        )
+        return f"Custom Objects > {custom_object_type.name}"
+
     def get_model(
         self,
         fields=None,
@@ -251,9 +274,10 @@ class CustomObjectType(NetBoxModel):
             primary_field = self._field_objects.get(self._primary_field_id, None)
             primary_field_value = None
             if primary_field:
-                primary_field_value = getattr(self, primary_field["name"])
+                field_type = FIELD_TYPE_CLASS[primary_field["field"].type]()
+                primary_field_value = field_type.get_display_value(self, primary_field["name"])
             if not primary_field_value:
-                return f"unnamed row {self.id}"
+                return f"{self.custom_object_type.name} {self.id}"
             return str(primary_field_value) or str(self.id)
 
         def get_absolute_url(self):
@@ -290,7 +314,7 @@ class CustomObjectType(NetBoxModel):
         # Create the model class.
         model = type(
             str(model_name),
-            (models.Model,),
+            (CustomObject,),
             attrs,
         )
 
@@ -342,133 +366,6 @@ class ProxyManager(models.Manager):
 
     def get_queryset(self):
         return super().get_queryset().filter(custom_object_type=self.custom_object_type)
-
-
-class CustomObject(
-    BookmarksMixin,
-    ChangeLoggingMixin,
-    CloningMixin,
-    # CustomFieldsMixin,
-    CustomLinksMixin,
-    CustomValidationMixin,
-    ExportTemplatesMixin,
-    JournalingMixin,
-    NotificationsMixin,
-    TagsMixin,
-    EventRulesMixin,
-    models.Model,
-):
-    custom_object_type = models.ForeignKey(
-        CustomObjectType, on_delete=models.CASCADE, related_name="custom_objects"
-    )
-    name = models.CharField(max_length=100, unique=True)
-    data = models.JSONField(blank=True, default=dict)
-
-    objects = RestrictedQuerySet.as_manager()
-
-    class Meta:
-        verbose_name = "Custom Object"
-
-    def __str__(self):
-        return self.name
-
-    @property
-    def formatted_data(self):
-        result = "<ul>"
-        for field_name, field in self.custom_object_type.schema.items():
-            value = self.data.get(field_name)
-            field_type = field.get("type")
-            if field_type in ["object", "multiobject"]:
-                content_type = ContentType.objects.get(
-                    app_label=field["app_label"], model=field["model"]
-                )
-                model_class = content_type.model_class()
-                if field_type == "object":
-                    instance = model_class.objects.get(pk=value["object_id"])
-                    url = instance.get_absolute_url()
-                    result += f'<li>{field_name}: <a href="{url}">{instance}</a></li>'
-                    continue
-                if field_type == "multiobject":
-                    result += f"<li>{field_name}: <ul>"
-                    for item in value:
-                        instance = model_class.objects.get(pk=item["object_id"])
-                        url = instance.get_absolute_url()
-                        result += f'<li><a href="{url}">{instance}</a></li>'
-                    result += "</ul></li>"
-                    continue
-            result += f"<li>{field_name}: {value}</li>"
-        result += "</ul>"
-        return result
-
-    @property
-    def custom_field_data(self):
-        return self.data
-
-    @property
-    def fields(self):
-        result = {}
-        for field in self.custom_object_type.fields.all():
-            result[field.name] = self.get_field_value(field)
-        return result
-
-    def get_field_value(self, field):
-        if field.type == CustomFieldTypeChoices.TYPE_OBJECT:
-            return field.model_class.objects.filter(pk=self.data.get(field.name))
-        if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-            return field.model_class.objects.filter(
-                pk__in=self.data.get(field.name) or []
-            )
-        return self.data.get(field.name)
-
-    def get_absolute_url(self):
-        return reverse("plugins:netbox_custom_objects:customobject", args=[self.pk])
-
-    def clean(self):
-        super().clean()
-
-        custom_fields = CustomObjectTypeField.objects.filter(
-            custom_object_type=self.custom_object_type
-        )
-
-        # Validate all field values
-        for field_name, value in self.custom_field_data.items():
-            # TODO: Maybe don't need to throw an error if an unknown field is in data (may have been deleted)
-            try:
-                custom_field = custom_fields.get(name=field_name)
-            except CustomObjectTypeField.DoesNotExist:
-                # raise ValidationError(_("Unknown field name '{name}' in custom field data.").format(
-                #     name=field_name
-                # ))
-                continue
-            try:
-                custom_field.validate(value)
-            except ValidationError as e:
-                raise ValidationError(
-                    _("Invalid value for custom field '{name}': {error}").format(
-                        name=field_name, error=e.message
-                    )
-                )
-
-            # Validate uniqueness if enforced
-            # TODO: change this to validate uniqueness per custom_object
-            if custom_field.unique and value not in CUSTOMFIELD_EMPTY_VALUES:
-                if (
-                    self._meta.model.objects.exclude(pk=self.pk)
-                    .filter(**{f"custom_field_data__{field_name}": value})
-                    .exists()
-                ):
-                    raise ValidationError(
-                        _("Custom field '{name}' must have a unique value.").format(
-                            name=field_name
-                        )
-                    )
-
-        # Check for missing required values
-        for cf in custom_fields:
-            if cf.required and cf.name not in self.custom_field_data:
-                raise ValidationError(
-                    _("Missing required custom field '{name}'.").format(name=cf.name)
-                )
 
 
 class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
@@ -633,6 +530,10 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     )
     comments = models.TextField(verbose_name=_("comments"), blank=True)
 
+    clone_fields = (
+        'custom_object_type',
+    )
+
     # For non-object fields, other field attribs (such as choices, length, required) should be added here as a
     # superset, or stored in a JSON field
     # options = models.JSONField(blank=True, default=dict)
@@ -696,6 +597,13 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         if self.choice_set:
             return self.choice_set.choices
         return []
+
+    @property
+    def related_object_type_label(self):
+        if self.related_object_type.app_label == APP_LABEL:
+            custom_object_type_id = self.related_object_type.model.replace("table", "").replace("model", "")
+            return CustomObjectType.get_content_type_label(custom_object_type_id)
+        return object_type_name(self.related_object_type, include_app=True)
 
     def get_ui_visible_color(self):
         return CustomFieldUIVisibleChoices.colors.get(self.ui_visible)
@@ -924,193 +832,6 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             model = self.related_object_type.model_class()
             return model.objects.filter(pk__in=value)
         return value
-
-    def to_form_field(
-        self,
-        set_initial=True,
-        enforce_required=True,
-        enforce_visibility=True,
-        for_csv_import=False,
-    ):
-        # TODO: Move all this logic to field_types.py get_form_field methods
-        """
-        Return a form field suitable for setting a CustomField's value for an object.
-
-        set_initial: Set initial data for the field. This should be False when generating a field for bulk editing.
-        enforce_required: Honor the value of CustomField.required. Set to False for filtering/bulk editing.
-        enforce_visibility: Honor the value of CustomField.ui_visible. Set to False for filtering.
-        for_csv_import: Return a form field suitable for bulk import of objects in CSV format.
-        """
-        initial = self.default if set_initial else None
-        required = self.required if enforce_required else False
-
-        # Integer
-        if self.type == CustomFieldTypeChoices.TYPE_INTEGER:
-            field = forms.IntegerField(
-                required=required,
-                initial=initial,
-                min_value=self.validation_minimum,
-                max_value=self.validation_maximum,
-            )
-
-        # Decimal
-        elif self.type == CustomFieldTypeChoices.TYPE_DECIMAL:
-            field = forms.DecimalField(
-                required=required,
-                initial=initial,
-                max_digits=12,
-                decimal_places=4,
-                min_value=self.validation_minimum,
-                max_value=self.validation_maximum,
-            )
-
-        # Boolean
-        elif self.type == CustomFieldTypeChoices.TYPE_BOOLEAN:
-            choices = (
-                (None, "---------"),
-                (True, _("True")),
-                (False, _("False")),
-            )
-            field = forms.NullBooleanField(
-                required=required, initial=initial, widget=forms.Select(choices=choices)
-            )
-
-        # Date
-        elif self.type == CustomFieldTypeChoices.TYPE_DATE:
-            field = forms.DateField(
-                required=required, initial=initial, widget=DatePicker()
-            )
-
-        # Date & time
-        elif self.type == CustomFieldTypeChoices.TYPE_DATETIME:
-            field = forms.DateTimeField(
-                required=required, initial=initial, widget=DateTimePicker()
-            )
-
-        # Select
-        elif self.type in (
-            CustomFieldTypeChoices.TYPE_SELECT,
-            CustomFieldTypeChoices.TYPE_MULTISELECT,
-        ):
-            choices = self.choice_set.choices
-            default_choice = self.default if self.default in self.choices else None
-
-            if not required or default_choice is None:
-                choices = add_blank_choice(choices)
-
-            # Set the initial value to the first available choice (if any)
-            if set_initial and default_choice:
-                initial = default_choice
-
-            if for_csv_import:
-                if self.type == CustomFieldTypeChoices.TYPE_SELECT:
-                    field_class = CSVChoiceField
-                else:
-                    field_class = CSVMultipleChoiceField
-                field = field_class(choices=choices, required=required, initial=initial)
-            else:
-                if self.type == CustomFieldTypeChoices.TYPE_SELECT:
-                    field_class = DynamicChoiceField
-                    widget_class = APISelect
-                else:
-                    field_class = DynamicMultipleChoiceField
-                    widget_class = APISelectMultiple
-                field = field_class(
-                    choices=choices,
-                    required=required,
-                    initial=initial,
-                    widget=widget_class(
-                        api_url=f"/api/extras/custom-field-choice-sets/{self.choice_set.pk}/choices/"
-                    ),
-                )
-
-        # URL
-        elif self.type == CustomFieldTypeChoices.TYPE_URL:
-            field = LaxURLField(
-                assume_scheme="https", required=required, initial=initial
-            )
-
-        # JSON
-        elif self.type == CustomFieldTypeChoices.TYPE_JSON:
-            field = JSONField(
-                required=required, initial=json.dumps(initial) if initial else None
-            )
-
-        # Object
-        elif self.type == CustomFieldTypeChoices.TYPE_OBJECT:
-            model = self.related_object_type.model_class()
-            if not model:
-                custom_object_model_name = self.related_object_type.name
-                custom_object_type_id = custom_object_model_name.replace(
-                    "table", ""
-                ).replace("model", "")
-                custom_object_type = CustomObjectType.objects.get(
-                    pk=custom_object_type_id
-                )
-                model = custom_object_type.get_model()
-            field_class = (
-                CSVModelChoiceField if for_csv_import else DynamicModelChoiceField
-            )
-            kwargs = {
-                "queryset": model.objects.all(),
-                "required": required,
-                "initial": initial,
-            }
-            if not for_csv_import:
-                kwargs["query_params"] = self.related_object_filter
-                kwargs["selector"] = True
-
-            field = field_class(**kwargs)
-
-        # Multiple objects
-        elif self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-            model = self.related_object_type.model_class()
-            field_class = (
-                CSVModelMultipleChoiceField
-                if for_csv_import
-                else DynamicModelMultipleChoiceField
-            )
-            kwargs = {
-                "queryset": model.objects.all(),
-                "required": required,
-                "initial": initial,
-            }
-            if not for_csv_import:
-                kwargs["query_params"] = self.related_object_filter
-                kwargs["selector"] = True
-
-            field = field_class(**kwargs)
-
-        # Text
-        else:
-            widget = (
-                forms.Textarea
-                if self.type == CustomFieldTypeChoices.TYPE_LONGTEXT
-                else None
-            )
-            field = forms.CharField(required=required, initial=initial, widget=widget)
-            if self.validation_regex:
-                field.validators = [
-                    RegexValidator(
-                        regex=self.validation_regex,
-                        message=mark_safe(
-                            _(
-                                "Values must match this regex: <code>{regex}</code>"
-                            ).format(regex=escape(self.validation_regex))
-                        ),
-                    )
-                ]
-
-        field.model = self
-        field.label = str(self)
-        if self.description:
-            field.help_text = render_markdown(self.description)
-
-        # Annotate read-only fields
-        if enforce_visibility and self.ui_editable != CustomFieldUIEditableChoices.YES:
-            field.disabled = True
-
-        return field
 
     def to_filter(self, lookup_expr=None):
         # TODO: Move all this logic to field_types.py get_filterform_field methods
