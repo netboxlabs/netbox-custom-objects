@@ -1,13 +1,16 @@
 import django_filters
 from django.contrib.postgres.fields import ArrayField
 from django.db.models import JSONField
-from django.shortcuts import get_object_or_404
+from django.shortcuts import get_object_or_404, render
+from django.urls import reverse
 from extras.choices import CustomFieldUIVisibleChoices
 from netbox.filtersets import BaseFilterSet
 from netbox.forms import NetBoxModelBulkEditForm, NetBoxModelFilterSetForm
 from netbox.views import generic
 from netbox.views.generic.mixins import TableMixin
-from utilities.views import register_model_view
+from utilities.forms import ConfirmationForm
+from utilities.htmx import htmx_partial
+from utilities.views import get_viewname, register_model_view
 
 from netbox_custom_objects.tables import CustomObjectTable
 
@@ -124,11 +127,58 @@ class CustomObjectTypeFieldEditView(generic.ObjectEditView):
 
 @register_model_view(CustomObjectTypeField, "delete")
 class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
+    template_name = 'netbox_custom_objects/field_delete.html'
     queryset = CustomObjectTypeField.objects.all()
 
     def get_return_url(self, request, obj=None):
         return obj.custom_object_type.get_absolute_url()
 
+    def get(self, request, *args, **kwargs):
+        """
+        GET request handler.
+
+        Args:
+            request: The current request
+        """
+        obj = self.get_object(**kwargs)
+        form = ConfirmationForm(initial=request.GET)
+
+        model = obj.custom_object_type.get_model()
+        kwargs = {
+            f'{obj.name}__isnull': False,
+        }
+        num_dependent_objects = model.objects.filter(**kwargs).count()
+
+        # If this is an HTMX request, return only the rendered deletion form as modal content
+        if htmx_partial(request):
+            viewname = get_viewname(self.queryset.model, action='delete')
+            form_url = reverse(viewname, kwargs={'pk': obj.pk})
+            return render(request, 'htmx/delete_form.html', {
+                'object': obj,
+                'object_type': self.queryset.model._meta.verbose_name,
+                'form': form,
+                'form_url': form_url,
+                'num_dependent_objects': num_dependent_objects,
+                **self.get_extra_context(request, obj),
+            })
+
+        return render(request, self.template_name, {
+            'object': obj,
+            'form': form,
+            'return_url': self.get_return_url(request, obj),
+            'num_dependent_objects': num_dependent_objects,
+            **self.get_extra_context(request, obj),
+        })
+
+
+    def _get_dependent_objects(self, obj):
+        dependent_objects = super()._get_dependent_objects(obj)
+        model = obj.custom_object_type.get_model()
+        kwargs = {
+            f'{obj.name}__isnull': False,
+        }
+        dependent_objects[model] = list(model.objects.filter(**kwargs))
+        return dependent_objects
 
 #
 # Custom Objects

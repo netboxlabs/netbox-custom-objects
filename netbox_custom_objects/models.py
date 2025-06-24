@@ -264,7 +264,7 @@ class CustomObjectType(NetBoxModel):
                 "app_label": APP_LABEL,
                 "ordering": ["id"],
                 "indexes": indexes,
-                # "verbose_name": self.get_verbose_name(),
+                "verbose_name": self.get_verbose_name(),
                 "verbose_name_plural": self.get_verbose_name_plural(),
             },
         )
