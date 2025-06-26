@@ -346,6 +346,16 @@ class CustomObjectEditView(generic.ObjectEditView):
             except NotImplementedError:
                 print(f"get_form: {field.name} field is not supported")
 
+        # Add an __init__ method to handle the tags field widget override
+        from django.forms.widgets import HiddenInput
+        
+        def __init__(self, *args, **kwargs):
+            forms.NetBoxModelForm.__init__(self, *args, **kwargs)
+            if 'tags' in self.fields:
+                self.fields['tags'].widget = HiddenInput()
+        
+        attrs['__init__'] = __init__
+
         form = type(
             f"{model._meta.object_name}Form",
             (forms.NetBoxModelForm,),

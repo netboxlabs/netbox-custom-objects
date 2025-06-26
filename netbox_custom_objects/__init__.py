@@ -14,6 +14,7 @@ class CustomObjectsPluginConfig(PluginConfig):
     required_settings = []
     template_extensions = "template_content.template_extensions"
 
+    '''
     def get_model(self, model_name, require_ready=True):
         if require_ready:
             self.apps.check_models_ready()
@@ -41,6 +42,7 @@ class CustomObjectsPluginConfig(PluginConfig):
     
     def ready(self):
         super().ready()
+    '''
 
 
 config = CustomObjectsPluginConfig
