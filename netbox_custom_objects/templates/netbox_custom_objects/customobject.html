@@ -12,32 +12,45 @@
 {% block extra_controls %}
 {% endblock %}
 
-{% block breadcrumbs %}
-  <li class="breadcrumb-item">
-{#    <a href="{% url object|viewname:'list' %}">{{ object|meta:'verbose_name_plural'|bettertitle }}</a>#}
-  </li>
-{% endblock breadcrumbs %}
+{% block page-header %}
+<div class="container-fluid mt-2 d-print-none">
+  <div class="d-flex justify-content-between">
 
-{# Add/edit/delete/etc. buttons #}
-{% block control-buttons %}
+    {# Title #}
+    <div>
+      <h1 class="page-title">{% block title %}{{ object }}{% endblock title %}</h1>
+      {% block subtitle %}{% endblock %}
+    </div>
 
-  {# Default buttons #}
-  {% if perms.extras.add_bookmark and object.bookmarks %}
-    {% custom_object_bookmark_button object %}
-  {% endif %}
-  {% if perms.extras.add_subscription and object.subscriptions %}
-{#    {% subscribe_button object %}#}
-  {% endif %}
-  {% if request.user|can_add:object %}
-{#        {% clone_button object %}#}
-  {% endif %}
-  {% if request.user|can_change:object %}
-    {% custom_object_edit_button object %}
-  {% endif %}
-  {% if request.user|can_delete:object %}
-    {% custom_object_delete_button object %}
-  {% endif %}
-{% endblock control-buttons %}
+    {# Controls #}
+    <div class="d-print-none">
+      {% block controls %}
+        <div class="btn-list">
+          {% block control-buttons %}
+            {# Default buttons #}
+            {% if perms.extras.add_bookmark and object.bookmarks %}
+              {% custom_object_bookmark_button object %}
+            {% endif %}
+            {% if perms.extras.add_subscription and object.subscriptions %}
+          {#    {% subscribe_button object %}#}
+            {% endif %}
+            {% if request.user|can_add:object %}
+          {#        {% clone_button object %}#}
+            {% endif %}
+            {% if request.user|can_change:object %}
+              {% custom_object_edit_button object %}
+            {% endif %}
+            {% if request.user|can_delete:object %}
+              {% custom_object_delete_button object %}
+            {% endif %}
+          {% endblock %}
+        </div>
+      {% endblock controls %}
+    </div>
+
+  </div>
+</div>
+{% endblock %}
 
 {% block tabs %}
   <ul class="nav nav-tabs" role="presentation">
