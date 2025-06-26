@@ -55,7 +55,6 @@ from utilities.validators import validate_regex
 
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
-from netbox_custom_objects.utilities import AppsProxy
 
 USER_TABLE_DATABASE_NAME_PREFIX = "custom_objects_"
 
@@ -73,6 +72,26 @@ class CustomObject(
     models.Model,
 ):
     objects = RestrictedQuerySet.as_manager()
+
+    def __str__(self):
+        # Find the field with primary=True and return that field's "name" as the name of the object
+        primary_field = self._field_objects.get(self._primary_field_id, None)
+        primary_field_value = None
+        if primary_field:
+            field_type = FIELD_TYPE_CLASS[primary_field["field"].type]()
+            primary_field_value = field_type.get_display_value(self, primary_field["name"])
+        if not primary_field_value:
+            return f"{self.custom_object_type.name} {self.id}"
+        return str(primary_field_value) or str(self.id)
+
+    def get_absolute_url(self):
+        return reverse(
+            "plugins:netbox_custom_objects:customobject",
+            kwargs={
+                "pk": self.pk,
+                "custom_object_type": self.custom_object_type.name.lower(),
+            },
+        )
 
 
 class CustomObjectType(NetBoxModel):
@@ -261,7 +280,6 @@ class CustomObjectType(NetBoxModel):
             )
         ]
 
-        apps = AppsProxy(manytomany_models, app_label)
         meta = type(
             "Meta",
             (),
@@ -277,26 +295,6 @@ class CustomObjectType(NetBoxModel):
             },
         )
 
-        def __str__(self):
-            # Find the field with primary=True and return that field's "name" as the name of the object
-            primary_field = self._field_objects.get(self._primary_field_id, None)
-            primary_field_value = None
-            if primary_field:
-                field_type = FIELD_TYPE_CLASS[primary_field["field"].type]()
-                primary_field_value = field_type.get_display_value(self, primary_field["name"])
-            if not primary_field_value:
-                return f"{self.custom_object_type.name} {self.id}"
-            return str(primary_field_value) or str(self.id)
-
-        def get_absolute_url(self):
-            return reverse(
-                "plugins:netbox_custom_objects:customobject",
-                kwargs={
-                    "pk": self.pk,
-                    "custom_object_type": self.custom_object_type.name.lower(),
-                },
-            )
-
         attrs = {
             "Meta": meta,
             "__module__": "database.models",
@@ -304,14 +302,7 @@ class CustomObjectType(NetBoxModel):
             "_generated_table_model": True,
             "custom_object_type": self,
             "custom_object_type_id": self.id,
-            "dynamic_models": apps.dynamic_models,
-            # We are using our own table model manager to implement some queryset
-            # helpers.
-            # "objects": models.Manager(),
-            "objects": RestrictedQuerySet.as_manager(),
-            # "objects_and_trash": TableModelTrashAndObjectsManager(),
-            "__str__": __str__,
-            "get_absolute_url": get_absolute_url,
+            # "dynamic_models": apps.dynamic_models,
         }
 
         field_attrs = self._fetch_and_generate_field_attrs(fields)

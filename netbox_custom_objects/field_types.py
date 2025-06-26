@@ -588,7 +588,6 @@ class MultiObjectFieldType(FieldType):
         """
         # TODO: Register through model in AppsProxy to avoid "model was already registered" warnings
         # app_label = str(uuid.uuid4()) + "_database_table"
-        # apps = AppsProxy(dynamic_models=None, app_label=app_label)
         meta = type(
             "Meta",
             (),
@@ -759,7 +758,6 @@ class MultiObjectFieldType(FieldType):
 
         # if app_label is None:
         #     app_label = str(uuid.uuid4()) + "_database_table"
-        # apps = AppsProxy(dynamic_models=None, app_label=app_label)
         try:
             through_model = apps.get_model(APP_LABEL, instance.through_model_name)
         except LookupError:
