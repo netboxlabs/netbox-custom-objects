@@ -352,7 +352,7 @@ class CustomObjectEditView(generic.ObjectEditView):
         def __init__(self, *args, **kwargs):
             forms.NetBoxModelForm.__init__(self, *args, **kwargs)
             if 'tags' in self.fields:
-                self.fields['tags'].widget = HiddenInput()
+                del self.fields["tags"]
         
         attrs['__init__'] = __init__
 
