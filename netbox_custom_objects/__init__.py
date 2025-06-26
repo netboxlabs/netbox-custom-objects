@@ -14,43 +14,7 @@ class CustomObjectsPluginConfig(PluginConfig):
     required_settings = []
     template_extensions = "template_content.template_extensions"
 
-    def get_model(self, model_name, require_ready=True):
-        print("--------------------------------")
-        print(f"CustomObjectsPluginConfig get_model {model_name}")
-        print("--------------------------------")
-        return super().get_model(model_name, require_ready)
-
-    '''
-    def get_model(self, model_name, require_ready=True):
-        if require_ready:
-            self.apps.check_models_ready()
-        else:
-            self.apps.check_apps_ready()
-
-        if model_name.lower() in self.models:
-            return self.models[model_name.lower()]
-        
-        from .models import CustomObjectType
-        if "table" not in model_name.lower() or "model" not in model_name.lower():
-            raise LookupError(
-                "App '%s' doesn't have a '%s' model." % (self.label, model_name)
-            )
-
-        custom_object_type_id = int(model_name.replace("table", "").replace("model", ""))
-
-        try:
-            obj = CustomObjectType.objects.get(pk=custom_object_type_id)
-        except CustomObjectType.DoesNotExist:
-            raise LookupError(
-                "App '%s' doesn't have a '%s' model." % (self.label, model_name)
-            )
-        return obj.get_model()
-    '''
-    
     def ready(self):
-        '''
-        # Import Django models only after apps are ready
-        # This prevents "AppRegistryNotReady" errors during module import
         from django.contrib.contenttypes.models import ContentType
         from django.contrib.contenttypes.management import create_contenttypes
         
@@ -91,7 +55,6 @@ class CustomObjectsPluginConfig(PluginConfig):
         except Exception as e:
             # Don't fail plugin startup if there are issues
             print(f"Warning: Could not initialize custom object models: {e}")
-        '''
             
         super().ready()
 
