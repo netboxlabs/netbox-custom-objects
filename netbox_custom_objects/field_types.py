@@ -610,22 +610,22 @@ class MultiObjectFieldType(FieldType):
             and field.custom_object_type.id == custom_object_type_id
         )
 
+        # Use the actual model if provided, otherwise use string reference
+        source_model = model if model else "netbox_custom_objects.CustomObject"
+        target_model = model if is_self_referential else "netbox_custom_objects.CustomObject"
+
         attrs = {
             "__module__": "netbox_custom_objects.models",
             "Meta": meta,
             "id": models.AutoField(primary_key=True),
             "source": models.ForeignKey(
-                (
-                    "self"
-                    if is_self_referential
-                    else (model or "netbox_custom_objects.CustomObject")
-                ),
+                source_model,
                 on_delete=models.CASCADE,
                 related_name="+",
                 db_column="source_id",
             ),
             "target": models.ForeignKey(
-                "self" if is_self_referential else "netbox_custom_objects.CustomObject",
+                target_model,
                 on_delete=models.CASCADE,
                 related_name="+",
                 db_column="target_id",
@@ -651,6 +651,8 @@ class MultiObjectFieldType(FieldType):
             and field.custom_object_type.id == custom_object_type_id
         )
 
+        # For now, we'll create the through model with string references
+        # and resolve them later in after_model_generation
         through = self.get_through_model(field)
 
         # For self-referential fields, use 'self' as the target
@@ -693,8 +695,13 @@ class MultiObjectFieldType(FieldType):
         if getattr(field, "_is_self_referential", False):
             field.remote_field.model = model
             through_model = field.remote_field.through
-            through_model._meta.get_field("target").remote_field.model = model
-            through_model._meta.get_field("target").related_model = model
+            # Update both source and target fields to point to the same model
+            source_field = through_model._meta.get_field("source")
+            target_field = through_model._meta.get_field("target")
+            source_field.remote_field.model = model
+            source_field.related_model = model
+            target_field.remote_field.model = model
+            target_field.related_model = model
             return
 
         content_type = ContentType.objects.get(pk=instance.related_object_type_id)
@@ -715,9 +722,16 @@ class MultiObjectFieldType(FieldType):
         # Update the M2M field's model references
         field.remote_field.model = to_model
 
-        # Update through model's target field
+        # Update through model's fields
         through_model = field.remote_field.through
+        source_field = through_model._meta.get_field("source")
         target_field = through_model._meta.get_field("target")
+        
+        # Source field should point to the current model
+        source_field.remote_field.model = model
+        source_field.related_model = model
+        
+        # Target field should point to the related model
         target_field.remote_field.model = to_model
         target_field.related_model = to_model
 
@@ -750,14 +764,22 @@ class MultiObjectFieldType(FieldType):
 
         # Create the through model with actual model references
         through = self.get_through_model(instance, model)
-        through._meta.get_field("target").remote_field.model = to_model
-        through._meta.get_field("target").related_model = to_model
+        
+        # Update the through model's foreign key references
+        source_field = through._meta.get_field("source")
+        target_field = through._meta.get_field("target")
+        
+        # Source field should point to the current model
+        source_field.remote_field.model = model
+        source_field.related_model = model
+        
+        # Target field should point to the related model
+        target_field.remote_field.model = to_model
+        target_field.related_model = to_model
 
         # Register the model with Django's app registry
         apps = model._meta.apps
 
-        # if app_label is None:
-        #     app_label = str(uuid.uuid4()) + "_database_table"
         try:
             through_model = apps.get_model(APP_LABEL, instance.through_model_name)
         except LookupError:

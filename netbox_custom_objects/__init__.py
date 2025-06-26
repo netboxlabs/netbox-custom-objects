@@ -14,6 +14,12 @@ class CustomObjectsPluginConfig(PluginConfig):
     required_settings = []
     template_extensions = "template_content.template_extensions"
 
+    def get_model(self, model_name, require_ready=True):
+        print("--------------------------------")
+        print(f"CustomObjectsPluginConfig get_model {model_name}")
+        print("--------------------------------")
+        return super().get_model(model_name, require_ready)
+
     '''
     def get_model(self, model_name, require_ready=True):
         if require_ready:
@@ -39,10 +45,55 @@ class CustomObjectsPluginConfig(PluginConfig):
                 "App '%s' doesn't have a '%s' model." % (self.label, model_name)
             )
         return obj.get_model()
+    '''
     
     def ready(self):
+        import netbox_custom_objects.signals
+        
+        # Import Django models only after apps are ready
+        # This prevents "AppRegistryNotReady" errors during module import
+        from django.contrib.contenttypes.models import ContentType
+        from django.contrib.contenttypes.management import create_contenttypes
+        
+        # Ensure all dynamic models are created and registered during startup
+        # This prevents ContentType race conditions with Bookmark operations
+        try:
+            from .models import CustomObjectType
+            from .constants import APP_LABEL
+            
+            # Only run this after the database is ready
+            if apps.is_installed('django.contrib.contenttypes'):
+                for custom_object_type in CustomObjectType.objects.all():
+                    try:
+                        # Get or create the model
+                        model = custom_object_type.get_model()
+                        
+                        # Ensure the model is registered
+                        try:
+                            apps.get_model(APP_LABEL, model._meta.model_name)
+                        except LookupError:
+                            apps.register_model(APP_LABEL, model)
+                        
+                        # Ensure ContentType exists
+                        content_type_name = custom_object_type.get_table_model_name(custom_object_type.id).lower()
+                        try:
+                            ContentType.objects.get(
+                                app_label=APP_LABEL, 
+                                model=content_type_name
+                            )
+                        except ContentType.DoesNotExist:
+                            # Create the ContentType
+                            app_config = apps.get_app_config(APP_LABEL)
+                            create_contenttypes(app_config)
+                            
+                    except Exception as e:
+                        # Log but don't fail startup
+                        print(f"Warning: Could not initialize model for CustomObjectType {custom_object_type.id}: {e}")
+        except Exception as e:
+            # Don't fail plugin startup if there are issues
+            print(f"Warning: Could not initialize custom object models: {e}")
+            
         super().ready()
-    '''
 
 
 config = CustomObjectsPluginConfig
