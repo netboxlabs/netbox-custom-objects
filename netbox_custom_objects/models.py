@@ -600,78 +600,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         return SEARCH_TYPES.get(self.type)
 
     @property
-    def choices(self):
-        if self.choice_set:
-            return self.choice_set.choices
-        return []
-
-    @property
     def related_object_type_label(self):
         if self.related_object_type.app_label == APP_LABEL:
             custom_object_type_id = self.related_object_type.model.replace("table", "").replace("model", "")
             return CustomObjectType.get_content_type_label(custom_object_type_id)
         return object_type_name(self.related_object_type, include_app=True)
-
-    def get_ui_visible_color(self):
-        return CustomFieldUIVisibleChoices.colors.get(self.ui_visible)
-
-    def get_ui_editable_color(self):
-        return CustomFieldUIEditableChoices.colors.get(self.ui_editable)
-
-    def get_choice_label(self, value):
-        if not hasattr(self, "_choice_map"):
-            self._choice_map = dict(self.choices)
-        return self._choice_map.get(value, value)
-
-    def populate_initial_data(self, content_types):
-        """
-        Populate initial custom field data upon either a) the creation of a new CustomField, or
-        b) the assignment of an existing CustomField to new object types.
-        """
-        if self.default is None:
-            # We have to convert None to a JSON null for jsonb_set()
-            value = RawSQL("'null'::jsonb", [])
-        else:
-            value = Value(self.default, models.JSONField())
-        for ct in content_types:
-            ct.model_class().objects.update(
-                custom_field_data=Func(
-                    F("custom_field_data"),
-                    Value([self.name]),
-                    value,
-                    function="jsonb_set",
-                )
-            )
-
-    def remove_stale_data(self, content_types):
-        """
-        Delete custom field data which is no longer relevant (either because the CustomField is
-        no longer assigned to a model, or because it has been deleted).
-        """
-        for ct in content_types:
-            if model := ct.model_class():
-                model.objects.update(
-                    custom_field_data=F("custom_field_data") - self.name
-                )
-
-    def rename_object_data(self, old_name, new_name):
-        """
-        Called when a CustomField has been renamed. Removes the original key and inserts the new
-        one, copying the value of the old key.
-        """
-        for ct in self.object_types.all():
-            ct.model_class().objects.update(
-                custom_field_data=Func(
-                    F("custom_field_data") - old_name,
-                    Value([new_name]),
-                    Func(
-                        F("custom_field_data"),
-                        function="jsonb_extract_path_text",
-                        template=f"to_jsonb(%(expressions)s -> '{old_name}')",
-                    ),
-                    function="jsonb_set",
-                )
-            )
 
     def clean(self):
         super().clean()
