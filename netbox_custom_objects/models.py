@@ -600,6 +600,12 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         return SEARCH_TYPES.get(self.type)
 
     @property
+    def choices(self):
+        if self.choice_set:
+            return self.choice_set.choices
+        return []
+
+    @property
     def related_object_type_label(self):
         if self.related_object_type.app_label == APP_LABEL:
             custom_object_type_id = self.related_object_type.model.replace("table", "").replace("model", "")
