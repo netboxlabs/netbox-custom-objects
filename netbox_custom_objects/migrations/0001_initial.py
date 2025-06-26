@@ -15,9 +15,8 @@ class Migration(migrations.Migration):
     initial = True
 
     dependencies = [
-        ("contenttypes", "0002_remove_content_type_name"),
-        ("core", "0015_remove_redundant_indexes"),
-        ("extras", "0128_tableconfig"),
+        ('core', '0012_job_object_type_optional'),
+        ('extras', '0123_journalentry_kind_default'),
     ]
 
     operations = [
