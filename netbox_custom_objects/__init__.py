@@ -48,8 +48,7 @@ class CustomObjectsPluginConfig(PluginConfig):
     '''
     
     def ready(self):
-        import netbox_custom_objects.signals
-        
+        '''
         # Import Django models only after apps are ready
         # This prevents "AppRegistryNotReady" errors during module import
         from django.contrib.contenttypes.models import ContentType
@@ -92,6 +91,7 @@ class CustomObjectsPluginConfig(PluginConfig):
         except Exception as e:
             # Don't fail plugin startup if there are issues
             print(f"Warning: Could not initialize custom object models: {e}")
+        '''
             
         super().ready()
 
