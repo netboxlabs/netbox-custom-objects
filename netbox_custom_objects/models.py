@@ -61,14 +61,14 @@ USER_TABLE_DATABASE_NAME_PREFIX = "custom_objects_"
 class CustomObject(
     BookmarksMixin,
     ChangeLoggingMixin,
-    # CloningMixin,
-    # CustomLinksMixin,
-    # CustomValidationMixin,
-    # ExportTemplatesMixin,
-    # JournalingMixin,
-    # NotificationsMixin,
+    CloningMixin,
+    CustomLinksMixin,
+    CustomValidationMixin,
+    ExportTemplatesMixin,
+    JournalingMixin,
+    NotificationsMixin,
     TagsMixin,
-    # EventRulesMixin,
+    EventRulesMixin,
     models.Model,
 ):
     objects = RestrictedQuerySet.as_manager()
@@ -290,9 +290,6 @@ class CustomObjectType(NetBoxModel):
         :rtype: Model
         """
 
-        print("--------------------------------")
-        print(f"get_model {self.name}")
-        print("--------------------------------")
         if app_label is None:
             app_label = str(uuid.uuid4()) + "_database_table"
 
