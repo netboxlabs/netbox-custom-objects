@@ -1,5 +1,5 @@
-# netbox-service-mappings
-Service Mappings plugin
+# netbox-custom-objects
+Custom Objects plugin
 
 1. Add `netbox_custom_objects` to `PLUGINS` in `configuration.py`.
 
@@ -18,33 +18,32 @@ $ ./manage.py migrate
 
 ## API
 
-The three relevant models making up the Service Mappings system can be manipulated through CRUD operations using the 
-standard NetBox API, using endpoints located at: `/api/plugins/service-mappings/`
+The three relevant models making up the Custom Objects system can be manipulated through CRUD operations using the 
+standard NetBox API, using endpoints located at: `/api/plugins/custom-objects/`
 
 ```json
 {
-    "mapping-type-fields": "http://127.0.0.1:8000/api/plugins/service-mappings/mapping-type-fields/",
-    "mapping-types": "http://127.0.0.1:8000/api/plugins/service-mappings/mapping-types/",
-    "mappings": "http://127.0.0.1:8000/api/plugins/service-mappings/mappings/"
+    "custom-object-type-fields": "http://127.0.0.1:8000/api/plugins/custom-objects/custom-object-type-fields/",
+    "custom-object-types": "http://127.0.0.1:8000/api/plugins/custom-objects/custom-object-types/",
+    "cats": "http://127.0.0.1:8000/api/plugins/custom-objects/cat/"
 }
 ```
 
-### Service Mapping Types
+### Custom Object Types
 
-Create a Service Mapping Type with a POST call to `/api/plugins/service-mappings/mapping-types/` using a payload
+Create a Custom Object Type with a POST call to `/api/plugins/custom-object/custom-object-types/` using a payload
 similar to the following:
 
 ```json
 {
   "name": "My Service Type",
-  "slug": "my-service-type"
 }
 ```
 
-### Mapping Type Fields
+### Custom Object Type Fields
 
-Then define the schema of the Service Mapping Type by creating fields of various types, with POST requests to
-`/api/plugins/service-mappings/mapping-type-fields/`:
+Then define the schema of the Custom Object Type by creating fields of various types, with POST requests to
+`/api/plugins/custom-objects/custom-object-type-fields/`:
 
 ```json
 {
