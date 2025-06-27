@@ -61,7 +61,7 @@ USER_TABLE_DATABASE_NAME_PREFIX = "custom_objects_"
 
 class CustomObject(
     # BookmarksMixin,
-    ChangeLoggingMixin,
+    # ChangeLoggingMixin,
     # CloningMixin,
     # CustomLinksMixin,
     # CustomValidationMixin,

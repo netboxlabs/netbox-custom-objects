@@ -159,7 +159,9 @@ class CustomObjectActionsColumn(columns.ActionsColumn):
 class CustomObjectTable(NetBoxTable):
     pk = columns.ToggleColumn(visible=False)
     id = tables.Column(linkify=True, verbose_name=_("ID"))
-    actions = CustomObjectActionsColumn()
+    actions = CustomObjectActionsColumn(
+        actions=('edit', 'delete'),
+    )
 
     class Meta(NetBoxTable.Meta):
         model = CustomObject
