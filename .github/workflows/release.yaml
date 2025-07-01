@@ -1,0 +1,48 @@
+name: Release
+
+on:
+  release:
+    types: [released]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build distribution
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
+    - uses: actions/setup-python@v5
+      with:
+        python-version: "3.x"
+    - name: Install pypa/build
+      run: |
+        python3 -m pip install build
+    - name: Build distribution package
+      run: |
+        python3 -m build
+    - name: Upload distribution package
+      uses: actions/upload-artifact@v4
+      with:
+        name: python-package-distributions
+        path: dist/
+        if-no-files-found: error
+
+  publish:
+    name: Publish to PyPI
+    needs:
+      - build
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+    - name: Download distribution package
+      uses: actions/download-artifact@v4
+      with:
+        name: python-package-distributions
+        path: dist/
+    - name: Publish distribution to PyPI
+      uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc # v1.12.4
