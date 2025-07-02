@@ -1,56 +1,36 @@
 import decimal
-import json
 import re
 import uuid
 from datetime import date, datetime
 
 import django_filters
 from core.models.contenttypes import ObjectTypeManager
-from django import forms
 from django.apps import apps
 from django.conf import settings
 from django.contrib.contenttypes.management import create_contenttypes
 from django.contrib.contenttypes.models import ContentType
 from django.core.validators import RegexValidator, ValidationError
 from django.db import connection, models
-from django.db.models import F, Func, Q, Value
-from django.db.models.expressions import RawSQL
+from django.db.models import Q
 from django.db.models.functions import Lower
 from django.urls import reverse
-from django.utils.html import escape
-from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
-from extras.choices import (CustomFieldFilterLogicChoices,
-                            CustomFieldTypeChoices,
-                            CustomFieldUIEditableChoices,
-                            CustomFieldUIVisibleChoices)
-from extras.constants import CUSTOMFIELD_EMPTY_VALUES
-# from .choices import MappingFieldTypeChoices
+from extras.choices import (
+    CustomFieldFilterLogicChoices, CustomFieldTypeChoices, CustomFieldUIEditableChoices, CustomFieldUIVisibleChoices,
+)
 from extras.models.customfields import SEARCH_TYPES
 from netbox.models import ChangeLoggedModel, NetBoxModel
-from netbox.models.features import (BookmarksMixin, ChangeLoggingMixin,
-                                    CloningMixin,
-                                    CustomLinksMixin, CustomValidationMixin,
-                                    EventRulesMixin, ExportTemplatesMixin,
-                                    JournalingMixin, NotificationsMixin,
-                                    TagsMixin)
+# from netbox.models.features import (
+#     BookmarksMixin, ChangeLoggingMixin, CloningMixin, CustomLinksMixin, CustomValidationMixin, EventRulesMixin,
+#     ExportTemplatesMixin, JournalingMixin, NotificationsMixin, TagsMixin,
+# )
+from netbox.models.features import CloningMixin, ExportTemplatesMixin, TagsMixin
 from netbox.registry import registry
 from utilities import filters
 from utilities.datetime import datetime_from_timestamp
-from utilities.forms.fields import (CSVChoiceField, CSVModelChoiceField,
-                                    CSVModelMultipleChoiceField,
-                                    CSVMultipleChoiceField, DynamicChoiceField,
-                                    DynamicModelChoiceField,
-                                    DynamicModelMultipleChoiceField,
-                                    DynamicMultipleChoiceField, JSONField,
-                                    LaxURLField)
-from utilities.forms.utils import add_blank_choice
-from utilities.forms.widgets import (APISelect, APISelectMultiple, DatePicker,
-                                     DateTimePicker)
 from utilities.object_types import object_type_name
 from utilities.querysets import RestrictedQuerySet
 from utilities.string import title
-from utilities.templatetags.builtins.filters import render_markdown
 from utilities.validators import validate_regex
 
 from netbox_custom_objects.constants import APP_LABEL
@@ -58,6 +38,7 @@ from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
 from netbox_custom_objects.utilities import AppsProxy
 
 USER_TABLE_DATABASE_NAME_PREFIX = "custom_objects_"
+
 
 class CustomObject(
     # BookmarksMixin,
