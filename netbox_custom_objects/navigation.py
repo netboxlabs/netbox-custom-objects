@@ -55,7 +55,7 @@ def get_menu():
             (_("Object Types"), (custom_object_type_plugin_menu_item,)),
             (_("Objects"), tuple(menu_items)),
         ),
-        icon_class="mdi mdi-source-branch",
+        icon_class="mdi mdi-toy-brick-outline",
     )
 
 
@@ -64,7 +64,7 @@ if current_version < version.parse("4.4.0"):
     menu = PluginMenu(
         label="Custom Objects",
         groups=((_("Object Types"), (custom_object_type_plugin_menu_item,)),),
-        icon_class="mdi mdi-source-branch",
+        icon_class="mdi mdi-toy-brick-outline",
     )
 else:
     menu = get_menu
