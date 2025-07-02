@@ -16,7 +16,7 @@ You can find further documentation [here](docs/index.md).
 pip install netboxlabs-netbox-custom-objects
 ```
 
-2. Add `netboxlabs_netbox_custom_objects` to `PLUGINS` in `configuration.py`.
+2. Add `netbox_custom_objects` to `PLUGINS` in `configuration.py`.
 
 ```python
 PLUGINS = [
