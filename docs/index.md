@@ -75,7 +75,7 @@ Now that you've created your `DHCP Scope` Custom Object Type, let's go ahead and
 
 #### Standard list views for Custom Objects
 
-As you saw in the previous step, all Custom Objects of a given Custom Object Type are viewable at the bottom of the Custom Object Type's detail page, but you can also view standard list views as you would with other NetBox objects.
+As you saw in the previous step, all Custom Objects of a given Custom Object Type are viewable at the bottom of the Custom Object Type's detail page, but you can also view standard list views:
 
 1. On the `DHCP Scope` detail view page, right click on `Dhcp_scopes` (you can also navigate to `plugins/custom-objects/dhcp_scope/`)
 2. Now you will see a standard NetBox list view of your `dhcp_scopes` with the standard options including `Configure Table`, `+ Add`, etc
