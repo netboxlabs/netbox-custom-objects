@@ -129,7 +129,3 @@ When deleting a Custom Object Type Field, you are in effect, deleting an entire 
 #### Deleting Custom Objects
 
 Deleting Custom Objects, like a specific DHCP Scope object you have created, works just like it does for normal NetBox objects. You can delete a Custom Object on the Custom Object's detail view, or via one of the two list views. We recommend that you follow your usual permissions practices here.
-
-## Known Limitations
-
-The Public Preview of NetBox Custom Objects is under active development as we proceed towards the General Availability release around NetBox 4.4. The best place to look for the latest list of known limitations is the [issues](https://github.com/netboxlabs/netbox-custom-objects/issues) list on the GitHub repository.
