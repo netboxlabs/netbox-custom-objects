@@ -1,19 +1,14 @@
-import json
-
 from django import forms
 from django.utils.translation import gettext_lazy as _
-from extras.choices import CustomFieldTypeChoices, CustomFieldUIEditableChoices
+from extras.choices import CustomFieldTypeChoices
 from extras.forms import CustomFieldForm
 from netbox.forms import NetBoxModelForm
-from utilities.forms.fields import (CommentField, ContentTypeChoiceField,
-                                    DynamicModelChoiceField)
+from utilities.forms.fields import CommentField, ContentTypeChoiceField, DynamicModelChoiceField
 from utilities.forms.rendering import FieldSet
 from utilities.object_types import object_type_name
 
 from netbox_custom_objects.constants import APP_LABEL
-from netbox_custom_objects.models import (CustomObjectObjectType,
-                                          CustomObjectType,
-                                          CustomObjectTypeField)
+from netbox_custom_objects.models import CustomObjectObjectType, CustomObjectType, CustomObjectTypeField
 
 __all__ = (
     "CustomObjectTypeForm",

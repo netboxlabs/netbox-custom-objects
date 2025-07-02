@@ -170,7 +170,6 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
             **self.get_extra_context(request, obj),
         })
 
-
     def _get_dependent_objects(self, obj):
         dependent_objects = super()._get_dependent_objects(obj)
         model = obj.custom_object_type.get_model()
@@ -347,13 +346,11 @@ class CustomObjectEditView(generic.ObjectEditView):
                 print(f"get_form: {field.name} field is not supported")
 
         # Add an __init__ method to handle the tags field widget override
-        from django.forms.widgets import HiddenInput
-        
         def __init__(self, *args, **kwargs):
             forms.NetBoxModelForm.__init__(self, *args, **kwargs)
             if 'tags' in self.fields:
                 del self.fields["tags"]
-        
+
         attrs['__init__'] = __init__
 
         form = type(
