@@ -2,6 +2,8 @@
 
 [NetBox](https://github.com/netbox-community/netbox) is the world's leading source of truth for infrastructure, featuring an extensive and complex data model. But sometimes it can be useful to extend the NetBox data model to fit specific organizational needs. This plugin introduces a new paradigm for NetBox to help overcome these challenges: custom objects.
 
+For additional documentation on the REST API, go [here](api.md).
+
 ## Features
 
 * Easily create new objects in NetBox - via the GUI, the REST API or `pynetbox`
