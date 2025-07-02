@@ -7,7 +7,6 @@ You can find further documentation [here](docs/index.md).
 ## Requirements
 
 * NetBox v4.2 or later
-* PostgreSQL 12 or later
 
 ## Installation
 
