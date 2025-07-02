@@ -10,16 +10,22 @@ You can find further documentation [here](docs/index.md).
 
 ## Installation
 
-1. Add `netboxlabs_netbox_custom_objects` to `PLUGINS` in `configuration.py`.
+1. Install the NetBox Custom Objects package.
+
+```
+pip install netboxlabs-netbox-custom-objects
+```
+
+2. Add `netboxlabs_netbox_custom_objects` to `PLUGINS` in `configuration.py`.
 
 ```python
 PLUGINS = [
     # ...
-    'netboxlabs_netbox_custom_objects',
+    'netbox_custom_objects',
 ]
 ```
 
-2. Run NetBox migrations:
+3. Run NetBox migrations:
 
 ```
 $ ./manage.py migrate
