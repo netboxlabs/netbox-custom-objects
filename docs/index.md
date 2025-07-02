@@ -131,9 +131,3 @@ Deleting Custom Objects, like a specific DHCP Scope object you have created, wor
 ## Known Limitations
 
 The Public Preview of NetBox Custom Objects is under active development as we proceed towards the General Availability release around NetBox 4.4. The best place to look for the latest list of known limitations is the [issues](https://github.com/netboxlabs/netbox-custom-objects/issues) list on the GitHub repository.
-
-Below is a handy list of the main areas we are working on.
-
-* **Custom Objects do not show up in the left-navigation pane.** Users are strongly encouraged to merge or remove all open branches prior to upgrading to a new minor release of NetBox (e.g. from v4.1 to v4.2). This is because database migrations introduced by the upgrade will _not_ be applied to branch schemas, potentially resulting in an invalid state. However, it should be considered safe to upgrade to new patch releases (e.g. v4.1.0 to v4.1.1) with open branches.
-
-* **Open branches will not reflect newly installed plugins.** Any branches created before installing a new plugin will not be updated to support its models. Note, however, that installing a new plugin will generally not impede the use of existing branches. Users are encouraged to install all necessary plugins prior to creating branches. (This also applies to database migrations introduced by upgrading a plugin.)
