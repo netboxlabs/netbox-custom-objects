@@ -30,6 +30,10 @@ PLUGINS = [
 ```
 $ ./manage.py migrate
 ```
+4. Restart NetBox
+```
+sudo systemctl restart netbox netbox-rq
+```
 
 ## Known Limitations
 
