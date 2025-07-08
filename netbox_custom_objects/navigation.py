@@ -21,13 +21,13 @@ custom_object_type_plugin_menu_item = PluginMenuItem(
 )
 
 
-def get_menu():
-    CustomObjectType = apps.get_model(APP_LABEL, "CustomObjectType")
-    menu_items = []
-    for custom_object_type in CustomObjectType.objects.all():
-        model = custom_object_type.get_model()
-        menu_items.append(
-            PluginMenuItem(
+class CustomObjectTypeMenuItems:
+
+    def __iter__(self):
+        CustomObjectType = apps.get_model(APP_LABEL, "CustomObjectType")
+        for custom_object_type in CustomObjectType.objects.all():
+            model = custom_object_type.get_model()
+            yield PluginMenuItem(
                 link=None,
                 url=reverse(
                     f"plugins:{APP_LABEL}:customobject_list",
@@ -48,23 +48,16 @@ def get_menu():
                     ),
                 ),
             )
-        )
-    return PluginMenu(
-        label="Custom Objects",
-        groups=(
-            (_("Object Types"), (custom_object_type_plugin_menu_item,)),
-            (_("Objects"), tuple(menu_items)),
-        ),
-        icon_class="mdi mdi-toy-brick-outline",
-    )
 
 
 current_version = version.parse(settings.RELEASE.version)
-if current_version < version.parse("4.4.0"):
-    menu = PluginMenu(
-        label="Custom Objects",
-        groups=((_("Object Types"), (custom_object_type_plugin_menu_item,)),),
-        icon_class="mdi mdi-toy-brick-outline",
-    )
-else:
-    menu = get_menu
+
+groups = [(_("Object Types"), (custom_object_type_plugin_menu_item,))]
+if current_version > version.parse("4.4.0"):
+    groups.append((_("Objects"), CustomObjectTypeMenuItems()))
+
+menu = PluginMenu(
+    label="Custom Objects",
+    groups=tuple(groups),
+    icon_class="mdi mdi-toy-brick-outline",
+)
