@@ -51,3 +51,4 @@ def cleanup_content_type(sender, instance, **kwargs):
     except Exception as e:
         # Log the error but don't fail the delete operation
         print(f"Warning: Could not delete ContentType for CustomObjectType {instance.id}: {e}") 
+

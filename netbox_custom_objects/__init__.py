@@ -67,19 +67,7 @@ class CustomObjectsPluginConfig(PluginConfig):
                             apps.get_model(APP_LABEL, model._meta.model_name)
                         except LookupError:
                             apps.register_model(APP_LABEL, model)
-                        
-                        # Ensure ContentType exists
-                        content_type_name = custom_object_type.get_table_model_name(custom_object_type.id).lower()
-                        try:
-                            ContentType.objects.get(
-                                app_label=APP_LABEL, 
-                                model=content_type_name
-                            )
-                        except ContentType.DoesNotExist:
-                            # Create the ContentType
-                            app_config = apps.get_app_config(APP_LABEL)
-                            create_contenttypes(app_config)
-                            
+
                     except Exception as e:
                         # Log but don't fail startup
                         print(f"Warning: Could not initialize model for CustomObjectType {custom_object_type.id}: {e}")

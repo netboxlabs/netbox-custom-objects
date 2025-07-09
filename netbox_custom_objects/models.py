@@ -35,7 +35,6 @@ from utilities.validators import validate_regex
 
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
-from netbox_custom_objects.utilities import AppsProxy
 
 USER_TABLE_DATABASE_NAME_PREFIX = "custom_objects_"
 
@@ -43,12 +42,12 @@ USER_TABLE_DATABASE_NAME_PREFIX = "custom_objects_"
 class CustomObject(
     BookmarksMixin,
     # ChangeLoggingMixin,
-    # CloningMixin,
-    # CustomLinksMixin,
-    # CustomValidationMixin,
-    # ExportTemplatesMixin,
-    # JournalingMixin,
-    # NotificationsMixin,
+    CloningMixin,
+    CustomLinksMixin,
+    CustomValidationMixin,
+    ExportTemplatesMixin,
+    JournalingMixin,
+    NotificationsMixin,
     TagsMixin,
     # EventRulesMixin,
     models.Model,
@@ -262,7 +261,6 @@ class CustomObjectType(NetBoxModel):
         # TODO: Add other fields with "index" specified
         indexes = []
 
-        apps = AppsProxy(manytomany_models, app_label)
         meta = type(
             "Meta",
             (),
@@ -305,18 +303,14 @@ class CustomObjectType(NetBoxModel):
             "_generated_table_model": True,
             "custom_object_type": self,
             "custom_object_type_id": self.id,
-            "dynamic_models": apps.dynamic_models,
             # We are using our own table model manager to implement some queryset
             # helpers.
-            # "objects": models.Manager(),
             "objects": RestrictedQuerySet.as_manager(),
-            # "objects_and_trash": TableModelTrashAndObjectsManager(),
             "__str__": __str__,
             "get_absolute_url": get_absolute_url,
         }
 
         field_attrs = self._fetch_and_generate_field_attrs(fields)
-        # field_attrs["name"] = models.CharField(max_length=100, unique=True)
 
         attrs.update(**field_attrs)
 
@@ -339,38 +333,31 @@ class CustomObjectType(NetBoxModel):
 
         # Ensure the model is registered with Django's app registry
         try:
-            apps.get_model(APP_LABEL, model._meta.model_name)
+            model = apps.get_model(APP_LABEL, model._meta.model_name)
+            print("--------------------------------")
+            print(f"model: {model._meta.model_name}")
+            print(f"model: {model}")
         except LookupError:
             apps.register_model(APP_LABEL, model)
+            print("--------------------------------")
+            print(f"register model: {model}")
         
-        # Ensure the app is registered
+        # Create the content type for the model
+        content_type_name = self.get_table_model_name(self.id).lower()
         try:
-            app_config = apps.get_app_config(APP_LABEL)
-        except LookupError:
-            # If app config doesn't exist, we'll create ContentTypes manually
-            # This is a fallback for when the app isn't properly registered
-            from django.contrib.contenttypes.models import ContentType
-            content_type_name = self.get_table_model_name(self.id).lower()
-            try:
-                ContentType.objects.get(
-                    app_label=APP_LABEL, model=content_type_name
-                )
-            except Exception:
-                # Create the ContentType manually
-                ContentType.objects.create(
-                    app_label=APP_LABEL,
-                    model=content_type_name
-                )
-            return
+            ct = ContentType.objects.get(
+                app_label=APP_LABEL, model=content_type_name
+            )
+        except Exception:
+            ContentType.objects.create(
+                app_label=APP_LABEL,
+                model=content_type_name
+            )
         
-        # Create ContentType for this model
-        create_contenttypes(app_config)
-
         with connection.schema_editor() as schema_editor:
             schema_editor.create_model(model)
 
     def save(self, *args, **kwargs):
-        # needs_db_create = self.pk is None
         needs_db_create = self._state.adding
         super().save(*args, **kwargs)
         if needs_db_create:
@@ -378,7 +365,6 @@ class CustomObjectType(NetBoxModel):
 
     def delete(self, *args, **kwargs):
         model = self.get_model()
-        # self.content_type.delete()
         ContentType.objects.get(
             app_label=APP_LABEL, model=self.get_table_model_name(self.id).lower()
         ).delete()
