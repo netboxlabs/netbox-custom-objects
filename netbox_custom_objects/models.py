@@ -20,10 +20,10 @@ from extras.choices import (
 )
 from extras.models.customfields import SEARCH_TYPES
 from netbox.models import ChangeLoggedModel, NetBoxModel
-# from netbox.models.features import (
-#     BookmarksMixin, ChangeLoggingMixin, CloningMixin, CustomLinksMixin, CustomValidationMixin, EventRulesMixin,
-#     ExportTemplatesMixin, JournalingMixin, NotificationsMixin, TagsMixin,
-# )
+from netbox.models.features import (
+    BookmarksMixin, ChangeLoggingMixin, CloningMixin, CustomLinksMixin, CustomValidationMixin, EventRulesMixin,
+    ExportTemplatesMixin, JournalingMixin, NotificationsMixin, TagsMixin,
+)
 from netbox.models.features import CloningMixin, ExportTemplatesMixin, TagsMixin
 from netbox.registry import registry
 from utilities import filters
@@ -41,7 +41,7 @@ USER_TABLE_DATABASE_NAME_PREFIX = "custom_objects_"
 
 
 class CustomObject(
-    # BookmarksMixin,
+    BookmarksMixin,
     # ChangeLoggingMixin,
     # CloningMixin,
     # CustomLinksMixin,
@@ -125,9 +125,34 @@ class CustomObjectType(NetBoxModel):
 
     @property
     def content_type(self):
-        return ContentType.objects.get(
-            app_label=APP_LABEL, model=self.get_table_model_name(self.id).lower()
-        )
+        try:
+            return ContentType.objects.get(
+                app_label=APP_LABEL, model=self.get_table_model_name(self.id).lower()
+            )
+        except Exception:
+            # If ContentType doesn't exist, try to create it
+            try:
+                self.create_model()
+                return ContentType.objects.get(
+                    app_label=APP_LABEL, model=self.get_table_model_name(self.id).lower()
+                )
+            except Exception:
+                # If we still can't get it, return None
+                return None
+
+    def ensure_content_type_exists(self):
+        """
+        Ensure that the ContentType for this CustomObjectType exists.
+        This is useful for preventing race conditions with Bookmark operations.
+        """
+        try:
+            content_type_name = self.get_table_model_name(self.id).lower()
+            ContentType.objects.get(
+                app_label=APP_LABEL, model=content_type_name
+            )
+        except Exception:
+            # Create the model and ContentType
+            self.create_model()
 
     def _fetch_and_generate_field_attrs(
         self,
@@ -235,12 +260,7 @@ class CustomObjectType(NetBoxModel):
             fields = []
 
         # TODO: Add other fields with "index" specified
-        indexes = [
-            models.Index(
-                fields=["id"],
-                name=self.get_collision_safe_order_id_idx_name(),
-            )
-        ]
+        indexes = []
 
         apps = AppsProxy(manytomany_models, app_label)
         meta = type(
@@ -316,8 +336,34 @@ class CustomObjectType(NetBoxModel):
 
     def create_model(self):
         model = self.get_model()
-        apps.register_model(APP_LABEL, model)
-        app_config = apps.get_app_config(APP_LABEL)
+
+        # Ensure the model is registered with Django's app registry
+        try:
+            apps.get_model(APP_LABEL, model._meta.model_name)
+        except LookupError:
+            apps.register_model(APP_LABEL, model)
+        
+        # Ensure the app is registered
+        try:
+            app_config = apps.get_app_config(APP_LABEL)
+        except LookupError:
+            # If app config doesn't exist, we'll create ContentTypes manually
+            # This is a fallback for when the app isn't properly registered
+            from django.contrib.contenttypes.models import ContentType
+            content_type_name = self.get_table_model_name(self.id).lower()
+            try:
+                ContentType.objects.get(
+                    app_label=APP_LABEL, model=content_type_name
+                )
+            except Exception:
+                # Create the ContentType manually
+                ContentType.objects.create(
+                    app_label=APP_LABEL,
+                    model=content_type_name
+                )
+            return
+        
+        # Create ContentType for this model
         create_contenttypes(app_config)
 
         with connection.schema_editor() as schema_editor:
