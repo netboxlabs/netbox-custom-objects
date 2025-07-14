@@ -184,6 +184,23 @@ class CustomObjectType(NetBoxModel):
         except Exception as e:
             print(f"Warning: Could not ensure model registration: {e}")
 
+    def ensure_model_ready_for_bookmarks(self):
+        """
+        Ensure that the model is ready for bookmark operations.
+        This includes ensuring the model is registered and the ContentType exists.
+        """
+        try:
+            # Ensure the model is registered
+            self.ensure_model_registered()
+            
+            # Ensure the ContentType exists
+            self.ensure_content_type_exists()
+            
+            return True
+        except Exception as e:
+            print(f"Warning: Could not ensure model ready for bookmarks: {e}")
+            return False
+
     def _fetch_and_generate_field_attrs(
         self,
         fields,

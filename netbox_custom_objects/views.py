@@ -284,7 +284,6 @@ class CustomObjectView(generic.ObjectView):
         custom_object_type = self.kwargs.pop("custom_object_type", None)
         object_type = get_object_or_404(CustomObjectType, name__iexact=custom_object_type)
         model = object_type.get_model()
-        # kwargs.pop('custom_object_type', None)
         return get_object_or_404(model.objects.all(), **self.kwargs)
 
     def get_extra_context(self, request, instance):
