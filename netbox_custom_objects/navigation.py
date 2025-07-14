@@ -1,6 +1,6 @@
 from django.apps import apps
 from django.conf import settings
-from django.urls import reverse
+from django.urls import reverse_lazy
 from django.utils.translation import gettext_lazy as _
 from netbox.plugins import PluginMenu, PluginMenuButton, PluginMenuItem
 from packaging import version
@@ -32,7 +32,7 @@ class CustomObjectTypeMenuItems:
                 _("Add"),
                 "mdi mdi-plus-thick",
             )
-            add_button.url = reverse(
+            add_button.url = reverse_lazy(
                 f"plugins:{APP_LABEL}:customobject_add",
                 kwargs={
                     "custom_object_type": custom_object_type.name.lower()
@@ -43,7 +43,7 @@ class CustomObjectTypeMenuItems:
                 link_text=_(title(model._meta.verbose_name_plural)),
                 buttons=(add_button,),
             )
-            menu_item.url = reverse(
+            menu_item.url = reverse_lazy(
                 f"plugins:{APP_LABEL}:customobject_list",
                 kwargs={"custom_object_type": custom_object_type.name.lower()},
             )
@@ -53,7 +53,7 @@ class CustomObjectTypeMenuItems:
 current_version = version.parse(settings.RELEASE.version)
 
 groups = [(_("Object Types"), (custom_object_type_plugin_menu_item,))]
-if current_version > version.parse("4.4.0"):
+if current_version >= version.parse("4.3.4"):
     groups.append((_("Objects"), CustomObjectTypeMenuItems()))
 
 menu = PluginMenu(
