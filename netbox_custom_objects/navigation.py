@@ -57,7 +57,7 @@ if current_version >= version.parse("4.3.4"):
     groups.append((_("Objects"), CustomObjectTypeMenuItems()))
 
 menu = PluginMenu(
-    label="Custom Objects",
+    label=_("Custom Objects"),
     groups=tuple(groups),
     icon_class="mdi mdi-toy-brick-outline",
 )
