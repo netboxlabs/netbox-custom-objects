@@ -10,7 +10,7 @@ from netbox_custom_objects.utilities import get_viewname
 
 __all__ = (
     "custom_object_add_button",
-    "custom_object_bookmark_button",
+    # "custom_object_bookmark_button",
     "custom_object_bulk_delete_button",
     "custom_object_bulk_edit_button",
     "custom_object_clone_button",
@@ -33,20 +33,17 @@ register = template.Library()
 @register.inclusion_tag("buttons/bookmark.html", takes_context=True)
 def custom_object_bookmark_button(context, instance):
     try:
-        # For custom objects, ensure the model is ready for bookmarks
-        if hasattr(instance, 'custom_object_type'):
-            if not instance.custom_object_type.ensure_model_ready_for_bookmarks():
-                # If the model isn't ready, don't show the bookmark button
-                return {}
         
         # Check if this user has already bookmarked the object
         content_type = ContentType.objects.get_for_model(instance)
-        
+        instance.custom_object_type.get_model()
+
         # Verify that the ContentType is properly accessible
         try:
             # This will test if the ContentType can be used to retrieve the model
             content_type.model_class()
         except Exception:
+            print("returning empty")
             # If we can't get the model class, don't show the bookmark button
             return {}
             
@@ -75,6 +72,7 @@ def custom_object_bookmark_button(context, instance):
         }
     except Exception:
         # If we can't get the content type, don't show the bookmark button
+        print("returning empty Exception")
         return {}
 
 

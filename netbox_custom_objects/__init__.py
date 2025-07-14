@@ -16,6 +16,7 @@ class CustomObjectsPluginConfig(PluginConfig):
 
     '''
     def get_model(self, model_name, require_ready=True):
+        return super().get_model(model_name, require_ready)
         if require_ready:
             self.apps.check_models_ready()
         else:
@@ -42,31 +43,16 @@ class CustomObjectsPluginConfig(PluginConfig):
     '''
 
     def ready(self):
-        import netbox_custom_objects.signals
-        
-        # Import Django models only after apps are ready
-        # This prevents "AppRegistryNotReady" errors during module import
-        from django.contrib.contenttypes.models import ContentType
-        from django.contrib.contenttypes.management import create_contenttypes
-        
         # Ensure all dynamic models are created and registered during startup
         # This prevents ContentType race conditions with Bookmark operations
         try:
             from .models import CustomObjectType
-            from .constants import APP_LABEL
             
             # Only run this after the database is ready
             if apps.is_installed('django.contrib.contenttypes'):
                 for custom_object_type in CustomObjectType.objects.all():
                     try:
-                        # Get or create the model
-                        model = custom_object_type.get_model()
-                        
-                        # Ensure the model is registered
-                        try:
-                            apps.get_model(APP_LABEL, model._meta.model_name)
-                        except LookupError:
-                            apps.register_model(APP_LABEL, model)
+                        custom_object_type.get_model()
 
                     except Exception as e:
                         # Log but don't fail startup
