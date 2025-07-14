@@ -40,7 +40,8 @@ class CustomObjectsPluginConfig(PluginConfig):
             )
         return obj.get_model()
     '''
-    
+
+    '''   
     def ready(self):
         import netbox_custom_objects.signals
         
@@ -76,6 +77,7 @@ class CustomObjectsPluginConfig(PluginConfig):
             print(f"Warning: Could not initialize custom object models: {e}")
             
         super().ready()
+    '''   
 
 
 config = CustomObjectsPluginConfig

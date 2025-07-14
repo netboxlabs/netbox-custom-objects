@@ -125,19 +125,10 @@ class CustomObjectType(NetBoxModel):
     @property
     def content_type(self):
         try:
-            return ContentType.objects.get(
-                app_label=APP_LABEL, model=self.get_table_model_name(self.id).lower()
-            )
+            return self.get_or_create_content_type()
         except Exception:
-            # If ContentType doesn't exist, try to create it
-            try:
-                self.create_model()
-                return ContentType.objects.get(
-                    app_label=APP_LABEL, model=self.get_table_model_name(self.id).lower()
-                )
-            except Exception:
-                # If we still can't get it, return None
-                return None
+            # If we still can't get it, return None
+            return None
 
     def ensure_content_type_exists(self):
         """
@@ -152,6 +143,46 @@ class CustomObjectType(NetBoxModel):
         except Exception:
             # Create the model and ContentType
             self.create_model()
+
+    def get_or_create_content_type(self):
+        """
+        Get or create the ContentType for this CustomObjectType.
+        This ensures the ContentType is immediately available in the current transaction.
+        """
+        content_type_name = self.get_table_model_name(self.id).lower()
+        try:
+            return ContentType.objects.get(
+                app_label=APP_LABEL, model=content_type_name
+            )
+        except Exception:
+            # Create the ContentType and ensure it's immediately available
+            ct = ContentType.objects.create(
+                app_label=APP_LABEL,
+                model=content_type_name
+            )
+            # Force a refresh to ensure it's available in the current transaction
+            ct.refresh_from_db()
+            return ct
+
+    def ensure_model_registered(self):
+        """
+        Ensure that the model is properly registered with Django's app registry.
+        This is useful for ensuring the model is accessible after creation.
+        """
+        try:
+            model = self.get_model()
+            model_name = model._meta.model_name
+            
+            # Try to get the model from the registry
+            try:
+                apps.get_model(APP_LABEL, model_name)
+            except LookupError:
+                # Model not registered, register it
+                apps.register_model(APP_LABEL, model)
+                print(f"Registered model: {model_name}")
+                
+        except Exception as e:
+            print(f"Warning: Could not ensure model registration: {e}")
 
     def _fetch_and_generate_field_attrs(
         self,
@@ -231,6 +262,7 @@ class CustomObjectType(NetBoxModel):
         fields=None,
         manytomany_models=None,
         app_label=None,
+        ensure_registered=True,
     ):
         """
         Generates a temporary Django model based on available fields that belong to
@@ -326,33 +358,28 @@ class CustomObjectType(NetBoxModel):
         if not manytomany_models:
             self._after_model_generation(attrs, model)
 
+        # Ensure the model is registered if requested
+        if ensure_registered:
+            try:
+                apps.get_model(APP_LABEL, model._meta.model_name)
+            except LookupError:
+                apps.register_model(APP_LABEL, model)
+
         return model
 
-    def create_model(self):
-        model = self.get_model()
+    def get_registered_model(self):
+        """
+        Get the model and ensure it's registered with Django's app registry.
+        This is a convenience method for getting a model that's guaranteed to be registered.
+        """
+        return self.get_model(ensure_registered=True)
 
-        # Ensure the model is registered with Django's app registry
-        try:
-            model = apps.get_model(APP_LABEL, model._meta.model_name)
-            print("--------------------------------")
-            print(f"model: {model._meta.model_name}")
-            print(f"model: {model}")
-        except LookupError:
-            apps.register_model(APP_LABEL, model)
-            print("--------------------------------")
-            print(f"register model: {model}")
-        
-        # Create the content type for the model
-        content_type_name = self.get_table_model_name(self.id).lower()
-        try:
-            ct = ContentType.objects.get(
-                app_label=APP_LABEL, model=content_type_name
-            )
-        except Exception:
-            ContentType.objects.create(
-                app_label=APP_LABEL,
-                model=content_type_name
-            )
+    def create_model(self):
+        # Get the model and ensure it's registered
+        model = self.get_registered_model()
+
+        # Ensure the ContentType exists and is immediately available
+        self.get_or_create_content_type()
         
         with connection.schema_editor() as schema_editor:
             schema_editor.create_model(model)
@@ -362,9 +389,11 @@ class CustomObjectType(NetBoxModel):
         super().save(*args, **kwargs)
         if needs_db_create:
             self.create_model()
+            # Ensure the ContentType is immediately available after creation
+            self.get_or_create_content_type()
 
     def delete(self, *args, **kwargs):
-        model = self.get_model()
+        model = self.get_registered_model()
         ContentType.objects.get(
             app_label=APP_LABEL, model=self.get_table_model_name(self.id).lower()
         ).delete()
@@ -1028,9 +1057,9 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     def save(self, *args, **kwargs):
         field_type = FIELD_TYPE_CLASS[self.type]()
         model_field = field_type.get_model_field(self)
-        model = self.custom_object_type.get_model()
+        model = self.custom_object_type.get_registered_model()
         model_field.contribute_to_class(model, self.name)
-        # apps.register_model(APP_LABEL, model)
+        
         with connection.schema_editor() as schema_editor:
             if self._state.adding:
                 schema_editor.add_field(model, model_field)
@@ -1045,9 +1074,9 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     def delete(self, *args, **kwargs):
         field_type = FIELD_TYPE_CLASS[self.type]()
         model_field = field_type.get_model_field(self)
-        model = self.custom_object_type.get_model()
+        model = self.custom_object_type.get_registered_model()
         model_field.contribute_to_class(model, self.name)
-        # apps.register_model(APP_LABEL, model)
+        
         with connection.schema_editor() as schema_editor:
             if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                 apps = model._meta.apps

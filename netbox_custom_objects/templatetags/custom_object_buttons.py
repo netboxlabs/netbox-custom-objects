@@ -32,31 +32,50 @@ register = template.Library()
 
 @register.inclusion_tag("buttons/bookmark.html", takes_context=True)
 def custom_object_bookmark_button(context, instance):
-    # Check if this user has already bookmarked the object
-    content_type = ContentType.objects.get_for_model(instance)
-    bookmark = Bookmark.objects.filter(
-        object_type=content_type, object_id=instance.pk, user=context["request"].user
-    ).first()
+    try:
+        # For custom objects, ensure the model is ready for bookmarks
+        if hasattr(instance, 'custom_object_type'):
+            if not instance.custom_object_type.ensure_model_ready_for_bookmarks():
+                # If the model isn't ready, don't show the bookmark button
+                return {}
+        
+        # Check if this user has already bookmarked the object
+        content_type = ContentType.objects.get_for_model(instance)
+        
+        # Verify that the ContentType is properly accessible
+        try:
+            # This will test if the ContentType can be used to retrieve the model
+            content_type.model_class()
+        except Exception:
+            # If we can't get the model class, don't show the bookmark button
+            return {}
+            
+        bookmark = Bookmark.objects.filter(
+            object_type=content_type, object_id=instance.pk, user=context["request"].user
+        ).first()
 
-    # Compile form URL & data
-    if bookmark:
-        form_url = reverse("extras:bookmark_delete", kwargs={"pk": bookmark.pk})
-        form_data = {
-            "confirm": "true",
-        }
-    else:
-        form_url = reverse("extras:bookmark_add")
-        form_data = {
-            "object_type": content_type.pk,
-            "object_id": instance.pk,
-        }
+        # Compile form URL & data
+        if bookmark:
+            form_url = reverse("extras:bookmark_delete", kwargs={"pk": bookmark.pk})
+            form_data = {
+                "confirm": "true",
+            }
+        else:
+            form_url = reverse("extras:bookmark_add")
+            form_data = {
+                "object_type": content_type.pk,
+                "object_id": instance.pk,
+            }
 
-    return {
-        "bookmark": bookmark,
-        "form_url": form_url,
-        "form_data": form_data,
-        "return_url": instance.get_absolute_url(),
-    }
+        return {
+            "bookmark": bookmark,
+            "form_url": form_url,
+            "form_data": form_data,
+            "return_url": instance.get_absolute_url(),
+        }
+    except Exception:
+        # If we can't get the content type, don't show the bookmark button
+        return {}
 
 
 @register.inclusion_tag("buttons/clone.html")
@@ -112,31 +131,50 @@ def custom_object_subscribe_button(context, instance):
     if not (issubclass(instance.__class__, NotificationsMixin)):
         return {}
 
-    # Check if this user has already subscribed to the object
-    content_type = ContentType.objects.get_for_model(instance)
-    subscription = Subscription.objects.filter(
-        object_type=content_type, object_id=instance.pk, user=context["request"].user
-    ).first()
+    try:
+        # For custom objects, ensure the model is ready for subscriptions
+        if hasattr(instance, 'custom_object_type'):
+            if not instance.custom_object_type.ensure_model_ready_for_bookmarks():
+                # If the model isn't ready, don't show the subscribe button
+                return {}
+        
+        # Check if this user has already subscribed to the object
+        content_type = ContentType.objects.get_for_model(instance)
+        
+        # Verify that the ContentType is properly accessible
+        try:
+            # This will test if the ContentType can be used to retrieve the model
+            content_type.model_class()
+        except Exception:
+            # If we can't get the model class, don't show the subscribe button
+            return {}
+            
+        subscription = Subscription.objects.filter(
+            object_type=content_type, object_id=instance.pk, user=context["request"].user
+        ).first()
 
-    # Compile form URL & data
-    if subscription:
-        form_url = reverse("extras:subscription_delete", kwargs={"pk": subscription.pk})
-        form_data = {
-            "confirm": "true",
-        }
-    else:
-        form_url = reverse("extras:subscription_add")
-        form_data = {
-            "object_type": content_type.pk,
-            "object_id": instance.pk,
-        }
+        # Compile form URL & data
+        if subscription:
+            form_url = reverse("extras:subscription_delete", kwargs={"pk": subscription.pk})
+            form_data = {
+                "confirm": "true",
+            }
+        else:
+            form_url = reverse("extras:subscription_add")
+            form_data = {
+                "object_type": content_type.pk,
+                "object_id": instance.pk,
+            }
 
-    return {
-        "subscription": subscription,
-        "form_url": form_url,
-        "form_data": form_data,
-        "return_url": instance.get_absolute_url(),
-    }
+        return {
+            "subscription": subscription,
+            "form_url": form_url,
+            "form_data": form_data,
+            "return_url": instance.get_absolute_url(),
+        }
+    except Exception:
+        # If we can't get the content type, don't show the subscribe button
+        return {}
 
 
 @register.inclusion_tag("buttons/sync.html")
