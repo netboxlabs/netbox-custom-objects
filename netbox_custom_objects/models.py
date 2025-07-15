@@ -225,7 +225,6 @@ class CustomObjectType(NetBoxModel):
         fields=None,
         manytomany_models=None,
         app_label=None,
-        ensure_registered=True,
     ):
         """
         Generates a temporary Django model based on available fields that belong to
@@ -320,13 +319,6 @@ class CustomObjectType(NetBoxModel):
 
         if not manytomany_models:
             self._after_model_generation(attrs, model)
-
-        # Ensure the model is registered if requested
-        if ensure_registered:
-            try:
-                apps.get_model(APP_LABEL, model._meta.model_name)
-            except LookupError:
-                apps.register_model(APP_LABEL, model)
 
         return model
 

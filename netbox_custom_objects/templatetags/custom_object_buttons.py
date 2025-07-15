@@ -10,7 +10,7 @@ from netbox_custom_objects.utilities import get_viewname
 
 __all__ = (
     "custom_object_add_button",
-    # "custom_object_bookmark_button",
+    "custom_object_bookmark_button",
     "custom_object_bulk_delete_button",
     "custom_object_bulk_edit_button",
     "custom_object_clone_button",
