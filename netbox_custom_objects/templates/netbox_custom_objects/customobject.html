@@ -35,7 +35,7 @@
               {% custom_object_subscribe_button object %}
             {% endif %}
             {% if request.user|can_add:object %}
-          {#        {% clone_button object %}#}
+              {% custom_object_clone_button object %}
             {% endif %}
             {% if request.user|can_change:object %}
               {% custom_object_edit_button object %}

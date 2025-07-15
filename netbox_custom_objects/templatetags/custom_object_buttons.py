@@ -76,14 +76,16 @@ def custom_object_bookmark_button(context, instance):
 
 @register.inclusion_tag("buttons/clone.html")
 def custom_object_clone_button(instance):
-    url = reverse(get_viewname(instance, "add"))
+    viewname = get_viewname(instance, "add")
+    url = reverse(
+        viewname,
+        kwargs={"custom_object_type": instance.custom_object_type.name.lower()}
+    )
 
     # Populate cloned field values
     param_string = prepare_cloned_fields(instance).urlencode()
     if param_string:
         url = f"{url}?{param_string}"
-    else:
-        url = None
 
     return {
         "url": url,
