@@ -128,12 +128,6 @@ def custom_object_subscribe_button(context, instance):
         return {}
 
     try:
-        # For custom objects, ensure the model is ready for subscriptions
-        if hasattr(instance, 'custom_object_type'):
-            if not instance.custom_object_type.ensure_model_ready_for_bookmarks():
-                # If the model isn't ready, don't show the subscribe button
-                return {}
-        
         # Check if this user has already subscribed to the object
         content_type = ContentType.objects.get_for_model(instance)
         
