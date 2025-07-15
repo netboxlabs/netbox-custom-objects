@@ -49,7 +49,7 @@ class CustomObject(
     JournalingMixin,
     NotificationsMixin,
     TagsMixin,
-    # EventRulesMixin,
+    EventRulesMixin,
     models.Model,
 ):
     """
