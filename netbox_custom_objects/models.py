@@ -54,6 +54,32 @@ class CustomObject(
 ):
     objects = RestrictedQuerySet.as_manager()
 
+    def __str__(self):
+        # Find the field with primary=True and return that field's "name" as the name of the object
+        primary_field = self._field_objects.get(self._primary_field_id, None)
+        primary_field_value = None
+        if primary_field:
+            field_type = FIELD_TYPE_CLASS[primary_field["field"].type]()
+            primary_field_value = field_type.get_display_value(self, primary_field["name"])
+        if not primary_field_value:
+            return f"{self.custom_object_type.name} {self.id}"
+        return str(primary_field_value) or str(self.id)
+
+    @property
+    def _generated_table_model(self):
+        # An indication that the model is a generated table model.
+        return True
+
+    def get_absolute_url(self):
+        return reverse(
+            "plugins:netbox_custom_objects:customobject",
+            kwargs={
+                "pk": self.pk,
+                "custom_object_type": self.custom_object_type.name.lower(),
+            },
+        )
+
+
 
 class CustomObjectType(NetBoxModel):
     name = models.CharField(max_length=100, unique=True)
@@ -270,38 +296,11 @@ class CustomObjectType(NetBoxModel):
             },
         )
 
-        def __str__(self):
-            # Find the field with primary=True and return that field's "name" as the name of the object
-            primary_field = self._field_objects.get(self._primary_field_id, None)
-            primary_field_value = None
-            if primary_field:
-                field_type = FIELD_TYPE_CLASS[primary_field["field"].type]()
-                primary_field_value = field_type.get_display_value(self, primary_field["name"])
-            if not primary_field_value:
-                return f"{self.custom_object_type.name} {self.id}"
-            return str(primary_field_value) or str(self.id)
-
-        def get_absolute_url(self):
-            return reverse(
-                "plugins:netbox_custom_objects:customobject",
-                kwargs={
-                    "pk": self.pk,
-                    "custom_object_type": self.custom_object_type.name.lower(),
-                },
-            )
-
         attrs = {
             "Meta": meta,
             "__module__": "database.models",
-            # An indication that the model is a generated table model.
-            "_generated_table_model": True,
             "custom_object_type": self,
             "custom_object_type_id": self.id,
-            # We are using our own table model manager to implement some queryset
-            # helpers.
-            "objects": RestrictedQuerySet.as_manager(),
-            "__str__": __str__,
-            "get_absolute_url": get_absolute_url,
         }
 
         field_attrs = self._fetch_and_generate_field_attrs(fields)
@@ -314,8 +313,6 @@ class CustomObjectType(NetBoxModel):
             (CustomObject,),
             attrs,
         )
-
-        # patch_meta_get_field(model._meta)
 
         if not manytomany_models:
             self._after_model_generation(attrs, model)
