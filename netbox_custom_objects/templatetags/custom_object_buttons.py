@@ -43,7 +43,6 @@ def custom_object_bookmark_button(context, instance):
             # This will test if the ContentType can be used to retrieve the model
             content_type.model_class()
         except Exception:
-            print("returning empty")
             # If we can't get the model class, don't show the bookmark button
             return {}
             
@@ -72,7 +71,6 @@ def custom_object_bookmark_button(context, instance):
         }
     except Exception:
         # If we can't get the content type, don't show the bookmark button
-        print("returning empty Exception")
         return {}
 
 
