@@ -52,6 +52,20 @@ class CustomObject(
     # EventRulesMixin,
     models.Model,
 ):
+    """
+    Base class for dynamically generated custom object models.
+    
+    This abstract model serves as the foundation for all custom object types created
+    through the CustomObjectType system. When a CustomObjectType is created, a concrete
+    model class is dynamically generated that inherits from this base class and includes
+    the specific fields defined in the CustomObjectType's schema.
+    
+    This class should not be used directly - instead, use CustomObjectType.get_model()
+    to create concrete model classes for specific custom object types.
+    
+    Attributes:
+        _generated_table_model (property): Indicates this is a generated table model
+    """
     objects = RestrictedQuerySet.as_manager()
 
     def __str__(self):
