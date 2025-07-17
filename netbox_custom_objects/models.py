@@ -57,6 +57,9 @@ class CustomObject(
 
 
 class CustomObjectType(NetBoxModel):
+    # Class-level cache for generated models
+    _model_cache = {}
+    
     name = models.CharField(max_length=100, unique=True)
     description = models.TextField(blank=True)
     schema = models.JSONField(blank=True, default=dict)
@@ -75,6 +78,46 @@ class CustomObjectType(NetBoxModel):
 
     def __str__(self):
         return self.name
+
+    @classmethod
+    def clear_model_cache(cls, custom_object_type_id=None):
+        """
+        Clear the model cache for a specific CustomObjectType or all models.
+        
+        :param custom_object_type_id: ID of the CustomObjectType to clear cache for, or None to clear all
+        """
+        if custom_object_type_id is not None:
+            if custom_object_type_id in cls._model_cache:
+                cls._model_cache.pop(custom_object_type_id, None)
+        else:
+            cls._model_cache.clear()
+
+    @classmethod
+    def get_cached_model(cls, custom_object_type_id):
+        """
+        Get a cached model for a specific CustomObjectType if it exists.
+        
+        :param custom_object_type_id: ID of the CustomObjectType
+        :return: The cached model or None if not found
+        """
+        return cls._model_cache.get(custom_object_type_id)
+
+    @classmethod
+    def is_model_cached(cls, custom_object_type_id):
+        """
+        Check if a model is cached for a specific CustomObjectType.
+        
+        :param custom_object_type_id: ID of the CustomObjectType
+        :return: True if the model is cached, False otherwise
+        """
+        return custom_object_type_id in cls._model_cache
+
+    def refresh_model_cache(self):
+        """
+        Force refresh the model cache for this CustomObjectType by clearing and regenerating.
+        """
+        self.clear_model_cache(self.id)
+        return self.get_model()
 
     @property
     def formatted_schema(self):
@@ -210,7 +253,7 @@ class CustomObjectType(NetBoxModel):
     ):
         """
         Generates a temporary Django model based on available fields that belong to
-        this table.
+        this table. Returns cached model if available, otherwise generates and caches it.
 
         :param fields: Extra table field instances that need to be added the model.
         :type fields: list
@@ -225,6 +268,10 @@ class CustomObjectType(NetBoxModel):
         :return: The generated model.
         :rtype: Model
         """
+        
+        # Check if we have a cached model for this CustomObjectType
+        if self.id in self._model_cache:
+            return self._model_cache[self.id]
 
         if app_label is None:
             app_label = str(uuid.uuid4()) + "_database_table"
@@ -312,6 +359,9 @@ class CustomObjectType(NetBoxModel):
         if not manytomany_models:
             self._after_model_generation(attrs, model)
 
+        # Cache the generated model
+        self._model_cache[self.id] = model
+        
         return model
 
     def create_model(self):
@@ -329,8 +379,14 @@ class CustomObjectType(NetBoxModel):
         super().save(*args, **kwargs)
         if needs_db_create:
             self.create_model()
+        else:
+            # Refresh the model cache when the CustomObjectType is modified
+            self.refresh_model_cache()
 
     def delete(self, *args, **kwargs):
+        # Clear the model cache for this CustomObjectType
+        self.clear_model_cache(self.id)
+        
         model = self.get_model()
         # self.content_type.delete()
         ContentType.objects.get(
@@ -1008,6 +1064,10 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 old_field = field_type.get_model_field(self.original)
                 old_field.contribute_to_class(model, self._original_name)
                 schema_editor.alter_field(model, old_field, model_field)
+        
+        # Refresh the model cache for this CustomObjectType when a field is modified
+        self.custom_object_type.refresh_model_cache()
+        
         super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
@@ -1022,6 +1082,9 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 through_model = apps.get_model(APP_LABEL, self.through_model_name)
                 schema_editor.delete_model(through_model)
             schema_editor.remove_field(model, model_field)
+
+        # Refresh the model cache for this CustomObjectType when a field is deleted
+        self.custom_object_type.refresh_model_cache()
 
         super().delete(*args, **kwargs)
 
