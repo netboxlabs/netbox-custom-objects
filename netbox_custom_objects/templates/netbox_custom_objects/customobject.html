@@ -100,10 +100,10 @@
           {% endfor %}
         </table>
       </div>
-      {% include 'inc/panels/tags.html' %}
       {% plugin_left_page object %}
     </div>
     <div class="col col-md-6">
+      {% include 'inc/panels/tags.html' %}
       {% include 'inc/panels/comments.html' %}
       {% plugin_right_page object %}
       {% for field in fields %}
