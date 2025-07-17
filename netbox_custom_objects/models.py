@@ -406,7 +406,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         max_length=50,
         blank=True,
         help_text=_(
-            "Name of the field as displayed to users (if not provided, 'the field's name will be used)"
+            "Name of the field as displayed to users (if not provided, the field's name will be used)"
         ),
     )
     group_name = models.CharField(
