@@ -32,10 +32,10 @@
               {% custom_object_bookmark_button object %}
             {% endif %}
             {% if perms.extras.add_subscription and object.subscriptions %}
-          {#    {% subscribe_button object %}#}
+              {% custom_object_subscribe_button object %}
             {% endif %}
             {% if request.user|can_add:object %}
-          {#        {% clone_button object %}#}
+              {% custom_object_clone_button object %}
             {% endif %}
             {% if request.user|can_change:object %}
               {% custom_object_edit_button object %}
@@ -100,10 +100,10 @@
           {% endfor %}
         </table>
       </div>
-      {# {% include 'inc/panels/tags.html' %} #}
       {% plugin_left_page object %}
     </div>
     <div class="col col-md-6">
+      {% include 'inc/panels/tags.html' %}
       {% include 'inc/panels/comments.html' %}
       {% plugin_right_page object %}
       {% for field in fields %}

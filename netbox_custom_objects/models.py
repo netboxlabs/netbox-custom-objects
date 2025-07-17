@@ -20,10 +20,10 @@ from extras.choices import (
 )
 from extras.models.customfields import SEARCH_TYPES
 from netbox.models import ChangeLoggedModel, NetBoxModel
-# from netbox.models.features import (
-#     BookmarksMixin, ChangeLoggingMixin, CloningMixin, CustomLinksMixin, CustomValidationMixin, EventRulesMixin,
-#     ExportTemplatesMixin, JournalingMixin, NotificationsMixin, TagsMixin,
-# )
+from netbox.models.features import (
+    BookmarksMixin, ChangeLoggingMixin, CloningMixin, CustomLinksMixin, CustomValidationMixin, EventRulesMixin,
+    ExportTemplatesMixin, JournalingMixin, NotificationsMixin, TagsMixin,
+)
 from netbox.models.features import CloningMixin, ExportTemplatesMixin, TagsMixin
 from netbox.registry import registry
 from utilities import filters
@@ -35,25 +35,64 @@ from utilities.validators import validate_regex
 
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
-from netbox_custom_objects.utilities import AppsProxy
 
 USER_TABLE_DATABASE_NAME_PREFIX = "custom_objects_"
 
 
 class CustomObject(
-    # BookmarksMixin,
-    # ChangeLoggingMixin,
-    # CloningMixin,
-    # CustomLinksMixin,
-    # CustomValidationMixin,
-    # ExportTemplatesMixin,
-    # JournalingMixin,
-    # NotificationsMixin,
+    BookmarksMixin,
+    ChangeLoggingMixin,
+    CloningMixin,
+    CustomLinksMixin,
+    CustomValidationMixin,
+    ExportTemplatesMixin,
+    JournalingMixin,
+    NotificationsMixin,
     TagsMixin,
-    # EventRulesMixin,
+    EventRulesMixin,
     models.Model,
 ):
+    """
+    Base class for dynamically generated custom object models.
+    
+    This abstract model serves as the foundation for all custom object types created
+    through the CustomObjectType system. When a CustomObjectType is created, a concrete
+    model class is dynamically generated that inherits from this base class and includes
+    the specific fields defined in the CustomObjectType's schema.
+    
+    This class should not be used directly - instead, use CustomObjectType.get_model()
+    to create concrete model classes for specific custom object types.
+    
+    Attributes:
+        _generated_table_model (property): Indicates this is a generated table model
+    """
     objects = RestrictedQuerySet.as_manager()
+
+    def __str__(self):
+        # Find the field with primary=True and return that field's "name" as the name of the object
+        primary_field = self._field_objects.get(self._primary_field_id, None)
+        primary_field_value = None
+        if primary_field:
+            field_type = FIELD_TYPE_CLASS[primary_field["field"].type]()
+            primary_field_value = field_type.get_display_value(self, primary_field["name"])
+        if not primary_field_value:
+            return f"{self.custom_object_type.name} {self.id}"
+        return str(primary_field_value) or str(self.id)
+
+    @property
+    def _generated_table_model(self):
+        # An indication that the model is a generated table model.
+        return True
+
+    def get_absolute_url(self):
+        return reverse(
+            "plugins:netbox_custom_objects:customobject",
+            kwargs={
+                "pk": self.pk,
+                "custom_object_type": self.custom_object_type.name.lower(),
+            },
+        )
+
 
 
 class CustomObjectType(NetBoxModel):
@@ -168,9 +207,31 @@ class CustomObjectType(NetBoxModel):
 
     @property
     def content_type(self):
-        return ContentType.objects.get(
-            app_label=APP_LABEL, model=self.get_table_model_name(self.id).lower()
-        )
+        try:
+            return self.get_or_create_content_type()
+        except Exception:
+            # If we still can't get it, return None
+            return None
+
+    def get_or_create_content_type(self):
+        """
+        Get or create the ContentType for this CustomObjectType.
+        This ensures the ContentType is immediately available in the current transaction.
+        """
+        content_type_name = self.get_table_model_name(self.id).lower()
+        try:
+            return ContentType.objects.get(
+                app_label=APP_LABEL, model=content_type_name
+            )
+        except Exception:
+            # Create the ContentType and ensure it's immediately available
+            ct = ContentType.objects.create(
+                app_label=APP_LABEL,
+                model=content_type_name
+            )
+            # Force a refresh to ensure it's available in the current transaction
+            ct.refresh_from_db()
+            return ct
 
     def _fetch_and_generate_field_attrs(
         self,
@@ -191,7 +252,6 @@ class CustomObjectType(NetBoxModel):
 
         for field in fields:
             field_type = FIELD_TYPE_CLASS[field.type]()
-            # field_type = field_type_registry.get_by_model(field)
             field_name = field.name
 
             field_attrs["_field_objects"][field.id] = {
@@ -206,8 +266,6 @@ class CustomObjectType(NetBoxModel):
 
             field_attrs[field.name] = field_type.get_model_field(
                 field,
-                # db_column=field.db_column,
-                # verbose_name=field.name,
             )
 
         return field_attrs
@@ -282,14 +340,8 @@ class CustomObjectType(NetBoxModel):
             fields = []
 
         # TODO: Add other fields with "index" specified
-        indexes = [
-            models.Index(
-                fields=["id"],
-                name=self.get_collision_safe_order_id_idx_name(),
-            )
-        ]
+        indexes = []
 
-        apps = AppsProxy(manytomany_models, app_label)
         meta = type(
             "Meta",
             (),
@@ -305,45 +357,14 @@ class CustomObjectType(NetBoxModel):
             },
         )
 
-        def __str__(self):
-            # Find the field with primary=True and return that field's "name" as the name of the object
-            primary_field = self._field_objects.get(self._primary_field_id, None)
-            primary_field_value = None
-            if primary_field:
-                field_type = FIELD_TYPE_CLASS[primary_field["field"].type]()
-                primary_field_value = field_type.get_display_value(self, primary_field["name"])
-            if not primary_field_value:
-                return f"{self.custom_object_type.name} {self.id}"
-            return str(primary_field_value) or str(self.id)
-
-        def get_absolute_url(self):
-            return reverse(
-                "plugins:netbox_custom_objects:customobject",
-                kwargs={
-                    "pk": self.pk,
-                    "custom_object_type": self.custom_object_type.name.lower(),
-                },
-            )
-
         attrs = {
             "Meta": meta,
             "__module__": "database.models",
-            # An indication that the model is a generated table model.
-            "_generated_table_model": True,
             "custom_object_type": self,
             "custom_object_type_id": self.id,
-            "dynamic_models": apps.dynamic_models,
-            # We are using our own table model manager to implement some queryset
-            # helpers.
-            # "objects": models.Manager(),
-            "objects": RestrictedQuerySet.as_manager(),
-            # "objects_and_trash": TableModelTrashAndObjectsManager(),
-            "__str__": __str__,
-            "get_absolute_url": get_absolute_url,
         }
 
         field_attrs = self._fetch_and_generate_field_attrs(fields)
-        # field_attrs["name"] = models.CharField(max_length=100, unique=True)
 
         attrs.update(**field_attrs)
 
@@ -354,8 +375,6 @@ class CustomObjectType(NetBoxModel):
             attrs,
         )
 
-        # patch_meta_get_field(model._meta)
-
         if not manytomany_models:
             self._after_model_generation(attrs, model)
 
@@ -365,16 +384,17 @@ class CustomObjectType(NetBoxModel):
         return model
 
     def create_model(self):
+        # Get the model and ensure it's registered
         model = self.get_model()
-        apps.register_model(APP_LABEL, model)
-        app_config = apps.get_app_config(APP_LABEL)
-        create_contenttypes(app_config)
+
+        # Ensure the ContentType exists and is immediately available
+        self.get_or_create_content_type()
+        model = self.get_model()
 
         with connection.schema_editor() as schema_editor:
             schema_editor.create_model(model)
 
     def save(self, *args, **kwargs):
-        # needs_db_create = self.pk is None
         needs_db_create = self._state.adding
         super().save(*args, **kwargs)
         if needs_db_create:
@@ -388,7 +408,6 @@ class CustomObjectType(NetBoxModel):
         self.clear_model_cache(self.id)
         
         model = self.get_model()
-        # self.content_type.delete()
         ContentType.objects.get(
             app_label=APP_LABEL, model=self.get_table_model_name(self.id).lower()
         ).delete()
@@ -1054,7 +1073,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         model_field = field_type.get_model_field(self)
         model = self.custom_object_type.get_model()
         model_field.contribute_to_class(model, self.name)
-        # apps.register_model(APP_LABEL, model)
+        
         with connection.schema_editor() as schema_editor:
             if self._state.adding:
                 schema_editor.add_field(model, model_field)
@@ -1075,7 +1094,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         model_field = field_type.get_model_field(self)
         model = self.custom_object_type.get_model()
         model_field.contribute_to_class(model, self.name)
-        # apps.register_model(APP_LABEL, model)
+        
         with connection.schema_editor() as schema_editor:
             if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                 apps = model._meta.apps

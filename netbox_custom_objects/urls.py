@@ -20,9 +20,6 @@ urlpatterns = [
         include(get_model_urls(APP_LABEL, "customobjecttype")),
     ),
     path(
-        "custom_objects/<int:pk>/", include(get_model_urls(APP_LABEL, "customobject"))
-    ),
-    path(
         "custom_object_type_fields/<int:pk>/",
         include(get_model_urls(APP_LABEL, "customobjecttypefield")),
     ),
@@ -58,6 +55,17 @@ urlpatterns = [
     ),
     path(
         "<str:custom_object_type>/<int:pk>/",
-        include(get_model_urls(APP_LABEL, "customobject")),
+        views.CustomObjectView.as_view(),
+        name="customobject",
+    ),
+    path(
+        "<str:custom_object_type>/<int:pk>/edit/",
+        views.CustomObjectEditView.as_view(),
+        name="customobject_edit",
+    ),
+    path(
+        "<str:custom_object_type>/<int:pk>/delete/",
+        views.CustomObjectDeleteView.as_view(),
+        name="customobject_delete",
     ),
 ]
