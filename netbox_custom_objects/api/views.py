@@ -18,7 +18,6 @@ class CustomObjectTypeViewSet(ModelViewSet):
 
 
 class CustomObjectViewSet(ModelViewSet):
-    queryset = CustomObject.objects.all()
     serializer_class = serializers.CustomObjectSerializer
     model = None
 

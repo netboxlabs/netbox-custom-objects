@@ -24,7 +24,6 @@ from netbox.models.features import (
     BookmarksMixin, ChangeLoggingMixin, CloningMixin, CustomLinksMixin, CustomValidationMixin, EventRulesMixin,
     ExportTemplatesMixin, JournalingMixin, NotificationsMixin, TagsMixin,
 )
-from netbox.models.features import CloningMixin, ExportTemplatesMixin, TagsMixin
 from netbox.registry import registry
 from utilities import filters
 from utilities.datetime import datetime_from_timestamp
@@ -48,9 +47,7 @@ class CustomObject(
     ExportTemplatesMixin,
     JournalingMixin,
     NotificationsMixin,
-    TagsMixin,
     EventRulesMixin,
-    models.Model,
 ):
     """
     Base class for dynamically generated custom object models.
@@ -67,6 +64,9 @@ class CustomObject(
         _generated_table_model (property): Indicates this is a generated table model
     """
     objects = RestrictedQuerySet.as_manager()
+
+    class Meta:
+        abstract = True
 
     def __str__(self):
         # Find the field with primary=True and return that field's "name" as the name of the object
@@ -98,6 +98,7 @@ class CustomObject(
 class CustomObjectType(NetBoxModel):
     # Class-level cache for generated models
     _model_cache = {}
+    _through_model_cache = {}
     
     name = models.CharField(max_length=100, unique=True)
     description = models.TextField(blank=True)
@@ -128,8 +129,12 @@ class CustomObjectType(NetBoxModel):
         if custom_object_type_id is not None:
             if custom_object_type_id in cls._model_cache:
                 cls._model_cache.pop(custom_object_type_id, None)
+            # Also clear through model cache if it exists
+            if custom_object_type_id in cls._through_model_cache:
+                cls._through_model_cache.pop(custom_object_type_id, None)
         else:
             cls._model_cache.clear()
+            cls._through_model_cache.clear()
 
     @classmethod
     def get_cached_model(cls, custom_object_type_id):
@@ -180,26 +185,6 @@ class CustomObjectType(NetBoxModel):
             "plugins:netbox_custom_objects:customobject_list",
             kwargs={"custom_object_type": self.name.lower()},
         )
-
-    def create_proxy_model(
-        self, model_name, base_model, extra_fields=None, meta_options=None
-    ):
-        """Creates a dynamic proxy model."""
-        name = f"{model_name}Proxy"
-
-        attrs = {"__module__": base_model.__module__}
-        if extra_fields:
-            attrs.update(extra_fields)
-
-        meta_attrs = {"proxy": True, "app_label": base_model._meta.app_label}
-        if meta_options:
-            meta_attrs.update(meta_options)
-
-        attrs["Meta"] = type("Meta", (), meta_attrs)
-        attrs["objects"] = ProxyManager(custom_object_type=self)
-
-        proxy_model = type(name, (base_model,), attrs)
-        return proxy_model
 
     @classmethod
     def get_table_model_name(cls, table_id):
@@ -368,18 +353,53 @@ class CustomObjectType(NetBoxModel):
 
         attrs.update(**field_attrs)
 
+        # Create a unique through model for tagging for this CustomObjectType
+        from taggit.managers import TaggableManager
+        from taggit.models import GenericTaggedItemBase
+        from extras.models.tags import Tag
+        from utilities.querysets import RestrictedQuerySet
+        
+        through_model_name = f'CustomObjectTaggedItem{self.id}'
+        
+        # Create a unique through model for this CustomObjectType
+        through_model = type(
+            through_model_name,
+            (GenericTaggedItemBase,),
+            {
+                '__module__': 'netbox_custom_objects.models',
+                'tag': models.ForeignKey(
+                    to=Tag,
+                    related_name=f"custom_objects_{through_model_name.lower()}_items",
+                    on_delete=models.CASCADE
+                ),
+                '_netbox_private': True,
+                'objects': RestrictedQuerySet.as_manager(),
+                'Meta': type('Meta', (), {
+                    'indexes': [models.Index(fields=["content_type", "object_id"])],
+                    'verbose_name': f'tagged item {self.id}',
+                    'verbose_name_plural': f'tagged items {self.id}',
+                })
+            }
+        )
+        
+        attrs['tags'] = TaggableManager(
+            through=through_model,
+            ordering=('weight', 'name'),
+        )
+
         # Create the model class.
         model = type(
             str(model_name),
-            (CustomObject,),
+            (CustomObject, models.Model),
             attrs,
         )
 
         if not manytomany_models:
             self._after_model_generation(attrs, model)
 
-        # Cache the generated model
+        # Cache the generated model and its through model
         self._model_cache[self.id] = model
+        self._through_model_cache[self.id] = through_model
         
         return model
 
@@ -393,6 +413,11 @@ class CustomObjectType(NetBoxModel):
 
         with connection.schema_editor() as schema_editor:
             schema_editor.create_model(model)
+            
+            # Also create the through model table for tags
+            if self.id in self._through_model_cache:
+                through_model = self._through_model_cache[self.id]
+                schema_editor.create_model(through_model)
 
     def save(self, *args, **kwargs):
         needs_db_create = self._state.adding
@@ -413,23 +438,11 @@ class CustomObjectType(NetBoxModel):
         ).delete()
         super().delete(*args, **kwargs)
         with connection.schema_editor() as schema_editor:
+            # Delete the through model table first if it exists
+            if self.id in self._through_model_cache:
+                through_model = self._through_model_cache[self.id]
+                schema_editor.delete_model(through_model)
             schema_editor.delete_model(model)
-
-
-class ProxyManager(models.Manager):
-    custom_object_type = None
-
-    def __init__(self, *args, **kwargs):
-        self.custom_object_type = kwargs.pop("custom_object_type", None)
-        super().__init__(*args, **kwargs)
-
-    # TODO: make this a RestrictedQuerySet
-    # def restrict(self, user, action='view'):
-    #     queryset = super().restrict(user, action=action)
-    #     return queryset.filter(custom_object_type=self.custom_object_type)
-
-    def get_queryset(self):
-        return super().get_queryset().filter(custom_object_type=self.custom_object_type)
 
 
 class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):

@@ -278,7 +278,12 @@ class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
 
 @register_model_view(CustomObject)
 class CustomObjectView(generic.ObjectView):
-    queryset = CustomObject.objects.all()
+
+    def get_queryset(self, request):
+        custom_object_type = self.kwargs.pop("custom_object_type", None)
+        object_type = get_object_or_404(CustomObjectType, name__iexact=custom_object_type)
+        model = object_type.get_model()
+        return model.objects.all()
 
     def get_object(self, **kwargs):
         custom_object_type = self.kwargs.pop("custom_object_type", None)
