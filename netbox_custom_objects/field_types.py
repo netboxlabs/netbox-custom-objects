@@ -613,7 +613,6 @@ class MultiObjectFieldType(FieldType):
 
         # Use the actual model if provided, otherwise use string reference
         source_model = model if model else "netbox_custom_objects.CustomObject"
-        target_model = model if is_self_referential else "netbox_custom_objects.CustomObject"
 
         attrs = {
             "__module__": "netbox_custom_objects.models",
@@ -732,7 +731,7 @@ class MultiObjectFieldType(FieldType):
         # Source field should point to the current model
         source_field.remote_field.model = model
         source_field.related_model = model
-        
+
         # Target field should point to the related model
         target_field.remote_field.model = to_model
         target_field.related_model = to_model
@@ -770,11 +769,11 @@ class MultiObjectFieldType(FieldType):
         # Update the through model's foreign key references
         source_field = through._meta.get_field("source")
         target_field = through._meta.get_field("target")
-        
+
         # Source field should point to the current model
         source_field.remote_field.model = model
         source_field.related_model = model
-        
+
         # Target field should point to the related model
         target_field.remote_field.model = to_model
         target_field.related_model = to_model

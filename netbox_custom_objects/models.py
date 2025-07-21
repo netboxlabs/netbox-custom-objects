@@ -7,7 +7,7 @@ import django_filters
 from core.models.contenttypes import ObjectTypeManager
 from django.apps import apps
 from django.conf import settings
-from django.contrib.contenttypes.management import create_contenttypes
+# from django.contrib.contenttypes.management import create_contenttypes
 from django.contrib.contenttypes.models import ContentType
 from django.core.validators import RegexValidator, ValidationError
 from django.db import connection, models
@@ -22,7 +22,7 @@ from extras.models.customfields import SEARCH_TYPES
 from netbox.models import ChangeLoggedModel, NetBoxModel
 from netbox.models.features import (
     BookmarksMixin, ChangeLoggingMixin, CloningMixin, CustomLinksMixin, CustomValidationMixin, EventRulesMixin,
-    ExportTemplatesMixin, JournalingMixin, NotificationsMixin, TagsMixin,
+    ExportTemplatesMixin, JournalingMixin, NotificationsMixin
 )
 from netbox.registry import registry
 from utilities import filters
@@ -51,15 +51,15 @@ class CustomObject(
 ):
     """
     Base class for dynamically generated custom object models.
-    
+
     This abstract model serves as the foundation for all custom object types created
     through the CustomObjectType system. When a CustomObjectType is created, a concrete
     model class is dynamically generated that inherits from this base class and includes
     the specific fields defined in the CustomObjectType's schema.
-    
+
     This class should not be used directly - instead, use CustomObjectType.get_model()
     to create concrete model classes for specific custom object types.
-    
+
     Attributes:
         _generated_table_model (property): Indicates this is a generated table model
     """
@@ -94,12 +94,11 @@ class CustomObject(
         )
 
 
-
 class CustomObjectType(NetBoxModel):
     # Class-level cache for generated models
     _model_cache = {}
     _through_model_cache = {}  # Now stores {custom_object_type_id: {through_model_name: through_model}}
-    
+
     name = models.CharField(max_length=100, unique=True)
     description = models.TextField(blank=True)
     schema = models.JSONField(blank=True, default=dict)
@@ -123,7 +122,7 @@ class CustomObjectType(NetBoxModel):
     def clear_model_cache(cls, custom_object_type_id=None):
         """
         Clear the model cache for a specific CustomObjectType or all models.
-        
+
         :param custom_object_type_id: ID of the CustomObjectType to clear cache for, or None to clear all
         """
         if custom_object_type_id is not None:
@@ -140,7 +139,7 @@ class CustomObjectType(NetBoxModel):
     def get_cached_model(cls, custom_object_type_id):
         """
         Get a cached model for a specific CustomObjectType if it exists.
-        
+
         :param custom_object_type_id: ID of the CustomObjectType
         :return: The cached model or None if not found
         """
@@ -150,17 +149,17 @@ class CustomObjectType(NetBoxModel):
     def is_model_cached(cls, custom_object_type_id):
         """
         Check if a model is cached for a specific CustomObjectType.
-        
+
         :param custom_object_type_id: ID of the CustomObjectType
         :return: True if the model is cached, False otherwise
         """
         return custom_object_type_id in cls._model_cache
-    
+
     @classmethod
     def get_cached_through_model(cls, custom_object_type_id, through_model_name):
         """
         Get a specific cached through model for a CustomObjectType.
-        
+
         :param custom_object_type_id: ID of the CustomObjectType
         :param through_model_name: Name of the through model to retrieve
         :return: The cached through model or None if not found
@@ -168,12 +167,12 @@ class CustomObjectType(NetBoxModel):
         if custom_object_type_id in cls._through_model_cache:
             return cls._through_model_cache[custom_object_type_id].get(through_model_name)
         return None
-    
+
     @classmethod
     def get_cached_through_models(cls, custom_object_type_id):
         """
         Get all cached through models for a CustomObjectType.
-        
+
         :param custom_object_type_id: ID of the CustomObjectType
         :return: Dict of through models or empty dict if not found
         """
@@ -327,7 +326,7 @@ class CustomObjectType(NetBoxModel):
         :return: The generated model.
         :rtype: Model
         """
-        
+
         # Check if we have a cached model for this CustomObjectType
         if self.is_model_cached(self.id):
             return self.get_cached_model(self.id)
@@ -374,9 +373,9 @@ class CustomObjectType(NetBoxModel):
         from taggit.models import GenericTaggedItemBase
         from extras.models.tags import Tag
         from utilities.querysets import RestrictedQuerySet
-        
+
         through_model_name = f'CustomObjectTaggedItem{self.id}'
-        
+
         # Create a unique through model for this CustomObjectType
         through_model = type(
             through_model_name,
@@ -397,7 +396,7 @@ class CustomObjectType(NetBoxModel):
                 })
             }
         )
-        
+
         attrs['tags'] = TaggableManager(
             through=through_model,
             ordering=('weight', 'name'),
@@ -418,7 +417,7 @@ class CustomObjectType(NetBoxModel):
         if self.id not in self._through_model_cache:
             self._through_model_cache[self.id] = {}
         self._through_model_cache[self.id][through_model_name] = through_model
-        
+
         return model
 
     def create_model(self):
@@ -431,7 +430,7 @@ class CustomObjectType(NetBoxModel):
 
         with connection.schema_editor() as schema_editor:
             schema_editor.create_model(model)
-            
+
             # Also create the through model tables for tags and other mixins
             if self.id in self._through_model_cache:
                 through_models = self._through_model_cache[self.id]
@@ -450,7 +449,7 @@ class CustomObjectType(NetBoxModel):
     def delete(self, *args, **kwargs):
         # Clear the model cache for this CustomObjectType
         self.clear_model_cache(self.id)
-        
+
         model = self.get_model()
         ContentType.objects.get(
             app_label=APP_LABEL, model=self.get_table_model_name(self.id).lower()
@@ -1106,7 +1105,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         model_field = field_type.get_model_field(self)
         model = self.custom_object_type.get_model()
         model_field.contribute_to_class(model, self.name)
-        
+
         with connection.schema_editor() as schema_editor:
             if self._state.adding:
                 schema_editor.add_field(model, model_field)
@@ -1116,10 +1115,10 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 old_field = field_type.get_model_field(self.original)
                 old_field.contribute_to_class(model, self._original_name)
                 schema_editor.alter_field(model, old_field, model_field)
-        
+
         # Clear and refresh the model cache for this CustomObjectType when a field is modified
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)
-        
+
         super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
@@ -1127,7 +1126,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         model_field = field_type.get_model_field(self)
         model = self.custom_object_type.get_model()
         model_field.contribute_to_class(model, self.name)
-        
+
         with connection.schema_editor() as schema_editor:
             if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                 apps = model._meta.apps
@@ -1135,7 +1134,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 schema_editor.delete_model(through_model)
             schema_editor.remove_field(model, model_field)
 
-        # Clear the model cache for this CustomObjectType when a field is deleted  
+        # Clear the model cache for this CustomObjectType when a field is deleted
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)
 
         super().delete(*args, **kwargs)

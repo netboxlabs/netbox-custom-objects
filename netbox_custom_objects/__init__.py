@@ -13,4 +13,5 @@ class CustomObjectsPluginConfig(PluginConfig):
     required_settings = []
     template_extensions = "template_content.template_extensions"
 
+
 config = CustomObjectsPluginConfig

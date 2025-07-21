@@ -33,7 +33,7 @@ register = template.Library()
 @register.inclusion_tag("buttons/bookmark.html", takes_context=True)
 def custom_object_bookmark_button(context, instance):
     try:
-        
+
         # Check if this user has already bookmarked the object
         content_type = ContentType.objects.get_for_model(instance)
         instance.custom_object_type.get_model()
@@ -45,7 +45,7 @@ def custom_object_bookmark_button(context, instance):
         except Exception:
             # If we can't get the model class, don't show the bookmark button
             return {}
-            
+
         bookmark = Bookmark.objects.filter(
             object_type=content_type, object_id=instance.pk, user=context["request"].user
         ).first()
@@ -132,7 +132,7 @@ def custom_object_subscribe_button(context, instance):
     try:
         # Check if this user has already subscribed to the object
         content_type = ContentType.objects.get_for_model(instance)
-        
+
         # Verify that the ContentType is properly accessible
         try:
             # This will test if the ContentType can be used to retrieve the model
@@ -140,7 +140,7 @@ def custom_object_subscribe_button(context, instance):
         except Exception:
             # If we can't get the model class, don't show the subscribe button
             return {}
-            
+
         subscription = Subscription.objects.filter(
             object_type=content_type, object_id=instance.pk, user=context["request"].user
         ).first()
