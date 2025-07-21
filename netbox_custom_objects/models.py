@@ -156,13 +156,6 @@ class CustomObjectType(NetBoxModel):
         """
         return custom_object_type_id in cls._model_cache
 
-    def refresh_model_cache(self):
-        """
-        Force refresh the model cache for this CustomObjectType by clearing and regenerating.
-        """
-        self.clear_model_cache(self.id)
-        return self.get_model()
-
     @property
     def formatted_schema(self):
         result = "<ul>"
@@ -313,8 +306,8 @@ class CustomObjectType(NetBoxModel):
         """
         
         # Check if we have a cached model for this CustomObjectType
-        if self.id in self._model_cache:
-            return self._model_cache[self.id]
+        if self.is_model_cached(self.id):
+            return self.get_cached_model(self.id)
 
         if app_label is None:
             app_label = str(uuid.uuid4()) + "_database_table"
@@ -425,8 +418,8 @@ class CustomObjectType(NetBoxModel):
         if needs_db_create:
             self.create_model()
         else:
-            # Refresh the model cache when the CustomObjectType is modified
-            self.refresh_model_cache()
+            # Clear the model cache when the CustomObjectType is modified
+            self.clear_model_cache(self.id)
 
     def delete(self, *args, **kwargs):
         # Clear the model cache for this CustomObjectType
@@ -1097,8 +1090,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 old_field.contribute_to_class(model, self._original_name)
                 schema_editor.alter_field(model, old_field, model_field)
         
-        # Refresh the model cache for this CustomObjectType when a field is modified
-        self.custom_object_type.refresh_model_cache()
+        # Clear and refresh the model cache for this CustomObjectType when a field is modified
+        self.custom_object_type.clear_model_cache(self.custom_object_type.id)
         
         super().save(*args, **kwargs)
 
@@ -1115,8 +1108,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 schema_editor.delete_model(through_model)
             schema_editor.remove_field(model, model_field)
 
-        # Refresh the model cache for this CustomObjectType when a field is deleted
-        self.custom_object_type.refresh_model_cache()
+        # Clear the model cache for this CustomObjectType when a field is deleted  
+        self.custom_object_type.clear_model_cache(self.custom_object_type.id)
 
         super().delete(*args, **kwargs)
 
