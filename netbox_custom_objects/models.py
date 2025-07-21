@@ -15,16 +15,21 @@ from django.db.models import Q
 from django.db.models.functions import Lower
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
-from extras.choices import (
-    CustomFieldFilterLogicChoices, CustomFieldTypeChoices, CustomFieldUIEditableChoices, CustomFieldUIVisibleChoices,
-)
+from extras.choices import (CustomFieldFilterLogicChoices,
+                            CustomFieldTypeChoices,
+                            CustomFieldUIEditableChoices,
+                            CustomFieldUIVisibleChoices)
 from extras.models.customfields import SEARCH_TYPES
+from extras.models.tags import Tag
 from netbox.models import ChangeLoggedModel, NetBoxModel
-from netbox.models.features import (
-    BookmarksMixin, ChangeLoggingMixin, CloningMixin, CustomLinksMixin, CustomValidationMixin, EventRulesMixin,
-    ExportTemplatesMixin, JournalingMixin, NotificationsMixin
-)
+from netbox.models.features import (BookmarksMixin, ChangeLoggingMixin,
+                                    CloningMixin, CustomLinksMixin,
+                                    CustomValidationMixin, EventRulesMixin,
+                                    ExportTemplatesMixin, JournalingMixin,
+                                    NotificationsMixin)
 from netbox.registry import registry
+from taggit.managers import TaggableManager
+from taggit.models import GenericTaggedItemBase
 from utilities import filters
 from utilities.datetime import datetime_from_timestamp
 from utilities.object_types import object_type_name
@@ -83,6 +88,23 @@ class CustomObject(
     def _generated_table_model(self):
         # An indication that the model is a generated table model.
         return True
+
+    @property
+    def clone_fields(self):
+        """
+        Return a tuple of field names that should be cloned when this object is cloned.
+        This property dynamically determines which fields to clone based on the
+        is_cloneable flag on the associated CustomObjectTypeField instances.
+        """
+        if not hasattr(self, 'custom_object_type_id'):
+            return ()
+        
+        # Get all field names where is_cloneable=True for this custom object type
+        cloneable_fields = self.custom_object_type.fields.filter(
+            is_cloneable=True
+        ).values_list('name', flat=True)
+        
+        return tuple(cloneable_fields)
 
     def get_absolute_url(self):
         return reverse(
@@ -369,10 +391,6 @@ class CustomObjectType(NetBoxModel):
         attrs.update(**field_attrs)
 
         # Create a unique through model for tagging for this CustomObjectType
-        from taggit.managers import TaggableManager
-        from taggit.models import GenericTaggedItemBase
-        from extras.models.tags import Tag
-        from utilities.querysets import RestrictedQuerySet
 
         through_model_name = f'CustomObjectTaggedItem{self.id}'
 
