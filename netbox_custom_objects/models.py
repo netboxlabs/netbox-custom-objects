@@ -112,13 +112,6 @@ class CustomObjectType(NetBoxModel):
         """
         return custom_object_type_id in cls._model_cache
 
-    def refresh_model_cache(self):
-        """
-        Force refresh the model cache for this CustomObjectType by clearing and regenerating.
-        """
-        self.clear_model_cache(self.id)
-        return self.get_model()
-
     @property
     def formatted_schema(self):
         result = "<ul>"
@@ -270,8 +263,8 @@ class CustomObjectType(NetBoxModel):
         """
         
         # Check if we have a cached model for this CustomObjectType
-        if self.id in self._model_cache:
-            return self._model_cache[self.id]
+        if self.is_model_cached(self.id):
+            return self.get_cached_model(self.id)
 
         if app_label is None:
             app_label = str(uuid.uuid4()) + "_database_table"
