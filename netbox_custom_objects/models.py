@@ -380,8 +380,8 @@ class CustomObjectType(NetBoxModel):
         if needs_db_create:
             self.create_model()
         else:
-            # Refresh the model cache when the CustomObjectType is modified
-            self.refresh_model_cache()
+            # Clear the model cache when the CustomObjectType is modified
+            self.clear_model_cache(self.id)
 
     def delete(self, *args, **kwargs):
         # Clear the model cache for this CustomObjectType
@@ -1065,8 +1065,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 old_field.contribute_to_class(model, self._original_name)
                 schema_editor.alter_field(model, old_field, model_field)
         
-        # Refresh the model cache for this CustomObjectType when a field is modified
-        self.custom_object_type.refresh_model_cache()
+        # Clear and refresh the model cache for this CustomObjectType when a field is modified
+        self.custom_object_type.clear_model_cache(self.custom_object_type.id)
         
         super().save(*args, **kwargs)
 
@@ -1083,8 +1083,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 schema_editor.delete_model(through_model)
             schema_editor.remove_field(model, model_field)
 
-        # Refresh the model cache for this CustomObjectType when a field is deleted
-        self.custom_object_type.refresh_model_cache()
+        # Clear the model cache for this CustomObjectType when a field is deleted  
+        self.custom_object_type.clear_model_cache(self.custom_object_type.id)
 
         super().delete(*args, **kwargs)
 
