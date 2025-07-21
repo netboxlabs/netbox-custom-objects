@@ -98,7 +98,7 @@ class CustomObject(
 class CustomObjectType(NetBoxModel):
     # Class-level cache for generated models
     _model_cache = {}
-    _through_model_cache = {}
+    _through_model_cache = {}  # Now stores {custom_object_type_id: {through_model_name: through_model}}
     
     name = models.CharField(max_length=100, unique=True)
     description = models.TextField(blank=True)
@@ -155,6 +155,29 @@ class CustomObjectType(NetBoxModel):
         :return: True if the model is cached, False otherwise
         """
         return custom_object_type_id in cls._model_cache
+    
+    @classmethod
+    def get_cached_through_model(cls, custom_object_type_id, through_model_name):
+        """
+        Get a specific cached through model for a CustomObjectType.
+        
+        :param custom_object_type_id: ID of the CustomObjectType
+        :param through_model_name: Name of the through model to retrieve
+        :return: The cached through model or None if not found
+        """
+        if custom_object_type_id in cls._through_model_cache:
+            return cls._through_model_cache[custom_object_type_id].get(through_model_name)
+        return None
+    
+    @classmethod
+    def get_cached_through_models(cls, custom_object_type_id):
+        """
+        Get all cached through models for a CustomObjectType.
+        
+        :param custom_object_type_id: ID of the CustomObjectType
+        :return: Dict of through models or empty dict if not found
+        """
+        return cls._through_model_cache.get(custom_object_type_id, {})
 
     @property
     def formatted_schema(self):
@@ -390,9 +413,11 @@ class CustomObjectType(NetBoxModel):
         if not manytomany_models:
             self._after_model_generation(attrs, model)
 
-        # Cache the generated model and its through model
+        # Cache the generated model and its through models
         self._model_cache[self.id] = model
-        self._through_model_cache[self.id] = through_model
+        if self.id not in self._through_model_cache:
+            self._through_model_cache[self.id] = {}
+        self._through_model_cache[self.id][through_model_name] = through_model
         
         return model
 
@@ -407,10 +432,11 @@ class CustomObjectType(NetBoxModel):
         with connection.schema_editor() as schema_editor:
             schema_editor.create_model(model)
             
-            # Also create the through model table for tags
+            # Also create the through model tables for tags and other mixins
             if self.id in self._through_model_cache:
-                through_model = self._through_model_cache[self.id]
-                schema_editor.create_model(through_model)
+                through_models = self._through_model_cache[self.id]
+                for through_model_name, through_model in through_models.items():
+                    schema_editor.create_model(through_model)
 
     def save(self, *args, **kwargs):
         needs_db_create = self._state.adding
@@ -431,10 +457,11 @@ class CustomObjectType(NetBoxModel):
         ).delete()
         super().delete(*args, **kwargs)
         with connection.schema_editor() as schema_editor:
-            # Delete the through model table first if it exists
+            # Delete the through model tables first if they exist
             if self.id in self._through_model_cache:
-                through_model = self._through_model_cache[self.id]
-                schema_editor.delete_model(through_model)
+                through_models = self._through_model_cache[self.id]
+                for through_model_name, through_model in through_models.items():
+                    schema_editor.delete_model(through_model)
             schema_editor.delete_model(model)
 
 
