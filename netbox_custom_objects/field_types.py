@@ -772,10 +772,12 @@ class MultiObjectFieldType(FieldType):
 
         # Source field should point to the current model
         source_field.remote_field.model = model
+        source_field.remote_field.field_name = model._meta.pk.name
         source_field.related_model = model
 
         # Target field should point to the related model
         target_field.remote_field.model = to_model
+        target_field.remote_field.field_name = to_model._meta.pk.name
         target_field.related_model = to_model
 
         # Register the model with Django's app registry
@@ -790,6 +792,7 @@ class MultiObjectFieldType(FieldType):
         # Update the M2M field's through model and target model
         field.remote_field.through = through_model
         field.remote_field.model = to_model
+        field.remote_field.field_name = to_model._meta.pk.name
 
         # Create the through table
         with connection.schema_editor() as schema_editor:
