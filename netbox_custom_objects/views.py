@@ -278,14 +278,21 @@ class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
 
 @register_model_view(CustomObject)
 class CustomObjectView(generic.ObjectView):
-    queryset = CustomObject.objects.all()
+    template_name = "netbox_custom_objects/customobject.html"
 
-    def get_object(self, **kwargs):
-        custom_object_type = self.kwargs.pop("custom_object_type", None)
+    def get_queryset(self, request):
+        custom_object_type = self.kwargs.get("custom_object_type", None)
         object_type = get_object_or_404(CustomObjectType, name__iexact=custom_object_type)
         model = object_type.get_model()
-        # kwargs.pop('custom_object_type', None)
-        return get_object_or_404(model.objects.all(), **self.kwargs)
+        return model.objects.all()
+
+    def get_object(self, **kwargs):
+        custom_object_type = self.kwargs.get("custom_object_type", None)
+        object_type = get_object_or_404(CustomObjectType, name__iexact=custom_object_type)
+        model = object_type.get_model()
+        # Filter out custom_object_type from kwargs for the object lookup
+        lookup_kwargs = {k: v for k, v in self.kwargs.items() if k != "custom_object_type"}
+        return get_object_or_404(model.objects.all(), **lookup_kwargs)
 
     def get_extra_context(self, request, instance):
         fields = instance.custom_object_type.fields.all().order_by("weight")
@@ -344,14 +351,6 @@ class CustomObjectEditView(generic.ObjectEditView):
                 attrs[field.name] = field_type.get_annotated_form_field(field)
             except NotImplementedError:
                 print(f"get_form: {field.name} field is not supported")
-
-        # Add an __init__ method to handle the tags field widget override
-        def __init__(self, *args, **kwargs):
-            forms.NetBoxModelForm.__init__(self, *args, **kwargs)
-            if 'tags' in self.fields:
-                del self.fields["tags"]
-
-        attrs['__init__'] = __init__
 
         form = type(
             f"{model._meta.object_name}Form",
