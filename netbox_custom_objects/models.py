@@ -1132,7 +1132,42 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             else:
                 old_field = field_type.get_model_field(self.original)
                 old_field.contribute_to_class(model, self._original_name)
-                schema_editor.alter_field(model, old_field, model_field)
+                
+                # Special handling for MultiObject fields when the name changes
+                if (self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT and 
+                    self.name != self._original_name):
+                    # For renamed MultiObject fields, we need to migrate data from old to new through table
+                    old_through_table_name = self.original.through_table_name
+                    new_through_table_name = self.through_table_name
+                    
+                    # First, create the new through table
+                    field_type.create_m2m_table(self, model, self.name)
+                    
+                    # Migrate data from old through table to new one if old table exists
+                    with connection.cursor() as cursor:
+                        # Check if old through table exists
+                        cursor.execute("""
+                            SELECT EXISTS (
+                                SELECT FROM information_schema.tables 
+                                WHERE table_name = %s
+                            );
+                        """, [old_through_table_name])
+                        
+                        if cursor.fetchone()[0]:  # Table exists
+                            # Copy all data from old through table to new one
+                            cursor.execute(f"""
+                                INSERT INTO "{new_through_table_name}" (source_id, target_id)
+                                SELECT source_id, target_id FROM "{old_through_table_name}"
+                            """)
+                            
+                            # Drop the old through table
+                            cursor.execute(f'DROP TABLE IF EXISTS "{old_through_table_name}"')
+                    
+                    # Alter the field normally (this updates the field definition)
+                    schema_editor.alter_field(model, old_field, model_field)
+                else:
+                    # Normal field alteration
+                    schema_editor.alter_field(model, old_field, model_field)
 
         # Clear and refresh the model cache for this CustomObjectType when a field is modified
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)
