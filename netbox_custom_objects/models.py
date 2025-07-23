@@ -1132,7 +1132,86 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             else:
                 old_field = field_type.get_model_field(self.original)
                 old_field.contribute_to_class(model, self._original_name)
-                schema_editor.alter_field(model, old_field, model_field)
+                
+                # Special handling for MultiObject fields when the name changes
+                if (self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT and 
+                    self.name != self._original_name):
+                    # For renamed MultiObject fields, we just need to rename the through table
+                    old_through_table_name = self.original.through_table_name
+                    new_through_table_name = self.through_table_name
+                    
+                    # Check if old through table exists
+                    with connection.cursor() as cursor:
+                        tables = connection.introspection.table_names(cursor)
+                        old_table_exists = old_through_table_name in tables
+                    
+                    if old_table_exists:
+                        # Create temporary models to represent the old and new through table states
+                        old_through_meta = type(
+                            "Meta",
+                            (),
+                            {
+                                "db_table": old_through_table_name,
+                                "app_label": APP_LABEL,
+                                "managed": True,
+                            },
+                        )
+                        old_through_model = type(
+                            f"TempOld{self.original.through_model_name}",
+                            (models.Model,),
+                            {
+                                "__module__": "netbox_custom_objects.models",
+                                "Meta": old_through_meta,
+                                "id": models.AutoField(primary_key=True),
+                                "source": models.ForeignKey(
+                                    model, on_delete=models.CASCADE, 
+                                    db_column="source_id", related_name="+"
+                                ),
+                                "target": models.ForeignKey(
+                                    model, on_delete=models.CASCADE, 
+                                    db_column="target_id", related_name="+"
+                                ),
+                            },
+                        )
+                        
+                        new_through_meta = type(
+                            "Meta",
+                            (),
+                            {
+                                "db_table": new_through_table_name,
+                                "app_label": APP_LABEL,
+                                "managed": True,
+                            },
+                        )
+                        new_through_model = type(
+                            f"TempNew{self.through_model_name}",
+                            (models.Model,),
+                            {
+                                "__module__": "netbox_custom_objects.models",
+                                "Meta": new_through_meta,
+                                "id": models.AutoField(primary_key=True),
+                                "source": models.ForeignKey(
+                                    model, on_delete=models.CASCADE, 
+                                    db_column="source_id", related_name="+"
+                                ),
+                                "target": models.ForeignKey(
+                                    model, on_delete=models.CASCADE, 
+                                    db_column="target_id", related_name="+"
+                                ),
+                            },
+                        )
+                        
+                        # Rename the table using Django's schema editor
+                        schema_editor.alter_db_table(old_through_model, old_through_table_name, new_through_table_name)
+                    else:
+                        # No old table exists, create the new through table
+                        field_type.create_m2m_table(self, model, self.name)
+                    
+                    # Alter the field normally (this updates the field definition)
+                    schema_editor.alter_field(model, old_field, model_field)
+                else:
+                    # Normal field alteration
+                    schema_editor.alter_field(model, old_field, model_field)
 
         # Clear and refresh the model cache for this CustomObjectType when a field is modified
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)
