@@ -115,6 +115,12 @@ class CustomObject(
             },
         )
 
+    def get_list_url(self):
+        return reverse(
+            "plugins:netbox_custom_objects:customobject_list",
+            kwargs={"custom_object_type": self.custom_object_type.name.lower()},
+        )
+
 
 class CustomObjectType(NetBoxModel):
     # Class-level cache for generated models
