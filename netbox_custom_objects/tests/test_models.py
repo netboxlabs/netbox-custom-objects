@@ -431,23 +431,6 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(instance.sites.all().count(), 1)
         self.assertEqual(str(instance), "Test Instance")
 
-    # def test_custom_object_validation(self):
-    #     """Test custom object field validation."""
-    #     # NOTE: Field validation is only on the form level; it is not enforced via the ORM.
-    #     # Test required field validation
-    #     with self.assertRaises(Exception):
-    #         self.model.objects.create(
-    #             description="A test instance",
-    #             count=50
-    #         )
-    #
-    #     # Test integer field validation
-    #     with self.assertRaises(Exception):
-    #         m = self.model.objects.create(
-    #             name="Test Instance",
-    #             count=-1  # Below minimum
-    #         )
-
     def test_custom_object_get_absolute_url(self):
         """Test get_absolute_url method for custom objects."""
         instance = self.model.objects.create(name="Test Instance")
