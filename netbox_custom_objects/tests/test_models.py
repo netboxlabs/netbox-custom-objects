@@ -397,6 +397,76 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
             validation_maximum=100
         )
 
+        cls.create_custom_object_type_field(
+            cls.custom_object_type,
+            name="price",
+            label="Price",
+            type="decimal",
+            validation_minimum=0,
+            validation_maximum=100
+        )
+
+        cls.create_custom_object_type_field(
+            cls.custom_object_type,
+            name="is_active",
+            label="Is active",
+            type="boolean",
+        )
+
+        cls.create_custom_object_type_field(
+            cls.custom_object_type,
+            name="created_on",
+            label="Created on (date)",
+            type="date",
+        )
+
+        cls.create_custom_object_type_field(
+            cls.custom_object_type,
+            name="created_at",
+            label="Created at (datetime)",
+            type="datetime",
+        )
+
+        cls.create_custom_object_type_field(
+            cls.custom_object_type,
+            name="url",
+            label="URL",
+            type="url",
+        )
+
+        cls.create_custom_object_type_field(
+            cls.custom_object_type,
+            name="data",
+            label="JSON data",
+            type="json",
+        )
+
+        choice_set = cls.create_choice_set()
+        cls.create_custom_object_type_field(
+            cls.custom_object_type,
+            name="country",
+            label="Single country",
+            type="select",
+            choice_set=choice_set,
+        )
+
+        cls.create_custom_object_type_field(
+            cls.custom_object_type,
+            name="countries",
+            label="Countries",
+            type="multiselect",
+            choice_set=choice_set,
+        )
+
+        site_ct = cls.get_site_content_type()
+        cls.create_custom_object_type_field(
+            cls.custom_object_type,
+            name="site",
+            label="Single site",
+            type="object",
+            related_object_type=site_ct,
+        )
+
         site_ct = cls.get_site_content_type()
         cls.create_custom_object_type_field(
             cls.custom_object_type,
