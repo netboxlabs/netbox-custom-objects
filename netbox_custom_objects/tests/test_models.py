@@ -52,13 +52,13 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         )
         self.assertEqual(custom_object_type.get_list_url(), expected_url)
 
-    # def test_custom_object_type_get_model_without_fields(self):
-    #     """Test get_model method when no fields are defined."""
-    #     custom_object_type = self.create_custom_object_type(name="TestObject")
-    #
-    #     # Should raise an error when no primary field is defined
-    #     with self.assertRaises(Exception):
-    #         custom_object_type.get_model()
+    def test_custom_object_type_get_model_without_fields(self):
+        """Test get_model method when no fields are defined."""
+        custom_object_type = self.create_custom_object_type(name="TestObject")
+
+        # Should raise an error when no primary field is defined
+        with self.assertRaises(Exception):
+            custom_object_type.get_model()
 
     def test_custom_object_type_get_model_with_primary_field(self):
         """Test get_model method with a primary field."""
@@ -314,15 +314,15 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
             )
             field.full_clean()
 
-    # def test_custom_object_type_field_get_absolute_url(self):
-    #     """Test get_absolute_url method."""
-    #     field = self.create_custom_object_type_field(
-    #         self.custom_object_type,
-    #         name="test_field",
-    #         type="text"
-    #     )
-    #     expected_url = reverse("plugins:netbox_custom_objects:customobjecttypefield", args=[field.pk])
-    #     self.assertEqual(field.get_absolute_url(), expected_url)
+    def test_custom_object_type_field_get_absolute_url(self):
+        """Test get_absolute_url method."""
+        field = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="test_field",
+            type="text"
+        )
+        expected_url = reverse("plugins:netbox_custom_objects:customobjecttypefield", args=[field.pk])
+        self.assertEqual(field.get_absolute_url(), expected_url)
 
     def test_custom_object_type_field_validation_methods(self):
         """Test field validation methods."""
