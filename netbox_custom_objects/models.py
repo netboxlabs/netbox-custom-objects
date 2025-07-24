@@ -7,6 +7,7 @@ import django_filters
 from core.models.contenttypes import ObjectTypeManager
 from django.apps import apps
 from django.conf import settings
+
 # from django.contrib.contenttypes.management import create_contenttypes
 from django.contrib.contenttypes.models import ContentType
 from django.core.validators import RegexValidator, ValidationError
@@ -15,18 +16,26 @@ from django.db.models import Q
 from django.db.models.functions import Lower
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
-from extras.choices import (CustomFieldFilterLogicChoices,
-                            CustomFieldTypeChoices,
-                            CustomFieldUIEditableChoices,
-                            CustomFieldUIVisibleChoices)
+from extras.choices import (
+    CustomFieldFilterLogicChoices,
+    CustomFieldTypeChoices,
+    CustomFieldUIEditableChoices,
+    CustomFieldUIVisibleChoices,
+)
 from extras.models.customfields import SEARCH_TYPES
 from extras.models.tags import Tag
-from netbox.models import ChangeLoggedModel, NetBoxModel
-from netbox.models.features import (BookmarksMixin, ChangeLoggingMixin,
-                                    CloningMixin, CustomLinksMixin,
-                                    CustomValidationMixin, EventRulesMixin,
-                                    ExportTemplatesMixin, JournalingMixin,
-                                    NotificationsMixin)
+from netbox.models import ChangeLoggedModel, PrimaryModel
+from netbox.models.features import (
+    BookmarksMixin,
+    ChangeLoggingMixin,
+    CloningMixin,
+    CustomLinksMixin,
+    CustomValidationMixin,
+    EventRulesMixin,
+    ExportTemplatesMixin,
+    JournalingMixin,
+    NotificationsMixin,
+)
 from netbox.registry import registry
 from taggit.managers import TaggableManager
 from taggit.models import GenericTaggedItemBase
@@ -68,6 +77,7 @@ class CustomObject(
     Attributes:
         _generated_table_model (property): Indicates this is a generated table model
     """
+
     objects = RestrictedQuerySet.as_manager()
 
     class Meta:
@@ -79,7 +89,9 @@ class CustomObject(
         primary_field_value = None
         if primary_field:
             field_type = FIELD_TYPE_CLASS[primary_field["field"].type]()
-            primary_field_value = field_type.get_display_value(self, primary_field["name"])
+            primary_field_value = field_type.get_display_value(
+                self, primary_field["name"]
+            )
         if not primary_field_value:
             return f"{self.custom_object_type.name} {self.id}"
         return str(primary_field_value) or str(self.id)
@@ -96,7 +108,7 @@ class CustomObject(
         This property dynamically determines which fields to clone based on the
         is_cloneable flag on the associated CustomObjectTypeField instances.
         """
-        if not hasattr(self, 'custom_object_type_id'):
+        if not hasattr(self, "custom_object_type_id"):
             return ()
 
         # Get all field names where is_cloneable=True for this custom object type
@@ -122,12 +134,11 @@ class CustomObject(
         )
 
 
-class CustomObjectType(NetBoxModel):
+class CustomObjectType(PrimaryModel):
     # Class-level cache for generated models
     _model_cache = {}
     _through_model_cache = {}  # Now stores {custom_object_type_id: {through_model_name: through_model}}
     name = models.CharField(max_length=100, unique=True)
-    description = models.TextField(blank=True)
     schema = models.JSONField(blank=True, default=dict)
     verbose_name_plural = models.CharField(max_length=100, blank=True)
 
@@ -136,9 +147,11 @@ class CustomObjectType(NetBoxModel):
         ordering = ("name",)
         constraints = [
             models.UniqueConstraint(
-                Lower('name'),
-                name='%(app_label)s_%(class)s_name',
-                violation_error_message=_("A Custom Object Type with this name already exists.")
+                Lower("name"),
+                name="%(app_label)s_%(class)s_name",
+                violation_error_message=_(
+                    "A Custom Object Type with this name already exists."
+                ),
             ),
         ]
 
@@ -192,7 +205,9 @@ class CustomObjectType(NetBoxModel):
         :return: The cached through model or None if not found
         """
         if custom_object_type_id in cls._through_model_cache:
-            return cls._through_model_cache[custom_object_type_id].get(through_model_name)
+            return cls._through_model_cache[custom_object_type_id].get(
+                through_model_name
+            )
         return None
 
     @classmethod
@@ -247,14 +262,11 @@ class CustomObjectType(NetBoxModel):
         """
         content_type_name = self.get_table_model_name(self.id).lower()
         try:
-            return ContentType.objects.get(
-                app_label=APP_LABEL, model=content_type_name
-            )
+            return ContentType.objects.get(app_label=APP_LABEL, model=content_type_name)
         except Exception:
             # Create the ContentType and ensure it's immediately available
             ct = ContentType.objects.create(
-                app_label=APP_LABEL,
-                model=content_type_name
+                app_label=APP_LABEL, model=content_type_name
             )
             # Force a refresh to ensure it's available in the current transaction
             ct.refresh_from_db()
@@ -325,9 +337,7 @@ class CustomObjectType(NetBoxModel):
 
     @staticmethod
     def get_content_type_label(custom_object_type_id):
-        custom_object_type = CustomObjectType.objects.get(
-            pk=custom_object_type_id
-        )
+        custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
         return f"Custom Objects > {custom_object_type.name}"
 
     def get_model(
@@ -397,32 +407,36 @@ class CustomObjectType(NetBoxModel):
 
         # Create a unique through model for tagging for this CustomObjectType
 
-        through_model_name = f'CustomObjectTaggedItem{self.id}'
+        through_model_name = f"CustomObjectTaggedItem{self.id}"
 
         # Create a unique through model for this CustomObjectType
         through_model = type(
             through_model_name,
             (GenericTaggedItemBase,),
             {
-                '__module__': 'netbox_custom_objects.models',
-                'tag': models.ForeignKey(
+                "__module__": "netbox_custom_objects.models",
+                "tag": models.ForeignKey(
                     to=Tag,
                     related_name=f"custom_objects_{through_model_name.lower()}_items",
-                    on_delete=models.CASCADE
+                    on_delete=models.CASCADE,
                 ),
-                '_netbox_private': True,
-                'objects': RestrictedQuerySet.as_manager(),
-                'Meta': type('Meta', (), {
-                    'indexes': [models.Index(fields=["content_type", "object_id"])],
-                    'verbose_name': f'tagged item {self.id}',
-                    'verbose_name_plural': f'tagged items {self.id}',
-                })
-            }
+                "_netbox_private": True,
+                "objects": RestrictedQuerySet.as_manager(),
+                "Meta": type(
+                    "Meta",
+                    (),
+                    {
+                        "indexes": [models.Index(fields=["content_type", "object_id"])],
+                        "verbose_name": f"tagged item {self.id}",
+                        "verbose_name_plural": f"tagged items {self.id}",
+                    },
+                ),
+            },
         )
 
-        attrs['tags'] = TaggableManager(
+        attrs["tags"] = TaggableManager(
             through=through_model,
-            ordering=('weight', 'name'),
+            ordering=("weight", "name"),
         )
 
         # Create the model class.
@@ -648,9 +662,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     )
     comments = models.TextField(verbose_name=_("comments"), blank=True)
 
-    clone_fields = (
-        'custom_object_type',
-    )
+    clone_fields = ("custom_object_type",)
 
     # For non-object fields, other field attribs (such as choices, length, required) should be added here as a
     # superset, or stored in a JSON field
@@ -718,7 +730,9 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     @property
     def related_object_type_label(self):
         if self.related_object_type.app_label == APP_LABEL:
-            custom_object_type_id = self.related_object_type.model.replace("table", "").replace("model", "")
+            custom_object_type_id = self.related_object_type.model.replace(
+                "table", ""
+            ).replace("model", "")
             return CustomObjectType.get_content_type_label(custom_object_type_id)
         return object_type_name(self.related_object_type, include_app=True)
 
@@ -1207,7 +1221,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                         new_through_model  # To silence ruff error
 
                         # Rename the table using Django's schema editor
-                        schema_editor.alter_db_table(old_through_model, old_through_table_name, new_through_table_name)
+                        schema_editor.alter_db_table(
+                            old_through_model,
+                            old_through_table_name,
+                            new_through_table_name,
+                        )
                     else:
                         # No old table exists, create the new through table
                         field_type.create_m2m_table(self, model, self.name)

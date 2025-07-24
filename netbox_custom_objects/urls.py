@@ -16,6 +16,21 @@ urlpatterns = [
         name="customobjecttype_add",
     ),
     path(
+        "custom_object_types/import/",
+        views.CustomObjectTypeBulkImportView.as_view(),
+        name="customobjecttype_bulk_import",
+    ),
+    path(
+        "custom_object_types/edit/",
+        views.CustomObjectTypeBulkEditView.as_view(),
+        name="customobjecttype_bulk_edit",
+    ),
+    path(
+        "custom_object_types/delete/",
+        views.CustomObjectTypeBulkDeleteView.as_view(),
+        name="customobjecttype_bulk_delete",
+    ),
+    path(
         "custom_object_types/<int:pk>/",
         include(get_model_urls(APP_LABEL, "customobjecttype")),
     ),

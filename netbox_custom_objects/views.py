@@ -14,7 +14,7 @@ from utilities.views import get_viewname, register_model_view
 
 from netbox_custom_objects.tables import CustomObjectTable
 
-from . import field_types, forms, tables
+from . import field_types, filtersets, forms, tables
 from .models import CustomObject, CustomObjectType, CustomObjectTypeField
 
 
@@ -74,8 +74,11 @@ class CustomObjectTableMixin(TableMixin):
 #
 
 
+@register_model_view(CustomObjectType, 'list', path='', detail=False)
 class CustomObjectTypeListView(generic.ObjectListView):
     queryset = CustomObjectType.objects.all()
+    filterset = filtersets.CustomObjectTypeFilterSet
+    filterset_form = forms.CustomObjectTypeFilterForm
     table = tables.CustomObjectTypeTable
 
 
@@ -178,6 +181,28 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
         }
         dependent_objects[model] = list(model.objects.filter(**kwargs))
         return dependent_objects
+
+
+@register_model_view(CustomObjectType, 'bulk_import', path='import', detail=False)
+class CustomObjectTypeBulkImportView(generic.BulkImportView):
+    queryset = CustomObjectType.objects.all()
+    model_form = forms.CustomObjectTypeImportForm
+
+
+@register_model_view(CustomObjectType, 'bulk_edit', path='edit', detail=False)
+class CustomObjectTypeBulkEditView(generic.BulkEditView):
+    queryset = CustomObjectType.objects.all()
+    filterset = filtersets.CustomObjectTypeFilterSet
+    table = tables.CustomObjectTypeTable
+    form = forms.CustomObjectTypeBulkEditForm
+
+
+@register_model_view(CustomObjectType, 'bulk_delete', path='delete', detail=False)
+class CustomObjectTypeBulkDeleteView(generic.BulkDeleteView):
+    queryset = CustomObjectType.objects.all()
+    filterset = filtersets.CustomObjectTypeFilterSet
+    table = tables.CustomObjectTypeTable
+
 
 #
 # Custom Objects
