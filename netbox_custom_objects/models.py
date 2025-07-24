@@ -98,12 +98,12 @@ class CustomObject(
         """
         if not hasattr(self, 'custom_object_type_id'):
             return ()
-        
+
         # Get all field names where is_cloneable=True for this custom object type
         cloneable_fields = self.custom_object_type.fields.filter(
             is_cloneable=True
         ).values_list('name', flat=True)
-        
+
         return tuple(cloneable_fields)
 
     def get_absolute_url(self):
@@ -119,8 +119,7 @@ class CustomObject(
 class CustomObjectType(NetBoxModel):
     # Class-level cache for generated models
     _model_cache = {}
-    _through_model_cache = {}  # Now stores {custom_object_type_id: {through_model_name: through_model}}
-
+_through_model_cache = {}  # Now stores {custom_object_type_id: {through_model_name: through_model}}
     name = models.CharField(max_length=100, unique=True)
     description = models.TextField(blank=True)
     schema = models.JSONField(blank=True, default=dict)
@@ -432,10 +431,9 @@ class CustomObjectType(NetBoxModel):
 
         # Cache the generated model and its through models
         self._model_cache[self.id] = model
-        if self.id not in self._through_model_cache:
+if self.id not in self._through_model_cache:
             self._through_model_cache[self.id] = {}
         self._through_model_cache[self.id][through_model_name] = through_model
-
         return model
 
     def create_model(self):
