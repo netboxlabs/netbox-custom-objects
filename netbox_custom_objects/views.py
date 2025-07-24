@@ -77,6 +77,8 @@ class CustomObjectTableMixin(TableMixin):
 @register_model_view(CustomObjectType, 'list', path='', detail=False)
 class CustomObjectTypeListView(generic.ObjectListView):
     queryset = CustomObjectType.objects.all()
+    filterset = filtersets.CustomObjectTypeFilterSet
+    filterset_form = forms.CustomObjectTypeFilterForm
     table = tables.CustomObjectTypeTable
 
 

@@ -2,17 +2,23 @@ from django import forms
 from django.utils.translation import gettext_lazy as _
 from extras.choices import CustomFieldTypeChoices
 from extras.forms import CustomFieldForm
-from netbox.forms import NetBoxModelForm, NetBoxModelBulkEditForm, NetBoxModelImportForm
-
-from utilities.forms.fields import CommentField, ContentTypeChoiceField, DynamicModelChoiceField
+from netbox.forms import (NetBoxModelBulkEditForm, NetBoxModelFilterSetForm,
+                          NetBoxModelForm, NetBoxModelImportForm)
+from utilities.forms.fields import (CommentField, ContentTypeChoiceField,
+                                    DynamicModelChoiceField, TagFilterField)
 from utilities.forms.rendering import FieldSet
 from utilities.object_types import object_type_name
 
 from netbox_custom_objects.constants import APP_LABEL
-from netbox_custom_objects.models import CustomObjectObjectType, CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.models import (CustomObjectObjectType,
+                                          CustomObjectType,
+                                          CustomObjectTypeField)
 
 __all__ = (
     "CustomObjectTypeForm",
+    "CustomObjectTypeBulkEditForm",
+    "CustomObjectTypeImportForm",
+    "CustomObjectTypeFilterForm",
     "CustomObjectTypeFieldForm",
     "CustomObjectType",
 )
@@ -33,18 +39,15 @@ class CustomObjectTypeForm(NetBoxModelForm):
 
 class CustomObjectTypeBulkEditForm(NetBoxModelBulkEditForm):
     description = forms.CharField(
-        label=_('Description'),
-        max_length=200,
-        required=False
+        label=_("Description"), max_length=200, required=False
     )
     comments = CommentField()
 
     model = CustomObjectType
-    fieldsets = (
-        FieldSet('description'),
-    )
+    fieldsets = (FieldSet("description"),)
     nullable_fields = (
-        'description', 'comments',
+        "description",
+        "comments",
     )
 
 
@@ -53,8 +56,17 @@ class CustomObjectTypeImportForm(NetBoxModelImportForm):
     class Meta:
         model = CustomObjectType
         fields = (
-            'name', 'description', 'comments', 'tags',
+            "name",
+            "description",
+            "comments",
+            "tags",
         )
+
+
+class CustomObjectTypeFilterForm(NetBoxModelFilterSetForm):
+    model = CustomObjectType
+    fieldsets = (FieldSet("q", "filter_id", "tag"),)
+    tag = TagFilterField(model)
 
 
 class CustomContentTypeChoiceField(ContentTypeChoiceField):
@@ -64,7 +76,9 @@ class CustomContentTypeChoiceField(ContentTypeChoiceField):
             custom_object_type_id = obj.model.replace("table", "").replace("model", "")
             if custom_object_type_id.isdigit():
                 try:
-                    return CustomObjectType.get_content_type_label(custom_object_type_id)
+                    return CustomObjectType.get_content_type_label(
+                        custom_object_type_id
+                    )
                 except CustomObjectType.DoesNotExist:
                     pass
         try:
