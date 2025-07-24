@@ -2,7 +2,8 @@ from django import forms
 from django.utils.translation import gettext_lazy as _
 from extras.choices import CustomFieldTypeChoices
 from extras.forms import CustomFieldForm
-from netbox.forms import NetBoxModelForm
+from netbox.forms import NetBoxModelForm, NetBoxModelBulkEditForm, NetBoxModelImportForm
+
 from utilities.forms.fields import CommentField, ContentTypeChoiceField, DynamicModelChoiceField
 from utilities.forms.rendering import FieldSet
 from utilities.object_types import object_type_name
@@ -28,6 +29,32 @@ class CustomObjectTypeForm(NetBoxModelForm):
     class Meta:
         model = CustomObjectType
         fields = ("name", "verbose_name_plural", "description", "comments", "tags")
+
+
+class CustomObjectTypeBulkEditForm(NetBoxModelBulkEditForm):
+    description = forms.CharField(
+        label=_('Description'),
+        max_length=200,
+        required=False
+    )
+    comments = CommentField()
+
+    model = CustomObjectType
+    fieldsets = (
+        FieldSet('description'),
+    )
+    nullable_fields = (
+        'description', 'comments',
+    )
+
+
+class CustomObjectTypeImportForm(NetBoxModelImportForm):
+
+    class Meta:
+        model = CustomObjectType
+        fields = (
+            'name', 'description', 'comments', 'tags',
+        )
 
 
 class CustomContentTypeChoiceField(ContentTypeChoiceField):
