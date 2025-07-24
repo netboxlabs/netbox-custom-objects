@@ -347,7 +347,7 @@ class CustomObjectEditView(generic.ObjectEditView):
             "custom_field_groups": {},
         }
 
-        for field in self.object.custom_object_type.fields.all():
+        for field in self.object.custom_object_type.fields.all().order_by('group_name', 'weight', 'name'):
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
             try:
                 field_name = field.name
