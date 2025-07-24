@@ -352,10 +352,10 @@ class CustomObjectEditView(generic.ObjectEditView):
             try:
                 field_name = field.name
                 attrs[field_name] = field_type.get_annotated_form_field(field)
-                
+
                 # Annotate the field in the list of CustomField form fields
                 attrs["custom_fields"][field_name] = field
-                
+
                 # Group fields by group_name (similar to NetBox custom fields)
                 group_name = field.group_name or None  # Use None for ungrouped fields
                 if group_name not in attrs["custom_field_groups"]:
@@ -369,9 +369,9 @@ class CustomObjectEditView(generic.ObjectEditView):
         def custom_init(self, *args, **kwargs):
             super(form_class, self).__init__(*args, **kwargs)
             # Set the grouping info as instance attributes from the outer scope
-            self.custom_fields = attrs["custom_fields"] 
+            self.custom_fields = attrs["custom_fields"]
             self.custom_field_groups = attrs["custom_field_groups"]
-        
+
         attrs["__init__"] = custom_init
 
         form_class = type(
