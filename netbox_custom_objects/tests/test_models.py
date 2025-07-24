@@ -1,15 +1,9 @@
-from pprint import pprint
-from datetime import date, datetime
-from decimal import Decimal
-from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test import TestCase
 from django.urls import reverse
-from extras.models import CustomFieldChoiceSet
-from utilities.testing import create_test_user
 
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.models import CustomObjectTypeField
 from .base import CustomObjectsTestCase
 
 
@@ -23,7 +17,7 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
             description="A test custom object type",
             verbose_name_plural="Test Objects"
         )
-        
+
         self.assertEqual(custom_object_type.name, "TestObject")
         self.assertEqual(custom_object_type.description, "A test custom object type")
         self.assertEqual(custom_object_type.verbose_name_plural, "Test Objects")
@@ -32,7 +26,7 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
     def test_custom_object_type_unique_name_constraint(self):
         """Test that custom object type names must be unique (case-insensitive)."""
         self.create_custom_object_type(name="TestObject")
-        
+
         # Should not allow duplicate name (case-insensitive)
         with self.assertRaises(Exception):
             self.create_custom_object_type(name="testobject")
@@ -63,7 +57,7 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
     def test_custom_object_type_get_model_with_primary_field(self):
         """Test get_model method with a primary field."""
         custom_object_type = self.create_custom_object_type(name="TestObject")
-        
+
         # Add a primary field
         self.create_custom_object_type_field(
             custom_object_type,
@@ -73,10 +67,10 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
             primary=True,
             required=True
         )
-        
+
         # Get the dynamic model
         model = custom_object_type.get_model()
-        
+
         # Verify the model has the expected fields
         self.assertTrue(hasattr(model, 'name'))
         self.assertTrue(hasattr(model, 'get_absolute_url'))
@@ -85,7 +79,7 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
     def test_custom_object_type_get_model_with_multiple_fields(self):
         """Test get_model method with multiple fields of different types."""
         custom_object_type = self.create_custom_object_type(name="TestObject")
-        
+
         # Add various field types
         self.create_custom_object_type_field(
             custom_object_type,
@@ -95,7 +89,7 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
             primary=True,
             required=True
         )
-        
+
         self.create_custom_object_type_field(
             custom_object_type,
             name="count",
@@ -104,7 +98,7 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
             validation_minimum=0,
             validation_maximum=100
         )
-        
+
         self.create_custom_object_type_field(
             custom_object_type,
             name="active",
@@ -112,10 +106,10 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
             type="boolean",
             default=True
         )
-        
+
         # Get the dynamic model
         model = custom_object_type.get_model()
-        
+
         # Verify all fields exist
         self.assertTrue(hasattr(model, 'name'))
         self.assertTrue(hasattr(model, 'count'))
@@ -124,7 +118,7 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
     def test_custom_object_type_save_creates_table(self):
         """Test that saving a custom object type creates the database table."""
         custom_object_type = self.create_custom_object_type(name="TestObject")
-        
+
         # Add a primary field
         self.create_custom_object_type_field(
             custom_object_type,
@@ -134,10 +128,10 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
             primary=True,
             required=True
         )
-        
+
         # Save to trigger table creation
         custom_object_type.save()
-        
+
         # Check if the table exists
         with connection.cursor() as cursor:
             tables = connection.introspection.table_names(cursor)
@@ -147,7 +141,7 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
     def test_custom_object_type_delete_removes_table(self):
         """Test that deleting a custom object type removes the database table."""
         custom_object_type = self.create_custom_object_type(name="TestObject")
-        
+
         # Add a primary field
         self.create_custom_object_type_field(
             custom_object_type,
@@ -157,16 +151,16 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
             primary=True,
             required=True
         )
-        
+
         # Save to create table
         custom_object_type.save()
-        
+
         # Get table name
         table_name = custom_object_type.get_database_table_name()
-        
+
         # Delete the custom object type
         custom_object_type.delete()
-        
+
         # Check if the table was removed
         with connection.cursor() as cursor:
             tables = connection.introspection.table_names(cursor)
@@ -192,7 +186,7 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
             required=True,
             unique=True
         )
-        
+
         self.assertEqual(field.name, "test_field")
         self.assertEqual(field.label, "Test Field")
         self.assertEqual(field.type, "text")
@@ -211,7 +205,7 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
                 type="text"
             )
             field.full_clean()
-        
+
         # Test double underscores
         with self.assertRaises(ValidationError):
             field = CustomObjectTypeField(
@@ -228,7 +222,7 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
             name="test_field",
             type="text"
         )
-        
+
         # Should not allow duplicate field name within the same type
         with self.assertRaises(Exception):
             self.create_custom_object_type_field(
@@ -247,7 +241,7 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
             validation_regex="^[A-Z]+$"
         )
         field.full_clean()
-        
+
         # Should fail for integer field
         with self.assertRaises(ValidationError):
             field = CustomObjectTypeField(
@@ -272,7 +266,7 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
     def test_custom_object_type_field_choice_set_validation(self):
         """Test choice set validation for select fields."""
         choice_set = self.create_choice_set()
-        
+
         # Should require choice set for select field
         with self.assertRaises(ValidationError):
             field = CustomObjectTypeField(
@@ -281,7 +275,7 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
                 type="select"
             )
             field.full_clean()
-        
+
         # Should not allow choice set for non-select field
         with self.assertRaises(ValidationError):
             field = CustomObjectTypeField(
@@ -302,7 +296,7 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
                 type="object"
             )
             field.full_clean()
-        
+
         # Should not allow related_object_type for non-object field
         device_ct = self.get_device_content_type()
         with self.assertRaises(ValidationError):
@@ -333,14 +327,14 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
             validation_minimum=0,
             validation_maximum=100
         )
-        
+
         # Test valid value
         field.validate(50)
-        
+
         # Test value below minimum
         with self.assertRaises(ValidationError):
             field.validate(-1)
-        
+
         # Test value above maximum
         with self.assertRaises(ValidationError):
             field.validate(101)
@@ -352,11 +346,11 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
             name="test_field",
             type="text"
         )
-        
+
         test_value = "test value"
         serialized = field.serialize(test_value)
         deserialized = field.deserialize(serialized)
-        
+
         self.assertEqual(deserialized, test_value)
 
 
@@ -368,7 +362,7 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
         """Set up test data that should be created once for the entire test class."""
         super().setUpTestData()
         cls.custom_object_type = cls.create_custom_object_type(name="TestObject")
-        
+
         # Add a primary field
         cls.create_custom_object_type_field(
             cls.custom_object_type,
@@ -378,7 +372,7 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
             primary=True,
             required=True
         )
-        
+
         # Add additional fields
         cls.create_custom_object_type_field(
             cls.custom_object_type,
@@ -387,7 +381,7 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
             type="text",
             required=False
         )
-        
+
         cls.create_custom_object_type_field(
             cls.custom_object_type,
             name="count",
@@ -494,7 +488,7 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
         site_ct = self.get_site_content_type()
         site = site_ct.model_class().objects.create()
         instance.sites.add(site)
-        
+
         self.assertEqual(instance.name, "Test Instance")
         self.assertEqual(instance.description, "A test instance")
         self.assertEqual(instance.count, 50)
@@ -519,11 +513,11 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
         self.model.objects.create(name="Instance 1", count=10)
         self.model.objects.create(name="Instance 2", count=20)
         self.model.objects.create(name="Instance 3", count=30)
-        
+
         # Test filtering
         filtered = self.model.objects.filter(count__gte=20)
         self.assertEqual(filtered.count(), 2)
-        
+
         # Test ordering
         ordered = self.model.objects.order_by('count')
         self.assertEqual(ordered.first().name, "Instance 1")
@@ -532,24 +526,24 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
     def test_custom_object_update(self):
         """Test updating custom object instances."""
         instance = self.model.objects.create(name="Test Instance", count=10)
-        
+
         # Update the instance
         instance.name = "Updated Instance"
         instance.count = 25
         instance.save()
-        
+
         # Refresh from database
         instance.refresh_from_db()
-        
+
         self.assertEqual(instance.name, "Updated Instance")
         self.assertEqual(instance.count, 25)
 
     def test_custom_object_delete(self):
         """Test deleting custom object instances."""
         instance = self.model.objects.create(name="Test Instance")
-        
+
         # Delete the instance
         instance.delete()
-        
+
         # Verify it's gone
-        self.assertEqual(self.model.objects.count(), 0) 
+        self.assertEqual(self.model.objects.count(), 0)
