@@ -125,7 +125,7 @@ class CustomObject(
 class CustomObjectType(NetBoxModel):
     # Class-level cache for generated models
     _model_cache = {}
-_through_model_cache = {}  # Now stores {custom_object_type_id: {through_model_name: through_model}}
+    _through_model_cache = {}  # Now stores {custom_object_type_id: {through_model_name: through_model}}
     name = models.CharField(max_length=100, unique=True)
     description = models.TextField(blank=True)
     schema = models.JSONField(blank=True, default=dict)
@@ -437,7 +437,7 @@ _through_model_cache = {}  # Now stores {custom_object_type_id: {through_model_n
 
         # Cache the generated model and its through models
         self._model_cache[self.id] = model
-if self.id not in self._through_model_cache:
+        if self.id not in self._through_model_cache:
             self._through_model_cache[self.id] = {}
         self._through_model_cache[self.id][through_model_name] = through_model
         return model
@@ -1136,19 +1136,19 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             else:
                 old_field = field_type.get_model_field(self.original)
                 old_field.contribute_to_class(model, self._original_name)
-                
+
                 # Special handling for MultiObject fields when the name changes
-                if (self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT and 
+                if (self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT and
                     self.name != self._original_name):
                     # For renamed MultiObject fields, we just need to rename the through table
                     old_through_table_name = self.original.through_table_name
                     new_through_table_name = self.through_table_name
-                    
+
                     # Check if old through table exists
                     with connection.cursor() as cursor:
                         tables = connection.introspection.table_names(cursor)
                         old_table_exists = old_through_table_name in tables
-                    
+
                     if old_table_exists:
                         # Create temporary models to represent the old and new through table states
                         old_through_meta = type(
@@ -1168,16 +1168,16 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                                 "Meta": old_through_meta,
                                 "id": models.AutoField(primary_key=True),
                                 "source": models.ForeignKey(
-                                    model, on_delete=models.CASCADE, 
+                                    model, on_delete=models.CASCADE,
                                     db_column="source_id", related_name="+"
                                 ),
                                 "target": models.ForeignKey(
-                                    model, on_delete=models.CASCADE, 
+                                    model, on_delete=models.CASCADE,
                                     db_column="target_id", related_name="+"
                                 ),
                             },
                         )
-                        
+
                         new_through_meta = type(
                             "Meta",
                             (),
@@ -1195,22 +1195,23 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                                 "Meta": new_through_meta,
                                 "id": models.AutoField(primary_key=True),
                                 "source": models.ForeignKey(
-                                    model, on_delete=models.CASCADE, 
+                                    model, on_delete=models.CASCADE,
                                     db_column="source_id", related_name="+"
                                 ),
                                 "target": models.ForeignKey(
-                                    model, on_delete=models.CASCADE, 
+                                    model, on_delete=models.CASCADE,
                                     db_column="target_id", related_name="+"
                                 ),
                             },
                         )
-                        
+                        new_through_model  # To silence ruff error
+
                         # Rename the table using Django's schema editor
                         schema_editor.alter_db_table(old_through_model, old_through_table_name, new_through_table_name)
                     else:
                         # No old table exists, create the new through table
                         field_type.create_m2m_table(self, model, self.name)
-                    
+
                     # Alter the field normally (this updates the field definition)
                     schema_editor.alter_field(model, old_field, model_field)
                 else:
