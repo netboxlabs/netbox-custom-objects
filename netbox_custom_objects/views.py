@@ -343,22 +343,44 @@ class CustomObjectEditView(generic.ObjectEditView):
             "Meta": meta,
             "__module__": "database.forms",
             "_errors": None,
+            "custom_fields": {},
+            "custom_field_groups": {},
         }
 
         for field in self.object.custom_object_type.fields.all():
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
             try:
-                attrs[field.name] = field_type.get_annotated_form_field(field)
+                field_name = field.name
+                attrs[field_name] = field_type.get_annotated_form_field(field)
+                
+                # Annotate the field in the list of CustomField form fields
+                attrs["custom_fields"][field_name] = field
+                
+                # Group fields by group_name (similar to NetBox custom fields)
+                group_name = field.group_name or None  # Use None for ungrouped fields
+                if group_name not in attrs["custom_field_groups"]:
+                    attrs["custom_field_groups"][group_name] = []
+                attrs["custom_field_groups"][group_name].append(field_name)
+
             except NotImplementedError:
                 print(f"get_form: {field.name} field is not supported")
 
-        form = type(
+        # Create a custom __init__ method to set instance attributes
+        def custom_init(self, *args, **kwargs):
+            super(form_class, self).__init__(*args, **kwargs)
+            # Set the grouping info as instance attributes from the outer scope
+            self.custom_fields = attrs["custom_fields"] 
+            self.custom_field_groups = attrs["custom_field_groups"]
+        
+        attrs["__init__"] = custom_init
+
+        form_class = type(
             f"{model._meta.object_name}Form",
             (forms.NetBoxModelForm,),
             attrs,
         )
 
-        return form
+        return form_class
 
 
 @register_model_view(CustomObject, "delete")
