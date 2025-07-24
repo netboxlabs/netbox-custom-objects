@@ -51,8 +51,8 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         custom_object_type = self.create_custom_object_type(name="TestObject")
 
         model = custom_object_type.get_model()
-        # Should only have one field defined (id)
-        self.assertEqual(len(model._meta.fields), 1)
+        # Base fields: id, created, last_updated
+        self.assertEqual(len(model._meta.fields), 3)
 
     def test_custom_object_type_get_model_with_primary_field(self):
         """Test get_model method with a primary field."""
