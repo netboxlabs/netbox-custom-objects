@@ -114,7 +114,7 @@ class CustomObject(
         # Get all field names where is_cloneable=True for this custom object type
         cloneable_fields = self.custom_object_type.fields.filter(
             is_cloneable=True
-        ).values_list("name", flat=True)
+        ).values_list('name', flat=True)
 
         return tuple(cloneable_fields)
 
@@ -137,10 +137,7 @@ class CustomObject(
 class CustomObjectType(PrimaryModel):
     # Class-level cache for generated models
     _model_cache = {}
-    _through_model_cache = (
-        {}
-    )  # Now stores {custom_object_type_id: {through_model_name: through_model}}
-
+    _through_model_cache = {}  # Now stores {custom_object_type_id: {through_model_name: through_model}}
     name = models.CharField(max_length=100, unique=True)
     schema = models.JSONField(blank=True, default=dict)
     verbose_name_plural = models.CharField(max_length=100, blank=True)
@@ -457,7 +454,6 @@ class CustomObjectType(PrimaryModel):
         if self.id not in self._through_model_cache:
             self._through_model_cache[self.id] = {}
         self._through_model_cache[self.id][through_model_name] = through_model
-
         return model
 
     def create_model(self):
@@ -1156,10 +1152,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 old_field.contribute_to_class(model, self._original_name)
 
                 # Special handling for MultiObject fields when the name changes
-                if (
-                    self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
-                    and self.name != self._original_name
-                ):
+                if (self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT and
+                    self.name != self._original_name):
                     # For renamed MultiObject fields, we just need to rename the through table
                     old_through_table_name = self.original.through_table_name
                     new_through_table_name = self.through_table_name
@@ -1188,16 +1182,12 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                                 "Meta": old_through_meta,
                                 "id": models.AutoField(primary_key=True),
                                 "source": models.ForeignKey(
-                                    model,
-                                    on_delete=models.CASCADE,
-                                    db_column="source_id",
-                                    related_name="+",
+                                    model, on_delete=models.CASCADE,
+                                    db_column="source_id", related_name="+"
                                 ),
                                 "target": models.ForeignKey(
-                                    model,
-                                    on_delete=models.CASCADE,
-                                    db_column="target_id",
-                                    related_name="+",
+                                    model, on_delete=models.CASCADE,
+                                    db_column="target_id", related_name="+"
                                 ),
                             },
                         )
@@ -1219,19 +1209,16 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                                 "Meta": new_through_meta,
                                 "id": models.AutoField(primary_key=True),
                                 "source": models.ForeignKey(
-                                    model,
-                                    on_delete=models.CASCADE,
-                                    db_column="source_id",
-                                    related_name="+",
+                                    model, on_delete=models.CASCADE,
+                                    db_column="source_id", related_name="+"
                                 ),
                                 "target": models.ForeignKey(
-                                    model,
-                                    on_delete=models.CASCADE,
-                                    db_column="target_id",
-                                    related_name="+",
+                                    model, on_delete=models.CASCADE,
+                                    db_column="target_id", related_name="+"
                                 ),
                             },
                         )
+                        new_through_model  # To silence ruff error
 
                         # Rename the table using Django's schema editor
                         schema_editor.alter_db_table(
