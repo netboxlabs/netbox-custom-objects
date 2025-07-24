@@ -1,4 +1,4 @@
-from unittest import skip, skipIf
+from unittest import skip
 
 from django.core.exceptions import ValidationError
 from django.db import connection
