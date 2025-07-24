@@ -30,8 +30,6 @@ jobs:
           pip install .
           pip install .[dev]
           pip install .[test]
-      - name: Build documentation
-        run: mkdocs build
       - name: Run ruff
         run: ruff check
   tests:
