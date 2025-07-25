@@ -56,9 +56,6 @@ class FieldType:
 
         return form_field
 
-    # def get_bulk_edit_form_field(self, field, **kwargs):
-    #     raise NotImplementedError
-
     def get_table_column_field(self, field, **kwargs):
         raise NotImplementedError
 
@@ -89,26 +86,6 @@ class TextFieldType(FieldType):
         return forms.CharField(
             required=field.required, initial=field.default, validators=validators
         )
-
-    # def get_serializer_field(self, field, **kwargs):
-    #     required = kwargs.get("required", False)
-    #     validators = kwargs.pop("validators", None) or []
-    #     # validators.append(self.validator)
-    #     return serializers.CharField(
-    #         **{
-    #             "required": required,
-    #             "allow_null": not required,
-    #             "allow_blank": not required,
-    #             "validators": validators,
-    #             **kwargs,
-    #         }
-    #     )
-
-    # def get_bulk_edit_form_field(self, field, **kwargs):
-    #     return forms.CharField(
-    #         max_length=200,
-    #         required=False,
-    #     )
 
     def get_filterform_field(self, field, **kwargs):
         return forms.CharField(
@@ -143,13 +120,6 @@ class LongTextFieldType(FieldType):
             initial=field.default,
             validators=validators,
         )
-
-    # def get_bulk_edit_form_field(self, field, **kwargs):
-    #     return forms.CharField(
-    #         label=field,
-    #         widget=forms.Textarea(),
-    #         required=False,
-    #     )
 
     def render_table_column(self, value):
         return render_markdown(value)
@@ -227,12 +197,6 @@ class DateFieldType(FieldType):
             required=field.required, initial=field.default, widget=DatePicker()
         )
 
-    # def get_bulk_edit_form_field(self, field, **kwargs):
-    #     return forms.DateField(
-    #         required=False,
-    #         widget=DatePicker()
-    #     )
-
 
 class DateTimeFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
@@ -243,12 +207,6 @@ class DateTimeFieldType(FieldType):
         return forms.DateTimeField(
             required=field.required, initial=field.default, widget=DateTimePicker()
         )
-
-    # def get_bulk_edit_form_field(self, field, **kwargs):
-    #     return forms.DateTimeField(
-    #         required=False,
-    #         widget=DateTimePicker()
-    #     )
 
 
 class URLFieldType(FieldType):
@@ -366,12 +324,6 @@ class MultiSelectFieldType(FieldType):
     def render_table_column(self, value):
         return ", ".join(value)
 
-    # TODO: Implement this
-    # def get_bulk_edit_form_field(self, field, **kwargs):
-    #     return forms.MultipleChoiceField(
-    #         choices=field.choices, required=required, label=label, **kwargs
-    #     )
-
 
 class ObjectFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
@@ -397,28 +349,42 @@ class ObjectFieldType(FieldType):
         )
         return f
 
-    # TODO: This logic is migrated from to_form_field, but currently does not work with custom objects as
-    #  the related_object_type (selected value is not recognized as an isinstance of the related model object)
-    # def get_form_field(self, field, for_csv_import=False, **kwargs):
-    #     # return field.to_form_field()
-    #     model = field.related_object_type.model_class()
-    #     if not model:
-    #         CustomObjectType = apps.get_model('netbox_custom_objects.CustomObjectType')
-    #         custom_object_model_name = field.related_object_type.name
-    #         custom_object_type_id = custom_object_model_name.replace('table', '').replace('model', '')
-    #         custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
-    #         model = custom_object_type.get_model()
-    #     field_class = CSVModelChoiceField if for_csv_import else CustomObjectDynamicModelChoiceField
-    #     kwargs = {
-    #         'queryset': model.objects.all(),
-    #         'required': field.required,
-    #         'initial': field.default,
-    #     }
-    #     if not for_csv_import:
-    #         kwargs['query_params'] = field.related_object_filter
-    #         kwargs['selector'] = True
-    #
-    #     return field_class(**kwargs)
+    def get_form_field(self, field, for_csv_import=False, **kwargs):
+        """
+        Returns a form field for object relationships.
+        For custom objects, uses CustomObjectDynamicModelChoiceField.
+        For regular NetBox objects, uses DynamicModelChoiceField.
+        """
+        content_type = ContentType.objects.get(pk=field.related_object_type_id)
+
+        from utilities.forms.fields import DynamicModelChoiceField
+        if content_type.app_label == APP_LABEL:
+            # This is a custom object type
+            from netbox_custom_objects.models import CustomObjectType
+
+            custom_object_type_id = content_type.model.replace("table", "").replace(
+                "model", ""
+            )
+            custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
+            model = custom_object_type.get_model()
+            field_class = DynamicModelChoiceField
+        else:
+            # This is a regular NetBox model
+            model = content_type.model_class()
+
+            field_class = DynamicModelChoiceField
+
+        return field_class(
+            queryset=model.objects.all(),
+            required=field.required,
+            initial=field.default,
+            query_params=(
+                field.related_object_filter
+                if hasattr(field, "related_object_filter")
+                else None
+            ),
+            selector=True,
+        )
 
     def get_filterform_field(self, field, **kwargs):
         return None
@@ -671,6 +637,40 @@ class MultiObjectFieldType(FieldType):
         m2m_field._is_self_referential = is_self_referential
 
         return m2m_field
+
+    def get_form_field(self, field, for_csv_import=False, **kwargs):
+        """
+        Returns a form field for multi-object relationships.
+        Uses DynamicModelMultipleChoiceField for both custom objects and regular NetBox objects.
+        """
+        content_type = ContentType.objects.get(pk=field.related_object_type_id)
+
+        if content_type.app_label == APP_LABEL:
+            # This is a custom object type
+            from netbox_custom_objects.models import CustomObjectType
+
+            custom_object_type_id = content_type.model.replace("table", "").replace(
+                "model", ""
+            )
+            custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
+            model = custom_object_type.get_model()
+        else:
+            # This is a regular NetBox model
+            model = content_type.model_class()
+
+        from utilities.forms.fields import DynamicModelMultipleChoiceField
+
+        return DynamicModelMultipleChoiceField(
+            queryset=model.objects.all(),
+            required=field.required,
+            initial=field.default,
+            query_params=(
+                field.related_object_filter
+                if hasattr(field, "related_object_filter")
+                else None
+            ),
+            selector=True,
+        )
 
     def get_filterform_field(self, field, **kwargs):
         return None
