@@ -1,4 +1,5 @@
 {% extends 'generic/object_edit.html' %}
+{% load form_helpers %}
 {% load i18n %}
 
 {% block title %}
@@ -10,3 +11,24 @@
     {% endblocktrans %}
   {% endif %}
 {% endblock title %}
+
+{% block form %}
+  {# Render hidden fields #}
+  {% for field in form.hidden_fields %}
+    {{ field }}
+  {% endfor %}
+
+  {# Render all fields grouped by group_name #}
+  <div class="field-group mb-5">
+    {% for group, fields in form.custom_field_groups.items %}
+      {% if group %}
+      <div class="row">
+        <h3 class="col-9 offset-3 mb-3 h4">{{ group }}</h3>
+      </div>
+      {% endif %}
+      {% for name in fields %}
+        {% render_field form|getfield:name %}
+      {% endfor %}
+    {% endfor %}
+  </div>
+{% endblock form %}
