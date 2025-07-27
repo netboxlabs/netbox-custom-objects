@@ -76,6 +76,7 @@ class TextFieldTypeTestCase(FieldTypeTestCase):
             type="text",
             required=True
         )
+        field  # To silence ruff error
 
         model = self.custom_object_type.get_model()
         instance = model.objects.create(name="Test", description="Test description")
@@ -106,6 +107,7 @@ class LongTextFieldTypeTestCase(FieldTypeTestCase):
             label="Content",
             type="longtext"
         )
+        field  # To silence ruff error
 
         model = self.custom_object_type.get_model()
         long_content = "This is a very long text content that should be stored in a TextField."
@@ -169,6 +171,7 @@ class IntegerFieldTypeTestCase(FieldTypeTestCase):
             type="integer",
             default=10
         )
+        field  # To silence ruff error
 
         model = self.custom_object_type.get_model()
         instance = model.objects.create(name="Test", count=25)
@@ -231,6 +234,7 @@ class DecimalFieldTypeTestCase(FieldTypeTestCase):
             type="decimal",
             default=10.50
         )
+        field  # To silence ruff error
 
         model = self.custom_object_type.get_model()
         instance = model.objects.create(name="Test", price=Decimal("25.75"))
@@ -282,6 +286,7 @@ class BooleanFieldTypeTestCase(FieldTypeTestCase):
             type="boolean",
             default=True
         )
+        field  # To silence ruff error
 
         model = self.custom_object_type.get_model()
         instance = model.objects.create(name="Test", active=False)
@@ -332,6 +337,7 @@ class DateFieldTypeTestCase(FieldTypeTestCase):
             label="Created Date",
             type="date"
         )
+        field  # To silence ruff error
 
         model = self.custom_object_type.get_model()
         test_date = date(2023, 1, 1)
@@ -383,6 +389,7 @@ class DateTimeFieldTypeTestCase(FieldTypeTestCase):
             label="Created DateTime",
             type="datetime"
         )
+        field  # To silence ruff error
 
         model = self.custom_object_type.get_model()
         test_datetime = datetime(2023, 1, 1, 12, 0, 0)
@@ -433,6 +440,7 @@ class URLFieldTypeTestCase(FieldTypeTestCase):
             label="Website",
             type="url"
         )
+        field  # To silence ruff error
 
         model = self.custom_object_type.get_model()
         instance = model.objects.create(name="Test", website="https://example.com")
@@ -464,6 +472,7 @@ class JSONFieldTypeTestCase(FieldTypeTestCase):
             label="Metadata",
             type="json"
         )
+        field  # To silence ruff error
 
         model = self.custom_object_type.get_model()
         test_data = {"key": "value", "number": 42, "list": [1, 2, 3]}
@@ -522,6 +531,7 @@ class SelectFieldTypeTestCase(FieldTypeTestCase):
             choice_set=self.choice_set,
             default="choice1"
         )
+        field  # To silence ruff error
 
         model = self.custom_object_type.get_model()
         instance = model.objects.create(name="Test", status="choice2")
@@ -578,6 +588,7 @@ class MultiSelectFieldTypeTestCase(FieldTypeTestCase):
             type="multiselect",
             choice_set=self.choice_set
         )
+        field  # To silence ruff error
 
         model = self.custom_object_type.get_model()
         instance = model.objects.create(name="Test", tags=["choice1", "choice3"])
@@ -615,6 +626,7 @@ class ObjectFieldTypeTestCase(FieldTypeTestCase):
             type="object",
             related_object_type=self.device_content_type
         )
+        field  # To silence ruff error
 
         model = self.custom_object_type.get_model()
 
@@ -673,6 +685,7 @@ class MultiObjectFieldTypeTestCase(FieldTypeTestCase):
             type="multiobject",
             related_object_type=self.device_content_type
         )
+        field  # To silence ruff error
 
         model = self.custom_object_type.get_model()
 
@@ -725,6 +738,7 @@ class SelfReferentialFieldTestCase(FieldTypeTestCase):
             type="object",
             related_object_type=self.custom_object_type.content_type
         )
+        field  # To silence ruff error
 
         model = self.custom_object_type.get_model()
 
@@ -747,6 +761,7 @@ class SelfReferentialFieldTestCase(FieldTypeTestCase):
             type="multiobject",
             related_object_type=self.custom_object_type.content_type
         )
+        field  # To silence ruff error
 
         model = self.custom_object_type.get_model()
 
@@ -789,6 +804,7 @@ class CrossReferentialFieldTestCase(FieldTypeTestCase):
             type="object",
             related_object_type=second_type.content_type
         )
+        field  # To silence ruff error
 
         model1 = self.custom_object_type.get_model()
         model2 = second_type.get_model()
@@ -820,6 +836,7 @@ class CrossReferentialFieldTestCase(FieldTypeTestCase):
             type="multiobject",
             related_object_type=second_type.content_type
         )
+        field  # To silence ruff error
 
         model1 = self.custom_object_type.get_model()
         model2 = second_type.get_model()
