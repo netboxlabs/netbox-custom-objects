@@ -20,7 +20,7 @@
 
   {# Render all fields grouped by group_name #}
   <div class="field-group mb-5">
-    {% for group, fields in form.custom_field_groups.items %}
+    {% for group, fields in form.custom_object_type_field_groups.items %}
       {% if group %}
       <div class="row">
         <h3 class="col-9 offset-3 mb-3 h4">{{ group }}</h3>
