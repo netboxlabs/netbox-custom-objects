@@ -368,8 +368,8 @@ class CustomObjectEditView(generic.ObjectEditView):
             "Meta": meta,
             "__module__": "database.forms",
             "_errors": None,
-            "custom_fields": {},
-            "custom_field_groups": {},
+            "custom_object_type_fields": {},
+            "custom_object_type_field_groups": {},
         }
 
         for field in self.object.custom_object_type.fields.all().order_by('group_name', 'weight', 'name'):
@@ -379,13 +379,13 @@ class CustomObjectEditView(generic.ObjectEditView):
                 attrs[field_name] = field_type.get_annotated_form_field(field)
 
                 # Annotate the field in the list of CustomField form fields
-                attrs["custom_fields"][field_name] = field
+                attrs["custom_object_type_fields"][field_name] = field
 
                 # Group fields by group_name (similar to NetBox custom fields)
                 group_name = field.group_name or None  # Use None for ungrouped fields
-                if group_name not in attrs["custom_field_groups"]:
-                    attrs["custom_field_groups"][group_name] = []
-                attrs["custom_field_groups"][group_name].append(field_name)
+                if group_name not in attrs["custom_object_type_field_groups"]:
+                    attrs["custom_object_type_field_groups"][group_name] = []
+                attrs["custom_object_type_field_groups"][group_name].append(field_name)
 
             except NotImplementedError:
                 print(f"get_form: {field.name} field is not supported")
@@ -394,8 +394,8 @@ class CustomObjectEditView(generic.ObjectEditView):
         def custom_init(self, *args, **kwargs):
             super(form_class, self).__init__(*args, **kwargs)
             # Set the grouping info as instance attributes from the outer scope
-            self.custom_fields = attrs["custom_fields"]
-            self.custom_field_groups = attrs["custom_field_groups"]
+            self.custom_object_type_fields = attrs["custom_object_type_fields"]
+            self.custom_object_type_field_groups = attrs["custom_object_type_field_groups"]
 
         attrs["__init__"] = custom_init
 
