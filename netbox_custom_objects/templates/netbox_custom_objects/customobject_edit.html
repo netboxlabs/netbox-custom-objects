@@ -30,5 +30,15 @@
         {% render_field form|getfield:name %}
       {% endfor %}
     {% endfor %}
+    
+    {# Render regular model fields (non-custom fields) that are not in any group #}
+    {% for field in form %}
+      {% if field.name not in form.custom_object_type_fields %}
+        {# Only render fields that are meant for user input #}
+        {% if not field.field.widget.is_hidden and not field.field.disabled and field.field.widget.input_type != 'hidden' %}
+          {% render_field field %}
+        {% endif %}
+      {% endif %}
+    {% endfor %}
   </div>
 {% endblock form %}
