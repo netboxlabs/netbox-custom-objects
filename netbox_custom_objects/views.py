@@ -355,11 +355,6 @@ class CustomObjectEditView(generic.ObjectEditView):
         return get_object_or_404(model.objects.all(), **self.kwargs)
 
     def get_form(self, model):
-        # Get all custom object type field names to identify them later
-        custom_field_names = set(
-            self.object.custom_object_type.fields.values_list('name', flat=True)
-        )
-
         meta = type(
             "Meta",
             (),
