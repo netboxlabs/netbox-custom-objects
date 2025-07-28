@@ -1,9 +1,11 @@
 from unittest import skip
+from decimal import Decimal
 
 from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 
 from netbox_custom_objects.models import CustomObjectTypeField
 from .base import CustomObjectsTestCase
@@ -489,19 +491,40 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
 
     def test_custom_object_creation(self):
         """Test creating a custom object instance."""
+        now = timezone.now()
+        site_ct = self.get_site_content_type()
+        site = site_ct.model_class().objects.create()
+
         instance = self.model.objects.create(
             name="Test Instance",
             description="A test instance",
-            count=50
+            count=50,
+            price=Decimal("10.50"),
+            is_active=True,
+            created_on=now,
+            created_at=now,
+            url="http://example.com",
+            data={"foo": "bar"},
+            country="US",
+            countries=["US", "AU"],
+            site=site,
         )
-        site_ct = self.get_site_content_type()
-        site = site_ct.model_class().objects.create()
         instance.sites.add(site)
 
         self.assertEqual(instance.name, "Test Instance")
         self.assertEqual(instance.description, "A test instance")
         self.assertEqual(instance.count, 50)
+        self.assertEqual(instance.price, Decimal("10.50"))
+        self.assertEqual(instance.is_active, True)
+        self.assertEqual(instance.created_on.date(), now.date())
+        self.assertEqual(instance.created_at, now)
+        self.assertEqual(instance.url, "http://example.com")
+        self.assertEqual(instance.data, {"foo": "bar"})
+        self.assertEqual(instance.country, "US")
+        self.assertEqual(instance.countries, ["US", "AU"])
+        self.assertEqual(instance.site, site)
         self.assertEqual(instance.sites.all().count(), 1)
+        self.assertIn(site, instance.sites.all())
         self.assertEqual(str(instance), "Test Instance")
 
     def test_custom_object_get_absolute_url(self):
