@@ -10,6 +10,7 @@ from django.conf import settings
 
 # from django.contrib.contenttypes.management import create_contenttypes
 from django.contrib.contenttypes.models import ContentType
+from core.models import ObjectType
 from django.core.validators import RegexValidator, ValidationError
 from django.db import connection, models
 from django.db.models import Q
@@ -33,7 +34,9 @@ from netbox.models.features import (
     CustomValidationMixin,
     EventRulesMixin,
     ExportTemplatesMixin,
+    get_model_features,
     JournalingMixin,
+    model_is_public,
     NotificationsMixin,
 )
 from netbox.registry import registry
@@ -257,15 +260,15 @@ class CustomObjectType(PrimaryModel):
 
     def get_or_create_content_type(self):
         """
-        Get or create the ContentType for this CustomObjectType.
-        This ensures the ContentType is immediately available in the current transaction.
+        Get or create the ObjectType for this CustomObjectType.
+        This ensures the ObjectType is immediately available in the current transaction.
         """
         content_type_name = self.get_table_model_name(self.id).lower()
         try:
-            return ContentType.objects.get(app_label=APP_LABEL, model=content_type_name)
+            return ObjectType.objects.get(app_label=APP_LABEL, model=content_type_name)
         except Exception:
-            # Create the ContentType and ensure it's immediately available
-            ct = ContentType.objects.create(
+            # Create the ObjectType and ensure it's immediately available
+            ct = ObjectType.objects.create(
                 app_label=APP_LABEL, model=content_type_name
             )
             # Force a refresh to ensure it's available in the current transaction
@@ -461,8 +464,16 @@ class CustomObjectType(PrimaryModel):
         model = self.get_model()
 
         # Ensure the ContentType exists and is immediately available
-        self.get_or_create_content_type()
+        ct = self.get_or_create_content_type()
         model = self.get_model()
+        is_public = model_is_public(model)
+        features = get_model_features(model)
+        # we need to append tags here as it is added dynamically to the model
+        # and not through a mixin
+        features.append("tags")
+        ct.is_public = is_public
+        ct.features = features
+        ct.save()
 
         with connection.schema_editor() as schema_editor:
             schema_editor.create_model(model)
@@ -487,7 +498,7 @@ class CustomObjectType(PrimaryModel):
         self.clear_model_cache(self.id)
 
         model = self.get_model()
-        ContentType.objects.get(
+        ObjectType.objects.get(
             app_label=APP_LABEL, model=self.get_table_model_name(self.id).lower()
         ).delete()
         super().delete(*args, **kwargs)
