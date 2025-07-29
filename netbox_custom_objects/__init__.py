@@ -16,41 +16,6 @@ class CustomObjectsPluginConfig(PluginConfig):
     required_settings = []
     template_extensions = "template_content.template_extensions"
 
-    '''
-    def ready(self):
-        """Called when the app is ready - ensure all through models are registered."""
-        super().ready()
-        
-        # Import here to avoid circular imports
-        try:
-            from .models import CustomObjectType
-            
-            # Ensure all custom object types have their through models registered
-            # Only if we haven't already done this initialization
-            if not hasattr(self.__class__, '_initialized'):
-                custom_object_types = CustomObjectType.objects.all()
-                for custom_type in custom_object_types:
-                    try:
-                        # This will create and cache the through model if it doesn't exist
-                        custom_type.get_model()
-                    except Exception as e:
-                        # Skip models that can't be loaded during initialization
-                        import logging
-                        logger = logging.getLogger(__name__)
-                        logger.debug(f"Failed to initialize custom object type {custom_type.id}: {e}")
-                        continue
-                
-                # Mark as initialized to prevent duplicate runs
-                self.__class__._initialized = True
-                
-        except Exception as e:
-            # Database might not be ready yet
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.debug(f"Database not ready during app initialization: {e}")
-            pass
-    '''
-
     def get_model(self, model_name, require_ready=True):
         try:
             # if the model is already loaded, return it

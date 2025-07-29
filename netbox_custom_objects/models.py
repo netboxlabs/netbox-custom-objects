@@ -1,6 +1,5 @@
 import decimal
 import re
-import uuid
 from datetime import date, datetime
 
 import django_filters
@@ -8,6 +7,7 @@ from core.models import ObjectType
 from core.models.contenttypes import ObjectTypeManager
 from django.apps import apps
 from django.conf import settings
+
 # from django.contrib.contenttypes.management import create_contenttypes
 from django.contrib.contenttypes.models import ContentType
 from django.core.validators import RegexValidator, ValidationError
@@ -16,18 +16,27 @@ from django.db.models import Q
 from django.db.models.functions import Lower
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
-from extras.choices import (CustomFieldFilterLogicChoices,
-                            CustomFieldTypeChoices,
-                            CustomFieldUIEditableChoices,
-                            CustomFieldUIVisibleChoices)
+from extras.choices import (
+    CustomFieldFilterLogicChoices,
+    CustomFieldTypeChoices,
+    CustomFieldUIEditableChoices,
+    CustomFieldUIVisibleChoices,
+)
 from extras.models.customfields import SEARCH_TYPES
 from netbox.models import ChangeLoggedModel, PrimaryModel
-from netbox.models.features import (BookmarksMixin, ChangeLoggingMixin,
-                                    CloningMixin, CustomLinksMixin,
-                                    CustomValidationMixin, EventRulesMixin,
-                                    ExportTemplatesMixin, JournalingMixin,
-                                    NotificationsMixin, get_model_features,
-                                    model_is_public)
+from netbox.models.features import (
+    BookmarksMixin,
+    ChangeLoggingMixin,
+    CloningMixin,
+    CustomLinksMixin,
+    CustomValidationMixin,
+    EventRulesMixin,
+    ExportTemplatesMixin,
+    JournalingMixin,
+    NotificationsMixin,
+    get_model_features,
+    model_is_public,
+)
 from netbox.registry import registry
 from taggit.managers import TaggableManager
 from utilities import filters
@@ -316,7 +325,6 @@ class CustomObjectType(PrimaryModel):
     def get_database_table_name(self):
         return f"{USER_TABLE_DATABASE_NAME_PREFIX}{self.id}"
 
-
     @property
     def title_case_name_plural(self):
         return title(self.name) + "s"
@@ -360,8 +368,7 @@ class CustomObjectType(PrimaryModel):
         if self.is_model_cached(self.id):
             model = self.get_cached_model(self.id)
             # Ensure the serializer is registered even for cached models
-            from netbox_custom_objects.api.serializers import \
-                get_serializer_class
+            from netbox_custom_objects.api.serializers import get_serializer_class
 
             get_serializer_class(model)
             return model
@@ -412,20 +419,21 @@ class CustomObjectType(PrimaryModel):
         # Create the model class with a workaround for TaggableManager conflicts
         # Temporarily disable the through model validation during model creation
         from taggit.managers import TaggableManager as TM
+
         original_post_through_setup = TM.post_through_setup
-        
+
         def patched_post_through_setup(self, model):
             # Skip the duplicate through model check for our dynamic models
-            if hasattr(model, 'custom_object_type_id'):
+            if hasattr(model, "custom_object_type_id"):
                 # Just set up the manager without checking for duplicates
-                if not hasattr(self.through._meta, 'auto_created'):
-                    setattr(self.through, '_custom_object_managed', True)
+                if not hasattr(self.through._meta, "auto_created"):
+                    setattr(self.through, "_custom_object_managed", True)
                 return
             # Call original method for other models
             return original_post_through_setup(self, model)
-        
+
         TM.post_through_setup = patched_post_through_setup
-        
+
         try:
             model = type(
                 str(model_name),
@@ -454,8 +462,7 @@ class CustomObjectType(PrimaryModel):
 
         # Register the serializer for this model
         if not manytomany_models:
-            from netbox_custom_objects.api.serializers import \
-                get_serializer_class
+            from netbox_custom_objects.api.serializers import get_serializer_class
 
             get_serializer_class(model)
 
