@@ -294,10 +294,7 @@ class CustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjec
         Return the base format for a URL for the test's model. Override this to test for a model which belongs
         to a different app (e.g. testing Interfaces within the virtualization app).
         """
-        return 'plugins:{}:customobject_{{}}'.format(
-            self.model._meta.app_label,
-            self.model._meta.model_name
-        )
+        return 'plugins:{}:customobject_{{}}'.format(self.model._meta.app_label)
 
     def _get_url(self, action, instance=None):
         """
@@ -504,10 +501,7 @@ class ComplexCustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.Prima
         Return the base format for a URL for the test's model. Override this to test for a model which belongs
         to a different app (e.g. testing Interfaces within the virtualization app).
         """
-        return 'plugins:{}:customobject_{{}}'.format(
-            self.model._meta.app_label,
-            self.model._meta.model_name
-        )
+        return 'plugins:{}:customobject_{{}}'.format(self.model._meta.app_label)
 
     def _get_url(self, action, instance=None):
         """
@@ -670,10 +664,7 @@ class ObjectFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObject
         Return the base format for a URL for the test's model. Override this to test for a model which belongs
         to a different app (e.g. testing Interfaces within the virtualization app).
         """
-        return 'plugins:{}:customobject_{{}}'.format(
-            self.model._meta.app_label,
-            self.model._meta.model_name
-        )
+        return 'plugins:{}:customobject_{{}}'.format(self.model._meta.app_label)
 
     def _get_url(self, action, instance=None):
         """
