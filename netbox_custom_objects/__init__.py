@@ -1,6 +1,7 @@
 import warnings
 
 from django.core.exceptions import AppRegistryNotReady
+from django.db.utils import DatabaseError, OperationalError
 from netbox.plugins import PluginConfig
 
 
@@ -53,39 +54,27 @@ class CustomObjectsPluginConfig(PluginConfig):
         for model in super().get_models(include_auto_created, include_swapped):
             yield model
 
-        # Only add dynamic models if we have access to the database
-        try:
-            from django.db import connection
-            connection.ensure_connection()
-            
-            # Suppress warnings about database calls during model loading
-            with warnings.catch_warnings():
-                warnings.filterwarnings(
-                    "ignore", category=RuntimeWarning, message=".*database.*"
-                )
-                warnings.filterwarnings(
-                    "ignore", category=UserWarning, message=".*database.*"
-                )
+        # Suppress warnings about database calls during model loading
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", category=RuntimeWarning, message=".*database.*"
+            )
+            warnings.filterwarnings(
+                "ignore", category=UserWarning, message=".*database.*"
+            )
 
-                # Add custom object type models
-                from .models import CustomObjectType
+            # Add custom object type models
+            from .models import CustomObjectType
 
+            custom_object_types = CustomObjectType.objects.all()
+            for custom_type in custom_object_types:
                 try:
-                    custom_object_types = CustomObjectType.objects.all()
-                    for custom_type in custom_object_types:
-                        try:
-                            model = custom_type.get_model()
-                            if model:
-                                yield model
-                        except Exception:
-                            # Skip models that can't be loaded
-                            continue
+                    model = custom_type.get_model()
+                    if model:
+                        yield model
                 except Exception:
-                    # Skip if we can't access CustomObjectType (e.g., during migrations)
-                    pass
-        except Exception:
-            # Skip dynamic models if database is not available
-            pass
+                    # Skip models that can't be loaded
+                    continue
 
 
 config = CustomObjectsPluginConfig
