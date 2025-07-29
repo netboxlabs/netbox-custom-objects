@@ -415,38 +415,10 @@ class CustomObjectType(PrimaryModel):
 
         attrs.update(**field_attrs)
 
-        # Create a unique through model for tagging for this CustomObjectType
-
-        through_model_name = f"CustomObjectTaggedItem{self.id}"
-
-        # Create a unique through model for this CustomObjectType
-        through_model = type(
-            through_model_name,
-            (GenericTaggedItemBase,),
-            {
-                "__module__": "netbox_custom_objects.models",
-                "tag": models.ForeignKey(
-                    to=Tag,
-                    related_name=f"custom_objects_{through_model_name.lower()}_items",
-                    on_delete=models.CASCADE,
-                ),
-                "_netbox_private": True,
-                "objects": RestrictedQuerySet.as_manager(),
-                "Meta": type(
-                    "Meta",
-                    (),
-                    {
-                        "indexes": [models.Index(fields=["content_type", "object_id"])],
-                        "verbose_name": f"tagged item {self.id}",
-                        "verbose_name_plural": f"tagged items {self.id}",
-                    },
-                ),
-            },
-        )
-
+        # Use the standard NetBox tagging system instead of custom through models
         attrs["tags"] = TaggableManager(
-            through=through_model,
-            ordering=("weight", "name"),
+            through='extras.TaggedItem',
+            ordering=('weight', 'name'),
         )
 
         # Create the model class.
@@ -456,14 +428,17 @@ class CustomObjectType(PrimaryModel):
             attrs,
         )
 
+        # Register the main model with Django's app registry
+        try:
+            existing_model = apps.get_model(APP_LABEL, model_name)
+        except LookupError:
+            apps.register_model(APP_LABEL, model)
+
         if not manytomany_models:
             self._after_model_generation(attrs, model)
 
-        # Cache the generated model and its through models
+        # Cache the generated model
         self._model_cache[self.id] = model
-        if self.id not in self._through_model_cache:
-            self._through_model_cache[self.id] = {}
-        self._through_model_cache[self.id][through_model_name] = through_model
 
         # Register the serializer for this model
         if not manytomany_models:
@@ -491,12 +466,6 @@ class CustomObjectType(PrimaryModel):
         with connection.schema_editor() as schema_editor:
             schema_editor.create_model(model)
 
-            # Also create the through model tables for tags and other mixins
-            if self.id in self._through_model_cache:
-                through_models = self._through_model_cache[self.id]
-                for through_model_name, through_model in through_models.items():
-                    schema_editor.create_model(through_model)
-
     def save(self, *args, **kwargs):
         needs_db_create = self._state.adding
         super().save(*args, **kwargs)
@@ -516,11 +485,6 @@ class CustomObjectType(PrimaryModel):
         ).delete()
         super().delete(*args, **kwargs)
         with connection.schema_editor() as schema_editor:
-            # Delete the through model tables first if they exist
-            if self.id in self._through_model_cache:
-                through_models = self._through_model_cache[self.id]
-                for through_model_name, through_model in through_models.items():
-                    schema_editor.delete_model(through_model)
             schema_editor.delete_model(model)
 
 
