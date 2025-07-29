@@ -177,6 +177,9 @@ class CustomObjectType(PrimaryModel):
         else:
             cls._model_cache.clear()
             cls._through_model_cache.clear()
+        
+        # Clear Django apps registry cache to ensure newly created models are recognized
+        apps.get_models.cache_clear()
 
     @classmethod
     def get_cached_model(cls, custom_object_type_id):
