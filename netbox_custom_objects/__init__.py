@@ -1,6 +1,7 @@
-from netbox.plugins import PluginConfig
-from django.core.exceptions import AppRegistryNotReady
 import warnings
+
+from django.core.exceptions import AppRegistryNotReady
+from netbox.plugins import PluginConfig
 
 
 # Plugin Configuration
@@ -33,7 +34,10 @@ class CustomObjectsPluginConfig(PluginConfig):
             )
 
         from .models import CustomObjectType
-        custom_object_type_id = int(model_name.replace("table", "").replace("model", ""))
+
+        custom_object_type_id = int(
+            model_name.replace("table", "").replace("model", "")
+        )
 
         try:
             obj = CustomObjectType.objects.get(pk=custom_object_type_id)
@@ -47,19 +51,24 @@ class CustomObjectsPluginConfig(PluginConfig):
         """Return all models for this plugin, including custom object type models."""
         # Get the regular Django models first
         models = list(super().get_models(include_auto_created, include_swapped))
-        
+
         # Suppress RuntimeWarning and UserWarning about database calls during model loading
         # These are read-only operations that are safe to perform - we also need
         # to suppress UserWarning as branching plugin will throw that as well.
         with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*database.*")
-            warnings.filterwarnings("ignore", category=UserWarning, message=".*database.*")
-            
+            warnings.filterwarnings(
+                "ignore", category=RuntimeWarning, message=".*database.*"
+            )
+            warnings.filterwarnings(
+                "ignore", category=UserWarning, message=".*database.*"
+            )
+
             # Add custom object type models
             try:
                 from .models import CustomObjectType
+
                 custom_object_types = CustomObjectType.objects.all()
-                
+
                 for custom_type in custom_object_types:
                     try:
                         model = custom_type.get_model()
@@ -71,7 +80,7 @@ class CustomObjectsPluginConfig(PluginConfig):
             except Exception:
                 # If we can't load custom object types, just return the regular models
                 pass
-        
+
         return models
 
 
