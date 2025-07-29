@@ -372,7 +372,11 @@ class CustomObjectType(PrimaryModel):
 
         # Check if we have a cached model for this CustomObjectType
         if self.is_model_cached(self.id):
-            return self.get_cached_model(self.id)
+            model = self.get_cached_model(self.id)
+            # Ensure the serializer is registered even for cached models
+            from netbox_custom_objects.api.serializers import get_serializer_class
+            get_serializer_class(model)
+            return model
 
         if app_label is None:
             app_label = str(uuid.uuid4()) + "_database_table"
@@ -460,6 +464,12 @@ class CustomObjectType(PrimaryModel):
         if self.id not in self._through_model_cache:
             self._through_model_cache[self.id] = {}
         self._through_model_cache[self.id][through_model_name] = through_model
+
+        # Register the serializer for this model
+        if not manytomany_models:
+            from netbox_custom_objects.api.serializers import get_serializer_class
+            get_serializer_class(model)
+
         return model
 
     def create_model(self):
