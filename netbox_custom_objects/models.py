@@ -4,44 +4,32 @@ import uuid
 from datetime import date, datetime
 
 import django_filters
+from core.models import ObjectType
 from core.models.contenttypes import ObjectTypeManager
 from django.apps import apps
 from django.conf import settings
-
 # from django.contrib.contenttypes.management import create_contenttypes
 from django.contrib.contenttypes.models import ContentType
-from core.models import ObjectType
 from django.core.validators import RegexValidator, ValidationError
 from django.db import connection, models
 from django.db.models import Q
 from django.db.models.functions import Lower
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
-from extras.choices import (
-    CustomFieldFilterLogicChoices,
-    CustomFieldTypeChoices,
-    CustomFieldUIEditableChoices,
-    CustomFieldUIVisibleChoices,
-)
+from extras.choices import (CustomFieldFilterLogicChoices,
+                            CustomFieldTypeChoices,
+                            CustomFieldUIEditableChoices,
+                            CustomFieldUIVisibleChoices)
 from extras.models.customfields import SEARCH_TYPES
-from extras.models.tags import Tag
 from netbox.models import ChangeLoggedModel, PrimaryModel
-from netbox.models.features import (
-    BookmarksMixin,
-    ChangeLoggingMixin,
-    CloningMixin,
-    CustomLinksMixin,
-    CustomValidationMixin,
-    EventRulesMixin,
-    ExportTemplatesMixin,
-    get_model_features,
-    JournalingMixin,
-    model_is_public,
-    NotificationsMixin,
-)
+from netbox.models.features import (BookmarksMixin, ChangeLoggingMixin,
+                                    CloningMixin, CustomLinksMixin,
+                                    CustomValidationMixin, EventRulesMixin,
+                                    ExportTemplatesMixin, JournalingMixin,
+                                    NotificationsMixin, get_model_features,
+                                    model_is_public)
 from netbox.registry import registry
 from taggit.managers import TaggableManager
-from taggit.models import GenericTaggedItemBase
 from utilities import filters
 from utilities.datetime import datetime_from_timestamp
 from utilities.object_types import object_type_name
@@ -117,7 +105,7 @@ class CustomObject(
         # Get all field names where is_cloneable=True for this custom object type
         cloneable_fields = self.custom_object_type.fields.filter(
             is_cloneable=True
-        ).values_list('name', flat=True)
+        ).values_list("name", flat=True)
 
         return tuple(cloneable_fields)
 
@@ -140,7 +128,9 @@ class CustomObject(
 class CustomObjectType(PrimaryModel):
     # Class-level cache for generated models
     _model_cache = {}
-    _through_model_cache = {}  # Now stores {custom_object_type_id: {through_model_name: through_model}}
+    _through_model_cache = (
+        {}
+    )  # Now stores {custom_object_type_id: {through_model_name: through_model}}
     name = models.CharField(max_length=100, unique=True)
     schema = models.JSONField(blank=True, default=dict)
     verbose_name_plural = models.CharField(max_length=100, blank=True)
@@ -177,7 +167,7 @@ class CustomObjectType(PrimaryModel):
         else:
             cls._model_cache.clear()
             cls._through_model_cache.clear()
-        
+
         # Clear Django apps registry cache to ensure newly created models are recognized
         apps.get_models.cache_clear()
 
@@ -271,9 +261,7 @@ class CustomObjectType(PrimaryModel):
             return ObjectType.objects.get(app_label=APP_LABEL, model=content_type_name)
         except Exception:
             # Create the ObjectType and ensure it's immediately available
-            ct = ObjectType.objects.create(
-                app_label=APP_LABEL, model=content_type_name
-            )
+            ct = ObjectType.objects.create(app_label=APP_LABEL, model=content_type_name)
             # Force a refresh to ensure it's available in the current transaction
             ct.refresh_from_db()
             return ct
@@ -374,7 +362,9 @@ class CustomObjectType(PrimaryModel):
         if self.is_model_cached(self.id):
             model = self.get_cached_model(self.id)
             # Ensure the serializer is registered even for cached models
-            from netbox_custom_objects.api.serializers import get_serializer_class
+            from netbox_custom_objects.api.serializers import \
+                get_serializer_class
+
             get_serializer_class(model)
             return model
 
@@ -417,8 +407,8 @@ class CustomObjectType(PrimaryModel):
 
         # Use the standard NetBox tagging system instead of custom through models
         attrs["tags"] = TaggableManager(
-            through='extras.TaggedItem',
-            ordering=('weight', 'name'),
+            through="extras.TaggedItem",
+            ordering=("weight", "name"),
         )
 
         # Create the model class.
@@ -430,7 +420,7 @@ class CustomObjectType(PrimaryModel):
 
         # Register the main model with Django's app registry
         try:
-            existing_model = apps.get_model(APP_LABEL, model_name)
+            apps.get_model(APP_LABEL, model_name)
         except LookupError:
             apps.register_model(APP_LABEL, model)
 
@@ -442,7 +432,9 @@ class CustomObjectType(PrimaryModel):
 
         # Register the serializer for this model
         if not manytomany_models:
-            from netbox_custom_objects.api.serializers import get_serializer_class
+            from netbox_custom_objects.api.serializers import \
+                get_serializer_class
+
             get_serializer_class(model)
 
         return model
@@ -1140,8 +1132,10 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 old_field.contribute_to_class(model, self._original_name)
 
                 # Special handling for MultiObject fields when the name changes
-                if (self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT and
-                    self.name != self._original_name):
+                if (
+                    self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
+                    and self.name != self._original_name
+                ):
                     # For renamed MultiObject fields, we just need to rename the through table
                     old_through_table_name = self.original.through_table_name
                     new_through_table_name = self.through_table_name
@@ -1170,12 +1164,16 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                                 "Meta": old_through_meta,
                                 "id": models.AutoField(primary_key=True),
                                 "source": models.ForeignKey(
-                                    model, on_delete=models.CASCADE,
-                                    db_column="source_id", related_name="+"
+                                    model,
+                                    on_delete=models.CASCADE,
+                                    db_column="source_id",
+                                    related_name="+",
                                 ),
                                 "target": models.ForeignKey(
-                                    model, on_delete=models.CASCADE,
-                                    db_column="target_id", related_name="+"
+                                    model,
+                                    on_delete=models.CASCADE,
+                                    db_column="target_id",
+                                    related_name="+",
                                 ),
                             },
                         )
@@ -1197,12 +1195,16 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                                 "Meta": new_through_meta,
                                 "id": models.AutoField(primary_key=True),
                                 "source": models.ForeignKey(
-                                    model, on_delete=models.CASCADE,
-                                    db_column="source_id", related_name="+"
+                                    model,
+                                    on_delete=models.CASCADE,
+                                    db_column="source_id",
+                                    related_name="+",
                                 ),
                                 "target": models.ForeignKey(
-                                    model, on_delete=models.CASCADE,
-                                    db_column="target_id", related_name="+"
+                                    model,
+                                    on_delete=models.CASCADE,
+                                    db_column="target_id",
+                                    related_name="+",
                                 ),
                             },
                         )

@@ -1,6 +1,7 @@
 import sys
-from django.contrib.contenttypes.models import ContentType
+
 from core.models import ObjectType
+from django.contrib.contenttypes.models import ContentType
 from extras.choices import CustomFieldTypeChoices
 from netbox.api.serializers import NetBoxModelSerializer
 from rest_framework import serializers
@@ -8,7 +9,8 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.reverse import reverse
 
 from netbox_custom_objects import field_types
-from netbox_custom_objects.models import CustomObject, CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.models import (CustomObject, CustomObjectType,
+                                          CustomObjectTypeField)
 
 __all__ = (
     "CustomObjectTypeSerializer",
@@ -199,12 +201,12 @@ class CustomObjectSerializer(NetBoxModelSerializer):
 
 def get_serializer_class(model):
     model_fields = model.custom_object_type.fields.all()
-    
+
     # Create field list including all necessary fields
     base_fields = ["id", "url", "display", "created", "last_updated", "tags"]
     custom_field_names = [field.name for field in model_fields]
     all_fields = base_fields + custom_field_names
-    
+
     meta = type(
         "Meta",
         (),
@@ -249,7 +251,9 @@ def get_serializer_class(model):
         try:
             attrs[field.name] = field_type.get_serializer_field(field)
         except NotImplementedError:
-            print(f"serializer: {field.name} field is not implemented; using a default serializer field")
+            print(
+                f"serializer: {field.name} field is not implemented; using a default serializer field"
+            )
 
     serializer_name = f"{model._meta.object_name}Serializer"
     serializer = type(
@@ -257,7 +261,7 @@ def get_serializer_class(model):
         (NetBoxModelSerializer,),
         attrs,
     )
-    
+
     # Register the serializer in the current module so NetBox can find it
     current_module = sys.modules[__name__]
     setattr(current_module, serializer_name, serializer)
