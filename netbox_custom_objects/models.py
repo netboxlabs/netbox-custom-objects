@@ -159,11 +159,8 @@ class CustomObjectType(PrimaryModel):
         :param custom_object_type_id: ID of the CustomObjectType to clear cache for, or None to clear all
         """
         if custom_object_type_id is not None:
-            if custom_object_type_id in cls._model_cache:
-                cls._model_cache.pop(custom_object_type_id, None)
-            # Also clear through model cache if it exists
-            if custom_object_type_id in cls._through_model_cache:
-                cls._through_model_cache.pop(custom_object_type_id, None)
+            cls._model_cache.pop(custom_object_type_id, None)
+            cls._through_model_cache.pop(custom_object_type_id, None)
         else:
             cls._model_cache.clear()
             cls._through_model_cache.clear()
@@ -319,6 +316,7 @@ class CustomObjectType(PrimaryModel):
     def get_database_table_name(self):
         return f"{USER_TABLE_DATABASE_NAME_PREFIX}{self.id}"
 
+
     @property
     def title_case_name_plural(self):
         return title(self.name) + "s"
@@ -369,7 +367,7 @@ class CustomObjectType(PrimaryModel):
             return model
 
         if app_label is None:
-            app_label = str(uuid.uuid4()) + "_database_table"
+            app_label = APP_LABEL
 
         model_name = self.get_table_model_name(self.pk)
 
@@ -405,22 +403,46 @@ class CustomObjectType(PrimaryModel):
 
         attrs.update(**field_attrs)
 
-        # Use the standard NetBox tagging system instead of custom through models
+        # Use the standard NetBox tagging system
         attrs["tags"] = TaggableManager(
             through="extras.TaggedItem",
             ordering=("weight", "name"),
         )
 
-        # Create the model class.
-        model = type(
-            str(model_name),
-            (CustomObject, models.Model),
-            attrs,
-        )
+        # Create the model class with a workaround for TaggableManager conflicts
+        # Temporarily disable the through model validation during model creation
+        from taggit.managers import TaggableManager as TM
+        original_post_through_setup = TM.post_through_setup
+        
+        def patched_post_through_setup(self, model):
+            # Skip the duplicate through model check for our dynamic models
+            if hasattr(model, 'custom_object_type_id'):
+                # Just set up the manager without checking for duplicates
+                if not hasattr(self.through._meta, 'auto_created'):
+                    setattr(self.through, '_custom_object_managed', True)
+                return
+            # Call original method for other models
+            return original_post_through_setup(self, model)
+        
+        TM.post_through_setup = patched_post_through_setup
+        
+        try:
+            model = type(
+                str(model_name),
+                (CustomObject, models.Model),
+                attrs,
+            )
+        finally:
+            # Restore the original method
+            TM.post_through_setup = original_post_through_setup
 
         # Register the main model with Django's app registry
         try:
-            apps.get_model(APP_LABEL, model_name)
+            existing_model = apps.get_model(APP_LABEL, model_name)
+            # If model exists but is different, we have a problem
+            if existing_model is not model:
+                # Use the existing model to avoid conflicts
+                model = existing_model
         except LookupError:
             apps.register_model(APP_LABEL, model)
 
