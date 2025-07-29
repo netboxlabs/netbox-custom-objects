@@ -1,4 +1,6 @@
+import sys
 from django.contrib.contenttypes.models import ContentType
+from core.models import ObjectType
 from extras.choices import CustomFieldTypeChoices
 from netbox.api.serializers import NetBoxModelSerializer
 from rest_framework import serializers
@@ -59,10 +61,10 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
             CustomFieldTypeChoices.TYPE_MULTIOBJECT,
         ]:
             try:
-                attrs["related_object_type"] = ContentType.objects.get(
+                attrs["related_object_type"] = ObjectType.objects.get(
                     app_label=app_label, model=model
                 )
-            except ContentType.DoesNotExist:
+            except ObjectType.DoesNotExist:
                 raise ValidationError(
                     "Must provide valid app_label and model for object field type."
                 )
@@ -197,17 +199,24 @@ class CustomObjectSerializer(NetBoxModelSerializer):
 
 def get_serializer_class(model):
     model_fields = model.custom_object_type.fields.all()
+    
+    # Create field list including all necessary fields
+    base_fields = ["id", "url", "display", "created", "last_updated", "tags"]
+    custom_field_names = [field.name for field in model_fields]
+    all_fields = base_fields + custom_field_names
+    
     meta = type(
         "Meta",
         (),
         {
             "model": model,
-            "fields": "__all__",
+            "fields": all_fields,
+            "brief_fields": ("id", "url", "display"),
         },
     )
 
     def get_url(self, obj):
-        # Unsaved objects will not yet have a valid URL.
+        """Generate the API URL for this object"""
         if hasattr(obj, "pk") and obj.pk in (None, ""):
             return None
 
@@ -221,11 +230,18 @@ def get_serializer_class(model):
         format = self.context.get("format")
         return reverse(view_name, kwargs=kwargs, request=request, format=format)
 
+    def get_display(self, obj):
+        """Get display representation of the object"""
+        return str(obj)
+
+    # Create basic attributes for the serializer
     attrs = {
         "Meta": meta,
-        "__module__": "database.serializers",
+        "__module__": "netbox_custom_objects.api.serializers",
         "url": serializers.SerializerMethodField(),
         "get_url": get_url,
+        "display": serializers.SerializerMethodField(),
+        "get_display": get_display,
     }
 
     for field in model_fields:
@@ -235,10 +251,15 @@ def get_serializer_class(model):
         except NotImplementedError:
             print(f"serializer: {field.name} field is not implemented; using a default serializer field")
 
+    serializer_name = f"{model._meta.object_name}Serializer"
     serializer = type(
-        f"{model._meta.object_name}Serializer",
-        (serializers.ModelSerializer,),
+        serializer_name,
+        (NetBoxModelSerializer,),
         attrs,
     )
+    
+    # Register the serializer in the current module so NetBox can find it
+    current_module = sys.modules[__name__]
+    setattr(current_module, serializer_name, serializer)
 
     return serializer
