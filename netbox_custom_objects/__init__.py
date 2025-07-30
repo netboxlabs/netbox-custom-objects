@@ -1,6 +1,7 @@
 import warnings
 
 from django.core.exceptions import AppRegistryNotReady
+from django.db import utils as django_db_utils
 from netbox.plugins import PluginConfig
 
 
@@ -45,6 +46,11 @@ class CustomObjectsPluginConfig(PluginConfig):
             raise LookupError(
                 "App '%s' doesn't have a '%s' model." % (self.label, model_name)
             )
+        except (django_db_utils.ProgrammingError, django_db_utils.OperationalError):
+            # Handle database errors that occur when the table doesn't exist yet during migrations
+            raise LookupError(
+                "App '%s' doesn't have a '%s' model." % (self.label, model_name)
+            )
         return obj.get_model()
 
     def get_models(self, include_auto_created=False, include_swapped=False):
@@ -67,18 +73,17 @@ class CustomObjectsPluginConfig(PluginConfig):
 
             # Only load models that are already cached to avoid creating all models at startup
             # This prevents the "two TaggableManagers with same through model" error
-            custom_object_types = CustomObjectType.objects.all()
-            for custom_type in custom_object_types:
-                try:
+            try:
+                custom_object_types = CustomObjectType.objects.all()
+                for custom_type in custom_object_types:
                     # Only yield already cached models during discovery
                     if CustomObjectType.is_model_cached(custom_type.id):
                         model = CustomObjectType.get_cached_model(custom_type.id)
                         if model:
                             yield model
-                    # Don't create new models during get_models() - they'll be created on demand
-                except Exception:
-                    # Skip models that can't be loaded
-                    continue
+            except (django_db_utils.ProgrammingError, django_db_utils.OperationalError):
+                # Handle database errors that occur when the table doesn't exist yet during migrations
+                pass
 
 
 config = CustomObjectsPluginConfig
