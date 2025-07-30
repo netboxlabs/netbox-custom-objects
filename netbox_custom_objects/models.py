@@ -473,9 +473,6 @@ class CustomObjectType(PrimaryModel):
         model = self.get_model()
         is_public = model_is_public(model)
         features = get_model_features(model)
-        # we need to append tags here as it is added dynamically to the model
-        # and not through a mixin
-        features.append("tags")
         ct.is_public = is_public
         ct.features = features
         ct.save()
