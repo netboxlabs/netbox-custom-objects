@@ -410,35 +410,11 @@ class CustomObjectType(PrimaryModel):
 
         attrs.update(**field_attrs)
 
-        # Use the standard NetBox tagging system
-        attrs["tags"] = TaggableManager(
-            through="extras.TaggedItem",
-            ordering=("weight", "name"),
+        model = type(
+            str(model_name),
+            (CustomObject, models.Model),
+            attrs,
         )
-
-        # Create the model class with a workaround for TaggableManager conflicts
-        # Wrap the existing post_through_setup method to handle ValueError exceptions
-        from taggit.managers import TaggableManager as TM
-
-        original_post_through_setup = TM.post_through_setup
-
-        def wrapped_post_through_setup(self, cls):
-            try:
-                return original_post_through_setup(self, cls)
-            except ValueError:
-                pass
-
-        TM.post_through_setup = wrapped_post_through_setup
-
-        try:
-            model = type(
-                str(model_name),
-                (CustomObject, models.Model),
-                attrs,
-            )
-        finally:
-            # Restore the original method
-            TM.post_through_setup = original_post_through_setup
 
         # Register the main model with Django's app registry
         try:
