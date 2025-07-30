@@ -417,22 +417,18 @@ class CustomObjectType(PrimaryModel):
         )
 
         # Create the model class with a workaround for TaggableManager conflicts
-        # Temporarily disable the through model validation during model creation
+        # Wrap the existing post_through_setup method to handle ValueError exceptions
         from taggit.managers import TaggableManager as TM
 
         original_post_through_setup = TM.post_through_setup
 
-        def patched_post_through_setup(self, model):
-            # Skip the duplicate through model check for our dynamic models
-            if hasattr(model, "custom_object_type_id"):
-                # Just set up the manager without checking for duplicates
-                if not hasattr(self.through._meta, "auto_created"):
-                    setattr(self.through, "_custom_object_managed", True)
-                return
-            # Call original method for other models
-            return original_post_through_setup(self, model)
+        def wrapped_post_through_setup(self, cls):
+            try:
+                return original_post_through_setup(self, cls)
+            except ValueError:
+                pass
 
-        TM.post_through_setup = patched_post_through_setup
+        TM.post_through_setup = wrapped_post_through_setup
 
         try:
             model = type(
