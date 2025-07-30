@@ -1,8 +1,19 @@
 import warnings
+import sys
 
 from django.core.exceptions import AppRegistryNotReady
-from django.db import utils as django_db_utils
 from netbox.plugins import PluginConfig
+
+
+def is_running_migration():
+    """
+    Check if the code is currently running during a Django migration.
+    """
+    # Check if 'makemigrations' or 'migrate' command is in sys.argv
+    if any(cmd in sys.argv for cmd in ['makemigrations', 'migrate']):
+        return True
+
+    return False
 
 
 # Plugin Configuration
@@ -46,11 +57,7 @@ class CustomObjectsPluginConfig(PluginConfig):
             raise LookupError(
                 "App '%s' doesn't have a '%s' model." % (self.label, model_name)
             )
-        except (django_db_utils.ProgrammingError, django_db_utils.OperationalError):
-            # Handle database errors that occur when the table doesn't exist yet during migrations
-            raise LookupError(
-                "App '%s' doesn't have a '%s' model." % (self.label, model_name)
-            )
+
         return obj.get_model()
 
     def get_models(self, include_auto_created=False, include_swapped=False):
@@ -58,6 +65,10 @@ class CustomObjectsPluginConfig(PluginConfig):
         # Get the regular Django models first
         for model in super().get_models(include_auto_created, include_swapped):
             yield model
+
+        # Skip custom object type model loading if running during migration
+        if is_running_migration():
+            return
 
         # Suppress warnings about database calls during model loading
         with warnings.catch_warnings():
@@ -73,17 +84,13 @@ class CustomObjectsPluginConfig(PluginConfig):
 
             # Only load models that are already cached to avoid creating all models at startup
             # This prevents the "two TaggableManagers with same through model" error
-            try:
-                custom_object_types = CustomObjectType.objects.all()
-                for custom_type in custom_object_types:
-                    # Only yield already cached models during discovery
-                    if CustomObjectType.is_model_cached(custom_type.id):
-                        model = CustomObjectType.get_cached_model(custom_type.id)
-                        if model:
-                            yield model
-            except (django_db_utils.ProgrammingError, django_db_utils.OperationalError):
-                # Handle database errors that occur when the table doesn't exist yet during migrations
-                pass
+            custom_object_types = CustomObjectType.objects.all()
+            for custom_type in custom_object_types:
+                # Only yield already cached models during discovery
+                if CustomObjectType.is_model_cached(custom_type.id):
+                    model = CustomObjectType.get_cached_model(custom_type.id)
+                    if model:
+                        yield model
 
 
 config = CustomObjectsPluginConfig
