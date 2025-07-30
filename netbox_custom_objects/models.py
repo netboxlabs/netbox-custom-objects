@@ -39,7 +39,6 @@ from netbox.models.features import (
     TagsMixin,
 )
 from netbox.registry import registry
-from taggit.managers import TaggableManager
 from utilities import filters
 from utilities.datetime import datetime_from_timestamp
 from utilities.object_types import object_type_name
