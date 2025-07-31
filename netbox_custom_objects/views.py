@@ -100,6 +100,7 @@ class CustomObjectTypeView(CustomObjectTableMixin, generic.ObjectView):
         }
 
 
+@register_model_view(CustomObjectType, 'add', detail=False)
 @register_model_view(CustomObjectType, "edit")
 class CustomObjectTypeEditView(generic.ObjectEditView):
     queryset = CustomObjectType.objects.all()
