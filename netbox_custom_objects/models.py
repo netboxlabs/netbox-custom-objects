@@ -1,9 +1,9 @@
 import decimal
 import re
-import uuid
 from datetime import date, datetime
 
 import django_filters
+from core.models import ObjectType
 from core.models.contenttypes import ObjectTypeManager
 from django.apps import apps
 from django.conf import settings
@@ -23,7 +23,6 @@ from extras.choices import (
     CustomFieldUIVisibleChoices,
 )
 from extras.models.customfields import SEARCH_TYPES
-from extras.models.tags import Tag
 from netbox.models import ChangeLoggedModel, PrimaryModel
 from netbox.models.features import (
     BookmarksMixin,
@@ -35,10 +34,11 @@ from netbox.models.features import (
     ExportTemplatesMixin,
     JournalingMixin,
     NotificationsMixin,
+    get_model_features,
+    model_is_public,
+    TagsMixin,
 )
 from netbox.registry import registry
-from taggit.managers import TaggableManager
-from taggit.models import GenericTaggedItemBase
 from utilities import filters
 from utilities.datetime import datetime_from_timestamp
 from utilities.object_types import object_type_name
@@ -62,6 +62,7 @@ class CustomObject(
     JournalingMixin,
     NotificationsMixin,
     EventRulesMixin,
+    TagsMixin,
 ):
     """
     Base class for dynamically generated custom object models.
@@ -114,7 +115,7 @@ class CustomObject(
         # Get all field names where is_cloneable=True for this custom object type
         cloneable_fields = self.custom_object_type.fields.filter(
             is_cloneable=True
-        ).values_list('name', flat=True)
+        ).values_list("name", flat=True)
 
         return tuple(cloneable_fields)
 
@@ -137,7 +138,9 @@ class CustomObject(
 class CustomObjectType(PrimaryModel):
     # Class-level cache for generated models
     _model_cache = {}
-    _through_model_cache = {}  # Now stores {custom_object_type_id: {through_model_name: through_model}}
+    _through_model_cache = (
+        {}
+    )  # Now stores {custom_object_type_id: {through_model_name: through_model}}
     name = models.CharField(max_length=100, unique=True)
     schema = models.JSONField(blank=True, default=dict)
     verbose_name_plural = models.CharField(max_length=100, blank=True)
@@ -166,14 +169,14 @@ class CustomObjectType(PrimaryModel):
         :param custom_object_type_id: ID of the CustomObjectType to clear cache for, or None to clear all
         """
         if custom_object_type_id is not None:
-            if custom_object_type_id in cls._model_cache:
-                cls._model_cache.pop(custom_object_type_id, None)
-            # Also clear through model cache if it exists
-            if custom_object_type_id in cls._through_model_cache:
-                cls._through_model_cache.pop(custom_object_type_id, None)
+            cls._model_cache.pop(custom_object_type_id, None)
+            cls._through_model_cache.pop(custom_object_type_id, None)
         else:
             cls._model_cache.clear()
             cls._through_model_cache.clear()
+
+        # Clear Django apps registry cache to ensure newly created models are recognized
+        apps.get_models.cache_clear()
 
     @classmethod
     def get_cached_model(cls, custom_object_type_id):
@@ -257,17 +260,15 @@ class CustomObjectType(PrimaryModel):
 
     def get_or_create_content_type(self):
         """
-        Get or create the ContentType for this CustomObjectType.
-        This ensures the ContentType is immediately available in the current transaction.
+        Get or create the ObjectType for this CustomObjectType.
+        This ensures the ObjectType is immediately available in the current transaction.
         """
         content_type_name = self.get_table_model_name(self.id).lower()
         try:
-            return ContentType.objects.get(app_label=APP_LABEL, model=content_type_name)
+            return ObjectType.objects.get(app_label=APP_LABEL, model=content_type_name)
         except Exception:
-            # Create the ContentType and ensure it's immediately available
-            ct = ContentType.objects.create(
-                app_label=APP_LABEL, model=content_type_name
-            )
+            # Create the ObjectType and ensure it's immediately available
+            ct = ObjectType.objects.create(app_label=APP_LABEL, model=content_type_name)
             # Force a refresh to ensure it's available in the current transaction
             ct.refresh_from_db()
             return ct
@@ -366,10 +367,15 @@ class CustomObjectType(PrimaryModel):
 
         # Check if we have a cached model for this CustomObjectType
         if self.is_model_cached(self.id):
-            return self.get_cached_model(self.id)
+            model = self.get_cached_model(self.id)
+            # Ensure the serializer is registered even for cached models
+            from netbox_custom_objects.api.serializers import get_serializer_class
+
+            get_serializer_class(model)
+            return model
 
         if app_label is None:
-            app_label = str(uuid.uuid4()) + "_database_table"
+            app_label = APP_LABEL
 
         model_name = self.get_table_model_name(self.pk)
 
@@ -405,55 +411,52 @@ class CustomObjectType(PrimaryModel):
 
         attrs.update(**field_attrs)
 
-        # Create a unique through model for tagging for this CustomObjectType
+        # Create the model class with a workaround for TaggableManager conflicts
+        # Wrap the existing post_through_setup method to handle ValueError exceptions
+        from taggit.managers import TaggableManager as TM
 
-        through_model_name = f"CustomObjectTaggedItem{self.id}"
+        original_post_through_setup = TM.post_through_setup
 
-        # Create a unique through model for this CustomObjectType
-        through_model = type(
-            through_model_name,
-            (GenericTaggedItemBase,),
-            {
-                "__module__": "netbox_custom_objects.models",
-                "tag": models.ForeignKey(
-                    to=Tag,
-                    related_name=f"custom_objects_{through_model_name.lower()}_items",
-                    on_delete=models.CASCADE,
-                ),
-                "_netbox_private": True,
-                "objects": RestrictedQuerySet.as_manager(),
-                "Meta": type(
-                    "Meta",
-                    (),
-                    {
-                        "indexes": [models.Index(fields=["content_type", "object_id"])],
-                        "verbose_name": f"tagged item {self.id}",
-                        "verbose_name_plural": f"tagged items {self.id}",
-                    },
-                ),
-            },
-        )
+        def wrapped_post_through_setup(self, cls):
+            try:
+                return original_post_through_setup(self, cls)
+            except ValueError:
+                pass
 
-        attrs["tags"] = TaggableManager(
-            through=through_model,
-            ordering=("weight", "name"),
-        )
+        TM.post_through_setup = wrapped_post_through_setup
 
-        # Create the model class.
-        model = type(
-            str(model_name),
-            (CustomObject, models.Model),
-            attrs,
-        )
+        try:
+            model = type(
+                str(model_name),
+                (CustomObject, models.Model),
+                attrs,
+            )
+        finally:
+            # Restore the original method
+            TM.post_through_setup = original_post_through_setup
+
+        # Register the main model with Django's app registry
+        try:
+            existing_model = apps.get_model(APP_LABEL, model_name)
+            # If model exists but is different, we have a problem
+            if existing_model is not model:
+                # Use the existing model to avoid conflicts
+                model = existing_model
+        except LookupError:
+            apps.register_model(APP_LABEL, model)
 
         if not manytomany_models:
             self._after_model_generation(attrs, model)
 
-        # Cache the generated model and its through models
+        # Cache the generated model
         self._model_cache[self.id] = model
-        if self.id not in self._through_model_cache:
-            self._through_model_cache[self.id] = {}
-        self._through_model_cache[self.id][through_model_name] = through_model
+
+        # Register the serializer for this model
+        if not manytomany_models:
+            from netbox_custom_objects.api.serializers import get_serializer_class
+
+            get_serializer_class(model)
+
         return model
 
     def create_model(self):
@@ -461,17 +464,16 @@ class CustomObjectType(PrimaryModel):
         model = self.get_model()
 
         # Ensure the ContentType exists and is immediately available
-        self.get_or_create_content_type()
+        ct = self.get_or_create_content_type()
         model = self.get_model()
+        is_public = model_is_public(model)
+        features = get_model_features(model)
+        ct.is_public = is_public
+        ct.features = features
+        ct.save()
 
         with connection.schema_editor() as schema_editor:
             schema_editor.create_model(model)
-
-            # Also create the through model tables for tags and other mixins
-            if self.id in self._through_model_cache:
-                through_models = self._through_model_cache[self.id]
-                for through_model_name, through_model in through_models.items():
-                    schema_editor.create_model(through_model)
 
     def save(self, *args, **kwargs):
         needs_db_create = self._state.adding
@@ -487,16 +489,11 @@ class CustomObjectType(PrimaryModel):
         self.clear_model_cache(self.id)
 
         model = self.get_model()
-        ContentType.objects.get(
+        ObjectType.objects.get(
             app_label=APP_LABEL, model=self.get_table_model_name(self.id).lower()
         ).delete()
         super().delete(*args, **kwargs)
         with connection.schema_editor() as schema_editor:
-            # Delete the through model tables first if they exist
-            if self.id in self._through_model_cache:
-                through_models = self._through_model_cache[self.id]
-                for through_model_name, through_model in through_models.items():
-                    schema_editor.delete_model(through_model)
             schema_editor.delete_model(model)
 
 
@@ -1152,8 +1149,10 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 old_field.contribute_to_class(model, self._original_name)
 
                 # Special handling for MultiObject fields when the name changes
-                if (self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT and
-                    self.name != self._original_name):
+                if (
+                    self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
+                    and self.name != self._original_name
+                ):
                     # For renamed MultiObject fields, we just need to rename the through table
                     old_through_table_name = self.original.through_table_name
                     new_through_table_name = self.through_table_name
@@ -1182,12 +1181,16 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                                 "Meta": old_through_meta,
                                 "id": models.AutoField(primary_key=True),
                                 "source": models.ForeignKey(
-                                    model, on_delete=models.CASCADE,
-                                    db_column="source_id", related_name="+"
+                                    model,
+                                    on_delete=models.CASCADE,
+                                    db_column="source_id",
+                                    related_name="+",
                                 ),
                                 "target": models.ForeignKey(
-                                    model, on_delete=models.CASCADE,
-                                    db_column="target_id", related_name="+"
+                                    model,
+                                    on_delete=models.CASCADE,
+                                    db_column="target_id",
+                                    related_name="+",
                                 ),
                             },
                         )
@@ -1209,12 +1212,16 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                                 "Meta": new_through_meta,
                                 "id": models.AutoField(primary_key=True),
                                 "source": models.ForeignKey(
-                                    model, on_delete=models.CASCADE,
-                                    db_column="source_id", related_name="+"
+                                    model,
+                                    on_delete=models.CASCADE,
+                                    db_column="source_id",
+                                    related_name="+",
                                 ),
                                 "target": models.ForeignKey(
-                                    model, on_delete=models.CASCADE,
-                                    db_column="target_id", related_name="+"
+                                    model,
+                                    on_delete=models.CASCADE,
+                                    db_column="target_id",
+                                    related_name="+",
                                 ),
                             },
                         )

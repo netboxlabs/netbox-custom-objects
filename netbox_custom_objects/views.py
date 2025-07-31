@@ -373,6 +373,7 @@ class CustomObjectEditView(generic.ObjectEditView):
             "custom_object_type_field_groups": {},
         }
 
+        # Process custom object type fields (with grouping)
         for field in self.object.custom_object_type.fields.all().order_by('group_name', 'weight', 'name'):
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
             try:
@@ -391,20 +392,25 @@ class CustomObjectEditView(generic.ObjectEditView):
             except NotImplementedError:
                 print(f"get_form: {field.name} field is not supported")
 
-        # Create a custom __init__ method to set instance attributes
-        def custom_init(self, *args, **kwargs):
-            super(form_class, self).__init__(*args, **kwargs)
-            # Set the grouping info as instance attributes from the outer scope
-            self.custom_object_type_fields = attrs["custom_object_type_fields"]
-            self.custom_object_type_field_groups = attrs["custom_object_type_field_groups"]
-
-        attrs["__init__"] = custom_init
+        # Note: Regular model fields (non-custom fields) are automatically included
+        # by the "fields": "__all__" setting in the Meta class, so we don't need
+        # to manually add them to the form attributes or grouping structure.
+        # The template will be able to access them directly through the form.
 
         form_class = type(
             f"{model._meta.object_name}Form",
             (forms.NetBoxModelForm,),
             attrs,
         )
+
+        # Create a custom __init__ method to set instance attributes
+        def custom_init(self, *args, **kwargs):
+            forms.NetBoxModelForm.__init__(self, *args, **kwargs)
+            # Set the grouping info as instance attributes from the outer scope
+            self.custom_object_type_fields = attrs["custom_object_type_fields"]
+            self.custom_object_type_field_groups = attrs["custom_object_type_field_groups"]
+
+        form_class.__init__ = custom_init
 
         return form_class
 
