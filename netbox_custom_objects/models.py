@@ -466,9 +466,8 @@ class CustomObjectType(PrimaryModel):
         # Ensure the ContentType exists and is immediately available
         ct = self.get_or_create_content_type()
         model = self.get_model()
-        is_public = model_is_public(model)
         features = get_model_features(model)
-        ct.is_public = is_public
+        ct.public = True
         ct.features = features
         ct.save()
 
