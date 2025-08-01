@@ -35,7 +35,6 @@ from netbox.models.features import (
     JournalingMixin,
     NotificationsMixin,
     get_model_features,
-    model_is_public,
     TagsMixin,
 )
 from netbox.registry import registry
