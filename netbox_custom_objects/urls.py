@@ -4,45 +4,24 @@ from utilities.urls import get_model_urls
 from . import views
 from .constants import APP_LABEL
 
+app_name = APP_LABEL
+
 urlpatterns = [
+    path('custom-object-types/', include(get_model_urls(APP_LABEL, 'customobjecttype', detail=False))),
+    path('custom-object-types/<int:pk>/', include(get_model_urls(APP_LABEL, 'customobjecttype'))),
+
+    # Custom Object Type Fields
     path(
-        "custom_object_types/",
-        views.CustomObjectTypeListView.as_view(),
-        name="customobjecttype_list",
-    ),
-    path(
-        "custom_object_types/add/",
-        views.CustomObjectTypeEditView.as_view(),
-        name="customobjecttype_add",
-    ),
-    path(
-        "custom_object_types/import/",
-        views.CustomObjectTypeBulkImportView.as_view(),
-        name="customobjecttype_bulk_import",
-    ),
-    path(
-        "custom_object_types/edit/",
-        views.CustomObjectTypeBulkEditView.as_view(),
-        name="customobjecttype_bulk_edit",
-    ),
-    path(
-        "custom_object_types/delete/",
-        views.CustomObjectTypeBulkDeleteView.as_view(),
-        name="customobjecttype_bulk_delete",
-    ),
-    path(
-        "custom_object_types/<int:pk>/",
-        include(get_model_urls(APP_LABEL, "customobjecttype")),
-    ),
-    path(
-        "custom_object_type_fields/<int:pk>/",
+        "custom-object-type-fields/<int:pk>/",
         include(get_model_urls(APP_LABEL, "customobjecttypefield")),
     ),
     path(
-        "custom_object_type_fields/add/",
+        "custom-object-type-fields/add/",
         views.CustomObjectTypeFieldEditView.as_view(),
         name="customobjecttypefield_add",
     ),
+
+    # Custom Objects1
     path(
         "<str:custom_object_type>/",
         views.CustomObjectListView.as_view(),
@@ -54,17 +33,12 @@ urlpatterns = [
         name="customobject_add",
     ),
     path(
-        "<str:custom_object_type>/delete/",
-        views.CustomObjectDeleteView.as_view(),
-        name="customobject_delete",
-    ),
-    path(
-        "<str:custom_object_type>/bulk_edit/",
+        "<str:custom_object_type>/bulk-edit/",
         views.CustomObjectBulkEditView.as_view(),
         name="customobject_bulk_edit",
     ),
     path(
-        "<str:custom_object_type>/bulk_delete/",
+        "<str:custom_object_type>/bulk-delete/",
         views.CustomObjectBulkDeleteView.as_view(),
         name="customobject_bulk_delete",
     ),
