@@ -105,6 +105,7 @@ def custom_object_edit_button(instance):
 
     return {
         "url": url,
+        "label": "Edit",
     }
 
 
