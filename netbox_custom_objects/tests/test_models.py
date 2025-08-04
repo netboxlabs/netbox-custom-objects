@@ -303,7 +303,7 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
             field.full_clean()
 
         # Should not allow related_object_type for non-object field
-        device_ct = self.get_device_content_type()
+        device_ct = self.get_device_object_type()
         with self.assertRaises(ValidationError):
             field = CustomObjectTypeField(
                 custom_object_type=self.custom_object_type,
@@ -463,7 +463,7 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
             choice_set=choice_set,
         )
 
-        site_ct = cls.get_site_content_type()
+        site_ct = cls.get_site_object_type()
         cls.create_custom_object_type_field(
             cls.custom_object_type,
             name="site",
@@ -472,7 +472,7 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
             related_object_type=site_ct,
         )
 
-        site_ct = cls.get_site_content_type()
+        site_ct = cls.get_site_object_type()
         cls.create_custom_object_type_field(
             cls.custom_object_type,
             name="sites",
@@ -492,7 +492,7 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
     def test_custom_object_creation(self):
         """Test creating a custom object instance."""
         now = timezone.now()
-        site_ct = self.get_site_content_type()
+        site_ct = self.get_site_object_type()
         site = site_ct.model_class().objects.create()
 
         instance = self.model.objects.create(

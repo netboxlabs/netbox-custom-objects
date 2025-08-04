@@ -1,6 +1,6 @@
 # Test utilities for netbox_custom_objects plugin
-from django.contrib.contenttypes.models import ContentType
 from django.test import Client
+from core.models import ObjectType
 from extras.models import CustomFieldChoiceSet
 from utilities.testing import create_test_user
 
@@ -61,14 +61,14 @@ class CustomObjectsTestCase:
         return CustomFieldChoiceSet.objects.create(**defaults)
 
     @classmethod
-    def get_device_content_type(cls):
+    def get_device_object_type(cls):
         """Get the device content type for object field testing."""
-        return ContentType.objects.get(app_label='dcim', model='device')
+        return ObjectType.objects.get(app_label='dcim', model='device')
 
     @classmethod
-    def get_site_content_type(cls):
+    def get_site_object_type(cls):
         """Get the site content type for object field testing."""
-        return ContentType.objects.get(app_label='dcim', model='site')
+        return ObjectType.objects.get(app_label='dcim', model='site')
 
     def create_simple_custom_object_type(self, **kwargs):
         """Create a simple custom object type with basic fields."""
@@ -99,7 +99,7 @@ class CustomObjectsTestCase:
         """Create a complex custom object type with various field types."""
         custom_object_type = CustomObjectsTestCase.create_custom_object_type(**kwargs)
         choice_set = CustomObjectsTestCase.create_choice_set()
-        device_content_type = CustomObjectsTestCase.get_device_content_type()
+        device_object_type = CustomObjectsTestCase.get_device_object_type()
 
         # Primary text field
         CustomObjectsTestCase.create_custom_object_type_field(
@@ -145,7 +145,7 @@ class CustomObjectsTestCase:
             name="device",
             label="Device",
             type="object",
-            related_object_type=device_content_type
+            related_object_type=device_object_type
         )
 
         return custom_object_type
@@ -169,8 +169,8 @@ class CustomObjectsTestCase:
     def create_multi_object_custom_object_type(self, **kwargs):
         """Create a custom object type with multi-object fields."""
         custom_object_type = CustomObjectsTestCase.create_custom_object_type(**kwargs)
-        device_content_type = CustomObjectsTestCase.get_device_content_type()
-        site_content_type = CustomObjectsTestCase.get_site_content_type()
+        device_object_type = CustomObjectsTestCase.get_device_object_type()
+        site_object_type = CustomObjectsTestCase.get_site_object_type()
 
         # Primary text field
         CustomObjectsTestCase.create_custom_object_type_field(
@@ -188,7 +188,7 @@ class CustomObjectsTestCase:
             name="devices",
             label="Devices",
             type="multiobject",
-            related_object_type=device_content_type
+            related_object_type=device_object_type
         )
 
         # Multi-object field (sites)
@@ -197,7 +197,7 @@ class CustomObjectsTestCase:
             name="sites",
             label="Sites",
             type="multiobject",
-            related_object_type=site_content_type
+            related_object_type=site_object_type
         )
 
         return custom_object_type

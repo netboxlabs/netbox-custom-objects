@@ -1,4 +1,3 @@
-import warnings
 import sys
 
 from django.core.exceptions import AppRegistryNotReady
@@ -60,37 +59,37 @@ class CustomObjectsPluginConfig(PluginConfig):
 
         return obj.get_model()
 
-    def get_models(self, include_auto_created=False, include_swapped=False):
-        """Return all models for this plugin, including custom object type models."""
-        # Get the regular Django models first
-        for model in super().get_models(include_auto_created, include_swapped):
-            yield model
-
-        # Skip custom object type model loading if running during migration
-        if is_running_migration():
-            return
-
-        # Suppress warnings about database calls during model loading
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore", category=RuntimeWarning, message=".*database.*"
-            )
-            warnings.filterwarnings(
-                "ignore", category=UserWarning, message=".*database.*"
-            )
-
-            # Add custom object type models
-            from .models import CustomObjectType
-
-            # Only load models that are already cached to avoid creating all models at startup
-            # This prevents the "two TaggableManagers with same through model" error
-            custom_object_types = CustomObjectType.objects.all()
-            for custom_type in custom_object_types:
-                # Only yield already cached models during discovery
-                if CustomObjectType.is_model_cached(custom_type.id):
-                    model = CustomObjectType.get_cached_model(custom_type.id)
-                    if model:
-                        yield model
+    # def get_models(self, include_auto_created=False, include_swapped=False):
+    #     """Return all models for this plugin, including custom object type models."""
+    #     # Get the regular Django models first
+    #     for model in super().get_models(include_auto_created, include_swapped):
+    #         yield model
+    #
+    #     # Skip custom object type model loading if running during migration
+    #     if is_running_migration():
+    #         return
+    #
+    #     # Suppress warnings about database calls during model loading
+    #     with warnings.catch_warnings():
+    #         warnings.filterwarnings(
+    #             "ignore", category=RuntimeWarning, message=".*database.*"
+    #         )
+    #         warnings.filterwarnings(
+    #             "ignore", category=UserWarning, message=".*database.*"
+    #         )
+    #
+    #         # Add custom object type models
+    #         from .models import CustomObjectType
+    #
+    #         # Only load models that are already cached to avoid creating all models at startup
+    #         # This prevents the "two TaggableManagers with same through model" error
+    #         custom_object_types = CustomObjectType.objects.all()
+    #         for custom_type in custom_object_types:
+    #             # Only yield already cached models during discovery
+    #             if CustomObjectType.is_model_cached(custom_type.id):
+    #                 model = CustomObjectType.get_cached_model(custom_type.id)
+    #                 if model:
+    #                     yield model
 
 
 config = CustomObjectsPluginConfig

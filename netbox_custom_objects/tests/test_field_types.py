@@ -602,7 +602,7 @@ class ObjectFieldTypeTestCase(FieldTypeTestCase):
     def setUp(self):
         """Set up test data."""
         super().setUp()
-        self.device_content_type = self.get_device_content_type()
+        self.device_object_type = self.get_device_object_type()
 
     def test_object_field_creation(self):
         """Test creating an object field."""
@@ -611,11 +611,11 @@ class ObjectFieldTypeTestCase(FieldTypeTestCase):
             name="device",
             label="Device",
             type="object",
-            related_object_type=self.device_content_type
+            related_object_type=self.device_object_type
         )
 
         self.assertEqual(field.type, "object")
-        self.assertEqual(field.related_object_type, self.device_content_type)
+        self.assertEqual(field.related_object_type, self.device_object_type)
 
     def test_object_field_model_generation(self):
         """Test object field model generation."""
@@ -624,7 +624,7 @@ class ObjectFieldTypeTestCase(FieldTypeTestCase):
             name="device",
             label="Device",
             type="object",
-            related_object_type=self.device_content_type
+            related_object_type=self.device_object_type
         )
         field  # To silence ruff error
 
@@ -661,7 +661,7 @@ class MultiObjectFieldTypeTestCase(FieldTypeTestCase):
     def setUp(self):
         """Set up test data."""
         super().setUp()
-        self.device_content_type = self.get_device_content_type()
+        self.device_object_type = self.get_device_object_type()
 
     def test_multiobject_field_creation(self):
         """Test creating a multiobject field."""
@@ -670,11 +670,11 @@ class MultiObjectFieldTypeTestCase(FieldTypeTestCase):
             name="devices",
             label="Devices",
             type="multiobject",
-            related_object_type=self.device_content_type
+            related_object_type=self.device_object_type
         )
 
         self.assertEqual(field.type, "multiobject")
-        self.assertEqual(field.related_object_type, self.device_content_type)
+        self.assertEqual(field.related_object_type, self.device_object_type)
 
     def test_multiobject_field_model_generation(self):
         """Test multiobject field model generation."""
@@ -683,7 +683,7 @@ class MultiObjectFieldTypeTestCase(FieldTypeTestCase):
             name="devices",
             label="Devices",
             type="multiobject",
-            related_object_type=self.device_content_type
+            related_object_type=self.device_object_type
         )
         field  # To silence ruff error
 
