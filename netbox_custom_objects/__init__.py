@@ -1,7 +1,9 @@
-import warnings
 import sys
+import warnings
 
 from django.core.exceptions import AppRegistryNotReady
+from django.db import transaction
+from django.db.utils import DatabaseError, OperationalError, ProgrammingError
 from netbox.plugins import PluginConfig
 
 
@@ -10,10 +12,30 @@ def is_running_migration():
     Check if the code is currently running during a Django migration.
     """
     # Check if 'makemigrations' or 'migrate' command is in sys.argv
-    if any(cmd in sys.argv for cmd in ['makemigrations', 'migrate']):
+    if any(cmd in sys.argv for cmd in ["makemigrations", "migrate"]):
         return True
 
     return False
+
+
+def check_custom_object_type_table_exists():
+    """
+    Check if the CustomObjectType table exists in the database.
+    Returns True if the table exists, False otherwise.
+    """
+    from .models import CustomObjectType
+
+    try:
+        # Try to query the model - if the table doesn't exist, this will raise an exception
+        # this check and the transaction.atomic() is only required when running tests as the
+        # migration check doesn't work correctly in the test environment
+        with transaction.atomic():
+            # Force immediate execution by using first()
+            CustomObjectType.objects.first()
+        return True
+    except (OperationalError, ProgrammingError, DatabaseError):
+        # Catch database-specific errors (table doesn't exist, permission issues, etc.)
+        return False
 
 
 # Plugin Configuration
@@ -66,10 +88,6 @@ class CustomObjectsPluginConfig(PluginConfig):
         for model in super().get_models(include_auto_created, include_swapped):
             yield model
 
-        # Skip custom object type model loading if running during migration
-        if is_running_migration():
-            return
-
         # Suppress warnings about database calls during model loading
         with warnings.catch_warnings():
             warnings.filterwarnings(
@@ -79,11 +97,13 @@ class CustomObjectsPluginConfig(PluginConfig):
                 "ignore", category=UserWarning, message=".*database.*"
             )
 
+            # Skip custom object type model loading if running during migration
+            if is_running_migration() or not check_custom_object_type_table_exists():
+                return
+
             # Add custom object type models
             from .models import CustomObjectType
 
-            # Only load models that are already cached to avoid creating all models at startup
-            # This prevents the "two TaggableManagers with same through model" error
             custom_object_types = CustomObjectType.objects.all()
             for custom_type in custom_object_types:
                 # Only yield already cached models during discovery
