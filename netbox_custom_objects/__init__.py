@@ -1,9 +1,9 @@
-import warnings
 import sys
+import warnings
 
 from django.core.exceptions import AppRegistryNotReady
-from django.db import connection, transaction
-from django.db.utils import OperationalError, ProgrammingError, DatabaseError
+from django.db import transaction
+from django.db.utils import DatabaseError, OperationalError, ProgrammingError
 from netbox.plugins import PluginConfig
 
 
@@ -12,7 +12,7 @@ def is_running_migration():
     Check if the code is currently running during a Django migration.
     """
     # Check if 'makemigrations' or 'migrate' command is in sys.argv
-    if any(cmd in sys.argv for cmd in ['makemigrations', 'migrate']):
+    if any(cmd in sys.argv for cmd in ["makemigrations", "migrate"]):
         return True
 
     return False
@@ -24,7 +24,7 @@ def check_custom_object_type_table_exists():
     Returns True if the table exists, False otherwise.
     """
     from .models import CustomObjectType
-    
+
     try:
         # Try to query the model - if the table doesn't exist, this will raise an exception
         # this check and the transaction.atomic() is only required when running tests as the
