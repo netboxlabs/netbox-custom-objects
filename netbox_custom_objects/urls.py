@@ -64,4 +64,14 @@ urlpatterns = [
         views.CustomObjectDeleteView.as_view(),
         name="customobject_delete",
     ),
+    path(
+        "custom_object/<int:pk>/journal/",
+        views.CustomObjectJournalView.as_view(),
+        name="customobject_journal",
+    ),
+    path(
+        "<str:custom_object_type>/<int:pk>/changelog/",
+        views.CustomObjectChangeLogView.as_view(),
+        name="customobject_changelog",
+    ),
 ]
