@@ -1,4 +1,3 @@
-import warnings
 import sys
 
 from django.core.exceptions import AppRegistryNotReady
