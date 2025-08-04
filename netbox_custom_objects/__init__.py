@@ -88,10 +88,6 @@ class CustomObjectsPluginConfig(PluginConfig):
         for model in super().get_models(include_auto_created, include_swapped):
             yield model
 
-        # Skip custom object type model loading if running during migration
-        if is_running_migration() or not check_custom_object_type_table_exists():
-            return
-
         # Suppress warnings about database calls during model loading
         with warnings.catch_warnings():
             warnings.filterwarnings(
@@ -100,6 +96,10 @@ class CustomObjectsPluginConfig(PluginConfig):
             warnings.filterwarnings(
                 "ignore", category=UserWarning, message=".*database.*"
             )
+
+            # Skip custom object type model loading if running during migration
+            if is_running_migration() or not check_custom_object_type_table_exists():
+                return
 
             # Add custom object type models
             from .models import CustomObjectType
