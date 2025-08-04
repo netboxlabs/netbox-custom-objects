@@ -1,5 +1,4 @@
 # Test utilities for netbox_custom_objects plugin
-from django.contrib.contenttypes.models import ContentType
 from django.test import Client
 from core.models import ObjectType
 from extras.models import CustomFieldChoiceSet
