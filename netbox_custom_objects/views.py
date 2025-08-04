@@ -18,6 +18,52 @@ from . import field_types, filtersets, forms, tables
 from .models import CustomObject, CustomObjectType, CustomObjectTypeField
 
 
+class CustomJournalEntryForm(JournalEntryForm):
+    """
+    Custom journal entry form that handles return URLs for custom objects.
+    """
+
+    def __init__(self, *args, **kwargs):
+        self.custom_object = kwargs.pop('custom_object', None)
+        super().__init__(*args, **kwargs)
+
+    def get_return_url(self):
+        """
+        Override to return the correct URL for custom objects.
+        """
+        if self.custom_object:
+            return reverse('plugins:netbox_custom_objects:customobject_journal', kwargs={
+                'custom_object_type': self.custom_object.custom_object_type.name,
+                'pk': self.custom_object.pk
+            })
+        return super().get_return_url()
+
+
+class CustomJournalEntryEditView(generic.ObjectEditView):
+    """
+    Custom journal entry edit view that handles return URLs for custom objects.
+    """
+    queryset = JournalEntry.objects.all()
+    form = CustomJournalEntryForm
+
+    def get_return_url(self, request, instance):
+        """
+        Override to return the correct URL for custom objects.
+        """
+        if instance.assigned_object and hasattr(instance.assigned_object, 'custom_object_type'):
+            # This is a custom object
+            return reverse('plugins:netbox_custom_objects:customobject_journal', kwargs={
+                'custom_object_type': instance.assigned_object.custom_object_type.name,
+                'pk': instance.assigned_object.pk
+            })
+        # Fall back to standard behavior for non-custom objects
+        if not instance.assigned_object:
+            return reverse('extras:journalentry_list')
+        obj = instance.assigned_object
+        viewname = get_viewname(obj, 'journal')
+        return reverse(viewname, kwargs={'pk': obj.pk})
+
+
 class CustomObjectTableMixin(TableMixin):
     def get_table(self, data, request, bulk_actions=True):
         model_fields = self.custom_object_type.fields.all()
@@ -504,3 +550,127 @@ class CustomObjectBulkDeleteView(CustomObjectTableMixin, generic.BulkDeleteView)
         )
         model = self.custom_object_type.get_model()
         return model.objects.all()
+
+
+class CustomObjectJournalView(ConditionalLoginRequiredMixin, View):
+    """
+    Custom journal view for CustomObject instances.
+    Shows all journal entries for a custom object.
+    """
+
+    base_template = None
+    tab = ViewTab(
+        label=_("Journal"), permission="extras.view_journalentry", weight=5000
+    )
+
+    def get(self, request, custom_object_type, **kwargs):
+        # Get the custom object type and model
+        object_type = get_object_or_404(
+            CustomObjectType, name__iexact=custom_object_type
+        )
+        model = object_type.get_model()
+
+        # Get the specific object
+        lookup_kwargs = {k: v for k, v in kwargs.items() if k != "custom_object_type"}
+        obj = get_object_or_404(model.objects.all(), **lookup_kwargs)
+
+        # Get journal entries for this object
+        content_type = ContentType.objects.get_for_model(model)
+        journal_entries = (
+            JournalEntry.objects.restrict(request.user, "view")
+            .prefetch_related("created_by")
+            .filter(
+                assigned_object_type=content_type,
+                assigned_object_id=obj.pk,
+            )
+        )
+
+        journal_table = JournalEntryTable(
+            data=journal_entries, orderable=False, user=request.user
+        )
+        journal_table.configure(request)
+        journal_table.columns.hide("assigned_object_type")
+        journal_table.columns.hide("assigned_object")
+
+        # Create form for new journal entry if user has permission
+        if request.user.has_perm("extras.add_journalentry"):
+            form = CustomJournalEntryForm(
+                custom_object=obj,
+                initial={
+                    "assigned_object_type": content_type,
+                    "assigned_object_id": obj.pk,
+                }
+            )
+        else:
+            form = None
+
+        # Set base template
+        if self.base_template is None:
+            self.base_template = "netbox_custom_objects/customobject.html"
+
+        return render(
+            request,
+            "netbox_custom_objects/object_journal.html",
+            {
+                "object": obj,
+                "form": form,
+                "table": journal_table,
+                "base_template": self.base_template,
+                "tab": "journal",
+                "form_action": reverse('plugins:netbox_custom_objects:custom_journalentry_add'),
+            },
+        )
+
+
+class CustomObjectChangeLogView(ConditionalLoginRequiredMixin, View):
+    """
+    Custom changelog view for CustomObject instances.
+    Shows all changes made to a custom object.
+    """
+
+    base_template = None
+    tab = ViewTab(
+        label=_("Changelog"), permission="core.view_objectchange", weight=10000
+    )
+
+    def get(self, request, custom_object_type, **kwargs):
+        # Get the custom object type and model
+        object_type = get_object_or_404(
+            CustomObjectType, name__iexact=custom_object_type
+        )
+        model = object_type.get_model()
+
+        # Get the specific object
+        lookup_kwargs = {k: v for k, v in kwargs.items() if k != "custom_object_type"}
+        obj = get_object_or_404(model.objects.all(), **lookup_kwargs)
+
+        # Gather all changes for this object (and its related objects)
+        content_type = ContentType.objects.get_for_model(model)
+        objectchanges = (
+            ObjectChange.objects.restrict(request.user, "view")
+            .prefetch_related("user", "changed_object_type")
+            .filter(
+                Q(changed_object_type=content_type, changed_object_id=obj.pk)
+                | Q(related_object_type=content_type, related_object_id=obj.pk)
+            )
+        )
+
+        objectchanges_table = ObjectChangeTable(
+            data=objectchanges, orderable=False, user=request.user
+        )
+        objectchanges_table.configure(request)
+
+        # Set base template
+        if self.base_template is None:
+            self.base_template = "netbox_custom_objects/customobject.html"
+
+        return render(
+            request,
+            "extras/object_changelog.html",
+            {
+                "object": obj,
+                "table": objectchanges_table,
+                "base_template": self.base_template,
+                "tab": "changelog",
+            },
+        )

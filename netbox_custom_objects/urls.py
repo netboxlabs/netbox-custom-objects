@@ -21,7 +21,14 @@ urlpatterns = [
         name="customobjecttypefield_add",
     ),
 
-    # Custom Objects1
+    # Journal Entries (must come before custom object patterns)
+    path(
+        "journal-entries/add/",
+        views.CustomJournalEntryEditView.as_view(),
+        name="custom_journalentry_add",
+    ),
+
+    # Custom Objects
     path(
         "<str:custom_object_type>/",
         views.CustomObjectListView.as_view(),
