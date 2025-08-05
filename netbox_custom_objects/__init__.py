@@ -103,13 +103,9 @@ class CustomObjectsPluginConfig(PluginConfig):
 
             # Add custom object type models
             from .models import CustomObjectType
-            from .search import register_custom_object_search_index
 
             custom_object_types = CustomObjectType.objects.all()
             for custom_type in custom_object_types:
-                # Synthesize SearchIndex classes for all CustomObjectTypes
-                register_custom_object_search_index(custom_type)
-
                 # Only yield already cached models during discovery
                 if CustomObjectType.is_model_cached(custom_type.id):
                     model = CustomObjectType.get_cached_model(custom_type.id)
