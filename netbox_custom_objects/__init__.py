@@ -50,6 +50,29 @@ class CustomObjectsPluginConfig(PluginConfig):
     required_settings = []
     template_extensions = "template_content.template_extensions"
 
+    def ready(self):
+        super().ready()
+        # Suppress warnings about database calls during model loading
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", category=RuntimeWarning, message=".*database.*"
+            )
+            warnings.filterwarnings(
+                "ignore", category=UserWarning, message=".*database.*"
+            )
+
+            # Skip custom object type model loading if running during migration
+            if is_running_migration() or not check_custom_object_type_table_exists():
+                return
+
+            from .models import CustomObjectType
+            from .search import register_custom_object_search_index
+
+            custom_object_types = CustomObjectType.objects.all()
+            for custom_type in custom_object_types:
+                # Synthesize SearchIndex classes for all CustomObjectTypes
+                register_custom_object_search_index(custom_type)
+
     def get_model(self, model_name, require_ready=True):
         try:
             # if the model is already loaded, return it
@@ -103,12 +126,9 @@ class CustomObjectsPluginConfig(PluginConfig):
 
             # Add custom object type models
             from .models import CustomObjectType
-            from .search import register_custom_object_search_index
 
             custom_object_types = CustomObjectType.objects.all()
             for custom_type in custom_object_types:
-                # Synthesize SearchIndex classes for all CustomObjectTypes
-                register_custom_object_search_index(custom_type)
 
                 # Only yield already cached models during discovery
                 if CustomObjectType.is_model_cached(custom_type.id):
