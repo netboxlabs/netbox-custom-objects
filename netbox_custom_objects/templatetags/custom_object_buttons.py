@@ -176,6 +176,7 @@ def custom_object_sync_button(instance):
     url = reverse(viewname, kwargs={"pk": instance.pk})
 
     return {
+        "label": "Sync",
         "url": url,
     }
 
@@ -196,6 +197,7 @@ def custom_object_add_button(model, custom_object_type, action="add"):
         url = None
 
     return {
+        "label": "Add",
         "url": url,
     }
 
@@ -208,6 +210,7 @@ def custom_object_import_button(model, action="bulk_import"):
         url = None
 
     return {
+        "label": "Import",
         "url": url,
     }
 
@@ -226,6 +229,7 @@ def custom_object_export_button(context, model):
     )
 
     return {
+        "label": "Export",
         "perms": context["perms"],
         "object_type": object_type,
         "url_params": (
@@ -252,6 +256,7 @@ def custom_object_bulk_edit_button(
         url = None
 
     return {
+        "label": "Bulk Edit",
         "htmx_navigation": context.get("htmx_navigation"),
         "url": url,
     }
@@ -272,6 +277,7 @@ def custom_object_bulk_delete_button(
         url = None
 
     return {
+        "label": "Bulk Delete",
         "htmx_navigation": context.get("htmx_navigation"),
         "url": url,
     }
