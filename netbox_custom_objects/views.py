@@ -524,6 +524,10 @@ class CustomObjectBulkImportView(generic.BulkImportView):
         # Necessary because get() in BulkImportView only takes request and no **kwargs
         return super().get(request)
 
+    def post(self, request, custom_object_type):
+        # Necessary because post() in BulkImportView only takes request and no **kwargs
+        return super().post(request)
+
     def setup(self, request, *args, **kwargs):
         super().setup(request, *args, **kwargs)
         self.queryset = self.get_queryset(request)
