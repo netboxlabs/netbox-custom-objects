@@ -65,7 +65,7 @@ urlpatterns = [
         name="customobject_delete",
     ),
     path(
-        "custom_object/<int:pk>/journal/",
+        "<str:custom_object_type>/<int:pk>/journal/",
         views.CustomObjectJournalView.as_view(),
         name="customobject_journal",
     ),
