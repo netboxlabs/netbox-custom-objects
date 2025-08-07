@@ -5,7 +5,7 @@ from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from extras.choices import CustomFieldUIVisibleChoices
 from netbox.filtersets import BaseFilterSet
-from netbox.forms import NetBoxModelBulkEditForm, NetBoxModelFilterSetForm
+from netbox.forms import NetBoxModelBulkEditForm, NetBoxModelFilterSetForm, NetBoxModelImportForm
 from netbox.views import generic
 from netbox.views.generic.mixins import TableMixin
 from utilities.forms import ConfirmationForm
@@ -462,8 +462,17 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
         return model.objects.all()
 
     def get_form(self, queryset):
+        meta = type(
+            "Meta",
+            (),
+            {
+                "model": queryset.model,
+                "fields": "__all__",
+            },
+        )
+
         attrs = {
-            "model": queryset.model,
+            "Meta": meta,
             "__module__": "database.forms",
         }
 
@@ -504,3 +513,58 @@ class CustomObjectBulkDeleteView(CustomObjectTableMixin, generic.BulkDeleteView)
         )
         model = self.custom_object_type.get_model()
         return model.objects.all()
+
+
+@register_model_view(CustomObject, 'bulk_import', path='import', detail=False)
+class CustomObjectBulkImportView(generic.BulkImportView):
+    queryset = None
+    model_form = None
+
+    def get(self, request, custom_object_type):
+        # Necessary because get() in BulkImportView only takes request and no **kwargs
+        return super().get(request)
+
+    def setup(self, request, *args, **kwargs):
+        super().setup(request, *args, **kwargs)
+        self.queryset = self.get_queryset(request)
+        self.model_form = self.get_model_form(self.queryset)
+
+    def get_queryset(self, request):
+        if self.queryset:
+            return self.queryset
+        custom_object_type = self.kwargs.get("custom_object_type", None)
+        self.custom_object_type = CustomObjectType.objects.get(
+            name__iexact=custom_object_type
+        )
+        model = self.custom_object_type.get_model()
+        return model.objects.all()
+
+    def get_model_form(self, queryset):
+        meta = type(
+            "Meta",
+            (),
+            {
+                "model": queryset.model,
+                "fields": "__all__",
+            },
+        )
+
+        attrs = {
+            "Meta": meta,
+            "__module__": "database.forms",
+        }
+
+        for field in self.custom_object_type.fields.all():
+            field_type = field_types.FIELD_TYPE_CLASS[field.type]()
+            try:
+                attrs[field.name] = field_type.get_annotated_form_field(field)
+            except NotImplementedError:
+                print(f"bulk import form: {field.name} field is not supported")
+
+        form = type(
+            f"{queryset.model._meta.object_name}BulkImportForm",
+            (NetBoxModelImportForm,),
+            attrs,
+        )
+
+        return form

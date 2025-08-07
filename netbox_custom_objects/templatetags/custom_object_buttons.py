@@ -203,9 +203,12 @@ def custom_object_add_button(model, custom_object_type, action="add"):
 
 
 @register.inclusion_tag("buttons/import.html")
-def custom_object_import_button(model, action="bulk_import"):
+def custom_object_import_button(model, custom_object_type, action="bulk_import"):
     try:
-        url = reverse(get_viewname(model, action))
+        viewname = get_viewname(model, action)
+        url = reverse(
+            viewname, kwargs={"custom_object_type": custom_object_type.name.lower()}
+        )
     except NoReverseMatch:
         url = None
 
