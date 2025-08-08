@@ -1284,7 +1284,7 @@ class CustomObjectObjectTypeManager(ObjectTypeManager):
         )
 
 
-class CustomObjectObjectType(ContentType):
+class CustomObjectObjectType(ObjectType):
     """
     Wrap Django's native ContentType model to use our custom manager.
     """
