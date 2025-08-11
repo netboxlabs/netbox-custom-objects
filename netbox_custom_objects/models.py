@@ -287,6 +287,7 @@ class CustomObjectType(PrimaryModel):
     def _fetch_and_generate_field_attrs(
         self,
         fields,
+        skip_object_fields=False,
     ):
         field_attrs = {
             "_primary_field_id": -1,
@@ -300,10 +301,16 @@ class CustomObjectType(PrimaryModel):
         # Create a combined list of fields that must be added and belong to the this
         # table.
         fields = list(fields) + [field for field in fields_query]
+        print('fields:', fields)
 
         for field in fields:
             field_type = FIELD_TYPE_CLASS[field.type]()
+            if skip_object_fields:
+                if field.type in [CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT]:
+                    continue
+
             field_name = field.name
+            print('field_name:', field_name)
 
             field_attrs["_field_objects"][field.id] = {
                 "field": field,
@@ -357,6 +364,8 @@ class CustomObjectType(PrimaryModel):
         fields=None,
         manytomany_models=None,
         app_label=None,
+        skip_object_fields=False,
+        no_cache=False,
     ):
         """
         Generates a temporary Django model based on available fields that belong to
@@ -377,7 +386,7 @@ class CustomObjectType(PrimaryModel):
         """
 
         # Check if we have a cached model for this CustomObjectType
-        if self.is_model_cached(self.id):
+        if self.is_model_cached(self.id) and not no_cache:
             model = self.get_cached_model(self.id)
             # Ensure the serializer is registered even for cached models
             from netbox_custom_objects.api.serializers import get_serializer_class
@@ -418,7 +427,7 @@ class CustomObjectType(PrimaryModel):
             "custom_object_type_id": self.id,
         }
 
-        field_attrs = self._fetch_and_generate_field_attrs(fields)
+        field_attrs = self._fetch_and_generate_field_attrs(fields, skip_object_fields=skip_object_fields)
 
         attrs.update(**field_attrs)
 
@@ -460,7 +469,8 @@ class CustomObjectType(PrimaryModel):
             self._after_model_generation(attrs, model)
 
         # Cache the generated model
-        self._model_cache[self.id] = model
+        if not no_cache:
+            self._model_cache[self.id] = model
 
         # Register the serializer for this model
         if not manytomany_models:

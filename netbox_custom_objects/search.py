@@ -21,7 +21,7 @@ def register_custom_object_search_index(custom_object_type):
         if field.primary or field.type == CustomFieldTypeChoices.TYPE_TEXT:
             fields.append((field.name, 100))
 
-    model = custom_object_type.get_model()
+    model = custom_object_type.get_model(skip_object_fields=True, no_cache=True)
     attrs = {
         "model": model,
         "fields": tuple(fields),
