@@ -46,12 +46,13 @@ class CustomObjectLink(PluginTemplateExtension):
             model = field.custom_object_type.get_model()
             for model_object in model.objects.all():
                 model_field = getattr(model_object, field.name)
-                if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                    if model_field.filter(id=self.context["object"].pk).exists():
-                        linked_custom_objects.append(LinkedCustomObject(custom_object=model_object, field=field))
-                else:
-                    if model_field.id == self.context["object"].pk:
-                        linked_custom_objects.append(LinkedCustomObject(custom_object=model_object, field=field))
+                if model_field:
+                  if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+                      if model_field.filter(id=self.context["object"].pk).exists():
+                          linked_custom_objects.append(LinkedCustomObject(custom_object=model_object, field=field))
+                  else:
+                      if model_field.id == self.context["object"].pk:
+                          linked_custom_objects.append(LinkedCustomObject(custom_object=model_object, field=field))
         return render_jinja2("""
           <div class="card">
             <h2 class="card-header">Custom Objects linking to this object</h2>
