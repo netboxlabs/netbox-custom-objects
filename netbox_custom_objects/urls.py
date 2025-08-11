@@ -21,7 +21,14 @@ urlpatterns = [
         name="customobjecttypefield_add",
     ),
 
-    # Custom Objects1
+    # Journal Entries (must come before custom object patterns)
+    path(
+        "journal-entries/add/",
+        views.CustomJournalEntryEditView.as_view(),
+        name="custom_journalentry_add",
+    ),
+
+    # Custom Objects
     path(
         "<str:custom_object_type>/",
         views.CustomObjectListView.as_view(),
@@ -61,5 +68,15 @@ urlpatterns = [
         "<str:custom_object_type>/<int:pk>/delete/",
         views.CustomObjectDeleteView.as_view(),
         name="customobject_delete",
+    ),
+    path(
+        "<str:custom_object_type>/<int:pk>/journal/",
+        views.CustomObjectJournalView.as_view(),
+        name="customobject_journal",
+    ),
+    path(
+        "<str:custom_object_type>/<int:pk>/changelog/",
+        views.CustomObjectChangeLogView.as_view(),
+        name="customobject_changelog",
     ),
 ]
