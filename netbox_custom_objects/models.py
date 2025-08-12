@@ -38,6 +38,7 @@ from netbox.models.features import (
     TagsMixin,
 )
 from netbox.registry import registry
+from netbox.search import SearchIndex
 from utilities import filters
 from utilities.datetime import datetime_from_timestamp
 from utilities.object_types import object_type_name
@@ -357,6 +358,26 @@ class CustomObjectType(PrimaryModel):
         custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
         return f"Custom Objects > {custom_object_type.name}"
 
+    def register_custom_object_search_index(self):
+        fields = []
+        for field in self.fields.all():
+            if field.primary or field.type == CustomFieldTypeChoices.TYPE_TEXT:
+                fields.append((field.name, 100))
+
+        model = self.get_model(skip_object_fields=True, no_cache=True)
+        attrs = {
+            "model": model,
+            "fields": tuple(fields),
+            "display_attrs": tuple(),
+        }
+        search_index = type(
+            f"{self.name}SearchIndex",
+            (SearchIndex,),
+            attrs,
+        )
+        label = f"{APP_LABEL}.{self.get_table_model_name(self.id).lower()}"
+        registry["search"][label] = search_index
+
     def get_model(
         self,
         fields=None,
@@ -496,6 +517,8 @@ class CustomObjectType(PrimaryModel):
 
         with connection.schema_editor() as schema_editor:
             schema_editor.create_model(model)
+
+        self.register_custom_object_search_index()
 
     def save(self, *args, **kwargs):
         needs_db_create = self._state.adding
@@ -1270,6 +1293,9 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
         super().save(*args, **kwargs)
 
+        # Reregister SearchIndex with new set of searchable fields
+        self.custom_object_type.register_custom_object_search_index()
+
     def delete(self, *args, **kwargs):
         field_type = FIELD_TYPE_CLASS[self.type]()
         model_field = field_type.get_model_field(self)
@@ -1287,6 +1313,9 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)
 
         super().delete(*args, **kwargs)
+
+        # Reregister SearchIndex with new set of searchable fields
+        self.custom_object_type.register_custom_object_search_index()
 
 
 class CustomObjectObjectTypeManager(ObjectTypeManager):

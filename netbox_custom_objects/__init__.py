@@ -66,12 +66,11 @@ class CustomObjectsPluginConfig(PluginConfig):
                 return
 
             from .models import CustomObjectType
-            from .search import register_custom_object_search_index
 
             custom_object_types = CustomObjectType.objects.all()
-            for custom_type in custom_object_types:
+            for custom_object_type in custom_object_types:
                 # Synthesize SearchIndex classes for all CustomObjectTypes
-                register_custom_object_search_index(custom_type)
+                custom_object_type.register_custom_object_search_index()
 
     def get_model(self, model_name, require_ready=True):
         try:
@@ -128,11 +127,11 @@ class CustomObjectsPluginConfig(PluginConfig):
             from .models import CustomObjectType
 
             custom_object_types = CustomObjectType.objects.all()
-            for custom_type in custom_object_types:
+            for custom_object_type in custom_object_types:
 
                 # Only yield already cached models during discovery
-                if CustomObjectType.is_model_cached(custom_type.id):
-                    model = CustomObjectType.get_cached_model(custom_type.id)
+                if CustomObjectType.is_model_cached(custom_object_type.id):
+                    model = CustomObjectType.get_cached_model(custom_object_type.id)
                     if model:
                         yield model
 
