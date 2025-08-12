@@ -360,9 +360,8 @@ class CustomObjectType(PrimaryModel):
 
     def register_custom_object_search_index(self):
         fields = []
-        for field in self.fields.all():
-            if field.primary or field.type == CustomFieldTypeChoices.TYPE_TEXT:
-                fields.append((field.name, 100))
+        for field in self.fields.filter(search_weight__gt=0):
+            fields.append((field.name, field.search_weight))
 
         model = self.get_model(skip_object_fields=True, no_cache=True)
         attrs = {
@@ -551,9 +550,10 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         max_length=50,
         choices=CustomFieldTypeChoices,
         default=CustomFieldTypeChoices.TYPE_TEXT,
-        help_text=_("The type of data this custom field holds"),
+        help_text=_("The type of data this custom object field holds"),
     )
     primary = models.BooleanField(
+        verbose_name=_("primary name field"),
         default=False,
         help_text=_(
             "Indicates that this field's value will be used as the object's displayed name"
@@ -569,7 +569,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     name = models.CharField(
         verbose_name=_("name"),
         max_length=50,
-        help_text=_("Internal field name"),
+        help_text=_("Internal field name, e.g. \"vendor_label\""),
         validators=(
             RegexValidator(
                 regex=r"^[a-z0-9_]+$",
@@ -579,7 +579,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             RegexValidator(
                 regex=r"__",
                 message=_(
-                    "Double underscores are not permitted in custom field names."
+                    "Double underscores are not permitted in custom object field names."
                 ),
                 flags=re.IGNORECASE,
                 inverse_match=True,
@@ -598,7 +598,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         verbose_name=_("group name"),
         max_length=50,
         blank=True,
-        help_text=_("Custom fields within the same group will be displayed together"),
+        help_text=_("Custom object fields within the same group will be displayed together"),
     )
     description = models.CharField(
         verbose_name=_("description"), max_length=200, blank=True
@@ -617,9 +617,9 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     )
     search_weight = models.PositiveSmallIntegerField(
         verbose_name=_("search weight"),
-        default=1000,
+        default=500,
         help_text=_(
-            "Weighting for search. Lower values are considered more important. Fields with a search weight of zero "
+            "Weighting for search. Lower values are considered more important. Fields with a search weight of 0 "
             "will be ignored."
         ),
     )
