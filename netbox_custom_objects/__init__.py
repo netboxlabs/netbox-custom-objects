@@ -49,6 +49,7 @@ class CustomObjectsPluginConfig(PluginConfig):
     default_settings = {}
     required_settings = []
     template_extensions = "template_content.template_extensions"
+    _in_get_models = False  # Recursion guard
 
     def get_model(self, model_name, require_ready=True):
         try:
@@ -84,31 +85,39 @@ class CustomObjectsPluginConfig(PluginConfig):
 
     def get_models(self, include_auto_created=False, include_swapped=False):
         """Return all models for this plugin, including custom object type models."""
-        # Get the regular Django models first
-        for model in super().get_models(include_auto_created, include_swapped):
-            yield model
+        # Prevent recursion
+        if self._in_get_models:
+            return
+        
+        self._in_get_models = True
+        try:
+            # Get the regular Django models first
+            for model in super().get_models(include_auto_created, include_swapped):
+                yield model
 
-        # Suppress warnings about database calls during model loading
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore", category=RuntimeWarning, message=".*database.*"
-            )
-            warnings.filterwarnings(
-                "ignore", category=UserWarning, message=".*database.*"
-            )
+            # Suppress warnings about database calls during model loading
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore", category=RuntimeWarning, message=".*database.*"
+                )
+                warnings.filterwarnings(
+                    "ignore", category=UserWarning, message=".*database.*"
+                )
 
-            # Skip custom object type model loading if running during migration
-            if is_running_migration() or not check_custom_object_type_table_exists():
-                return
+                # Skip custom object type model loading if running during migration
+                if is_running_migration() or not check_custom_object_type_table_exists():
+                    return
 
-            # Add custom object type models
-            from .models import CustomObjectType
+                # Add custom object type models
+                from .models import CustomObjectType
 
-            custom_object_types = CustomObjectType.objects.all()
-            for custom_type in custom_object_types:
-                model = custom_type.get_model()
-                if model:
-                    yield model
+                custom_object_types = CustomObjectType.objects.all()
+                for custom_type in custom_object_types:
+                    model = custom_type.get_model()
+                    if model:
+                        yield model
+        finally:
+            self._in_get_models = False
 
 
 config = CustomObjectsPluginConfig
