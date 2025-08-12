@@ -18,8 +18,12 @@ from netbox.views import generic
 from netbox.views.generic.mixins import TableMixin
 from utilities.forms import ConfirmationForm
 from utilities.htmx import htmx_partial
-from utilities.views import (ConditionalLoginRequiredMixin, ViewTab,
-                             get_viewname, register_model_view)
+from utilities.views import (
+    ConditionalLoginRequiredMixin,
+    ViewTab,
+    get_viewname,
+    register_model_view,
+)
 
 from netbox_custom_objects.tables import CustomObjectTable
 
@@ -33,7 +37,7 @@ class CustomJournalEntryForm(JournalEntryForm):
     """
 
     def __init__(self, *args, **kwargs):
-        self.custom_object = kwargs.pop('custom_object', None)
+        self.custom_object = kwargs.pop("custom_object", None)
         super().__init__(*args, **kwargs)
 
     def get_return_url(self):
@@ -41,10 +45,13 @@ class CustomJournalEntryForm(JournalEntryForm):
         Override to return the correct URL for custom objects.
         """
         if self.custom_object:
-            return reverse('plugins:netbox_custom_objects:customobject_journal', kwargs={
-                'custom_object_type': self.custom_object.custom_object_type.name,
-                'pk': self.custom_object.pk
-            })
+            return reverse(
+                "plugins:netbox_custom_objects:customobject_journal",
+                kwargs={
+                    "custom_object_type": self.custom_object.custom_object_type.name,
+                    "pk": self.custom_object.pk,
+                },
+            )
         return super().get_return_url()
 
 
@@ -52,6 +59,7 @@ class CustomJournalEntryEditView(generic.ObjectEditView):
     """
     Custom journal entry edit view that handles return URLs for custom objects.
     """
+
     queryset = JournalEntry.objects.all()
     form = CustomJournalEntryForm
 
@@ -59,18 +67,23 @@ class CustomJournalEntryEditView(generic.ObjectEditView):
         """
         Override to return the correct URL for custom objects.
         """
-        if instance.assigned_object and hasattr(instance.assigned_object, 'custom_object_type'):
+        if instance.assigned_object and hasattr(
+            instance.assigned_object, "custom_object_type"
+        ):
             # This is a custom object
-            return reverse('plugins:netbox_custom_objects:customobject_journal', kwargs={
-                'custom_object_type': instance.assigned_object.custom_object_type.name,
-                'pk': instance.assigned_object.pk
-            })
+            return reverse(
+                "plugins:netbox_custom_objects:customobject_journal",
+                kwargs={
+                    "custom_object_type": instance.assigned_object.custom_object_type.name,
+                    "pk": instance.assigned_object.pk,
+                },
+            )
         # Fall back to standard behavior for non-custom objects
         if not instance.assigned_object:
-            return reverse('extras:journalentry_list')
+            return reverse("extras:journalentry_list")
         obj = instance.assigned_object
-        viewname = get_viewname(obj, 'journal')
-        return reverse(viewname, kwargs={'pk': obj.pk})
+        viewname = get_viewname(obj, "journal")
+        return reverse(viewname, kwargs={"pk": obj.pk})
 
 
 class CustomObjectTableMixin(TableMixin):
@@ -391,8 +404,10 @@ class CustomObjectView(generic.ObjectView):
         return get_object_or_404(model.objects.all(), **lookup_kwargs)
 
     def get_extra_context(self, request, instance):
-        fields = instance.custom_object_type.fields.all().order_by("group_name", "weight", "name")
-        
+        fields = instance.custom_object_type.fields.all().order_by(
+            "group_name", "weight", "name"
+        )
+
         # Group fields by group_name
         field_groups = {}
         for field in fields:
@@ -400,7 +415,7 @@ class CustomObjectView(generic.ObjectView):
             if group_name not in field_groups:
                 field_groups[group_name] = []
             field_groups[group_name].append(field)
-        
+
         return {
             "fields": fields,
             "field_groups": field_groups,
@@ -641,7 +656,7 @@ class CustomObjectJournalView(ConditionalLoginRequiredMixin, View):
                 initial={
                     "assigned_object_type": content_type,
                     "assigned_object_id": obj.pk,
-                }
+                },
             )
         else:
             form = None
@@ -659,7 +674,9 @@ class CustomObjectJournalView(ConditionalLoginRequiredMixin, View):
                 "table": journal_table,
                 "base_template": self.base_template,
                 "tab": "journal",
-                "form_action": reverse('plugins:netbox_custom_objects:custom_journalentry_add'),
+                "form_action": reverse(
+                    "plugins:netbox_custom_objects:custom_journalentry_add"
+                ),
             },
         )
 
