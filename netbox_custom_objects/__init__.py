@@ -106,11 +106,9 @@ class CustomObjectsPluginConfig(PluginConfig):
 
             custom_object_types = CustomObjectType.objects.all()
             for custom_type in custom_object_types:
-                # Only yield already cached models during discovery
-                if CustomObjectType.is_model_cached(custom_type.id):
-                    model = CustomObjectType.get_cached_model(custom_type.id)
-                    if model:
-                        yield model
+                model = custom_type.get_model()
+                if model:
+                    yield model
 
 
 config = CustomObjectsPluginConfig
