@@ -102,19 +102,26 @@
               {% endif %}
             </td>
           </tr>
-          {% for field in fields %}
-            {% with is_visible_in_ui=object|get_field_is_ui_visible:field %}
-              {% if field.is_single_value and is_visible_in_ui %}
-                <tr>
-                  <th scope="row">{{ field }}</th>
-                  <td>
-                    {% with customfield=field value=object|get_field_value:field %}
-                      {% include "builtins/customfield_value.html" %}
-                    {% endwith %}
-                  </td>
-                </tr>
-              {% endif %}
-            {% endwith %}
+          {% for group_name, group_fields in field_groups.items %}
+            {% if group_name %}
+              <tr class="table-group-header">
+                <th scope="row" colspan="2" class="fw-bold">{{ group_name }}</th>
+              </tr>
+            {% endif %}
+            {% for field in group_fields %}
+              {% with is_visible_in_ui=object|get_field_is_ui_visible:field %}
+                {% if field.is_single_value and is_visible_in_ui %}
+                  <tr>
+                    <th scope="row">{{ field }}</th>
+                    <td>
+                      {% with customfield=field value=object|get_field_value:field %}
+                        {% include "builtins/customfield_value.html" %}
+                      {% endwith %}
+                    </td>
+                  </tr>
+                {% endif %}
+              {% endwith %}
+            {% endfor %}
           {% endfor %}
         </table>
       </div>
@@ -123,12 +130,15 @@
     <div class="col col-md-6">
       {% include 'inc/panels/tags.html' %}
       {% plugin_right_page object %}
-      {% for field in fields %}
+      {% for group_name, group_fields in field_groups.items %}
+        {% for field in group_fields %}
           {% if field.many %}
             {% with field_values=object|get_child_relations:field is_visible_in_ui=object|get_field_is_ui_visible:field %}
               {% if is_visible_in_ui %}
                 <div class="card">
-                  <h2 class="card-header">{{ field }}</h2>
+                  <h2 class="card-header">
+                    {% if group_name %}{{ group_name }}: {% endif %}{{ field }}
+                  </h2>
                   <table class="table table-hover attr-table">
                     {% for relation in field_values.all %}
                       <tr>
@@ -140,6 +150,7 @@
               {% endif %}
             {% endwith %}
           {% endif %}
+        {% endfor %}
       {% endfor %}
     </div>
   </div>
