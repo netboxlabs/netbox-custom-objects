@@ -3,7 +3,7 @@ import re
 from datetime import date, datetime
 
 import django_filters
-from core.models import ObjectType
+from core.models import ObjectType, ObjectChange
 from core.models.contenttypes import ObjectTypeManager
 from django.apps import apps
 from django.conf import settings
@@ -499,12 +499,16 @@ class CustomObjectType(PrimaryModel):
         self.clear_model_cache(self.id)
 
         model = self.get_model()
-        ObjectType.objects.get(
-            app_label=APP_LABEL, model=self.get_table_model_name(self.id).lower()
-        ).delete()
+        object_type = ObjectType.objects.get_for_model(model)
+        ObjectChange.objects.filter(changed_object_type=object_type).delete()
+        object_type_qs = ObjectType.objects.filter(pk=object_type.pk)
+        # _raw_delete is necessary to avoid post_delete signal handling
+        object_type_qs._raw_delete(object_type_qs.db)
         super().delete(*args, **kwargs)
         with connection.schema_editor() as schema_editor:
             schema_editor.delete_model(model)
+        # TODO: The ContentType should be cleaned up as well but it throws an error in this flow
+        # ContentType.objects.get(pk=object_type.id).delete()
 
 
 class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
