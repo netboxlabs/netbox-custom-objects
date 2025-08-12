@@ -301,7 +301,6 @@ class CustomObjectType(PrimaryModel):
         # Create a combined list of fields that must be added and belong to the this
         # table.
         fields = list(fields) + [field for field in fields_query]
-        print('fields:', fields)
 
         for field in fields:
             field_type = FIELD_TYPE_CLASS[field.type]()
@@ -310,7 +309,6 @@ class CustomObjectType(PrimaryModel):
                     continue
 
             field_name = field.name
-            print('field_name:', field_name)
 
             field_attrs["_field_objects"][field.id] = {
                 "field": field,
@@ -381,6 +379,10 @@ class CustomObjectType(PrimaryModel):
             have the same app_label. If passed along in this parameter, then the
             generated model will use that one instead of generating a unique one.
         :type app_label: Optional[String]
+        :param skip_object_fields: Don't add object or multiobject fields to the model
+        :type skip_object_fields: bool
+        :param no_cache: Don't cache the generated model or attempt to pull from cache
+        :type no_cache: bool
         :return: The generated model.
         :rtype: Model
         """
