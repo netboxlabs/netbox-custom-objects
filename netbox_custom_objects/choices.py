@@ -36,4 +36,3 @@ class SearchWeightChoices(ChoiceSet):
         (WEIGHT_LOW, _('Low (1000)')),
         (WEIGHT_NONE, _('Not searchable')),
     )
-
