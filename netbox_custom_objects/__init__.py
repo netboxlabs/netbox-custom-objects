@@ -23,7 +23,7 @@ def is_in_clear_cache():
     Check if the code is currently being called from Django's clear_cache() method.
 
     This is fairly ugly, but in models.CustomObjectType.get_model() we call
-    meta = type() which calls clear_cache on the model which causes a call to 
+    meta = type() which calls clear_cache on the model which causes a call to
     get_models() which in-turn calls get_model and therefore recurses.
 
     This catches the specific case of a recursive call to get_models() from
@@ -31,12 +31,15 @@ def is_in_clear_cache():
     safe.
     """
     import inspect
+
     frame = inspect.currentframe()
     try:
         # Walk up the call stack to see if we're being called from clear_cache
         while frame:
-            if (frame.f_code.co_name == 'clear_cache' and 
-                'django/apps/registry.py' in frame.f_code.co_filename):
+            if (
+                frame.f_code.co_name == "clear_cache"
+                and "django/apps/registry.py" in frame.f_code.co_filename
+            ):
                 return True
             frame = frame.f_back
         return False
@@ -112,7 +115,7 @@ class CustomObjectsPluginConfig(PluginConfig):
 
     def get_models(self, include_auto_created=False, include_swapped=False):
         """Return all models for this plugin, including custom object type models."""
-        
+
         # Get the regular Django models first
         for model in super().get_models(include_auto_created, include_swapped):
             yield model
@@ -134,7 +137,10 @@ class CustomObjectsPluginConfig(PluginConfig):
                 )
 
                 # Skip custom object type model loading if running during migration
-                if is_running_migration() or not check_custom_object_type_table_exists():
+                if (
+                    is_running_migration()
+                    or not check_custom_object_type_table_exists()
+                ):
                     return
 
                 # Add custom object type models
@@ -148,5 +154,6 @@ class CustomObjectsPluginConfig(PluginConfig):
         finally:
             # Clean up the recursion guard
             self._in_get_models = False
-    
+
+
 config = CustomObjectsPluginConfig
