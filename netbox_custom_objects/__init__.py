@@ -22,13 +22,13 @@ def is_in_clear_cache():
     """
     Check if the code is currently being called from Django's clear_cache() method.
 
-    This is fairly ugly, but in models.CustomObjectType.get_model() we call
+    TODO: This is fairly ugly, but in models.CustomObjectType.get_model() we call
     meta = type() which calls clear_cache on the model which causes a call to
     get_models() which in-turn calls get_model and therefore recurses.
 
     This catches the specific case of a recursive call to get_models() from
     clear_cache() which is the only case we care about, so should be relatively
-    safe.
+    safe.  An alternative should be found for this.
     """
     import inspect
 
