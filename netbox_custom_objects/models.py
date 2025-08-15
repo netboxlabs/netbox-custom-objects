@@ -3,7 +3,7 @@ import re
 from datetime import date, datetime
 
 import django_filters
-from core.models import ObjectType
+from core.models import ObjectType, ObjectChange
 from core.models.contenttypes import ObjectTypeManager
 from django.apps import apps
 from django.conf import settings
@@ -14,8 +14,10 @@ from django.core.validators import RegexValidator, ValidationError
 from django.db import connection, models
 from django.db.models import Q
 from django.db.models.functions import Lower
+from django.db.models.signals import pre_delete
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
+from core.signals import handle_deleted_object
 from extras.choices import (
     CustomFieldFilterLogicChoices,
     CustomFieldTypeChoices,
@@ -500,12 +502,17 @@ class CustomObjectType(PrimaryModel):
         self.clear_model_cache(self.id)
 
         model = self.get_model()
-        ObjectType.objects.get(
-            app_label=APP_LABEL, model=self.get_table_model_name(self.id).lower()
-        ).delete()
+        object_type = ObjectType.objects.get_for_model(model)
+        ObjectChange.objects.filter(changed_object_type=object_type).delete()
         super().delete(*args, **kwargs)
+
+        # Temporarily disconnect the pre_delete handler to skip the ObjectType deletion
+        # TODO: Remove this disconnect/reconnect after ObjectType has been exempted from handle_deleted_object
+        pre_delete.disconnect(handle_deleted_object)
+        object_type.delete()
         with connection.schema_editor() as schema_editor:
             schema_editor.delete_model(model)
+        pre_delete.connect(handle_deleted_object)
 
 
 class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
