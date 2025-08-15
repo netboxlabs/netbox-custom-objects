@@ -14,17 +14,26 @@ from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
 from extras.choices import CustomFieldTypeChoices, CustomFieldUIEditableChoices
 from utilities.api import get_serializer_for_model
-from utilities.forms.fields import (CSVChoiceField, CSVMultipleChoiceField,
-                                    DynamicChoiceField,
-                                    DynamicMultipleChoiceField, JSONField,
-                                    LaxURLField)
+from utilities.forms.fields import (
+    CSVChoiceField,
+    CSVMultipleChoiceField,
+    DynamicChoiceField,
+    DynamicMultipleChoiceField,
+    JSONField,
+    LaxURLField,
+)
 from utilities.forms.utils import add_blank_choice
-from utilities.forms.widgets import (APISelect, APISelectMultiple, DatePicker,
-                                     DateTimePicker)
+from utilities.forms.widgets import (
+    APISelect,
+    APISelectMultiple,
+    DatePicker,
+    DateTimePicker,
+)
 from utilities.templatetags.builtins.filters import linkify, render_markdown
 
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.utilities import get_custom_object_type_from_content_type
+
 
 class FieldType:
 
@@ -335,7 +344,9 @@ class ObjectFieldType(FieldType):
         if content_type.app_label == APP_LABEL:
             from netbox_custom_objects.models import CustomObjectType
 
-            custom_object_type_id = get_custom_object_type_from_content_type(content_type)
+            custom_object_type_id = get_custom_object_type_from_content_type(
+                content_type
+            )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
             model = custom_object_type.get_model()
         else:
@@ -356,11 +367,14 @@ class ObjectFieldType(FieldType):
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
 
         from utilities.forms.fields import DynamicModelChoiceField
+
         if content_type.app_label == APP_LABEL:
             # This is a custom object type
             from netbox_custom_objects.models import CustomObjectType
 
-            custom_object_type_id = get_custom_object_type_from_content_type(content_type)
+            custom_object_type_id = get_custom_object_type_from_content_type(
+                content_type
+            )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
             model = custom_object_type.get_model()
             field_class = DynamicModelChoiceField
@@ -641,7 +655,9 @@ class MultiObjectFieldType(FieldType):
             # This is a custom object type
             from netbox_custom_objects.models import CustomObjectType
 
-            custom_object_type_id = get_custom_object_type_from_content_type(content_type)
+            custom_object_type_id = get_custom_object_type_from_content_type(
+                content_type
+            )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
             model = custom_object_type.get_model()
         else:
@@ -701,7 +717,9 @@ class MultiObjectFieldType(FieldType):
         if content_type.app_label == APP_LABEL:
             from netbox_custom_objects.models import CustomObjectType
 
-            custom_object_type_id = get_custom_object_type_from_content_type(content_type)
+            custom_object_type_id = get_custom_object_type_from_content_type(
+                content_type
+            )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
             to_model = custom_object_type.get_model()
         else:
@@ -741,7 +759,9 @@ class MultiObjectFieldType(FieldType):
             if content_type.app_label == APP_LABEL:
                 from netbox_custom_objects.models import CustomObjectType
 
-                custom_object_type_id = get_custom_object_type_from_content_type(content_type)
+                custom_object_type_id = get_custom_object_type_from_content_type(
+                    content_type
+                )
                 custom_object_type = CustomObjectType.objects.get(
                     pk=custom_object_type_id
                 )
