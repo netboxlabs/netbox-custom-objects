@@ -359,13 +359,12 @@ class CustomObjectType(PrimaryModel):
         custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
         return f"Custom Objects > {custom_object_type.name}"
 
-    def register_custom_object_search_index(self, model=None):
+    def register_custom_object_search_index(self, model):
+        # model must be an instance of this CustomObjectType's get_model() generated class
         fields = []
         for field in self.fields.filter(search_weight__gt=0):
             fields.append((field.name, field.search_weight))
 
-        if not model:
-            model = self.get_model(skip_object_fields=True, no_cache=True)
         attrs = {
             "model": model,
             "fields": tuple(fields),
@@ -513,7 +512,6 @@ class CustomObjectType(PrimaryModel):
 
         # Ensure the ContentType exists and is immediately available
         ct = self.get_or_create_content_type()
-        model = self.get_model()
         features = get_model_features(model)
         ct.public = True
         ct.features = features
@@ -522,7 +520,7 @@ class CustomObjectType(PrimaryModel):
         with connection.schema_editor() as schema_editor:
             schema_editor.create_model(model)
 
-        self.register_custom_object_search_index()
+        self.register_custom_object_search_index(model)
 
     def save(self, *args, **kwargs):
         needs_db_create = self._state.adding
@@ -1299,7 +1297,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         super().save(*args, **kwargs)
 
         # Reregister SearchIndex with new set of searchable fields
-        self.custom_object_type.register_custom_object_search_index()
+        self.custom_object_type.register_custom_object_search_index(model)
 
     def delete(self, *args, **kwargs):
         field_type = FIELD_TYPE_CLASS[self.type]()
@@ -1320,7 +1318,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         super().delete(*args, **kwargs)
 
         # Reregister SearchIndex with new set of searchable fields
-        self.custom_object_type.register_custom_object_search_index()
+        self.custom_object_type.register_custom_object_search_index(model)
 
 
 class CustomObjectObjectTypeManager(ObjectTypeManager):
