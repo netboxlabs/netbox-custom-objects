@@ -8,6 +8,7 @@ from core.models import ObjectType
 from core.models.contenttypes import ObjectTypeManager
 from django.apps import apps
 from django.conf import settings
+
 # from django.contrib.contenttypes.management import create_contenttypes
 from django.contrib.contenttypes.models import ContentType
 from django.core.validators import RegexValidator, ValidationError
@@ -16,18 +17,27 @@ from django.db.models import Q
 from django.db.models.functions import Lower
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
-from extras.choices import (CustomFieldFilterLogicChoices,
-                            CustomFieldTypeChoices,
-                            CustomFieldUIEditableChoices,
-                            CustomFieldUIVisibleChoices)
+from extras.choices import (
+    CustomFieldFilterLogicChoices,
+    CustomFieldTypeChoices,
+    CustomFieldUIEditableChoices,
+    CustomFieldUIVisibleChoices,
+)
 from extras.models.customfields import SEARCH_TYPES
 from netbox.models import ChangeLoggedModel, PrimaryModel
-from netbox.models.features import (BookmarksMixin, ChangeLoggingMixin,
-                                    CloningMixin, CustomLinksMixin,
-                                    CustomValidationMixin, EventRulesMixin,
-                                    ExportTemplatesMixin, JournalingMixin,
-                                    NotificationsMixin, TagsMixin,
-                                    get_model_features)
+from netbox.models.features import (
+    BookmarksMixin,
+    ChangeLoggingMixin,
+    CloningMixin,
+    CustomLinksMixin,
+    CustomValidationMixin,
+    EventRulesMixin,
+    ExportTemplatesMixin,
+    JournalingMixin,
+    NotificationsMixin,
+    TagsMixin,
+    get_model_features,
+)
 from netbox.registry import registry
 from utilities import filters
 from utilities.datetime import datetime_from_timestamp
