@@ -502,6 +502,7 @@ class CustomObjectType(PrimaryModel):
 
             get_serializer_class(model)
 
+        # Register the global SearchIndex for this model
         self.register_custom_object_search_index(model)
 
         return model
