@@ -1,3 +1,4 @@
+import logging
 import sys
 
 from core.models import ObjectType
@@ -251,7 +252,7 @@ def get_serializer_class(model):
         try:
             attrs[field.name] = field_type.get_serializer_field(field)
         except NotImplementedError:
-            print(
+            logging.debug(
                 f"serializer: {field.name} field is not implemented; using a default serializer field"
             )
 

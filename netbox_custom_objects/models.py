@@ -1,5 +1,6 @@
 import decimal
 import re
+import warnings
 from datetime import date, datetime
 
 import django_filters
@@ -436,15 +437,20 @@ class CustomObjectType(PrimaryModel):
 
         TM.post_through_setup = wrapped_post_through_setup
 
-        try:
-            model = type(
-                str(model_name),
-                (CustomObject, models.Model),
-                attrs,
-            )
-        finally:
-            # Restore the original method
-            TM.post_through_setup = original_post_through_setup
+        # Suppress RuntimeWarning about model already being registered
+        # TODO: Remove this once we have a better way to handle model registration
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*was already registered.*")
+            
+            try:
+                model = type(
+                    str(model_name),
+                    (CustomObject, models.Model),
+                    attrs,
+                )
+            finally:
+                # Restore the original method
+                TM.post_through_setup = original_post_through_setup
 
         # Register the main model with Django's app registry
         try:
