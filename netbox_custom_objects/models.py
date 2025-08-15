@@ -372,8 +372,7 @@ class CustomObjectType(PrimaryModel):
         if self.is_model_cached(self.id):
             model = self.get_cached_model(self.id)
             # Ensure the serializer is registered even for cached models
-            from netbox_custom_objects.api.serializers import \
-                get_serializer_class
+            from netbox_custom_objects.api.serializers import get_serializer_class
 
             get_serializer_class(model)
             return model
@@ -464,8 +463,7 @@ class CustomObjectType(PrimaryModel):
 
         # Register the serializer for this model
         if not manytomany_models:
-            from netbox_custom_objects.api.serializers import \
-                get_serializer_class
+            from netbox_custom_objects.api.serializers import get_serializer_class
 
             get_serializer_class(model)
 
