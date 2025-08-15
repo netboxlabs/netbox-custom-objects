@@ -99,9 +99,8 @@ class CustomObjectsPluginConfig(PluginConfig):
             )
 
         from .models import CustomObjectType
-        from .utilities import get_custom_object_type_from_content_type
 
-        custom_object_type_id = get_custom_object_type_from_content_type(model_name)
+        custom_object_type_id = model_name.replace("table", "").replace("model", "")
 
         try:
             obj = CustomObjectType.objects.get(pk=custom_object_type_id)
