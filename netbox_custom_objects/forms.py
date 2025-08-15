@@ -9,6 +9,7 @@ from utilities.forms.fields import (CommentField, ContentTypeChoiceField,
 from utilities.forms.rendering import FieldSet
 from utilities.object_types import object_type_name
 
+from netbox_custom_objects.choices import SearchWeightChoices
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.models import (CustomObjectObjectType,
                                           CustomObjectType,
@@ -104,13 +105,21 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
         queryset=CustomObjectObjectType.objects.public(),
         help_text=_("Type of the related object (for object/multi-object fields only)"),
     )
+    search_weight = forms.ChoiceField(
+        choices=SearchWeightChoices,
+        required=False,
+        help_text=_(
+            "Weighting for search. Lower values are considered more important. Fields with a search weight of 0 "
+            "will be ignored."
+        ),
+    )
 
     fieldsets = (
         FieldSet(
             "custom_object_type",
-            "primary",
             "name",
             "label",
+            "primary",
             "group_name",
             "description",
             "type",

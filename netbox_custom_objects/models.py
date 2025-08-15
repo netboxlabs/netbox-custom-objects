@@ -41,6 +41,7 @@ from netbox.models.features import (
     get_model_features,
 )
 from netbox.registry import registry
+from netbox.search import SearchIndex
 from utilities import filters
 from utilities.datetime import datetime_from_timestamp
 from utilities.object_types import object_type_name
@@ -291,6 +292,7 @@ class CustomObjectType(PrimaryModel):
     def _fetch_and_generate_field_attrs(
         self,
         fields,
+        skip_object_fields=False,
     ):
         field_attrs = {
             "_primary_field_id": -1,
@@ -307,6 +309,10 @@ class CustomObjectType(PrimaryModel):
 
         for field in fields:
             field_type = FIELD_TYPE_CLASS[field.type]()
+            if skip_object_fields:
+                if field.type in [CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT]:
+                    continue
+
             field_name = field.name
 
             field_attrs["_field_objects"][field.id] = {
@@ -356,11 +362,32 @@ class CustomObjectType(PrimaryModel):
         custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
         return f"Custom Objects > {custom_object_type.name}"
 
+    def register_custom_object_search_index(self, model):
+        # model must be an instance of this CustomObjectType's get_model() generated class
+        fields = []
+        for field in self.fields.filter(search_weight__gt=0):
+            fields.append((field.name, field.search_weight))
+
+        attrs = {
+            "model": model,
+            "fields": tuple(fields),
+            "display_attrs": tuple(),
+        }
+        search_index = type(
+            f"{self.name}SearchIndex",
+            (SearchIndex,),
+            attrs,
+        )
+        label = f"{APP_LABEL}.{self.get_table_model_name(self.id).lower()}"
+        registry["search"][label] = search_index
+
     def get_model(
         self,
         fields=None,
         manytomany_models=None,
         app_label=None,
+        skip_object_fields=False,
+        no_cache=False,
     ):
         """
         Generates a temporary Django model based on available fields that belong to
@@ -376,12 +403,16 @@ class CustomObjectType(PrimaryModel):
             have the same app_label. If passed along in this parameter, then the
             generated model will use that one instead of generating a unique one.
         :type app_label: Optional[String]
+        :param skip_object_fields: Don't add object or multiobject fields to the model
+        :type skip_object_fields: bool
+        :param no_cache: Don't cache the generated model or attempt to pull from cache
+        :type no_cache: bool
         :return: The generated model.
         :rtype: Model
         """
 
         # Check if we have a cached model for this CustomObjectType
-        if self.is_model_cached(self.id):
+        if self.is_model_cached(self.id) and not no_cache:
             model = self.get_cached_model(self.id)
             # Ensure the serializer is registered even for cached models
             from netbox_custom_objects.api.serializers import get_serializer_class
@@ -422,7 +453,7 @@ class CustomObjectType(PrimaryModel):
             "custom_object_type_id": self.id,
         }
 
-        field_attrs = self._fetch_and_generate_field_attrs(fields)
+        field_attrs = self._fetch_and_generate_field_attrs(fields, skip_object_fields=skip_object_fields)
 
         attrs.update(**field_attrs)
 
@@ -471,13 +502,17 @@ class CustomObjectType(PrimaryModel):
             self._after_model_generation(attrs, model)
 
         # Cache the generated model
-        self._model_cache[self.id] = model
+        if not no_cache:
+            self._model_cache[self.id] = model
 
         # Register the serializer for this model
         if not manytomany_models:
             from netbox_custom_objects.api.serializers import get_serializer_class
 
             get_serializer_class(model)
+
+        # Register the global SearchIndex for this model
+        self.register_custom_object_search_index(model)
 
         return model
 
@@ -487,7 +522,6 @@ class CustomObjectType(PrimaryModel):
 
         # Ensure the ContentType exists and is immediately available
         ct = self.get_or_create_content_type()
-        model = self.get_model()
         features = get_model_features(model)
         ct.public = True
         ct.features = features
@@ -495,6 +529,8 @@ class CustomObjectType(PrimaryModel):
 
         with connection.schema_editor() as schema_editor:
             schema_editor.create_model(model)
+
+        self.register_custom_object_search_index(model)
 
     def save(self, *args, **kwargs):
         needs_db_create = self._state.adding
@@ -532,9 +568,10 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         max_length=50,
         choices=CustomFieldTypeChoices,
         default=CustomFieldTypeChoices.TYPE_TEXT,
-        help_text=_("The type of data this custom field holds"),
+        help_text=_("The type of data this custom object field holds"),
     )
     primary = models.BooleanField(
+        verbose_name=_("primary name field"),
         default=False,
         help_text=_(
             "Indicates that this field's value will be used as the object's displayed name"
@@ -550,7 +587,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     name = models.CharField(
         verbose_name=_("name"),
         max_length=50,
-        help_text=_("Internal field name"),
+        help_text=_("Internal field name, e.g. \"vendor_label\""),
         validators=(
             RegexValidator(
                 regex=r"^[a-z0-9_]+$",
@@ -560,7 +597,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             RegexValidator(
                 regex=r"__",
                 message=_(
-                    "Double underscores are not permitted in custom field names."
+                    "Double underscores are not permitted in custom object field names."
                 ),
                 flags=re.IGNORECASE,
                 inverse_match=True,
@@ -579,7 +616,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         verbose_name=_("group name"),
         max_length=50,
         blank=True,
-        help_text=_("Custom fields within the same group will be displayed together"),
+        help_text=_("Custom object fields within the same group will be displayed together"),
     )
     description = models.CharField(
         verbose_name=_("description"), max_length=200, blank=True
@@ -598,9 +635,9 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     )
     search_weight = models.PositiveSmallIntegerField(
         verbose_name=_("search weight"),
-        default=1000,
+        default=500,
         help_text=_(
-            "Weighting for search. Lower values are considered more important. Fields with a search weight of zero "
+            "Weighting for search. Lower values are considered more important. Fields with a search weight of 0 "
             "will be ignored."
         ),
     )
@@ -1274,6 +1311,9 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
         super().save(*args, **kwargs)
 
+        # Reregister SearchIndex with new set of searchable fields
+        self.custom_object_type.register_custom_object_search_index(model)
+
     def delete(self, *args, **kwargs):
         field_type = FIELD_TYPE_CLASS[self.type]()
         model_field = field_type.get_model_field(self)
@@ -1291,6 +1331,9 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)
 
         super().delete(*args, **kwargs)
+
+        # Reregister SearchIndex with new set of searchable fields
+        self.custom_object_type.register_custom_object_search_index(model)
 
 
 class CustomObjectObjectTypeManager(ObjectTypeManager):
