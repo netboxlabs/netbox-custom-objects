@@ -32,7 +32,7 @@ from utilities.forms.widgets import (
 from utilities.templatetags.builtins.filters import linkify, render_markdown
 
 from netbox_custom_objects.constants import APP_LABEL
-from netbox_custom_objects.utilities import get_custom_object_type_from_content_type
+from netbox_custom_objects.utilities import get_custom_object_type_id_from_content_type
 
 
 class FieldType:
@@ -344,7 +344,7 @@ class ObjectFieldType(FieldType):
         if content_type.app_label == APP_LABEL:
             from netbox_custom_objects.models import CustomObjectType
 
-            custom_object_type_id = get_custom_object_type_from_content_type(
+            custom_object_type_id = get_custom_object_type_id_from_content_type(
                 content_type
             )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
@@ -372,7 +372,7 @@ class ObjectFieldType(FieldType):
             # This is a custom object type
             from netbox_custom_objects.models import CustomObjectType
 
-            custom_object_type_id = get_custom_object_type_from_content_type(
+            custom_object_type_id = get_custom_object_type_id_from_content_type(
                 content_type
             )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
@@ -579,7 +579,7 @@ class MultiObjectFieldType(FieldType):
 
         # Check if this is a self-referential M2M
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
-        custom_object_type_id = get_custom_object_type_from_content_type(content_type)
+        custom_object_type_id = get_custom_object_type_id_from_content_type(content_type)
         is_self_referential = (
             content_type.app_label == APP_LABEL
             and field.custom_object_type.id == custom_object_type_id
@@ -614,7 +614,7 @@ class MultiObjectFieldType(FieldType):
         """
         # Check if this is a self-referential M2M
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
-        custom_object_type_id = get_custom_object_type_from_content_type(content_type)
+        custom_object_type_id = get_custom_object_type_id_from_content_type(content_type)
         # TODO: Default does not auto-populate, to new or existing objects (should it?)
         kwargs.update({"default": field.default, "unique": field.unique})
 
@@ -655,7 +655,7 @@ class MultiObjectFieldType(FieldType):
             # This is a custom object type
             from netbox_custom_objects.models import CustomObjectType
 
-            custom_object_type_id = get_custom_object_type_from_content_type(
+            custom_object_type_id = get_custom_object_type_id_from_content_type(
                 content_type
             )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
@@ -717,7 +717,7 @@ class MultiObjectFieldType(FieldType):
         if content_type.app_label == APP_LABEL:
             from netbox_custom_objects.models import CustomObjectType
 
-            custom_object_type_id = get_custom_object_type_from_content_type(
+            custom_object_type_id = get_custom_object_type_id_from_content_type(
                 content_type
             )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
@@ -759,7 +759,7 @@ class MultiObjectFieldType(FieldType):
             if content_type.app_label == APP_LABEL:
                 from netbox_custom_objects.models import CustomObjectType
 
-                custom_object_type_id = get_custom_object_type_from_content_type(
+                custom_object_type_id = get_custom_object_type_id_from_content_type(
                     content_type
                 )
                 custom_object_type = CustomObjectType.objects.get(
