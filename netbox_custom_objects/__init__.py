@@ -81,28 +81,6 @@ class CustomObjectsPluginConfig(PluginConfig):
     template_extensions = "template_content.template_extensions"
     _in_get_models = False  # Recursion guard
 
-    def ready(self):
-        super().ready()
-        # Suppress warnings about database calls during model loading
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore", category=RuntimeWarning, message=".*database.*"
-            )
-            warnings.filterwarnings(
-                "ignore", category=UserWarning, message=".*database.*"
-            )
-
-            # Skip custom object type model loading if running during migration
-            if is_running_migration() or not check_custom_object_type_table_exists():
-                return
-
-            from .models import CustomObjectType
-
-            custom_object_types = CustomObjectType.objects.all()
-            for custom_object_type in custom_object_types:
-                # Synthesize SearchIndex classes for all CustomObjectTypes
-                custom_object_type.register_custom_object_search_index()
-
     def get_model(self, model_name, require_ready=True):
         try:
             # if the model is already loaded, return it

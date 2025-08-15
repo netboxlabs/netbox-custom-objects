@@ -359,12 +359,13 @@ class CustomObjectType(PrimaryModel):
         custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
         return f"Custom Objects > {custom_object_type.name}"
 
-    def register_custom_object_search_index(self):
+    def register_custom_object_search_index(self, model=None):
         fields = []
         for field in self.fields.filter(search_weight__gt=0):
             fields.append((field.name, field.search_weight))
 
-        model = self.get_model(skip_object_fields=True, no_cache=True)
+        if not model:
+            model = self.get_model(skip_object_fields=True, no_cache=True)
         attrs = {
             "model": model,
             "fields": tuple(fields),
@@ -500,6 +501,8 @@ class CustomObjectType(PrimaryModel):
             from netbox_custom_objects.api.serializers import get_serializer_class
 
             get_serializer_class(model)
+
+        self.register_custom_object_search_index(model)
 
         return model
 
