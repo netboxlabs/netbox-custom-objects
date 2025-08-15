@@ -87,4 +87,4 @@ def get_viewname(model, action=None, rest_api=False):
 
 
 def get_custom_object_type_from_content_type(content_type):
-    return content_type.model.replace("table", "").replace("model", "")
+    return int(content_type.model.replace("table", "").replace("model", ""))
