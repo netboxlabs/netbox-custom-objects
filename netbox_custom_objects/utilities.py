@@ -4,6 +4,7 @@ from netbox_custom_objects.constants import APP_LABEL
 
 __all__ = (
     "AppsProxy",
+    "get_custom_object_type_from_content_type",
     "get_viewname",
 )
 
@@ -83,3 +84,7 @@ def get_viewname(model, action=None, rest_api=False):
             viewname = f"{viewname}_{action}"
 
     return viewname
+
+
+def get_custom_object_type_from_content_type(content_type):
+    return content_type.model.replace("table", "").replace("model", "")
