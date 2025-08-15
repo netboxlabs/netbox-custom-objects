@@ -137,13 +137,14 @@ class CustomObject(
     @classmethod
     def _get_viewname(cls, action=None, rest_api=False):
         if rest_api:
-            return f"plugins-api:netbox_custom_objects:api:customobject_{action}"
+            return f"plugins-api:netbox_custom_objects-api:customobject-{action}"
         return f"plugins:netbox_custom_objects:customobject_{action}"
 
     @classmethod
     def _get_action_url(cls, action=None, rest_api=False, kwargs=None):
-        if kwargs:
-            kwargs["custom_object_type"] = cls.custom_object_type.name.lower()
+        if kwargs is None:
+            kwargs = {}
+        kwargs["custom_object_type"] = cls.custom_object_type.name.lower()
         return reverse(cls._get_viewname(action, rest_api), kwargs=kwargs)
 
 
