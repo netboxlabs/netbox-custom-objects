@@ -1,4 +1,5 @@
 import django_filters
+import logging
 from core.models import ObjectChange
 from core.tables import ObjectChangeTable
 from django.contrib.contenttypes.models import ContentType
@@ -29,6 +30,8 @@ from netbox_custom_objects.tables import CustomObjectTable
 
 from . import field_types, filtersets, forms, tables
 from .models import CustomObject, CustomObjectType, CustomObjectTypeField
+
+logger = logging.getLogger('netbox_custom_objects.views')
 
 
 class CustomJournalEntryForm(JournalEntryForm):
@@ -119,8 +122,8 @@ class CustomObjectTableMixin(TableMixin):
             try:
                 attrs[field.name] = field_type.get_table_column_field(field)
             except NotImplementedError:
-                print(
-                    f"table mixin: {field.name} field is not implemented; using a default column"
+                logger.debug(
+                    "table mixin: {} field is not implemented; using a default column".format(field.name)
                 )
             # Define a method "render_table_column" method on any FieldType to customize output
             # See https://django-tables2.readthedocs.io/en/latest/pages/custom-data.html#table-render-foo-methods
@@ -361,7 +364,7 @@ class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
             try:
                 attrs[field.name] = field_type.get_filterform_field(field)
             except NotImplementedError:
-                print(f"list view: {field.name} field is not supported")
+                logger.debug("list view: {} field is not supported".format(field.name))
 
         return type(
             f"{model._meta.object_name}FilterForm",
@@ -489,7 +492,7 @@ class CustomObjectEditView(generic.ObjectEditView):
                 attrs["custom_object_type_field_groups"][group_name].append(field_name)
 
             except NotImplementedError:
-                print(f"get_form: {field.name} field is not supported")
+                logger.debug("get_form: {} field is not supported".format(field.name))
 
         # Note: Regular model fields (non-custom fields) are automatically included
         # by the "fields": "__all__" setting in the Meta class, so we don't need
@@ -575,7 +578,7 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
             try:
                 attrs[field.name] = field_type.get_annotated_form_field(field)
             except NotImplementedError:
-                print(f"bulk edit form: {field.name} field is not supported")
+                logger.debug("bulk edit form: {} field is not supported".format(field.name))
 
         form = type(
             f"{queryset.model._meta.object_name}BulkEditForm",
