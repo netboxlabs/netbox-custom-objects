@@ -8,7 +8,6 @@ from core.models import ObjectType
 from core.models.contenttypes import ObjectTypeManager
 from django.apps import apps
 from django.conf import settings
-
 # from django.contrib.contenttypes.management import create_contenttypes
 from django.contrib.contenttypes.models import ContentType
 from django.core.validators import RegexValidator, ValidationError
@@ -17,27 +16,18 @@ from django.db.models import Q
 from django.db.models.functions import Lower
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
-from extras.choices import (
-    CustomFieldFilterLogicChoices,
-    CustomFieldTypeChoices,
-    CustomFieldUIEditableChoices,
-    CustomFieldUIVisibleChoices,
-)
+from extras.choices import (CustomFieldFilterLogicChoices,
+                            CustomFieldTypeChoices,
+                            CustomFieldUIEditableChoices,
+                            CustomFieldUIVisibleChoices)
 from extras.models.customfields import SEARCH_TYPES
 from netbox.models import ChangeLoggedModel, PrimaryModel
-from netbox.models.features import (
-    BookmarksMixin,
-    ChangeLoggingMixin,
-    CloningMixin,
-    CustomLinksMixin,
-    CustomValidationMixin,
-    EventRulesMixin,
-    ExportTemplatesMixin,
-    JournalingMixin,
-    NotificationsMixin,
-    get_model_features,
-    TagsMixin,
-)
+from netbox.models.features import (BookmarksMixin, ChangeLoggingMixin,
+                                    CloningMixin, CustomLinksMixin,
+                                    CustomValidationMixin, EventRulesMixin,
+                                    ExportTemplatesMixin, JournalingMixin,
+                                    NotificationsMixin, TagsMixin,
+                                    get_model_features)
 from netbox.registry import registry
 from utilities import filters
 from utilities.datetime import datetime_from_timestamp
@@ -381,7 +371,8 @@ class CustomObjectType(PrimaryModel):
         if self.is_model_cached(self.id):
             model = self.get_cached_model(self.id)
             # Ensure the serializer is registered even for cached models
-            from netbox_custom_objects.api.serializers import get_serializer_class
+            from netbox_custom_objects.api.serializers import \
+                get_serializer_class
 
             get_serializer_class(model)
             return model
@@ -440,8 +431,10 @@ class CustomObjectType(PrimaryModel):
         # Suppress RuntimeWarning about model already being registered
         # TODO: Remove this once we have a better way to handle model registration
         with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=RuntimeWarning, message=".*was already registered.*")
-            
+            warnings.filterwarnings(
+                "ignore", category=RuntimeWarning, message=".*was already registered.*"
+            )
+
             try:
                 model = type(
                     str(model_name),
@@ -470,7 +463,8 @@ class CustomObjectType(PrimaryModel):
 
         # Register the serializer for this model
         if not manytomany_models:
-            from netbox_custom_objects.api.serializers import get_serializer_class
+            from netbox_custom_objects.api.serializers import \
+                get_serializer_class
 
             get_serializer_class(model)
 
