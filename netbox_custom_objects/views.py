@@ -14,7 +14,11 @@ from extras.forms import JournalEntryForm
 from extras.models import JournalEntry
 from extras.tables import JournalEntryTable
 from netbox.filtersets import BaseFilterSet
-from netbox.forms import NetBoxModelBulkEditForm, NetBoxModelFilterSetForm, NetBoxModelImportForm
+from netbox.forms import (
+    NetBoxModelBulkEditForm,
+    NetBoxModelFilterSetForm,
+    NetBoxModelImportForm,
+)
 from netbox.views import generic
 from netbox.views.generic.mixins import TableMixin
 from utilities.forms import ConfirmationForm
@@ -31,7 +35,7 @@ from netbox_custom_objects.tables import CustomObjectTable
 from . import field_types, filtersets, forms, tables
 from .models import CustomObject, CustomObjectType, CustomObjectTypeField
 
-logger = logging.getLogger('netbox_custom_objects.views')
+logger = logging.getLogger("netbox_custom_objects.views")
 
 
 class CustomJournalEntryForm(JournalEntryForm):
@@ -123,7 +127,9 @@ class CustomObjectTableMixin(TableMixin):
                 attrs[field.name] = field_type.get_table_column_field(field)
             except NotImplementedError:
                 logger.debug(
-                    "table mixin: {} field is not implemented; using a default column".format(field.name)
+                    "table mixin: {} field is not implemented; using a default column".format(
+                        field.name
+                    )
                 )
             # Define a method "render_table_column" method on any FieldType to customize output
             # See https://django-tables2.readthedocs.io/en/latest/pages/custom-data.html#table-render-foo-methods
@@ -587,7 +593,9 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
             try:
                 attrs[field.name] = field_type.get_annotated_form_field(field)
             except NotImplementedError:
-                logger.debug("bulk edit form: {} field is not supported".format(field.name))
+                logger.debug(
+                    "bulk edit form: {} field is not supported".format(field.name)
+                )
 
         form = type(
             f"{queryset.model._meta.object_name}BulkEditForm",
@@ -621,7 +629,7 @@ class CustomObjectBulkDeleteView(CustomObjectTableMixin, generic.BulkDeleteView)
         return model.objects.all()
 
 
-@register_model_view(CustomObject, 'bulk_import', path='import', detail=False)
+@register_model_view(CustomObject, "bulk_import", path="import", detail=False)
 class CustomObjectBulkImportView(generic.BulkImportView):
     queryset = None
     model_form = None
@@ -667,7 +675,9 @@ class CustomObjectBulkImportView(generic.BulkImportView):
         for field in self.custom_object_type.fields.all():
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
             try:
-                attrs[field.name] = field_type.get_annotated_form_field(field)
+                attrs[field.name] = field_type.get_annotated_form_field(
+                    field, for_csv_import=True
+                )
             except NotImplementedError:
                 print(f"bulk import form: {field.name} field is not supported")
 
@@ -678,6 +688,7 @@ class CustomObjectBulkImportView(generic.BulkImportView):
         )
 
         return form
+
 
 class CustomObjectJournalView(ConditionalLoginRequiredMixin, View):
     """
