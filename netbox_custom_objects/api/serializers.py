@@ -1,3 +1,4 @@
+import logging
 import sys
 
 from core.models import ObjectType
@@ -11,6 +12,9 @@ from rest_framework.reverse import reverse
 from netbox_custom_objects import field_types
 from netbox_custom_objects.models import (CustomObject, CustomObjectType,
                                           CustomObjectTypeField)
+
+logger = logging.getLogger('netbox_custom_objects.api.serializers')
+
 
 __all__ = (
     "CustomObjectTypeSerializer",
@@ -251,8 +255,8 @@ def get_serializer_class(model):
         try:
             attrs[field.name] = field_type.get_serializer_field(field)
         except NotImplementedError:
-            print(
-                f"serializer: {field.name} field is not implemented; using a default serializer field"
+            logger.debug(
+                "serializer: {} field is not implemented; using a default serializer field".format(field.name)
             )
 
     serializer_name = f"{model._meta.object_name}Serializer"

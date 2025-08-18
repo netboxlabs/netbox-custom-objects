@@ -1,4 +1,5 @@
 import django_filters
+import logging
 from core.models import ObjectChange
 from core.tables import ObjectChangeTable
 from django.contrib.contenttypes.models import ContentType
@@ -18,13 +19,19 @@ from netbox.views import generic
 from netbox.views.generic.mixins import TableMixin
 from utilities.forms import ConfirmationForm
 from utilities.htmx import htmx_partial
-from utilities.views import (ConditionalLoginRequiredMixin, ViewTab,
-                             get_viewname, register_model_view)
+from utilities.views import (
+    ConditionalLoginRequiredMixin,
+    ViewTab,
+    get_viewname,
+    register_model_view,
+)
 
 from netbox_custom_objects.tables import CustomObjectTable
 
 from . import field_types, filtersets, forms, tables
 from .models import CustomObject, CustomObjectType, CustomObjectTypeField
+
+logger = logging.getLogger('netbox_custom_objects.views')
 
 
 class CustomJournalEntryForm(JournalEntryForm):
@@ -33,7 +40,7 @@ class CustomJournalEntryForm(JournalEntryForm):
     """
 
     def __init__(self, *args, **kwargs):
-        self.custom_object = kwargs.pop('custom_object', None)
+        self.custom_object = kwargs.pop("custom_object", None)
         super().__init__(*args, **kwargs)
 
     def get_return_url(self):
@@ -41,10 +48,13 @@ class CustomJournalEntryForm(JournalEntryForm):
         Override to return the correct URL for custom objects.
         """
         if self.custom_object:
-            return reverse('plugins:netbox_custom_objects:customobject_journal', kwargs={
-                'custom_object_type': self.custom_object.custom_object_type.name,
-                'pk': self.custom_object.pk
-            })
+            return reverse(
+                "plugins:netbox_custom_objects:customobject_journal",
+                kwargs={
+                    "custom_object_type": self.custom_object.custom_object_type.name,
+                    "pk": self.custom_object.pk,
+                },
+            )
         return super().get_return_url()
 
 
@@ -52,6 +62,7 @@ class CustomJournalEntryEditView(generic.ObjectEditView):
     """
     Custom journal entry edit view that handles return URLs for custom objects.
     """
+
     queryset = JournalEntry.objects.all()
     form = CustomJournalEntryForm
 
@@ -59,18 +70,23 @@ class CustomJournalEntryEditView(generic.ObjectEditView):
         """
         Override to return the correct URL for custom objects.
         """
-        if instance.assigned_object and hasattr(instance.assigned_object, 'custom_object_type'):
+        if instance.assigned_object and hasattr(
+            instance.assigned_object, "custom_object_type"
+        ):
             # This is a custom object
-            return reverse('plugins:netbox_custom_objects:customobject_journal', kwargs={
-                'custom_object_type': instance.assigned_object.custom_object_type.name,
-                'pk': instance.assigned_object.pk
-            })
+            return reverse(
+                "plugins:netbox_custom_objects:customobject_journal",
+                kwargs={
+                    "custom_object_type": instance.assigned_object.custom_object_type.name,
+                    "pk": instance.assigned_object.pk,
+                },
+            )
         # Fall back to standard behavior for non-custom objects
         if not instance.assigned_object:
-            return reverse('extras:journalentry_list')
+            return reverse("extras:journalentry_list")
         obj = instance.assigned_object
-        viewname = get_viewname(obj, 'journal')
-        return reverse(viewname, kwargs={'pk': obj.pk})
+        viewname = get_viewname(obj, "journal")
+        return reverse(viewname, kwargs={"pk": obj.pk})
 
 
 class CustomObjectTableMixin(TableMixin):
@@ -106,8 +122,8 @@ class CustomObjectTableMixin(TableMixin):
             try:
                 attrs[field.name] = field_type.get_table_column_field(field)
             except NotImplementedError:
-                print(
-                    f"table mixin: {field.name} field is not implemented; using a default column"
+                logger.debug(
+                    "table mixin: {} field is not implemented; using a default column".format(field.name)
                 )
             # Define a method "render_table_column" method on any FieldType to customize output
             # See https://django-tables2.readthedocs.io/en/latest/pages/custom-data.html#table-render-foo-methods
@@ -348,7 +364,7 @@ class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
             try:
                 attrs[field.name] = field_type.get_filterform_field(field)
             except NotImplementedError:
-                print(f"list view: {field.name} field is not supported")
+                logger.debug("list view: {} field is not supported".format(field.name))
 
         return type(
             f"{model._meta.object_name}FilterForm",
@@ -391,9 +407,21 @@ class CustomObjectView(generic.ObjectView):
         return get_object_or_404(model.objects.all(), **lookup_kwargs)
 
     def get_extra_context(self, request, instance):
-        fields = instance.custom_object_type.fields.all().order_by("weight")
+        fields = instance.custom_object_type.fields.all().order_by(
+            "group_name", "weight", "name"
+        )
+
+        # Group fields by group_name
+        field_groups = {}
+        for field in fields:
+            group_name = field.group_name or None  # Use None for ungrouped fields
+            if group_name not in field_groups:
+                field_groups[group_name] = []
+            field_groups[group_name].append(field)
+
         return {
             "fields": fields,
+            "field_groups": field_groups,
         }
 
 
@@ -464,7 +492,7 @@ class CustomObjectEditView(generic.ObjectEditView):
                 attrs["custom_object_type_field_groups"][group_name].append(field_name)
 
             except NotImplementedError:
-                print(f"get_form: {field.name} field is not supported")
+                logger.debug("get_form: {} field is not supported".format(field.name))
 
         # Note: Regular model fields (non-custom fields) are automatically included
         # by the "fields": "__all__" setting in the Meta class, so we don't need
@@ -559,7 +587,7 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
             try:
                 attrs[field.name] = field_type.get_annotated_form_field(field)
             except NotImplementedError:
-                print(f"bulk edit form: {field.name} field is not supported")
+                logger.debug("bulk edit form: {} field is not supported".format(field.name))
 
         form = type(
             f"{queryset.model._meta.object_name}BulkEditForm",
@@ -698,7 +726,7 @@ class CustomObjectJournalView(ConditionalLoginRequiredMixin, View):
                 initial={
                     "assigned_object_type": content_type,
                     "assigned_object_id": obj.pk,
-                }
+                },
             )
         else:
             form = None
@@ -716,7 +744,9 @@ class CustomObjectJournalView(ConditionalLoginRequiredMixin, View):
                 "table": journal_table,
                 "base_template": self.base_template,
                 "tab": "journal",
-                "form_action": reverse('plugins:netbox_custom_objects:custom_journalentry_add'),
+                "form_action": reverse(
+                    "plugins:netbox_custom_objects:custom_journalentry_add"
+                ),
             },
         )
 

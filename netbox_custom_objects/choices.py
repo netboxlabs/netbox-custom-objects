@@ -18,3 +18,21 @@ class MappingFieldTypeChoices(ChoiceSet):
         (DATETIME, _("DateTime"), "blue"),
         (OBJECT, _("Object"), "orange"),
     )
+
+
+#
+# Search
+#
+
+class SearchWeightChoices(ChoiceSet):
+    WEIGHT_NONE = 0
+    WEIGHT_LOW = 1000
+    WEIGHT_MEDIUM = 500
+    WEIGHT_HIGH = 100
+
+    CHOICES = (
+        (WEIGHT_HIGH, _('High (100)')),
+        (WEIGHT_MEDIUM, _('Medium (500)')),
+        (WEIGHT_LOW, _('Low (1000)')),
+        (WEIGHT_NONE, _('Not searchable')),
+    )
