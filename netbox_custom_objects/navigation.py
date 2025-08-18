@@ -52,9 +52,10 @@ class CustomObjectTypeMenuItems:
 
 current_version = version.parse(settings.RELEASE.version)
 
-groups = [(_("Object Types"), (custom_object_type_plugin_menu_item,))]
-if current_version >= version.parse("4.3.4"):
-    groups.append((_("Objects"), CustomObjectTypeMenuItems()))
+groups = [
+    (_("Object Types"), (custom_object_type_plugin_menu_item,)),
+    (_("Objects"), CustomObjectTypeMenuItems()),
+]
 
 menu = PluginMenu(
     label=_("Custom Objects"),

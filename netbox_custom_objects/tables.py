@@ -52,6 +52,12 @@ OBJECTCHANGE_REQUEST_ID = """
 
 
 class CustomObjectTypeTable(NetBoxTable):
+    comments = columns.MarkdownColumn(
+        verbose_name=_('Comments'),
+    )
+    tags = columns.TagColumn(
+        url_name='circuits:provider_list'
+    )
 
     class Meta(NetBoxTable.Meta):
         model = CustomObjectType
@@ -59,6 +65,9 @@ class CustomObjectTypeTable(NetBoxTable):
             "pk",
             "id",
             "name",
+            'description',
+            'comments',
+            'tags',
             "created",
             "last_updated",
         )

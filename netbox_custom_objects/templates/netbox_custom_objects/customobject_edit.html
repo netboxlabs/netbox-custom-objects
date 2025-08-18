@@ -1,4 +1,5 @@
 {% extends 'generic/object_edit.html' %}
+{% load form_helpers %}
 {% load i18n %}
 
 {% block title %}
@@ -10,3 +11,34 @@
     {% endblocktrans %}
   {% endif %}
 {% endblock title %}
+
+{% block form %}
+  {# Render hidden fields #}
+  {% for field in form.hidden_fields %}
+    {{ field }}
+  {% endfor %}
+
+  {# Render all fields grouped by group_name #}
+  <div class="field-group mb-5">
+    {% for group, fields in form.custom_object_type_field_groups.items %}
+      {% if group %}
+      <div class="row">
+        <h3 class="col-9 offset-3 mb-3 h4">{{ group }}</h3>
+      </div>
+      {% endif %}
+      {% for name in fields %}
+        {% render_field form|getfield:name %}
+      {% endfor %}
+    {% endfor %}
+    
+    {# Render regular model fields (non-custom fields) that are not in any group #}
+    {% for field in form %}
+      {% if field.name not in form.custom_object_type_fields %}
+        {# Only render fields that are meant for user input #}
+        {% if not field.field.widget.is_hidden and not field.field.disabled and field.field.widget.input_type != 'hidden' %}
+          {% render_field field %}
+        {% endif %}
+      {% endif %}
+    {% endfor %}
+  </div>
+{% endblock form %}

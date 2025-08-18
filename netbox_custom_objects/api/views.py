@@ -2,7 +2,7 @@ from django.http import Http404
 from rest_framework.routers import APIRootView
 from rest_framework.viewsets import ModelViewSet
 
-from netbox_custom_objects.models import CustomObject, CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 
 from . import serializers
 
@@ -18,14 +18,13 @@ class CustomObjectTypeViewSet(ModelViewSet):
 
 
 class CustomObjectViewSet(ModelViewSet):
-    queryset = CustomObject.objects.all()
     serializer_class = serializers.CustomObjectSerializer
     model = None
 
     def get_view_name(self):
         if self.model:
             return self.model.custom_object_type.name
-        return super().get_view_name()
+        return 'Custom Object'
 
     def get_serializer_class(self):
         return serializers.get_serializer_class(self.model)

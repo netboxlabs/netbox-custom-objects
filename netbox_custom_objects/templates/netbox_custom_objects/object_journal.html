@@ -1,0 +1,34 @@
+{% extends base_template %}
+{% load form_helpers %}
+{% load render_table from django_tables2 %}
+{% load i18n %}
+
+{% render_errors form %}
+
+{% block content %}
+  <div class="card">
+    <div class="table-responsive">
+      {% render_table table 'inc/table.html' %}
+      {% include 'inc/paginator.html' with paginator=table.paginator page=table.page %}
+    </div>
+  </div>
+  {% if perms.extras.add_journalentry %}
+    <div class="card">
+      <h2 class="card-header">{% trans "New Journal Entry" %}</h2>
+      <div class="card-body">
+        <form action="{% if form_action %}{{ form_action }}{% else %}{% url 'extras:journalentry_add' %}{% endif %}" method="post" enctype="multipart/form-data">
+          <div class="container">
+            <div class="field-group">
+              {% csrf_token %}
+              {% render_form form %}
+            </div>
+            <div class="col col-md-12 text-end my-3">
+              <a href="{{ object.get_absolute_url }}" class="btn btn-outline-secondary">{% trans "Cancel" %}</a>
+              <button type="submit" class="btn btn-primary">{% trans "Save" %}</button>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+  {% endif %}
+{% endblock %} 

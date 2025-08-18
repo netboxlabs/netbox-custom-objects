@@ -1,11 +1,20 @@
-from django.db.models import Q
 from netbox.filtersets import NetBoxModelFilterSet
 
-from .models import CustomObject
+from .models import CustomObjectType
 
-__all__ = ("CustomObjectFilterSet",)
+__all__ = ("CustomObjectTypeFilterSet",)
 
 
+class CustomObjectTypeFilterSet(NetBoxModelFilterSet):
+    class Meta:
+        model = CustomObjectType
+        fields = (
+            "id",
+            "name",
+        )
+
+
+"""
 class CustomObjectFilterSet(NetBoxModelFilterSet):
     class Meta:
         model = CustomObject
@@ -19,3 +28,4 @@ class CustomObjectFilterSet(NetBoxModelFilterSet):
         if not value.strip():
             return queryset
         return queryset.filter(Q(name__icontains=value))
+"""

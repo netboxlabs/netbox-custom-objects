@@ -1,6 +1,7 @@
 {% extends 'generic/object.html' %}
 {% load static %}
 {% load custom_object_buttons %}
+{% load custom_links %}
 {% load helpers %}
 {% load perms %}
 {% load plugins %}
@@ -12,45 +13,59 @@
 {% block extra_controls %}
 {% endblock %}
 
-{% block page-header %}
-<div class="container-fluid mt-2 d-print-none">
-  <div class="d-flex justify-content-between">
+{% block breadcrumbs %}
+<li class="breadcrumb-item"><a href="{{ object.get_list_url }}">{{ object.custom_object_type.get_verbose_name_plural }}</a></li>
+<li class="breadcrumb-item"><a href="{{ object.custom_object_type.get_absolute_url }}">{{ object.custom_object_type }}</a></li>
+{% endblock breadcrumbs %}
 
-    {# Title #}
-    <div>
-      <h1 class="page-title">{% block title %}{{ object }}{% endblock title %}</h1>
-      {% block subtitle %}{% endblock %}
-    </div>
+{% block object_identifier %}
+{{ object|meta:"app_label" }}.{{ object.custom_object_type.name }}:{{ object.pk }}
+{% if object.slug %}({{ object.slug }}){% endif %}
+{% endblock object_identifier %}
 
-    {# Controls #}
-    <div class="d-print-none">
-      {% block controls %}
-        <div class="btn-list">
-          {% block control-buttons %}
-            {# Default buttons #}
-            {% if perms.extras.add_bookmark and object.bookmarks %}
-              {% custom_object_bookmark_button object %}
-            {% endif %}
-            {% if perms.extras.add_subscription and object.subscriptions %}
-          {#    {% subscribe_button object %}#}
-            {% endif %}
-            {% if request.user|can_add:object %}
-          {#        {% clone_button object %}#}
-            {% endif %}
-            {% if request.user|can_change:object %}
-              {% custom_object_edit_button object %}
-            {% endif %}
-            {% if request.user|can_delete:object %}
-              {% custom_object_delete_button object %}
-            {% endif %}
-          {% endblock %}
-        </div>
-      {% endblock controls %}
-    </div>
+{% block title %}{{ object }}{% endblock title %}
 
-  </div>
+{% block subtitle %}
+<div class="text-secondary fs-5">
+  {% trans "Created" %} {{ object.created|isodatetime:"minutes" }}
+  {% if object.last_updated %}
+    <span class="separator">&middot;</span>
+    {% trans "Updated" %} {{ object.last_updated|isodatetime:"minutes" }}
+  {% endif %}
 </div>
-{% endblock %}
+{% endblock subtitle %}
+
+{% block controls %}
+<div class="btn-list justify-content-end mb-2">
+    {% block control-buttons %}
+      {# Default buttons #}
+      {% if perms.extras.add_bookmark and object.bookmarks %}
+        {% custom_object_bookmark_button object %}
+      {% endif %}
+      {% if perms.extras.add_subscription and object.subscriptions %}
+        {% custom_object_subscribe_button object %}
+      {% endif %}
+      {% if request.user|can_add:object %}
+        {% custom_object_clone_button object %}
+      {% endif %}
+      {% if request.user|can_change:object %}
+        {% custom_object_edit_button object %}
+      {% endif %}
+      {% if request.user|can_delete:object %}
+        {% custom_object_delete_button object %}
+      {% endif %}
+    {% endblock %}
+  </div>
+
+  {# Custom links #}
+  <div class="d-flex justify-content-end">
+    <div class="btn-list">
+      {% block custom-links %}
+        {% custom_links object %}
+      {% endblock custom-links %}
+    </div>
+  </div>
+{% endblock controls %}
 
 {% block tabs %}
   <ul class="nav nav-tabs" role="presentation">
@@ -58,9 +73,12 @@
     <li class="nav-item">
       <a class="nav-link{% if not tab %} active{% endif %}" href="{{ object.get_absolute_url }}">{{ object.custom_object_type.get_verbose_name }}</a>
     </li>
-
-    {# Include tabs for registered model views #}
-    {% model_view_tabs object %}
+    <li class="nav-item">
+      <a class="nav-link{% if tab == 'journal' %} active{% endif %}" href="{% url 'plugins:netbox_custom_objects:customobject_journal' object.custom_object_type.name object.pk %}">{% trans "Journal" %}</a>
+    </li>
+    <li class="nav-item">
+      <a class="nav-link{% if tab == 'changelog' %} active{% endif %}" href="{% url 'plugins:netbox_custom_objects:customobject_changelog' object.custom_object_type.name object.pk %}">{% trans "Changelog" %}</a>
+    </li>
   </ul>
 {% endblock tabs %}
 
@@ -84,33 +102,43 @@
               {% endif %}
             </td>
           </tr>
-          {% for field in fields %}
-            {% with is_visible_in_ui=object|get_field_is_ui_visible:field %}
-              {% if field.is_single_value and is_visible_in_ui %}
-                <tr>
-                  <th scope="row">{{ field }}</th>
-                  <td>
-                    {% with customfield=field value=object|get_field_value:field %}
-                      {% include "builtins/customfield_value.html" %}
-                    {% endwith %}
-                  </td>
-                </tr>
-              {% endif %}
-            {% endwith %}
+          {% for group_name, group_fields in field_groups.items %}
+            {% if group_name %}
+              <tr class="table-group-header">
+                <th scope="row" colspan="2" class="fw-bold">{{ group_name }}</th>
+              </tr>
+            {% endif %}
+            {% for field in group_fields %}
+              {% with is_visible_in_ui=object|get_field_is_ui_visible:field %}
+                {% if field.is_single_value and is_visible_in_ui %}
+                  <tr>
+                    <th scope="row">{{ field }}</th>
+                    <td>
+                      {% with customfield=field value=object|get_field_value:field %}
+                        {% include "builtins/customfield_value.html" %}
+                      {% endwith %}
+                    </td>
+                  </tr>
+                {% endif %}
+              {% endwith %}
+            {% endfor %}
           {% endfor %}
         </table>
       </div>
-      {# {% include 'inc/panels/tags.html' %} #}
       {% plugin_left_page object %}
     </div>
     <div class="col col-md-6">
+      {% include 'inc/panels/tags.html' %}
       {% plugin_right_page object %}
-      {% for field in fields %}
+      {% for group_name, group_fields in field_groups.items %}
+        {% for field in group_fields %}
           {% if field.many %}
             {% with field_values=object|get_child_relations:field is_visible_in_ui=object|get_field_is_ui_visible:field %}
               {% if is_visible_in_ui %}
                 <div class="card">
-                  <h2 class="card-header">{{ field }}</h2>
+                  <h2 class="card-header">
+                    {% if group_name %}{{ group_name }}: {% endif %}{{ field }}
+                  </h2>
                   <table class="table table-hover attr-table">
                     {% for relation in field_values.all %}
                       <tr>
@@ -122,6 +150,7 @@
               {% endif %}
             {% endwith %}
           {% endif %}
+        {% endfor %}
       {% endfor %}
     </div>
   </div>

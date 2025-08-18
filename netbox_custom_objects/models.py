@@ -1,31 +1,47 @@
 import decimal
 import re
-import uuid
+import warnings
 from datetime import date, datetime
 
 import django_filters
+from core.models import ObjectType, ObjectChange
 from core.models.contenttypes import ObjectTypeManager
 from django.apps import apps
 from django.conf import settings
-from django.contrib.contenttypes.management import create_contenttypes
+
+# from django.contrib.contenttypes.management import create_contenttypes
 from django.contrib.contenttypes.models import ContentType
 from django.core.validators import RegexValidator, ValidationError
 from django.db import connection, models
 from django.db.models import Q
 from django.db.models.functions import Lower
+from django.db.models.signals import pre_delete
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
+from core.signals import handle_deleted_object
 from extras.choices import (
-    CustomFieldFilterLogicChoices, CustomFieldTypeChoices, CustomFieldUIEditableChoices, CustomFieldUIVisibleChoices,
+    CustomFieldFilterLogicChoices,
+    CustomFieldTypeChoices,
+    CustomFieldUIEditableChoices,
+    CustomFieldUIVisibleChoices,
 )
 from extras.models.customfields import SEARCH_TYPES
-from netbox.models import ChangeLoggedModel, NetBoxModel
-# from netbox.models.features import (
-#     BookmarksMixin, ChangeLoggingMixin, CloningMixin, CustomLinksMixin, CustomValidationMixin, EventRulesMixin,
-#     ExportTemplatesMixin, JournalingMixin, NotificationsMixin, TagsMixin,
-# )
-from netbox.models.features import CloningMixin, ExportTemplatesMixin, TagsMixin
+from netbox.models import ChangeLoggedModel, PrimaryModel
+from netbox.models.features import (
+    BookmarksMixin,
+    ChangeLoggingMixin,
+    CloningMixin,
+    CustomLinksMixin,
+    CustomValidationMixin,
+    EventRulesMixin,
+    ExportTemplatesMixin,
+    JournalingMixin,
+    NotificationsMixin,
+    TagsMixin,
+    get_model_features,
+)
 from netbox.registry import registry
+from netbox.search import SearchIndex
 from utilities import filters
 from utilities.datetime import datetime_from_timestamp
 from utilities.object_types import object_type_name
@@ -35,33 +51,113 @@ from utilities.validators import validate_regex
 
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
-from netbox_custom_objects.utilities import AppsProxy
 
 USER_TABLE_DATABASE_NAME_PREFIX = "custom_objects_"
 
 
 class CustomObject(
-    # BookmarksMixin,
-    # ChangeLoggingMixin,
-    # CloningMixin,
-    # CustomLinksMixin,
-    # CustomValidationMixin,
-    # ExportTemplatesMixin,
-    # JournalingMixin,
-    # NotificationsMixin,
+    BookmarksMixin,
+    ChangeLoggingMixin,
+    CloningMixin,
+    CustomLinksMixin,
+    CustomValidationMixin,
+    ExportTemplatesMixin,
+    JournalingMixin,
+    NotificationsMixin,
+    EventRulesMixin,
     TagsMixin,
-    # EventRulesMixin,
-    models.Model,
 ):
+    """
+    Base class for dynamically generated custom object models.
+
+    This abstract model serves as the foundation for all custom object types created
+    through the CustomObjectType system. When a CustomObjectType is created, a concrete
+    model class is dynamically generated that inherits from this base class and includes
+    the specific fields defined in the CustomObjectType's schema.
+
+    This class should not be used directly - instead, use CustomObjectType.get_model()
+    to create concrete model classes for specific custom object types.
+
+    Attributes:
+        _generated_table_model (property): Indicates this is a generated table model
+    """
+
     objects = RestrictedQuerySet.as_manager()
 
+    class Meta:
+        abstract = True
 
-class CustomObjectType(NetBoxModel):
+    def __str__(self):
+        # Find the field with primary=True and return that field's "name" as the name of the object
+        primary_field = self._field_objects.get(self._primary_field_id, None)
+        primary_field_value = None
+        if primary_field:
+            field_type = FIELD_TYPE_CLASS[primary_field["field"].type]()
+            primary_field_value = field_type.get_display_value(
+                self, primary_field["name"]
+            )
+        if not primary_field_value:
+            return f"{self.custom_object_type.name} {self.id}"
+        return str(primary_field_value) or str(self.id)
+
+    @property
+    def _generated_table_model(self):
+        # An indication that the model is a generated table model.
+        return True
+
+    @property
+    def clone_fields(self):
+        """
+        Return a tuple of field names that should be cloned when this object is cloned.
+        This property dynamically determines which fields to clone based on the
+        is_cloneable flag on the associated CustomObjectTypeField instances.
+        """
+        if not hasattr(self, "custom_object_type_id"):
+            return ()
+
+        # Get all field names where is_cloneable=True for this custom object type
+        cloneable_fields = self.custom_object_type.fields.filter(
+            is_cloneable=True
+        ).values_list("name", flat=True)
+
+        return tuple(cloneable_fields)
+
+    def get_absolute_url(self):
+        return reverse(
+            "plugins:netbox_custom_objects:customobject",
+            kwargs={
+                "pk": self.pk,
+                "custom_object_type": self.custom_object_type.name.lower(),
+            },
+        )
+
+    def get_list_url(self):
+        return reverse(
+            "plugins:netbox_custom_objects:customobject_list",
+            kwargs={"custom_object_type": self.custom_object_type.name.lower()},
+        )
+
+    @classmethod
+    def _get_viewname(cls, action=None, rest_api=False):
+        if rest_api:
+            return f"plugins-api:netbox_custom_objects-api:customobject-{action}"
+        return f"plugins:netbox_custom_objects:customobject_{action}"
+
+    @classmethod
+    def _get_action_url(cls, action=None, rest_api=False, kwargs=None):
+        if kwargs is None:
+            kwargs = {}
+        kwargs["custom_object_type"] = cls.custom_object_type.name.lower()
+        return reverse(cls._get_viewname(action, rest_api), kwargs=kwargs)
+
+
+class CustomObjectType(PrimaryModel):
     # Class-level cache for generated models
     _model_cache = {}
-    
+    _through_model_cache = (
+        {}
+    )  # Now stores {custom_object_type_id: {through_model_name: through_model}}
     name = models.CharField(max_length=100, unique=True)
-    description = models.TextField(blank=True)
     schema = models.JSONField(blank=True, default=dict)
     verbose_name_plural = models.CharField(max_length=100, blank=True)
 
@@ -70,9 +166,11 @@ class CustomObjectType(NetBoxModel):
         ordering = ("name",)
         constraints = [
             models.UniqueConstraint(
-                Lower('name'),
-                name='%(app_label)s_%(class)s_name',
-                violation_error_message=_("A Custom Object Type with this name already exists.")
+                Lower("name"),
+                name="%(app_label)s_%(class)s_name",
+                violation_error_message=_(
+                    "A Custom Object Type with this name already exists."
+                ),
             ),
         ]
 
@@ -83,20 +181,24 @@ class CustomObjectType(NetBoxModel):
     def clear_model_cache(cls, custom_object_type_id=None):
         """
         Clear the model cache for a specific CustomObjectType or all models.
-        
+
         :param custom_object_type_id: ID of the CustomObjectType to clear cache for, or None to clear all
         """
         if custom_object_type_id is not None:
-            if custom_object_type_id in cls._model_cache:
-                cls._model_cache.pop(custom_object_type_id, None)
+            cls._model_cache.pop(custom_object_type_id, None)
+            cls._through_model_cache.pop(custom_object_type_id, None)
         else:
             cls._model_cache.clear()
+            cls._through_model_cache.clear()
+
+        # Clear Django apps registry cache to ensure newly created models are recognized
+        apps.get_models.cache_clear()
 
     @classmethod
     def get_cached_model(cls, custom_object_type_id):
         """
         Get a cached model for a specific CustomObjectType if it exists.
-        
+
         :param custom_object_type_id: ID of the CustomObjectType
         :return: The cached model or None if not found
         """
@@ -106,11 +208,36 @@ class CustomObjectType(NetBoxModel):
     def is_model_cached(cls, custom_object_type_id):
         """
         Check if a model is cached for a specific CustomObjectType.
-        
+
         :param custom_object_type_id: ID of the CustomObjectType
         :return: True if the model is cached, False otherwise
         """
         return custom_object_type_id in cls._model_cache
+
+    @classmethod
+    def get_cached_through_model(cls, custom_object_type_id, through_model_name):
+        """
+        Get a specific cached through model for a CustomObjectType.
+
+        :param custom_object_type_id: ID of the CustomObjectType
+        :param through_model_name: Name of the through model to retrieve
+        :return: The cached through model or None if not found
+        """
+        if custom_object_type_id in cls._through_model_cache:
+            return cls._through_model_cache[custom_object_type_id].get(
+                through_model_name
+            )
+        return None
+
+    @classmethod
+    def get_cached_through_models(cls, custom_object_type_id):
+        """
+        Get all cached through models for a CustomObjectType.
+
+        :param custom_object_type_id: ID of the CustomObjectType
+        :return: Dict of through models or empty dict if not found
+        """
+        return cls._through_model_cache.get(custom_object_type_id, {})
 
     @property
     def formatted_schema(self):
@@ -135,39 +262,37 @@ class CustomObjectType(NetBoxModel):
             kwargs={"custom_object_type": self.name.lower()},
         )
 
-    def create_proxy_model(
-        self, model_name, base_model, extra_fields=None, meta_options=None
-    ):
-        """Creates a dynamic proxy model."""
-        name = f"{model_name}Proxy"
-
-        attrs = {"__module__": base_model.__module__}
-        if extra_fields:
-            attrs.update(extra_fields)
-
-        meta_attrs = {"proxy": True, "app_label": base_model._meta.app_label}
-        if meta_options:
-            meta_attrs.update(meta_options)
-
-        attrs["Meta"] = type("Meta", (), meta_attrs)
-        attrs["objects"] = ProxyManager(custom_object_type=self)
-
-        proxy_model = type(name, (base_model,), attrs)
-        return proxy_model
-
     @classmethod
     def get_table_model_name(cls, table_id):
         return f"Table{table_id}Model"
 
     @property
     def content_type(self):
-        return ContentType.objects.get(
-            app_label=APP_LABEL, model=self.get_table_model_name(self.id).lower()
-        )
+        try:
+            return self.get_or_create_content_type()
+        except Exception:
+            # If we still can't get it, return None
+            return None
+
+    def get_or_create_content_type(self):
+        """
+        Get or create the ObjectType for this CustomObjectType.
+        This ensures the ObjectType is immediately available in the current transaction.
+        """
+        content_type_name = self.get_table_model_name(self.id).lower()
+        try:
+            return ObjectType.objects.get(app_label=APP_LABEL, model=content_type_name)
+        except Exception:
+            # Create the ObjectType and ensure it's immediately available
+            ct = ObjectType.objects.create(app_label=APP_LABEL, model=content_type_name)
+            # Force a refresh to ensure it's available in the current transaction
+            ct.refresh_from_db()
+            return ct
 
     def _fetch_and_generate_field_attrs(
         self,
         fields,
+        skip_object_fields=False,
     ):
         field_attrs = {
             "_primary_field_id": -1,
@@ -184,7 +309,10 @@ class CustomObjectType(NetBoxModel):
 
         for field in fields:
             field_type = FIELD_TYPE_CLASS[field.type]()
-            # field_type = field_type_registry.get_by_model(field)
+            if skip_object_fields:
+                if field.type in [CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT]:
+                    continue
+
             field_name = field.name
 
             field_attrs["_field_objects"][field.id] = {
@@ -199,8 +327,6 @@ class CustomObjectType(NetBoxModel):
 
             field_attrs[field.name] = field_type.get_model_field(
                 field,
-                # db_column=field.db_column,
-                # verbose_name=field.name,
             )
 
         return field_attrs
@@ -233,16 +359,35 @@ class CustomObjectType(NetBoxModel):
 
     @staticmethod
     def get_content_type_label(custom_object_type_id):
-        custom_object_type = CustomObjectType.objects.get(
-            pk=custom_object_type_id
-        )
+        custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
         return f"Custom Objects > {custom_object_type.name}"
+
+    def register_custom_object_search_index(self, model):
+        # model must be an instance of this CustomObjectType's get_model() generated class
+        fields = []
+        for field in self.fields.filter(search_weight__gt=0):
+            fields.append((field.name, field.search_weight))
+
+        attrs = {
+            "model": model,
+            "fields": tuple(fields),
+            "display_attrs": tuple(),
+        }
+        search_index = type(
+            f"{self.name}SearchIndex",
+            (SearchIndex,),
+            attrs,
+        )
+        label = f"{APP_LABEL}.{self.get_table_model_name(self.id).lower()}"
+        registry["search"][label] = search_index
 
     def get_model(
         self,
         fields=None,
         manytomany_models=None,
         app_label=None,
+        skip_object_fields=False,
+        no_cache=False,
     ):
         """
         Generates a temporary Django model based on available fields that belong to
@@ -258,16 +403,25 @@ class CustomObjectType(NetBoxModel):
             have the same app_label. If passed along in this parameter, then the
             generated model will use that one instead of generating a unique one.
         :type app_label: Optional[String]
+        :param skip_object_fields: Don't add object or multiobject fields to the model
+        :type skip_object_fields: bool
+        :param no_cache: Don't cache the generated model or attempt to pull from cache
+        :type no_cache: bool
         :return: The generated model.
         :rtype: Model
         """
-        
+
         # Check if we have a cached model for this CustomObjectType
-        if self.is_model_cached(self.id):
-            return self.get_cached_model(self.id)
+        if self.is_model_cached(self.id) and not no_cache:
+            model = self.get_cached_model(self.id)
+            # Ensure the serializer is registered even for cached models
+            from netbox_custom_objects.api.serializers import get_serializer_class
+
+            get_serializer_class(model)
+            return model
 
         if app_label is None:
-            app_label = str(uuid.uuid4()) + "_database_table"
+            app_label = APP_LABEL
 
         model_name = self.get_table_model_name(self.pk)
 
@@ -275,14 +429,8 @@ class CustomObjectType(NetBoxModel):
             fields = []
 
         # TODO: Add other fields with "index" specified
-        indexes = [
-            models.Index(
-                fields=["id"],
-                name=self.get_collision_safe_order_id_idx_name(),
-            )
-        ]
+        indexes = []
 
-        apps = AppsProxy(manytomany_models, app_label)
         meta = type(
             "Meta",
             (),
@@ -298,76 +446,93 @@ class CustomObjectType(NetBoxModel):
             },
         )
 
-        def __str__(self):
-            # Find the field with primary=True and return that field's "name" as the name of the object
-            primary_field = self._field_objects.get(self._primary_field_id, None)
-            primary_field_value = None
-            if primary_field:
-                field_type = FIELD_TYPE_CLASS[primary_field["field"].type]()
-                primary_field_value = field_type.get_display_value(self, primary_field["name"])
-            if not primary_field_value:
-                return f"{self.custom_object_type.name} {self.id}"
-            return str(primary_field_value) or str(self.id)
-
-        def get_absolute_url(self):
-            return reverse(
-                "plugins:netbox_custom_objects:customobject",
-                kwargs={
-                    "pk": self.pk,
-                    "custom_object_type": self.custom_object_type.name.lower(),
-                },
-            )
-
         attrs = {
             "Meta": meta,
             "__module__": "database.models",
-            # An indication that the model is a generated table model.
-            "_generated_table_model": True,
             "custom_object_type": self,
             "custom_object_type_id": self.id,
-            "dynamic_models": apps.dynamic_models,
-            # We are using our own table model manager to implement some queryset
-            # helpers.
-            # "objects": models.Manager(),
-            "objects": RestrictedQuerySet.as_manager(),
-            # "objects_and_trash": TableModelTrashAndObjectsManager(),
-            "__str__": __str__,
-            "get_absolute_url": get_absolute_url,
         }
 
-        field_attrs = self._fetch_and_generate_field_attrs(fields)
-        # field_attrs["name"] = models.CharField(max_length=100, unique=True)
+        field_attrs = self._fetch_and_generate_field_attrs(fields, skip_object_fields=skip_object_fields)
 
         attrs.update(**field_attrs)
 
-        # Create the model class.
-        model = type(
-            str(model_name),
-            (CustomObject,),
-            attrs,
-        )
+        # Create the model class with a workaround for TaggableManager conflicts
+        # Wrap the existing post_through_setup method to handle ValueError exceptions
+        from taggit.managers import TaggableManager as TM
 
-        # patch_meta_get_field(model._meta)
+        original_post_through_setup = TM.post_through_setup
+
+        def wrapped_post_through_setup(self, cls):
+            try:
+                return original_post_through_setup(self, cls)
+            except ValueError:
+                pass
+
+        TM.post_through_setup = wrapped_post_through_setup
+
+        # Suppress RuntimeWarning about model already being registered
+        # TODO: Remove this once we have a better way to handle model registration
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", category=RuntimeWarning, message=".*was already registered.*"
+            )
+
+            try:
+                model = type(
+                    str(model_name),
+                    (CustomObject, models.Model),
+                    attrs,
+                )
+            finally:
+                # Restore the original method
+                TM.post_through_setup = original_post_through_setup
+
+        # Register the main model with Django's app registry
+        try:
+            existing_model = apps.get_model(APP_LABEL, model_name)
+            # If model exists but is different, we have a problem
+            if existing_model is not model:
+                # Use the existing model to avoid conflicts
+                model = existing_model
+        except LookupError:
+            apps.register_model(APP_LABEL, model)
 
         if not manytomany_models:
             self._after_model_generation(attrs, model)
 
         # Cache the generated model
-        self._model_cache[self.id] = model
-        
+        if not no_cache:
+            self._model_cache[self.id] = model
+
+        # Register the serializer for this model
+        if not manytomany_models:
+            from netbox_custom_objects.api.serializers import get_serializer_class
+
+            get_serializer_class(model)
+
+        # Register the global SearchIndex for this model
+        self.register_custom_object_search_index(model)
+
         return model
 
     def create_model(self):
+        # Get the model and ensure it's registered
         model = self.get_model()
-        apps.register_model(APP_LABEL, model)
-        app_config = apps.get_app_config(APP_LABEL)
-        create_contenttypes(app_config)
+
+        # Ensure the ContentType exists and is immediately available
+        ct = self.get_or_create_content_type()
+        features = get_model_features(model)
+        ct.public = True
+        ct.features = features
+        ct.save()
 
         with connection.schema_editor() as schema_editor:
             schema_editor.create_model(model)
 
+        self.register_custom_object_search_index(model)
+
     def save(self, *args, **kwargs):
-        # needs_db_create = self.pk is None
         needs_db_create = self._state.adding
         super().save(*args, **kwargs)
         if needs_db_create:
@@ -379,31 +544,19 @@ class CustomObjectType(NetBoxModel):
     def delete(self, *args, **kwargs):
         # Clear the model cache for this CustomObjectType
         self.clear_model_cache(self.id)
-        
+
         model = self.get_model()
-        # self.content_type.delete()
-        ContentType.objects.get(
-            app_label=APP_LABEL, model=self.get_table_model_name(self.id).lower()
-        ).delete()
+        object_type = ObjectType.objects.get_for_model(model)
+        ObjectChange.objects.filter(changed_object_type=object_type).delete()
         super().delete(*args, **kwargs)
+
+        # Temporarily disconnect the pre_delete handler to skip the ObjectType deletion
+        # TODO: Remove this disconnect/reconnect after ObjectType has been exempted from handle_deleted_object
+        pre_delete.disconnect(handle_deleted_object)
+        object_type.delete()
         with connection.schema_editor() as schema_editor:
             schema_editor.delete_model(model)
-
-
-class ProxyManager(models.Manager):
-    custom_object_type = None
-
-    def __init__(self, *args, **kwargs):
-        self.custom_object_type = kwargs.pop("custom_object_type", None)
-        super().__init__(*args, **kwargs)
-
-    # TODO: make this a RestrictedQuerySet
-    # def restrict(self, user, action='view'):
-    #     queryset = super().restrict(user, action=action)
-    #     return queryset.filter(custom_object_type=self.custom_object_type)
-
-    def get_queryset(self):
-        return super().get_queryset().filter(custom_object_type=self.custom_object_type)
+        pre_delete.connect(handle_deleted_object)
 
 
 class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
@@ -415,9 +568,10 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         max_length=50,
         choices=CustomFieldTypeChoices,
         default=CustomFieldTypeChoices.TYPE_TEXT,
-        help_text=_("The type of data this custom field holds"),
+        help_text=_("The type of data this custom object field holds"),
     )
     primary = models.BooleanField(
+        verbose_name=_("primary name field"),
         default=False,
         help_text=_(
             "Indicates that this field's value will be used as the object's displayed name"
@@ -433,7 +587,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     name = models.CharField(
         verbose_name=_("name"),
         max_length=50,
-        help_text=_("Internal field name"),
+        help_text=_("Internal field name, e.g. \"vendor_label\""),
         validators=(
             RegexValidator(
                 regex=r"^[a-z0-9_]+$",
@@ -443,7 +597,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             RegexValidator(
                 regex=r"__",
                 message=_(
-                    "Double underscores are not permitted in custom field names."
+                    "Double underscores are not permitted in custom object field names."
                 ),
                 flags=re.IGNORECASE,
                 inverse_match=True,
@@ -462,7 +616,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         verbose_name=_("group name"),
         max_length=50,
         blank=True,
-        help_text=_("Custom fields within the same group will be displayed together"),
+        help_text=_("Custom object fields within the same group will be displayed together"),
     )
     description = models.CharField(
         verbose_name=_("description"), max_length=200, blank=True
@@ -481,9 +635,9 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     )
     search_weight = models.PositiveSmallIntegerField(
         verbose_name=_("search weight"),
-        default=1000,
+        default=500,
         help_text=_(
-            "Weighting for search. Lower values are considered more important. Fields with a search weight of zero "
+            "Weighting for search. Lower values are considered more important. Fields with a search weight of 0 "
             "will be ignored."
         ),
     )
@@ -568,9 +722,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     )
     comments = models.TextField(verbose_name=_("comments"), blank=True)
 
-    clone_fields = (
-        'custom_object_type',
-    )
+    clone_fields = ("custom_object_type",)
 
     # For non-object fields, other field attribs (such as choices, length, required) should be added here as a
     # superset, or stored in a JSON field
@@ -638,7 +790,9 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     @property
     def related_object_type_label(self):
         if self.related_object_type.app_label == APP_LABEL:
-            custom_object_type_id = self.related_object_type.model.replace("table", "").replace("model", "")
+            custom_object_type_id = self.related_object_type.model.replace(
+                "table", ""
+            ).replace("model", "")
             return CustomObjectType.get_content_type_label(custom_object_type_id)
         return object_type_name(self.related_object_type, include_app=True)
 
@@ -1047,7 +1201,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         model_field = field_type.get_model_field(self)
         model = self.custom_object_type.get_model()
         model_field.contribute_to_class(model, self.name)
-        # apps.register_model(APP_LABEL, model)
+
         with connection.schema_editor() as schema_editor:
             if self._state.adding:
                 schema_editor.add_field(model, model_field)
@@ -1056,19 +1210,116 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             else:
                 old_field = field_type.get_model_field(self.original)
                 old_field.contribute_to_class(model, self._original_name)
-                schema_editor.alter_field(model, old_field, model_field)
-        
+
+                # Special handling for MultiObject fields when the name changes
+                if (
+                    self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
+                    and self.name != self._original_name
+                ):
+                    # For renamed MultiObject fields, we just need to rename the through table
+                    old_through_table_name = self.original.through_table_name
+                    new_through_table_name = self.through_table_name
+
+                    # Check if old through table exists
+                    with connection.cursor() as cursor:
+                        tables = connection.introspection.table_names(cursor)
+                        old_table_exists = old_through_table_name in tables
+
+                    if old_table_exists:
+                        # Create temporary models to represent the old and new through table states
+                        old_through_meta = type(
+                            "Meta",
+                            (),
+                            {
+                                "db_table": old_through_table_name,
+                                "app_label": APP_LABEL,
+                                "managed": True,
+                            },
+                        )
+                        old_through_model = type(
+                            f"TempOld{self.original.through_model_name}",
+                            (models.Model,),
+                            {
+                                "__module__": "netbox_custom_objects.models",
+                                "Meta": old_through_meta,
+                                "id": models.AutoField(primary_key=True),
+                                "source": models.ForeignKey(
+                                    model,
+                                    on_delete=models.CASCADE,
+                                    db_column="source_id",
+                                    related_name="+",
+                                ),
+                                "target": models.ForeignKey(
+                                    model,
+                                    on_delete=models.CASCADE,
+                                    db_column="target_id",
+                                    related_name="+",
+                                ),
+                            },
+                        )
+
+                        new_through_meta = type(
+                            "Meta",
+                            (),
+                            {
+                                "db_table": new_through_table_name,
+                                "app_label": APP_LABEL,
+                                "managed": True,
+                            },
+                        )
+                        new_through_model = type(
+                            f"TempNew{self.through_model_name}",
+                            (models.Model,),
+                            {
+                                "__module__": "netbox_custom_objects.models",
+                                "Meta": new_through_meta,
+                                "id": models.AutoField(primary_key=True),
+                                "source": models.ForeignKey(
+                                    model,
+                                    on_delete=models.CASCADE,
+                                    db_column="source_id",
+                                    related_name="+",
+                                ),
+                                "target": models.ForeignKey(
+                                    model,
+                                    on_delete=models.CASCADE,
+                                    db_column="target_id",
+                                    related_name="+",
+                                ),
+                            },
+                        )
+                        new_through_model  # To silence ruff error
+
+                        # Rename the table using Django's schema editor
+                        schema_editor.alter_db_table(
+                            old_through_model,
+                            old_through_table_name,
+                            new_through_table_name,
+                        )
+                    else:
+                        # No old table exists, create the new through table
+                        field_type.create_m2m_table(self, model, self.name)
+
+                    # Alter the field normally (this updates the field definition)
+                    schema_editor.alter_field(model, old_field, model_field)
+                else:
+                    # Normal field alteration
+                    schema_editor.alter_field(model, old_field, model_field)
+
         # Clear and refresh the model cache for this CustomObjectType when a field is modified
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)
-        
+
         super().save(*args, **kwargs)
+
+        # Reregister SearchIndex with new set of searchable fields
+        self.custom_object_type.register_custom_object_search_index(model)
 
     def delete(self, *args, **kwargs):
         field_type = FIELD_TYPE_CLASS[self.type]()
         model_field = field_type.get_model_field(self)
         model = self.custom_object_type.get_model()
         model_field.contribute_to_class(model, self.name)
-        # apps.register_model(APP_LABEL, model)
+
         with connection.schema_editor() as schema_editor:
             if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                 apps = model._meta.apps
@@ -1076,10 +1327,13 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 schema_editor.delete_model(through_model)
             schema_editor.remove_field(model, model_field)
 
-        # Clear the model cache for this CustomObjectType when a field is deleted  
+        # Clear the model cache for this CustomObjectType when a field is deleted
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)
 
         super().delete(*args, **kwargs)
+
+        # Reregister SearchIndex with new set of searchable fields
+        self.custom_object_type.register_custom_object_search_index(model)
 
 
 class CustomObjectObjectTypeManager(ObjectTypeManager):
@@ -1101,7 +1355,7 @@ class CustomObjectObjectTypeManager(ObjectTypeManager):
         )
 
 
-class CustomObjectObjectType(ContentType):
+class CustomObjectObjectType(ObjectType):
     """
     Wrap Django's native ContentType model to use our custom manager.
     """
