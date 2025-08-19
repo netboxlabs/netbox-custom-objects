@@ -14,7 +14,8 @@ from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
 from extras.choices import CustomFieldTypeChoices, CustomFieldUIEditableChoices
 from utilities.api import get_serializer_for_model
-from utilities.forms.fields import (CSVChoiceField, CSVMultipleChoiceField,
+from utilities.forms.fields import (CSVChoiceField, CSVModelChoiceField,
+                                    CSVModelMultipleChoiceField, CSVMultipleChoiceField,
                                     DynamicChoiceField,
                                     DynamicMultipleChoiceField, JSONField,
                                     LaxURLField)
@@ -357,7 +358,6 @@ class ObjectFieldType(FieldType):
         """
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
 
-        from utilities.forms.fields import DynamicModelChoiceField
         if content_type.app_label == APP_LABEL:
             # This is a custom object type
             from netbox_custom_objects.models import CustomObjectType
@@ -367,24 +367,34 @@ class ObjectFieldType(FieldType):
             )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
             model = custom_object_type.get_model()
-            field_class = DynamicModelChoiceField
         else:
             # This is a regular NetBox model
             model = content_type.model_class()
 
+        if for_csv_import:
+            field_class = CSVModelChoiceField
+            # For CSV import, determine to_field_name from the field configuration
+            to_field_name = getattr(field, 'to_field_name', None) or 'name'
+            return field_class(
+                queryset=model.objects.all(),
+                required=field.required,
+                initial=field.default,
+                to_field_name=to_field_name,
+            )
+        else:
+            from utilities.forms.fields import DynamicModelChoiceField
             field_class = DynamicModelChoiceField
-
-        return field_class(
-            queryset=model.objects.all(),
-            required=field.required,
-            initial=field.default,
-            query_params=(
-                field.related_object_filter
-                if hasattr(field, "related_object_filter")
-                else None
-            ),
-            selector=True,
-        )
+            return field_class(
+                queryset=model.objects.all(),
+                required=field.required,
+                initial=field.default,
+                query_params=(
+                    field.related_object_filter
+                    if hasattr(field, "related_object_filter")
+                    else None
+                ),
+                selector=True,
+            )
 
     def get_filterform_field(self, field, **kwargs):
         return None
@@ -658,19 +668,30 @@ class MultiObjectFieldType(FieldType):
             # This is a regular NetBox model
             model = content_type.model_class()
 
-        from utilities.forms.fields import DynamicModelMultipleChoiceField
-
-        return DynamicModelMultipleChoiceField(
-            queryset=model.objects.all(),
-            required=field.required,
-            initial=field.default,
-            query_params=(
-                field.related_object_filter
-                if hasattr(field, "related_object_filter")
-                else None
-            ),
-            selector=True,
-        )
+        if for_csv_import:
+            field_class = CSVModelMultipleChoiceField
+            # For CSV import, determine to_field_name from the field configuration
+            to_field_name = getattr(field, 'to_field_name', None) or 'name'
+            return field_class(
+                queryset=model.objects.all(),
+                required=field.required,
+                initial=field.default,
+                to_field_name=to_field_name,
+            )
+        else:
+            from utilities.forms.fields import DynamicModelMultipleChoiceField
+            field_class = DynamicModelMultipleChoiceField
+            return field_class(
+                queryset=model.objects.all(),
+                required=field.required,
+                initial=field.default,
+                query_params=(
+                    field.related_object_filter
+                    if hasattr(field, "related_object_filter")
+                    else None
+                ),
+                selector=True,
+            )
 
     def get_filterform_field(self, field, **kwargs):
         return None
