@@ -31,7 +31,7 @@ from netbox_custom_objects.tables import CustomObjectTable
 from . import field_types, filtersets, forms, tables
 from .models import CustomObject, CustomObjectType, CustomObjectTypeField
 
-logger = logging.getLogger('netbox_custom_objects.views')
+logger = logging.getLogger("netbox_custom_objects.views")
 
 
 class CustomJournalEntryForm(JournalEntryForm):
@@ -123,7 +123,9 @@ class CustomObjectTableMixin(TableMixin):
                 attrs[field.name] = field_type.get_table_column_field(field)
             except NotImplementedError:
                 logger.debug(
-                    "table mixin: {} field is not implemented; using a default column".format(field.name)
+                    "table mixin: {} field is not implemented; using a default column".format(
+                        field.name
+                    )
                 )
             # Define a method "render_table_column" method on any FieldType to customize output
             # See https://django-tables2.readthedocs.io/en/latest/pages/custom-data.html#table-render-foo-methods
@@ -543,6 +545,22 @@ class CustomObjectDeleteView(generic.ObjectDeleteView):
         model = object_type.get_model()
         return get_object_or_404(model.objects.all(), **self.kwargs)
 
+    def get_return_url(self, request, obj=None):
+        """
+        Return the URL to redirect to after deleting a custom object.
+        """
+        if obj:
+            # Get the custom object type from the object directly
+            custom_object_type = obj.custom_object_type.name
+        else:
+            # Fallback to getting it from kwargs if object is not available
+            custom_object_type = self.kwargs.get("custom_object_type")
+
+        return reverse(
+            "plugins:netbox_custom_objects:customobject_list",
+            kwargs={"custom_object_type": custom_object_type},
+        )
+
 
 @register_model_view(CustomObject, "bulk_edit", path="edit", detail=False)
 class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
@@ -578,7 +596,9 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
             try:
                 attrs[field.name] = field_type.get_annotated_form_field(field)
             except NotImplementedError:
-                logger.debug("bulk edit form: {} field is not supported".format(field.name))
+                logger.debug(
+                    "bulk edit form: {} field is not supported".format(field.name)
+                )
 
         form = type(
             f"{queryset.model._meta.object_name}BulkEditForm",
