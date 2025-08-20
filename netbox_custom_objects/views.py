@@ -543,6 +543,19 @@ class CustomObjectDeleteView(generic.ObjectDeleteView):
         model = object_type.get_model()
         return get_object_or_404(model.objects.all(), **self.kwargs)
 
+    def get_return_url(self, request, obj=None):
+        """
+        Return the URL to redirect to after deleting a custom object.
+        """
+        if obj:
+            # Get the custom object type from the object directly
+            custom_object_type = obj.custom_object_type.name
+        else:
+            # Fallback to getting it from kwargs if object is not available
+            custom_object_type = self.kwargs.get("custom_object_type")
+        
+        return reverse("plugins:netbox_custom_objects:customobject_list", kwargs={"custom_object_type": custom_object_type})
+
 
 @register_model_view(CustomObject, "bulk_edit", path="edit", detail=False)
 class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
