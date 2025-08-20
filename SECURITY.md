@@ -2,4 +2,4 @@
 
 ## Reporting a Vulnerability
 
-Please send any suspected vulnerability report to security@netboxlabs.com
+Please send any suspected vulnerability report to [security@netboxlabs.com](mailto:security@netboxlabs.com)

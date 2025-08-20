@@ -6,7 +6,7 @@ You can find further documentation [here](https://github.com/netboxlabs/netbox-c
 
 ## Requirements
 
-* NetBox v4.2 or later
+* NetBox v4.4-beta or later
 
 ## Installation
 
@@ -30,6 +30,7 @@ PLUGINS = [
 ```
 $ ./manage.py migrate
 ```
+
 4. Restart NetBox
 ```
 sudo systemctl restart netbox netbox-rq
@@ -37,4 +38,4 @@ sudo systemctl restart netbox netbox-rq
 
 ## Known Limitations
 
-The Public Preview of NetBox Custom Objects is under active development as we proceed towards the General Availability release around NetBox 4.4. The best place to look for the latest list of known limitations is the [issues](https://github.com/netboxlabs/netbox-custom-objects/issues) list on the GitHub repository. These include features like Tags, Import/Export, Bulk Edit, Text Search and Branching.
+The Public Preview of NetBox Custom Objects is under active development as we proceed towards the General Availability release around NetBox 4.4. The best place to look for the latest list of known limitations is the [issues](https://github.com/netboxlabs/netbox-custom-objects/issues) list on the GitHub repository.

@@ -28,7 +28,7 @@ similar to the following:
 ### Custom Object Type Fields
 
 Define the schema of the Custom Object Type by creating fields of various types, with POST requests to
-`/api/plugins/custom-objects/custom-object-type-fields/`:
+`/api/plugins/custom-objects/custom-object-type-fields/`, referencing the ID of the Custom Object Type you just created:
 
 ```json
 {
@@ -166,8 +166,44 @@ The response will include the created object with its assigned ID and additional
 }
 ```
 
-PATCH requests can be used to update all the above objects, as well as DELETE and GET operations, using the detail
-URL for each model:
+### API output in the browser
+
+As with other NetBox objects, you can also view the API output for given Custom Objects by prepending `api/` to the URL, e.g. `api/plugins/custom-objects/dhcp_scope/`
+
+```
+HTTP 200 OK
+Allow: GET, POST, HEAD, OPTIONS
+Content-Type: application/json
+Vary: Accept
+
+{
+    "count": 1,
+    "next": null,
+    "previous": null,
+    "results": [
+        {
+            "id": 1,
+            "url": "http://localhost:8001/api/plugins/custom-objects/dhcp_scope/1/",
+            "range": {
+                "id": 1,
+                "url": "http://localhost:8001/api/ipam/ip-ranges/1/",
+                "display": "192.168.0.1-100/24",
+                "family": {
+                    "value": 4,
+                    "label": "IPv4"
+                },
+                "start_address": "192.168.0.1/24",
+                "end_address": "192.168.0.100/24",
+                "description": ""
+            }
+        }
+    ]
+}
+```
+
+### Other operations
+
+`PATCH`, `DELETE` and `GET` requests can be used on all of the above, using the detail URL for each model:
 - Custom Object Types: `/api/plugins/custom-objects/custom-object-types/15/`
 - Custom Object Type Fields: `/api/plugins/custom-objects/custom-object-type-fields/23/`
 - Custom Objects: `/api/plugins/custom-objects/<custom-object-type>/15/`
