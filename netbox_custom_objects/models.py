@@ -12,7 +12,7 @@ from django.conf import settings
 # from django.contrib.contenttypes.management import create_contenttypes
 from django.contrib.contenttypes.models import ContentType
 from django.core.validators import RegexValidator, ValidationError
-from django.db import connection, models, IntegrityError
+from django.db import connection, models, IntegrityError, transaction
 from django.db.models import Q
 from django.db.models.functions import Lower
 from django.db.models.signals import pre_delete
@@ -892,11 +892,12 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             old_field.contribute_to_class(model, self._original_name)
 
             try:
-                with connection.schema_editor() as test_schema_editor:
-                    test_schema_editor.alter_field(model, old_field, model_field)
-                    # If we get here, the constraint was applied successfully
-                    # Now raise a custom exception to rollback the test transaction
-                    raise UniquenessConstraintTestError()
+                with transaction.atomic():
+                    with connection.schema_editor() as test_schema_editor:
+                        test_schema_editor.alter_field(model, old_field, model_field)
+                        # If we get here, the constraint was applied successfully
+                        # Now raise a custom exception to rollback the test transaction
+                        raise UniquenessConstraintTestError()
             except UniquenessConstraintTestError:
                 # The constraint can be applied, validation passes
                 pass
@@ -909,6 +910,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                         )
                     }
                 )
+            finally:
+                self.custom_object_type.clear_model_cache(self.custom_object_type.id)
 
         # Choice set must be set on selection fields, and *only* on selection fields
         if self.type in (
