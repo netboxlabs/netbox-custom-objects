@@ -6,3 +6,19 @@ INCLUDE_MODELS = (
 )
 
 APP_LABEL = "netbox_custom_objects"
+
+# Field names that are reserved and cannot be used for custom object fields
+RESERVED_FIELD_NAMES = [
+    "bookmarks",
+    "contacts",
+    "created",
+    "custom_field_data",
+    "id",
+    "images",
+    "jobs",
+    "journal_entries",
+    "last_updated",
+    "pk",
+    "subscriptions",
+    "tags",
+]

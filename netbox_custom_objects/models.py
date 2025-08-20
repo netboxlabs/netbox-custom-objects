@@ -49,7 +49,7 @@ from utilities.querysets import RestrictedQuerySet
 from utilities.string import title
 from utilities.validators import validate_regex
 
-from netbox_custom_objects.constants import APP_LABEL
+from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
 
 
@@ -812,6 +812,16 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
     def clean(self):
         super().clean()
+
+        # Check if the field name is reserved
+        if self.name in RESERVED_FIELD_NAMES:
+            raise ValidationError(
+                {
+                    "name": _(
+                        'Field name "{name}" is reserved and cannot be used. Reserved names are: {reserved_names}'
+                    ).format(name=self.name, reserved_names=", ".join(RESERVED_FIELD_NAMES))
+                }
+            )
 
         # Validate the field's default value (if any)
         if self.default is not None:
