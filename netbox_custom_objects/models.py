@@ -164,9 +164,15 @@ class CustomObjectType(PrimaryModel):
     _through_model_cache = (
         {}
     )  # Now stores {custom_object_type_id: {through_model_name: through_model}}
-    name = models.CharField(max_length=100, unique=True)
+    name = models.CharField(
+        max_length=100,
+        unique=True,
+        help_text=_("Internal lowercased object name, e.g. \"vendor_policy\""),
+    )
     schema = models.JSONField(blank=True, default=dict)
+    verbose_name = models.CharField(max_length=100, blank=True)
     verbose_name_plural = models.CharField(max_length=100, blank=True)
+    slug = models.SlugField(max_length=100, null=True, unique=True, db_index=True)
 
     class Meta:
         verbose_name = "Custom Object Type"
@@ -356,7 +362,7 @@ class CustomObjectType(PrimaryModel):
 
     @property
     def title_case_name_plural(self):
-        return title(self.name) + "s"
+        return title(self.verbose_name or self.name) + "s"
 
     def get_verbose_name(self):
         return self.name
