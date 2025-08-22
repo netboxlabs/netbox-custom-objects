@@ -4,9 +4,9 @@
 
 {% block title %}
   {% if object.pk %}
-    {% trans "Editing" %} {{ object.custom_object_type.get_verbose_name.lower }} {{ object }}
+    {% trans "Editing" %} {{ object.custom_object_type.display_name.lower }} {{ object }}
   {% else %}
-    {% blocktrans trimmed with custom_object_type=object.custom_object_type.name %}
+    {% blocktrans trimmed with custom_object_type=object.custom_object_type.display_name %}
       Add a new {{ custom_object_type }}
     {% endblocktrans %}
   {% endif %}

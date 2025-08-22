@@ -79,7 +79,7 @@ def custom_object_clone_button(instance):
     viewname = get_viewname(instance, "add")
     url = reverse(
         viewname,
-        kwargs={"custom_object_type": instance.custom_object_type.name.lower()}
+        kwargs={"custom_object_type": instance.custom_object_type.slug}
     )
 
     # Populate cloned field values
@@ -99,7 +99,7 @@ def custom_object_edit_button(instance):
         viewname,
         kwargs={
             "pk": instance.pk,
-            "custom_object_type": instance.custom_object_type.name.lower(),
+            "custom_object_type": instance.custom_object_type.slug,
         },
     )
 
@@ -115,7 +115,7 @@ def custom_object_delete_button(instance):
     url = reverse(
         viewname, kwargs={
             "pk": instance.pk,
-            "custom_object_type": instance.custom_object_type.name.lower(),
+            "custom_object_type": instance.custom_object_type.slug,
         },
     )
 
@@ -191,7 +191,7 @@ def custom_object_add_button(model, custom_object_type, action="add"):
     try:
         viewname = get_viewname(model, action)
         url = reverse(
-            viewname, kwargs={"custom_object_type": custom_object_type.name.lower()}
+            viewname, kwargs={"custom_object_type": custom_object_type.slug}
         )
     except NoReverseMatch:
         url = None
@@ -247,7 +247,7 @@ def custom_object_bulk_edit_button(
     try:
         viewname = get_viewname(model, action)
         url = reverse(
-            viewname, kwargs={"custom_object_type": custom_object_type.name.lower()}
+            viewname, kwargs={"custom_object_type": custom_object_type.slug}
         )
 
         if query_params:
@@ -269,7 +269,7 @@ def custom_object_bulk_delete_button(
     try:
         viewname = get_viewname(model, action)
         url = reverse(
-            viewname, kwargs={"custom_object_type": custom_object_type.name.lower()}
+            viewname, kwargs={"custom_object_type": custom_object_type.slug}
         )
         if query_params:
             url = f"{url}?{query_params.urlencode()}"

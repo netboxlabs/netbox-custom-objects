@@ -192,7 +192,7 @@ class CustomObjectSerializer(NetBoxModelSerializer):
         lookup_value = getattr(obj, "pk")
         kwargs = {
             "pk": lookup_value,
-            "custom_object_type": obj.custom_object_type.name.lower(),
+            "custom_object_type": obj.custom_object_type.slug,
         }
         request = self.context["request"]
         format = self.context.get("format")
@@ -230,7 +230,7 @@ def get_serializer_class(model):
         lookup_value = getattr(obj, "pk")
         kwargs = {
             "pk": lookup_value,
-            "custom_object_type": obj.custom_object_type.name.lower(),
+            "custom_object_type": obj.custom_object_type.slug,
         }
         request = self.context["request"]
         format = self.context.get("format")

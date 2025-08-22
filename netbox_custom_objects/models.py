@@ -134,14 +134,14 @@ class CustomObject(
             "plugins:netbox_custom_objects:customobject",
             kwargs={
                 "pk": self.pk,
-                "custom_object_type": self.custom_object_type.name.lower(),
+                "custom_object_type": self.custom_object_type.slug,
             },
         )
 
     def get_list_url(self):
         return reverse(
             "plugins:netbox_custom_objects:customobject_list",
-            kwargs={"custom_object_type": self.custom_object_type.name.lower()},
+            kwargs={"custom_object_type": self.custom_object_type.slug},
         )
 
     @classmethod
@@ -154,7 +154,7 @@ class CustomObject(
     def _get_action_url(cls, action=None, rest_api=False, kwargs=None):
         if kwargs is None:
             kwargs = {}
-        kwargs["custom_object_type"] = cls.custom_object_type.name.lower()
+        kwargs["custom_object_type"] = cls.custom_object_type.slug
         return reverse(cls._get_viewname(action, rest_api), kwargs=kwargs)
 
 
@@ -188,7 +188,11 @@ class CustomObjectType(PrimaryModel):
         ]
 
     def __str__(self):
-        return self.name
+        return self.display_name
+
+    @property
+    def display_name(self):
+        return self.verbose_name or self.name
 
     @classmethod
     def clear_model_cache(cls, custom_object_type_id=None):
@@ -272,7 +276,7 @@ class CustomObjectType(PrimaryModel):
     def get_list_url(self):
         return reverse(
             "plugins:netbox_custom_objects:customobject_list",
-            kwargs={"custom_object_type": self.name.lower()},
+            kwargs={"custom_object_type": self.slug},
         )
 
     @classmethod

@@ -23,7 +23,7 @@ class CustomObjectViewSet(ModelViewSet):
 
     def get_view_name(self):
         if self.model:
-            return self.model.custom_object_type.name
+            return self.model.custom_object_type.verbose_name or self.model.custom_object_type.name
         return 'Custom Object'
 
     def get_serializer_class(self):
@@ -32,7 +32,7 @@ class CustomObjectViewSet(ModelViewSet):
     def get_queryset(self):
         try:
             custom_object_type = CustomObjectType.objects.get(
-                name__iexact=self.kwargs["custom_object_type"]
+                slug=self.kwargs["custom_object_type"]
             )
         except CustomObjectType.DoesNotExist:
             raise Http404

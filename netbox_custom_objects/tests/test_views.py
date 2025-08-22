@@ -20,13 +20,15 @@ class CustomObjectTypeViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryO
         cls.custom_object_type1 = CustomObjectType.objects.create(
             name="TestObject1",
             description="First test custom object type",
-            verbose_name_plural="Test Objects 1"
+            verbose_name_plural="Test Objects 1",
+            slug="test-objects-1",
         )
 
         cls.custom_object_type2 = CustomObjectType.objects.create(
             name="TestObject2",
             description="Second test custom object type",
-            verbose_name_plural="Test Objects 2"
+            verbose_name_plural="Test Objects 2",
+            slug="test-objects-2",
         )
 
     def setUp(self):
@@ -302,7 +304,7 @@ class CustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjec
         """
         url_format = self._get_base_url()
 
-        custom_object_type = self.model.custom_object_type.name.lower()
+        custom_object_type = self.model.custom_object_type.slug
 
         # If no instance was provided, assume we don't need a unique identifier
         if instance is None:
@@ -509,7 +511,7 @@ class ComplexCustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.Prima
         """
         url_format = self._get_base_url()
 
-        custom_object_type = self.model.custom_object_type.name.lower()
+        custom_object_type = self.model.custom_object_type.slug
 
         # If no instance was provided, assume we don't need a unique identifier
         if instance is None:
@@ -672,7 +674,7 @@ class ObjectFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObject
         """
         url_format = self._get_base_url()
 
-        custom_object_type = self.model.custom_object_type.name.lower()
+        custom_object_type = self.model.custom_object_type.slug
 
         # If no instance was provided, assume we don't need a unique identifier
         if instance is None:

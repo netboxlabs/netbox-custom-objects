@@ -35,7 +35,7 @@ class CustomObjectTypeMenuItems:
             add_button.url = reverse_lazy(
                 f"plugins:{APP_LABEL}:customobject_add",
                 kwargs={
-                    "custom_object_type": custom_object_type.name.lower()
+                    "custom_object_type": custom_object_type.slug
                 },
             )
             menu_item = PluginMenuItem(
@@ -45,7 +45,7 @@ class CustomObjectTypeMenuItems:
             )
             menu_item.url = reverse_lazy(
                 f"plugins:{APP_LABEL}:customobject_list",
-                kwargs={"custom_object_type": custom_object_type.name.lower()},
+                kwargs={"custom_object_type": custom_object_type.slug},
             )
             yield menu_item
 
