@@ -110,7 +110,8 @@ class CustomObjectTypeFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.Pri
         cls.custom_object_type = CustomObjectType.objects.create(
             name="TestObject",
             description="Test custom object type",
-            verbose_name_plural="Test Objects"
+            verbose_name_plural="Test Objects",
+            slug="test-objects",
         )
 
         # Create test fields
