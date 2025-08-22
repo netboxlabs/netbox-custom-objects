@@ -168,6 +168,20 @@ class CustomObjectType(PrimaryModel):
         max_length=100,
         unique=True,
         help_text=_("Internal lowercased object name, e.g. \"vendor_policy\""),
+        validators=(
+            RegexValidator(
+                regex=r"^[a-z0-9_]+$",
+                message=_("Only lowercase alphanumeric characters and underscores are allowed."),
+            ),
+            RegexValidator(
+                regex=r"__",
+                message=_(
+                    "Double underscores are not permitted in custom object object type names."
+                ),
+                flags=re.IGNORECASE,
+                inverse_match=True,
+            ),
+        ),
     )
     schema = models.JSONField(blank=True, default=dict)
     verbose_name = models.CharField(max_length=100, blank=True)
