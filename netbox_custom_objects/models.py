@@ -172,7 +172,7 @@ class CustomObjectType(PrimaryModel):
     schema = models.JSONField(blank=True, default=dict)
     verbose_name = models.CharField(max_length=100, blank=True)
     verbose_name_plural = models.CharField(max_length=100, blank=True)
-    slug = models.SlugField(max_length=100, null=True, unique=True, db_index=True)
+    slug = models.SlugField(max_length=100, unique=True, db_index=True)
 
     class Meta:
         verbose_name = "Custom Object Type"
