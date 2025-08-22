@@ -553,14 +553,14 @@ class CustomObjectType(PrimaryModel):
         self.clear_model_cache(self.id)
 
         model = self.get_model()
+
+        # Delete all CustomObjectTypeFields that reference this CustomObjectType
+        for field in CustomObjectTypeField.objects.filter(related_object_type=self.content_type):
+            field.delete()
+
         object_type = ObjectType.objects.get_for_model(model)
         ObjectChange.objects.filter(changed_object_type=object_type).delete()
         super().delete(*args, **kwargs)
-
-        # Delete all CustomObjectTypeFields that reference this CustomObjectType
-        CustomObjectTypeField.objects.filter(
-            related_object_type=self.content_type
-        ).delete()
 
         # Temporarily disconnect the pre_delete handler to skip the ObjectType deletion
         # TODO: Remove this disconnect/reconnect after ObjectType has been exempted from handle_deleted_object
