@@ -485,6 +485,10 @@ class CustomObjectType(PrimaryModel):
                 "ignore", category=RuntimeWarning, message=".*was already registered.*"
             )
 
+            # Monkey patch apps.clear_cache to do nothing
+            original_clear_cache = apps.clear_cache
+            apps.clear_cache = lambda: None
+
             try:
                 model = type(
                     str(model_name),
@@ -492,8 +496,9 @@ class CustomObjectType(PrimaryModel):
                     attrs,
                 )
             finally:
-                # Restore the original method
+                # Restore the original methods
                 TM.post_through_setup = original_post_through_setup
+                apps.clear_cache = original_clear_cache
 
         # Register the main model with Django's app registry
         try:
@@ -511,6 +516,9 @@ class CustomObjectType(PrimaryModel):
         # Cache the generated model
         if not no_cache:
             self._model_cache[self.id] = model
+            # Do the clear cache now that we have it in the cache so there
+            # is no recursion.
+            apps.clear_cache()
 
         # Register the serializer for this model
         if not manytomany_models:
