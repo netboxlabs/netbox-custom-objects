@@ -24,7 +24,7 @@ from utilities.forms.widgets import (APISelect, APISelectMultiple, DatePicker,
 from utilities.templatetags.builtins.filters import linkify, render_markdown
 
 from netbox_custom_objects.constants import APP_LABEL
-
+from netbox_custom_objects.utilities import generate_model
 
 class FieldType:
 
@@ -598,7 +598,7 @@ class MultiObjectFieldType(FieldType):
             ),
         }
 
-        return type(field.through_model_name, (models.Model,), attrs)
+        return generate_model(field.through_model_name, (models.Model,), attrs)
 
     def get_model_field(self, field, **kwargs):
         """
