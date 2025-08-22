@@ -240,7 +240,8 @@ class CustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjec
         cls.custom_object_type = CustomObjectType.objects.create(
             name="TestObject",
             description="Test custom object type",
-            verbose_name_plural="Test Objects"
+            verbose_name_plural="Test Objects",
+            slug="test-objects",
         )
 
         # Add a primary field
@@ -382,7 +383,8 @@ class ComplexCustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.Prima
         cls.custom_object_type = CustomObjectType.objects.create(
             name="ComplexObject",
             description="Complex test custom object type",
-            verbose_name_plural="Complex Objects"
+            verbose_name_plural="Complex Objects",
+            slug="complex-objects",
         )
 
         # Add primary field
@@ -583,7 +585,8 @@ class ObjectFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObject
         cls.custom_object_type = CustomObjectType.objects.create(
             name="ObjectTestObject",
             description="Test custom object type with object fields",
-            verbose_name_plural="Object Test Objects"
+            verbose_name_plural="Object Test Objects",
+            slug="object-test-objects",
         )
 
         # Add primary field
