@@ -12,7 +12,7 @@ from django.conf import settings
 # from django.contrib.contenttypes.management import create_contenttypes
 from django.contrib.contenttypes.models import ContentType
 from django.core.validators import RegexValidator, ValidationError
-from django.db import connection, models
+from django.db import connection, IntegrityError, models, transaction
 from django.db.models import Q
 from django.db.models.functions import Lower
 from django.db.models.signals import pre_delete
@@ -49,8 +49,15 @@ from utilities.querysets import RestrictedQuerySet
 from utilities.string import title
 from utilities.validators import validate_regex
 
-from netbox_custom_objects.constants import APP_LABEL
+from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
+
+
+class UniquenessConstraintTestError(Exception):
+    """Custom exception used to signal successful uniqueness constraint test."""
+
+    pass
+
 
 USER_TABLE_DATABASE_NAME_PREFIX = "custom_objects_"
 
@@ -799,6 +806,16 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     def clean(self):
         super().clean()
 
+        # Check if the field name is reserved
+        if self.name in RESERVED_FIELD_NAMES:
+            raise ValidationError(
+                {
+                    "name": _(
+                        'Field name "{name}" is reserved and cannot be used. Reserved names are: {reserved_names}'
+                    ).format(name=self.name, reserved_names=", ".join(RESERVED_FIELD_NAMES))
+                }
+            )
+
         # Validate the field's default value (if any)
         if self.default is not None:
             try:
@@ -861,6 +878,43 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             raise ValidationError(
                 {"unique": _("Uniqueness cannot be enforced for boolean fields")}
             )
+
+        # Check if uniqueness constraint can be applied when changing from non-unique to unique
+        if (
+            self.pk
+            and self.unique
+            and not self.original.unique
+            and not self._state.adding
+        ):
+            field_type = FIELD_TYPE_CLASS[self.type]()
+            model_field = field_type.get_model_field(self)
+            model = self.custom_object_type.get_model()
+            model_field.contribute_to_class(model, self.name)
+
+            old_field = field_type.get_model_field(self.original)
+            old_field.contribute_to_class(model, self._original_name)
+
+            try:
+                with transaction.atomic():
+                    with connection.schema_editor() as test_schema_editor:
+                        test_schema_editor.alter_field(model, old_field, model_field)
+                        # If we get here, the constraint was applied successfully
+                        # Now raise a custom exception to rollback the test transaction
+                        raise UniquenessConstraintTestError()
+            except UniquenessConstraintTestError:
+                # The constraint can be applied, validation passes
+                pass
+            except IntegrityError:
+                # The constraint cannot be applied due to existing non-unique values
+                raise ValidationError(
+                    {
+                        "unique": _(
+                            "Custom objects with non-unique values already exist so this action isn't permitted"
+                        )
+                    }
+                )
+            finally:
+                self.custom_object_type.clear_model_cache(self.custom_object_type.id)
 
         # Choice set must be set on selection fields, and *only* on selection fields
         if self.type in (

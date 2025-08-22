@@ -18,36 +18,6 @@ def is_running_migration():
     return False
 
 
-def is_in_clear_cache():
-    """
-    Check if the code is currently being called from Django's clear_cache() method.
-
-    TODO: This is fairly ugly, but in models.CustomObjectType.get_model() we call
-    meta = type() which calls clear_cache on the model which causes a call to
-    get_models() which in-turn calls get_model and therefore recurses.
-
-    This catches the specific case of a recursive call to get_models() from
-    clear_cache() which is the only case we care about, so should be relatively
-    safe.  An alternative should be found for this.
-    """
-    import inspect
-
-    frame = inspect.currentframe()
-    try:
-        # Walk up the call stack to see if we're being called from clear_cache
-        while frame:
-            if (
-                frame.f_code.co_name == "clear_cache"
-                and "django/apps/registry.py" in frame.f_code.co_filename
-            ):
-                return True
-            frame = frame.f_back
-        return False
-    finally:
-        # Clean up the frame reference
-        del frame
-
-
 def check_custom_object_type_table_exists():
     """
     Check if the CustomObjectType table exists in the database.
@@ -79,7 +49,6 @@ class CustomObjectsPluginConfig(PluginConfig):
     default_settings = {}
     required_settings = []
     template_extensions = "template_content.template_extensions"
-    _in_get_models = False  # Recursion guard
 
     def get_model(self, model_name, require_ready=True):
         try:
@@ -115,45 +84,33 @@ class CustomObjectsPluginConfig(PluginConfig):
 
     def get_models(self, include_auto_created=False, include_swapped=False):
         """Return all models for this plugin, including custom object type models."""
-
         # Get the regular Django models first
         for model in super().get_models(include_auto_created, include_swapped):
             yield model
 
-        # Prevent recursion
-        if self._in_get_models and is_in_clear_cache():
-            # Skip dynamic model creation if we're in a recursive get_models call
-            return
+        # Suppress warnings about database calls during model loading
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", category=RuntimeWarning, message=".*database.*"
+            )
+            warnings.filterwarnings(
+                "ignore", category=UserWarning, message=".*database.*"
+            )
 
-        self._in_get_models = True
-        try:
-            # Suppress warnings about database calls during model loading
-            with warnings.catch_warnings():
-                warnings.filterwarnings(
-                    "ignore", category=RuntimeWarning, message=".*database.*"
-                )
-                warnings.filterwarnings(
-                    "ignore", category=UserWarning, message=".*database.*"
-                )
+            # Skip custom object type model loading if running during migration
+            if is_running_migration() or not check_custom_object_type_table_exists():
+                return
 
-                # Skip custom object type model loading if running during migration
-                if (
-                    is_running_migration()
-                    or not check_custom_object_type_table_exists()
-                ):
-                    return
+            # Add custom object type models
+            from .models import CustomObjectType
 
-                # Add custom object type models
-                from .models import CustomObjectType
-
-                custom_object_types = CustomObjectType.objects.all()
-                for custom_type in custom_object_types:
-                    model = custom_type.get_model()
+            custom_object_types = CustomObjectType.objects.all()
+            for custom_type in custom_object_types:
+                # Only yield already cached models during discovery
+                if CustomObjectType.is_model_cached(custom_type.id):
+                    model = CustomObjectType.get_cached_model(custom_type.id)
                     if model:
                         yield model
-        finally:
-            # Clean up the recursion guard
-            self._in_get_models = False
 
 
 config = CustomObjectsPluginConfig
