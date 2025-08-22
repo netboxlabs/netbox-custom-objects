@@ -115,13 +115,16 @@ class CustomObjectTypeSerializer(NetBoxModelSerializer):
             "id",
             "url",
             "name",
+            "verbose_name",
+            "verbose_name_plural",
+            "slug",
             "description",
             "tags",
             "created",
             "last_updated",
             "fields",
         ]
-        brief_fields = ("id", "url", "name", "description")
+        brief_fields = ("id", "url", "name", "slug", "description")
 
     def create(self, validated_data):
         return super().create(validated_data)
