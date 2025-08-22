@@ -29,7 +29,8 @@ class CustomObjectsTestCase:
         defaults = {
             'name': 'TestObject',
             'description': 'A test custom object type',
-            'verbose_name_plural': 'Test Objects'
+            'verbose_name_plural': 'Test Objects',
+            'slug': 'test-objects',
         }
         defaults.update(kwargs)
         return CustomObjectType.objects.create(**defaults)

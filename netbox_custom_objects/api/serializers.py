@@ -115,13 +115,16 @@ class CustomObjectTypeSerializer(NetBoxModelSerializer):
             "id",
             "url",
             "name",
+            "verbose_name",
+            "verbose_name_plural",
+            "slug",
             "description",
             "tags",
             "created",
             "last_updated",
             "fields",
         ]
-        brief_fields = ("id", "url", "name", "description")
+        brief_fields = ("id", "url", "name", "slug", "description")
 
     def create(self, validated_data):
         return super().create(validated_data)
@@ -192,7 +195,7 @@ class CustomObjectSerializer(NetBoxModelSerializer):
         lookup_value = getattr(obj, "pk")
         kwargs = {
             "pk": lookup_value,
-            "custom_object_type": obj.custom_object_type.name.lower(),
+            "custom_object_type": obj.custom_object_type.slug,
         }
         request = self.context["request"]
         format = self.context.get("format")
@@ -230,7 +233,7 @@ def get_serializer_class(model):
         lookup_value = getattr(obj, "pk")
         kwargs = {
             "pk": lookup_value,
-            "custom_object_type": obj.custom_object_type.name.lower(),
+            "custom_object_type": obj.custom_object_type.slug,
         }
         request = self.context["request"]
         format = self.context.get("format")

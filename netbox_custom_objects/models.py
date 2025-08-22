@@ -104,7 +104,7 @@ class CustomObject(
                 self, primary_field["name"]
             )
         if not primary_field_value:
-            return f"{self.custom_object_type.name} {self.id}"
+            return f"{self.custom_object_type.display_name} {self.id}"
         return str(primary_field_value) or str(self.id)
 
     @property
@@ -134,14 +134,14 @@ class CustomObject(
             "plugins:netbox_custom_objects:customobject",
             kwargs={
                 "pk": self.pk,
-                "custom_object_type": self.custom_object_type.name.lower(),
+                "custom_object_type": self.custom_object_type.slug,
             },
         )
 
     def get_list_url(self):
         return reverse(
             "plugins:netbox_custom_objects:customobject_list",
-            kwargs={"custom_object_type": self.custom_object_type.name.lower()},
+            kwargs={"custom_object_type": self.custom_object_type.slug},
         )
 
     @classmethod
@@ -154,7 +154,7 @@ class CustomObject(
     def _get_action_url(cls, action=None, rest_api=False, kwargs=None):
         if kwargs is None:
             kwargs = {}
-        kwargs["custom_object_type"] = cls.custom_object_type.name.lower()
+        kwargs["custom_object_type"] = cls.custom_object_type.slug
         return reverse(cls._get_viewname(action, rest_api), kwargs=kwargs)
 
 
@@ -164,9 +164,29 @@ class CustomObjectType(PrimaryModel):
     _through_model_cache = (
         {}
     )  # Now stores {custom_object_type_id: {through_model_name: through_model}}
-    name = models.CharField(max_length=100, unique=True)
+    name = models.CharField(
+        max_length=100,
+        unique=True,
+        help_text=_("Internal lowercased object name, e.g. \"vendor_policy\""),
+        validators=(
+            RegexValidator(
+                regex=r"^[a-z0-9_]+$",
+                message=_("Only lowercase alphanumeric characters and underscores are allowed."),
+            ),
+            RegexValidator(
+                regex=r"__",
+                message=_(
+                    "Double underscores are not permitted in custom object object type names."
+                ),
+                flags=re.IGNORECASE,
+                inverse_match=True,
+            ),
+        ),
+    )
     schema = models.JSONField(blank=True, default=dict)
+    verbose_name = models.CharField(max_length=100, blank=True)
     verbose_name_plural = models.CharField(max_length=100, blank=True)
+    slug = models.SlugField(max_length=100, unique=True, db_index=True)
 
     class Meta:
         verbose_name = "Custom Object Type"
@@ -182,7 +202,7 @@ class CustomObjectType(PrimaryModel):
         ]
 
     def __str__(self):
-        return self.name
+        return self.display_name
 
     @classmethod
     def clear_model_cache(cls, custom_object_type_id=None):
@@ -266,7 +286,7 @@ class CustomObjectType(PrimaryModel):
     def get_list_url(self):
         return reverse(
             "plugins:netbox_custom_objects:customobject_list",
-            kwargs={"custom_object_type": self.name.lower()},
+            kwargs={"custom_object_type": self.slug},
         )
 
     @classmethod
@@ -355,14 +375,22 @@ class CustomObjectType(PrimaryModel):
         return f"{USER_TABLE_DATABASE_NAME_PREFIX}{self.id}"
 
     @property
+    def title_case_name(self):
+        return title(self.verbose_name or self.name)
+
+    @property
     def title_case_name_plural(self):
-        return title(self.name) + "s"
+        return title(self.verbose_name or self.name) + "s"
 
     def get_verbose_name(self):
-        return self.name
+        return self.verbose_name or self.title_case_name
 
     def get_verbose_name_plural(self):
         return self.verbose_name_plural or self.title_case_name_plural
+
+    @property
+    def display_name(self):
+        return self.get_verbose_name()
 
     @staticmethod
     def get_content_type_label(custom_object_type_id):

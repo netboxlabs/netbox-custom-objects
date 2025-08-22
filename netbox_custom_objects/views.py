@@ -312,7 +312,7 @@ class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
             return self.queryset
         custom_object_type = self.kwargs.get("custom_object_type", None)
         self.custom_object_type = get_object_or_404(
-            CustomObjectType, name__iexact=custom_object_type
+            CustomObjectType, slug=custom_object_type
         )
         model = self.custom_object_type.get_model()
         return model.objects.all()
@@ -395,7 +395,7 @@ class CustomObjectView(generic.ObjectView):
     def get_queryset(self, request):
         custom_object_type = self.kwargs.get("custom_object_type", None)
         object_type = get_object_or_404(
-            CustomObjectType, name__iexact=custom_object_type
+            CustomObjectType, slug=custom_object_type
         )
         model = object_type.get_model()
         return model.objects.all()
@@ -403,7 +403,7 @@ class CustomObjectView(generic.ObjectView):
     def get_object(self, **kwargs):
         custom_object_type = self.kwargs.get("custom_object_type", None)
         object_type = get_object_or_404(
-            CustomObjectType, name__iexact=custom_object_type
+            CustomObjectType, slug=custom_object_type
         )
         model = object_type.get_model()
         # Filter out custom_object_type from kwargs for the object lookup
@@ -453,7 +453,7 @@ class CustomObjectEditView(generic.ObjectEditView):
             return self.object
         custom_object_type = self.kwargs.pop("custom_object_type", None)
         object_type = get_object_or_404(
-            CustomObjectType, name__iexact=custom_object_type
+            CustomObjectType, slug=custom_object_type
         )
         model = object_type.get_model()
         if not self.kwargs.get("pk", None):
@@ -544,7 +544,7 @@ class CustomObjectDeleteView(generic.ObjectDeleteView):
             return self.object
         custom_object_type = self.kwargs.pop("custom_object_type", None)
         object_type = get_object_or_404(
-            CustomObjectType, name__iexact=custom_object_type
+            CustomObjectType, slug=custom_object_type
         )
         model = object_type.get_model()
         return get_object_or_404(model.objects.all(), **self.kwargs)
@@ -584,7 +584,7 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
             return self.queryset
         custom_object_type = self.kwargs.get("custom_object_type", None)
         self.custom_object_type = CustomObjectType.objects.get(
-            name__iexact=custom_object_type
+            slug=custom_object_type
         )
         model = self.custom_object_type.get_model()
         return model.objects.all()
@@ -639,7 +639,7 @@ class CustomObjectBulkDeleteView(CustomObjectTableMixin, generic.BulkDeleteView)
             return self.queryset
         custom_object_type = self.kwargs.pop("custom_object_type", None)
         self.custom_object_type = CustomObjectType.objects.get(
-            name__iexact=custom_object_type
+            slug=custom_object_type
         )
         model = self.custom_object_type.get_model()
         return model.objects.all()
@@ -720,7 +720,7 @@ class CustomObjectJournalView(ConditionalLoginRequiredMixin, View):
     def get(self, request, custom_object_type, **kwargs):
         # Get the custom object type and model
         object_type = get_object_or_404(
-            CustomObjectType, name__iexact=custom_object_type
+            CustomObjectType, slug=custom_object_type
         )
         model = object_type.get_model()
 
@@ -792,7 +792,7 @@ class CustomObjectChangeLogView(ConditionalLoginRequiredMixin, View):
     def get(self, request, custom_object_type, **kwargs):
         # Get the custom object type and model
         object_type = get_object_or_404(
-            CustomObjectType, name__iexact=custom_object_type
+            CustomObjectType, slug=custom_object_type
         )
         model = object_type.get_model()
 

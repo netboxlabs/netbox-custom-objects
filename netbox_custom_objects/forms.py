@@ -5,7 +5,7 @@ from extras.forms import CustomFieldForm
 from netbox.forms import (NetBoxModelBulkEditForm, NetBoxModelFilterSetForm,
                           NetBoxModelForm, NetBoxModelImportForm)
 from utilities.forms.fields import (CommentField, ContentTypeChoiceField,
-                                    DynamicModelChoiceField, TagFilterField)
+                                    DynamicModelChoiceField, SlugField, TagFilterField)
 from utilities.forms.rendering import FieldSet
 from utilities.object_types import object_type_name
 
@@ -26,16 +26,36 @@ __all__ = (
 
 
 class CustomObjectTypeForm(NetBoxModelForm):
+    verbose_name = forms.CharField(
+        label=_("Readable name"),
+        max_length=100,
+        required=False,
+        help_text=_("Displayed object type name, e.g. \"Vendor Policy\""),
+    )
     verbose_name_plural = forms.CharField(
-        label=_("Readable plural name"), max_length=100, required=False
+        label=_("Readable plural name"),
+        max_length=100,
+        required=False,
+        help_text=_("Displayed plural object type name, e.g. \"Vendor Policies\""),
+    )
+    slug = SlugField(
+        slug_source="verbose_name_plural",
+        help_text=_("URL-friendly unique plural shorthand, e.g. \"vendor-policies\""),
     )
 
-    fieldsets = (FieldSet("name", "verbose_name_plural", "description", "tags"),)
+    fieldsets = (
+        FieldSet(
+            "name", "verbose_name", "verbose_name_plural", "slug", "description", "tags",
+        ),
+    )
     comments = CommentField()
 
     class Meta:
         model = CustomObjectType
-        fields = ("name", "verbose_name_plural", "description", "comments", "tags")
+        fields = (
+            "name", "verbose_name", "verbose_name_plural", "slug", "description",
+            "comments", "tags",
+        )
 
 
 class CustomObjectTypeBulkEditForm(NetBoxModelBulkEditForm):
