@@ -26,6 +26,7 @@ from utilities.templatetags.builtins.filters import linkify, render_markdown
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.utilities import generate_model
 
+
 class FieldType:
 
     def get_display_value(self, instance, field_name):

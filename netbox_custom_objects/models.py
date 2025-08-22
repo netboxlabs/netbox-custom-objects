@@ -52,6 +52,7 @@ from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
 from netbox_custom_objects.utilities import generate_model
 
+
 class UniquenessConstraintTestError(Exception):
     """Custom exception used to signal successful uniqueness constraint test."""
 
@@ -479,7 +480,7 @@ class CustomObjectType(PrimaryModel):
 
         try:
             model = generate_model(
-                str(model_name), 
+                str(model_name),
                 (CustomObject, models.Model),
                 attrs,
             )
