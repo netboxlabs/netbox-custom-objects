@@ -88,7 +88,6 @@ class CustomObjectsPluginConfig(PluginConfig):
         for model in super().get_models(include_auto_created, include_swapped):
             yield model
 
-
         # Suppress warnings about database calls during model loading
         with warnings.catch_warnings():
             warnings.filterwarnings(
