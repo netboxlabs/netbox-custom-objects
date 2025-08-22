@@ -9,7 +9,7 @@ from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 from django.views.generic import View
-from extras.choices import CustomFieldUIVisibleChoices
+from extras.choices import CustomFieldTypeChoices, CustomFieldUIVisibleChoices
 from extras.forms import JournalEntryForm
 from extras.models import JournalEntry
 from extras.tables import JournalEntryTable
@@ -189,6 +189,16 @@ class CustomObjectTypeDeleteView(generic.ObjectDeleteView):
         dependent_objects = super()._get_dependent_objects(obj)
         model = obj.get_model()
         dependent_objects[model] = list(model.objects.all())
+        
+        # Find CustomObjectTypeFields that reference this CustomObjectType
+        referencing_fields = CustomObjectTypeField.objects.filter(
+            related_object_type=obj.content_type
+        )
+        
+        # Add the CustomObjectTypeFields that reference this CustomObjectType
+        if referencing_fields.exists():
+            dependent_objects[CustomObjectTypeField] = list(referencing_fields)
+        
         return dependent_objects
 
 
