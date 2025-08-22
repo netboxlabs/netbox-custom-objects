@@ -104,7 +104,7 @@ class CustomObject(
                 self, primary_field["name"]
             )
         if not primary_field_value:
-            return f"{self.custom_object_type.name} {self.id}"
+            return f"{self.custom_object_type.display_name} {self.id}"
         return str(primary_field_value) or str(self.id)
 
     @property
@@ -203,10 +203,6 @@ class CustomObjectType(PrimaryModel):
 
     def __str__(self):
         return self.display_name
-
-    @property
-    def display_name(self):
-        return self.verbose_name or self.name
 
     @classmethod
     def clear_model_cache(cls, custom_object_type_id=None):
@@ -379,14 +375,22 @@ class CustomObjectType(PrimaryModel):
         return f"{USER_TABLE_DATABASE_NAME_PREFIX}{self.id}"
 
     @property
+    def title_case_name(self):
+        return title(self.verbose_name or self.name)
+
+    @property
     def title_case_name_plural(self):
         return title(self.verbose_name or self.name) + "s"
 
     def get_verbose_name(self):
-        return self.name
+        return self.verbose_name or self.title_case_name
 
     def get_verbose_name_plural(self):
         return self.verbose_name_plural or self.title_case_name_plural
+
+    @property
+    def display_name(self):
+        return self.get_verbose_name()
 
     @staticmethod
     def get_content_type_label(custom_object_type_id):
