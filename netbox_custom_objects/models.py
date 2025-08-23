@@ -1,6 +1,5 @@
 import decimal
 import re
-import warnings
 from datetime import date, datetime
 
 import django_filters
@@ -51,6 +50,7 @@ from utilities.validators import validate_regex
 
 from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
+from netbox_custom_objects.utilities import generate_model
 
 
 class UniquenessConstraintTestError(Exception):
@@ -478,22 +478,14 @@ class CustomObjectType(PrimaryModel):
 
         TM.post_through_setup = wrapped_post_through_setup
 
-        # Suppress RuntimeWarning about model already being registered
-        # TODO: Remove this once we have a better way to handle model registration
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore", category=RuntimeWarning, message=".*was already registered.*"
+        try:
+            model = generate_model(
+                str(model_name),
+                (CustomObject, models.Model),
+                attrs,
             )
-
-            try:
-                model = type(
-                    str(model_name),
-                    (CustomObject, models.Model),
-                    attrs,
-                )
-            finally:
-                # Restore the original method
-                TM.post_through_setup = original_post_through_setup
+        finally:
+            TM.post_through_setup = original_post_through_setup
 
         # Register the main model with Django's app registry
         try:
@@ -511,6 +503,9 @@ class CustomObjectType(PrimaryModel):
         # Cache the generated model
         if not no_cache:
             self._model_cache[self.id] = model
+            # Do the clear cache now that we have it in the cache so there
+            # is no recursion.
+            apps.clear_cache()
 
         # Register the serializer for this model
         if not manytomany_models:
@@ -1295,7 +1290,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                                 "managed": True,
                             },
                         )
-                        old_through_model = type(
+                        old_through_model = generate_model(
                             f"TempOld{self.original.through_model_name}",
                             (models.Model,),
                             {
@@ -1326,7 +1321,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                                 "managed": True,
                             },
                         )
-                        new_through_model = type(
+                        new_through_model = generate_model(
                             f"TempNew{self.through_model_name}",
                             (models.Model,),
                             {
