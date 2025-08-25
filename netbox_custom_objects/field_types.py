@@ -35,10 +35,10 @@ class LazyForeignKey(ForeignKey):
 
     def __init__(self, to_model_name, *args, **kwargs):
         self._to_model_name = to_model_name
-        
+
         # Filter out our custom parameters before passing to Django's ForeignKey
         field_kwargs = {k: v for k, v in kwargs.items() if not k.startswith('_') and k != 'generating_models'}
-        
+
         super().__init__(to_model_name, *args, **field_kwargs)
 
     def contribute_to_class(self, cls, name, **kwargs):
@@ -84,7 +84,7 @@ class FieldType:
         Create a safe kwargs dict that can be passed to Django field constructors.
         This method automatically filters out any custom parameters.
         """
-        return {k: v for k, v in kwargs.items() 
+        return {k: v for k, v in kwargs.items()
                 if not k.startswith('_') and k != 'generating_models'}
 
     def get_annotated_form_field(self, field, enforce_visibility=True, **kwargs):
@@ -93,7 +93,7 @@ class FieldType:
         form_field.label = str(field)
         # Set the field name so Django can properly bind it to the instance
         form_field.name = field.name
-        
+
         if field.description:
             form_field.help_text = render_markdown(field.description)
 
@@ -387,7 +387,7 @@ class ObjectFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
         to_model = content_type.model
-        
+
         # Extract our custom parameters and keep only Django field parameters
         generating_models = kwargs.pop('_generating_models', getattr(self, '_generating_models', set()))
         field_kwargs = {k: v for k, v in kwargs.items() if not k.startswith('_')}
@@ -401,16 +401,16 @@ class ObjectFieldType(FieldType):
                 "model", ""
             )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
-            
+
             # Check if this is a self-referential field
             if custom_object_type.id == field.custom_object_type.id:
                 # For self-referential fields, use LazyForeignKey to defer resolution
                 model_name = f"{APP_LABEL}.{custom_object_type.get_table_model_name(custom_object_type.id)}"
                 f = LazyForeignKey(
                     model_name,
-                    null=True, 
-                    blank=True, 
-                    on_delete=models.CASCADE, 
+                    null=True,
+                    blank=True,
+                    on_delete=models.CASCADE,
                     **field_kwargs
                 )
                 return f
@@ -423,9 +423,9 @@ class ObjectFieldType(FieldType):
                     model_name = f"{APP_LABEL}.{custom_object_type.get_table_model_name(custom_object_type.id)}"
                     f = models.ForeignKey(
                         model_name,
-                        null=True, 
-                        blank=True, 
-                        on_delete=models.CASCADE, 
+                        null=True,
+                        blank=True,
+                        on_delete=models.CASCADE,
                         **field_kwargs
                     )
                     return f
@@ -435,11 +435,11 @@ class ObjectFieldType(FieldType):
             # to_model = content_type.model_class()._meta.object_name
             to_ct = f"{content_type.app_label}.{to_model}"
             model = apps.get_model(to_ct)
-        
+
         f = models.ForeignKey(
             model, null=True, blank=True, on_delete=models.CASCADE, **field_kwargs
         )
-        
+
         return f
 
     def get_form_field(self, field, for_csv_import=False, **kwargs):
@@ -458,7 +458,7 @@ class ObjectFieldType(FieldType):
                 "model", ""
             )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
-            
+
             # Check if we're in a recursion situation
             generating_models = getattr(self, '_generating_models', set())
             if generating_models and custom_object_type.id in generating_models:
@@ -737,7 +737,7 @@ class MultiObjectFieldType(FieldType):
         custom_object_type_id = content_type.model.replace("table", "").replace(
             "model", ""
         )
-        
+
         # Extract our custom parameters and keep only Django field parameters
         generating_models = kwargs.pop('_generating_models', getattr(self, '_generating_models', set()))
         field_kwargs = {k: v for k, v in kwargs.items() if not k.startswith('_')}
@@ -860,16 +860,16 @@ class MultiObjectFieldType(FieldType):
             # Update both source and target fields to point to the same model
             source_field = through_model._meta.get_field("source")
             target_field = through_model._meta.get_field("target")
-            
+
             # Resolve the foreign key fields to point to the actual model
             source_field.remote_field.model = model
             source_field.related_model = model
             target_field.remote_field.model = model
             target_field.related_model = model
-            
+
             # Also update the field's to attribute to point to the actual model
             field.to = model
-            
+
             return
 
         # For non-self-referential fields, we need to resolve the target model
@@ -884,7 +884,7 @@ class MultiObjectFieldType(FieldType):
                 "model", ""
             )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
-            
+
             # For self-referential fields, we need to resolve them to the current model
             # This doesn't cause recursion because we're not calling get_model() again
             if custom_object_type.id == instance.custom_object_type.id:
@@ -941,7 +941,7 @@ class MultiObjectFieldType(FieldType):
                 custom_object_type = CustomObjectType.objects.get(
                     pk=custom_object_type_id
                 )
-                
+
                 # Check if we're in a recursion situation
                 generating_models = getattr(self, '_generating_models', set())
                 if generating_models and custom_object_type.id in generating_models:

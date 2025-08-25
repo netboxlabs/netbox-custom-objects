@@ -525,29 +525,29 @@ class CustomObjectEditView(generic.ObjectEditView):
         def custom_save(self, commit=True):
             # First save the instance to get the primary key
             instance = forms.NetBoxModelForm.save(self, commit=False)
-            
+
             if commit:
                 instance.save()
-                
+
                 # Handle M2M fields manually to ensure proper clearing and setting
                 for field_name, field_obj in self.custom_object_type_fields.items():
                     if field_obj.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                         # Get the current value from the form
                         current_value = self.cleaned_data.get(field_name, [])
-                        
+
                         # Get the field from the instance
                         instance_field = getattr(instance, field_name)
-                        
+
                         # Clear existing relationships and set new ones
                         if hasattr(instance_field, 'clear') and hasattr(instance_field, 'set'):
                             instance_field.clear()
-                            
+
                             if current_value:
                                 instance_field.set(current_value)
-                
+
                 # Save M2M relationships
                 self.save_m2m()
-            
+
             return instance
 
         form_class.__init__ = custom_init
