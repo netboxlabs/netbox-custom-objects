@@ -23,7 +23,7 @@ class CustomObjectViewSet(ModelViewSet):
 
     def get_view_name(self):
         if self.model:
-            return self.model.custom_object_type.verbose_name or self.model.custom_object_type.name
+            return self.model.custom_object_type.display_name
         return 'Custom Object'
 
     def get_serializer_class(self):
