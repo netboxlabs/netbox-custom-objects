@@ -220,6 +220,15 @@ class CustomObjectType(PrimaryModel):
 
         # Clear Django apps registry cache to ensure newly created models are recognized
         apps.get_models.cache_clear()
+        
+        # Clear global recursion tracking when clearing cache
+        cls.clear_global_recursion_tracking()
+
+    @classmethod
+    def clear_global_recursion_tracking(cls):
+        """Clear the global recursion tracking set."""
+        if hasattr(cls, '_global_generating_models'):
+            cls._global_generating_models.clear()
 
     @classmethod
     def get_cached_model(cls, custom_object_type_id):
@@ -320,6 +329,7 @@ class CustomObjectType(PrimaryModel):
         self,
         fields,
         skip_object_fields=False,
+        generating_models=None,
     ):
         field_attrs = {
             "_primary_field_id": -1,
@@ -327,6 +337,7 @@ class CustomObjectType(PrimaryModel):
             # names with the table field id as key.
             "_field_objects": {},
             "_trashed_field_objects": {},
+            "_skipped_fields": set(),  # Track fields skipped due to recursion
         }
         fields_query = self.fields(manager="objects").all()
 
@@ -342,6 +353,73 @@ class CustomObjectType(PrimaryModel):
             field_type = FIELD_TYPE_CLASS[field.type]()
             field_name = field.name
 
+            # Pass generating models set to field generation to prevent infinite loops
+            field_type._generating_models = generating_models
+            
+            # Check if we're in a recursion situation before generating the field
+            # Use depth-based recursion control: allow self-referential fields at level 0, skip at deeper levels
+            should_skip = False
+            
+            # Calculate depth correctly: depth 0 is when we're generating the main model
+            # depth 1+ is when we're generating related models recursively
+            current_depth = len(generating_models) - 1 if generating_models else 0
+            
+            if field.type in [CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT]:
+                if field.related_object_type:
+                    # Check if this field references the same CustomObjectType (self-referential)
+                    if field.related_object_type.app_label == APP_LABEL:
+                        # This is a custom object type
+                        from django.contrib.contenttypes.models import ContentType
+                        content_type = ContentType.objects.get(pk=field.related_object_type_id)
+                        if content_type.app_label == APP_LABEL:
+                            # Extract the custom object type ID from the model name
+                            # The model name format is "table{id}model" or similar
+                            model_name = content_type.model
+                            
+                            # Try to extract the ID from the model name
+                            import re
+                            id_match = re.search(r'table(\d+)model', model_name, re.IGNORECASE)
+                            if id_match:
+                                custom_object_type_id = int(id_match.group(1))
+                                
+                                if custom_object_type_id == self.id:
+                                    # This is a self-referential field
+                                    if current_depth == 0:
+                                        # At level 0, allow self-referential fields
+                                        should_skip = False
+                                    else:
+                                        # At deeper levels, skip self-referential fields to prevent infinite recursion
+                                        should_skip = True
+                                else:
+                                    # Cross-referential field
+                                    pass
+                            else:
+                                # Could not parse custom object type ID
+                                pass
+                        else:
+                            # Non-custom object type
+                            pass
+                    else:
+                        # Non-custom object type
+                        pass
+                else:
+                    # No related object type
+                    pass
+            else:
+                # Not object/multiobject type
+                pass
+            
+            if should_skip:
+                # Skip this field to prevent further recursion
+                field_attrs["_skipped_fields"].add(field.name)
+                continue
+            
+            field_attrs[field.name] = field_type.get_model_field(
+                field,
+                _generating_models=generating_models,  # Pass as prefixed parameter
+            )
+            
+            # Add to field objects only if the field was successfully generated
             field_attrs["_field_objects"][field.id] = {
                 "field": field,
                 "type": field_type,
@@ -352,21 +430,35 @@ class CustomObjectType(PrimaryModel):
             if field.primary:
                 field_attrs["_primary_field_id"] = field.id
 
-            field_attrs[field.name] = field_type.get_model_field(
-                field,
-            )
-
         return field_attrs
 
     def _after_model_generation(self, attrs, model):
-        all_field_objects = {
-            **attrs["_field_objects"],
-            **attrs["_trashed_field_objects"],
-        }
+        all_field_objects = {}
+        all_field_objects.update(attrs["_field_objects"])
+        all_field_objects.update(attrs["_trashed_field_objects"])
+        
+        # Get the set of fields that were skipped due to recursion
+        skipped_fields = attrs.get("_skipped_fields", set())
+        
         for field_object in all_field_objects.values():
-            field_object["type"].after_model_generation(
-                field_object["field"], model, field_object["name"]
-            )
+            field_name = field_object["name"]
+            
+            # Skip fields that were skipped due to recursion
+            if field_name in skipped_fields:
+                continue
+            
+            # Only process fields that actually exist on the model
+            # Fields might be skipped due to recursion prevention
+            if hasattr(model._meta, 'get_field'):
+                try:
+                    model._meta.get_field(field_name)
+                    # Field exists, process it
+                    field_object["type"].after_model_generation(
+                        field_object["field"], model, field_name
+                    )
+                except Exception as e:
+                    # Field doesn't exist (likely skipped due to recursion), skip processing
+                    continue
 
     def get_collision_safe_order_id_idx_name(self):
         return f"tbl_order_id_{self.id}_idx"
@@ -423,6 +515,7 @@ class CustomObjectType(PrimaryModel):
         app_label=None,
         skip_object_fields=False,
         no_cache=False,
+        _generating_models=None,
     ):
         """
         Generates a temporary Django model based on available fields that belong to
@@ -442,6 +535,8 @@ class CustomObjectType(PrimaryModel):
         :type skip_object_fields: bool
         :param no_cache: Don't cache the generated model or attempt to pull from cache
         :type no_cache: bool
+        :param _generating_models: Internal parameter to track models being generated
+        :type _generating_models: set
         :return: The generated model.
         :rtype: Model
         """
@@ -454,6 +549,25 @@ class CustomObjectType(PrimaryModel):
 
             get_serializer_class(model)
             return model
+
+        # Circular reference detection using class-level tracking
+        if not hasattr(CustomObjectType, '_global_generating_models'):
+            CustomObjectType._global_generating_models = set()
+        
+        if _generating_models is None:
+            _generating_models = CustomObjectType._global_generating_models
+        # Check if we're already generating this model (circular reference)
+        if self.id in _generating_models:
+            # We have a circular reference, return a minimal model to break the cycle
+            return self._get_minimal_model(_generating_models)
+        
+        # Check recursion depth to prevent infinite loops
+        if len(_generating_models) > 1:
+            # We're too deep in recursion, return a minimal model
+            return self._get_minimal_model(_generating_models)
+        
+        # Add this model to the set of models being generated
+        _generating_models.add(self.id)
 
         if app_label is None:
             app_label = APP_LABEL
@@ -488,9 +602,18 @@ class CustomObjectType(PrimaryModel):
             "custom_object_type_id": self.id,
         }
 
-        field_attrs = self._fetch_and_generate_field_attrs(fields, skip_object_fields=skip_object_fields)
+        # Pass the generating models set to field generation
+        field_attrs = self._fetch_and_generate_field_attrs(
+            fields, 
+            skip_object_fields=skip_object_fields,
+            generating_models=_generating_models
+        )
 
         attrs.update(**field_attrs)
+        
+        # Track which fields were skipped due to recursion for after_model_generation
+        if '_skipped_fields' not in attrs:
+            attrs['_skipped_fields'] = set()
 
         # Create the model class with a workaround for TaggableManager conflicts
         # Wrap the existing post_through_setup method to handle ValueError exceptions
@@ -548,6 +671,68 @@ class CustomObjectType(PrimaryModel):
 
         # Register the global SearchIndex for this model
         self.register_custom_object_search_index(model)
+
+        # Clean up: remove this model from the set of models being generated
+        if _generating_models is not None:
+            _generating_models.discard(self.id)
+            # Also clean up from global tracking if this is the global set
+            if _generating_models is CustomObjectType._global_generating_models:
+                CustomObjectType._global_generating_models.discard(self.id)
+                # Clear global tracking when we're done to ensure clean state
+                if len(CustomObjectType._global_generating_models) == 0:
+                    CustomObjectType._global_generating_models.clear()
+
+        return model
+
+    def _get_minimal_model(self, _generating_models=None):
+        """
+        Creates a minimal model with only basic fields when recursion is detected.
+        This breaks infinite recursion cycles by providing a basic model structure.
+        """
+        model_name = self.get_table_model_name(self.pk)
+        
+        meta = type(
+            "Meta",
+            (),
+            {
+                "apps": apps,
+                "managed": False,
+                "db_table": self.get_database_table_name(),
+                "app_label": APP_LABEL,
+                "ordering": ["id"],
+                "verbose_name": self.get_verbose_name(),
+                "verbose_name_plural": self.get_verbose_name_plural(),
+            },
+        )
+
+        attrs = {
+            "Meta": meta,
+            "__module__": "database.models",
+            "custom_object_type": self,
+            "custom_object_type_id": self.id,
+        }
+
+        # Don't call field generation methods to avoid further recursion
+        # Just create a basic model with no custom fields
+        # attrs.update(**field_attrs)
+
+        # Create the minimal model
+        model = type(
+            str(model_name),
+            (CustomObject, models.Model),
+            attrs,
+        )
+
+        # Register the model with Django's app registry
+        try:
+            existing_model = apps.get_model(APP_LABEL, model_name)
+            if existing_model is not model:
+                model = existing_model
+        except LookupError:
+            apps.register_model(APP_LABEL, model)
+
+        # Cache this minimal model
+        self._model_cache[self.id] = model
 
         return model
 
