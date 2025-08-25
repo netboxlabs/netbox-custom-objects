@@ -32,16 +32,16 @@ class LazyForeignKey(ForeignKey):
     A ForeignKey field that can handle lazy model references.
     The target model is resolved after the model is fully generated.
     """
-    
+
     def __init__(self, to_model_name, *args, **kwargs):
         self._to_model_name = to_model_name
         super().__init__(to_model_name, *args, **kwargs)
-    
+
     def contribute_to_class(self, cls, name, **kwargs):
         super().contribute_to_class(cls, name, **kwargs)
         # Mark this field for later resolution
         setattr(cls, f'_resolve_{name}_model', self._resolve_model)
-    
+
     def _resolve_model(self, model):
         """Resolve the lazy reference to the actual model class."""
         # Get the actual model class from the app registry
@@ -365,16 +365,16 @@ class ObjectFieldType(FieldType):
                 "model", ""
             )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
-            
+
             # Check if this is a self-referential field
             if custom_object_type.id == field.custom_object_type.id:
                 # For self-referential fields, use LazyForeignKey to defer resolution
                 model_name = f"{APP_LABEL}.{custom_object_type.get_table_model_name(custom_object_type.id)}"
                 f = LazyForeignKey(
                     model_name,
-                    null=True, 
-                    blank=True, 
-                    on_delete=models.CASCADE, 
+                    null=True,
+                    blank=True,
+                    on_delete=models.CASCADE,
                     **kwargs
                 )
                 return f
@@ -385,11 +385,11 @@ class ObjectFieldType(FieldType):
             # to_model = content_type.model_class()._meta.object_name
             to_ct = f"{content_type.app_label}.{to_model}"
             model = apps.get_model(to_ct)
-        
+
         f = models.ForeignKey(
             model, null=True, blank=True, on_delete=models.CASCADE, **kwargs
         )
-        
+
         return f
 
     def get_form_field(self, field, for_csv_import=False, **kwargs):
