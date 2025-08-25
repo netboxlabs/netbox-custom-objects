@@ -739,7 +739,6 @@ class MultiObjectFieldType(FieldType):
         )
 
         # Extract our custom parameters and keep only Django field parameters
-        generating_models = kwargs.pop('_generating_models', getattr(self, '_generating_models', set()))
         field_kwargs = {k: v for k, v in kwargs.items() if not k.startswith('_')}
         field_kwargs.update({"default": field.default, "unique": field.unique})
 

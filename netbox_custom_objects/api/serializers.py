@@ -254,7 +254,9 @@ def get_serializer_class(model, skip_object_fields=False):
     }
 
     for field in model_fields:
-        if skip_object_fields and field.type in [CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT]:
+        if skip_object_fields and field.type in [
+            CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT
+        ]:
             continue
         field_type = field_types.FIELD_TYPE_CLASS[field.type]()
         try:
