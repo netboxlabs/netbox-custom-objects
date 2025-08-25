@@ -7,7 +7,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
 from django.core.validators import RegexValidator
 from django.db import models
-from django.db.models.fields.related import ManyToManyDescriptor
+from django.db.models.fields.related import ForeignKey, ManyToManyDescriptor
 from django.db.models.manager import Manager
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
@@ -25,6 +25,31 @@ from utilities.forms.widgets import (APISelect, APISelectMultiple, DatePicker,
 from utilities.templatetags.builtins.filters import linkify, render_markdown
 
 from netbox_custom_objects.constants import APP_LABEL
+
+
+class LazyForeignKey(ForeignKey):
+    """
+    A ForeignKey field that can handle lazy model references.
+    The target model is resolved after the model is fully generated.
+    """
+    
+    def __init__(self, to_model_name, *args, **kwargs):
+        self._to_model_name = to_model_name
+        super().__init__(to_model_name, *args, **kwargs)
+    
+    def contribute_to_class(self, cls, name, **kwargs):
+        super().contribute_to_class(cls, name, **kwargs)
+        # Mark this field for later resolution
+        setattr(cls, f'_resolve_{name}_model', self._resolve_model)
+    
+    def _resolve_model(self, model):
+        """Resolve the lazy reference to the actual model class."""
+        # Get the actual model class from the app registry
+        from django.apps import apps
+        actual_model = apps.get_model(self._to_model_name)
+        # Update the field's references
+        self.remote_field.model = actual_model
+        self.to = actual_model
 
 
 class FieldType:
@@ -332,7 +357,7 @@ class ObjectFieldType(FieldType):
         to_model = content_type.model
         kwargs.update({"default": field.default, "unique": field.unique})
 
-        # TODO: Handle pointing to object of same type (avoid infinite loop)
+        # Handle self-referential fields by using string references
         if content_type.app_label == APP_LABEL:
             from netbox_custom_objects.models import CustomObjectType
 
@@ -340,14 +365,31 @@ class ObjectFieldType(FieldType):
                 "model", ""
             )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
-            model = custom_object_type.get_model()
+            
+            # Check if this is a self-referential field
+            if custom_object_type.id == field.custom_object_type.id:
+                # For self-referential fields, use LazyForeignKey to defer resolution
+                model_name = f"{APP_LABEL}.{custom_object_type.get_table_model_name(custom_object_type.id)}"
+                f = LazyForeignKey(
+                    model_name,
+                    null=True, 
+                    blank=True, 
+                    on_delete=models.CASCADE, 
+                    **kwargs
+                )
+                return f
+            else:
+                # For cross-referential fields, use skip_object_fields to avoid infinite loops
+                model = custom_object_type.get_model(skip_object_fields=True)
         else:
             # to_model = content_type.model_class()._meta.object_name
             to_ct = f"{content_type.app_label}.{to_model}"
             model = apps.get_model(to_ct)
+        
         f = models.ForeignKey(
             model, null=True, blank=True, on_delete=models.CASCADE, **kwargs
         )
+        
         return f
 
     def get_form_field(self, field, for_csv_import=False, **kwargs):
@@ -404,10 +446,22 @@ class ObjectFieldType(FieldType):
 
     def get_serializer_field(self, field, **kwargs):
         related_model_class = field.related_object_type.model_class()
-        if not related_model_class:
-            raise NotImplementedError("Custom object serializers not implemented")
-        serializer = get_serializer_for_model(related_model_class)
+        if related_model_class._meta.app_label == APP_LABEL:
+            from netbox_custom_objects.api.serializers import get_serializer_class
+            serializer = get_serializer_class(related_model_class, skip_object_fields=True)
+        else:
+            serializer = get_serializer_for_model(related_model_class)
         return serializer(required=field.required, nested=True)
+
+    def after_model_generation(self, instance, model, field_name):
+        """
+        Resolve lazy references after the model is fully generated.
+        This ensures that self-referential fields point to the correct model class.
+        """
+        # Check if this field has a resolution method
+        resolve_method = getattr(model, f'_resolve_{field_name}_model', None)
+        if resolve_method:
+            resolve_method(model)
 
 
 class CustomManyToManyManager(Manager):
