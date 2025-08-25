@@ -55,7 +55,7 @@ class CustomJournalEntryForm(JournalEntryForm):
             return reverse(
                 "plugins:netbox_custom_objects:customobject_journal",
                 kwargs={
-                    "custom_object_type": self.custom_object.custom_object_type.name,
+                    "custom_object_type": self.custom_object.custom_object_type.slug,
                     "pk": self.custom_object.pk,
                 },
             )
@@ -81,7 +81,7 @@ class CustomJournalEntryEditView(generic.ObjectEditView):
             return reverse(
                 "plugins:netbox_custom_objects:customobject_journal",
                 kwargs={
-                    "custom_object_type": instance.assigned_object.custom_object_type.name,
+                    "custom_object_type": instance.assigned_object.custom_object_type.slug,
                     "pk": instance.assigned_object.pk,
                 },
             )
@@ -555,7 +555,7 @@ class CustomObjectDeleteView(generic.ObjectDeleteView):
         """
         if obj:
             # Get the custom object type from the object directly
-            custom_object_type = obj.custom_object_type.name
+            custom_object_type = obj.custom_object_type.slug
         else:
             # Fallback to getting it from kwargs if object is not available
             custom_object_type = self.kwargs.get("custom_object_type")
