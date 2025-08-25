@@ -717,7 +717,7 @@ class MultiObjectFieldType(FieldType):
                 "model", ""
             )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
-            model = custom_object_type.get_model()
+            model = custom_object_type.get_model(skip_object_fields=True)
         else:
             # This is a regular NetBox model
             model = content_type.model_class()
@@ -755,9 +755,13 @@ class MultiObjectFieldType(FieldType):
 
     def get_serializer_field(self, field, **kwargs):
         related_model_class = field.related_object_type.model_class()
-        if not related_model_class:
-            raise NotImplementedError("Custom object serializers not implemented")
-        serializer = get_serializer_for_model(related_model_class)
+        if related_model_class._meta.app_label == APP_LABEL:
+            from netbox_custom_objects.api.serializers import get_serializer_class
+            serializer = get_serializer_class(related_model_class, skip_object_fields=True)
+        # if not related_model_class:
+        #     raise NotImplementedError("Custom object serializers not implemented")
+        else:
+            serializer = get_serializer_for_model(related_model_class)
         return serializer(required=field.required, nested=True, many=True)
 
     def after_model_generation(self, instance, model, field_name):

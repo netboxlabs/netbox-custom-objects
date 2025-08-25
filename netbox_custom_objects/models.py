@@ -335,11 +335,11 @@ class CustomObjectType(PrimaryModel):
         fields = list(fields) + [field for field in fields_query]
 
         for field in fields:
-            field_type = FIELD_TYPE_CLASS[field.type]()
             if skip_object_fields:
                 if field.type in [CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT]:
                     continue
 
+            field_type = FIELD_TYPE_CLASS[field.type]()
             field_name = field.name
 
             field_attrs["_field_objects"][field.id] = {
