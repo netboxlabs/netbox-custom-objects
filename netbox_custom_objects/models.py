@@ -183,6 +183,7 @@ class CustomObjectType(PrimaryModel):
             ),
         ),
     )
+    version = models.CharField(max_length=10, blank=True)
     schema = models.JSONField(blank=True, default=dict)
     verbose_name = models.CharField(max_length=100, blank=True)
     verbose_name_plural = models.CharField(max_length=100, blank=True)
