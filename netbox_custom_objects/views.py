@@ -1,10 +1,9 @@
-import django_filters
 import logging
+
 from core.models import ObjectChange
 from core.tables import ObjectChangeTable
 from django.contrib.contenttypes.models import ContentType
-from django.contrib.postgres.fields import ArrayField
-from django.db.models import JSONField, Q
+from django.db.models import Q
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
@@ -13,21 +12,15 @@ from extras.choices import CustomFieldUIVisibleChoices
 from extras.forms import JournalEntryForm
 from extras.models import JournalEntry
 from extras.tables import JournalEntryTable
-from netbox.filtersets import BaseFilterSet
 from netbox.forms import NetBoxModelBulkEditForm, NetBoxModelFilterSetForm
 from netbox.views import generic
 from netbox.views.generic.mixins import TableMixin
 from utilities.forms import ConfirmationForm
 from utilities.htmx import htmx_partial
-from utilities.views import (
-    ConditionalLoginRequiredMixin,
-    ViewTab,
-    get_viewname,
-    register_model_view,
-)
+from utilities.views import ConditionalLoginRequiredMixin, ViewTab, get_viewname, register_model_view
 
+from netbox_custom_objects.filtersets import get_filterset_class
 from netbox_custom_objects.tables import CustomObjectTable
-
 from . import field_types, filtersets, forms, tables
 from .models import CustomObject, CustomObjectType, CustomObjectTypeField
 
@@ -324,44 +317,7 @@ class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
         return model.objects.all()
 
     def get_filterset(self):
-        model = self.queryset.model
-        fields = [field.name for field in model._meta.fields]
-
-        meta = type(
-            "Meta",
-            (),
-            {
-                "model": model,
-                "fields": fields,
-                # TODO: overrides should come from FieldType
-                # These are placeholders; should use different logic
-                "filter_overrides": {
-                    JSONField: {
-                        "filter_class": django_filters.CharFilter,
-                        "extra": lambda f: {
-                            "lookup_expr": "icontains",
-                        },
-                    },
-                    ArrayField: {
-                        "filter_class": django_filters.CharFilter,
-                        "extra": lambda f: {
-                            "lookup_expr": "icontains",
-                        },
-                    },
-                },
-            },
-        )
-
-        attrs = {
-            "Meta": meta,
-            "__module__": "database.filtersets",
-        }
-
-        return type(
-            f"{model._meta.object_name}FilterSet",
-            (BaseFilterSet,),  # TODO: Should be a NetBoxModelFilterSet
-            attrs,
-        )
+        return get_filterset_class(self.queryset.model)
 
     def get_filterset_form(self):
         model = self.queryset.model
