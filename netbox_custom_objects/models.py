@@ -396,7 +396,7 @@ class CustomObjectType(PrimaryModel):
     @staticmethod
     def get_content_type_label(custom_object_type_id):
         custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
-        return f"Custom Objects > {custom_object_type.name}"
+        return f"Custom Objects > {custom_object_type.display_name}"
 
     def register_custom_object_search_index(self, model):
         # model must be an instance of this CustomObjectType's get_model() generated class

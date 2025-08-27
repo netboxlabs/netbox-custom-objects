@@ -207,7 +207,7 @@ def custom_object_import_button(model, custom_object_type, action="bulk_import")
     try:
         viewname = get_viewname(model, action)
         url = reverse(
-            viewname, kwargs={"custom_object_type": custom_object_type.name.lower()}
+            viewname, kwargs={"custom_object_type": custom_object_type.slug}
         )
     except NoReverseMatch:
         url = None
