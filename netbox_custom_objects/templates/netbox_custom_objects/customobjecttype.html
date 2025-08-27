@@ -30,6 +30,10 @@
             <td>{{ object.verbose_name }}</td>
           </tr>
           <tr>
+            <th scope="row">{% trans "Version" %}</th>
+            <td>{{ object.version }}</td>
+          </tr>
+          <tr>
             <th scope="row">{% trans "Description" %}</th>
             <td>{{ object.description|placeholder }}</td>
           </tr>
