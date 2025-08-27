@@ -390,24 +390,6 @@ class CustomObjectType(PrimaryModel):
                                     else:
                                         # At deeper levels, skip self-referential fields to prevent infinite recursion
                                         should_skip = True
-                                else:
-                                    # Cross-referential field
-                                    pass
-                            else:
-                                # Could not parse custom object type ID
-                                pass
-                        else:
-                            # Non-custom object type
-                            pass
-                    else:
-                        # Non-custom object type
-                        pass
-                else:
-                    # No related object type
-                    pass
-            else:
-                # Not object/multiobject type
-                pass
 
             if should_skip:
                 # Skip this field to prevent further recursion
