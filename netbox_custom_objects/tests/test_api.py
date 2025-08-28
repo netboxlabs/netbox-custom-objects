@@ -18,15 +18,15 @@ class CustomObjectTest(CustomObjectsTestCase, APIViewTestCases.APIViewTestCase):
         """Set up test data."""
         # Create a user
         self.user = create_test_user('testuser')
-        
+
         # Create token for API access
         self.token = Token.objects.create(user=self.user)
         self.header = {'HTTP_AUTHORIZATION': f'Token {self.token.key}'}
-        
+
         # Ensure we have the model reference
         if self.model is None:
             self.model = self.custom_object_type1.get_model()
-        
+
         # Make custom object type accessible as instance variable
         self.custom_object_type1 = self.__class__.custom_object_type1
 
@@ -50,7 +50,7 @@ class CustomObjectTest(CustomObjectsTestCase, APIViewTestCases.APIViewTestCase):
 
         cls.model = cls.custom_object_type1.get_model()
         cls.create_custom_object_type_field(cls.custom_object_type1)
-        
+
         # Set the model for the test class
         CustomObjectTest.model = cls.model
 
@@ -79,11 +79,11 @@ class CustomObjectTest(CustomObjectsTestCase, APIViewTestCases.APIViewTestCase):
         return self.model.objects.all()
 
     def _get_detail_url(self, instance):
-        viewname = f'plugins-api:netbox_custom_objects-api:customobject-detail'
+        viewname = 'plugins-api:netbox_custom_objects-api:customobject-detail'
         return reverse(viewname, kwargs={'pk': instance.pk, 'custom_object_type': instance.custom_object_type.slug})
 
     def _get_list_url(self):
-        viewname = f'plugins-api:netbox_custom_objects-api:customobject-list'
+        viewname = 'plugins-api:netbox_custom_objects-api:customobject-list'
         return reverse(viewname, kwargs={'custom_object_type': self.custom_object_type1.slug})
 
     def test_list_objects(self):

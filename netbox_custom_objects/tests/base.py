@@ -1,6 +1,5 @@
 # Test utilities for netbox_custom_objects plugin
 from django.test import Client
-from django.urls import reverse
 from core.models import ObjectType
 from extras.models import CustomFieldChoiceSet
 from utilities.testing import create_test_user
