@@ -1,6 +1,8 @@
+from django.test import override_settings
 from django.urls import reverse
 from extras.models import CustomFieldChoiceSet
-from utilities.testing import ViewTestCases
+from users.models import ObjectPermission
+from utilities.testing import ViewTestCases, post_data
 
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from .base import CustomObjectsTestCase
@@ -55,14 +57,81 @@ class CustomObjectTypeViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryO
 
         return reverse(url_format.format(action), kwargs={'pk': instance.pk})
 
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=["*"])
     def test_create_object_with_permission(self):
-        ...
+        initial_count = self._get_queryset().count()
 
+        # Add object permission
+        self.add_permissions("netbox_custom_objects.add_customobjecttype")
+
+        form_data = {
+            "name": "NewTestObject",
+            "description": "A new test custom object type",
+            "verbose_name_plural": "New Test Objects",
+        }
+
+        request = {
+            "path": self._get_url("add"),
+            "data": post_data(form_data),
+        }
+
+        self.assertHttpStatus(self.client.post(**request), 302)
+        self.assertEqual(self._get_queryset().count(), initial_count + 1)
+        self.assertTrue(
+            self._get_queryset()
+            .filter(name=form_data["name"], description=form_data["description"])
+            .exists()
+        )
+
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=["*"])
     def test_create_object_with_constrained_permission(self):
-        ...
+        initial_count = self._get_queryset().count()
 
+        # Add constrained permission (deny all initially)
+        obj_perm = ObjectPermission(
+            name="Test permission",
+            constraints={"pk": 0},  # Will never match any real object
+            actions=["add"],
+        )
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        obj_perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+        form_data = {
+            "name": "RestrictedTestObject",
+            "description": "A restricted test custom object type",
+            "verbose_name_plural": "Restricted Test Objects",
+        }
+
+        request = {
+            "path": self._get_url("add"),
+            "data": post_data(form_data),
+        }
+
+        # Should be denied
+        self.assertHttpStatus(self.client.post(**request), 200)
+        self.assertEqual(self._get_queryset().count(), initial_count)
+
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=["*"])
     def test_edit_object_with_permission(self):
-        ...
+        # Add object permission
+        self.add_permissions("netbox_custom_objects.change_customobjecttype")
+
+        form_data = {
+            "name": "UpdatedTestObject1",
+            "description": "Updated first test custom object type",
+            "verbose_name_plural": "Updated Test Objects 1",
+        }
+
+        request = {
+            "path": self._get_url("edit", self.custom_object_type1),
+            "data": post_data(form_data),
+        }
+
+        self.assertHttpStatus(self.client.post(**request), 302)
+        self.custom_object_type1.refresh_from_db()
+        self.assertEqual(self.custom_object_type1.name, form_data["name"])
+        self.assertEqual(self.custom_object_type1.description, form_data["description"])
 
     def test_edit_object_with_constrained_permission(self):
         ...
