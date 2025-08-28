@@ -204,6 +204,7 @@ class CustomObjectTypeViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryO
     def test_bulk_import_objects_with_constrained_permission(self):
         ...
 
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=["*"])
     def test_delete_object_with_permission(self):
         ...
 
