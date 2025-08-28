@@ -133,14 +133,93 @@ class CustomObjectTypeViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryO
         self.assertEqual(self.custom_object_type1.name, form_data["name"])
         self.assertEqual(self.custom_object_type1.description, form_data["description"])
 
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=["*"])
     def test_edit_object_with_constrained_permission(self):
-        ...
+        # Add constrained permission (deny edits for this specific object)
+        obj_perm = ObjectPermission(
+            name="Test permission",
+            constraints={
+                "pk__in": [self.custom_object_type2.pk]
+            },  # Only allow editing type2
+            actions=["change"],
+        )
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        obj_perm.object_types.add(ObjectType.objects.get_for_model(self.model))
 
+        form_data = {
+            "name": "RestrictedTestObject1",
+            "description": "Restricted first test custom object type",
+            "verbose_name_plural": "Restricted Test Objects 1",
+        }
+
+        request = {
+            "path": self._get_url("edit", self.custom_object_type1),
+            "data": post_data(form_data),
+        }
+
+        # Should be denied
+        self.assertHttpStatus(self.client.post(**request), 200)
+        self.custom_object_type1.refresh_from_db()
+        self.assertNotEqual(self.custom_object_type1.name, form_data["name"])
+
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=["*"])
     def test_bulk_edit_objects_with_permission(self):
-        ...
+        # Add object permission
+        self.add_permissions("netbox_custom_objects.change_customobjecttype")
 
+        form_data = {
+            "pk": [self.custom_object_type1.pk, self.custom_object_type2.pk],
+            "_apply": True,
+            "description": "Bulk updated description",
+        }
+
+        request = {
+            "path": self._get_url("bulk_edit"),
+            "data": post_data(form_data),
+        }
+
+        self.assertHttpStatus(self.client.post(**request), 302)
+
+        # Verify both objects were updated
+        self.custom_object_type1.refresh_from_db()
+        self.custom_object_type2.refresh_from_db()
+        self.assertEqual(self.custom_object_type1.description, form_data["description"])
+        self.assertEqual(self.custom_object_type2.description, form_data["description"])
+
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=["*"])
     def test_bulk_edit_objects_with_constrained_permission(self):
-        ...
+        # Add constrained permission (only allow editing type2)
+        obj_perm = ObjectPermission(
+            name="Test permission",
+            constraints={"pk__in": [self.custom_object_type2.pk]},
+            actions=["change"],
+        )
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        obj_perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+        form_data = {
+            "pk": [self.custom_object_type1.pk, self.custom_object_type2.pk],
+            "_apply": True,
+            "description": "Bulk updated description",
+        }
+
+        request = {
+            "path": self._get_url("bulk_edit"),
+            "data": post_data(form_data),
+        }
+
+        # Should be successful (only type2 will be updated)
+        self.assertHttpStatus(self.client.post(**request), 302)
+
+        # Verify only type2 was updated
+        self.custom_object_type1.refresh_from_db()
+        self.custom_object_type2.refresh_from_db()
+        self.assertNotEqual(
+            self.custom_object_type1.description, form_data["description"]
+        )
+        self.assertEqual(self.custom_object_type2.description, form_data["description"])
 
     def test_bulk_update_objects_with_permission(self):
         ...
