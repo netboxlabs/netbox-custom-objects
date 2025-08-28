@@ -203,11 +203,3 @@ class CustomObjectsTestCase:
         )
 
         return custom_object_type
-
-    def _get_detail_url(self, instance):
-        viewname = f'plugins:netbox_custom_objects:customobject'
-        return reverse(viewname, kwargs={'pk': instance.pk, 'custom_object_type': instance.custom_object_type.slug})
-
-    def _get_list_url(self):
-        viewname = f'plugins:netbox_custom_objects:customobject_list'
-        return reverse(viewname, kwargs={'custom_object_type': self.custom_object_type1.slug})
