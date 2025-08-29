@@ -672,7 +672,7 @@ class CustomManyToManyField(models.ManyToManyField):
 
 
 class MultiObjectFieldType(FieldType):
-    def get_through_model(self, field, model):
+    def get_through_model(self, field, model_string):
         """
         Creates a through model with deferred model references
         """
@@ -701,21 +701,18 @@ class MultiObjectFieldType(FieldType):
             and field.custom_object_type.id == custom_object_type_id
         )
 
-        # Use the actual model if provided, otherwise use string reference
-        source_model = model
-
         attrs = {
             "__module__": "netbox_custom_objects.models",
             "Meta": meta,
             "id": models.AutoField(primary_key=True),
             "source": models.ForeignKey(
-                source_model,
+                model_string,
                 on_delete=models.CASCADE,
                 related_name="+",
                 db_column="source_id",
             ),
             "target": models.ForeignKey(
-                "self" if is_self_referential else model,
+                "self" if is_self_referential else model_string,
                 on_delete=models.CASCADE,
                 related_name="+",
                 db_column="target_id",
