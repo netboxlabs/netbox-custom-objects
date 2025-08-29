@@ -172,17 +172,6 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
             if "related_object_type" in self.fields:
                 self.fields["related_object_type"].disabled = True
 
-    def clean_related_object_type(self):
-        # TODO: Figure out how to do recursive M2M relations and remove this constraint
-        if (
-            self.cleaned_data["related_object_type"]
-            == self.cleaned_data["custom_object_type"].content_type
-        ):
-            raise forms.ValidationError(
-                "Cannot create a foreign-key relation with custom objects of the same type."
-            )
-        return self.cleaned_data["related_object_type"]
-
     def clean_primary(self):
         primary_fields = self.cleaned_data["custom_object_type"].fields.filter(
             primary=True

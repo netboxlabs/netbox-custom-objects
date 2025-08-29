@@ -206,7 +206,7 @@ class CustomObjectSerializer(NetBoxModelSerializer):
         return result
 
 
-def get_serializer_class(model):
+def get_serializer_class(model, skip_object_fields=False):
     model_fields = model.custom_object_type.fields.all()
 
     # Create field list including all necessary fields
@@ -254,6 +254,10 @@ def get_serializer_class(model):
     }
 
     for field in model_fields:
+        if skip_object_fields and field.type in [
+            CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT
+        ]:
+            continue
         field_type = field_types.FIELD_TYPE_CLASS[field.type]()
         try:
             attrs[field.name] = field_type.get_serializer_field(field)
