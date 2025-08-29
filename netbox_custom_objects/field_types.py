@@ -702,7 +702,7 @@ class MultiObjectFieldType(FieldType):
         )
 
         # Use the actual model if provided, otherwise use string reference
-        source_model = model if model else "netbox_custom_objects.CustomObject"
+        source_model = model
 
         attrs = {
             "__module__": "netbox_custom_objects.models",
@@ -715,7 +715,7 @@ class MultiObjectFieldType(FieldType):
                 db_column="source_id",
             ),
             "target": models.ForeignKey(
-                "self" if is_self_referential else "netbox_custom_objects.CustomObject",
+                "self" if is_self_referential else model,
                 on_delete=models.CASCADE,
                 related_name="+",
                 db_column="target_id",
@@ -745,11 +745,13 @@ class MultiObjectFieldType(FieldType):
 
         # For now, we'll create the through model with string references
         # and resolve them later in after_model_generation
-        through = self.get_through_model(field)
+        # TODO: Check whether later resolution of the model is actually necessary or can be passed as string
+        model_string = f"{field.related_object_type.app_label}.{field.related_object_type.model}"
+        through = self.get_through_model(field, model_string)
 
         # For self-referential fields, use 'self' as the target
         m2m_field = CustomManyToManyField(
-            to="self" if is_self_referential else "netbox_custom_objects.CustomObject",
+            to="self" if is_self_referential else model_string,
             through=through,
             through_fields=("source", "target"),
             blank=True,
