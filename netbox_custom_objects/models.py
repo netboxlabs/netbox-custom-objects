@@ -378,7 +378,6 @@ class CustomObjectType(PrimaryModel):
                             model_name = content_type.model
 
                             # Try to extract the ID from the model name
-                            import re
                             id_match = re.search(r'table(\d+)model', model_name, re.IGNORECASE)
                             if id_match:
                                 custom_object_type_id = int(id_match.group(1))
@@ -539,15 +538,6 @@ class CustomObjectType(PrimaryModel):
 
         if _generating_models is None:
             _generating_models = CustomObjectType._global_generating_models
-        # Check if we're already generating this model (circular reference)
-        if self.id in _generating_models:
-            # We have a circular reference, return a minimal model to break the cycle
-            return self._get_minimal_model(_generating_models)
-
-        # Check recursion depth to prevent infinite loops
-        if len(_generating_models) > 1:
-            # We're too deep in recursion, return a minimal model
-            return self._get_minimal_model(_generating_models)
 
         # Add this model to the set of models being generated
         _generating_models.add(self.id)
@@ -664,58 +654,6 @@ class CustomObjectType(PrimaryModel):
                 # Clear global tracking when we're done to ensure clean state
                 if len(CustomObjectType._global_generating_models) == 0:
                     CustomObjectType._global_generating_models.clear()
-
-        return model
-
-    def _get_minimal_model(self, _generating_models=None):
-        """
-        Creates a minimal model with only basic fields when recursion is detected.
-        This breaks infinite recursion cycles by providing a basic model structure.
-        """
-        model_name = self.get_table_model_name(self.pk)
-
-        meta = type(
-            "Meta",
-            (),
-            {
-                "apps": apps,
-                "managed": False,
-                "db_table": self.get_database_table_name(),
-                "app_label": APP_LABEL,
-                "ordering": ["id"],
-                "verbose_name": self.get_verbose_name(),
-                "verbose_name_plural": self.get_verbose_name_plural(),
-            },
-        )
-
-        attrs = {
-            "Meta": meta,
-            "__module__": "database.models",
-            "custom_object_type": self,
-            "custom_object_type_id": self.id,
-        }
-
-        # Don't call field generation methods to avoid further recursion
-        # Just create a basic model with no custom fields
-        # attrs.update(**field_attrs)
-
-        # Create the minimal model
-        model = type(
-            str(model_name),
-            (CustomObject, models.Model),
-            attrs,
-        )
-
-        # Register the model with Django's app registry
-        try:
-            existing_model = apps.get_model(APP_LABEL, model_name)
-            if existing_model is not model:
-                model = existing_model
-        except LookupError:
-            apps.register_model(APP_LABEL, model)
-
-        # Cache this minimal model
-        self._model_cache[self.id] = model
 
         return model
 
