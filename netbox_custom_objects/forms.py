@@ -5,7 +5,7 @@ from extras.forms import CustomFieldForm
 from netbox.forms import (NetBoxModelBulkEditForm, NetBoxModelFilterSetForm,
                           NetBoxModelForm, NetBoxModelImportForm)
 from utilities.forms.fields import (CommentField, ContentTypeChoiceField,
-                                    DynamicModelChoiceField, TagFilterField)
+                                    DynamicModelChoiceField, SlugField, TagFilterField)
 from utilities.forms.rendering import FieldSet
 from utilities.object_types import object_type_name
 
@@ -26,16 +26,36 @@ __all__ = (
 
 
 class CustomObjectTypeForm(NetBoxModelForm):
+    verbose_name = forms.CharField(
+        label=_("Readable name"),
+        max_length=100,
+        required=False,
+        help_text=_("Displayed object type name, e.g. \"Vendor Policy\""),
+    )
     verbose_name_plural = forms.CharField(
-        label=_("Readable plural name"), max_length=100, required=False
+        label=_("Readable plural name"),
+        max_length=100,
+        required=False,
+        help_text=_("Displayed plural object type name, e.g. \"Vendor Policies\""),
+    )
+    slug = SlugField(
+        slug_source="verbose_name_plural",
+        help_text=_("URL-friendly unique plural shorthand, e.g. \"vendor-policies\""),
     )
 
-    fieldsets = (FieldSet("name", "verbose_name_plural", "description", "tags"),)
+    fieldsets = (
+        FieldSet(
+            "name", "verbose_name", "verbose_name_plural", "slug", "version", "description", "tags",
+        ),
+    )
     comments = CommentField()
 
     class Meta:
         model = CustomObjectType
-        fields = ("name", "verbose_name_plural", "description", "comments", "tags")
+        fields = (
+            "name", "verbose_name", "verbose_name_plural", "slug", "version", "description",
+            "comments", "tags",
+        )
 
 
 class CustomObjectTypeBulkEditForm(NetBoxModelBulkEditForm):
@@ -151,17 +171,6 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
             self.fields["custom_object_type"].disabled = True
             if "related_object_type" in self.fields:
                 self.fields["related_object_type"].disabled = True
-
-    def clean_related_object_type(self):
-        # TODO: Figure out how to do recursive M2M relations and remove this constraint
-        if (
-            self.cleaned_data["related_object_type"]
-            == self.cleaned_data["custom_object_type"].content_type
-        ):
-            raise forms.ValidationError(
-                "Cannot create a foreign-key relation with custom objects of the same type."
-            )
-        return self.cleaned_data["related_object_type"]
 
     def clean_primary(self):
         primary_fields = self.cleaned_data["custom_object_type"].fields.filter(

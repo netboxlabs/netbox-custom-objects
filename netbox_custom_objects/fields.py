@@ -59,7 +59,7 @@ class CustomObjectDynamicModelChoiceField(DynamicModelChoiceField):
             widget.attrs["data-url"] = reverse(
                 viewname,
                 kwargs={
-                    "custom_object_type": form.instance.custom_object_type.name.lower()
+                    "custom_object_type": form.instance.custom_object_type.slug
                 },
             )
 
@@ -70,7 +70,7 @@ class CustomObjectDynamicModelChoiceField(DynamicModelChoiceField):
                 "url": reverse(
                     viewname,
                     kwargs={
-                        "custom_object_type": form.instance.custom_object_type.name.lower()
+                        "custom_object_type": form.instance.custom_object_type.slug
                     },
                 ),
                 "params": {},

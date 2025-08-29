@@ -14,7 +14,11 @@ from extras.forms import JournalEntryForm
 from extras.models import JournalEntry
 from extras.tables import JournalEntryTable
 from netbox.filtersets import BaseFilterSet
-from netbox.forms import NetBoxModelBulkEditForm, NetBoxModelFilterSetForm
+from netbox.forms import (
+    NetBoxModelBulkEditForm,
+    NetBoxModelFilterSetForm,
+    NetBoxModelImportForm,
+)
 from netbox.views import generic
 from netbox.views.generic.mixins import TableMixin
 from utilities.forms import ConfirmationForm
@@ -30,6 +34,7 @@ from netbox_custom_objects.tables import CustomObjectTable
 
 from . import field_types, filtersets, forms, tables
 from .models import CustomObject, CustomObjectType, CustomObjectTypeField
+from extras.choices import CustomFieldTypeChoices
 
 logger = logging.getLogger("netbox_custom_objects.views")
 
@@ -51,7 +56,7 @@ class CustomJournalEntryForm(JournalEntryForm):
             return reverse(
                 "plugins:netbox_custom_objects:customobject_journal",
                 kwargs={
-                    "custom_object_type": self.custom_object.custom_object_type.name,
+                    "custom_object_type": self.custom_object.custom_object_type.slug,
                     "pk": self.custom_object.pk,
                 },
             )
@@ -77,7 +82,7 @@ class CustomJournalEntryEditView(generic.ObjectEditView):
             return reverse(
                 "plugins:netbox_custom_objects:customobject_journal",
                 kwargs={
-                    "custom_object_type": instance.assigned_object.custom_object_type.name,
+                    "custom_object_type": instance.assigned_object.custom_object_type.slug,
                     "pk": instance.assigned_object.pk,
                 },
             )
@@ -308,7 +313,7 @@ class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
             return self.queryset
         custom_object_type = self.kwargs.get("custom_object_type", None)
         self.custom_object_type = get_object_or_404(
-            CustomObjectType, name__iexact=custom_object_type
+            CustomObjectType, slug=custom_object_type
         )
         model = self.custom_object_type.get_model()
         return model.objects.all()
@@ -391,7 +396,7 @@ class CustomObjectView(generic.ObjectView):
     def get_queryset(self, request):
         custom_object_type = self.kwargs.get("custom_object_type", None)
         object_type = get_object_or_404(
-            CustomObjectType, name__iexact=custom_object_type
+            CustomObjectType, slug=custom_object_type
         )
         model = object_type.get_model()
         return model.objects.all()
@@ -399,7 +404,7 @@ class CustomObjectView(generic.ObjectView):
     def get_object(self, **kwargs):
         custom_object_type = self.kwargs.get("custom_object_type", None)
         object_type = get_object_or_404(
-            CustomObjectType, name__iexact=custom_object_type
+            CustomObjectType, slug=custom_object_type
         )
         model = object_type.get_model()
         # Filter out custom_object_type from kwargs for the object lookup
@@ -449,7 +454,7 @@ class CustomObjectEditView(generic.ObjectEditView):
             return self.object
         custom_object_type = self.kwargs.pop("custom_object_type", None)
         object_type = get_object_or_404(
-            CustomObjectType, name__iexact=custom_object_type
+            CustomObjectType, slug=custom_object_type
         )
         model = object_type.get_model()
         if not self.kwargs.get("pk", None):
@@ -516,7 +521,37 @@ class CustomObjectEditView(generic.ObjectEditView):
                 "custom_object_type_field_groups"
             ]
 
+        # Create a custom save method to properly handle M2M fields
+        def custom_save(self, commit=True):
+            # First save the instance to get the primary key
+            instance = forms.NetBoxModelForm.save(self, commit=False)
+
+            if commit:
+                instance.save()
+
+                # Handle M2M fields manually to ensure proper clearing and setting
+                for field_name, field_obj in self.custom_object_type_fields.items():
+                    if field_obj.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+                        # Get the current value from the form
+                        current_value = self.cleaned_data.get(field_name, [])
+
+                        # Get the field from the instance
+                        instance_field = getattr(instance, field_name)
+
+                        # Clear existing relationships and set new ones
+                        if hasattr(instance_field, 'clear') and hasattr(instance_field, 'set'):
+                            instance_field.clear()
+
+                            if current_value:
+                                instance_field.set(current_value)
+
+                # Save M2M relationships
+                self.save_m2m()
+
+            return instance
+
         form_class.__init__ = custom_init
+        form_class.save = custom_save
 
         return form_class
 
@@ -540,7 +575,7 @@ class CustomObjectDeleteView(generic.ObjectDeleteView):
             return self.object
         custom_object_type = self.kwargs.pop("custom_object_type", None)
         object_type = get_object_or_404(
-            CustomObjectType, name__iexact=custom_object_type
+            CustomObjectType, slug=custom_object_type
         )
         model = object_type.get_model()
         return get_object_or_404(model.objects.all(), **self.kwargs)
@@ -551,7 +586,7 @@ class CustomObjectDeleteView(generic.ObjectDeleteView):
         """
         if obj:
             # Get the custom object type from the object directly
-            custom_object_type = obj.custom_object_type.name
+            custom_object_type = obj.custom_object_type.slug
         else:
             # Fallback to getting it from kwargs if object is not available
             custom_object_type = self.kwargs.get("custom_object_type")
@@ -580,14 +615,23 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
             return self.queryset
         custom_object_type = self.kwargs.get("custom_object_type", None)
         self.custom_object_type = CustomObjectType.objects.get(
-            name__iexact=custom_object_type
+            slug=custom_object_type
         )
         model = self.custom_object_type.get_model()
         return model.objects.all()
 
     def get_form(self, queryset):
+        meta = type(
+            "Meta",
+            (),
+            {
+                "model": queryset.model,
+                "fields": "__all__",
+            },
+        )
+
         attrs = {
-            "model": queryset.model,
+            "Meta": meta,
             "__module__": "database.forms",
         }
 
@@ -626,10 +670,71 @@ class CustomObjectBulkDeleteView(CustomObjectTableMixin, generic.BulkDeleteView)
             return self.queryset
         custom_object_type = self.kwargs.pop("custom_object_type", None)
         self.custom_object_type = CustomObjectType.objects.get(
+            slug=custom_object_type
+        )
+        model = self.custom_object_type.get_model()
+        return model.objects.all()
+
+
+@register_model_view(CustomObject, "bulk_import", path="import", detail=False)
+class CustomObjectBulkImportView(generic.BulkImportView):
+    queryset = None
+    model_form = None
+
+    def get(self, request, custom_object_type):
+        # Necessary because get() in BulkImportView only takes request and no **kwargs
+        return super().get(request)
+
+    def post(self, request, custom_object_type):
+        # Necessary because post() in BulkImportView only takes request and no **kwargs
+        return super().post(request)
+
+    def setup(self, request, *args, **kwargs):
+        super().setup(request, *args, **kwargs)
+        self.queryset = self.get_queryset(request)
+        self.model_form = self.get_model_form(self.queryset)
+
+    def get_queryset(self, request):
+        if self.queryset:
+            return self.queryset
+        custom_object_type = self.kwargs.get("custom_object_type", None)
+        self.custom_object_type = CustomObjectType.objects.get(
             name__iexact=custom_object_type
         )
         model = self.custom_object_type.get_model()
         return model.objects.all()
+
+    def get_model_form(self, queryset):
+        meta = type(
+            "Meta",
+            (),
+            {
+                "model": queryset.model,
+                "fields": "__all__",
+            },
+        )
+
+        attrs = {
+            "Meta": meta,
+            "__module__": "database.forms",
+        }
+
+        for field in self.custom_object_type.fields.all():
+            field_type = field_types.FIELD_TYPE_CLASS[field.type]()
+            try:
+                attrs[field.name] = field_type.get_annotated_form_field(
+                    field, for_csv_import=True
+                )
+            except NotImplementedError:
+                print(f"bulk import form: {field.name} field is not supported")
+
+        form = type(
+            f"{queryset.model._meta.object_name}BulkImportForm",
+            (NetBoxModelImportForm,),
+            attrs,
+        )
+
+        return form
 
 
 class CustomObjectJournalView(ConditionalLoginRequiredMixin, View):
@@ -646,7 +751,7 @@ class CustomObjectJournalView(ConditionalLoginRequiredMixin, View):
     def get(self, request, custom_object_type, **kwargs):
         # Get the custom object type and model
         object_type = get_object_or_404(
-            CustomObjectType, name__iexact=custom_object_type
+            CustomObjectType, slug=custom_object_type
         )
         model = object_type.get_model()
 
@@ -718,7 +823,7 @@ class CustomObjectChangeLogView(ConditionalLoginRequiredMixin, View):
     def get(self, request, custom_object_type, **kwargs):
         # Get the custom object type and model
         object_type = get_object_or_404(
-            CustomObjectType, name__iexact=custom_object_type
+            CustomObjectType, slug=custom_object_type
         )
         model = object_type.get_model()
 

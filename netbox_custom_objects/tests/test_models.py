@@ -19,12 +19,14 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         custom_object_type = self.create_custom_object_type(
             name="TestObject",
             description="A test custom object type",
-            verbose_name_plural="Test Objects"
+            verbose_name_plural="Test Objects",
+            slug="test-objects",
         )
 
         self.assertEqual(custom_object_type.name, "TestObject")
         self.assertEqual(custom_object_type.description, "A test custom object type")
         self.assertEqual(custom_object_type.verbose_name_plural, "Test Objects")
+        self.assertEqual(custom_object_type.slug, "test-objects")
         self.assertEqual(str(custom_object_type), "TestObject")
 
     def test_custom_object_type_unique_name_constraint(self):
@@ -46,7 +48,7 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         custom_object_type = self.create_custom_object_type(name="TestObject")
         expected_url = reverse(
             "plugins:netbox_custom_objects:customobject_list",
-            kwargs={"custom_object_type": custom_object_type.name.lower()}
+            kwargs={"custom_object_type": custom_object_type.slug}
         )
         self.assertEqual(custom_object_type.get_list_url(), expected_url)
 
@@ -533,7 +535,7 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
         expected_url = reverse(
             "plugins:netbox_custom_objects:customobject",
             kwargs={
-                "custom_object_type": self.custom_object_type.name.lower(),
+                "custom_object_type": self.custom_object_type.slug,
                 "pk": instance.pk
             }
         )

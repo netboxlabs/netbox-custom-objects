@@ -115,13 +115,16 @@ class CustomObjectTypeSerializer(NetBoxModelSerializer):
             "id",
             "url",
             "name",
+            "verbose_name",
+            "verbose_name_plural",
+            "slug",
             "description",
             "tags",
             "created",
             "last_updated",
             "fields",
         ]
-        brief_fields = ("id", "url", "name", "description")
+        brief_fields = ("id", "url", "name", "slug", "description")
 
     def create(self, validated_data):
         return super().create(validated_data)
@@ -192,7 +195,7 @@ class CustomObjectSerializer(NetBoxModelSerializer):
         lookup_value = getattr(obj, "pk")
         kwargs = {
             "pk": lookup_value,
-            "custom_object_type": obj.custom_object_type.name.lower(),
+            "custom_object_type": obj.custom_object_type.slug,
         }
         request = self.context["request"]
         format = self.context.get("format")
@@ -203,7 +206,7 @@ class CustomObjectSerializer(NetBoxModelSerializer):
         return result
 
 
-def get_serializer_class(model):
+def get_serializer_class(model, skip_object_fields=False):
     model_fields = model.custom_object_type.fields.all()
 
     # Create field list including all necessary fields
@@ -230,7 +233,7 @@ def get_serializer_class(model):
         lookup_value = getattr(obj, "pk")
         kwargs = {
             "pk": lookup_value,
-            "custom_object_type": obj.custom_object_type.name.lower(),
+            "custom_object_type": obj.custom_object_type.slug,
         }
         request = self.context["request"]
         format = self.context.get("format")
@@ -251,6 +254,10 @@ def get_serializer_class(model):
     }
 
     for field in model_fields:
+        if skip_object_fields and field.type in [
+            CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT
+        ]:
+            continue
         field_type = field_types.FIELD_TYPE_CLASS[field.type]()
         try:
             attrs[field.name] = field_type.get_serializer_field(field)
