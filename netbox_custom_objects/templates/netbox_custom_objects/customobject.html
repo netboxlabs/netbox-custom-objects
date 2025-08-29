@@ -19,7 +19,7 @@
 {% endblock breadcrumbs %}
 
 {% block object_identifier %}
-{{ object|meta:"app_label" }}.{{ object.custom_object_type.name }}:{{ object.pk }}
+{{ object|meta:"app_label" }}.{{ object.custom_object_type.slug }}:{{ object.pk }}
 {% if object.slug %}({{ object.slug }}){% endif %}
 {% endblock object_identifier %}
 
@@ -74,10 +74,10 @@
       <a class="nav-link{% if not tab %} active{% endif %}" href="{{ object.get_absolute_url }}">{{ object.custom_object_type.get_verbose_name }}</a>
     </li>
     <li class="nav-item">
-      <a class="nav-link{% if tab == 'journal' %} active{% endif %}" href="{% url 'plugins:netbox_custom_objects:customobject_journal' object.custom_object_type.name object.pk %}">{% trans "Journal" %}</a>
+      <a class="nav-link{% if tab == 'journal' %} active{% endif %}" href="{% url 'plugins:netbox_custom_objects:customobject_journal' object.custom_object_type.slug object.pk %}">{% trans "Journal" %}</a>
     </li>
     <li class="nav-item">
-      <a class="nav-link{% if tab == 'changelog' %} active{% endif %}" href="{% url 'plugins:netbox_custom_objects:customobject_changelog' object.custom_object_type.name object.pk %}">{% trans "Changelog" %}</a>
+      <a class="nav-link{% if tab == 'changelog' %} active{% endif %}" href="{% url 'plugins:netbox_custom_objects:customobject_changelog' object.custom_object_type.slug object.pk %}">{% trans "Changelog" %}</a>
     </li>
   </ul>
 {% endblock tabs %}

@@ -183,6 +183,7 @@ class CustomObjectType(PrimaryModel):
             ),
         ),
     )
+    version = models.CharField(max_length=10, blank=True)
     schema = models.JSONField(blank=True, default=dict)
     verbose_name = models.CharField(max_length=100, blank=True)
     verbose_name_plural = models.CharField(max_length=100, blank=True)
@@ -469,7 +470,7 @@ class CustomObjectType(PrimaryModel):
     @staticmethod
     def get_content_type_label(custom_object_type_id):
         custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
-        return f"Custom Objects > {custom_object_type.name}"
+        return f"Custom Objects > {custom_object_type.display_name}"
 
     def register_custom_object_search_index(self, model):
         # model must be an instance of this CustomObjectType's get_model() generated class
