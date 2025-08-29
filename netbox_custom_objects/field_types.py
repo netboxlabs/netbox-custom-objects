@@ -672,7 +672,7 @@ class CustomManyToManyField(models.ManyToManyField):
 
 
 class MultiObjectFieldType(FieldType):
-    def get_through_model(self, field, model=None):
+    def get_through_model(self, field, model):
         """
         Creates a through model with deferred model references
         """
