@@ -14,14 +14,19 @@ from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
 from extras.choices import CustomFieldTypeChoices, CustomFieldUIEditableChoices
 from utilities.api import get_serializer_for_model
-from utilities.forms.fields import (CSVChoiceField, CSVModelChoiceField,
-                                    CSVModelMultipleChoiceField, CSVMultipleChoiceField,
-                                    DynamicChoiceField,
-                                    DynamicMultipleChoiceField, JSONField,
-                                    LaxURLField)
+from utilities.forms.fields import (
+    CSVChoiceField, CSVModelChoiceField,
+    CSVModelMultipleChoiceField, CSVMultipleChoiceField,
+    DynamicChoiceField, DynamicModelChoiceField,
+    DynamicModelMultipleChoiceField,
+    DynamicMultipleChoiceField, JSONField,
+    LaxURLField,
+)
 from utilities.forms.utils import add_blank_choice
-from utilities.forms.widgets import (APISelect, APISelectMultiple, DatePicker,
-                                     DateTimePicker)
+from utilities.forms.widgets import (
+    APISelect, APISelectMultiple, DatePicker,
+    DateTimePicker,
+)
 from utilities.templatetags.builtins.filters import linkify, render_markdown
 
 from netbox_custom_objects.constants import APP_LABEL
@@ -72,12 +77,6 @@ class FieldType:
 
     def get_form_field(self, field, **kwargs):
         raise NotImplementedError
-
-    def _filter_field_kwargs(self, kwargs):
-        """
-        Filter out custom parameters that shouldn't be passed to Django field constructors.
-        """
-        return {k: v for k, v in kwargs.items() if not k.startswith('_') and k != 'generating_models'}
 
     def _safe_kwargs(self, **kwargs):
         """
@@ -464,7 +463,6 @@ class ObjectFieldType(FieldType):
             if generating_models and custom_object_type.id in generating_models:
                 # We're in a circular reference, don't call get_model() to prevent recursion
                 # Use a minimal approach or return a basic field
-                from utilities.forms.fields import DynamicModelChoiceField
                 return DynamicModelChoiceField(
                     queryset=custom_object_type.get_model(skip_object_fields=True).objects.all(),
                     required=field.required,
@@ -488,7 +486,6 @@ class ObjectFieldType(FieldType):
                 to_field_name=to_field_name,
             )
         else:
-            from utilities.forms.fields import DynamicModelChoiceField
             field_class = DynamicModelChoiceField
             return field_class(
                 queryset=model.objects.all(),
@@ -523,8 +520,7 @@ class ObjectFieldType(FieldType):
         This ensures that self-referential fields point to the correct model class.
         """
         # Check if this field has a resolution method
-        resolve_method = getattr(model, f'_resolve_{field_name}_model', None)
-        if resolve_method:
+        if resolve_method := getattr(model, f'_resolve_{field_name}_model', None):
             resolve_method(model)
 
 
@@ -790,7 +786,6 @@ class MultiObjectFieldType(FieldType):
             if generating_models and custom_object_type.id in generating_models:
                 # We're in a circular reference, don't call get_model() to prevent recursion
                 # Use a minimal approach or return a basic field
-                from utilities.forms.fields import DynamicModelMultipleChoiceField
                 return DynamicModelMultipleChoiceField(
                     queryset=custom_object_type.get_model(skip_object_fields=True).objects.all(),
                     required=field.required,
@@ -814,7 +809,6 @@ class MultiObjectFieldType(FieldType):
                 to_field_name=to_field_name,
             )
         else:
-            from utilities.forms.fields import DynamicModelMultipleChoiceField
             field_class = DynamicModelMultipleChoiceField
             return field_class(
                 queryset=model.objects.all(),
@@ -839,8 +833,6 @@ class MultiObjectFieldType(FieldType):
         if related_model_class._meta.app_label == APP_LABEL:
             from netbox_custom_objects.api.serializers import get_serializer_class
             serializer = get_serializer_class(related_model_class, skip_object_fields=True)
-        # if not related_model_class:
-        #     raise NotImplementedError("Custom object serializers not implemented")
         else:
             serializer = get_serializer_for_model(related_model_class)
         return serializer(required=field.required, nested=True, many=True)
