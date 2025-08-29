@@ -388,8 +388,7 @@ class ObjectFieldType(FieldType):
         to_model = content_type.model
 
         # Extract our custom parameters and keep only Django field parameters
-        generating_models = kwargs.pop('_generating_models', getattr(self, '_generating_models', set()))
-        field_kwargs = {k: v for k, v in kwargs.items() if not k.startswith('_')}
+        field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
 
         # Handle self-referential fields by using string references
@@ -401,35 +400,15 @@ class ObjectFieldType(FieldType):
             )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
 
-            # Check if this is a self-referential field
-            if custom_object_type.id == field.custom_object_type.id:
-                # For self-referential fields, use LazyForeignKey to defer resolution
-                model_name = f"{APP_LABEL}.{custom_object_type.get_table_model_name(custom_object_type.id)}"
-                f = LazyForeignKey(
-                    model_name,
-                    null=True,
-                    blank=True,
-                    on_delete=models.CASCADE,
-                    **field_kwargs
-                )
-                return f
-            else:
-                # For cross-referential fields, use skip_object_fields to avoid infinite loops
-                # Check if we're in a recursion situation using the parameter or stored attribute
-                if generating_models and custom_object_type.id in generating_models:
-                    # We're in a circular reference, don't call get_model() to prevent recursion
-                    # Use a string reference instead
-                    model_name = f"{APP_LABEL}.{custom_object_type.get_table_model_name(custom_object_type.id)}"
-                    f = models.ForeignKey(
-                        model_name,
-                        null=True,
-                        blank=True,
-                        on_delete=models.CASCADE,
-                        **field_kwargs
-                    )
-                    return f
-                else:
-                    model = custom_object_type.get_model(skip_object_fields=True)
+            model_name = f"{APP_LABEL}.{custom_object_type.get_table_model_name(custom_object_type.id)}"
+            f = LazyForeignKey(
+                model_name,
+                null=True,
+                blank=True,
+                on_delete=models.CASCADE,
+                **field_kwargs
+            )
+            return f
         else:
             # to_model = content_type.model_class()._meta.object_name
             to_ct = f"{content_type.app_label}.{to_model}"
