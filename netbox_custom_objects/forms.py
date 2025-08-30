@@ -47,7 +47,10 @@ class CustomObjectTypeForm(NetBoxModelForm):
     slug = SlugField(
         label=_("URL path/slug"),
         slug_source="verbose_name_plural",
-        help_text=_("URL-friendly unique plural shorthand, e.g. \"vendor-policies\""),
+        help_text=_(
+            "Unique plural shorthand for use as a URL component, e.g. \"vendor-policies\" for "
+            "\"/plugins/custom-objects/vendor-policies/\""
+        ),
     )
 
     fieldsets = (
