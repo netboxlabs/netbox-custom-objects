@@ -167,7 +167,6 @@ class CustomObjectType(PrimaryModel):
     name = models.CharField(
         max_length=100,
         unique=True,
-        help_text=_("Internal lowercased object name, e.g. \"vendor_policy\""),
         validators=(
             RegexValidator(
                 regex=r"^[a-z0-9_]+$",
