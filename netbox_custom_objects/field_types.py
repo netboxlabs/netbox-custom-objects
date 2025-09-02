@@ -28,6 +28,7 @@ from utilities.forms.widgets import (
     DateTimePicker,
 )
 from utilities.templatetags.builtins.filters import linkify, render_markdown
+from netbox.tables.columns import BooleanColumn
 
 from netbox_custom_objects.constants import APP_LABEL
 
@@ -64,6 +65,9 @@ class LazyForeignKey(ForeignKey):
 class FieldType:
 
     def get_display_value(self, instance, field_name):
+        """
+        This value is used as the object title in the Custom Object detail view.
+        """
         return getattr(instance, field_name)
 
     def get_model_field(self, field, **kwargs):
@@ -236,6 +240,9 @@ class BooleanFieldType(FieldType):
             initial=field.default,
             widget=forms.Select(choices=choices),
         )
+
+    def get_table_column_field(self, field, **kwargs):
+        return BooleanColumn()
 
 
 class DateFieldType(FieldType):
@@ -823,6 +830,10 @@ class MultiObjectFieldType(FieldType):
 
     def get_filterform_field(self, field, **kwargs):
         return None
+
+    def get_display_value(self, instance, field_name):
+        field = getattr(instance, field_name)
+        return ", ".join(str(s) for s in field.all())
 
     def get_table_column_field(self, field, **kwargs):
         return tables.ManyToManyColumn(linkify_item=True, orderable=False)
