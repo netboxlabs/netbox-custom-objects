@@ -160,9 +160,22 @@ class CustomObjectTypeView(CustomObjectTableMixin, generic.ObjectView):
 
     def get_extra_context(self, request, instance):
         model = instance.get_model()
+        
+        # Get fields and group them by group_name
+        fields = instance.fields.all().order_by("group_name", "weight", "name")
+        
+        # Group fields by group_name
+        field_groups = {}
+        for field in fields:
+            group_name = field.group_name or None  # Use None for ungrouped fields
+            if group_name not in field_groups:
+                field_groups[group_name] = []
+            field_groups[group_name].append(field)
+        
         return {
             "custom_objects": model.objects.all(),
             "table": self.get_table(self.queryset, request),
+            "field_groups": field_groups,
         }
 
 
