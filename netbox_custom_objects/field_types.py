@@ -406,11 +406,14 @@ class ObjectFieldType(FieldType):
             if custom_object_type.id == field.custom_object_type.id:
                 # For self-referential fields, use LazyForeignKey to defer resolution
                 model_name = f"{APP_LABEL}.{custom_object_type.get_table_model_name(custom_object_type.id)}"
+                # Generate a unique related_name to prevent reverse accessor conflicts
+                related_name = f"{field.custom_object_type.get_table_model_name(field.custom_object_type.id).lower()}_{field.name}_set"
                 f = LazyForeignKey(
                     model_name,
                     null=True,
                     blank=True,
                     on_delete=models.CASCADE,
+                    related_name=related_name,
                     **field_kwargs
                 )
                 return f
@@ -421,11 +424,14 @@ class ObjectFieldType(FieldType):
                     # We're in a circular reference, don't call get_model() to prevent recursion
                     # Use a string reference instead
                     model_name = f"{APP_LABEL}.{custom_object_type.get_table_model_name(custom_object_type.id)}"
+                    # Generate a unique related_name to prevent reverse accessor conflicts
+                    related_name = f"{field.custom_object_type.get_table_model_name(field.custom_object_type.id).lower()}_{field.name}_set"
                     f = models.ForeignKey(
                         model_name,
                         null=True,
                         blank=True,
                         on_delete=models.CASCADE,
+                        related_name=related_name,
                         **field_kwargs
                     )
                     return f
@@ -436,8 +442,10 @@ class ObjectFieldType(FieldType):
             to_ct = f"{content_type.app_label}.{to_model}"
             model = apps.get_model(to_ct)
 
+        # Generate a unique related_name to prevent reverse accessor conflicts
+        related_name = f"{field.custom_object_type.get_table_model_name(field.custom_object_type.id).lower()}_{field.name}_set"
         f = models.ForeignKey(
-            model, null=True, blank=True, on_delete=models.CASCADE, **field_kwargs
+            model, null=True, blank=True, on_delete=models.CASCADE, related_name=related_name, **field_kwargs
         )
 
         return f
