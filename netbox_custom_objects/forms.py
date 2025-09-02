@@ -26,21 +26,31 @@ __all__ = (
 
 
 class CustomObjectTypeForm(NetBoxModelForm):
+    name = forms.CharField(
+        label=_("Internal name"),
+        max_length=100,
+        required=True,
+        help_text=_("Internal lowercased object name, e.g. \"vendor_policy\""),
+    )
     verbose_name = forms.CharField(
-        label=_("Readable name"),
+        label=_("Display name (singular)"),
         max_length=100,
         required=False,
         help_text=_("Displayed object type name, e.g. \"Vendor Policy\""),
     )
     verbose_name_plural = forms.CharField(
-        label=_("Readable plural name"),
+        label=_("Display name (plural)"),
         max_length=100,
         required=False,
         help_text=_("Displayed plural object type name, e.g. \"Vendor Policies\""),
     )
     slug = SlugField(
+        label=_("URL path/slug"),
         slug_source="verbose_name_plural",
-        help_text=_("URL-friendly unique plural shorthand, e.g. \"vendor-policies\""),
+        help_text=_(
+            "Unique plural shorthand for use as a URL component, e.g. \"vendor-policies\" for "
+            "\"/plugins/custom-objects/vendor-policies/\""
+        ),
     )
 
     fieldsets = (
