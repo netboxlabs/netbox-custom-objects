@@ -1,6 +1,5 @@
 import decimal
 import re
-import warnings
 from datetime import date, datetime
 
 import django_filters
@@ -51,6 +50,7 @@ from utilities.validators import validate_regex
 
 from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
+from netbox_custom_objects.utilities import generate_model
 
 
 class UniquenessConstraintTestError(Exception):
@@ -421,6 +421,9 @@ class CustomObjectType(PrimaryModel):
         # Get the set of fields that were skipped due to recursion
         skipped_fields = attrs.get("_skipped_fields", set())
 
+        # Collect through models during after_model_generation
+        through_models = []
+
         for field_object in all_field_objects.values():
             field_name = field_object["name"]
 
@@ -432,14 +435,27 @@ class CustomObjectType(PrimaryModel):
             # Fields might be skipped due to recursion prevention
             if hasattr(model._meta, 'get_field'):
                 try:
-                    model._meta.get_field(field_name)
+                    field = model._meta.get_field(field_name)
                     # Field exists, process it
                     field_object["type"].after_model_generation(
                         field_object["field"], model, field_name
                     )
+
+                    # Collect through models from M2M fields
+                    if hasattr(field, 'remote_field') and hasattr(field.remote_field, 'through'):
+                        through_model = field.remote_field.through
+                        # Only collect custom through models, not auto-created Django ones
+                        if (through_model and through_model not in through_models and
+                            hasattr(through_model._meta, 'app_label') and
+                            through_model._meta.app_label == APP_LABEL):
+                            through_models.append(through_model)
+
                 except Exception:
                     # Field doesn't exist (likely skipped due to recursion), skip processing
                     continue
+
+        # Store through models on the model for yielding in get_models()
+        model._through_models = through_models
 
     def get_collision_safe_order_id_idx_name(self):
         return f"tbl_order_id_{self.id}_idx"
@@ -601,22 +617,14 @@ class CustomObjectType(PrimaryModel):
 
         TM.post_through_setup = wrapped_post_through_setup
 
-        # Suppress RuntimeWarning about model already being registered
-        # TODO: Remove this once we have a better way to handle model registration
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore", category=RuntimeWarning, message=".*was already registered.*"
+        try:
+            model = generate_model(
+                str(model_name),
+                (CustomObject, models.Model),
+                attrs,
             )
-
-            try:
-                model = type(
-                    str(model_name),
-                    (CustomObject, models.Model),
-                    attrs,
-                )
-            finally:
-                # Restore the original method
-                TM.post_through_setup = original_post_through_setup
+        finally:
+            TM.post_through_setup = original_post_through_setup
 
         # Register the main model with Django's app registry
         try:
@@ -634,6 +642,9 @@ class CustomObjectType(PrimaryModel):
         # Cache the generated model
         if not no_cache:
             self._model_cache[self.id] = model
+            # Do the clear cache now that we have it in the cache so there
+            # is no recursion.
+            apps.clear_cache()
 
         # Register the serializer for this model
         if not manytomany_models:
@@ -663,6 +674,7 @@ class CustomObjectType(PrimaryModel):
         # Ensure the ContentType exists and is immediately available
         ct = self.get_or_create_content_type()
         features = get_model_features(model)
+        ct.features = features + ['branching']
         ct.public = True
         ct.features = features
         ct.save()
@@ -1423,7 +1435,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                                 "managed": True,
                             },
                         )
-                        old_through_model = type(
+                        old_through_model = generate_model(
                             f"TempOld{self.original.through_model_name}",
                             (models.Model,),
                             {
@@ -1454,7 +1466,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                                 "managed": True,
                             },
                         )
-                        new_through_model = type(
+                        new_through_model = generate_model(
                             f"TempNew{self.through_model_name}",
                             (models.Model,),
                             {
