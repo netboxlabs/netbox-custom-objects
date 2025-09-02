@@ -422,6 +422,9 @@ class CustomObjectType(PrimaryModel):
         # Get the set of fields that were skipped due to recursion
         skipped_fields = attrs.get("_skipped_fields", set())
 
+        # Collect through models during after_model_generation
+        through_models = []
+
         for field_object in all_field_objects.values():
             field_name = field_object["name"]
 
@@ -433,14 +436,27 @@ class CustomObjectType(PrimaryModel):
             # Fields might be skipped due to recursion prevention
             if hasattr(model._meta, 'get_field'):
                 try:
-                    model._meta.get_field(field_name)
+                    field = model._meta.get_field(field_name)
                     # Field exists, process it
                     field_object["type"].after_model_generation(
                         field_object["field"], model, field_name
                     )
+                    
+                    # Collect through models from M2M fields
+                    if hasattr(field, 'remote_field') and hasattr(field.remote_field, 'through'):
+                        through_model = field.remote_field.through
+                        # Only collect custom through models, not auto-created Django ones
+                        if (through_model and through_model not in through_models and
+                            hasattr(through_model._meta, 'app_label') and
+                            through_model._meta.app_label == APP_LABEL):
+                            through_models.append(through_model)
+                            
                 except Exception:
                     # Field doesn't exist (likely skipped due to recursion), skip processing
                     continue
+
+        # Store through models on the model for yielding in get_models()
+        model._through_models = through_models
 
     def get_collision_safe_order_id_idx_name(self):
         return f"tbl_order_id_{self.id}_idx"

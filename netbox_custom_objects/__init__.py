@@ -6,6 +6,8 @@ from django.db import transaction
 from django.db.utils import DatabaseError, OperationalError, ProgrammingError
 from netbox.plugins import PluginConfig
 
+from .constants import APP_LABEL
+
 
 def is_running_migration():
     """
@@ -109,6 +111,11 @@ class CustomObjectsPluginConfig(PluginConfig):
                 model = custom_type.get_model()
                 if model:
                     yield model
+                    
+                    # If include_auto_created is True, also yield through models
+                    if include_auto_created and hasattr(model, '_through_models'):
+                        for through_model in model._through_models:
+                            yield through_model
 
 
 config = CustomObjectsPluginConfig
