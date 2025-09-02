@@ -675,6 +675,7 @@ class CustomObjectType(PrimaryModel):
         # Ensure the ContentType exists and is immediately available
         ct = self.get_or_create_content_type()
         features = get_model_features(model)
+        ct.features = features + ['branching']
         ct.public = True
         ct.features = features
         ct.save()
