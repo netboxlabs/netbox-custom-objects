@@ -441,7 +441,7 @@ class CustomObjectType(PrimaryModel):
                     field_object["type"].after_model_generation(
                         field_object["field"], model, field_name
                     )
-                    
+
                     # Collect through models from M2M fields
                     if hasattr(field, 'remote_field') and hasattr(field.remote_field, 'through'):
                         through_model = field.remote_field.through
@@ -450,7 +450,7 @@ class CustomObjectType(PrimaryModel):
                             hasattr(through_model._meta, 'app_label') and
                             through_model._meta.app_label == APP_LABEL):
                             through_models.append(through_model)
-                            
+
                 except Exception:
                     # Field doesn't exist (likely skipped due to recursion), skip processing
                     continue
