@@ -191,6 +191,8 @@ class CustomObjectType(PrimaryModel):
         ObjectType,
         on_delete=models.CASCADE,
         related_name="custom_object_types",
+        null=True,
+        blank=True,
         editable=False
     )
     class Meta:
@@ -668,20 +670,18 @@ class CustomObjectType(PrimaryModel):
     def save(self, *args, **kwargs):
         needs_db_create = self._state.adding
 
-        # If creating a new object, get or create the ObjectType
-        if needs_db_create:
-            content_type_name = self.get_table_model_name(self.id).lower()
-            try:
-                self.object_type = ObjectType.objects.get(app_label=APP_LABEL, model=content_type_name)
-            except Exception:
-                # Create the ObjectType and ensure it's immediately available
-                ct = ObjectType.objects.create(app_label=APP_LABEL, model=content_type_name)
-                # Force a refresh to ensure it's available in the current transaction
-                ct.refresh_from_db()
-                self.object_type = ct
-
         super().save(*args, **kwargs)
         if needs_db_create:
+            # If creating a new object, get or create the ObjectType
+            content_type_name = self.get_table_model_name(self.id).lower()
+            ct, created = ObjectType.objects.get_or_create(
+                app_label=APP_LABEL, 
+                model=content_type_name
+            )
+            # Force a refresh to ensure it's available in the current transaction
+            # ct.refresh_from_db()
+            self.object_type = ct
+
             self.create_model()
         else:
             # Clear the model cache when the CustomObjectType is modified
