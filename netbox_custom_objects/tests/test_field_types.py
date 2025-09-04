@@ -834,7 +834,7 @@ class CrossReferentialFieldTestCase(FieldTypeTestCase):
             name="related_objects",
             label="Related Objects",
             type="multiobject",
-            related_object_type=second_type
+            related_object_type=second_type.object_type
         )
         field  # To silence ruff error
 
