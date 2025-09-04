@@ -187,7 +187,12 @@ class CustomObjectType(PrimaryModel):
     verbose_name = models.CharField(max_length=100, blank=True)
     verbose_name_plural = models.CharField(max_length=100, blank=True)
     slug = models.SlugField(max_length=100, unique=True, db_index=True)
-
+    object_type = models.OneToOneField(
+        ObjectType,
+        on_delete=models.CASCADE,
+        related_name="custom_object_types",
+        editable=False
+    )
     class Meta:
         verbose_name = "Custom Object Type"
         ordering = ("name",)
@@ -301,29 +306,6 @@ class CustomObjectType(PrimaryModel):
     @classmethod
     def get_table_model_name(cls, table_id):
         return f"Table{table_id}Model"
-
-    @property
-    def content_type(self):
-        try:
-            return self.get_or_create_content_type()
-        except Exception:
-            # If we still can't get it, return None
-            return None
-
-    def get_or_create_content_type(self):
-        """
-        Get or create the ObjectType for this CustomObjectType.
-        This ensures the ObjectType is immediately available in the current transaction.
-        """
-        content_type_name = self.get_table_model_name(self.id).lower()
-        try:
-            return ObjectType.objects.get(app_label=APP_LABEL, model=content_type_name)
-        except Exception:
-            # Create the ObjectType and ensure it's immediately available
-            ct = ObjectType.objects.create(app_label=APP_LABEL, model=content_type_name)
-            # Force a refresh to ensure it's available in the current transaction
-            ct.refresh_from_db()
-            return ct
 
     def _fetch_and_generate_field_attrs(
         self,
@@ -672,12 +654,11 @@ class CustomObjectType(PrimaryModel):
         model = self.get_model()
 
         # Ensure the ContentType exists and is immediately available
-        ct = self.get_or_create_content_type()
         features = get_model_features(model)
-        ct.features = features + ['branching']
-        ct.public = True
-        ct.features = features
-        ct.save()
+        self.object_type.features = features + ['branching']
+        self.object_type.public = True
+        self.object_type.features = features
+        self.object_type.save()
 
         with connection.schema_editor() as schema_editor:
             schema_editor.create_model(model)
@@ -686,6 +667,19 @@ class CustomObjectType(PrimaryModel):
 
     def save(self, *args, **kwargs):
         needs_db_create = self._state.adding
+
+        # If creating a new object, get or create the ObjectType
+        if needs_db_create:
+            content_type_name = self.get_table_model_name(self.id).lower()
+            try:
+                self.object_type = ObjectType.objects.get(app_label=APP_LABEL, model=content_type_name)
+            except Exception:
+                # Create the ObjectType and ensure it's immediately available
+                ct = ObjectType.objects.create(app_label=APP_LABEL, model=content_type_name)
+                # Force a refresh to ensure it's available in the current transaction
+                ct.refresh_from_db()
+                self.object_type = ct
+
         super().save(*args, **kwargs)
         if needs_db_create:
             self.create_model()
