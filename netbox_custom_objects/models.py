@@ -1137,8 +1137,6 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         Raises ValidationError if recursion is detected.
         """
         # Check if this field points to the same custom object type (self-referential)
-        print(f"related_object_type_id: {self.related_object_type_id}, custom_object_type.object_type_id: {self.custom_object_type.object_type_id}")
-        breakpoint()
         if self.related_object_type_id == self.custom_object_type.object_type_id:
             return  # Self-referential fields are allowed
 
