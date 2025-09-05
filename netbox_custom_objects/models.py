@@ -59,6 +59,13 @@ class UniquenessConstraintTestError(Exception):
     pass
 
 
+
+class UniquenessConstraintTestError(Exception):
+    """Custom exception used to signal successful uniqueness constraint test."""
+
+    pass
+
+
 USER_TABLE_DATABASE_NAME_PREFIX = "custom_objects_"
 
 
