@@ -4,7 +4,7 @@ from datetime import date, datetime
 
 import django_filters
 from core.models import ObjectType, ObjectChange
-from core.models.contenttypes import ObjectTypeManager
+from core.models.object_types import ObjectTypeManager
 from django.apps import apps
 from django.conf import settings
 
@@ -698,6 +698,11 @@ class CustomObjectType(PrimaryModel):
         self.clear_model_cache(self.id)
 
         model = self.get_model()
+
+        # Delete all CustomObjectTypeFields that reference this CustomObjectType
+        for field in CustomObjectTypeField.objects.filter(related_object_type=self.content_type):
+            field.delete()
+
         object_type = ObjectType.objects.get_for_model(model)
         ObjectChange.objects.filter(changed_object_type=object_type).delete()
         super().delete(*args, **kwargs)
