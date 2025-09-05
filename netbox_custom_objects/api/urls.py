@@ -51,7 +51,7 @@ class CustomObjectsAPIRootView(APIView):
         # Extra logic to populate roots for custom object type lists
         for custom_object_type in CustomObjectType.objects.all():
             local_kwargs = deepcopy(kwargs)
-            cot_name = custom_object_type.name.lower()
+            cot_name = custom_object_type.slug
             url_name = 'customobject-list'
             local_kwargs['custom_object_type'] = cot_name
             if namespace:

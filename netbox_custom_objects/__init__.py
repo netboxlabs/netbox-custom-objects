@@ -6,6 +6,8 @@ from django.db import transaction
 from django.db.utils import DatabaseError, OperationalError, ProgrammingError
 from netbox.plugins import PluginConfig
 
+from .constants import APP_LABEL as APP_LABEL
+
 
 def is_running_migration():
     """
@@ -106,11 +108,14 @@ class CustomObjectsPluginConfig(PluginConfig):
 
             custom_object_types = CustomObjectType.objects.all()
             for custom_type in custom_object_types:
-                # Only yield already cached models during discovery
-                if CustomObjectType.is_model_cached(custom_type.id):
-                    model = CustomObjectType.get_cached_model(custom_type.id)
-                    if model:
-                        yield model
+                model = custom_type.get_model()
+                if model:
+                    yield model
+
+                    # If include_auto_created is True, also yield through models
+                    if include_auto_created and hasattr(model, '_through_models'):
+                        for through_model in model._through_models:
+                            yield through_model
 
 
 config = CustomObjectsPluginConfig

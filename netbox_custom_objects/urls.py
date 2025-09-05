@@ -50,6 +50,11 @@ urlpatterns = [
         name="customobject_bulk_delete",
     ),
     path(
+        "<str:custom_object_type>/bulk-import/",
+        views.CustomObjectBulkImportView.as_view(),
+        name="customobject_bulk_import",
+    ),
+    path(
         "<str:custom_object_type>/<int:pk>/",
         views.CustomObjectView.as_view(),
         name="customobject",

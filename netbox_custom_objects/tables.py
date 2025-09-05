@@ -112,7 +112,7 @@ class CustomObjectActionsColumn(columns.ActionsColumn):
                     get_viewname(model, action),
                     kwargs={
                         "pk": record.pk,
-                        "custom_object_type": record.custom_object_type.name.lower(),
+                        "custom_object_type": record.custom_object_type.slug,
                     },
                 )
 

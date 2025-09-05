@@ -8,6 +8,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 from netbox_custom_objects.models import CustomObjectTypeField
+from core.models import ObjectType
 from .base import CustomObjectsTestCase
 
 
@@ -19,12 +20,14 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         custom_object_type = self.create_custom_object_type(
             name="TestObject",
             description="A test custom object type",
-            verbose_name_plural="Test Objects"
+            verbose_name_plural="Test Objects",
+            slug="test-objects",
         )
 
         self.assertEqual(custom_object_type.name, "TestObject")
         self.assertEqual(custom_object_type.description, "A test custom object type")
         self.assertEqual(custom_object_type.verbose_name_plural, "Test Objects")
+        self.assertEqual(custom_object_type.slug, "test-objects")
         self.assertEqual(str(custom_object_type), "TestObject")
 
     def test_custom_object_type_unique_name_constraint(self):
@@ -46,7 +49,7 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         custom_object_type = self.create_custom_object_type(name="TestObject")
         expected_url = reverse(
             "plugins:netbox_custom_objects:customobject_list",
-            kwargs={"custom_object_type": custom_object_type.name.lower()}
+            kwargs={"custom_object_type": custom_object_type.slug}
         )
         self.assertEqual(custom_object_type.get_list_url(), expected_url)
 
@@ -372,7 +375,16 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
     def setUpTestData(cls):
         """Set up test data that should be created once for the entire test class."""
         super().setUpTestData()
-        cls.custom_object_type = cls.create_custom_object_type(name="TestObject")
+        cls.custom_object_type = cls.create_custom_object_type(name="TestObject", slug="test-objects")
+        cls.cot_1_model_name = (
+            cls.custom_object_type.get_table_model_name(cls.custom_object_type.id).lower()
+        )
+        first_object_ct = ObjectType.objects.get(app_label='netbox_custom_objects', model=cls.cot_1_model_name)
+        cls.second_custom_object_type = cls.create_custom_object_type(name="TestObject2", slug="test-objects2")
+        cls.cot_2_model_name = (
+            cls.second_custom_object_type.get_table_model_name(cls.second_custom_object_type.id).lower()
+        )
+        second_object_ct = ObjectType.objects.get(app_label='netbox_custom_objects', model=cls.cot_2_model_name)
 
         # Add a primary field
         cls.create_custom_object_type_field(
@@ -472,13 +484,64 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
             related_object_type=site_ct,
         )
 
-        site_ct = cls.get_site_object_type()
         cls.create_custom_object_type_field(
             cls.custom_object_type,
             name="sites",
             label="Sites",
             type="multiobject",
             related_object_type=site_ct,
+        )
+
+        # Custom Object single- and multi-object fields
+
+        cls.create_custom_object_type_field(
+            cls.custom_object_type,
+            name="second_object_single",
+            label="Second Object Single",
+            type="object",
+            related_object_type=second_object_ct,
+        )
+
+        cls.create_custom_object_type_field(
+            cls.custom_object_type,
+            name="second_object_single_2",
+            label="Second Object Single 2",
+            type="object",
+            related_object_type=second_object_ct,
+        )
+
+        cls.create_custom_object_type_field(
+            cls.custom_object_type,
+            name="second_object_multi",
+            label="Second Object Multi",
+            type="multiobject",
+            related_object_type=second_object_ct,
+        )
+
+        cls.create_custom_object_type_field(
+            cls.custom_object_type,
+            name="second_object_multi_2",
+            label="Second Object Multi 2",
+            type="multiobject",
+            related_object_type=second_object_ct,
+        )
+
+        # Self-referential
+
+        cls.create_custom_object_type_field(
+            cls.custom_object_type,
+            name="self_ref_single",
+            label="Self Ref Single",
+            type="object",
+            related_object_type=first_object_ct,
+        )
+
+        cls.create_custom_object_type_field(
+            cls.custom_object_type,
+            name="self_ref_multi",
+            label="Self Ref Multi",
+            type="multiobject",
+            related_object_type=first_object_ct,
         )
 
         # Get the dynamic model
@@ -494,6 +557,11 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
         now = timezone.now()
         site_ct = self.get_site_object_type()
         site = site_ct.model_class().objects.create()
+        first_object_1 = self.model.objects.create()
+        first_object_2 = self.model.objects.create()
+        second_object_model = self.second_custom_object_type.get_model()
+        second_object_1 = second_object_model.objects.create()
+        second_object_2 = second_object_model.objects.create()
 
         instance = self.model.objects.create(
             name="Test Instance",
@@ -508,8 +576,16 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
             country="US",
             countries=["US", "AU"],
             site=site,
+            second_object_single=second_object_1,
+            second_object_single_2=second_object_2,
+            self_ref_single=first_object_1,
         )
         instance.sites.add(site)
+        instance.second_object_multi.add(second_object_1)
+        instance.second_object_multi.add(second_object_2)
+        instance.second_object_multi_2.add(second_object_1)
+        instance.self_ref_multi.add(first_object_1)
+        instance.self_ref_multi.add(first_object_2)
 
         self.assertEqual(instance.name, "Test Instance")
         self.assertEqual(instance.description, "A test instance")
@@ -526,6 +602,14 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(instance.sites.all().count(), 1)
         self.assertIn(site, instance.sites.all())
         self.assertEqual(str(instance), "Test Instance")
+        # Object Fields pointing to Custom Objects
+        self.assertEqual(instance.second_object_single, second_object_1)
+        self.assertEqual(instance.second_object_single_2, second_object_2)
+        self.assertEqual(instance.second_object_multi.count(), 2)
+        self.assertEqual(instance.second_object_multi_2.count(), 1)
+        # Self-referential Object Fields
+        self.assertEqual(instance.self_ref_single, first_object_1)
+        self.assertEqual(instance.self_ref_multi.count(), 2)
 
     def test_custom_object_get_absolute_url(self):
         """Test get_absolute_url method for custom objects."""
@@ -533,7 +617,7 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
         expected_url = reverse(
             "plugins:netbox_custom_objects:customobject",
             kwargs={
-                "custom_object_type": self.custom_object_type.name.lower(),
+                "custom_object_type": self.custom_object_type.slug,
                 "pk": instance.pk
             }
         )
