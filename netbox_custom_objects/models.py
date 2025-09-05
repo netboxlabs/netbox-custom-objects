@@ -675,7 +675,7 @@ class CustomObjectType(PrimaryModel):
             # If creating a new object, get or create the ObjectType
             content_type_name = self.get_table_model_name(self.id).lower()
             ct, created = ObjectType.objects.get_or_create(
-                app_label=APP_LABEL, 
+                app_label=APP_LABEL,
                 model=content_type_name
             )
             # Force a refresh to ensure it's available in the current transaction
