@@ -12,7 +12,6 @@ from extras.choices import CustomFieldUIVisibleChoices
 from extras.forms import JournalEntryForm
 from extras.models import JournalEntry
 from extras.tables import JournalEntryTable
-from netbox.filtersets import BaseFilterSet
 from netbox.forms import (
     NetBoxModelBulkEditForm,
     NetBoxModelFilterSetForm,
