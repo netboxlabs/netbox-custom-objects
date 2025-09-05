@@ -1,9 +1,12 @@
+import warnings
+
 from django.apps import apps
 
 from netbox_custom_objects.constants import APP_LABEL
 
 __all__ = (
     "AppsProxy",
+    "generate_model",
     "get_viewname",
 )
 
@@ -83,3 +86,25 @@ def get_viewname(model, action=None, rest_api=False):
             viewname = f"{viewname}_{action}"
 
     return viewname
+
+
+def generate_model(*args, **kwargs):
+    """
+    Create a model.
+    """
+    # Monkey patch apps.clear_cache to do nothing
+    apps.clear_cache = lambda: None
+
+    # Suppress RuntimeWarning about model already being registered
+    # TODO: Remove this once we have a better way to handle model registration
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", category=RuntimeWarning, message=".*was already registered.*"
+        )
+
+        try:
+            model = type(*args, **kwargs)
+        finally:
+            apps.clear_cache = apps.clear_cache
+
+    return model

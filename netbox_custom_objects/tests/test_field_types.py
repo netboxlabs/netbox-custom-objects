@@ -786,7 +786,7 @@ class CrossReferentialFieldTestCase(FieldTypeTestCase):
     def test_cross_referential_object_field(self):
         """Test object field referencing another custom object type."""
         # Create second custom object type
-        second_type = self.create_custom_object_type(name="SecondObject")
+        second_type = self.create_custom_object_type(name="SecondObject", slug="second-objects")
         self.create_custom_object_type_field(
             second_type,
             name="name",
@@ -818,7 +818,7 @@ class CrossReferentialFieldTestCase(FieldTypeTestCase):
     def test_cross_referential_multiobject_field(self):
         """Test multiobject field referencing another custom object type."""
         # Create second custom object type
-        second_type = self.create_custom_object_type(name="SecondObject")
+        second_type = self.create_custom_object_type(name="SecondObject", slug="second-objects")
         self.create_custom_object_type_field(
             second_type,
             name="name",

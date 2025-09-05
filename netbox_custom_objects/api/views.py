@@ -1,4 +1,5 @@
 from django.http import Http404
+from drf_spectacular.utils import extend_schema_view, extend_schema
 from rest_framework.routers import APIRootView
 from rest_framework.viewsets import ModelViewSet
 
@@ -18,13 +19,25 @@ class CustomObjectTypeViewSet(ModelViewSet):
     serializer_class = serializers.CustomObjectTypeSerializer
 
 
+# TODO: Need to remove this for now, check if work-around in the future.
+# There is a catch-22 spectacular get the queryset and serializer class without
+# params at startup.  The suggested workaround is to return the model empty
+# queryset, but we can't get the model without params at startup.
+@extend_schema_view(
+    list=extend_schema(exclude=True),
+    retrieve=extend_schema(exclude=True),
+    create=extend_schema(exclude=True),
+    update=extend_schema(exclude=True),
+    partial_update=extend_schema(exclude=True),
+    destroy=extend_schema(exclude=True)
+)
 class CustomObjectViewSet(ModelViewSet):
     serializer_class = serializers.CustomObjectSerializer
     model = None
 
     def get_view_name(self):
         if self.model:
-            return self.model.custom_object_type.name
+            return self.model.custom_object_type.display_name
         return 'Custom Object'
 
     def get_serializer_class(self):
@@ -33,7 +46,7 @@ class CustomObjectViewSet(ModelViewSet):
     def get_queryset(self):
         try:
             custom_object_type = CustomObjectType.objects.get(
-                name__iexact=self.kwargs["custom_object_type"]
+                slug=self.kwargs["custom_object_type"]
             )
         except CustomObjectType.DoesNotExist:
             raise Http404

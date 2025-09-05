@@ -7,28 +7,68 @@ from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
 from django.core.validators import RegexValidator
 from django.db import models
-from django.db.models.fields.related import ManyToManyDescriptor
+from django.db.models.fields.related import ForeignKey, ManyToManyDescriptor
 from django.db.models.manager import Manager
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
 from extras.choices import CustomFieldTypeChoices, CustomFieldUIEditableChoices
 from utilities.api import get_serializer_for_model
-from utilities.forms.fields import (CSVChoiceField, CSVMultipleChoiceField,
-                                    DynamicChoiceField,
-                                    DynamicMultipleChoiceField, JSONField,
-                                    LaxURLField)
+from utilities.forms.fields import (
+    CSVChoiceField, CSVModelChoiceField,
+    CSVModelMultipleChoiceField, CSVMultipleChoiceField,
+    DynamicChoiceField, DynamicModelChoiceField,
+    DynamicModelMultipleChoiceField,
+    DynamicMultipleChoiceField, JSONField,
+    LaxURLField,
+)
 from utilities.forms.utils import add_blank_choice
-from utilities.forms.widgets import (APISelect, APISelectMultiple, DatePicker,
-                                     DateTimePicker)
+from utilities.forms.widgets import (
+    APISelect, APISelectMultiple, DatePicker,
+    DateTimePicker,
+)
 from utilities.templatetags.builtins.filters import linkify, render_markdown
+from netbox.tables.columns import BooleanColumn
 
 from netbox_custom_objects.constants import APP_LABEL
+from netbox_custom_objects.utilities import generate_model
+
+
+class LazyForeignKey(ForeignKey):
+    """
+    A ForeignKey field that can handle lazy model references.
+    The target model is resolved after the model is fully generated.
+    """
+
+    def __init__(self, to_model_name, *args, **kwargs):
+        self._to_model_name = to_model_name
+
+        # Filter out our custom parameters before passing to Django's ForeignKey
+        field_kwargs = {k: v for k, v in kwargs.items() if not k.startswith('_') and k != 'generating_models'}
+
+        super().__init__(to_model_name, *args, **field_kwargs)
+
+    def contribute_to_class(self, cls, name, **kwargs):
+        super().contribute_to_class(cls, name, **kwargs)
+        # Mark this field for later resolution
+        setattr(cls, f"_resolve_{name}_model", self._resolve_model)
+
+    def _resolve_model(self, model):
+        """Resolve the lazy reference to the actual model class."""
+        # Get the actual model class from the app registry
+        from django.apps import apps
+        actual_model = apps.get_model(self._to_model_name)
+        # Update the field's references
+        self.remote_field.model = actual_model
+        self.to = actual_model
 
 
 class FieldType:
 
     def get_display_value(self, instance, field_name):
+        """
+        This value is used as the object title in the Custom Object detail view.
+        """
         return getattr(instance, field_name)
 
     def get_model_field(self, field, **kwargs):
@@ -43,10 +83,21 @@ class FieldType:
     def get_form_field(self, field, **kwargs):
         raise NotImplementedError
 
+    def _safe_kwargs(self, **kwargs):
+        """
+        Create a safe kwargs dict that can be passed to Django field constructors.
+        This method automatically filters out any custom parameters.
+        """
+        return {k: v for k, v in kwargs.items()
+                if not k.startswith('_') and k != 'generating_models'}
+
     def get_annotated_form_field(self, field, enforce_visibility=True, **kwargs):
         form_field = self.get_form_field(field, **kwargs)
         form_field.model = field
         form_field.label = str(field)
+        # Set the field name so Django can properly bind it to the instance
+        form_field.name = field.name
+
         if field.description:
             form_field.help_text = render_markdown(field.description)
 
@@ -67,8 +118,9 @@ class FieldType:
 class TextFieldType(FieldType):
 
     def get_model_field(self, field, **kwargs):
-        kwargs.update({"default": field.default, "unique": field.unique})
-        return models.CharField(null=True, blank=True, **kwargs)
+        field_kwargs = self._safe_kwargs(**kwargs)
+        field_kwargs.update({"default": field.default, "unique": field.unique})
+        return models.CharField(null=True, blank=True, **field_kwargs)
 
     def get_form_field(self, field, **kwargs):
         validators = []
@@ -97,8 +149,9 @@ class TextFieldType(FieldType):
 
 class LongTextFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        kwargs.update({"default": field.default, "unique": field.unique})
-        return models.TextField(null=True, blank=True, **kwargs)
+        field_kwargs = self._safe_kwargs(**kwargs)
+        field_kwargs.update({"default": field.default, "unique": field.unique})
+        return models.TextField(null=True, blank=True, **field_kwargs)
 
     def get_form_field(self, field, **kwargs):
         widget = forms.Textarea
@@ -129,8 +182,9 @@ class IntegerFieldType(FieldType):
 
     def get_model_field(self, field, **kwargs):
         # TODO: handle all args for IntegerField
-        kwargs.update({"default": field.default, "unique": field.unique})
-        return models.IntegerField(null=True, blank=True, **kwargs)
+        field_kwargs = self._safe_kwargs(**kwargs)
+        field_kwargs.update({"default": field.default, "unique": field.unique})
+        return models.IntegerField(null=True, blank=True, **field_kwargs)
 
     def get_filterform_field(self, field, **kwargs):
         return forms.IntegerField(
@@ -149,13 +203,14 @@ class IntegerFieldType(FieldType):
 
 class DecimalFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        kwargs.update({"default": field.default, "unique": field.unique})
+        field_kwargs = self._safe_kwargs(**kwargs)
+        field_kwargs.update({"default": field.default, "unique": field.unique})
         return models.DecimalField(
             null=True,
             blank=True,
             max_digits=8,
             decimal_places=2,
-            **kwargs,
+            **field_kwargs
         )
 
     def get_form_field(self, field, **kwargs):
@@ -171,8 +226,9 @@ class DecimalFieldType(FieldType):
 
 class BooleanFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        kwargs.update({"default": field.default, "unique": field.unique})
-        return models.BooleanField(null=True, blank=True, **kwargs)
+        field_kwargs = self._safe_kwargs(**kwargs)
+        field_kwargs.update({"default": field.default, "unique": field.unique})
+        return models.BooleanField(null=True, blank=True, **field_kwargs)
 
     def get_form_field(self, field, **kwargs):
         choices = (
@@ -186,11 +242,15 @@ class BooleanFieldType(FieldType):
             widget=forms.Select(choices=choices),
         )
 
+    def get_table_column_field(self, field, **kwargs):
+        return BooleanColumn()
+
 
 class DateFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        kwargs.update({"default": field.default, "unique": field.unique})
-        return models.DateField(null=True, blank=True, **kwargs)
+        field_kwargs = self._safe_kwargs(**kwargs)
+        field_kwargs.update({"default": field.default, "unique": field.unique})
+        return models.DateField(null=True, blank=True, **field_kwargs)
 
     def get_form_field(self, field, **kwargs):
         return forms.DateField(
@@ -200,8 +260,9 @@ class DateFieldType(FieldType):
 
 class DateTimeFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        kwargs.update({"default": field.default, "unique": field.unique})
-        return models.DateTimeField(null=True, blank=True, **kwargs)
+        field_kwargs = self._safe_kwargs(**kwargs)
+        field_kwargs.update({"default": field.default, "unique": field.unique})
+        return models.DateTimeField(null=True, blank=True, **field_kwargs)
 
     def get_form_field(self, field, **kwargs):
         return forms.DateTimeField(
@@ -211,8 +272,9 @@ class DateTimeFieldType(FieldType):
 
 class URLFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        kwargs.update({"default": field.default, "unique": field.unique})
-        return models.URLField(null=True, blank=True, **kwargs)
+        field_kwargs = self._safe_kwargs(**kwargs)
+        field_kwargs.update({"default": field.default, "unique": field.unique})
+        return models.URLField(null=True, blank=True, **field_kwargs)
 
     def get_form_field(self, field, **kwargs):
         return LaxURLField(
@@ -222,8 +284,9 @@ class URLFieldType(FieldType):
 
 class JSONFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        kwargs.update({"default": field.default, "unique": field.unique})
-        return models.JSONField(null=True, blank=True, **kwargs)
+        field_kwargs = self._safe_kwargs(**kwargs)
+        field_kwargs.update({"default": field.default, "unique": field.unique})
+        return models.JSONField(null=True, blank=True, **field_kwargs)
 
     def get_form_field(self, field, **kwargs):
         return JSONField(
@@ -234,13 +297,14 @@ class JSONFieldType(FieldType):
 
 class SelectFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        kwargs.update({"default": field.default, "unique": field.unique})
+        field_kwargs = self._safe_kwargs(**kwargs)
+        field_kwargs.update({"default": field.default, "unique": field.unique})
         return models.CharField(
             max_length=100,
             choices=field.choices,
             null=True,
             blank=True,
-            **kwargs,
+            **field_kwargs
         )
 
     def get_form_field(self, field, for_csv_import=False, **kwargs):
@@ -278,12 +342,13 @@ class MultiSelectFieldType(FieldType):
         return ", ".join(getattr(instance, field_name) or [])
 
     def get_model_field(self, field, **kwargs):
-        kwargs.update({"default": field.default, "unique": field.unique})
+        field_kwargs = self._safe_kwargs(**kwargs)
+        field_kwargs.update({"default": field.default, "unique": field.unique})
         return ArrayField(
             base_field=models.CharField(max_length=50, choices=field.choices),
             null=True,
             blank=True,
-            **kwargs,
+            **field_kwargs
         )
 
     def get_form_field(self, field, for_csv_import=False, **kwargs):
@@ -329,9 +394,13 @@ class ObjectFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
         to_model = content_type.model
-        kwargs.update({"default": field.default, "unique": field.unique})
 
-        # TODO: Handle pointing to object of same type (avoid infinite loop)
+        # Extract our custom parameters and keep only Django field parameters
+        generating_models = kwargs.pop('_generating_models', getattr(self, '_generating_models', set()))
+        field_kwargs = {k: v for k, v in kwargs.items() if not k.startswith('_')}
+        field_kwargs.update({"default": field.default, "unique": field.unique})
+
+        # Handle self-referential fields by using string references
         if content_type.app_label == APP_LABEL:
             from netbox_custom_objects.models import CustomObjectType
 
@@ -339,14 +408,58 @@ class ObjectFieldType(FieldType):
                 "model", ""
             )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
-            model = custom_object_type.get_model()
+
+            # Check if this is a self-referential field
+            if custom_object_type.id == field.custom_object_type.id:
+                # For self-referential fields, use LazyForeignKey to defer resolution
+                model_name = f"{APP_LABEL}.{custom_object_type.get_table_model_name(custom_object_type.id)}"
+                # Generate a unique related_name to prevent reverse accessor conflicts
+                table_model_name = field.custom_object_type.get_table_model_name(field.custom_object_type.id).lower()
+                related_name = f"{table_model_name}_{field.name}_set"
+                f = LazyForeignKey(
+                    model_name,
+                    null=True,
+                    blank=True,
+                    on_delete=models.CASCADE,
+                    related_name=related_name,
+                    **field_kwargs
+                )
+                return f
+            else:
+                # For cross-referential fields, use skip_object_fields to avoid infinite loops
+                # Check if we're in a recursion situation using the parameter or stored attribute
+                if generating_models and custom_object_type.id in generating_models:
+                    # We're in a circular reference, don't call get_model() to prevent recursion
+                    # Use a string reference instead
+                    model_name = f"{APP_LABEL}.{custom_object_type.get_table_model_name(custom_object_type.id)}"
+                    # Generate a unique related_name to prevent reverse accessor conflicts
+                    table_model_name = field.custom_object_type.get_table_model_name(
+                        field.custom_object_type.id
+                    ).lower()
+                    related_name = f"{table_model_name}_{field.name}_set"
+                    f = models.ForeignKey(
+                        model_name,
+                        null=True,
+                        blank=True,
+                        on_delete=models.CASCADE,
+                        related_name=related_name,
+                        **field_kwargs
+                    )
+                    return f
+                else:
+                    model = custom_object_type.get_model(skip_object_fields=True)
         else:
             # to_model = content_type.model_class()._meta.object_name
             to_ct = f"{content_type.app_label}.{to_model}"
             model = apps.get_model(to_ct)
+
+        # Generate a unique related_name to prevent reverse accessor conflicts
+        table_model_name = field.custom_object_type.get_table_model_name(field.custom_object_type.id).lower()
+        related_name = f"{table_model_name}_{field.name}_set"
         f = models.ForeignKey(
-            model, null=True, blank=True, on_delete=models.CASCADE, **kwargs
+            model, null=True, blank=True, on_delete=models.CASCADE, related_name=related_name, **field_kwargs
         )
+
         return f
 
     def get_form_field(self, field, for_csv_import=False, **kwargs):
@@ -357,7 +470,6 @@ class ObjectFieldType(FieldType):
         """
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
 
-        from utilities.forms.fields import DynamicModelChoiceField
         if content_type.app_label == APP_LABEL:
             # This is a custom object type
             from netbox_custom_objects.models import CustomObjectType
@@ -366,25 +478,47 @@ class ObjectFieldType(FieldType):
                 "model", ""
             )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
-            model = custom_object_type.get_model()
-            field_class = DynamicModelChoiceField
+
+            # Check if we're in a recursion situation
+            generating_models = getattr(self, '_generating_models', set())
+            if generating_models and custom_object_type.id in generating_models:
+                # We're in a circular reference, don't call get_model() to prevent recursion
+                # Use a minimal approach or return a basic field
+                return DynamicModelChoiceField(
+                    queryset=custom_object_type.get_model(skip_object_fields=True).objects.all(),
+                    required=field.required,
+                    # Remove initial=field.default to allow Django to handle instance data properly
+                    selector=True,
+                )
+            else:
+                model = custom_object_type.get_model()
         else:
             # This is a regular NetBox model
             model = content_type.model_class()
 
+        if for_csv_import:
+            field_class = CSVModelChoiceField
+            # For CSV import, determine to_field_name from the field configuration
+            to_field_name = getattr(field, 'to_field_name', None) or 'name'
+            return field_class(
+                queryset=model.objects.all(),
+                required=field.required,
+                # Remove initial=field.default to allow Django to handle instance data properly
+                to_field_name=to_field_name,
+            )
+        else:
             field_class = DynamicModelChoiceField
-
-        return field_class(
-            queryset=model.objects.all(),
-            required=field.required,
-            initial=field.default,
-            query_params=(
-                field.related_object_filter
-                if hasattr(field, "related_object_filter")
-                else None
-            ),
-            selector=True,
-        )
+            return field_class(
+                queryset=model.objects.all(),
+                required=field.required,
+                # Remove initial=field.default to allow Django to handle instance data properly
+                query_params=(
+                    field.related_object_filter
+                    if hasattr(field, "related_object_filter")
+                    else None
+                ),
+                selector=model._meta.app_label != APP_LABEL,
+            )
 
     def get_filterform_field(self, field, **kwargs):
         return None
@@ -394,10 +528,21 @@ class ObjectFieldType(FieldType):
 
     def get_serializer_field(self, field, **kwargs):
         related_model_class = field.related_object_type.model_class()
-        if not related_model_class:
-            raise NotImplementedError("Custom object serializers not implemented")
-        serializer = get_serializer_for_model(related_model_class)
+        if related_model_class._meta.app_label == APP_LABEL:
+            from netbox_custom_objects.api.serializers import get_serializer_class
+            serializer = get_serializer_class(related_model_class, skip_object_fields=True)
+        else:
+            serializer = get_serializer_for_model(related_model_class)
         return serializer(required=field.required, nested=True)
+
+    def after_model_generation(self, instance, model, field_name):
+        """
+        Resolve lazy references after the model is fully generated.
+        This ensures that self-referential fields point to the correct model class.
+        """
+        # Check if this field has a resolution method
+        if resolve_method := getattr(model, f'_resolve_{field_name}_model', None):
+            resolve_method(model)
 
 
 class CustomManyToManyManager(Manager):
@@ -548,7 +693,7 @@ class CustomManyToManyField(models.ManyToManyField):
 
 
 class MultiObjectFieldType(FieldType):
-    def get_through_model(self, field, model=None):
+    def get_through_model(self, field, model_string):
         """
         Creates a through model with deferred model references
         """
@@ -577,28 +722,25 @@ class MultiObjectFieldType(FieldType):
             and field.custom_object_type.id == custom_object_type_id
         )
 
-        # Use the actual model if provided, otherwise use string reference
-        source_model = model if model else "netbox_custom_objects.CustomObject"
-
         attrs = {
             "__module__": "netbox_custom_objects.models",
             "Meta": meta,
             "id": models.AutoField(primary_key=True),
             "source": models.ForeignKey(
-                source_model,
+                model_string,
                 on_delete=models.CASCADE,
                 related_name="+",
                 db_column="source_id",
             ),
             "target": models.ForeignKey(
-                "self" if is_self_referential else "netbox_custom_objects.CustomObject",
+                "self" if is_self_referential else model_string,
                 on_delete=models.CASCADE,
                 related_name="+",
                 db_column="target_id",
             ),
         }
 
-        return type(field.through_model_name, (models.Model,), attrs)
+        return generate_model(field.through_model_name, (models.Model,), attrs)
 
     def get_model_field(self, field, **kwargs):
         """
@@ -609,8 +751,10 @@ class MultiObjectFieldType(FieldType):
         custom_object_type_id = content_type.model.replace("table", "").replace(
             "model", ""
         )
-        # TODO: Default does not auto-populate, to new or existing objects (should it?)
-        kwargs.update({"default": field.default, "unique": field.unique})
+
+        # Extract our custom parameters and keep only Django field parameters
+        field_kwargs = {k: v for k, v in kwargs.items() if not k.startswith('_')}
+        field_kwargs.update({"default": field.default, "unique": field.unique})
 
         is_self_referential = (
             content_type.app_label == APP_LABEL
@@ -619,17 +763,19 @@ class MultiObjectFieldType(FieldType):
 
         # For now, we'll create the through model with string references
         # and resolve them later in after_model_generation
-        through = self.get_through_model(field)
+        # TODO: Check whether later resolution of the model is actually necessary or can be passed as string
+        model_string = f"{field.related_object_type.app_label}.{field.related_object_type.model}"
+        through = self.get_through_model(field, model_string)
 
         # For self-referential fields, use 'self' as the target
         m2m_field = CustomManyToManyField(
-            to="self" if is_self_referential else "netbox_custom_objects.CustomObject",
+            to="self" if is_self_referential else model_string,
             through=through,
             through_fields=("source", "target"),
             blank=True,
             related_name="+",
             related_query_name="+",
-            **kwargs,
+            **field_kwargs
         )
 
         # Store metadata for later resolution
@@ -653,36 +799,66 @@ class MultiObjectFieldType(FieldType):
                 "model", ""
             )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
-            model = custom_object_type.get_model()
+
+            # For cross-referential fields, use skip_object_fields to avoid infinite loops
+            # Check if we're in a recursion situation using the parameter or stored attribute
+            generating_models = getattr(self, '_generating_models', set())
+            if generating_models and custom_object_type.id in generating_models:
+                # We're in a circular reference, don't call get_model() to prevent recursion
+                # Use a minimal approach or return a basic field
+                return DynamicModelMultipleChoiceField(
+                    queryset=custom_object_type.get_model(skip_object_fields=True).objects.all(),
+                    required=field.required,
+                    # Remove initial=field.default to allow Django to handle instance data properly
+                    selector=True,
+                )
+            else:
+                model = custom_object_type.get_model(skip_object_fields=True)
         else:
             # This is a regular NetBox model
             model = content_type.model_class()
 
-        from utilities.forms.fields import DynamicModelMultipleChoiceField
-
-        return DynamicModelMultipleChoiceField(
-            queryset=model.objects.all(),
-            required=field.required,
-            initial=field.default,
-            query_params=(
-                field.related_object_filter
-                if hasattr(field, "related_object_filter")
-                else None
-            ),
-            selector=True,
-        )
+        if for_csv_import:
+            field_class = CSVModelMultipleChoiceField
+            # For CSV import, determine to_field_name from the field configuration
+            to_field_name = getattr(field, 'to_field_name', None) or 'name'
+            return field_class(
+                queryset=model.objects.all(),
+                required=field.required,
+                # Remove initial=field.default to allow Django to handle instance data properly
+                to_field_name=to_field_name,
+            )
+        else:
+            field_class = DynamicModelMultipleChoiceField
+            return field_class(
+                queryset=model.objects.all(),
+                required=field.required,
+                # Remove initial=field.default to allow Django to handle instance data properly
+                query_params=(
+                    field.related_object_filter
+                    if hasattr(field, "related_object_filter")
+                    else None
+                ),
+                selector=model._meta.app_label != APP_LABEL,
+            )
 
     def get_filterform_field(self, field, **kwargs):
         return None
+
+    def get_display_value(self, instance, field_name):
+        field = getattr(instance, field_name)
+        return ", ".join(str(s) for s in field.all())
 
     def get_table_column_field(self, field, **kwargs):
         return tables.ManyToManyColumn(linkify_item=True, orderable=False)
 
     def get_serializer_field(self, field, **kwargs):
         related_model_class = field.related_object_type.model_class()
-        if not related_model_class:
-            raise NotImplementedError("Custom object serializers not implemented")
-        serializer = get_serializer_for_model(related_model_class)
+        if related_model_class._meta.app_label == APP_LABEL:
+            from netbox_custom_objects.api.serializers import get_serializer_class
+            serializer = get_serializer_class(related_model_class, skip_object_fields=True)
+        else:
+            serializer = get_serializer_for_model(related_model_class)
         return serializer(required=field.required, nested=True, many=True)
 
     def after_model_generation(self, instance, model, field_name):
@@ -699,12 +875,20 @@ class MultiObjectFieldType(FieldType):
             # Update both source and target fields to point to the same model
             source_field = through_model._meta.get_field("source")
             target_field = through_model._meta.get_field("target")
+
+            # Resolve the foreign key fields to point to the actual model
             source_field.remote_field.model = model
             source_field.related_model = model
             target_field.remote_field.model = model
             target_field.related_model = model
+
+            # Also update the field's to attribute to point to the actual model
+            field.to = model
+
             return
 
+        # For non-self-referential fields, we need to resolve the target model
+        # Use the instance parameter which contains the field definition
         content_type = ContentType.objects.get(pk=instance.related_object_type_id)
 
         # Now we can safely resolve the target model
@@ -715,7 +899,20 @@ class MultiObjectFieldType(FieldType):
                 "model", ""
             )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
-            to_model = custom_object_type.get_model()
+
+            # For self-referential fields, we need to resolve them to the current model
+            # This doesn't cause recursion because we're not calling get_model() again
+            if custom_object_type.id == instance.custom_object_type.id:
+                # Self-referential field - resolve to current model
+                to_model = model
+            else:
+                # Cross-referential field - check for recursion before calling get_model()
+                generating_models = getattr(self, '_generating_models', set())
+                if generating_models and custom_object_type.id in generating_models:
+                    # We're in a circular reference, don't call get_model() to prevent recursion
+                    return
+                else:
+                    to_model = custom_object_type.get_model()
         else:
             to_ct = f"{content_type.app_label}.{content_type.model}"
             to_model = apps.get_model(to_ct)
@@ -759,7 +956,15 @@ class MultiObjectFieldType(FieldType):
                 custom_object_type = CustomObjectType.objects.get(
                     pk=custom_object_type_id
                 )
-                to_model = custom_object_type.get_model()
+
+                # Check if we're in a recursion situation
+                generating_models = getattr(self, '_generating_models', set())
+                if generating_models and custom_object_type.id in generating_models:
+                    # We're in a circular reference, don't call get_model() to prevent recursion
+                    # Use a minimal approach or skip this field
+                    return
+                else:
+                    to_model = custom_object_type.get_model()
             else:
                 to_model = content_type.model_class()
 
