@@ -1,8 +1,14 @@
-from netbox.filtersets import NetBoxModelFilterSet
+import django_filters
+from django.contrib.postgres.fields import ArrayField
+from django.db.models import JSONField
+from netbox.filtersets import BaseFilterSet, NetBoxModelFilterSet
 
 from .models import CustomObjectType
 
-__all__ = ("CustomObjectTypeFilterSet",)
+__all__ = (
+    "CustomObjectTypeFilterSet",
+    "get_filterset_class",
+)
 
 
 class CustomObjectTypeFilterSet(NetBoxModelFilterSet):
@@ -14,18 +20,44 @@ class CustomObjectTypeFilterSet(NetBoxModelFilterSet):
         )
 
 
-"""
-class CustomObjectFilterSet(NetBoxModelFilterSet):
-    class Meta:
-        model = CustomObject
-        fields = (
-            "id",
-            "name",
-            "custom_object_type",
-        )
+def get_filterset_class(model):
+    """
+    Create and return a filterset class for the given custom object model.
+    """
+    fields = [field.name for field in model._meta.fields]
 
-    def search(self, queryset, name, value):
-        if not value.strip():
-            return queryset
-        return queryset.filter(Q(name__icontains=value))
-"""
+    meta = type(
+        "Meta",
+        (),
+        {
+            "model": model,
+            "fields": fields,
+            # TODO: overrides should come from FieldType
+            # These are placeholders; should use different logic
+            "filter_overrides": {
+                JSONField: {
+                    "filter_class": django_filters.CharFilter,
+                    "extra": lambda f: {
+                        "lookup_expr": "icontains",
+                    },
+                },
+                ArrayField: {
+                    "filter_class": django_filters.CharFilter,
+                    "extra": lambda f: {
+                        "lookup_expr": "icontains",
+                    },
+                },
+            },
+        },
+    )
+
+    attrs = {
+        "Meta": meta,
+        "__module__": "database.filtersets",
+    }
+
+    return type(
+        f"{model._meta.object_name}FilterSet",
+        (BaseFilterSet,),  # TODO: Should be a NetBoxModelFilterSet
+        attrs,
+    )
