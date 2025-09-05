@@ -517,7 +517,7 @@ class ObjectFieldType(FieldType):
                     if hasattr(field, "related_object_filter")
                     else None
                 ),
-                selector=True,
+                selector=model._meta.app_label != APP_LABEL,
             )
 
     def get_filterform_field(self, field, **kwargs):
@@ -839,7 +839,7 @@ class MultiObjectFieldType(FieldType):
                     if hasattr(field, "related_object_filter")
                     else None
                 ),
-                selector=True,
+                selector=model._meta.app_label != APP_LABEL,
             )
 
     def get_filterform_field(self, field, **kwargs):
