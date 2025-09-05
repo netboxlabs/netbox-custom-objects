@@ -168,7 +168,7 @@ The response will include the created object with its assigned ID and additional
 
 ### API output in the browser
 
-As with other NetBox objects, you can also view the API output for given Custom Objects by prepending `api/` to the URL, e.g. `api/plugins/custom-objects/dhcp_scope/`
+As with other NetBox objects, you can also view the API output for given Custom Objects by prepending `api/` to the URL, e.g. `api/plugins/custom-objects/dhcp_scopes/`
 
 ```
 HTTP 200 OK
