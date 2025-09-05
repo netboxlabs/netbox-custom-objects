@@ -1,10 +1,9 @@
-import django_filters
 import logging
+
 from core.models import ObjectChange
 from core.tables import ObjectChangeTable
 from django.contrib.contenttypes.models import ContentType
-from django.contrib.postgres.fields import ArrayField
-from django.db.models import JSONField, Q
+from django.db.models import Q
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
@@ -23,15 +22,10 @@ from netbox.views import generic
 from netbox.views.generic.mixins import TableMixin
 from utilities.forms import ConfirmationForm
 from utilities.htmx import htmx_partial
-from utilities.views import (
-    ConditionalLoginRequiredMixin,
-    ViewTab,
-    get_viewname,
-    register_model_view,
-)
+from utilities.views import ConditionalLoginRequiredMixin, ViewTab, get_viewname, register_model_view
 
+from netbox_custom_objects.filtersets import get_filterset_class
 from netbox_custom_objects.tables import CustomObjectTable
-
 from . import field_types, filtersets, forms, tables
 from .models import CustomObject, CustomObjectType, CustomObjectTypeField
 from extras.choices import CustomFieldTypeChoices
@@ -172,9 +166,22 @@ class CustomObjectTypeView(CustomObjectTableMixin, generic.ObjectView):
 
     def get_extra_context(self, request, instance):
         model = instance.get_model()
+
+        # Get fields and group them by group_name
+        fields = instance.fields.all().order_by("group_name", "weight", "name")
+
+        # Group fields by group_name
+        field_groups = {}
+        for field in fields:
+            group_name = field.group_name or None  # Use None for ungrouped fields
+            if group_name not in field_groups:
+                field_groups[group_name] = []
+            field_groups[group_name].append(field)
+
         return {
             "custom_objects": model.objects.all(),
             "table": self.get_table(self.queryset, request),
+            "field_groups": field_groups,
         }
 
 
@@ -194,6 +201,16 @@ class CustomObjectTypeDeleteView(generic.ObjectDeleteView):
         dependent_objects = super()._get_dependent_objects(obj)
         model = obj.get_model()
         dependent_objects[model] = list(model.objects.all())
+
+        # Find CustomObjectTypeFields that reference this CustomObjectType
+        referencing_fields = CustomObjectTypeField.objects.filter(
+            related_object_type=obj.content_type
+        )
+
+        # Add the CustomObjectTypeFields that reference this CustomObjectType
+        if referencing_fields.exists():
+            dependent_objects[CustomObjectTypeField] = list(referencing_fields)
+
         return dependent_objects
 
 
@@ -319,44 +336,7 @@ class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
         return model.objects.all()
 
     def get_filterset(self):
-        model = self.queryset.model
-        fields = [field.name for field in model._meta.fields]
-
-        meta = type(
-            "Meta",
-            (),
-            {
-                "model": model,
-                "fields": fields,
-                # TODO: overrides should come from FieldType
-                # These are placeholders; should use different logic
-                "filter_overrides": {
-                    JSONField: {
-                        "filter_class": django_filters.CharFilter,
-                        "extra": lambda f: {
-                            "lookup_expr": "icontains",
-                        },
-                    },
-                    ArrayField: {
-                        "filter_class": django_filters.CharFilter,
-                        "extra": lambda f: {
-                            "lookup_expr": "icontains",
-                        },
-                    },
-                },
-            },
-        )
-
-        attrs = {
-            "Meta": meta,
-            "__module__": "database.filtersets",
-        }
-
-        return type(
-            f"{model._meta.object_name}FilterSet",
-            (BaseFilterSet,),  # TODO: Should be a NetBoxModelFilterSet
-            attrs,
-        )
+        return get_filterset_class(self.queryset.model)
 
     def get_filterset_form(self):
         model = self.queryset.model

@@ -3,6 +3,7 @@ from drf_spectacular.utils import extend_schema_view, extend_schema
 from rest_framework.routers import APIRootView
 from rest_framework.viewsets import ModelViewSet
 
+from netbox_custom_objects.filtersets import get_filterset_class
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 
 from . import serializers
@@ -51,6 +52,10 @@ class CustomObjectViewSet(ModelViewSet):
             raise Http404
         self.model = custom_object_type.get_model()
         return self.model.objects.all()
+
+    @property
+    def filterset_class(self):
+        return get_filterset_class(self.model)
 
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)
