@@ -4,7 +4,7 @@ from datetime import date, datetime
 
 import django_filters
 from core.models import ObjectType, ObjectChange
-from core.models.contenttypes import ObjectTypeManager
+from core.models.object_types import ObjectTypeManager
 from django.apps import apps
 from django.conf import settings
 
