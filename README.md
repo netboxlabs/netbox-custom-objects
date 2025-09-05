@@ -6,7 +6,7 @@ You can find further documentation [here](https://github.com/netboxlabs/netbox-c
 
 ## Requirements
 
-* NetBox v4.4-beta or later
+* NetBox v4.4 or later
 
 ## Installation
 

@@ -48,14 +48,18 @@ Let's walk through the above DHCP Scope example, to highlight the steps involved
 ### Create the Custom Object Type
 
 1. Navigate to the Custom Objects plugin in the left navigation pane and click the `+` next to `Custom Object Types`
-2. Choose a name for your Custom Object Type. In this case we will choose `dhcp_scope`
+2. Choose the relevant naming for your Custom Object Type.
+
+| Field                   | Value         |
+|-------------------------|---------------|
+| Internal name           | `dhcp_scope`  |
+| Display name (singular) | `DHCP Scope`  |
+| Display name (plural)   | `DHCP Scopes` |
+| URL path/slug           | `dhcp_scopes` |
 
 > [!TIP]
-> Give your Custom Object Types URL friendly names
-
-> [!TIP]
-> By default the plural name for your Custom Object Type will be its name with `s` appended. So for example, multiple `dhcp_scope` Custom Objects will be referred to as `dhcp_scopes`.  
-> This behaviour can be overridden using the `Readable plural name` field. For example if you have a Custom Object Type called `Child` you can use the `Readable plural name` field to specify `Children` instead of `Childs`  
+> You can optionally choose a version for for your custom object type, e.g. `0.1`  
+> Custom Object Type versioning will become more important in future releases of NetBox Custom Objects
 
 3. Click `Create`
 
@@ -87,15 +91,15 @@ Typically, NetBox admins would be responsible for thinking through modelling req
 
 Now that you've created your `DHCP Scope` Custom Object Type, let's go ahead and create a new `DHCP Scope`.
 
-1. Under the NetBox Custom Objects plugin in the left side navigation you will now see `Dhcp_scopes`. Click on `+` next to your new Custom Object Type.
+1. Under the NetBox Custom Objects plugin in the left side navigation you will now see `DHCP Scopes`. Click on `+` next to your new Custom Object Type.
 2. As you added a single field, called `Range` of type `IPAM > IP Range` you are prompted to specify a range. Go and ahead and select one, then click `Create`.
 3. You're now taken to the detail view for your new `DHCP Scope` object.
 
 #### Standard list views for Custom Objects
 
-As with core NetBox objects, Custom Objects have their own list views. To see all your `DHCP Scopes` you can just click on your Custom Object Type in the Custom Object plugin section in the left side navigation. In the example above, click on `Custom Objects` -> `OBJECTS` -> `Dhcp_scopes`
+As with core NetBox objects, Custom Objects have their own list views. To see all your `DHCP Scopes` you can just click on your Custom Object Type in the Custom Object plugin section in the left side navigation. In the example above, click on `Custom Objects` -> `OBJECTS` -> `DHCP Scopes`
 
-You will now see a standard NetBox list view for your new Custom Objects with the standard options including `Configure Table`, `+ Add`, Import, Export, etc
+You will now see a standard NetBox list view for your new Custom Objects with the standard options including `Configure Table`, `+ Add`, `Import`, `Export`, etc
 
 ### Deletions
 
