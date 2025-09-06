@@ -1127,7 +1127,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         if (self.type in (
             CustomFieldTypeChoices.TYPE_OBJECT,
             CustomFieldTypeChoices.TYPE_MULTIOBJECT,
-        ) and self.related_object_type_id and 
+        ) and self.related_object_type_id and
             self.related_object_type.app_label == APP_LABEL):
             self._check_recursion()
 
@@ -1161,11 +1161,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     def _has_circular_reference(self, custom_object_type, visited):
         """
         Recursively check if there's a circular reference by following the dependency chain.
-        
+
         Args:
             custom_object_type: The CustomObjectType object to check
             visited: Set of custom object type IDs already visited in this traversal
-            
+
         Returns:
             bool: True if a circular reference is detected, False otherwise
         """
@@ -1175,7 +1175,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
         # Add this type to visited set
         visited.add(custom_object_type.id)
-        
+
         # Check all object and multiobject fields in this custom object type
         for field in custom_object_type.fields.filter(
             type__in=[
@@ -1191,7 +1191,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 next_custom_object_type = CustomObjectType.objects.get(object_type=field.related_object_type)
             except CustomObjectType.DoesNotExist:
                 continue
-            
+
             # Recursively check this dependency
             if self._has_circular_reference(next_custom_object_type, visited):
                 return True
