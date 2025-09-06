@@ -28,12 +28,7 @@ def get_field_type_verbose_name(field: CustomObjectTypeField) -> str:
 
 @register.filter(name="get_field_value")
 def get_field_value(obj, field: CustomObjectTypeField) -> str:
-    try:
-        return getattr(obj, field.name)
-    except AttributeError:
-        model = obj.custom_object_type.get_model()
-        new_obj = model.objects.get(pk=obj.pk)
-        return getattr(new_obj, field.name)
+    return getattr(obj, field.name, "")
 
 
 @register.filter(name="get_field_is_ui_visible")
