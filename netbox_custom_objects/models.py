@@ -611,6 +611,7 @@ class CustomObjectType(PrimaryModel):
         finally:
             TM.post_through_setup = original_post_through_setup
 
+        '''
         # Register the main model with Django's app registry
         try:
             existing_model = apps.get_model(APP_LABEL, model_name)
@@ -620,16 +621,17 @@ class CustomObjectType(PrimaryModel):
                 model = existing_model
         except LookupError:
             apps.register_model(APP_LABEL, model)
+        '''
+        apps.register_model(APP_LABEL, model)
 
         if not manytomany_models:
             self._after_model_generation(attrs, model)
 
         # Cache the generated model
-        if not no_cache:
-            self._model_cache[self.id] = model
-            # Do the clear cache now that we have it in the cache so there
-            # is no recursion.
-            apps.clear_cache()
+        self._model_cache[self.id] = model
+        # Do the clear cache now that we have it in the cache so there
+        # is no recursion.
+        apps.clear_cache()
 
         # Register the serializer for this model
         if not manytomany_models:

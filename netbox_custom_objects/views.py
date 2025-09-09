@@ -1,5 +1,6 @@
 import logging
 
+from django.apps import apps
 from core.models import ObjectChange
 from core.tables import ObjectChangeTable
 from django.contrib.contenttypes.models import ContentType
@@ -435,7 +436,33 @@ class CustomObjectEditView(generic.ObjectEditView):
         object_type = get_object_or_404(
             CustomObjectType, slug=custom_object_type
         )
+        
+        # Clear all caches to ensure we get a fresh model
+        object_type.clear_model_cache(object_type.id)
+        from django.apps import apps
+        apps.clear_cache()
+        
         model = object_type.get_model()
+
+        # 1) What columns does Django think exist?
+        print("")
+        print("--------------------------------")
+        table_model_name = CustomObjectType.get_table_model_name(model.custom_object_type_id)
+        database_table_name = model.custom_object_type.get_database_table_name()
+        M = apps.get_model('netbox_custom_objects', table_model_name)  # or your class
+        print("concrete fields")
+        for f in M._meta.concrete_fields:
+            print(f.name, f.attname, f.column)
+
+        # 2) What columns actually exist in the DB?
+        print("")
+        print("database fields")
+        from django.db import connection
+        with connection.cursor() as c:
+            cols = connection.introspection.get_table_description(c, database_table_name)
+        for c in cols:
+            print(c.name, c.type_code)
+
         if not self.kwargs.get("pk", None):
             # We're creating a new object
             return model()

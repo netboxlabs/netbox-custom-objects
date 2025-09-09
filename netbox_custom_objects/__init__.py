@@ -53,15 +53,25 @@ class CustomObjectsPluginConfig(PluginConfig):
     template_extensions = "template_content.template_extensions"
 
     def get_model(self, model_name, require_ready=True):
-        try:
-            # if the model is already loaded, return it
-            return super().get_model(model_name, require_ready)
-        except LookupError:
-            try:
-                self.apps.check_apps_ready()
-            except AppRegistryNotReady:
-                raise
+        print("")
+        print(f"model_name: {model_name} require_ready: {require_ready}")
+        if "table" in model_name.lower() and "model" in model_name.lower():
+            is_custom_object_model = True
+        else:
+            is_custom_object_model = False
 
+        self.apps.check_apps_ready()
+        if not is_custom_object_model:
+            try:
+                # if the model is already loaded, return it
+                return super().get_model(model_name, require_ready)
+            except LookupError:
+                try:
+                    self.apps.check_apps_ready()
+                except AppRegistryNotReady:
+                    raise
+
+        model_name = model_name.lower()
         # only do database calls if we are sure the app is ready to avoid
         # Django warnings
         if "table" not in model_name.lower() or "model" not in model_name.lower():
@@ -82,6 +92,7 @@ class CustomObjectsPluginConfig(PluginConfig):
                 "App '%s' doesn't have a '%s' model." % (self.label, model_name)
             )
 
+        print("calling get_model with no_cache=True")
         return obj.get_model()
 
     def get_models(self, include_auto_created=False, include_swapped=False):
