@@ -629,6 +629,9 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
             attrs,
         )
 
+        # Set the model attribute that NetBox form mixins expect
+        form.model = queryset.model
+
         return form
 
 
