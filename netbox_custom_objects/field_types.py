@@ -146,6 +146,12 @@ class TextFieldType(FieldType):
             required=False,
         )
 
+    def render_table_column(self, value, record, bound_column):
+        primary_field = record._field_objects.get(record._primary_field_id, None)
+        if primary_field and bound_column.name == primary_field["name"]:
+            return mark_safe(f'<a href="{record.get_absolute_url()}">{value}</a>')
+        return value
+
 
 class LongTextFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
