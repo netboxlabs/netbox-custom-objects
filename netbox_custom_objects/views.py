@@ -28,6 +28,7 @@ from netbox_custom_objects.tables import CustomObjectTable
 from . import field_types, filtersets, forms, tables
 from .models import CustomObject, CustomObjectType, CustomObjectTypeField
 from extras.choices import CustomFieldTypeChoices
+from netbox_custom_objects.constants import APP_LABEL
 
 logger = logging.getLogger("netbox_custom_objects.views")
 
@@ -493,12 +494,48 @@ class CustomObjectEditView(generic.ObjectEditView):
 
         # Create a custom __init__ method to set instance attributes
         def custom_init(self, *args, **kwargs):
-            forms.NetBoxModelForm.__init__(self, *args, **kwargs)
             # Set the grouping info as instance attributes from the outer scope
             self.custom_object_type_fields = attrs["custom_object_type_fields"]
             self.custom_object_type_field_groups = attrs[
                 "custom_object_type_field_groups"
             ]
+            
+            # Handle default values for MultiObject fields BEFORE calling parent __init__
+            # This ensures the initial values are set before Django processes the form
+            instance = kwargs.get('instance', None)
+            if not instance or not instance.pk:
+                # Only set defaults for new instances (not when editing existing ones)
+                for field_name, field_obj in self.custom_object_type_fields.items():
+                    if field_obj.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+                        if field_obj.default and isinstance(field_obj.default, list):
+                            # Get the related model
+                            content_type = field_obj.related_object_type
+                            if content_type.app_label == APP_LABEL:
+                                # Custom object type
+                                from netbox_custom_objects.models import CustomObjectType
+                                custom_object_type_id = content_type.model.replace("table", "").replace("model", "")
+                                custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
+                                model = custom_object_type.get_model(skip_object_fields=True)
+                            else:
+                                # Regular NetBox model
+                                model = content_type.model_class()
+                            
+                            try:
+                                # Query the database to get the actual objects
+                                initial_objects = model.objects.filter(pk__in=field_obj.default)
+                                # Convert to list of IDs for ModelMultipleChoiceField
+                                initial_ids = list(initial_objects.values_list('pk', flat=True))
+                                
+                                # Set the initial value in the form's initial data
+                                if 'initial' not in kwargs:
+                                    kwargs['initial'] = {}
+                                kwargs['initial'][field_name] = initial_ids
+                            except Exception as e:
+                                # If there's an error, don't set initial values
+                                pass
+            
+            # Now call the parent __init__ with the modified kwargs
+            forms.NetBoxModelForm.__init__(self, *args, **kwargs)
 
         # Create a custom save method to properly handle M2M fields
         def custom_save(self, commit=True):
