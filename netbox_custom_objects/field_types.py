@@ -819,9 +819,6 @@ class MultiObjectFieldType(FieldType):
             # This is a regular NetBox model
             model = content_type.model_class()
 
-        # Don't set initial values here - let Django handle it properly
-        # Initial values will be set in the form's __init__ method
-
         if for_csv_import:
             field_class = CSVModelMultipleChoiceField
             # For CSV import, determine to_field_name from the field configuration
