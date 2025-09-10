@@ -18,6 +18,7 @@ custom_object_type_plugin_menu_item = PluginMenuItem(
             "mdi mdi-plus-thick",
         ),
     ),
+    auth_required=True,
 )
 
 
@@ -42,6 +43,7 @@ class CustomObjectTypeMenuItems:
                 link=None,
                 link_text=_(title(model._meta.verbose_name_plural)),
                 buttons=(add_button,),
+                auth_required=True,
             )
             menu_item.url = reverse_lazy(
                 f"plugins:{APP_LABEL}:customobject_list",
