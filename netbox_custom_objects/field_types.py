@@ -844,7 +844,6 @@ class MultiObjectFieldType(FieldType):
                 selector=model._meta.app_label != APP_LABEL,
             )
 
-
     def get_filterform_field(self, field, **kwargs):
         return None
 

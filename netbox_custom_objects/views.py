@@ -499,7 +499,7 @@ class CustomObjectEditView(generic.ObjectEditView):
             self.custom_object_type_field_groups = attrs[
                 "custom_object_type_field_groups"
             ]
-            
+
             # Handle default values for MultiObject fields BEFORE calling parent __init__
             # This ensures the initial values are set before Django processes the form
             instance = kwargs.get('instance', None)
@@ -519,21 +519,21 @@ class CustomObjectEditView(generic.ObjectEditView):
                             else:
                                 # Regular NetBox model
                                 model = content_type.model_class()
-                            
+
                             try:
                                 # Query the database to get the actual objects
                                 initial_objects = model.objects.filter(pk__in=field_obj.default)
                                 # Convert to list of IDs for ModelMultipleChoiceField
                                 initial_ids = list(initial_objects.values_list('pk', flat=True))
-                                
+
                                 # Set the initial value in the form's initial data
                                 if 'initial' not in kwargs:
                                     kwargs['initial'] = {}
                                 kwargs['initial'][field_name] = initial_ids
-                            except Exception as e:
+                            except Exception:
                                 # If there's an error, don't set initial values
                                 pass
-            
+
             # Now call the parent __init__ with the modified kwargs
             forms.NetBoxModelForm.__init__(self, *args, **kwargs)
 
