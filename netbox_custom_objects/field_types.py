@@ -754,7 +754,8 @@ class MultiObjectFieldType(FieldType):
 
         # Extract our custom parameters and keep only Django field parameters
         field_kwargs = {k: v for k, v in kwargs.items() if not k.startswith('_')}
-        field_kwargs.update({"default": field.default, "unique": field.unique})
+        # Remove default from field_kwargs since ManyToManyField doesn't handle defaults the same way
+        field_kwargs.update({"unique": field.unique})
 
         is_self_referential = (
             content_type.app_label == APP_LABEL
@@ -825,7 +826,6 @@ class MultiObjectFieldType(FieldType):
             return field_class(
                 queryset=model.objects.all(),
                 required=field.required,
-                # Remove initial=field.default to allow Django to handle instance data properly
                 to_field_name=to_field_name,
             )
         else:
@@ -833,7 +833,6 @@ class MultiObjectFieldType(FieldType):
             return field_class(
                 queryset=model.objects.all(),
                 required=field.required,
-                # Remove initial=field.default to allow Django to handle instance data properly
                 query_params=(
                     field.related_object_filter
                     if hasattr(field, "related_object_filter")
