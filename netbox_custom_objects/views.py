@@ -448,7 +448,7 @@ class CustomObjectEditView(generic.ObjectEditView):
             "Meta",
             (),
             {
-                "model": model(),
+                "model": model,
                 "fields": "__all__",
             },
         )
