@@ -53,8 +53,6 @@ class CustomObjectsPluginConfig(PluginConfig):
     template_extensions = "template_content.template_extensions"
 
     def get_model(self, model_name, require_ready=True):
-        print("")
-        print(f"model_name: {model_name} require_ready: {require_ready}")
         if "table" in model_name.lower() and "model" in model_name.lower():
             is_custom_object_model = True
         else:
@@ -92,7 +90,6 @@ class CustomObjectsPluginConfig(PluginConfig):
                 "App '%s' doesn't have a '%s' model." % (self.label, model_name)
             )
 
-        print("calling get_model with no_cache=True")
         return obj.get_model()
 
     def get_models(self, include_auto_created=False, include_swapped=False):

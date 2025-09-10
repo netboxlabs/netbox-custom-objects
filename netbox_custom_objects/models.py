@@ -611,17 +611,6 @@ class CustomObjectType(PrimaryModel):
         finally:
             TM.post_through_setup = original_post_through_setup
 
-        '''
-        # Register the main model with Django's app registry
-        try:
-            existing_model = apps.get_model(APP_LABEL, model_name)
-            # If model exists but is different, we have a problem
-            if existing_model is not model:
-                # Use the existing model to avoid conflicts
-                model = existing_model
-        except LookupError:
-            apps.register_model(APP_LABEL, model)
-        '''
         apps.register_model(APP_LABEL, model)
 
         if not manytomany_models:
