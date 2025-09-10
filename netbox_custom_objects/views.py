@@ -435,7 +435,8 @@ class CustomObjectEditView(generic.ObjectEditView):
         object_type = get_object_or_404(
             CustomObjectType, slug=custom_object_type
         )
-        
+        model = object_type.get_model()
+
         if not self.kwargs.get("pk", None):
             # We're creating a new object
             return model()
@@ -446,7 +447,7 @@ class CustomObjectEditView(generic.ObjectEditView):
             "Meta",
             (),
             {
-                "model": model,
+                "model": model(),
                 "fields": "__all__",
             },
         )
@@ -628,7 +629,7 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
             (NetBoxModelBulkEditForm,),
             attrs,
         )
-        
+
         # Set the model attribute that NetBox form mixins expect
         form.model = queryset.model
 

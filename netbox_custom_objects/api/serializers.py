@@ -211,7 +211,7 @@ def get_serializer_class(model, skip_object_fields=False):
 
     # Create field list including all necessary fields
     base_fields = ["id", "url", "display", "created", "last_updated", "tags"]
-    
+
     # Only include custom field names that will actually be added to the serializer
     custom_field_names = []
     for field in model_fields:
@@ -220,7 +220,7 @@ def get_serializer_class(model, skip_object_fields=False):
         ]:
             continue
         custom_field_names.append(field.name)
-    
+
     all_fields = base_fields + custom_field_names
 
     meta = type(
