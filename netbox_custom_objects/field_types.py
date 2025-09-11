@@ -987,11 +987,11 @@ class MultiObjectFieldType(FieldType):
         # Register the model with Django's app registry
         apps = model._meta.apps
 
-        try:
-            through_model = apps.get_model(APP_LABEL, instance.through_model_name)
-        except LookupError:
+        app_models = apps.all_models[APP_LABEL]
+        if instance.through_model_name not in app_models:
             apps.register_model(APP_LABEL, through)
-            through_model = through
+        else:
+            through_model = apps.all_models[APP_LABEL][instance.through_model_name]
 
         # Update the M2M field's through model and target model
         field.remote_field.through = through_model

@@ -615,6 +615,8 @@ class CustomObjectType(PrimaryModel):
         model_name = model._meta.model_name
         if model_name not in app_models:
             apps.register_model(APP_LABEL, model)
+        else:
+            model = apps.all_models[APP_LABEL][model_name]
 
         if not manytomany_models:
             self._after_model_generation(attrs, model)
