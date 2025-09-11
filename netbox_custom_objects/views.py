@@ -203,7 +203,7 @@ class CustomObjectTypeDeleteView(generic.ObjectDeleteView):
 
         # Find CustomObjectTypeFields that reference this CustomObjectType
         referencing_fields = CustomObjectTypeField.objects.filter(
-            related_object_type=obj.content_type
+            related_object_type=obj.object_type
         )
 
         # Add the CustomObjectTypeFields that reference this CustomObjectType

@@ -736,7 +736,7 @@ class SelfReferentialFieldTestCase(FieldTypeTestCase):
             name="parent",
             label="Parent",
             type="object",
-            related_object_type=self.custom_object_type.content_type
+            related_object_type=self.custom_object_type.object_type
         )
         field  # To silence ruff error
 
@@ -759,7 +759,7 @@ class SelfReferentialFieldTestCase(FieldTypeTestCase):
             name="children",
             label="Children",
             type="multiobject",
-            related_object_type=self.custom_object_type.content_type
+            related_object_type=self.custom_object_type.object_type
         )
         field  # To silence ruff error
 
@@ -802,7 +802,7 @@ class CrossReferentialFieldTestCase(FieldTypeTestCase):
             name="related_object",
             label="Related Object",
             type="object",
-            related_object_type=second_type.content_type
+            related_object_type=second_type.object_type
         )
         field  # To silence ruff error
 
@@ -834,7 +834,7 @@ class CrossReferentialFieldTestCase(FieldTypeTestCase):
             name="related_objects",
             label="Related Objects",
             type="multiobject",
-            related_object_type=second_type.content_type
+            related_object_type=second_type.object_type
         )
         field  # To silence ruff error
 

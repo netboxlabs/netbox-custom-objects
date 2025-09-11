@@ -14,7 +14,8 @@ from django.core.validators import RegexValidator, ValidationError
 from django.db import connection, IntegrityError, models, transaction
 from django.db.models import Q
 from django.db.models.functions import Lower
-from django.db.models.signals import pre_delete
+from django.db.models.signals import pre_delete, post_save
+from django.dispatch import receiver
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 from core.signals import handle_deleted_object
@@ -187,7 +188,14 @@ class CustomObjectType(PrimaryModel):
     verbose_name = models.CharField(max_length=100, blank=True)
     verbose_name_plural = models.CharField(max_length=100, blank=True)
     slug = models.SlugField(max_length=100, unique=True, db_index=True)
-
+    object_type = models.OneToOneField(
+        ObjectType,
+        on_delete=models.CASCADE,
+        related_name="custom_object_types",
+        null=True,
+        blank=True,
+        editable=False
+    )
     class Meta:
         verbose_name = "Custom Object Type"
         ordering = ("name",)
@@ -301,29 +309,6 @@ class CustomObjectType(PrimaryModel):
     @classmethod
     def get_table_model_name(cls, table_id):
         return f"Table{table_id}Model"
-
-    @property
-    def content_type(self):
-        try:
-            return self.get_or_create_content_type()
-        except Exception:
-            # If we still can't get it, return None
-            return None
-
-    def get_or_create_content_type(self):
-        """
-        Get or create the ObjectType for this CustomObjectType.
-        This ensures the ObjectType is immediately available in the current transaction.
-        """
-        content_type_name = self.get_table_model_name(self.id).lower()
-        try:
-            return ObjectType.objects.get(app_label=APP_LABEL, model=content_type_name)
-        except Exception:
-            # Create the ObjectType and ensure it's immediately available
-            ct = ObjectType.objects.create(app_label=APP_LABEL, model=content_type_name)
-            # Force a refresh to ensure it's available in the current transaction
-            ct.refresh_from_db()
-            return ct
 
     def _fetch_and_generate_field_attrs(
         self,
@@ -672,12 +657,11 @@ class CustomObjectType(PrimaryModel):
         model = self.get_model()
 
         # Ensure the ContentType exists and is immediately available
-        ct = self.get_or_create_content_type()
         features = get_model_features(model)
-        ct.features = features + ['branching']
-        ct.public = True
-        ct.features = features
-        ct.save()
+        self.object_type.features = features + ['branching']
+        self.object_type.public = True
+        self.object_type.features = features
+        self.object_type.save()
 
         with connection.schema_editor() as schema_editor:
             schema_editor.create_model(model)
@@ -686,7 +670,9 @@ class CustomObjectType(PrimaryModel):
 
     def save(self, *args, **kwargs):
         needs_db_create = self._state.adding
+
         super().save(*args, **kwargs)
+
         if needs_db_create:
             self.create_model()
         else:
@@ -700,7 +686,7 @@ class CustomObjectType(PrimaryModel):
         model = self.get_model()
 
         # Delete all CustomObjectTypeFields that reference this CustomObjectType
-        for field in CustomObjectTypeField.objects.filter(related_object_type=self.content_type):
+        for field in CustomObjectTypeField.objects.filter(related_object_type=self.object_type):
             field.delete()
 
         object_type = ObjectType.objects.get_for_model(model)
@@ -714,6 +700,19 @@ class CustomObjectType(PrimaryModel):
         with connection.schema_editor() as schema_editor:
             schema_editor.delete_model(model)
         pre_delete.connect(handle_deleted_object)
+
+
+@receiver(post_save, sender=CustomObjectType)
+def custom_object_type_post_save_handler(sender, instance, created, **kwargs):
+    if created:
+        # If creating a new object, get or create the ObjectType
+        content_type_name = instance.get_table_model_name(instance.id).lower()
+        ct, created = ObjectType.objects.get_or_create(
+            app_label=APP_LABEL,
+            model=content_type_name
+        )
+        instance.object_type = ct
+        instance.save()
 
 
 class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
@@ -1123,6 +1122,81 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                         )
                     }
                 )
+
+        # Check for recursion in object and multiobject fields
+        if (self.type in (
+            CustomFieldTypeChoices.TYPE_OBJECT,
+            CustomFieldTypeChoices.TYPE_MULTIOBJECT,
+        ) and self.related_object_type_id and
+            self.related_object_type.app_label == APP_LABEL):
+            self._check_recursion()
+
+    def _check_recursion(self):
+        """
+        Check for circular references in object and multiobject fields.
+        Raises ValidationError if recursion is detected.
+        """
+        # Check if this field points to the same custom object type (self-referential)
+        if self.related_object_type_id == self.custom_object_type.object_type_id:
+            return  # Self-referential fields are allowed
+
+        # Get the related custom object type directly from the object_type relationship
+        try:
+            related_custom_object_type = CustomObjectType.objects.get(object_type=self.related_object_type)
+        except CustomObjectType.DoesNotExist:
+            return  # Not a custom object type, no recursion possible
+
+        # Check for circular references by traversing the dependency chain
+        visited = {self.custom_object_type.id}
+        if self._has_circular_reference(related_custom_object_type, visited):
+            raise ValidationError(
+                {
+                    "related_object_type": _(
+                        "Circular reference detected. This field would create a circular dependency "
+                        "between custom object types."
+                    )
+                }
+            )
+
+    def _has_circular_reference(self, custom_object_type, visited):
+        """
+        Recursively check if there's a circular reference by following the dependency chain.
+
+        Args:
+            custom_object_type: The CustomObjectType object to check
+            visited: Set of custom object type IDs already visited in this traversal
+
+        Returns:
+            bool: True if a circular reference is detected, False otherwise
+        """
+        # If we've already visited this type, we have a cycle
+        if custom_object_type.id in visited:
+            return True
+
+        # Add this type to visited set
+        visited.add(custom_object_type.id)
+
+        # Check all object and multiobject fields in this custom object type
+        for field in custom_object_type.fields.filter(
+            type__in=[
+                CustomFieldTypeChoices.TYPE_OBJECT,
+                CustomFieldTypeChoices.TYPE_MULTIOBJECT,
+            ],
+            related_object_type__isnull=False,
+            related_object_type__app_label=APP_LABEL
+        ):
+
+            # Get the related custom object type directly from the object_type relationship
+            try:
+                next_custom_object_type = CustomObjectType.objects.get(object_type=field.related_object_type)
+            except CustomObjectType.DoesNotExist:
+                continue
+
+            # Recursively check this dependency
+            if self._has_circular_reference(next_custom_object_type, visited):
+                return True
+
+        return False
 
     def serialize(self, value):
         """
