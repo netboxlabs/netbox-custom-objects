@@ -990,6 +990,7 @@ class MultiObjectFieldType(FieldType):
         app_models = apps.all_models[APP_LABEL]
         if instance.through_model_name not in app_models:
             apps.register_model(APP_LABEL, through)
+            through_model = through
         else:
             through_model = apps.all_models[APP_LABEL][instance.through_model_name]
 
