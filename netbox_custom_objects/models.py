@@ -497,6 +497,7 @@ class CustomObjectType(PrimaryModel):
         app_label=None,
         skip_object_fields=False,
         no_cache=False,
+        refresh_cache=True,
         _generating_models=None,
     ):
         """
@@ -517,6 +518,8 @@ class CustomObjectType(PrimaryModel):
         :type skip_object_fields: bool
         :param no_cache: Don't cache the generated model or attempt to pull from cache
         :type no_cache: bool
+        :param refresh_cache: Refresh the cached model even if no_cache=True
+        :type refresh_cache: bool
         :param _generating_models: Internal parameter to track models being generated
         :type _generating_models: set
         :return: The generated model.
@@ -625,7 +628,7 @@ class CustomObjectType(PrimaryModel):
             self._after_model_generation(attrs, model)
 
         # Cache the generated model
-        if not no_cache:
+        if not no_cache or refresh_cache:
             self._model_cache[self.id] = model
             # Do the clear cache now that we have it in the cache so there
             # is no recursion.
@@ -1477,7 +1480,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     def save(self, *args, **kwargs):
         field_type = FIELD_TYPE_CLASS[self.type]()
         model_field = field_type.get_model_field(self)
-        model = self.custom_object_type.get_model()
+        model = self.custom_object_type.get_model(no_cache=True, refresh_cache=True)
         model_field.contribute_to_class(model, self.name)
 
         with connection.schema_editor() as schema_editor:
@@ -1595,7 +1598,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     def delete(self, *args, **kwargs):
         field_type = FIELD_TYPE_CLASS[self.type]()
         model_field = field_type.get_model_field(self)
-        model = self.custom_object_type.get_model()
+        model = self.custom_object_type.get_model(no_cache=True, refresh_cache=True)
         model_field.contribute_to_class(model, self.name)
 
         with connection.schema_editor() as schema_editor:

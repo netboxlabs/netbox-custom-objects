@@ -515,7 +515,7 @@ class CustomObjectEditView(generic.ObjectEditView):
                                 from netbox_custom_objects.models import CustomObjectType
                                 custom_object_type_id = content_type.model.replace("table", "").replace("model", "")
                                 custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
-                                model = custom_object_type.get_model(skip_object_fields=True)
+                                model = custom_object_type.get_model(skip_object_fields=True, no_cache=True)
                             else:
                                 # Regular NetBox model
                                 model = content_type.model_class()
