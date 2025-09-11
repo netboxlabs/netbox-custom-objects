@@ -611,7 +611,10 @@ class CustomObjectType(PrimaryModel):
         finally:
             TM.post_through_setup = original_post_through_setup
 
-        apps.register_model(APP_LABEL, model)
+        app_models = apps.all_models[APP_LABEL]
+        model_name = model._meta.model_name
+        if model_name not in app_models:
+            apps.register_model(APP_LABEL, model)
 
         if not manytomany_models:
             self._after_model_generation(attrs, model)
