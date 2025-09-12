@@ -53,15 +53,23 @@ class CustomObjectsPluginConfig(PluginConfig):
     template_extensions = "template_content.template_extensions"
 
     def get_model(self, model_name, require_ready=True):
-        try:
-            # if the model is already loaded, return it
-            return super().get_model(model_name, require_ready)
-        except LookupError:
-            try:
-                self.apps.check_apps_ready()
-            except AppRegistryNotReady:
-                raise
+        if "table" in model_name.lower() and "model" in model_name.lower():
+            is_custom_object_model = True
+        else:
+            is_custom_object_model = False
 
+        self.apps.check_apps_ready()
+        if not is_custom_object_model:
+            try:
+                # if the model is already loaded, return it
+                return super().get_model(model_name, require_ready)
+            except LookupError:
+                try:
+                    self.apps.check_apps_ready()
+                except AppRegistryNotReady:
+                    raise
+
+        model_name = model_name.lower()
         # only do database calls if we are sure the app is ready to avoid
         # Django warnings
         if "table" not in model_name.lower() or "model" not in model_name.lower():
@@ -82,7 +90,7 @@ class CustomObjectsPluginConfig(PluginConfig):
                 "App '%s' doesn't have a '%s' model." % (self.label, model_name)
             )
 
-        return obj.get_model()
+        return obj.get_model(no_cache=False)
 
     def get_models(self, include_auto_created=False, include_swapped=False):
         """Return all models for this plugin, including custom object type models."""
@@ -108,7 +116,7 @@ class CustomObjectsPluginConfig(PluginConfig):
 
             custom_object_types = CustomObjectType.objects.all()
             for custom_type in custom_object_types:
-                model = custom_type.get_model()
+                model = custom_type.get_model(no_cache=False)
                 if model:
                     yield model
 

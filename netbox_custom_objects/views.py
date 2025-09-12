@@ -437,6 +437,7 @@ class CustomObjectEditView(generic.ObjectEditView):
             CustomObjectType, slug=custom_object_type
         )
         model = object_type.get_model()
+
         if not self.kwargs.get("pk", None):
             # We're creating a new object
             return model()
