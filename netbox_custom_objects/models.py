@@ -496,7 +496,7 @@ class CustomObjectType(PrimaryModel):
         manytomany_models=None,
         app_label=None,
         skip_object_fields=False,
-        no_cache=False,
+        no_cache=True,
         _generating_models=None,
     ):
         """

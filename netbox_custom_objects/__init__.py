@@ -90,7 +90,7 @@ class CustomObjectsPluginConfig(PluginConfig):
                 "App '%s' doesn't have a '%s' model." % (self.label, model_name)
             )
 
-        return obj.get_model()
+        return obj.get_model(no_cache=False)
 
     def get_models(self, include_auto_created=False, include_swapped=False):
         """Return all models for this plugin, including custom object type models."""
@@ -116,7 +116,7 @@ class CustomObjectsPluginConfig(PluginConfig):
 
             custom_object_types = CustomObjectType.objects.all()
             for custom_type in custom_object_types:
-                model = custom_type.get_model()
+                model = custom_type.get_model(no_cache=False)
                 if model:
                     yield model
 
