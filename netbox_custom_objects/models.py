@@ -493,10 +493,9 @@ class CustomObjectType(PrimaryModel):
     def get_model(
         self,
         fields=None,
-        manytomany_models=None,
         app_label=None,
         skip_object_fields=False,
-        no_cache=True,
+        no_cache=False,
         _generating_models=None,
     ):
         """
@@ -505,10 +504,6 @@ class CustomObjectType(PrimaryModel):
 
         :param fields: Extra table field instances that need to be added the model.
         :type fields: list
-        :param manytomany_models: In some cases with related fields a model has to be
-            generated in order to generate that model. In order to prevent a
-            recursion loop we cache the generated models and pass those along.
-        :type manytomany_models: dict
         :param app_label: In some cases with related fields, the related models must
             have the same app_label. If passed along in this parameter, then the
             generated model will use that one instead of generating a unique one.
@@ -522,7 +517,17 @@ class CustomObjectType(PrimaryModel):
         :return: The generated model.
         :rtype: Model
         """
+        if app_label is None:
+            app_label = APP_LABEL
 
+        # Check if we have a cached model for this CustomObjectType
+        model_name = self.get_table_model_name(self.pk).lower()
+        app_models = apps.all_models[APP_LABEL]
+        if model_name in app_models:
+            model = apps.all_models[APP_LABEL][model_name]
+            return model
+
+        '''
         # Check if we have a cached model for this CustomObjectType
         if self.is_model_cached(self.id) and not no_cache:
             model = self.get_cached_model(self.id)
@@ -531,6 +536,7 @@ class CustomObjectType(PrimaryModel):
 
             get_serializer_class(model)
             return model
+        '''
 
         # Circular reference detection using class-level tracking
         if not hasattr(CustomObjectType, '_global_generating_models'):
@@ -542,13 +548,7 @@ class CustomObjectType(PrimaryModel):
         # Add this model to the set of models being generated
         _generating_models.add(self.id)
 
-        if app_label is None:
-            app_label = APP_LABEL
 
-        model_name = self.get_table_model_name(self.pk)
-
-        if fields is None:
-            fields = []
 
         # TODO: Add other fields with "index" specified
         indexes = []
@@ -574,6 +574,9 @@ class CustomObjectType(PrimaryModel):
             "custom_object_type": self,
             "custom_object_type_id": self.id,
         }
+
+        if fields is None:
+            fields = []
 
         # Pass the generating models set to field generation
         field_attrs = self._fetch_and_generate_field_attrs(
@@ -611,27 +614,27 @@ class CustomObjectType(PrimaryModel):
         finally:
             TM.post_through_setup = original_post_through_setup
 
-        app_models = apps.all_models[APP_LABEL]
-        model_name = model._meta.model_name
         if model_name not in app_models:
             apps.register_model(APP_LABEL, model)
         else:
             model = apps.all_models[APP_LABEL][model_name]
 
-        if not manytomany_models:
-            self._after_model_generation(attrs, model)
+        self._after_model_generation(attrs, model)
 
+        '''
         # Cache the generated model
         self._model_cache[self.id] = model
         # Do the clear cache now that we have it in the cache so there
         # is no recursion.
+        '''
         apps.clear_cache()
 
+        '''
         # Register the serializer for this model
-        if not manytomany_models:
-            from netbox_custom_objects.api.serializers import get_serializer_class
+        from netbox_custom_objects.api.serializers import get_serializer_class
 
-            get_serializer_class(model)
+        get_serializer_class(model)
+        '''
 
         # Register the global SearchIndex for this model
         self.register_custom_object_search_index(model)

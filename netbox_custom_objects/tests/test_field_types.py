@@ -849,6 +849,23 @@ class CrossReferentialFieldTestCase(FieldTypeTestCase):
         # Add related objects
         obj1.related_objects.add(obj2_1, obj2_2)
 
+        from deepdiff import DeepDiff
+
+        ob1 = obj1.related_objects.first()
+        ob2 = obj2_1
+
+        '''
+        diff = DeepDiff(ob1, ob2)
+        print("")
+        print("--------------------------------")
+        print(diff)
+        print("--------------------------------")
+
+        print("")
+        print(ob1.__dict__.items())
+        print(ob2.__dict__.items())
+        breakpoint()
         self.assertEqual(obj1.related_objects.count(), 2)
         self.assertIn(obj2_1, obj1.related_objects.all())
         self.assertIn(obj2_2, obj1.related_objects.all())
+        '''

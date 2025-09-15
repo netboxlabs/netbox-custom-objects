@@ -409,45 +409,20 @@ class ObjectFieldType(FieldType):
             )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
 
-            # Check if this is a self-referential field
-            if custom_object_type.id == field.custom_object_type.id:
-                # For self-referential fields, use LazyForeignKey to defer resolution
-                model_name = f"{APP_LABEL}.{custom_object_type.get_table_model_name(custom_object_type.id)}"
-                # Generate a unique related_name to prevent reverse accessor conflicts
-                table_model_name = field.custom_object_type.get_table_model_name(field.custom_object_type.id).lower()
-                related_name = f"{table_model_name}_{field.name}_set"
-                f = LazyForeignKey(
-                    model_name,
-                    null=True,
-                    blank=True,
-                    on_delete=models.CASCADE,
-                    related_name=related_name,
-                    **field_kwargs
-                )
-                return f
-            else:
-                # For cross-referential fields, use skip_object_fields to avoid infinite loops
-                # Check if we're in a recursion situation using the parameter or stored attribute
-                if generating_models and custom_object_type.id in generating_models:
-                    # We're in a circular reference, don't call get_model() to prevent recursion
-                    # Use a string reference instead
-                    model_name = f"{APP_LABEL}.{custom_object_type.get_table_model_name(custom_object_type.id)}"
-                    # Generate a unique related_name to prevent reverse accessor conflicts
-                    table_model_name = field.custom_object_type.get_table_model_name(
-                        field.custom_object_type.id
-                    ).lower()
-                    related_name = f"{table_model_name}_{field.name}_set"
-                    f = models.ForeignKey(
-                        model_name,
-                        null=True,
-                        blank=True,
-                        on_delete=models.CASCADE,
-                        related_name=related_name,
-                        **field_kwargs
-                    )
-                    return f
-                else:
-                    model = custom_object_type.get_model(skip_object_fields=True)
+            # For self-referential fields, use LazyForeignKey to defer resolution
+            model_name = f"{APP_LABEL}.{custom_object_type.get_table_model_name(custom_object_type.id)}"
+            # Generate a unique related_name to prevent reverse accessor conflicts
+            table_model_name = field.custom_object_type.get_table_model_name(field.custom_object_type.id).lower()
+            related_name = f"{table_model_name}_{field.name}_set"
+            f = LazyForeignKey(
+                model_name,
+                null=True,
+                blank=True,
+                on_delete=models.CASCADE,
+                related_name=related_name,
+                **field_kwargs
+            )
+            return f
         else:
             # to_model = content_type.model_class()._meta.object_name
             to_ct = f"{content_type.app_label}.{to_model}"

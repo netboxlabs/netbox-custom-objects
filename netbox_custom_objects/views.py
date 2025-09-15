@@ -28,6 +28,7 @@ from netbox_custom_objects.tables import CustomObjectTable
 from . import field_types, filtersets, forms, tables
 from .models import CustomObject, CustomObjectType, CustomObjectTypeField
 from extras.choices import CustomFieldTypeChoices
+from netbox_custom_objects.api.serializers import get_serializer_class
 from netbox_custom_objects.constants import APP_LABEL
 
 logger = logging.getLogger("netbox_custom_objects.views")
@@ -141,6 +142,14 @@ class CustomObjectTableMixin(TableMixin):
         return super().get_table(data, request, bulk_actions=bulk_actions)
 
 
+class CustomObjectModelMixin:
+    def get_model(self, custom_object_type):
+        model = custom_object_type.get_model()
+        get_serializer_class(model)
+        custom_object_type.register_custom_object_search_index(model)
+        return model
+
+
 #
 # Custom Object Types
 #
@@ -155,17 +164,17 @@ class CustomObjectTypeListView(generic.ObjectListView):
 
 
 @register_model_view(CustomObjectType)
-class CustomObjectTypeView(CustomObjectTableMixin, generic.ObjectView):
+class CustomObjectTypeView(CustomObjectTableMixin, CustomObjectModelMixin, generic.ObjectView):
     queryset = CustomObjectType.objects.all()
 
     def get_table(self, data, request, bulk_actions=True):
         self.custom_object_type = self.get_object(**self.kwargs)
-        model = self.custom_object_type.get_model()
+        model = self.get_model(self.custom_object_type)
         data = model.objects.all()
         return super().get_table(data, request, bulk_actions=False)
 
     def get_extra_context(self, request, instance):
-        model = instance.get_model()
+        model = self.get_model(instance)
 
         # Get fields and group them by group_name
         fields = instance.fields.all().order_by("group_name", "weight", "name")
@@ -193,13 +202,13 @@ class CustomObjectTypeEditView(generic.ObjectEditView):
 
 
 @register_model_view(CustomObjectType, "delete")
-class CustomObjectTypeDeleteView(generic.ObjectDeleteView):
+class CustomObjectTypeDeleteView(CustomObjectModelMixin, generic.ObjectDeleteView):
     queryset = CustomObjectType.objects.all()
     default_return_url = "plugins:netbox_custom_objects:customobjecttype_list"
 
     def _get_dependent_objects(self, obj):
         dependent_objects = super()._get_dependent_objects(obj)
-        model = obj.get_model()
+        model = self.get_model(obj)
         dependent_objects[model] = list(model.objects.all())
 
         # Find CustomObjectTypeFields that reference this CustomObjectType
@@ -226,7 +235,7 @@ class CustomObjectTypeFieldEditView(generic.ObjectEditView):
 
 
 @register_model_view(CustomObjectTypeField, "delete")
-class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
+class CustomObjectTypeFieldDeleteView(CustomObjectModelMixin, generic.ObjectDeleteView):
     template_name = "netbox_custom_objects/field_delete.html"
     queryset = CustomObjectTypeField.objects.all()
 
@@ -243,7 +252,7 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
         obj = self.get_object(**kwargs)
         form = ConfirmationForm(initial=request.GET)
 
-        model = obj.custom_object_type.get_model()
+        model = self.get_model(obj.custom_object_type)
         kwargs = {
             f"{obj.name}__isnull": False,
         }
@@ -280,7 +289,7 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
 
     def _get_dependent_objects(self, obj):
         dependent_objects = super()._get_dependent_objects(obj)
-        model = obj.custom_object_type.get_model()
+        model = self.get_model(obj.custom_object_type)
         kwargs = {
             f"{obj.name}__isnull": False,
         }
@@ -314,7 +323,7 @@ class CustomObjectTypeBulkDeleteView(generic.BulkDeleteView):
 #
 
 
-class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
+class CustomObjectListView(CustomObjectTableMixin, CustomObjectModelMixin, generic.ObjectListView):
     queryset = None
     custom_object_type = None
     template_name = "netbox_custom_objects/custom_object_list.html"
@@ -332,7 +341,7 @@ class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
         self.custom_object_type = get_object_or_404(
             CustomObjectType, slug=custom_object_type
         )
-        model = self.custom_object_type.get_model()
+        model = self.get_model(self.custom_object_type)
         return model.objects.all()
 
     def get_filterset(self):
@@ -370,7 +379,7 @@ class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
 
 
 @register_model_view(CustomObject)
-class CustomObjectView(generic.ObjectView):
+class CustomObjectView(CustomObjectModelMixin, generic.ObjectView):
     template_name = "netbox_custom_objects/customobject.html"
 
     def get_queryset(self, request):
@@ -378,7 +387,7 @@ class CustomObjectView(generic.ObjectView):
         object_type = get_object_or_404(
             CustomObjectType, slug=custom_object_type
         )
-        model = object_type.get_model()
+        model = self.get_model(object_type)
         return model.objects.all()
 
     def get_object(self, **kwargs):
@@ -386,7 +395,7 @@ class CustomObjectView(generic.ObjectView):
         object_type = get_object_or_404(
             CustomObjectType, slug=custom_object_type
         )
-        model = object_type.get_model()
+        model = self.get_model(object_type)
         # Filter out custom_object_type from kwargs for the object lookup
         lookup_kwargs = {
             k: v for k, v in self.kwargs.items() if k != "custom_object_type"
@@ -413,7 +422,7 @@ class CustomObjectView(generic.ObjectView):
 
 
 @register_model_view(CustomObject, "edit")
-class CustomObjectEditView(generic.ObjectEditView):
+class CustomObjectEditView(CustomObjectModelMixin, generic.ObjectEditView):
     template_name = "netbox_custom_objects/customobject_edit.html"
     form = None
     queryset = None
@@ -436,7 +445,7 @@ class CustomObjectEditView(generic.ObjectEditView):
         object_type = get_object_or_404(
             CustomObjectType, slug=custom_object_type
         )
-        model = object_type.get_model()
+        model = self.get_model(object_type)
 
         if not self.kwargs.get("pk", None):
             # We're creating a new object
@@ -574,7 +583,7 @@ class CustomObjectEditView(generic.ObjectEditView):
 
 
 @register_model_view(CustomObject, "delete")
-class CustomObjectDeleteView(generic.ObjectDeleteView):
+class CustomObjectDeleteView(CustomObjectModelMixin, generic.ObjectDeleteView):
     queryset = None
     object = None
     default_return_url = "plugins:netbox_custom_objects:customobject_list"
@@ -594,7 +603,7 @@ class CustomObjectDeleteView(generic.ObjectDeleteView):
         object_type = get_object_or_404(
             CustomObjectType, slug=custom_object_type
         )
-        model = object_type.get_model()
+        model = self.get_model(object_type)
         return get_object_or_404(model.objects.all(), **self.kwargs)
 
     def get_return_url(self, request, obj=None):
@@ -615,7 +624,7 @@ class CustomObjectDeleteView(generic.ObjectDeleteView):
 
 
 @register_model_view(CustomObject, "bulk_edit", path="edit", detail=False)
-class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
+class CustomObjectBulkEditView(CustomObjectTableMixin, CustomObjectModelMixin, generic.BulkEditView):
     queryset = None
     custom_object_type = None
     table = None
@@ -634,7 +643,7 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
         self.custom_object_type = CustomObjectType.objects.get(
             slug=custom_object_type
         )
-        model = self.custom_object_type.get_model()
+        model = self.get_model(self.custom_object_type)
         return model.objects.all()
 
     def get_form(self, queryset):
@@ -674,7 +683,7 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
 
 
 @register_model_view(CustomObject, "bulk_delete", path="delete", detail=False)
-class CustomObjectBulkDeleteView(CustomObjectTableMixin, generic.BulkDeleteView):
+class CustomObjectBulkDeleteView(CustomObjectTableMixin, CustomObjectModelMixin, generic.BulkDeleteView):
     queryset = None
     custom_object_type = None
     table = None
@@ -692,12 +701,12 @@ class CustomObjectBulkDeleteView(CustomObjectTableMixin, generic.BulkDeleteView)
         self.custom_object_type = CustomObjectType.objects.get(
             slug=custom_object_type
         )
-        model = self.custom_object_type.get_model()
+        model = self.get_model(self.custom_object_type)
         return model.objects.all()
 
 
 @register_model_view(CustomObject, "bulk_import", path="import", detail=False)
-class CustomObjectBulkImportView(generic.BulkImportView):
+class CustomObjectBulkImportView(CustomObjectModelMixin, generic.BulkImportView):
     queryset = None
     model_form = None
 
@@ -721,7 +730,7 @@ class CustomObjectBulkImportView(generic.BulkImportView):
         self.custom_object_type = CustomObjectType.objects.get(
             name__iexact=custom_object_type
         )
-        model = self.custom_object_type.get_model()
+        model = self.get_model(self.custom_object_type)
         return model.objects.all()
 
     def get_model_form(self, queryset):
@@ -757,7 +766,7 @@ class CustomObjectBulkImportView(generic.BulkImportView):
         return form
 
 
-class CustomObjectJournalView(ConditionalLoginRequiredMixin, View):
+class CustomObjectJournalView(ConditionalLoginRequiredMixin, CustomObjectModelMixin, View):
     """
     Custom journal view for CustomObject instances.
     Shows all journal entries for a custom object.
@@ -773,7 +782,7 @@ class CustomObjectJournalView(ConditionalLoginRequiredMixin, View):
         object_type = get_object_or_404(
             CustomObjectType, slug=custom_object_type
         )
-        model = object_type.get_model()
+        model = self.get_model(object_type)
 
         # Get the specific object
         lookup_kwargs = {k: v for k, v in kwargs.items() if k != "custom_object_type"}
@@ -829,7 +838,7 @@ class CustomObjectJournalView(ConditionalLoginRequiredMixin, View):
         )
 
 
-class CustomObjectChangeLogView(ConditionalLoginRequiredMixin, View):
+class CustomObjectChangeLogView(ConditionalLoginRequiredMixin, CustomObjectModelMixin, View):
     """
     Custom changelog view for CustomObject instances.
     Shows all changes made to a custom object.
@@ -845,7 +854,7 @@ class CustomObjectChangeLogView(ConditionalLoginRequiredMixin, View):
         object_type = get_object_or_404(
             CustomObjectType, slug=custom_object_type
         )
-        model = object_type.get_model()
+        model = self.get_model(object_type)
 
         # Get the specific object
         lookup_kwargs = {k: v for k, v in kwargs.items() if k != "custom_object_type"}
