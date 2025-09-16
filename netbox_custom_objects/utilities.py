@@ -8,6 +8,7 @@ __all__ = (
     "AppsProxy",
     "generate_model",
     "get_viewname",
+    "get_sub_models",
 )
 
 
@@ -108,3 +109,67 @@ def generate_model(*args, **kwargs):
             apps.clear_cache = apps.clear_cache
 
     return model
+
+
+def get_sub_models(custom_object, visited=None):
+    """
+    Recursively find all related custom object models for a given CustomObject instance.
+    
+    This function traverses through the custom object type's fields and finds all
+    related custom object types that are referenced through OBJECT or MULTIOBJECT fields.
+    
+    Args:
+        custom_object: An instance of a dynamically created CustomObject class
+        visited: Set of custom object type IDs already visited (used for cycle detection)
+        
+    Returns:
+        list: A list of model classes (including the original model) that are related
+              through custom object relationships
+    """
+    from netbox_custom_objects.models import CustomObjectType
+    models = [custom_object]
+    if visited is None:
+        visited = set()
+
+    # Get the custom object type from the instance
+    custom_object_type = custom_object.custom_object_type
+
+    # If we've already visited this type, return empty list to prevent infinite recursion
+    if custom_object_type.id in visited:
+        return []
+
+    # Add this type to visited set
+    visited.add(custom_object_type.id)
+
+    # Get all fields of type OBJECT or MULTIOBJECT
+    # Using string constants to avoid import issues
+    object_fields = custom_object_type.fields.filter(
+        type__in=["object", "multiobject"],
+        related_object_type__isnull=False,
+        related_object_type__app_label=APP_LABEL
+    )
+
+    # For each object field, check if it references another custom object
+    for field in object_fields:
+        related_object_type = field.related_object_type
+
+        # Get the related custom object type
+        related_custom_object_type = CustomObjectType.objects.get(
+            object_type=related_object_type
+        )
+
+        # Get the model for the related custom object type
+        related_model = related_custom_object_type.get_model()
+
+        # Recursively get sub-models from the related type
+        sub_models = get_sub_models(related_model(), visited.copy())
+
+        # Add the related model and its sub-models to our list
+        if related_model not in models:
+            models.append(related_model)
+
+        for sub_model in sub_models:
+            if sub_model not in models:
+                models.append(sub_model)
+
+    return models

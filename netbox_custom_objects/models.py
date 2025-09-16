@@ -493,7 +493,6 @@ class CustomObjectType(PrimaryModel):
     def get_model(
         self,
         fields=None,
-        app_label=None,
         skip_object_fields=False,
         no_cache=False,
         _generating_models=None,
@@ -504,10 +503,6 @@ class CustomObjectType(PrimaryModel):
 
         :param fields: Extra table field instances that need to be added the model.
         :type fields: list
-        :param app_label: In some cases with related fields, the related models must
-            have the same app_label. If passed along in this parameter, then the
-            generated model will use that one instead of generating a unique one.
-        :type app_label: Optional[String]
         :param skip_object_fields: Don't add object or multiobject fields to the model
         :type skip_object_fields: bool
         :param no_cache: Don't cache the generated model or attempt to pull from cache
@@ -517,8 +512,6 @@ class CustomObjectType(PrimaryModel):
         :return: The generated model.
         :rtype: Model
         """
-        if app_label is None:
-            app_label = APP_LABEL
 
         # Check if we have a cached model for this CustomObjectType
         model_name = self.get_table_model_name(self.pk).lower()
@@ -634,10 +627,10 @@ class CustomObjectType(PrimaryModel):
         from netbox_custom_objects.api.serializers import get_serializer_class
 
         get_serializer_class(model)
-        '''
 
         # Register the global SearchIndex for this model
         self.register_custom_object_search_index(model)
+        '''
 
         # Clean up: remove this model from the set of models being generated
         if _generating_models is not None:
