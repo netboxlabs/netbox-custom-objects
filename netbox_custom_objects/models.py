@@ -524,7 +524,6 @@ class CustomObjectType(PrimaryModel):
         # Add this model to the set of models being generated
         _generating_models.add(self.id)
 
-        app_models = apps.all_models[APP_LABEL]
         model_name = self.get_table_model_name(self.pk)
 
         # TODO: Add other fields with "index" specified
