@@ -590,7 +590,7 @@ class CustomObjectType(PrimaryModel):
             TM.post_through_setup = original_post_through_setup
 
         # Register the main model with Django's app registry
-        if model_name in app_models:
+        if model_name in apps.all_models[APP_LABEL]:
             # Remove the existing model from all_models before registering the new one
             del apps.all_models[APP_LABEL][model_name]
 
