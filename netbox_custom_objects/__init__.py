@@ -64,7 +64,7 @@ class CustomObjectsPluginConfig(PluginConfig):
             warnings.filterwarnings(
                 "ignore", category=UserWarning, message=".*database.*"
             )
-            
+
             # Skip database calls if running during migration or if table doesn't exist
             if is_running_migration() or not check_custom_object_type_table_exists():
                 super().ready()
