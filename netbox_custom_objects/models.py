@@ -68,16 +68,22 @@ USER_TABLE_DATABASE_NAME_PREFIX = "custom_objects_"
 def thread_safe_model_generation(func):
     """
     Decorator to ensure thread-safe model generation.
-
+    
     This decorator prevents race conditions when multiple threads try to generate
-    the same custom object model simultaneously. It uses a class-level reentrant
-    lock to ensure only one thread can generate a model at a time, while allowing
-    recursive calls from the same thread (e.g., during Django startup).
+    the same custom object model simultaneously. It uses per-model locks to ensure
+    only one thread can generate a specific model at a time, while allowing
+    different models to be generated concurrently and preventing deadlocks.
     """
     @wraps(func)
     def wrapper(self, *args, **kwargs):
-        # Use the class-level lock for thread safety
-        with self._model_cache_lock:
+        # Get or create a lock for this specific model
+        with self._global_lock:
+            if self.id not in self._model_cache_locks:
+                self._model_cache_locks[self.id] = threading.RLock()
+            model_lock = self._model_cache_locks[self.id]
+        
+        # Use the per-model lock for thread safety
+        with model_lock:
             return func(self, *args, **kwargs)
     return wrapper
 
@@ -184,7 +190,8 @@ class CustomObjectType(PrimaryModel):
     _through_model_cache = (
         {}
     )  # Now stores {custom_object_type_id: {through_model_name: through_model}}
-    _model_cache_lock = threading.RLock()  # Reentrant lock for model cache operations (allows recursive calls)
+    _model_cache_locks = {}  # Per-model locks to prevent race conditions
+    _global_lock = threading.RLock()  # Global lock for managing per-model locks
     name = models.CharField(
         max_length=100,
         unique=True,
@@ -239,12 +246,15 @@ class CustomObjectType(PrimaryModel):
 
         :param custom_object_type_id: ID of the CustomObjectType to clear cache for, or None to clear all
         """
-        if custom_object_type_id is not None:
-            cls._model_cache.pop(custom_object_type_id, None)
-            cls._through_model_cache.pop(custom_object_type_id, None)
-        else:
-            cls._model_cache.clear()
-            cls._through_model_cache.clear()
+        with cls._global_lock:
+            if custom_object_type_id is not None:
+                cls._model_cache.pop(custom_object_type_id, None)
+                cls._through_model_cache.pop(custom_object_type_id, None)
+                cls._model_cache_locks.pop(custom_object_type_id, None)
+            else:
+                cls._model_cache.clear()
+                cls._through_model_cache.clear()
+                cls._model_cache_locks.clear()
 
         # Clear Django apps registry cache to ensure newly created models are recognized
         apps.get_models.cache_clear()

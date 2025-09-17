@@ -28,34 +28,22 @@ def get_field_type_verbose_name(field: CustomObjectTypeField) -> str:
 
 @register.filter(name="get_field_value")
 def get_field_value(obj, field: CustomObjectTypeField) -> str:
-    try:
-        return getattr(obj, field.name)
-    except AttributeError:
-        # Handle race condition where model doesn't have the field yet
-        return ""
+    return getattr(obj, field.name)
 
 
 @register.filter(name="get_field_is_ui_visible")
 def get_field_is_ui_visible(obj, field: CustomObjectTypeField) -> bool:
     if field.ui_visible == CustomFieldUIVisibleChoices.ALWAYS:
         return True
-    try:
-        if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-            field_value = getattr(obj, field.name).exists()
-        else:
-            field_value = getattr(obj, field.name)
-        if field.ui_visible == CustomFieldUIVisibleChoices.IF_SET and field_value:
-            return True
-    except AttributeError:
-        # Handle race condition where model doesn't have the field yet
-        pass
+    if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+        field_value = getattr(obj, field.name).exists()
+    else:
+        field_value = getattr(obj, field.name)
+    if field.ui_visible == CustomFieldUIVisibleChoices.IF_SET and field_value:
+        return True
     return False
 
 
 @register.filter(name="get_child_relations")
 def get_child_relations(obj, field: CustomObjectTypeField):
-    try:
-        return getattr(obj, field.name).all()
-    except AttributeError:
-        # Handle race condition where model doesn't have the field yet
-        return []
+    return getattr(obj, field.name).all()
