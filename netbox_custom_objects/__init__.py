@@ -52,16 +52,49 @@ class CustomObjectsPluginConfig(PluginConfig):
     required_settings = []
     template_extensions = "template_content.template_extensions"
 
-    def get_model(self, model_name, require_ready=True):
-        try:
-            # if the model is already loaded, return it
-            return super().get_model(model_name, require_ready)
-        except LookupError:
-            try:
-                self.apps.check_apps_ready()
-            except AppRegistryNotReady:
-                raise
+    def ready(self):
+        from .models import CustomObjectType
+        from netbox_custom_objects.api.serializers import get_serializer_class
 
+        # Suppress warnings about database calls during app initialization
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", category=RuntimeWarning, message=".*database.*"
+            )
+            warnings.filterwarnings(
+                "ignore", category=UserWarning, message=".*database.*"
+            )
+            
+            # Skip database calls if running during migration or if table doesn't exist
+            if is_running_migration() or not check_custom_object_type_table_exists():
+                super().ready()
+                return
+
+            qs = CustomObjectType.objects.all()
+            for obj in qs:
+                model = obj.get_model()
+                get_serializer_class(model)
+
+        super().ready()
+
+    def get_model(self, model_name, require_ready=True):
+        if "table" in model_name.lower() and "model" in model_name.lower():
+            is_custom_object_model = True
+        else:
+            is_custom_object_model = False
+
+        self.apps.check_apps_ready()
+        if not is_custom_object_model:
+            try:
+                # if the model is already loaded, return it
+                return super().get_model(model_name, require_ready)
+            except LookupError:
+                try:
+                    self.apps.check_apps_ready()
+                except AppRegistryNotReady:
+                    raise
+
+        model_name = model_name.lower()
         # only do database calls if we are sure the app is ready to avoid
         # Django warnings
         if "table" not in model_name.lower() or "model" not in model_name.lower():
