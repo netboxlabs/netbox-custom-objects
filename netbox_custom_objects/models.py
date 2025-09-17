@@ -493,7 +493,6 @@ class CustomObjectType(PrimaryModel):
     def get_model(
         self,
         fields=None,
-        manytomany_models=None,
         app_label=None,
         skip_object_fields=False,
         no_cache=False,
@@ -505,10 +504,6 @@ class CustomObjectType(PrimaryModel):
 
         :param fields: Extra table field instances that need to be added the model.
         :type fields: list
-        :param manytomany_models: In some cases with related fields a model has to be
-            generated in order to generate that model. In order to prevent a
-            recursion loop we cache the generated models and pass those along.
-        :type manytomany_models: dict
         :param app_label: In some cases with related fields, the related models must
             have the same app_label. If passed along in this parameter, then the
             generated model will use that one instead of generating a unique one.
@@ -621,8 +616,7 @@ class CustomObjectType(PrimaryModel):
         except LookupError:
             apps.register_model(APP_LABEL, model)
 
-        if not manytomany_models:
-            self._after_model_generation(attrs, model)
+        self._after_model_generation(attrs, model)
 
         # Cache the generated model
         if not no_cache:
@@ -632,10 +626,9 @@ class CustomObjectType(PrimaryModel):
             apps.clear_cache()
 
         # Register the serializer for this model
-        if not manytomany_models:
-            from netbox_custom_objects.api.serializers import get_serializer_class
+        from netbox_custom_objects.api.serializers import get_serializer_class
 
-            get_serializer_class(model)
+        get_serializer_class(model)
 
         # Register the global SearchIndex for this model
         self.register_custom_object_search_index(model)
