@@ -1,6 +1,8 @@
 import decimal
 import re
+import threading
 from datetime import date, datetime
+from functools import wraps
 
 import django_filters
 from core.models import ObjectType, ObjectChange
@@ -61,6 +63,23 @@ class UniquenessConstraintTestError(Exception):
 
 
 USER_TABLE_DATABASE_NAME_PREFIX = "custom_objects_"
+
+
+def thread_safe_model_generation(func):
+    """
+    Decorator to ensure thread-safe model generation.
+
+    This decorator prevents race conditions when multiple threads try to generate
+    the same custom object model simultaneously. It uses a class-level reentrant
+    lock to ensure only one thread can generate a model at a time, while allowing
+    recursive calls from the same thread (e.g., during Django startup).
+    """
+    @wraps(func)
+    def wrapper(self, *args, **kwargs):
+        # Use the class-level lock for thread safety
+        with self._model_cache_lock:
+            return func(self, *args, **kwargs)
+    return wrapper
 
 
 class CustomObject(
@@ -165,6 +184,7 @@ class CustomObjectType(PrimaryModel):
     _through_model_cache = (
         {}
     )  # Now stores {custom_object_type_id: {through_model_name: through_model}}
+    _model_cache_lock = threading.RLock()  # Reentrant lock for model cache operations (allows recursive calls)
     name = models.CharField(
         max_length=100,
         unique=True,
@@ -437,6 +457,7 @@ class CustomObjectType(PrimaryModel):
         label = f"{APP_LABEL}.{self.get_table_model_name(self.id).lower()}"
         registry["search"][label] = search_index
 
+    @thread_safe_model_generation
     def get_model(
         self,
         skip_object_fields=False,
@@ -451,11 +472,12 @@ class CustomObjectType(PrimaryModel):
         :rtype: Model
         """
 
-        # Check if we have a cached model for this CustomObjectType
+        # Double-check pattern: check cache again after acquiring lock
         if self.is_model_cached(self.id):
             model = self.get_cached_model(self.id)
             return model
 
+        # Generate the model inside the lock to prevent race conditions
         model_name = self.get_table_model_name(self.pk)
 
         # TODO: Add other fields with "index" specified
