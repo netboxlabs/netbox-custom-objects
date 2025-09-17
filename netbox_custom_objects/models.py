@@ -445,8 +445,6 @@ class CustomObjectType(PrimaryModel):
         Generates a temporary Django model based on available fields that belong to
         this table. Returns cached model if available, otherwise generates and caches it.
 
-        :param fields: Extra table field instances that need to be added the model.
-        :type fields: list
         :param skip_object_fields: Don't add object or multiobject fields to the model
         :type skip_object_fields: bool
         :return: The generated model.
@@ -527,16 +525,6 @@ class CustomObjectType(PrimaryModel):
             del apps.all_models[APP_LABEL][model_name.lower()]
 
         apps.register_model(APP_LABEL, model)
-        '''
-        try:
-            existing_model = apps.get_model(APP_LABEL, model_name)
-            # If model exists but is different, we have a problem
-            if existing_model is not model:
-                # Use the existing model to avoid conflicts
-                model = existing_model
-        except LookupError:
-            apps.register_model(APP_LABEL, model)
-        '''
 
         self._after_model_generation(attrs, model)
 
@@ -547,13 +535,6 @@ class CustomObjectType(PrimaryModel):
         # is no recursion.
         apps.clear_cache()
         ContentType.objects.clear_cache()
-
-        '''
-        # Register the serializer for this model
-        from netbox_custom_objects.api.serializers import get_serializer_class
-
-        get_serializer_class(model)
-        '''
 
         # Register the global SearchIndex for this model
         self.register_custom_object_search_index(model)
