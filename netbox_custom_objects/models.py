@@ -508,7 +508,7 @@ class CustomObjectType(PrimaryModel):
         :return: The generated model.
         :rtype: Model
         """
- 
+
         # Check if we have a cached model for this CustomObjectType
         if self.is_model_cached(self.id):
             model = self.get_cached_model(self.id)
@@ -597,7 +597,7 @@ class CustomObjectType(PrimaryModel):
         if model_name in app_models:
             # Remove the existing model from all_models before registering the new one
             del apps.all_models[APP_LABEL][model_name]
-        
+
         apps.register_model(APP_LABEL, model)
         '''
         try:
