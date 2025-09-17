@@ -512,10 +512,6 @@ class CustomObjectType(PrimaryModel):
         # Check if we have a cached model for this CustomObjectType
         if self.is_model_cached(self.id):
             model = self.get_cached_model(self.id)
-            # Ensure the serializer is registered even for cached models
-            from netbox_custom_objects.api.serializers import get_serializer_class
-
-            get_serializer_class(model)
             return model
 
         # Circular reference detection using class-level tracking
