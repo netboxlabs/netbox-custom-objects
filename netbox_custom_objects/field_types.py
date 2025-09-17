@@ -408,20 +408,25 @@ class ObjectFieldType(FieldType):
             )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
 
-            # For self-referential fields, use LazyForeignKey to defer resolution
-            model_name = f"{APP_LABEL}.{custom_object_type.get_table_model_name(custom_object_type.id)}"
-            # Generate a unique related_name to prevent reverse accessor conflicts
-            table_model_name = field.custom_object_type.get_table_model_name(field.custom_object_type.id).lower()
-            related_name = f"{table_model_name}_{field.name}_set"
-            f = LazyForeignKey(
-                model_name,
-                null=True,
-                blank=True,
-                on_delete=models.CASCADE,
-                related_name=related_name,
-                **field_kwargs
-            )
-            return f
+            # Check if this is a self-referential field
+            if custom_object_type.id == field.custom_object_type.id:
+                # For self-referential fields, use LazyForeignKey to defer resolution
+                model_name = f"{APP_LABEL}.{custom_object_type.get_table_model_name(custom_object_type.id)}"
+                # Generate a unique related_name to prevent reverse accessor conflicts
+                table_model_name = field.custom_object_type.get_table_model_name(field.custom_object_type.id).lower()
+                related_name = f"{table_model_name}_{field.name}_set"
+                f = LazyForeignKey(
+                    model_name,
+                    null=True,
+                    blank=True,
+                    on_delete=models.CASCADE,
+                    related_name=related_name,
+                    **field_kwargs
+                )
+                return f
+            else:
+                # For cross-referential fields, use skip_object_fields to avoid infinite loops
+                model = custom_object_type.get_model(skip_object_fields=True)
         else:
             # to_model = content_type.model_class()._meta.object_name
             to_ct = f"{content_type.app_label}.{to_model}"
@@ -453,19 +458,7 @@ class ObjectFieldType(FieldType):
             )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
 
-            # Check if we're in a recursion situation
-            generating_models = getattr(self, '_generating_models', set())
-            if generating_models and custom_object_type.id in generating_models:
-                # We're in a circular reference, don't call get_model() to prevent recursion
-                # Use a minimal approach or return a basic field
-                return DynamicModelChoiceField(
-                    queryset=custom_object_type.get_model(skip_object_fields=True).objects.all(),
-                    required=field.required,
-                    # Remove initial=field.default to allow Django to handle instance data properly
-                    selector=True,
-                )
-            else:
-                model = custom_object_type.get_model()
+            model = custom_object_type.get_model()
         else:
             # This is a regular NetBox model
             model = content_type.model_class()
@@ -775,20 +768,7 @@ class MultiObjectFieldType(FieldType):
             )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
 
-            # For cross-referential fields, use skip_object_fields to avoid infinite loops
-            # Check if we're in a recursion situation using the parameter or stored attribute
-            generating_models = getattr(self, '_generating_models', set())
-            if generating_models and custom_object_type.id in generating_models:
-                # We're in a circular reference, don't call get_model() to prevent recursion
-                # Use a minimal approach or return a basic field
-                return DynamicModelMultipleChoiceField(
-                    queryset=custom_object_type.get_model(skip_object_fields=True).objects.all(),
-                    required=field.required,
-                    # Remove initial=field.default to allow Django to handle instance data properly
-                    selector=True,
-                )
-            else:
-                model = custom_object_type.get_model(skip_object_fields=True)
+            model = custom_object_type.get_model(skip_object_fields=True)
         else:
             # This is a regular NetBox model
             model = content_type.model_class()
@@ -879,13 +859,7 @@ class MultiObjectFieldType(FieldType):
                 # Self-referential field - resolve to current model
                 to_model = model
             else:
-                # Cross-referential field - check for recursion before calling get_model()
-                generating_models = getattr(self, '_generating_models', set())
-                if generating_models and custom_object_type.id in generating_models:
-                    # We're in a circular reference, don't call get_model() to prevent recursion
-                    return
-                else:
-                    to_model = custom_object_type.get_model()
+                to_model = custom_object_type.get_model()
         else:
             to_ct = f"{content_type.app_label}.{content_type.model}"
             to_model = apps.get_model(to_ct)
@@ -930,14 +904,7 @@ class MultiObjectFieldType(FieldType):
                     pk=custom_object_type_id
                 )
 
-                # Check if we're in a recursion situation
-                generating_models = getattr(self, '_generating_models', set())
-                if generating_models and custom_object_type.id in generating_models:
-                    # We're in a circular reference, don't call get_model() to prevent recursion
-                    # Use a minimal approach or skip this field
-                    return
-                else:
-                    to_model = custom_object_type.get_model()
+                to_model = custom_object_type.get_model()
             else:
                 to_model = content_type.model_class()
 

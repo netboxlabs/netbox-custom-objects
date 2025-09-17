@@ -229,15 +229,6 @@ class CustomObjectType(PrimaryModel):
         # Clear Django apps registry cache to ensure newly created models are recognized
         apps.get_models.cache_clear()
 
-        # Clear global recursion tracking when clearing cache
-        cls.clear_global_recursion_tracking()
-
-    @classmethod
-    def clear_global_recursion_tracking(cls):
-        """Clear the global recursion tracking set."""
-        if hasattr(cls, '_global_generating_models'):
-            cls._global_generating_models.clear()
-
     @classmethod
     def get_cached_model(cls, custom_object_type_id):
         """
@@ -314,7 +305,6 @@ class CustomObjectType(PrimaryModel):
         self,
         fields,
         skip_object_fields=False,
-        generating_models=None,
     ):
         field_attrs = {
             "_primary_field_id": -1,
@@ -338,16 +328,9 @@ class CustomObjectType(PrimaryModel):
             field_type = FIELD_TYPE_CLASS[field.type]()
             field_name = field.name
 
-            # Pass generating models set to field generation to prevent infinite loops
-            field_type._generating_models = generating_models
-
             # Check if we're in a recursion situation before generating the field
             # Use depth-based recursion control: allow self-referential fields at level 0, skip at deeper levels
             should_skip = False
-
-            # Calculate depth correctly: depth 0 is when we're generating the main model
-            # depth 1+ is when we're generating related models recursively
-            current_depth = len(generating_models) - 1 if generating_models else 0
 
             if field.type in [CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT]:
                 if field.related_object_type:
@@ -366,23 +349,8 @@ class CustomObjectType(PrimaryModel):
                             if id_match:
                                 custom_object_type_id = int(id_match.group(1))
 
-                                if custom_object_type_id == self.id:
-                                    # This is a self-referential field
-                                    if current_depth == 0:
-                                        # At level 0, allow self-referential fields
-                                        should_skip = False
-                                    else:
-                                        # At deeper levels, skip self-referential fields to prevent infinite recursion
-                                        should_skip = True
-
-            if should_skip:
-                # Skip this field to prevent further recursion
-                field_attrs["_skipped_fields"].add(field.name)
-                continue
-
             field_attrs[field.name] = field_type.get_model_field(
                 field,
-                _generating_models=generating_models,  # Pass as prefixed parameter
             )
 
             # Add to field objects only if the field was successfully generated
@@ -493,7 +461,6 @@ class CustomObjectType(PrimaryModel):
     def get_model(
         self,
         skip_object_fields=False,
-        _generating_models=None,
     ):
         """
         Generates a temporary Django model based on available fields that belong to
@@ -503,8 +470,6 @@ class CustomObjectType(PrimaryModel):
         :type fields: list
         :param skip_object_fields: Don't add object or multiobject fields to the model
         :type skip_object_fields: bool
-        :param _generating_models: Internal parameter to track models being generated
-        :type _generating_models: set
         :return: The generated model.
         :rtype: Model
         """
@@ -513,16 +478,6 @@ class CustomObjectType(PrimaryModel):
         if self.is_model_cached(self.id):
             model = self.get_cached_model(self.id)
             return model
-
-        # Circular reference detection using class-level tracking
-        if not hasattr(CustomObjectType, '_global_generating_models'):
-            CustomObjectType._global_generating_models = set()
-
-        if _generating_models is None:
-            _generating_models = CustomObjectType._global_generating_models
-
-        # Add this model to the set of models being generated
-        _generating_models.add(self.id)
 
         model_name = self.get_table_model_name(self.pk)
 
@@ -556,7 +511,6 @@ class CustomObjectType(PrimaryModel):
         field_attrs = self._fetch_and_generate_field_attrs(
             fields,
             skip_object_fields=skip_object_fields,
-            generating_models=_generating_models
         )
 
         attrs.update(**field_attrs)
@@ -589,9 +543,9 @@ class CustomObjectType(PrimaryModel):
             TM.post_through_setup = original_post_through_setup
 
         # Register the main model with Django's app registry
-        if model_name in apps.all_models[APP_LABEL]:
+        if model_name.lower() in apps.all_models[APP_LABEL]:
             # Remove the existing model from all_models before registering the new one
-            del apps.all_models[APP_LABEL][model_name]
+            del apps.all_models[APP_LABEL][model_name.lower()]
 
         apps.register_model(APP_LABEL, model)
         '''
@@ -613,6 +567,7 @@ class CustomObjectType(PrimaryModel):
         # Do the clear cache now that we have it in the cache so there
         # is no recursion.
         apps.clear_cache()
+        ContentType.objects.clear_cache()
 
         '''
         # Register the serializer for this model
@@ -623,16 +578,6 @@ class CustomObjectType(PrimaryModel):
 
         # Register the global SearchIndex for this model
         self.register_custom_object_search_index(model)
-
-        # Clean up: remove this model from the set of models being generated
-        if _generating_models is not None:
-            _generating_models.discard(self.id)
-            # Also clean up from global tracking if this is the global set
-            if _generating_models is CustomObjectType._global_generating_models:
-                CustomObjectType._global_generating_models.discard(self.id)
-                # Clear global tracking when we're done to ensure clean state
-                if len(CustomObjectType._global_generating_models) == 0:
-                    CustomObjectType._global_generating_models.clear()
 
         return model
 
