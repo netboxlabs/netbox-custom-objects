@@ -1,7 +1,6 @@
 import sys
 import warnings
 
-from django.core.exceptions import AppRegistryNotReady
 from django.db import transaction
 from django.db.utils import DatabaseError, OperationalError, ProgrammingError
 from netbox.plugins import PluginConfig
