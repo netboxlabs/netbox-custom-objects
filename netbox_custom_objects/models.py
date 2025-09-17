@@ -328,27 +328,6 @@ class CustomObjectType(PrimaryModel):
             field_type = FIELD_TYPE_CLASS[field.type]()
             field_name = field.name
 
-            # Check if we're in a recursion situation before generating the field
-            # Use depth-based recursion control: allow self-referential fields at level 0, skip at deeper levels
-            should_skip = False
-
-            if field.type in [CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT]:
-                if field.related_object_type:
-                    # Check if this field references the same CustomObjectType (self-referential)
-                    if field.related_object_type.app_label == APP_LABEL:
-                        # This is a custom object type
-                        from django.contrib.contenttypes.models import ContentType
-                        content_type = ContentType.objects.get(pk=field.related_object_type_id)
-                        if content_type.app_label == APP_LABEL:
-                            # Extract the custom object type ID from the model name
-                            # The model name format is "table{id}model" or similar
-                            model_name = content_type.model
-
-                            # Try to extract the ID from the model name
-                            id_match = re.search(r'table(\d+)model', model_name, re.IGNORECASE)
-                            if id_match:
-                                custom_object_type_id = int(id_match.group(1))
-
             field_attrs[field.name] = field_type.get_model_field(
                 field,
             )
