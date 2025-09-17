@@ -493,7 +493,6 @@ class CustomObjectType(PrimaryModel):
     def get_model(
         self,
         fields=None,
-        app_label=None,
         skip_object_fields=False,
         no_cache=False,
         _generating_models=None,
@@ -504,10 +503,6 @@ class CustomObjectType(PrimaryModel):
 
         :param fields: Extra table field instances that need to be added the model.
         :type fields: list
-        :param app_label: In some cases with related fields, the related models must
-            have the same app_label. If passed along in this parameter, then the
-            generated model will use that one instead of generating a unique one.
-        :type app_label: Optional[String]
         :param skip_object_fields: Don't add object or multiobject fields to the model
         :type skip_object_fields: bool
         :param no_cache: Don't cache the generated model or attempt to pull from cache
@@ -536,9 +531,6 @@ class CustomObjectType(PrimaryModel):
 
         # Add this model to the set of models being generated
         _generating_models.add(self.id)
-
-        if app_label is None:
-            app_label = APP_LABEL
 
         model_name = self.get_table_model_name(self.pk)
 
