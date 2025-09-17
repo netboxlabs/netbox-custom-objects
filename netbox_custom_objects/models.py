@@ -493,7 +493,6 @@ class CustomObjectType(PrimaryModel):
     def get_model(
         self,
         skip_object_fields=False,
-        no_cache=False,
         _generating_models=None,
     ):
         """
@@ -504,16 +503,14 @@ class CustomObjectType(PrimaryModel):
         :type fields: list
         :param skip_object_fields: Don't add object or multiobject fields to the model
         :type skip_object_fields: bool
-        :param no_cache: Don't cache the generated model or attempt to pull from cache
-        :type no_cache: bool
         :param _generating_models: Internal parameter to track models being generated
         :type _generating_models: set
         :return: The generated model.
         :rtype: Model
         """
-
+ 
         # Check if we have a cached model for this CustomObjectType
-        if self.is_model_cached(self.id) and not no_cache:
+        if self.is_model_cached(self.id):
             model = self.get_cached_model(self.id)
             # Ensure the serializer is registered even for cached models
             from netbox_custom_objects.api.serializers import get_serializer_class
@@ -531,6 +528,7 @@ class CustomObjectType(PrimaryModel):
         # Add this model to the set of models being generated
         _generating_models.add(self.id)
 
+        app_models = apps.all_models[APP_LABEL]
         model_name = self.get_table_model_name(self.pk)
 
         # TODO: Add other fields with "index" specified
@@ -596,6 +594,12 @@ class CustomObjectType(PrimaryModel):
             TM.post_through_setup = original_post_through_setup
 
         # Register the main model with Django's app registry
+        if model_name in app_models:
+            # Remove the existing model from all_models before registering the new one
+            del apps.all_models[APP_LABEL][model_name]
+        
+        apps.register_model(APP_LABEL, model)
+        '''
         try:
             existing_model = apps.get_model(APP_LABEL, model_name)
             # If model exists but is different, we have a problem
@@ -604,15 +608,16 @@ class CustomObjectType(PrimaryModel):
                 model = existing_model
         except LookupError:
             apps.register_model(APP_LABEL, model)
+        '''
 
         self._after_model_generation(attrs, model)
 
         # Cache the generated model
-        if not no_cache:
-            self._model_cache[self.id] = model
-            # Do the clear cache now that we have it in the cache so there
-            # is no recursion.
-            apps.clear_cache()
+        self._model_cache[self.id] = model
+
+        # Do the clear cache now that we have it in the cache so there
+        # is no recursion.
+        apps.clear_cache()
 
         # Register the serializer for this model
         from netbox_custom_objects.api.serializers import get_serializer_class
