@@ -492,7 +492,6 @@ class CustomObjectType(PrimaryModel):
 
     def get_model(
         self,
-        fields=None,
         skip_object_fields=False,
         no_cache=False,
         _generating_models=None,
@@ -534,9 +533,6 @@ class CustomObjectType(PrimaryModel):
 
         model_name = self.get_table_model_name(self.pk)
 
-        if fields is None:
-            fields = []
-
         # TODO: Add other fields with "index" specified
         indexes = []
 
@@ -563,6 +559,7 @@ class CustomObjectType(PrimaryModel):
         }
 
         # Pass the generating models set to field generation
+        fields = []
         field_attrs = self._fetch_and_generate_field_attrs(
             fields,
             skip_object_fields=skip_object_fields,
