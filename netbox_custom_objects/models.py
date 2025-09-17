@@ -619,10 +619,12 @@ class CustomObjectType(PrimaryModel):
         # is no recursion.
         apps.clear_cache()
 
+        '''
         # Register the serializer for this model
         from netbox_custom_objects.api.serializers import get_serializer_class
 
         get_serializer_class(model)
+        '''
 
         # Register the global SearchIndex for this model
         self.register_custom_object_search_index(model)
