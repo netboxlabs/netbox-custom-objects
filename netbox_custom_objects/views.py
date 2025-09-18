@@ -160,12 +160,12 @@ class CustomObjectTypeView(CustomObjectTableMixin, generic.ObjectView):
 
     def get_table(self, data, request, bulk_actions=True):
         self.custom_object_type = self.get_object(**self.kwargs)
-        model = self.custom_object_type.get_model()
+        model = self.custom_object_type.get_model_with_serializer()
         data = model.objects.all()
         return super().get_table(data, request, bulk_actions=False)
 
     def get_extra_context(self, request, instance):
-        model = instance.get_model()
+        model = instance.get_model_with_serializer()
 
         # Get fields and group them by group_name
         fields = instance.fields.all().order_by("group_name", "weight", "name")
@@ -199,7 +199,7 @@ class CustomObjectTypeDeleteView(generic.ObjectDeleteView):
 
     def _get_dependent_objects(self, obj):
         dependent_objects = super()._get_dependent_objects(obj)
-        model = obj.get_model()
+        model = obj.get_model_with_serializer()
         dependent_objects[model] = list(model.objects.all())
 
         # Find CustomObjectTypeFields that reference this CustomObjectType
@@ -243,7 +243,7 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
         obj = self.get_object(**kwargs)
         form = ConfirmationForm(initial=request.GET)
 
-        model = obj.custom_object_type.get_model()
+        model = obj.custom_object_type.get_model_with_serializer()
         kwargs = {
             f"{obj.name}__isnull": False,
         }
@@ -280,7 +280,7 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
 
     def _get_dependent_objects(self, obj):
         dependent_objects = super()._get_dependent_objects(obj)
-        model = obj.custom_object_type.get_model()
+        model = obj.custom_object_type.get_model_with_serializer()
         kwargs = {
             f"{obj.name}__isnull": False,
         }
@@ -332,7 +332,7 @@ class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
         self.custom_object_type = get_object_or_404(
             CustomObjectType, slug=custom_object_type
         )
-        model = self.custom_object_type.get_model()
+        model = self.custom_object_type.get_model_with_serializer()
         return model.objects.all()
 
     def get_filterset(self):
@@ -378,7 +378,7 @@ class CustomObjectView(generic.ObjectView):
         object_type = get_object_or_404(
             CustomObjectType, slug=custom_object_type
         )
-        model = object_type.get_model()
+        model = object_type.get_model_with_serializer()
         return model.objects.all()
 
     def get_object(self, **kwargs):
@@ -386,7 +386,7 @@ class CustomObjectView(generic.ObjectView):
         object_type = get_object_or_404(
             CustomObjectType, slug=custom_object_type
         )
-        model = object_type.get_model()
+        model = object_type.get_model_with_serializer()
         # Filter out custom_object_type from kwargs for the object lookup
         lookup_kwargs = {
             k: v for k, v in self.kwargs.items() if k != "custom_object_type"
@@ -436,7 +436,8 @@ class CustomObjectEditView(generic.ObjectEditView):
         object_type = get_object_or_404(
             CustomObjectType, slug=custom_object_type
         )
-        model = object_type.get_model()
+        model = object_type.get_model_with_serializer()
+
         if not self.kwargs.get("pk", None):
             # We're creating a new object
             return model()
@@ -593,7 +594,7 @@ class CustomObjectDeleteView(generic.ObjectDeleteView):
         object_type = get_object_or_404(
             CustomObjectType, slug=custom_object_type
         )
-        model = object_type.get_model()
+        model = object_type.get_model_with_serializer()
         return get_object_or_404(model.objects.all(), **self.kwargs)
 
     def get_return_url(self, request, obj=None):
@@ -633,7 +634,7 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
         self.custom_object_type = CustomObjectType.objects.get(
             slug=custom_object_type
         )
-        model = self.custom_object_type.get_model()
+        model = self.custom_object_type.get_model_with_serializer()
         return model.objects.all()
 
     def get_form(self, queryset):
@@ -691,7 +692,7 @@ class CustomObjectBulkDeleteView(CustomObjectTableMixin, generic.BulkDeleteView)
         self.custom_object_type = CustomObjectType.objects.get(
             slug=custom_object_type
         )
-        model = self.custom_object_type.get_model()
+        model = self.custom_object_type.get_model_with_serializer()
         return model.objects.all()
 
 
@@ -720,7 +721,7 @@ class CustomObjectBulkImportView(generic.BulkImportView):
         self.custom_object_type = CustomObjectType.objects.get(
             name__iexact=custom_object_type
         )
-        model = self.custom_object_type.get_model()
+        model = self.custom_object_type.get_model_with_serializer()
         return model.objects.all()
 
     def get_model_form(self, queryset):
@@ -772,7 +773,7 @@ class CustomObjectJournalView(ConditionalLoginRequiredMixin, View):
         object_type = get_object_or_404(
             CustomObjectType, slug=custom_object_type
         )
-        model = object_type.get_model()
+        model = object_type.get_model_with_serializer()
 
         # Get the specific object
         lookup_kwargs = {k: v for k, v in kwargs.items() if k != "custom_object_type"}
@@ -844,7 +845,7 @@ class CustomObjectChangeLogView(ConditionalLoginRequiredMixin, View):
         object_type = get_object_or_404(
             CustomObjectType, slug=custom_object_type
         )
-        model = object_type.get_model()
+        model = object_type.get_model_with_serializer()
 
         # Get the specific object
         lookup_kwargs = {k: v for k, v in kwargs.items() if k != "custom_object_type"}

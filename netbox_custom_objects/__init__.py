@@ -1,7 +1,6 @@
 import sys
 import warnings
 
-from django.core.exceptions import AppRegistryNotReady
 from django.db import transaction
 from django.db.utils import DatabaseError, OperationalError, ProgrammingError
 from netbox.plugins import PluginConfig
@@ -52,16 +51,40 @@ class CustomObjectsPluginConfig(PluginConfig):
     required_settings = []
     template_extensions = "template_content.template_extensions"
 
+    def ready(self):
+        from .models import CustomObjectType
+        from netbox_custom_objects.api.serializers import get_serializer_class
+
+        # Suppress warnings about database calls during app initialization
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", category=RuntimeWarning, message=".*database.*"
+            )
+            warnings.filterwarnings(
+                "ignore", category=UserWarning, message=".*database.*"
+            )
+
+            # Skip database calls if running during migration or if table doesn't exist
+            if is_running_migration() or not check_custom_object_type_table_exists():
+                super().ready()
+                return
+
+            qs = CustomObjectType.objects.all()
+            for obj in qs:
+                model = obj.get_model()
+                get_serializer_class(model)
+
+        super().ready()
+
     def get_model(self, model_name, require_ready=True):
+        self.apps.check_apps_ready()
         try:
             # if the model is already loaded, return it
             return super().get_model(model_name, require_ready)
         except LookupError:
-            try:
-                self.apps.check_apps_ready()
-            except AppRegistryNotReady:
-                raise
+            pass
 
+        model_name = model_name.lower()
         # only do database calls if we are sure the app is ready to avoid
         # Django warnings
         if "table" not in model_name.lower() or "model" not in model_name.lower():

@@ -1,5 +1,6 @@
 import decimal
 import re
+import threading
 from datetime import date, datetime
 
 import django_filters
@@ -165,6 +166,8 @@ class CustomObjectType(PrimaryModel):
     _through_model_cache = (
         {}
     )  # Now stores {custom_object_type_id: {through_model_name: through_model}}
+    _model_cache_locks = {}  # Per-model locks to prevent race conditions
+    _global_lock = threading.RLock()  # Global lock for managing per-model locks
     name = models.CharField(
         max_length=100,
         unique=True,
@@ -219,24 +222,18 @@ class CustomObjectType(PrimaryModel):
 
         :param custom_object_type_id: ID of the CustomObjectType to clear cache for, or None to clear all
         """
-        if custom_object_type_id is not None:
-            cls._model_cache.pop(custom_object_type_id, None)
-            cls._through_model_cache.pop(custom_object_type_id, None)
-        else:
-            cls._model_cache.clear()
-            cls._through_model_cache.clear()
+        with cls._global_lock:
+            if custom_object_type_id is not None:
+                cls._model_cache.pop(custom_object_type_id, None)
+                cls._through_model_cache.pop(custom_object_type_id, None)
+                cls._model_cache_locks.pop(custom_object_type_id, None)
+            else:
+                cls._model_cache.clear()
+                cls._through_model_cache.clear()
+                cls._model_cache_locks.clear()
 
         # Clear Django apps registry cache to ensure newly created models are recognized
         apps.get_models.cache_clear()
-
-        # Clear global recursion tracking when clearing cache
-        cls.clear_global_recursion_tracking()
-
-    @classmethod
-    def clear_global_recursion_tracking(cls):
-        """Clear the global recursion tracking set."""
-        if hasattr(cls, '_global_generating_models'):
-            cls._global_generating_models.clear()
 
     @classmethod
     def get_cached_model(cls, custom_object_type_id):
@@ -314,7 +311,6 @@ class CustomObjectType(PrimaryModel):
         self,
         fields,
         skip_object_fields=False,
-        generating_models=None,
     ):
         field_attrs = {
             "_primary_field_id": -1,
@@ -338,51 +334,8 @@ class CustomObjectType(PrimaryModel):
             field_type = FIELD_TYPE_CLASS[field.type]()
             field_name = field.name
 
-            # Pass generating models set to field generation to prevent infinite loops
-            field_type._generating_models = generating_models
-
-            # Check if we're in a recursion situation before generating the field
-            # Use depth-based recursion control: allow self-referential fields at level 0, skip at deeper levels
-            should_skip = False
-
-            # Calculate depth correctly: depth 0 is when we're generating the main model
-            # depth 1+ is when we're generating related models recursively
-            current_depth = len(generating_models) - 1 if generating_models else 0
-
-            if field.type in [CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT]:
-                if field.related_object_type:
-                    # Check if this field references the same CustomObjectType (self-referential)
-                    if field.related_object_type.app_label == APP_LABEL:
-                        # This is a custom object type
-                        from django.contrib.contenttypes.models import ContentType
-                        content_type = ContentType.objects.get(pk=field.related_object_type_id)
-                        if content_type.app_label == APP_LABEL:
-                            # Extract the custom object type ID from the model name
-                            # The model name format is "table{id}model" or similar
-                            model_name = content_type.model
-
-                            # Try to extract the ID from the model name
-                            id_match = re.search(r'table(\d+)model', model_name, re.IGNORECASE)
-                            if id_match:
-                                custom_object_type_id = int(id_match.group(1))
-
-                                if custom_object_type_id == self.id:
-                                    # This is a self-referential field
-                                    if current_depth == 0:
-                                        # At level 0, allow self-referential fields
-                                        should_skip = False
-                                    else:
-                                        # At deeper levels, skip self-referential fields to prevent infinite recursion
-                                        should_skip = True
-
-            if should_skip:
-                # Skip this field to prevent further recursion
-                field_attrs["_skipped_fields"].add(field.name)
-                continue
-
             field_attrs[field.name] = field_type.get_model_field(
                 field,
-                _generating_models=generating_models,  # Pass as prefixed parameter
             )
 
             # Add to field objects only if the field was successfully generated
@@ -492,63 +445,25 @@ class CustomObjectType(PrimaryModel):
 
     def get_model(
         self,
-        fields=None,
-        manytomany_models=None,
-        app_label=None,
         skip_object_fields=False,
-        no_cache=False,
-        _generating_models=None,
     ):
         """
         Generates a temporary Django model based on available fields that belong to
         this table. Returns cached model if available, otherwise generates and caches it.
 
-        :param fields: Extra table field instances that need to be added the model.
-        :type fields: list
-        :param manytomany_models: In some cases with related fields a model has to be
-            generated in order to generate that model. In order to prevent a
-            recursion loop we cache the generated models and pass those along.
-        :type manytomany_models: dict
-        :param app_label: In some cases with related fields, the related models must
-            have the same app_label. If passed along in this parameter, then the
-            generated model will use that one instead of generating a unique one.
-        :type app_label: Optional[String]
         :param skip_object_fields: Don't add object or multiobject fields to the model
         :type skip_object_fields: bool
-        :param no_cache: Don't cache the generated model or attempt to pull from cache
-        :type no_cache: bool
-        :param _generating_models: Internal parameter to track models being generated
-        :type _generating_models: set
         :return: The generated model.
         :rtype: Model
         """
 
-        # Check if we have a cached model for this CustomObjectType
-        if self.is_model_cached(self.id) and not no_cache:
+        # Double-check pattern: check cache again after acquiring lock
+        if self.is_model_cached(self.id):
             model = self.get_cached_model(self.id)
-            # Ensure the serializer is registered even for cached models
-            from netbox_custom_objects.api.serializers import get_serializer_class
-
-            get_serializer_class(model)
             return model
 
-        # Circular reference detection using class-level tracking
-        if not hasattr(CustomObjectType, '_global_generating_models'):
-            CustomObjectType._global_generating_models = set()
-
-        if _generating_models is None:
-            _generating_models = CustomObjectType._global_generating_models
-
-        # Add this model to the set of models being generated
-        _generating_models.add(self.id)
-
-        if app_label is None:
-            app_label = APP_LABEL
-
+        # Generate the model inside the lock to prevent race conditions
         model_name = self.get_table_model_name(self.pk)
-
-        if fields is None:
-            fields = []
 
         # TODO: Add other fields with "index" specified
         indexes = []
@@ -576,10 +491,10 @@ class CustomObjectType(PrimaryModel):
         }
 
         # Pass the generating models set to field generation
+        fields = []
         field_attrs = self._fetch_and_generate_field_attrs(
             fields,
             skip_object_fields=skip_object_fields,
-            generating_models=_generating_models
         )
 
         attrs.update(**field_attrs)
@@ -612,44 +527,32 @@ class CustomObjectType(PrimaryModel):
             TM.post_through_setup = original_post_through_setup
 
         # Register the main model with Django's app registry
-        try:
-            existing_model = apps.get_model(APP_LABEL, model_name)
-            # If model exists but is different, we have a problem
-            if existing_model is not model:
-                # Use the existing model to avoid conflicts
-                model = existing_model
-        except LookupError:
-            apps.register_model(APP_LABEL, model)
+        if model_name.lower() in apps.all_models[APP_LABEL]:
+            # Remove the existing model from all_models before registering the new one
+            del apps.all_models[APP_LABEL][model_name.lower()]
 
-        if not manytomany_models:
-            self._after_model_generation(attrs, model)
+        apps.register_model(APP_LABEL, model)
+
+        self._after_model_generation(attrs, model)
 
         # Cache the generated model
-        if not no_cache:
-            self._model_cache[self.id] = model
-            # Do the clear cache now that we have it in the cache so there
-            # is no recursion.
-            apps.clear_cache()
+        self._model_cache[self.id] = model
 
-        # Register the serializer for this model
-        if not manytomany_models:
-            from netbox_custom_objects.api.serializers import get_serializer_class
-
-            get_serializer_class(model)
+        # Do the clear cache now that we have it in the cache so there
+        # is no recursion.
+        apps.clear_cache()
+        ContentType.objects.clear_cache()
 
         # Register the global SearchIndex for this model
         self.register_custom_object_search_index(model)
 
-        # Clean up: remove this model from the set of models being generated
-        if _generating_models is not None:
-            _generating_models.discard(self.id)
-            # Also clean up from global tracking if this is the global set
-            if _generating_models is CustomObjectType._global_generating_models:
-                CustomObjectType._global_generating_models.discard(self.id)
-                # Clear global tracking when we're done to ensure clean state
-                if len(CustomObjectType._global_generating_models) == 0:
-                    CustomObjectType._global_generating_models.clear()
+        return model
 
+    def get_model_with_serializer(self):
+        from netbox_custom_objects.api.serializers import get_serializer_class
+        model = self.get_model()
+        get_serializer_class(model)
+        self.register_custom_object_search_index(model)
         return model
 
     def create_model(self):
