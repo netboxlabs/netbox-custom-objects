@@ -51,7 +51,6 @@ from utilities.string import title
 from utilities.validators import validate_regex
 
 from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
-from netbox_custom_objects.decorators import thread_safe_model_generation
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
 from netbox_custom_objects.utilities import generate_model
 
@@ -444,7 +443,6 @@ class CustomObjectType(PrimaryModel):
         label = f"{APP_LABEL}.{self.get_table_model_name(self.id).lower()}"
         registry["search"][label] = search_index
 
-    @thread_safe_model_generation
     def get_model(
         self,
         skip_object_fields=False,
@@ -550,7 +548,6 @@ class CustomObjectType(PrimaryModel):
 
         return model
 
-    @thread_safe_model_generation
     def get_model_with_serializer(self):
         from netbox_custom_objects.api.serializers import get_serializer_class
         model = self.get_model()

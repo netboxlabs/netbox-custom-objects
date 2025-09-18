@@ -1,27 +1,11 @@
 import sys
-import threading
 import warnings
-from functools import wraps
 
 from django.db import transaction
 from django.db.utils import DatabaseError, OperationalError, ProgrammingError
 from netbox.plugins import PluginConfig
 
 from .constants import APP_LABEL as APP_LABEL
-
-# Global lock for plugin ready method
-_plugin_ready_lock = threading.RLock()
-
-
-def thread_safe_plugin_ready(func):
-    """
-    Decorator to ensure thread-safe plugin ready method execution.
-    """
-    @wraps(func)
-    def wrapper(self, *args, **kwargs):
-        with _plugin_ready_lock:
-            return func(self, *args, **kwargs)
-    return wrapper
 
 
 def is_running_migration():
@@ -67,7 +51,6 @@ class CustomObjectsPluginConfig(PluginConfig):
     required_settings = []
     template_extensions = "template_content.template_extensions"
 
-    @thread_safe_plugin_ready
     def ready(self):
         from .models import CustomObjectType
         from netbox_custom_objects.api.serializers import get_serializer_class
