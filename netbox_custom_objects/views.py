@@ -421,26 +421,22 @@ class CustomObjectEditView(generic.ObjectEditView):
 
     def setup(self, request, *args, **kwargs):
         super().setup(request, *args, **kwargs)
-        model = self.get_model(**kwargs)
         self.object = self.get_object()
-        # model = self.object._meta.model
+        model = self.object._meta.model
         self.form = self.get_form(model)
 
     def get_queryset(self, request):
         model = self.object._meta.model
         return model.objects.all()
 
-    def get_model(self, **kwargs):
+    def get_object(self, **kwargs):
+        # if self.object:
+        #     return self.object
         custom_object_type = self.kwargs.pop("custom_object_type", None)
         object_type = get_object_or_404(
             CustomObjectType, slug=custom_object_type
         )
-        return object_type.get_model_with_serializer()
-
-    def get_object(self, **kwargs):
-        model = self.get_model(**kwargs)
-        if self.object:
-            return self.object
+        model = object_type.get_model_with_serializer()
 
         if not self.kwargs.get("pk", None):
             # We're creating a new object
