@@ -28,7 +28,6 @@ from netbox_custom_objects.tables import CustomObjectTable
 from . import field_types, filtersets, forms, tables
 from .models import CustomObject, CustomObjectType, CustomObjectTypeField
 from extras.choices import CustomFieldTypeChoices
-from netbox_custom_objects.api.serializers import get_serializer_class
 from netbox_custom_objects.constants import APP_LABEL
 
 logger = logging.getLogger("netbox_custom_objects.views")
