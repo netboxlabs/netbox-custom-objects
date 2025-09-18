@@ -2,7 +2,6 @@ import decimal
 import re
 import threading
 from datetime import date, datetime
-from functools import wraps
 
 import django_filters
 from core.models import ObjectType, ObjectChange
@@ -52,6 +51,7 @@ from utilities.string import title
 from utilities.validators import validate_regex
 
 from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
+from netbox_custom_objects.decorators import thread_safe_model_generation
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
 from netbox_custom_objects.utilities import generate_model
 
@@ -63,29 +63,6 @@ class UniquenessConstraintTestError(Exception):
 
 
 USER_TABLE_DATABASE_NAME_PREFIX = "custom_objects_"
-
-
-def thread_safe_model_generation(func):
-    """
-    Decorator to ensure thread-safe model generation.
-
-    This decorator prevents race conditions when multiple threads try to generate
-    the same custom object model simultaneously. It uses per-model locks to ensure
-    only one thread can generate a specific model at a time, while allowing
-    different models to be generated concurrently and preventing deadlocks.
-    """
-    @wraps(func)
-    def wrapper(self, *args, **kwargs):
-        # Get or create a lock for this specific model
-        with self._global_lock:
-            if self.id not in self._model_cache_locks:
-                self._model_cache_locks[self.id] = threading.RLock()
-            model_lock = self._model_cache_locks[self.id]
-
-        # Use the per-model lock for thread safety
-        with model_lock:
-            return func(self, *args, **kwargs)
-    return wrapper
 
 
 class CustomObject(
@@ -571,6 +548,14 @@ class CustomObjectType(PrimaryModel):
         # Register the global SearchIndex for this model
         self.register_custom_object_search_index(model)
 
+        return model
+
+    @thread_safe_model_generation
+    def get_model_with_serializer(self):
+        from netbox_custom_objects.api.serializers import get_serializer_class
+        model = self.get_model()
+        get_serializer_class(model)
+        self.register_custom_object_search_index(model)
         return model
 
     def create_model(self):
