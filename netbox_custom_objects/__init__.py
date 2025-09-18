@@ -46,6 +46,8 @@ class CustomObjectsPluginConfig(PluginConfig):
     verbose_name = "Custom Objects"
     description = "A plugin to manage custom objects in NetBox"
     version = "0.3.1"
+    author = 'Netbox Labs'
+    author_email = 'support@netboxlabs.com'
     base_url = "custom-objects"
     min_version = "4.4.0"
     default_settings = {}
