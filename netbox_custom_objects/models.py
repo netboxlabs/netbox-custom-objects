@@ -187,7 +187,6 @@ class CustomObjectType(PrimaryModel):
         ),
     )
     version = models.CharField(max_length=10, blank=True)
-    schema = models.JSONField(blank=True, default=dict)
     verbose_name = models.CharField(max_length=100, blank=True)
     verbose_name_plural = models.CharField(max_length=100, blank=True)
     slug = models.SlugField(max_length=100, unique=True, db_index=True)
@@ -279,20 +278,6 @@ class CustomObjectType(PrimaryModel):
         :return: Dict of through models or empty dict if not found
         """
         return cls._through_model_cache.get(custom_object_type_id, {})
-
-    @property
-    def formatted_schema(self):
-        result = "<ul>"
-        for field_name, field in self.schema.items():
-            field_type = field.get("type")
-            if field_type in ["object", "multiobject"]:
-                content_type = ContentType.objects.get(
-                    app_label=field["app_label"], model=field["model"]
-                )
-                field = content_type
-            result += f"<li>{field_name}: {field}</li>"
-        result += "</ul>"
-        return result
 
     def get_absolute_url(self):
         return reverse("plugins:netbox_custom_objects:customobjecttype", args=[self.pk])
