@@ -446,6 +446,7 @@ class CustomObjectType(PrimaryModel):
     def get_model(
         self,
         skip_object_fields=False,
+        no_cache=False,
     ):
         """
         Generates a temporary Django model based on available fields that belong to
@@ -458,7 +459,7 @@ class CustomObjectType(PrimaryModel):
         """
 
         # Double-check pattern: check cache again after acquiring lock
-        if self.is_model_cached(self.id):
+        if self.is_model_cached(self.id) and not no_cache:
             model = self.get_cached_model(self.id)
             return model
 
@@ -550,7 +551,7 @@ class CustomObjectType(PrimaryModel):
 
     def get_model_with_serializer(self):
         from netbox_custom_objects.api.serializers import get_serializer_class
-        model = self.get_model()
+        model = self.get_model(no_cache=True)
         get_serializer_class(model)
         self.register_custom_object_search_index(model)
         return model

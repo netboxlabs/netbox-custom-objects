@@ -430,8 +430,8 @@ class CustomObjectEditView(generic.ObjectEditView):
         return model.objects.all()
 
     def get_object(self, **kwargs):
-        # if self.object:
-        #     return self.object
+        if self.object:
+            return self.object
         custom_object_type = self.kwargs.pop("custom_object_type", None)
         object_type = get_object_or_404(
             CustomObjectType, slug=custom_object_type
