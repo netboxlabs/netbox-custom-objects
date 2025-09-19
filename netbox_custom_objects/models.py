@@ -439,6 +439,8 @@ class CustomObjectType(PrimaryModel):
 
         :param skip_object_fields: Don't add object or multiobject fields to the model
         :type skip_object_fields: bool
+        :param no_cache: Force regeneration of the model, bypassing cache
+        :type no_cache: bool
         :return: The generated model.
         :rtype: Model
         """
