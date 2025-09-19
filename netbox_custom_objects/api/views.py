@@ -50,7 +50,7 @@ class CustomObjectViewSet(ModelViewSet):
             )
         except CustomObjectType.DoesNotExist:
             raise Http404
-        self.model = custom_object_type.get_model()
+        self.model = custom_object_type.get_model_with_serializer(no_cache=True)
         return self.model.objects.all()
 
     @property
