@@ -43,7 +43,7 @@ class Migration(migrations.Migration):
                         blank=True,
                         default=dict,
                         encoder=utilities.json.CustomFieldJSONEncoder,
-                    )
+                    ),
                 ),
                 ("description", models.CharField(blank=True, max_length=200)),
                 ("comments", models.TextField(blank=True)),
@@ -61,9 +61,9 @@ class Migration(migrations.Migration):
                                 inverse_match=True,
                                 message="Double underscores are not permitted in custom object object type names.",
                                 regex="__",
-                            )
-                        ]
-                    )
+                            ),
+                        ],
+                    ),
                 ),
                 ("version", models.CharField(blank=True, max_length=10)),
                 ("verbose_name", models.CharField(blank=True, max_length=100)),
@@ -77,7 +77,7 @@ class Migration(migrations.Migration):
                         on_delete=django.db.models.deletion.CASCADE,
                         related_name="custom_object_types",
                         to="core.objecttype",
-                    )
+                    ),
                 ),
                 ("tags", taggit.managers.TaggableManager(through="extras.TaggedItem", to="extras.Tag")),
             ],
@@ -109,9 +109,9 @@ class Migration(migrations.Migration):
                                 inverse_match=True,
                                 message="Double underscores are not permitted in custom object field names.",
                                 regex="__",
-                            )
-                        ]
-                    )
+                            ),
+                        ],
+                    ),
                 ),
                 ("label", models.CharField(blank=True, max_length=50)),
                 ("group_name", models.CharField(blank=True, max_length=50)),
@@ -130,7 +130,7 @@ class Migration(migrations.Migration):
                         blank=True,
                         max_length=500,
                         validators=[utilities.validators.validate_regex],
-                    )
+                    ),
                 ),
                 ("ui_visible", models.CharField(default="always", max_length=50)),
                 ("ui_editable", models.CharField(default="yes", max_length=50)),
@@ -143,14 +143,14 @@ class Migration(migrations.Migration):
                         on_delete=django.db.models.deletion.PROTECT,
                         related_name="choices_for_object_type",
                         to="extras.customfieldchoiceset",
-                    )
+                    ),
                 ),
                 (
                     "custom_object_type", models.ForeignKey(
                         on_delete=django.db.models.deletion.CASCADE,
                         related_name="fields",
                         to="netbox_custom_objects.customobjecttype",
-                    )
+                    ),
                 ),
                 (
                     "related_object_type", models.ForeignKey(
@@ -158,7 +158,7 @@ class Migration(migrations.Migration):
                         null=True,
                         on_delete=django.db.models.deletion.PROTECT,
                         to="core.objecttype",
-                    )
+                    ),
                 ),
             ],
             options={
