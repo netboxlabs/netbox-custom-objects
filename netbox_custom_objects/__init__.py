@@ -1,7 +1,6 @@
 import sys
 import warnings
 
-from django.db import transaction
 from django.db.utils import DatabaseError, OperationalError, ProgrammingError
 from netbox.plugins import PluginConfig
 
@@ -33,7 +32,7 @@ def check_custom_object_type_table_exists():
             table_name = CustomObjectType._meta.db_table
             cursor.execute("""
                 SELECT EXISTS (
-                    SELECT FROM information_schema.tables 
+                    SELECT FROM information_schema.tables
                     WHERE table_name = %s
                 )
             """, [table_name])
