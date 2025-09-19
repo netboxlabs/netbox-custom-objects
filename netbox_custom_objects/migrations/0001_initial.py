@@ -38,41 +38,47 @@ class Migration(migrations.Migration):
                 ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False)),
                 ("created", models.DateTimeField(auto_now_add=True, null=True)),
                 ("last_updated", models.DateTimeField(auto_now=True, null=True)),
-                ("custom_field_data", models.JSONField(
-                    blank=True,
-                    default=dict,
-                    encoder=utilities.json.CustomFieldJSONEncoder,
-                )),
+                (
+                    "custom_field_data", models.JSONField(
+                        blank=True,
+                        default=dict,
+                        encoder=utilities.json.CustomFieldJSONEncoder,
+                    )
+                ),
                 ("description", models.CharField(blank=True, max_length=200)),
                 ("comments", models.TextField(blank=True)),
-                ("name", models.CharField(
-                    max_length=100,
-                    unique=True,
-                    validators=[
-                        django.core.validators.RegexValidator(
-                            message="Only lowercase alphanumeric characters and underscores are allowed.",
-                            regex="^[a-z0-9_]+$",
-                        ),
-                        django.core.validators.RegexValidator(
-                            flags=re.RegexFlag["IGNORECASE"],
-                            inverse_match=True,
-                            message="Double underscores are not permitted in custom object object type names.",
-                            regex="__",
-                        )
-                    ]
-                )),
+                (
+                    "name", models.CharField(
+                        max_length=100,
+                        unique=True,
+                        validators=[
+                            django.core.validators.RegexValidator(
+                                message="Only lowercase alphanumeric characters and underscores are allowed.",
+                                regex="^[a-z0-9_]+$",
+                            ),
+                            django.core.validators.RegexValidator(
+                                flags=re.RegexFlag["IGNORECASE"],
+                                inverse_match=True,
+                                message="Double underscores are not permitted in custom object object type names.",
+                                regex="__",
+                            )
+                        ]
+                    )
+                ),
                 ("version", models.CharField(blank=True, max_length=10)),
                 ("verbose_name", models.CharField(blank=True, max_length=100)),
                 ("verbose_name_plural", models.CharField(blank=True, max_length=100)),
                 ("slug", models.SlugField(max_length=100, unique=True)),
-                ("object_type", models.OneToOneField(
-                    blank=True,
-                    editable=False,
-                    null=True,
-                    on_delete=django.db.models.deletion.CASCADE,
-                    related_name="custom_object_types",
-                    to="core.objecttype",
-                )),
+                (
+                    "object_type", models.OneToOneField(
+                        blank=True,
+                        editable=False,
+                        null=True,
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="custom_object_types",
+                        to="core.objecttype",
+                    )
+                ),
                 ("tags", taggit.managers.TaggableManager(through="extras.TaggedItem", to="extras.Tag")),
             ],
             options={
@@ -89,22 +95,24 @@ class Migration(migrations.Migration):
                 ("last_updated", models.DateTimeField(auto_now=True, null=True)),
                 ("type", models.CharField(default="text", max_length=50)),
                 ("primary", models.BooleanField(default=False)),
-                ("name", models.CharField(
-                    max_length=50,
-                    validators=[
-                        django.core.validators.RegexValidator(
-                            flags=re.RegexFlag["IGNORECASE"],
-                            message="Only alphanumeric characters and underscores are allowed.",
-                            regex="^[a-z0-9_]+$",
-                        ),
-                        django.core.validators.RegexValidator(
-                            flags=re.RegexFlag["IGNORECASE"],
-                            inverse_match=True,
-                            message="Double underscores are not permitted in custom object field names.",
-                            regex="__",
-                        )
-                    ]
-                )),
+                (
+                    "name", models.CharField(
+                        max_length=50,
+                        validators=[
+                            django.core.validators.RegexValidator(
+                                flags=re.RegexFlag["IGNORECASE"],
+                                message="Only alphanumeric characters and underscores are allowed.",
+                                regex="^[a-z0-9_]+$",
+                            ),
+                            django.core.validators.RegexValidator(
+                                flags=re.RegexFlag["IGNORECASE"],
+                                inverse_match=True,
+                                message="Double underscores are not permitted in custom object field names.",
+                                regex="__",
+                            )
+                        ]
+                    )
+                ),
                 ("label", models.CharField(blank=True, max_length=50)),
                 ("group_name", models.CharField(blank=True, max_length=50)),
                 ("description", models.CharField(blank=True, max_length=200)),
@@ -117,33 +125,41 @@ class Migration(migrations.Migration):
                 ("weight", models.PositiveSmallIntegerField(default=100)),
                 ("validation_minimum", models.BigIntegerField(blank=True, null=True)),
                 ("validation_maximum", models.BigIntegerField(blank=True, null=True)),
-                ("validation_regex", models.CharField(
-                    blank=True,
-                    max_length=500,
-                    validators=[utilities.validators.validate_regex],
-                )),
+                (
+                    "validation_regex", models.CharField(
+                        blank=True,
+                        max_length=500,
+                        validators=[utilities.validators.validate_regex],
+                    )
+                ),
                 ("ui_visible", models.CharField(default="always", max_length=50)),
                 ("ui_editable", models.CharField(default="yes", max_length=50)),
                 ("is_cloneable", models.BooleanField(default=False)),
                 ("comments", models.TextField(blank=True)),
-                ("choice_set", models.ForeignKey(
-                    blank=True,
-                    null=True,
-                    on_delete=django.db.models.deletion.PROTECT,
-                    related_name="choices_for_object_type",
-                    to="extras.customfieldchoiceset",
-                )),
-                ("custom_object_type", models.ForeignKey(
-                    on_delete=django.db.models.deletion.CASCADE,
-                    related_name="fields",
-                    to="netbox_custom_objects.customobjecttype",
-                )),
-                ("related_object_type", models.ForeignKey(
-                    blank=True,
-                    null=True,
-                    on_delete=django.db.models.deletion.PROTECT,
-                    to="core.objecttype",
-                )),
+                (
+                    "choice_set", models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.PROTECT,
+                        related_name="choices_for_object_type",
+                        to="extras.customfieldchoiceset",
+                    )
+                ),
+                (
+                    "custom_object_type", models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name="fields",
+                        to="netbox_custom_objects.customobjecttype",
+                    )
+                ),
+                (
+                    "related_object_type", models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.PROTECT,
+                        to="core.objecttype",
+                    )
+                ),
             ],
             options={
                 "verbose_name": "custom object type field",
