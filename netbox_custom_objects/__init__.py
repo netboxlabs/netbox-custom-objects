@@ -1,7 +1,6 @@
 import sys
 import warnings
 
-from django.db import transaction
 from django.db.utils import DatabaseError, OperationalError, ProgrammingError
 from netbox.plugins import PluginConfig
 
@@ -24,18 +23,23 @@ def check_custom_object_type_table_exists():
     Check if the CustomObjectType table exists in the database.
     Returns True if the table exists, False otherwise.
     """
+    from django.db import connection
     from .models import CustomObjectType
 
     try:
-        # Try to query the model - if the table doesn't exist, this will raise an exception
-        # this check and the transaction.atomic() is only required when running tests as the
-        # migration check doesn't work correctly in the test environment
-        with transaction.atomic():
-            # Force immediate execution by using first()
-            CustomObjectType.objects.first()
-        return True
+        # Use raw SQL to check table existence without generating ORM errors
+        with connection.cursor() as cursor:
+            table_name = CustomObjectType._meta.db_table
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables
+                    WHERE table_name = %s
+                )
+            """, [table_name])
+            table_exists = cursor.fetchone()[0]
+            return table_exists
     except (OperationalError, ProgrammingError, DatabaseError):
-        # Catch database-specific errors (table doesn't exist, permission issues, etc.)
+        # Catch database-specific errors (permission issues, etc.)
         return False
 
 
