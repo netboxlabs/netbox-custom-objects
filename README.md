@@ -35,7 +35,3 @@ $ ./manage.py migrate
 ```
 sudo systemctl restart netbox netbox-rq
 ```
-
-## Known Limitations
-
-The Public Preview of NetBox Custom Objects is under active development as we proceed towards the General Availability release around NetBox 4.4. The best place to look for the latest list of known limitations is the [issues](https://github.com/netboxlabs/netbox-custom-objects/issues) list on the GitHub repository.
