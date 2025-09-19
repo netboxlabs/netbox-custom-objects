@@ -96,7 +96,12 @@ class Migration(migrations.Migration):
         migrations.CreateModel(
             name="CustomObjectTypeField",
             fields=[
-                ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False)),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True, primary_key=True, serialize=False
+                    ),
+                ),
                 ("created", models.DateTimeField(auto_now_add=True, null=True)),
                 ("last_updated", models.DateTimeField(auto_now=True, null=True)),
                 ("type", models.CharField(default="text", max_length=50)),
