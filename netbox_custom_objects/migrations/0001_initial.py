@@ -37,7 +37,7 @@ class Migration(migrations.Migration):
                 (
                     "id",
                     models.BigAutoField(
-                        auto_created=True, primary_key=True, serialize=False,
+                        auto_created=True, primary_key=True, serialize=False
                     ),
                 ),
                 ("created", models.DateTimeField(auto_now_add=True, null=True)),
