@@ -23,8 +23,7 @@ class Migration(migrations.Migration):
     operations = [
         migrations.CreateModel(
             name="CustomObjectObjectType",
-            fields=[
-            ],
+            fields=[],
             options={
                 "proxy": True,
                 "indexes": [],
@@ -35,11 +34,17 @@ class Migration(migrations.Migration):
         migrations.CreateModel(
             name="CustomObjectType",
             fields=[
-                ("id", models.BigAutoField(auto_created=True, primary_key=True, serialize=False)),
+                (
+                    "id",
+                    models.BigAutoField(
+                        auto_created=True, primary_key=True, serialize=False,
+                    )
+                ),
                 ("created", models.DateTimeField(auto_now_add=True, null=True)),
                 ("last_updated", models.DateTimeField(auto_now=True, null=True)),
                 (
-                    "custom_field_data", models.JSONField(
+                    "custom_field_data",
+                    models.JSONField(
                         blank=True,
                         default=dict,
                         encoder=utilities.json.CustomFieldJSONEncoder,
@@ -48,7 +53,8 @@ class Migration(migrations.Migration):
                 ("description", models.CharField(blank=True, max_length=200)),
                 ("comments", models.TextField(blank=True)),
                 (
-                    "name", models.CharField(
+                    "name",
+                    models.CharField(
                         max_length=100,
                         unique=True,
                         validators=[
@@ -96,7 +102,8 @@ class Migration(migrations.Migration):
                 ("type", models.CharField(default="text", max_length=50)),
                 ("primary", models.BooleanField(default=False)),
                 (
-                    "name", models.CharField(
+                    "name",
+                    models.CharField(
                         max_length=50,
                         validators=[
                             django.core.validators.RegexValidator(
@@ -126,7 +133,8 @@ class Migration(migrations.Migration):
                 ("validation_minimum", models.BigIntegerField(blank=True, null=True)),
                 ("validation_maximum", models.BigIntegerField(blank=True, null=True)),
                 (
-                    "validation_regex", models.CharField(
+                    "validation_regex",
+                    models.CharField(
                         blank=True,
                         max_length=500,
                         validators=[utilities.validators.validate_regex],
@@ -137,7 +145,8 @@ class Migration(migrations.Migration):
                 ("is_cloneable", models.BooleanField(default=False)),
                 ("comments", models.TextField(blank=True)),
                 (
-                    "choice_set", models.ForeignKey(
+                    "choice_set",
+                    models.ForeignKey(
                         blank=True,
                         null=True,
                         on_delete=django.db.models.deletion.PROTECT,
@@ -146,14 +155,16 @@ class Migration(migrations.Migration):
                     ),
                 ),
                 (
-                    "custom_object_type", models.ForeignKey(
+                    "custom_object_type",
+                    models.ForeignKey(
                         on_delete=django.db.models.deletion.CASCADE,
                         related_name="fields",
                         to="netbox_custom_objects.customobjecttype",
                     ),
                 ),
                 (
-                    "related_object_type", models.ForeignKey(
+                    "related_object_type",
+                    models.ForeignKey(
                         blank=True,
                         null=True,
                         on_delete=django.db.models.deletion.PROTECT,
