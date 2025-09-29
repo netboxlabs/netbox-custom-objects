@@ -12,7 +12,7 @@ from django.conf import settings
 # from django.contrib.contenttypes.management import create_contenttypes
 from django.contrib.contenttypes.models import ContentType
 from django.core.validators import RegexValidator, ValidationError
-from django.db import connection, IntegrityError, models, transaction
+from django.db import connection, connections, IntegrityError, models, transaction
 from django.db.models import Q
 from django.db.models.functions import Lower
 from django.db.models.signals import pre_delete, post_save
@@ -52,7 +52,7 @@ from utilities.validators import validate_regex
 
 from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
-from netbox_custom_objects.utilities import generate_model
+from netbox_custom_objects.utilities import generate_model, get_schema_connection
 
 
 class UniquenessConstraintTestError(Exception):
@@ -549,12 +549,11 @@ class CustomObjectType(PrimaryModel):
 
         # Ensure the ContentType exists and is immediately available
         features = get_model_features(model)
-        self.object_type.features = features + ['branching']
-        self.object_type.public = True
         self.object_type.features = features
+        self.object_type.public = True
         self.object_type.save()
 
-        with connection.schema_editor() as schema_editor:
+        with get_schema_connection().schema_editor() as schema_editor:
             schema_editor.create_model(model)
 
         self.register_custom_object_search_index(model)
@@ -588,7 +587,7 @@ class CustomObjectType(PrimaryModel):
         # TODO: Remove this disconnect/reconnect after ObjectType has been exempted from handle_deleted_object
         pre_delete.disconnect(handle_deleted_object)
         object_type.delete()
-        with connection.schema_editor() as schema_editor:
+        with get_schema_connection().schema_editor() as schema_editor:
             schema_editor.delete_model(model)
         pre_delete.connect(handle_deleted_object)
 
@@ -936,7 +935,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
             try:
                 with transaction.atomic():
-                    with connection.schema_editor() as test_schema_editor:
+                    with get_schema_connection().schema_editor() as test_schema_editor:
                         test_schema_editor.alter_field(model, old_field, model_field)
                         # If we get here, the constraint was applied successfully
                         # Now raise a custom exception to rollback the test transaction
@@ -1371,7 +1370,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         model = self.custom_object_type.get_model()
         model_field.contribute_to_class(model, self.name)
 
-        with connection.schema_editor() as schema_editor:
+        with get_schema_connection().schema_editor() as schema_editor:
             if self._state.adding:
                 schema_editor.add_field(model, model_field)
                 if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
@@ -1489,7 +1488,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         model = self.custom_object_type.get_model()
         model_field.contribute_to_class(model, self.name)
 
-        with connection.schema_editor() as schema_editor:
+        with get_schema_connection().schema_editor() as schema_editor:
             if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                 apps = model._meta.apps
                 through_model = apps.get_model(APP_LABEL, self.through_model_name)

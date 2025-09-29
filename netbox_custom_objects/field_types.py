@@ -31,7 +31,7 @@ from utilities.templatetags.builtins.filters import linkify, render_markdown
 from netbox.tables.columns import BooleanColumn
 
 from netbox_custom_objects.constants import APP_LABEL
-from netbox_custom_objects.utilities import generate_model
+from netbox_custom_objects.utilities import generate_model, get_schema_connection
 
 
 class LazyForeignKey(ForeignKey):

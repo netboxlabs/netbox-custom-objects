@@ -1,12 +1,22 @@
 import warnings
 
 from django.apps import apps
+from django.db import connection, connections
 
 from netbox_custom_objects.constants import APP_LABEL
+
+# Import branching components if available
+try:
+    from netbox_branching.contextvars import active_branch
+    from netbox_branching.database import BranchAwareRouter
+    BRANCHING_AVAILABLE = True
+except ImportError:
+    BRANCHING_AVAILABLE = False
 
 __all__ = (
     "AppsProxy",
     "generate_model",
+    "get_schema_connection",
     "get_viewname",
 )
 
@@ -57,6 +67,20 @@ class AppsProxy:
 
     def __getattr__(self, attr):
         return getattr(apps, attr)
+
+
+def get_schema_connection():
+    """
+    Get the appropriate database connection for schema operations.
+    Uses BranchAwareRouter logic if branching is available and there's an active branch.
+    """
+    if BRANCHING_AVAILABLE:
+        if branch := active_branch.get():
+            router = BranchAwareRouter()
+            branch_connection_name = router._get_connection(branch)
+            return connections[branch_connection_name]
+
+    return connection
 
 
 def get_viewname(model, action=None, rest_api=False):
