@@ -544,6 +544,7 @@ class CustomObjectType(PrimaryModel):
         return model
 
     def create_model(self):
+        from netbox_custom_objects.api.serializers import get_serializer_class
         # Get the model and ensure it's registered
         model = self.get_model()
 
@@ -556,6 +557,7 @@ class CustomObjectType(PrimaryModel):
         with get_schema_connection().schema_editor() as schema_editor:
             schema_editor.create_model(model)
 
+        get_serializer_class(model)
         self.register_custom_object_search_index(model)
 
     def save(self, *args, **kwargs):
