@@ -13,6 +13,10 @@
 {% endblock title %}
 
 {% block form %}
+  {% if branch_warning %}
+    {% include 'netbox_custom_objects/inc/branch_warning.html' %}
+  {% endif %}
+
   {# Render hidden fields #}
   {% for field in form.hidden_fields %}
     {{ field }}
