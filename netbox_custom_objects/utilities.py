@@ -1,7 +1,6 @@
 import warnings
 
 from django.apps import apps
-from django.conf import settings
 
 from netbox_custom_objects.constants import APP_LABEL
 
@@ -9,9 +8,7 @@ __all__ = (
     "AppsProxy",
     "generate_model",
     "get_viewname",
-    "is_branching_plugin_installed",
     "is_in_branch",
-    "get_branching_status",
 )
 
 
@@ -117,7 +114,7 @@ def generate_model(*args, **kwargs):
 def is_in_branch():
     """
     Check if currently operating within a branch.
-    
+
     Returns:
         bool: True if currently in a branch, False otherwise.
     """
