@@ -550,6 +550,8 @@ class CustomObjectType(PrimaryModel):
 
         # Ensure the ContentType exists and is immediately available
         features = get_model_features(model)
+        if 'branching' in features:
+            features.remove('branching')
         self.object_type.features = features
         self.object_type.public = True
         self.object_type.save()
