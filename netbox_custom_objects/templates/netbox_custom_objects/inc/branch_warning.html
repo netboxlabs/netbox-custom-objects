@@ -1,0 +1,12 @@
+{% load i18n %}
+
+<div class="alert alert-warning d-flex align-items-center mb-4" role="alert">
+  <span class="text-warning fs-1">
+    <i class="mdi mdi-alert"></i>
+  </span>
+  <span class="flex-fill">
+  {% blocktrans trimmed  %}
+    This object has fields that reference objects in other apps and you have a branch active. Care must be taken to not reference an object that only exists in another branch.
+  {% endblocktrans %}
+  </span>
+</div>

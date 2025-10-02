@@ -29,6 +29,7 @@ from . import field_types, filtersets, forms, tables
 from .models import CustomObject, CustomObjectType, CustomObjectTypeField
 from extras.choices import CustomFieldTypeChoices
 from netbox_custom_objects.constants import APP_LABEL
+from netbox_custom_objects.utilities import is_in_branch
 
 logger = logging.getLogger("netbox_custom_objects.views")
 
@@ -571,6 +572,23 @@ class CustomObjectEditView(generic.ObjectEditView):
         form_class.save = custom_save
 
         return form_class
+
+    def get_extra_context(self, request, obj):
+
+        # Check if we're in a branch and if there are external object pointers
+        has_external_object_pointers = False
+        if is_in_branch():
+            # Check all fields in the custom object type
+            for field in self.object.custom_object_type.fields.all():
+                if field.type in [CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT]:
+                    # Check if the related object type is not from the current app
+                    if field.related_object_type.app_label != APP_LABEL:
+                        has_external_object_pointers = True
+                        break
+
+        return {
+            'branch_warning': has_external_object_pointers,
+        }
 
 
 @register_model_view(CustomObject, "delete")
