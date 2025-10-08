@@ -36,7 +36,7 @@
             {% if return_url %}
               <a href="{{ return_url }}" class="btn btn-outline-secondary">{% trans "Cancel" %}</a>
             {% endif %}
-            <button type="submit" name="data_submit" class="btn btn-primary">{% trans "Submit" %}</button>
+            <button type="submit" name="data_submit" class="btn btn-primary"{% if branch_warning %} disabled{% endif %}>{% trans "Submit" %}</button>
           </div>
         </div>
       </form>
@@ -68,7 +68,7 @@
             {% if return_url %}
               <a href="{{ return_url }}" class="btn btn-outline-secondary">{% trans "Cancel" %}</a>
             {% endif %}
-            <button type="submit" name="file_submit" class="btn btn-primary">{% trans "Submit" %}</button>
+            <button type="submit" name="file_submit" class="btn btn-primary"{% if branch_warning %} disabled{% endif %}>{% trans "Submit" %}</button>
           </div>
         </div>
       </form>
@@ -101,7 +101,7 @@
             {% if return_url %}
               <a href="{{ return_url }}" class="btn btn-outline-secondary">{% trans "Cancel" %}</a>
             {% endif %}
-            <button type="submit" name="file_submit" class="btn btn-primary">{% trans "Submit" %}</button>
+            <button type="submit" name="file_submit" class="btn btn-primary"{% if branch_warning %} disabled{% endif %}>{% trans "Submit" %}</button>
           </div>
         </div>
       </form>

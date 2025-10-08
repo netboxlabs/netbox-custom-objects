@@ -574,20 +574,8 @@ class CustomObjectEditView(generic.ObjectEditView):
         return form_class
 
     def get_extra_context(self, request, obj):
-
-        # Check if we're in a branch and if there are external object pointers
-        has_external_object_pointers = False
-        if is_in_branch():
-            # Check all fields in the custom object type
-            for field in self.object.custom_object_type.fields.all():
-                if field.type in [CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT]:
-                    # Check if the related object type is not from the current app
-                    if field.related_object_type.app_label != APP_LABEL:
-                        has_external_object_pointers = True
-                        break
-
         return {
-            'branch_warning': has_external_object_pointers,
+            'branch_warning': is_in_branch(),
         }
 
 
@@ -692,20 +680,8 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
         return form
 
     def get_extra_context(self, request):
-
-        # Check if we're in a branch and if there are external object pointers
-        has_external_object_pointers = False
-        if is_in_branch():
-            # Check all fields in the custom object type
-            for field in self.custom_object_type.fields.all():
-                if field.type in [CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT]:
-                    # Check if the related object type is not from the current app
-                    if field.related_object_type.app_label != APP_LABEL:
-                        has_external_object_pointers = True
-                        break
-
         return {
-            'branch_warning': has_external_object_pointers,
+            'branch_warning': is_in_branch(),
         }
 
 
@@ -795,20 +771,8 @@ class CustomObjectBulkImportView(generic.BulkImportView):
         return form
 
     def get_extra_context(self, request):
-
-        # Check if we're in a branch and if there are external object pointers
-        has_external_object_pointers = False
-        if is_in_branch():
-            # Check all fields in the custom object type
-            for field in self.custom_object_type.fields.all():
-                if field.type in [CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT]:
-                    # Check if the related object type is not from the current app
-                    if field.related_object_type.app_label != APP_LABEL:
-                        has_external_object_pointers = True
-                        break
-
         return {
-            'branch_warning': has_external_object_pointers,
+            'branch_warning': is_in_branch(),
         }
 
 

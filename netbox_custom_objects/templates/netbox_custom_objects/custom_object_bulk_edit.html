@@ -85,7 +85,7 @@
 
         <div class="btn-float-group-right">
           <a href="{{ return_url }}" class="btn btn-outline-secondary btn-float">{% trans "Cancel" %}</a>
-          <button type="submit" name="_apply" class="btn btn-primary">{% trans "Apply" %}</button>
+          <button type="submit" name="_apply" class="btn btn-primary"{% if branch_warning %} disabled{% endif %}>{% trans "Apply" %}</button>
         </div>
       </div>
     </form>
