@@ -69,7 +69,7 @@ jobs:
         with:
           repository: "netbox-community/netbox"
           path: netbox
-          ref: feature
+          ref: main
       - name: Install netbox-custom-objects
         working-directory: netbox-custom-objects
         run: |
