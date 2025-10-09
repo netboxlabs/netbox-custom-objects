@@ -574,20 +574,8 @@ class CustomObjectEditView(generic.ObjectEditView):
         return form_class
 
     def get_extra_context(self, request, obj):
-
-        # Check if we're in a branch and if there are external object pointers
-        has_external_object_pointers = False
-        if is_in_branch():
-            # Check all fields in the custom object type
-            for field in self.object.custom_object_type.fields.all():
-                if field.type in [CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT]:
-                    # Check if the related object type is not from the current app
-                    if field.related_object_type.app_label != APP_LABEL:
-                        has_external_object_pointers = True
-                        break
-
         return {
-            'branch_warning': has_external_object_pointers,
+            'branch_warning': is_in_branch(),
         }
 
 
@@ -634,6 +622,7 @@ class CustomObjectDeleteView(generic.ObjectDeleteView):
 
 @register_model_view(CustomObject, "bulk_edit", path="edit", detail=False)
 class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
+    template_name = "netbox_custom_objects/custom_object_bulk_edit.html"
     queryset = None
     custom_object_type = None
     table = None
@@ -690,6 +679,11 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
 
         return form
 
+    def get_extra_context(self, request):
+        return {
+            'branch_warning': is_in_branch(),
+        }
+
 
 @register_model_view(CustomObject, "bulk_delete", path="delete", detail=False)
 class CustomObjectBulkDeleteView(CustomObjectTableMixin, generic.BulkDeleteView):
@@ -706,9 +700,9 @@ class CustomObjectBulkDeleteView(CustomObjectTableMixin, generic.BulkDeleteView)
     def get_queryset(self, request):
         if self.queryset:
             return self.queryset
-        custom_object_type = self.kwargs.pop("custom_object_type", None)
+        self.custom_object_type = self.kwargs.pop("custom_object_type", None)
         self.custom_object_type = CustomObjectType.objects.get(
-            slug=custom_object_type
+            slug=self.custom_object_type
         )
         model = self.custom_object_type.get_model_with_serializer()
         return model.objects.all()
@@ -716,8 +710,10 @@ class CustomObjectBulkDeleteView(CustomObjectTableMixin, generic.BulkDeleteView)
 
 @register_model_view(CustomObject, "bulk_import", path="import", detail=False)
 class CustomObjectBulkImportView(generic.BulkImportView):
+    template_name = "netbox_custom_objects/custom_object_bulk_import.html"
     queryset = None
     model_form = None
+    custom_object_type = None
 
     def get(self, request, custom_object_type):
         # Necessary because get() in BulkImportView only takes request and no **kwargs
@@ -773,6 +769,11 @@ class CustomObjectBulkImportView(generic.BulkImportView):
         )
 
         return form
+
+    def get_extra_context(self, request):
+        return {
+            'branch_warning': is_in_branch(),
+        }
 
 
 class CustomObjectJournalView(ConditionalLoginRequiredMixin, View):

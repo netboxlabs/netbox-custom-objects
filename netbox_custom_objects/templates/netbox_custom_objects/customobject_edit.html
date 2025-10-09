@@ -46,3 +46,21 @@
     {% endfor %}
   </div>
 {% endblock form %}
+
+{% block buttons %}
+  <a href="{{ return_url }}" class="btn btn-outline-secondary btn-float">{% trans "Cancel" %}</a>
+  {% if object.pk %}
+    <button type="submit" name="_update" class="btn btn-primary"{% if branch_warning %} disabled{% endif %}>
+      {% trans "Save" %}
+    </button>
+  {% else %}
+    <div class="btn-group" role="group" aria-label="{% trans "Actions" %}">
+      <button type="submit" name="_create" class="btn btn-primary"{% if branch_warning %} disabled{% endif %}>
+        {% trans "Create" %}
+      </button>
+      <button type="submit" name="_addanother" class="btn btn-outline-primary btn-float"{% if branch_warning %} disabled{% endif %}>
+        {% trans "Create & Add Another" %}
+      </button>
+    </div>
+  {% endif %}
+{% endblock buttons %}

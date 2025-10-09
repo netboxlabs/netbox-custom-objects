@@ -1,0 +1,103 @@
+{% extends 'generic/bulk_edit.html' %}
+{% load form_helpers %}
+{% load helpers %}
+{% load i18n %}
+{% load render_table from django_tables2 %}
+
+
+{% block content %}
+
+  {# Edit form #}
+  <div class="tab-pane show active" id="edit-form" role="tabpanel" aria-labelledby="edit-form-tab">
+    {% if branch_warning %}
+    {% include 'netbox_custom_objects/inc/branch_warning.html' %}
+    {% endif %}
+
+    <form action="" method="post" class="form form-horizontal mt-5">
+      <div id="form_fields" hx-disinherit="hx-select hx-swap">
+        {% csrf_token %}
+        {% if request.POST.return_url %}
+          <input type="hidden" name="return_url" value="{{ request.POST.return_url }}" />
+        {% endif %}
+        {% for field in form.hidden_fields %}
+          {{ field }}
+        {% endfor %}
+
+        {% if form.fieldsets %}
+
+          {# Render grouped fields according to declared fieldsets #}
+          {% for fieldset in form.fieldsets %}
+            {% render_fieldset form fieldset %}
+          {% endfor %}
+
+          {# Render tag add/remove fields #}
+          {% if form.add_tags and form.remove_tags %}
+            <div class="field-group mb-5">
+              <div class="row">
+                <h2 class="col-9 offset-3">{% trans "Tags" %}</h2>
+              </div>
+              {% render_field form.add_tags %}
+              {% render_field form.remove_tags %}
+            </div>
+          {% endif %}
+
+          {# Render custom fields #}
+          {% if form.custom_fields %}
+            <div class="field-group mb-5">
+              <div class="row">
+                <h2 class="col-9 offset-3">{% trans "Custom Fields" %}</h2>
+              </div>
+              {% render_custom_fields form %}
+            </div>
+          {% endif %}
+
+          {# Render comments #}
+          {% if form.comments %}
+            <div class="field-group mb-5">
+              <div class="row">
+                <h2 class="col-9 offset-3">{% trans "Comments" %}</h2>
+              </div>
+              {% render_field form.comments bulk_nullable=True %}
+            </div>
+          {% endif %}
+
+        {% else %}
+
+          {# Render all fields #}
+          {% for field in form.visible_fields %}
+            {% if field.name in form.meta_fields %}
+            {% elif field.name in form.nullable_fields %}
+              {% render_field field bulk_nullable=True %}
+            {% else %}
+              {% render_field field %}
+            {% endif %}
+          {% endfor %}
+
+        {% endif %}
+
+        {# Meta fields #}
+        <div class="bg-primary-subtle border border-primary rounded-1 pt-3 px-3 mb-3">
+          {% if form.changelog_message %}
+            {% render_field form.changelog_message %}
+          {% endif %}
+          {% render_field form.background_job %}
+        </div>
+
+        <div class="btn-float-group-right">
+          <a href="{{ return_url }}" class="btn btn-outline-secondary btn-float">{% trans "Cancel" %}</a>
+          <button type="submit" name="_apply" class="btn btn-primary"{% if branch_warning %} disabled{% endif %}>{% trans "Apply" %}</button>
+        </div>
+      </div>
+    </form>
+  </div>
+
+  {# Selected objects list #}
+  <div class="tab-pane" id="object-list" role="tabpanel" aria-labelledby="object-list-tab">
+    <div class="card">
+      <div class="card-body table-responsive">
+        {% render_table table 'inc/table.html' %}
+      </div>
+    </div>
+  </div>
+
+{% endblock content %}
