@@ -2,10 +2,16 @@
 
 [NetBox](https://github.com/netbox-community/netbox) is the world's leading source of truth for infrastructure, featuring an extensive data model. Sometimes it can be useful to extend the NetBox data model to fit specific organizational needs. The Custom Objects plugin introduces a new paradigm for NetBox to help overcome these challenges, allowing NetBox adminstrators to extend the NetBox data model without writing a line of code.
 
-For additional documentation on the REST API, go [here](api.md).
+- For additional documentation on the REST API, go [here](api.md).
+- For information about using Custom Objects with NetBox Branching, go [here](branching.md)
 
 > [!TIP]
-> NetBox Custom Objects is still in Public Preview. If you hit any problems please check the [exiting issues](https://github.com/netboxlabs/netbox-custom-objects/issues) before creating a new one. If you're unsure, start a [discussion](https://github.com/netboxlabs/netbox-custom-objects/discussions).
+> If you hit any problems please check the [exiting issues](https://github.com/netboxlabs/netbox-custom-objects/issues) before creating a new one. If you're unsure, start a [discussion](https://github.com/netboxlabs/netbox-custom-objects/discussions).
+
+
+> [!TIP]
+> If you are using Custom Objects with Custom Scripts or Plugins you need to use Django's `AppConfig.get_model` to retrieve Custom Object Types: [https://docs.djangoproject.com/en/5.2/ref/applications/#django.apps.AppConfig.get_model](https://docs.djangoproject.com/en/5.2/ref/applications/#django.apps.AppConfig.get_model)  
+> Pass in the plugin name (`netbox_custom_objects`) and the name of the Custom Object (e.g. `dhcp_scope`) to return the correct object.  
 
 ## Features
 
