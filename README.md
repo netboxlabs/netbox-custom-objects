@@ -53,4 +53,4 @@ PLUGINS_CONFIG = {
 
 ## Known Limitations
 
-NetBox Custom Objects is now GA which means you can use it in production and migrations to future versions will work. There are many up and coming features including GraphQL support - the best place to see what's on the way is the [issues](https://github.com/netboxlabs/netbox-custom-objects/issues) list on the GitHub repository.
+NetBox Custom Objects is now Generally Available which means you can use it in production and migrations to future versions will work. There are many upcoming features including GraphQL support - the best place to see what's on the way is the [issues](https://github.com/netboxlabs/netbox-custom-objects/issues) list on the GitHub repository.

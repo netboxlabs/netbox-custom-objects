@@ -3,7 +3,7 @@
 As of version 0.4.0 Custom Objects is _compatible_ with NetBox Branching, but not fully supported. This means that users can safely use both plugins together, but there are some caveats to be aware of. See below to learn how each of the Custom Objects models interacts with NetBox Branching.
 
 > [!NOTE]
-> We are working towards fully support for Custom Objects on branches. Keep an eye on the GitHub issues for updates ahead of future releases.  
+> We are working towards full support for Custom Objects on branches. Keep an eye on the GitHub issues for updates ahead of future releases.  
 
 > [!TIP]
 > If you have any questions the best place to start is on the GitHub [discussions](https://github.com/netboxlabs/netbox-custom-objects/discussions). If you are a NetBox Labs customer, you can also contact support.  

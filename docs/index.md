@@ -6,7 +6,7 @@
 - For information about using Custom Objects with NetBox Branching, go [here](branching.md)
 
 > [!TIP]
-> If you hit any problems please check the [exiting issues](https://github.com/netboxlabs/netbox-custom-objects/issues) before creating a new one. If you're unsure, start a [discussion](https://github.com/netboxlabs/netbox-custom-objects/discussions).
+> If you hit any problems please check the [existing issues](https://github.com/netboxlabs/netbox-custom-objects/issues) before creating a new one. If you're unsure, start a [discussion](https://github.com/netboxlabs/netbox-custom-objects/discussions).
 
 
 > [!TIP]
