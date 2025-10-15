@@ -3,20 +3,20 @@
 ## 0.4.0
 ---
 
-# New Features
+### New Features
 
 **Limited Branching Compatibility for Custom Objects**
 
 Custom Objects now has limited compatibility with NetBox Branching. Please see the documentation for more details.
 
-# Enhancements
+### Enhancements
 
 - [#37](https://github.com/netboxlabs/netbox-custom-objects/issues/37) - Limited Branching compatibility for Custom Objects
 - [#42](https://github.com/netboxlabs/netbox-custom-objects/issues/42) - Populate default values for Multi-Object fields
 - [#87](https://github.com/netboxlabs/netbox-custom-objects/issues/87) - Make Custom Object "name" clickable
 - [#150](https://github.com/netboxlabs/netbox-custom-objects/issues/150) - Cannot import created CustomObject (Documentation)
 
-# Bug Fixes
+### Bug Fixes
 
 - [#70](https://github.com/netboxlabs/netbox-custom-objects/issues/70) - Incorrect validation message on integer field min/max defaults
 - [#104](https://github.com/netboxlabs/netbox-custom-objects/issues/104) - Bulk edit not possible on fields of type `object`
