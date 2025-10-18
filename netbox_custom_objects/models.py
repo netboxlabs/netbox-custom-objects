@@ -209,6 +209,13 @@ class CustomObjectType(PrimaryModel):
                     "A Custom Object Type with this name already exists."
                 ),
             ),
+            models.UniqueConstraint(
+                Lower("slug"),
+                name="%(app_label)s_%(class)s_slug",
+                violation_error_message=_(
+                    "A Custom Object Type with this slug already exists."
+                ),
+            ),
         ]
 
     def __str__(self):

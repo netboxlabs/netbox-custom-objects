@@ -733,7 +733,7 @@ class CustomObjectBulkImportView(generic.BulkImportView):
             return self.queryset
         custom_object_type = self.kwargs.get("custom_object_type", None)
         self.custom_object_type = CustomObjectType.objects.get(
-            name__iexact=custom_object_type
+            slug=custom_object_type
         )
         model = self.custom_object_type.get_model_with_serializer()
         return model.objects.all()
