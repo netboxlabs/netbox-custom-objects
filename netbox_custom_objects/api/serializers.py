@@ -57,6 +57,7 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
             "related_object_type",
             "app_label",
             "model",
+            "group_name",
         )
 
     def validate(self, attrs):
