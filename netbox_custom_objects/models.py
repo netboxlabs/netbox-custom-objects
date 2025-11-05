@@ -1071,6 +1071,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         visited.add(custom_object_type.id)
 
         # Check all object and multiobject fields in this custom object type
+        related_objects_checked = set()
         for field in custom_object_type.fields.filter(
             type__in=[
                 CustomFieldTypeChoices.TYPE_OBJECT,
@@ -1079,6 +1080,9 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             related_object_type__isnull=False,
             related_object_type__app_label=APP_LABEL
         ):
+            if field.related_object_type in related_objects_checked:
+                continue
+            related_objects_checked.add(field.related_object_type)
 
             # Get the related custom object type directly from the object_type relationship
             try:
