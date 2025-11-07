@@ -31,6 +31,11 @@ class CustomObjectTypeViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryO
             slug="test-objects-2",
         )
 
+        cls.form_data = {
+            'name': 'custom_object_type_1',
+            'slug': 'custom-object-type-1s',
+        }
+
     def setUp(self):
         """Set up test data."""
         super().setUp()
@@ -63,12 +68,6 @@ class CustomObjectTypeViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryO
     def test_create_object_with_constrained_permission(self):
         ...
 
-    def test_edit_object_with_permission(self):
-        ...
-
-    def test_edit_object_with_constrained_permission(self):
-        ...
-
     def test_bulk_edit_objects_with_permission(self):
         ...
 
@@ -82,12 +81,6 @@ class CustomObjectTypeViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryO
         ...
 
     def test_bulk_import_objects_with_constrained_permission(self):
-        ...
-
-    def test_delete_object_with_permission(self):
-        ...
-
-    def test_delete_object_with_constrained_permission(self):
         ...
 
     def test_bulk_delete_objects_with_permission(self):
@@ -130,6 +123,16 @@ class CustomObjectTypeFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.Pri
             type="integer",
             description="Second test field"
         )
+
+        cls.form_data = {
+            "custom_object_type": cls.custom_object_type.id,
+            "name": "field3",
+            "type": "text",
+            "filter_logic": "loose",
+            "ui_visible": "always",
+            "ui_editable": "yes",
+            "weight": 100,
+        }
 
     def setUp(self):
         """Set up test data."""
@@ -181,18 +184,6 @@ class CustomObjectTypeFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.Pri
     def test_export_objects(self):
         ...
 
-    def test_create_object_with_permission(self):
-        ...
-
-    def test_create_object_with_constrained_permission(self):
-        ...
-
-    def test_edit_object_with_permission(self):
-        ...
-
-    def test_edit_object_with_constrained_permission(self):
-        ...
-
     def test_bulk_edit_objects_with_permission(self):
         ...
 
@@ -214,13 +205,7 @@ class CustomObjectTypeFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.Pri
     def test_bulk_import_objects_with_constrained_permission(self):
         ...
 
-    def test_delete_object_with_permission(self):
-        ...
-
     def test_bulk_delete_objects_without_permission(self):
-        ...
-
-    def test_delete_object_with_constrained_permission(self):
         ...
 
     def test_bulk_delete_objects_with_permission(self):
