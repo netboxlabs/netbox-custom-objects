@@ -10,8 +10,17 @@
 
 
 > [!TIP]
-> If you are using Custom Objects with Custom Scripts or Plugins you need to use Django's `AppConfig.get_model` to retrieve Custom Object Types: [https://docs.djangoproject.com/en/5.2/ref/applications/#django.apps.AppConfig.get_model](https://docs.djangoproject.com/en/5.2/ref/applications/#django.apps.AppConfig.get_model)  
-> Pass in the plugin name (`netbox_custom_objects`) and the name of the Custom Object (e.g. `dhcp_scope`) to return the correct object.  
+> If you are using Custom Objects with Custom Scripts or Plugins you will need to use the following method to import and instantiate a Custom Object as a class that will behave like a standard Django model:
+> ```python
+> from netbox_custom_objects.models import CustomObjectType
+>
+> custom_object_type = CustomObjectType.objects.get(name="cat")
+> Cat = custom_object_type.get_model()
+> ```
+> ```python
+> In [21]: Cat.objects.count()
+> Out[21]: 3
+> ```
 
 ## Features
 
