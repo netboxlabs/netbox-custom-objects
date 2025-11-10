@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.1
+---
+
+### Bug Fixes
+
+- [#237](https://github.com/netboxlabs/netbox-custom-objects/issues/237) - Incorrect validation error when adding multiple fields pointing to the same Custom Object Type
+- [#251](https://github.com/netboxlabs/netbox-custom-objects/issues/251) - Bulk import broken due to incorrect slug handling
+- [#273](https://github.com/netboxlabs/netbox-custom-objects/issues/273) - `group_name` missing from Custom Object Type serializer
+
+
 ## 0.4.0
 ---
 
