@@ -197,7 +197,8 @@ class CustomObjectTest(CustomObjectsTestCase, APIViewTestCases.APIViewTestCase):
 
         data = {
             'test_field': 'Test 004',
-            'devices': [devices[0].id, devices[1].id],
+            'device': devices[0].id,
+            'devices': [devices[1].id, devices[2].id],
         }
 
         initial_count = self._get_queryset().count()
