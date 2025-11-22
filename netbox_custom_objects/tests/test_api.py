@@ -1,10 +1,14 @@
 from django.urls import reverse
 
-from users.models import Token
 from utilities.testing import APIViewTestCases, create_test_user
+from rest_framework import status
 
 from netbox_custom_objects.models import CustomObjectType
 from .base import CustomObjectsTestCase
+from core.models import ObjectType
+from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Rack, Site
+from users.models import ObjectPermission, Token
+from virtualization.models import Cluster, ClusterType
 
 
 class CustomObjectTest(CustomObjectsTestCase, APIViewTestCases.APIViewTestCase):
@@ -32,6 +36,72 @@ class CustomObjectTest(CustomObjectsTestCase, APIViewTestCases.APIViewTestCase):
 
     @classmethod
     def setUpTestData(cls):
+        # Set up some devices to be used in object/multiobject fields
+        sites = (
+            Site(name='Site 1', slug='site-1'),
+            Site(name='Site 2', slug='site-2'),
+        )
+        Site.objects.bulk_create(sites)
+
+        racks = (
+            Rack(name='Rack 1', site=sites[0]),
+            Rack(name='Rack 2', site=sites[1]),
+        )
+        Rack.objects.bulk_create(racks)
+
+        manufacturer = Manufacturer.objects.create(name='Manufacturer 1', slug='manufacturer-1')
+
+        device_types = (
+            DeviceType(manufacturer=manufacturer, model='Device Type 1', slug='device-type-1'),
+            DeviceType(manufacturer=manufacturer, model='Device Type 2', slug='device-type-2', u_height=2),
+        )
+        DeviceType.objects.bulk_create(device_types)
+
+        roles = (
+            DeviceRole(name='Device Role 1', slug='device-role-1', color='ff0000'),
+            DeviceRole(name='Device Role 2', slug='device-role-2', color='00ff00'),
+        )
+        for role in roles:
+            role.save()
+
+        cluster_type = ClusterType.objects.create(name='Cluster Type 1', slug='cluster-type-1')
+
+        clusters = (
+            Cluster(name='Cluster 1', type=cluster_type),
+            Cluster(name='Cluster 2', type=cluster_type),
+        )
+        Cluster.objects.bulk_create(clusters)
+
+        devices = (
+            Device(
+                device_type=device_types[0],
+                role=roles[0],
+                name='Device 1',
+                site=sites[0],
+                rack=racks[0],
+                cluster=clusters[0],
+                local_context_data={'A': 1}
+            ),
+            Device(
+                device_type=device_types[0],
+                role=roles[0],
+                name='Device 2',
+                site=sites[0],
+                rack=racks[0],
+                cluster=clusters[0],
+                local_context_data={'B': 2}
+            ),
+            Device(
+                device_type=device_types[0],
+                role=roles[0],
+                name='Device 3',
+                site=sites[0],
+                rack=racks[0],
+                cluster=clusters[0],
+                local_context_data={'C': 3}
+            ),
+        )
+        Device.objects.bulk_create(devices)
 
         # Create test custom object types
         cls.custom_object_type1 = CustomObjectType.objects.create(
@@ -47,6 +117,8 @@ class CustomObjectTest(CustomObjectsTestCase, APIViewTestCases.APIViewTestCase):
             verbose_name_plural="Test Objects 2",
             slug="test-objects-2",
         )
+
+        cls.custom_object_type3 = cls.create_complex_custom_object_type(name="ComplexObject")
 
         cls.model = cls.custom_object_type1.get_model()
         cls.create_custom_object_type_field(cls.custom_object_type1)
@@ -102,6 +174,47 @@ class CustomObjectTest(CustomObjectsTestCase, APIViewTestCases.APIViewTestCase):
     def test_delete_object(self):
         # TODO: ObjectChange causes failure
         ...
+
+    def test_create_with_nested_serializers(self):
+        """
+        POST a single object with a multiobject field's values specified via a list of PKs.
+        """
+        model = self.custom_object_type3.get_model()
+
+        # Set the model for the test class
+        self.model = model
+
+        # Add object-level permission
+        obj_perm = ObjectPermission(
+            name='Test permission',
+            actions=['add']
+        )
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        obj_perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+        devices = Device.objects.all()
+
+        data = {
+            'test_field': 'Test 004',
+            'devices': [devices[0].id, devices[1].id],
+        }
+
+        initial_count = self._get_queryset().count()
+
+        viewname = 'plugins-api:netbox_custom_objects-api:customobject-list'
+        list_url = reverse(viewname, kwargs={'custom_object_type': self.custom_object_type3.slug})
+
+        response = self.client.post(list_url, data, format='json', **self.header)
+        self.assertHttpStatus(response, status.HTTP_201_CREATED)
+        self.assertEqual(self._get_queryset().count(), initial_count + 1)
+        instance = self._get_queryset().get(pk=response.data['id'])
+        self.assertInstanceEqual(
+            instance,
+            self.create_data[0],
+            exclude=self.validation_excluded_fields,
+            api=True
+        )
 
     # TODO: GraphQL
     def test_graphql_list_objects(self):
