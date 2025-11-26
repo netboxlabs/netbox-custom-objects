@@ -48,6 +48,7 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
             "name",
             "label",
             "custom_object_type",
+            "description",
             "type",
             "primary",
             "default",
