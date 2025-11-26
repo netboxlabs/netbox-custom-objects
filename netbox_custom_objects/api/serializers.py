@@ -60,6 +60,13 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
             "app_label",
             "model",
             "group_name",
+            "search_weight",
+            "filter_logic",
+            "ui_visible",
+            "ui_editable",
+            "weight",
+            "is_cloneable",
+            "comments",
         )
 
     def validate(self, attrs):
