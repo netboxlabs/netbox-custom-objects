@@ -543,6 +543,68 @@ class CustomObjectType(PrimaryModel):
         self.register_custom_object_search_index(model)
         return model
 
+    def _ensure_fk_constraints(self, model):
+        """
+        Ensure that foreign key constraints are properly created at the database level
+        for OBJECT type fields with ON DELETE CASCADE. This is necessary because models
+        are created with managed=False, which may not properly create FK constraints
+        with CASCADE behavior.
+
+        :param model: The model to ensure FK constraints for
+        """
+        # Query all OBJECT type fields for this CustomObjectType
+        object_fields = self.fields.filter(type=CustomFieldTypeChoices.TYPE_OBJECT)
+
+        if not object_fields.exists():
+            return
+
+        table_name = self.get_database_table_name()
+
+        with connection.cursor() as cursor:
+            for field in object_fields:
+                field_name = field.name
+                try:
+                    model_field = model._meta.get_field(field_name)
+                    if not (hasattr(model_field, 'remote_field') and model_field.remote_field):
+                        continue
+
+                    # Get the referenced table
+                    related_model = model_field.remote_field.model
+                    related_table = related_model._meta.db_table
+                    column_name = model_field.column
+
+                    # Drop existing FK constraint if it exists
+                    # Query for existing constraints
+                    cursor.execute("""
+                        SELECT constraint_name
+                        FROM information_schema.table_constraints
+                        WHERE table_name = %s
+                        AND constraint_type = 'FOREIGN KEY'
+                        AND constraint_name LIKE %s
+                    """, [table_name, f"%{column_name}%"])
+
+                    for row in cursor.fetchall():
+                        constraint_name = row[0]
+                        cursor.execute(f'ALTER TABLE "{table_name}" DROP CONSTRAINT IF EXISTS "{constraint_name}"')
+
+                    # Create new FK constraint with ON DELETE CASCADE
+                    constraint_name = f"{table_name}_{column_name}_fk_cascade"
+                    cursor.execute(f"""
+                        ALTER TABLE "{table_name}"
+                        ADD CONSTRAINT "{constraint_name}"
+                        FOREIGN KEY ("{column_name}")
+                        REFERENCES "{related_table}" ("id")
+                        ON DELETE CASCADE
+                        DEFERRABLE INITIALLY DEFERRED
+                    """)
+
+                except Exception as e:
+                    # Log the error but continue with other fields
+                    import logging
+                    logger = logging.getLogger('netbox.custom_objects')
+                    logger.warning(f"Failed to ensure FK constraint for {table_name}.{field_name}: {e}")
+                    continue
+
     def create_model(self):
         from netbox_custom_objects.api.serializers import get_serializer_class
         # Get the model and ensure it's registered
@@ -558,6 +620,9 @@ class CustomObjectType(PrimaryModel):
 
         with connection.schema_editor() as schema_editor:
             schema_editor.create_model(model)
+
+        # Ensure FK constraints are properly created for OBJECT fields
+        self._ensure_fk_constraints(model)
 
         get_serializer_class(model)
         self.register_custom_object_search_index(model)
@@ -1481,6 +1546,10 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 else:
                     # Normal field alteration
                     schema_editor.alter_field(model, old_field, model_field)
+
+        # Ensure FK constraints are properly created for OBJECT fields with CASCADE behavior
+        if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
+            self.custom_object_type._ensure_fk_constraints(model)
 
         # Clear and refresh the model cache for this CustomObjectType when a field is modified
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)
