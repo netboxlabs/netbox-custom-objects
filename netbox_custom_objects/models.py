@@ -242,7 +242,10 @@ class CustomObjectType(PrimaryModel):
         :param custom_object_type_id: ID of the CustomObjectType
         :return: The cached model or None if not found
         """
-        return cls._model_cache.get(custom_object_type_id)
+        entry = cls._model_cache.get(custom_object_type_id)
+        if isinstance(entry, tuple):
+            return entry[0]
+        return entry
 
     @classmethod
     def is_model_cached(cls, custom_object_type_id):
@@ -447,8 +450,28 @@ class CustomObjectType(PrimaryModel):
 
         # Double-check pattern: check cache again after acquiring lock
         if self.is_model_cached(self.id) and not no_cache:
-            model = self.get_cached_model(self.id)
-            return model
+            entry = self._model_cache.get(self.id)
+            if isinstance(entry, tuple):
+                model, cached_timestamp = entry
+                if cached_timestamp == self.last_updated:
+                    return model
+            else:
+                return entry
+
+        # If we are regenerating, check for a stale model to clean up its relations
+        # This ensures that if a field was deleted, the related model (e.g. VRF)
+        # forgets about the old relationship.
+        if self.is_model_cached(self.id):
+            entry = self._model_cache.get(self.id)
+            stale_model = entry[0] if isinstance(entry, tuple) else entry
+            
+            # Expire cache for all related models in the stale model
+            for field in stale_model._meta.get_fields():
+                if field.is_relation and field.related_model and field.related_model != stale_model:
+                    try:
+                        field.related_model._meta._expire_cache()
+                    except Exception:
+                        pass
 
         # Generate the model inside the lock to prevent race conditions
         model_name = self.get_table_model_name(self.pk)
@@ -524,12 +547,23 @@ class CustomObjectType(PrimaryModel):
         self._after_model_generation(attrs, model)
 
         # Cache the generated model
-        self._model_cache[self.id] = model
+        self._model_cache[self.id] = (model, self.last_updated)
 
         # Do the clear cache now that we have it in the cache so there
         # is no recursion.
         apps.clear_cache()
         ContentType.objects.clear_cache()
+
+        # Clear the cache of related models to ensure reverse relations are updated
+        for field in self.fields.filter(
+            type__in=[
+                CustomFieldTypeChoices.TYPE_OBJECT,
+                CustomFieldTypeChoices.TYPE_MULTIOBJECT,
+            ],
+            related_object_type__isnull=False,
+        ):
+            if related_model := field.related_object_type.model_class():
+                related_model._meta._expire_cache()
 
         # Register the global SearchIndex for this model
         self.register_custom_object_search_index(model)
@@ -538,7 +572,8 @@ class CustomObjectType(PrimaryModel):
 
     def get_model_with_serializer(self):
         from netbox_custom_objects.api.serializers import get_serializer_class
-        model = self.get_model(no_cache=True)
+        # Use cached model to avoid clearing apps cache repeatedly
+        model = self.get_model()
         get_serializer_class(model)
         self.register_custom_object_search_index(model)
         return model
@@ -1487,6 +1522,9 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
         super().save(*args, **kwargs)
 
+        # Update parent timestamp to invalidate other pods' caches
+        self.custom_object_type.save()
+
         # Reregister SearchIndex with new set of searchable fields
         self.custom_object_type.register_custom_object_search_index(model)
 
@@ -1503,10 +1541,18 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 schema_editor.delete_model(through_model)
             schema_editor.remove_field(model, model_field)
 
+        # Expire cache on the related model (if any) to remove the reverse relation immediately
+        if self.related_object_type:
+            if related_model := self.related_object_type.model_class():
+                related_model._meta._expire_cache()
+
         # Clear the model cache for this CustomObjectType when a field is deleted
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)
 
         super().delete(*args, **kwargs)
+
+        # Update parent timestamp to invalidate other pods' caches
+        self.custom_object_type.save()
 
         # Reregister SearchIndex with new set of searchable fields
         self.custom_object_type.register_custom_object_search_index(model)
