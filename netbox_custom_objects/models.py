@@ -41,6 +41,7 @@ from netbox.models.features import (
     TagsMixin,
     get_model_features,
 )
+from netbox.plugins import get_plugin_config
 from netbox.registry import registry
 from netbox.search import SearchIndex
 from utilities import filters
@@ -198,6 +199,7 @@ class CustomObjectType(PrimaryModel):
         blank=True,
         editable=False
     )
+
     class Meta:
         verbose_name = "Custom Object Type"
         ordering = ("name",)
@@ -213,6 +215,15 @@ class CustomObjectType(PrimaryModel):
 
     def __str__(self):
         return self.display_name
+
+    def clean(self):
+        super().clean()
+
+        # Enforce max number of COTs that may be created (max_cots)
+        if not self.pk:
+            max_cots = get_plugin_config("netbox_custom_objects", "max_cots")
+            if max_cots and CustomObjectType.objects.count() > max_cots:
+                raise ValidationError(_(f"Maximum number of Custom Object Types ({max_cots}) exceeded"))
 
     @classmethod
     def clear_model_cache(cls, custom_object_type_id=None):
