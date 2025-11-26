@@ -27,7 +27,7 @@ from extras.choices import (
     CustomFieldUIVisibleChoices,
 )
 from extras.models.customfields import SEARCH_TYPES
-from netbox.models import ChangeLoggedModel, PrimaryModel
+from netbox.models import ChangeLoggedModel, NetBoxModel
 from netbox.models.features import (
     BookmarksMixin,
     ChangeLoggingMixin,
@@ -160,7 +160,7 @@ class CustomObject(
         return reverse(cls._get_viewname(action, rest_api), kwargs=kwargs)
 
 
-class CustomObjectType(PrimaryModel):
+class CustomObjectType(NetBoxModel):
     # Class-level cache for generated models
     _model_cache = {}
     _through_model_cache = (
@@ -185,6 +185,15 @@ class CustomObjectType(PrimaryModel):
                 inverse_match=True,
             ),
         ),
+    )
+    description = models.CharField(
+        verbose_name=_('description'),
+        max_length=200,
+        blank=True
+    )
+    comments = models.TextField(
+        verbose_name=_('comments'),
+        blank=True
     )
     version = models.CharField(max_length=10, blank=True)
     verbose_name = models.CharField(max_length=100, blank=True)
