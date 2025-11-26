@@ -219,11 +219,14 @@ class CustomObjectType(PrimaryModel):
     def clean(self):
         super().clean()
 
-        # Enforce max number of COTs that may be created (max_cots)
+        # Enforce max number of COTs that may be created (max_custom_object_types)
         if not self.pk:
-            max_cots = get_plugin_config("netbox_custom_objects", "max_cots")
+            max_cots = get_plugin_config("netbox_custom_objects", "max_custom_object_types")
             if max_cots and CustomObjectType.objects.count() > max_cots:
-                raise ValidationError(_(f"Maximum number of Custom Object Types ({max_cots}) exceeded"))
+                raise ValidationError(_(
+                    f"Maximum number of Custom Object Types ({max_cots}) "
+                    "exceeded; adjust max_custom_object_types to raise this limit"
+                ))
 
     @classmethod
     def clear_model_cache(cls, custom_object_type_id=None):

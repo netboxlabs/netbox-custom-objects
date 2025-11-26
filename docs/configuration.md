@@ -1,6 +1,6 @@
 # Configuration Parameters
 
-## `max_cots`
+## `max_custom_object_types`
 
 Default: None
 
