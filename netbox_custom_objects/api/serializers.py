@@ -43,11 +43,11 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
     class Meta:
         model = CustomObjectTypeField
         fields = (
-            # 'id', 'url', 'name', 'label', 'custom_object_type', 'field_type', 'content_type', 'many', 'options',
             "id",
             "name",
             "label",
             "custom_object_type",
+            "description",
             "type",
             "primary",
             "default",
@@ -59,6 +59,13 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
             "app_label",
             "model",
             "group_name",
+            "search_weight",
+            "filter_logic",
+            "ui_visible",
+            "ui_editable",
+            "weight",
+            "is_cloneable",
+            "comments",
         )
 
     def validate(self, attrs):
