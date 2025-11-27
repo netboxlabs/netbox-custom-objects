@@ -96,6 +96,14 @@ class CustomObject(
     class Meta:
         abstract = True
 
+    def save(self, *args, **kwargs):
+        # Ensure we have a fresh model definition before saving
+        # This is critical for multi-pod environments to ensure the schema is up-to-date
+        # We check for both adding and updating to ensure we always have the latest schema
+        self.custom_object_type.get_model()
+
+        super().save(*args, **kwargs)
+
     def __str__(self):
         # Find the field with primary=True and return that field's "name" as the name of the object
         primary_field = self._field_objects.get(self._primary_field_id, None)
@@ -198,6 +206,7 @@ class CustomObjectType(PrimaryModel):
         blank=True,
         editable=False
     )
+
     class Meta:
         verbose_name = "Custom Object Type"
         ordering = ("name",)
@@ -464,14 +473,79 @@ class CustomObjectType(PrimaryModel):
         if self.is_model_cached(self.id):
             entry = self._model_cache.get(self.id)
             stale_model = entry[0] if isinstance(entry, tuple) else entry
-            
-            # Expire cache for all related models in the stale model
+
+            # Clean up reverse relations on related models
+            # This is crucial to prevent "Reverse accessor clashes" when the model is regenerated
             for field in stale_model._meta.get_fields():
-                if field.is_relation and field.related_model and field.related_model != stale_model:
+                if (
+                    not field.auto_created
+                    and field.is_relation
+                    and field.related_model
+                    and field.related_model != stale_model
+                    and isinstance(field.related_model, type)
+                ):
+                    try:
+                        remote_field = field.remote_field
+                        if remote_field:
+                            accessor_name = remote_field.get_accessor_name()
+                            if accessor_name and hasattr(
+                                field.related_model, accessor_name
+                            ):
+                                delattr(field.related_model, accessor_name)
+                    except Exception:
+                        pass
+
                     try:
                         field.related_model._meta._expire_cache()
                     except Exception:
                         pass
+
+            # Clear global caches to ensure fresh start
+            ContentType.objects.clear_cache()
+            apps.clear_cache()
+
+            # Also clear the dynamic models cache in utilities
+            # We can't easily access the instance, but we can try to clear what we can
+            # This is a best-effort attempt to clear any lingering references
+            try:
+                # Force expire cache on all models in the app registry
+                for model in apps.get_models():
+                    model._meta._expire_cache()
+            except Exception:
+                pass
+
+        # PRE-EMPTIVE CLEANUP for current fields
+        # This handles the case where the target model (e.g. VRF) still has the descriptor
+        # from a previous generation of this model, even if we couldn't find the stale model.
+
+        # Clean up Object fields
+        for field in self.fields.filter(type=CustomFieldTypeChoices.TYPE_OBJECT):
+            if field.related_object_type:
+                try:
+                    # Get the related model class (e.g. VRF)
+                    related_model = field.related_object_type.model_class()
+                    if related_model:
+                        table_model_name = self.get_table_model_name(self.id).lower()
+                        # The related_name we generate in field_types.py
+                        related_name = f"{table_model_name}_{field.name}_set"
+
+                        if hasattr(related_model, related_name):
+                            delattr(related_model, related_name)
+                except Exception:
+                    pass
+
+        # Clean up Tags (TagsMixin)
+        try:
+            # NetBox uses extras.models.Tag
+            from extras.models import Tag
+
+            table_model_name = self.get_table_model_name(self.id).lower()
+            # Based on the error log: 'Tag.table12model_set'
+            related_name = f"{table_model_name}_set"
+            if hasattr(Tag, related_name):
+                delattr(Tag, related_name)
+        except Exception:
+            pass
 
         # Generate the model inside the lock to prevent race conditions
         model_name = self.get_table_model_name(self.pk)
@@ -572,6 +646,7 @@ class CustomObjectType(PrimaryModel):
 
     def get_model_with_serializer(self):
         from netbox_custom_objects.api.serializers import get_serializer_class
+
         # Use cached model to avoid clearing apps cache repeatedly
         model = self.get_model()
         get_serializer_class(model)
@@ -580,6 +655,7 @@ class CustomObjectType(PrimaryModel):
 
     def create_model(self):
         from netbox_custom_objects.api.serializers import get_serializer_class
+
         # Get the model and ensure it's registered
         model = self.get_model()
 

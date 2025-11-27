@@ -57,6 +57,7 @@ class LazyForeignKey(ForeignKey):
         """Resolve the lazy reference to the actual model class."""
         # Get the actual model class from the app registry
         from django.apps import apps
+
         actual_model = apps.get_model(self._to_model_name)
         # Update the field's references
         self.remote_field.model = actual_model
@@ -408,25 +409,23 @@ class ObjectFieldType(FieldType):
             )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
 
-            # Check if this is a self-referential field
-            if custom_object_type.id == field.custom_object_type.id:
-                # For self-referential fields, use LazyForeignKey to defer resolution
-                model_name = f"{APP_LABEL}.{custom_object_type.get_table_model_name(custom_object_type.id)}"
-                # Generate a unique related_name to prevent reverse accessor conflicts
-                table_model_name = field.custom_object_type.get_table_model_name(field.custom_object_type.id).lower()
-                related_name = f"{table_model_name}_{field.name}_set"
-                f = LazyForeignKey(
-                    model_name,
-                    null=True,
-                    blank=True,
-                    on_delete=models.CASCADE,
-                    related_name=related_name,
-                    **field_kwargs
-                )
-                return f
-            else:
-                # For cross-referential fields, use skip_object_fields to avoid infinite loops
-                model = custom_object_type.get_model(skip_object_fields=True)
+            # Use string reference for ALL custom object relationships to avoid recursion and partial models
+            # This ensures that we always refer to the fully generated model class
+            model_name = f"{APP_LABEL}.{custom_object_type.get_table_model_name(custom_object_type.id)}"
+            table_model_name = field.custom_object_type.get_table_model_name(
+                field.custom_object_type.id
+            ).lower()
+            related_name = f"{table_model_name}_{field.name}_set"
+
+            f = LazyForeignKey(
+                model_name,
+                null=True,
+                blank=True,
+                on_delete=models.CASCADE,
+                related_name=related_name,
+                **field_kwargs,
+            )
+            return f
         else:
             # to_model = content_type.model_class()._meta.object_name
             to_ct = f"{content_type.app_label}.{to_model}"
@@ -768,7 +767,7 @@ class MultiObjectFieldType(FieldType):
             )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
 
-            model = custom_object_type.get_model(skip_object_fields=True)
+            model = custom_object_type.get_model()
         else:
             # This is a regular NetBox model
             model = content_type.model_class()
