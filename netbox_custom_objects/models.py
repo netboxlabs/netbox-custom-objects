@@ -538,7 +538,7 @@ class CustomObjectType(PrimaryModel):
 
     def get_model_with_serializer(self):
         from netbox_custom_objects.api.serializers import get_serializer_class
-        model = self.get_model(no_cache=True)
+        model = self.get_model()
         get_serializer_class(model)
         self.register_custom_object_search_index(model)
         return model
