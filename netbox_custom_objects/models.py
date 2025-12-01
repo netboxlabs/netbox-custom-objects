@@ -447,11 +447,12 @@ class CustomObjectType(PrimaryModel):
         """
 
         # Double-check pattern: check cache again after acquiring lock
-        if self.is_model_cached(self.id) and not no_cache:
-            model = self.get_cached_model(self.id)
-            return model
+        with self._global_lock:
+            if self.is_model_cached(self.id) and not no_cache:
+                model = self.get_cached_model(self.id)
+                return model
 
-        # Generate the model inside the lock to prevent race conditions
+        # Generate the model outside the lock to avoid holding it during expensive operations
         model_name = self.get_table_model_name(self.pk)
 
         # TODO: Add other fields with "index" specified
@@ -524,8 +525,9 @@ class CustomObjectType(PrimaryModel):
 
         self._after_model_generation(attrs, model)
 
-        # Cache the generated model
-        self._model_cache[self.id] = model
+        # Cache the generated model (protected by lock for thread safety)
+        with self._global_lock:
+            self._model_cache[self.id] = model
 
         # Do the clear cache now that we have it in the cache so there
         # is no recursion.
