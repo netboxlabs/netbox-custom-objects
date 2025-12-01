@@ -15,6 +15,7 @@ from django.core.validators import RegexValidator, ValidationError
 from django.db import connection, IntegrityError, models, transaction
 from django.db.models import Q
 from django.db.models.functions import Lower
+from django.core.signals import request_started
 from django.db.models.signals import pre_delete, post_save
 from django.dispatch import receiver
 from django.urls import reverse
@@ -1601,3 +1602,46 @@ class CustomObjectObjectType(ObjectType):
 
     class Meta:
         proxy = True
+
+
+# Signal handlers to clear model cache when definitions change
+
+
+@receiver(request_started)
+def clear_cache_on_request(sender, **kwargs):
+    """
+    Clear the model cache at the start of each request.
+
+    The cache is not a performance cache, it is a recursion prevention cache,
+    mainly for __init__ get_models() and get_model() methods. This makes
+    sure that each request will have a fresh model cache.
+    """
+    CustomObjectType.clear_model_cache()
+
+
+@receiver(post_save, sender=CustomObjectType)
+def clear_cache_on_custom_object_type_save(sender, instance, **kwargs):
+    """
+    Clear the model cache when a CustomObjectType is saved.
+    """
+    CustomObjectType.clear_model_cache(instance.id)
+
+
+@receiver(post_save, sender=CustomObjectTypeField)
+def clear_cache_on_field_save(sender, instance, **kwargs):
+    """
+    Clear the model cache when a CustomObjectTypeField is saved.
+    This ensures the parent CustomObjectType's model is regenerated.
+    """
+    if instance.custom_object_type_id:
+        CustomObjectType.clear_model_cache(instance.custom_object_type_id)
+
+
+@receiver(pre_delete, sender=CustomObjectTypeField)
+def clear_cache_on_field_delete(sender, instance, **kwargs):
+    """
+    Clear the model cache when a CustomObjectTypeField is deleted.
+    This is in addition to the manual clear in the delete() method.
+    """
+    if instance.custom_object_type_id:
+        CustomObjectType.clear_model_cache(instance.custom_object_type_id)
