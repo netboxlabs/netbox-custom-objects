@@ -563,47 +563,39 @@ class CustomObjectType(PrimaryModel):
         with connection.cursor() as cursor:
             for field in object_fields:
                 field_name = field.name
-                try:
-                    model_field = model._meta.get_field(field_name)
-                    if not (hasattr(model_field, 'remote_field') and model_field.remote_field):
-                        continue
-
-                    # Get the referenced table
-                    related_model = model_field.remote_field.model
-                    related_table = related_model._meta.db_table
-                    column_name = model_field.column
-
-                    # Drop existing FK constraint if it exists
-                    # Query for existing constraints
-                    cursor.execute("""
-                        SELECT constraint_name
-                        FROM information_schema.table_constraints
-                        WHERE table_name = %s
-                        AND constraint_type = 'FOREIGN KEY'
-                        AND constraint_name LIKE %s
-                    """, [table_name, f"%{column_name}%"])
-
-                    for row in cursor.fetchall():
-                        constraint_name = row[0]
-                        cursor.execute(f'ALTER TABLE "{table_name}" DROP CONSTRAINT IF EXISTS "{constraint_name}"')
-
-                    # Create new FK constraint with ON DELETE CASCADE
-                    constraint_name = f"{table_name}_{column_name}_fk_cascade"
-                    cursor.execute(f"""
-                        ALTER TABLE "{table_name}"
-                        ADD CONSTRAINT "{constraint_name}"
-                        FOREIGN KEY ("{column_name}")
-                        REFERENCES "{related_table}" ("id")
-                        ON DELETE CASCADE
-                        DEFERRABLE INITIALLY DEFERRED
-                    """)
-
-                except Exception as e:
-                    # Log the error but continue with other fields
-                    import logging
-                    logger = logging.getLogger('netbox.custom_objects')
-                    logger.warning(f"Failed to ensure FK constraint for {table_name}.{field_name}: {e}")
+                model_field = model._meta.get_field(field_name)
+                if not (hasattr(model_field, 'remote_field') and model_field.remote_field):
                     continue
+
+                # Get the referenced table
+                related_model = model_field.remote_field.model
+                related_table = related_model._meta.db_table
+                column_name = model_field.column
+
+                # Drop existing FK constraint if it exists
+                # Query for existing constraints
+                cursor.execute("""
+                    SELECT constraint_name
+                    FROM information_schema.table_constraints
+                    WHERE table_name = %s
+                    AND constraint_type = 'FOREIGN KEY'
+                    AND constraint_name LIKE %s
+                """, [table_name, f"%{column_name}%"])
+
+                for row in cursor.fetchall():
+                    constraint_name = row[0]
+                    cursor.execute(f'ALTER TABLE "{table_name}" DROP CONSTRAINT IF EXISTS "{constraint_name}"')
+
+                # Create new FK constraint with ON DELETE CASCADE
+                constraint_name = f"{table_name}_{column_name}_fk_cascade"
+                cursor.execute(f"""
+                    ALTER TABLE "{table_name}"
+                    ADD CONSTRAINT "{constraint_name}"
+                    FOREIGN KEY ("{column_name}")
+                    REFERENCES "{related_table}" ("id")
+                    ON DELETE CASCADE
+                    DEFERRABLE INITIALLY DEFERRED
+                """)
 
     def create_model(self):
         from netbox_custom_objects.api.serializers import get_serializer_class
