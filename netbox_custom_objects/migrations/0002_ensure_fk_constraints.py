@@ -12,7 +12,8 @@ def ensure_existing_fk_constraints(apps, schema_editor):
     on individual fields rather than all fields, and this migration ensures existing
     fields have proper CASCADE constraints.
     """
-    CustomObjectType = apps.get_model('netbox_custom_objects', 'CustomObjectType')
+    # Import the actual model class (not the historical version) to access methods
+    from netbox_custom_objects.models import CustomObjectType
 
     for custom_object_type in CustomObjectType.objects.all():
         try:
