@@ -545,59 +545,73 @@ class CustomObjectType(PrimaryModel):
         self.register_custom_object_search_index(model)
         return model
 
-    def _ensure_fk_constraints(self, model):
+    def _ensure_field_fk_constraint(self, model, field_name):
+        """
+        Ensure that a foreign key constraint is properly created at the database level
+        for a specific OBJECT type field with ON DELETE CASCADE. This is necessary because
+        models are created with managed=False, which may not properly create FK constraints
+        with CASCADE behavior.
+
+        :param model: The model containing the field
+        :param field_name: The name of the field to ensure FK constraint for
+        """
+        table_name = self.get_database_table_name()
+
+        # Get the model field
+        try:
+            model_field = model._meta.get_field(field_name)
+        except Exception:
+            return
+
+        if not (hasattr(model_field, 'remote_field') and model_field.remote_field):
+            return
+
+        # Get the referenced table
+        related_model = model_field.remote_field.model
+        related_table = related_model._meta.db_table
+        column_name = model_field.column
+
+        with connection.cursor() as cursor:
+            # Drop existing FK constraint if it exists
+            # Query for existing constraints
+            cursor.execute("""
+                SELECT constraint_name
+                FROM information_schema.table_constraints
+                WHERE table_name = %s
+                AND constraint_type = 'FOREIGN KEY'
+                AND constraint_name LIKE %s
+            """, [table_name, f"%{column_name}%"])
+
+            for row in cursor.fetchall():
+                constraint_name = row[0]
+                cursor.execute(f'ALTER TABLE "{table_name}" DROP CONSTRAINT IF EXISTS "{constraint_name}"')
+
+            # Create new FK constraint with ON DELETE CASCADE
+            constraint_name = f"{table_name}_{column_name}_fk_cascade"
+            cursor.execute(f"""
+                ALTER TABLE "{table_name}"
+                ADD CONSTRAINT "{constraint_name}"
+                FOREIGN KEY ("{column_name}")
+                REFERENCES "{related_table}" ("id")
+                ON DELETE CASCADE
+                DEFERRABLE INITIALLY DEFERRED
+            """)
+
+    def _ensure_all_fk_constraints(self, model):
         """
         Ensure that foreign key constraints are properly created at the database level
-        for OBJECT type fields with ON DELETE CASCADE. This is necessary because models
-        are created with managed=False, which may not properly create FK constraints
-        with CASCADE behavior.
+        for ALL OBJECT type fields with ON DELETE CASCADE.
+
+        NOTE: This method is deprecated for normal use - use _ensure_field_fk_constraint
+        for individual fields. This is kept for migration purposes only.
 
         :param model: The model to ensure FK constraints for
         """
         # Query all OBJECT type fields for this CustomObjectType
         object_fields = self.fields.filter(type=CustomFieldTypeChoices.TYPE_OBJECT)
 
-        if not object_fields.exists():
-            return
-
-        table_name = self.get_database_table_name()
-
-        with connection.cursor() as cursor:
-            for field in object_fields:
-                field_name = field.name
-                model_field = model._meta.get_field(field_name)
-                if not (hasattr(model_field, 'remote_field') and model_field.remote_field):
-                    continue
-
-                # Get the referenced table
-                related_model = model_field.remote_field.model
-                related_table = related_model._meta.db_table
-                column_name = model_field.column
-
-                # Drop existing FK constraint if it exists
-                # Query for existing constraints
-                cursor.execute("""
-                    SELECT constraint_name
-                    FROM information_schema.table_constraints
-                    WHERE table_name = %s
-                    AND constraint_type = 'FOREIGN KEY'
-                    AND constraint_name LIKE %s
-                """, [table_name, f"%{column_name}%"])
-
-                for row in cursor.fetchall():
-                    constraint_name = row[0]
-                    cursor.execute(f'ALTER TABLE "{table_name}" DROP CONSTRAINT IF EXISTS "{constraint_name}"')
-
-                # Create new FK constraint with ON DELETE CASCADE
-                constraint_name = f"{table_name}_{column_name}_fk_cascade"
-                cursor.execute(f"""
-                    ALTER TABLE "{table_name}"
-                    ADD CONSTRAINT "{constraint_name}"
-                    FOREIGN KEY ("{column_name}")
-                    REFERENCES "{related_table}" ("id")
-                    ON DELETE CASCADE
-                    DEFERRABLE INITIALLY DEFERRED
-                """)
+        for field in object_fields:
+            self._ensure_field_fk_constraint(model, field.name)
 
     def create_model(self):
         from netbox_custom_objects.api.serializers import get_serializer_class
@@ -615,8 +629,8 @@ class CustomObjectType(PrimaryModel):
         with connection.schema_editor() as schema_editor:
             schema_editor.create_model(model)
 
-        # Ensure FK constraints are properly created for OBJECT fields
-        self._ensure_fk_constraints(model)
+        # Note: FK constraints for OBJECT fields are now created when the field is saved,
+        # not when the model is first created (since there are no fields yet)
 
         get_serializer_class(model)
         self.register_custom_object_search_index(model)
@@ -855,6 +869,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         super().__init__(*args, **kwargs)
         self._name = self.__dict__.get("name")
         self._original_name = self.name
+        self._original_type = self.type
+        self._original_related_object_type_id = self.related_object_type_id
 
     def __str__(self):
         return self.label or self.name.replace("_", " ").capitalize()
@@ -1542,13 +1558,39 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     schema_editor.alter_field(model, old_field, model_field)
 
         # Ensure FK constraints are properly created for OBJECT fields with CASCADE behavior
+        # Only do this when:
+        # 1. Creating a new OBJECT field, OR
+        # 2. Updating an existing field where type changed to OBJECT, OR
+        # 3. Updating an existing OBJECT field where related_object_type changed
+        should_ensure_fk = False
         if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
-            self.custom_object_type._ensure_fk_constraints(model)
+            if self._state.adding:
+                # New OBJECT field - ensure FK constraint
+                should_ensure_fk = True
+            else:
+                # Existing field - check if type changed to OBJECT or related_object_type changed
+                type_changed_to_object = (
+                    self._original_type != CustomFieldTypeChoices.TYPE_OBJECT
+                    and self.type == CustomFieldTypeChoices.TYPE_OBJECT
+                )
+                related_object_changed = (
+                    self._original_type == CustomFieldTypeChoices.TYPE_OBJECT
+                    and self.related_object_type_id != self._original_related_object_type_id
+                )
+                should_ensure_fk = type_changed_to_object or related_object_changed
 
         # Clear and refresh the model cache for this CustomObjectType when a field is modified
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)
 
         super().save(*args, **kwargs)
+
+        # Ensure FK constraints AFTER the transaction commits to avoid "pending trigger events" errors
+        # We use transaction.on_commit() to ensure all deferred constraints are checked first
+        if should_ensure_fk:
+            def ensure_constraint():
+                self.custom_object_type._ensure_field_fk_constraint(model, self.name)
+
+            transaction.on_commit(ensure_constraint)
 
         # Reregister SearchIndex with new set of searchable fields
         self.custom_object_type.register_custom_object_search_index(model)
