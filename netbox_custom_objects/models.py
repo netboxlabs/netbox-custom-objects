@@ -626,9 +626,6 @@ class CustomObjectType(PrimaryModel):
         with connection.schema_editor() as schema_editor:
             schema_editor.create_model(model)
 
-        # Note: FK constraints for OBJECT fields are now created when the field is saved,
-        # not when the model is first created (since there are no fields yet)
-
         get_serializer_class(model)
         self.register_custom_object_search_index(model)
 
