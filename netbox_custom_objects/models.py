@@ -602,9 +602,6 @@ class CustomObjectType(PrimaryModel):
         Ensure that foreign key constraints are properly created at the database level
         for ALL OBJECT type fields with ON DELETE CASCADE.
 
-        NOTE: This method is deprecated for normal use - use _ensure_field_fk_constraint
-        for individual fields. This is kept for migration purposes only.
-
         :param model: The model to ensure FK constraints for
         """
         # Query all OBJECT type fields for this CustomObjectType
@@ -1558,14 +1555,9 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     schema_editor.alter_field(model, old_field, model_field)
 
         # Ensure FK constraints are properly created for OBJECT fields with CASCADE behavior
-        # Only do this when:
-        # 1. Creating a new OBJECT field, OR
-        # 2. Updating an existing field where type changed to OBJECT, OR
-        # 3. Updating an existing OBJECT field where related_object_type changed
         should_ensure_fk = False
         if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
             if self._state.adding:
-                # New OBJECT field - ensure FK constraint
                 should_ensure_fk = True
             else:
                 # Existing field - check if type changed to OBJECT or related_object_type changed
@@ -1585,7 +1577,6 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         super().save(*args, **kwargs)
 
         # Ensure FK constraints AFTER the transaction commits to avoid "pending trigger events" errors
-        # We use transaction.on_commit() to ensure all deferred constraints are checked first
         if should_ensure_fk:
             def ensure_constraint():
                 self.custom_object_type._ensure_field_fk_constraint(model, self.name)
