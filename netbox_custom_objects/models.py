@@ -15,7 +15,6 @@ from django.core.validators import RegexValidator, ValidationError
 from django.db import connection, IntegrityError, models, transaction
 from django.db.models import Q
 from django.db.models.functions import Lower
-from django.core.signals import request_started
 from django.db.models.signals import pre_delete, post_save
 from django.dispatch import receiver
 from django.urls import reverse
@@ -1607,18 +1606,6 @@ class CustomObjectObjectType(ObjectType):
 
 
 # Signal handlers to clear model cache when definitions change
-
-
-@receiver(request_started)
-def clear_cache_on_request(sender, **kwargs):
-    """
-    Clear the model cache at the start of each request.
-
-    The cache is not a performance cache, it is a recursion prevention cache,
-    mainly for __init__ get_models() and get_model() methods. This makes
-    sure that each request will have a fresh model cache.
-    """
-    CustomObjectType.clear_model_cache()
 
 
 @receiver(post_save, sender=CustomObjectType)
