@@ -10,7 +10,7 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.reverse import reverse
 from rest_framework.utils import model_meta
 
-from netbox_custom_objects import field_types
+from netbox_custom_objects import constants, field_types
 from netbox_custom_objects.models import (CustomObject, CustomObjectType,
                                           CustomObjectTypeField)
 
@@ -117,6 +117,8 @@ class CustomObjectTypeSerializer(NetBoxModelSerializer):
         read_only=True,
         many=True,
     )
+    table_model_name = serializers.SerializerMethodField()
+    object_type_name = serializers.SerializerMethodField()
 
     class Meta:
         model = CustomObjectType
@@ -132,8 +134,16 @@ class CustomObjectTypeSerializer(NetBoxModelSerializer):
             "created",
             "last_updated",
             "fields",
+            "table_model_name",
+            "object_type_name",
         ]
         brief_fields = ("id", "url", "name", "slug", "description")
+
+    def get_table_model_name(self, obj):
+        return obj.get_table_model_name(obj.id)
+
+    def get_object_type_name(self, obj):
+        return f"{constants.APP_LABEL}.{obj.get_table_model_name(obj.id).lower()}"
 
     def create(self, validated_data):
         return super().create(validated_data)
