@@ -55,7 +55,7 @@ class CustomObjectsPluginConfig(PluginConfig):
     min_version = "4.4.0"
     default_settings = {
         # The maximum number of Custom Object Types that may be created
-        'max_custom_object_types': 100,
+        'max_custom_object_types': 50,
     }
     required_settings = []
     template_extensions = "template_content.template_extensions"
