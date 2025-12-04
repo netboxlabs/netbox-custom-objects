@@ -48,7 +48,7 @@ class CustomObjectLink(PluginTemplateExtension):
         linked_custom_objects = []
         for field in custom_object_type_fields:
             model = field.custom_object_type.get_model()
-            for model_object in model.objects.all():
+            for model_object in model.objects.all()[0:19]:
                 model_field = getattr(model_object, field.name)
                 if model_field:
                     if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
