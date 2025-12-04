@@ -23,6 +23,13 @@ class CustomObjectsTestCase:
         self.client = Client()
         self.client.force_login(self.user)
 
+    def tearDown(self):
+        """Clean up after each test."""
+        # Clear the model cache to ensure test isolation
+        # This prevents cached models with deleted fields from affecting other tests
+        CustomObjectType.clear_model_cache()
+        super().tearDown()
+
     @classmethod
     def create_custom_object_type(cls, **kwargs):
         """Helper method to create a custom object type."""
