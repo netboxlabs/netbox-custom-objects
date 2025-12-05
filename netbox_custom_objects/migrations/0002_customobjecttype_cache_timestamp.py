@@ -6,7 +6,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("netbox_custom_objects", "0002_ensure_fk_constraints"),
+        ("netbox_custom_objects", "0001_initial"),
     ]
 
     operations = [

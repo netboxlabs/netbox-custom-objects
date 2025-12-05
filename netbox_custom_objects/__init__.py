@@ -1,6 +1,7 @@
 import sys
 import warnings
 
+from django.db import transaction
 from django.db.utils import DatabaseError, OperationalError, ProgrammingError
 from netbox.plugins import PluginConfig
 
@@ -78,10 +79,17 @@ class CustomObjectsPluginConfig(PluginConfig):
                 super().ready()
                 return
 
-            qs = CustomObjectType.objects.all()
-            for obj in qs:
-                model = obj.get_model()
-                get_serializer_class(model)
+            try:
+                with transaction.atomic():
+                    qs = CustomObjectType.objects.all()
+                    for obj in qs:
+                        model = obj.get_model()
+                        get_serializer_class(model)
+            except (DatabaseError, OperationalError, ProgrammingError):
+                # Database schema may not match model during migrations
+                # The transaction.atomic() block will automatically rollback
+                # Skip loading custom object types in this case
+                pass
 
         super().ready()
 
@@ -138,16 +146,24 @@ class CustomObjectsPluginConfig(PluginConfig):
             # Add custom object type models
             from .models import CustomObjectType
 
-            custom_object_types = CustomObjectType.objects.all()
-            for custom_type in custom_object_types:
-                model = custom_type.get_model()
-                if model:
-                    yield model
+            try:
+                with transaction.atomic():
+                    custom_object_types = CustomObjectType.objects.all()
+                    for custom_type in custom_object_types:
+                        model = custom_type.get_model()
+                        if model:
+                            yield model
 
-                    # If include_auto_created is True, also yield through models
-                    if include_auto_created and hasattr(model, '_through_models'):
-                        for through_model in model._through_models:
-                            yield through_model
+                            # If include_auto_created is True, also yield through models
+                            if include_auto_created and hasattr(model, '_through_models'):
+                                for through_model in model._through_models:
+                                    yield through_model
+            except (DatabaseError, OperationalError, ProgrammingError):
+                # Database schema may not match model during migrations
+                # (e.g., cache_timestamp column doesn't exist yet)
+                # The transaction.atomic() block will automatically rollback
+                # Skip loading custom object types in this case
+                pass
 
 
 config = CustomObjectsPluginConfig
