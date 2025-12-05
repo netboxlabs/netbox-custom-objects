@@ -1,5 +1,6 @@
 import decimal
 import re
+import threading
 from datetime import date, datetime
 
 import django_filters
@@ -14,7 +15,8 @@ from django.core.validators import RegexValidator, ValidationError
 from django.db import connection, IntegrityError, models, transaction
 from django.db.models import Q
 from django.db.models.functions import Lower
-from django.db.models.signals import pre_delete
+from django.db.models.signals import pre_delete, post_save
+from django.dispatch import receiver
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 from core.signals import handle_deleted_object
@@ -25,7 +27,7 @@ from extras.choices import (
     CustomFieldUIVisibleChoices,
 )
 from extras.models.customfields import SEARCH_TYPES
-from netbox.models import ChangeLoggedModel, PrimaryModel
+from netbox.models import ChangeLoggedModel, NetBoxModel
 from netbox.models.features import (
     BookmarksMixin,
     ChangeLoggingMixin,
@@ -39,6 +41,7 @@ from netbox.models.features import (
     TagsMixin,
     get_model_features,
 )
+from netbox.plugins import get_plugin_config
 from netbox.registry import registry
 from netbox.search import SearchIndex
 from utilities import filters
@@ -158,12 +161,14 @@ class CustomObject(
         return reverse(cls._get_viewname(action, rest_api), kwargs=kwargs)
 
 
-class CustomObjectType(PrimaryModel):
+class CustomObjectType(NetBoxModel):
     # Class-level cache for generated models
     _model_cache = {}
     _through_model_cache = (
         {}
     )  # Now stores {custom_object_type_id: {through_model_name: through_model}}
+    _model_cache_locks = {}  # Per-model locks to prevent race conditions
+    _global_lock = threading.RLock()  # Global lock for managing per-model locks
     name = models.CharField(
         max_length=100,
         unique=True,
@@ -182,11 +187,27 @@ class CustomObjectType(PrimaryModel):
             ),
         ),
     )
+    description = models.CharField(
+        verbose_name=_('description'),
+        max_length=200,
+        blank=True
+    )
+    comments = models.TextField(
+        verbose_name=_('comments'),
+        blank=True
+    )
     version = models.CharField(max_length=10, blank=True)
-    schema = models.JSONField(blank=True, default=dict)
     verbose_name = models.CharField(max_length=100, blank=True)
     verbose_name_plural = models.CharField(max_length=100, blank=True)
     slug = models.SlugField(max_length=100, unique=True, db_index=True)
+    object_type = models.OneToOneField(
+        ObjectType,
+        on_delete=models.CASCADE,
+        related_name="custom_object_types",
+        null=True,
+        blank=True,
+        editable=False
+    )
 
     class Meta:
         verbose_name = "Custom Object Type"
@@ -204,6 +225,18 @@ class CustomObjectType(PrimaryModel):
     def __str__(self):
         return self.display_name
 
+    def clean(self):
+        super().clean()
+
+        # Enforce max number of COTs that may be created (max_custom_object_types)
+        if not self.pk:
+            max_cots = get_plugin_config("netbox_custom_objects", "max_custom_object_types")
+            if max_cots and CustomObjectType.objects.count() > max_cots:
+                raise ValidationError(_(
+                    f"Maximum number of Custom Object Types ({max_cots}) "
+                    "exceeded; adjust max_custom_object_types to raise this limit"
+                ))
+
     @classmethod
     def clear_model_cache(cls, custom_object_type_id=None):
         """
@@ -211,24 +244,18 @@ class CustomObjectType(PrimaryModel):
 
         :param custom_object_type_id: ID of the CustomObjectType to clear cache for, or None to clear all
         """
-        if custom_object_type_id is not None:
-            cls._model_cache.pop(custom_object_type_id, None)
-            cls._through_model_cache.pop(custom_object_type_id, None)
-        else:
-            cls._model_cache.clear()
-            cls._through_model_cache.clear()
+        with cls._global_lock:
+            if custom_object_type_id is not None:
+                cls._model_cache.pop(custom_object_type_id, None)
+                cls._through_model_cache.pop(custom_object_type_id, None)
+                cls._model_cache_locks.pop(custom_object_type_id, None)
+            else:
+                cls._model_cache.clear()
+                cls._through_model_cache.clear()
+                cls._model_cache_locks.clear()
 
         # Clear Django apps registry cache to ensure newly created models are recognized
         apps.get_models.cache_clear()
-
-        # Clear global recursion tracking when clearing cache
-        cls.clear_global_recursion_tracking()
-
-    @classmethod
-    def clear_global_recursion_tracking(cls):
-        """Clear the global recursion tracking set."""
-        if hasattr(cls, '_global_generating_models'):
-            cls._global_generating_models.clear()
 
     @classmethod
     def get_cached_model(cls, custom_object_type_id):
@@ -275,20 +302,6 @@ class CustomObjectType(PrimaryModel):
         """
         return cls._through_model_cache.get(custom_object_type_id, {})
 
-    @property
-    def formatted_schema(self):
-        result = "<ul>"
-        for field_name, field in self.schema.items():
-            field_type = field.get("type")
-            if field_type in ["object", "multiobject"]:
-                content_type = ContentType.objects.get(
-                    app_label=field["app_label"], model=field["model"]
-                )
-                field = content_type
-            result += f"<li>{field_name}: {field}</li>"
-        result += "</ul>"
-        return result
-
     def get_absolute_url(self):
         return reverse("plugins:netbox_custom_objects:customobjecttype", args=[self.pk])
 
@@ -302,34 +315,10 @@ class CustomObjectType(PrimaryModel):
     def get_table_model_name(cls, table_id):
         return f"Table{table_id}Model"
 
-    @property
-    def content_type(self):
-        try:
-            return self.get_or_create_content_type()
-        except Exception:
-            # If we still can't get it, return None
-            return None
-
-    def get_or_create_content_type(self):
-        """
-        Get or create the ObjectType for this CustomObjectType.
-        This ensures the ObjectType is immediately available in the current transaction.
-        """
-        content_type_name = self.get_table_model_name(self.id).lower()
-        try:
-            return ObjectType.objects.get(app_label=APP_LABEL, model=content_type_name)
-        except Exception:
-            # Create the ObjectType and ensure it's immediately available
-            ct = ObjectType.objects.create(app_label=APP_LABEL, model=content_type_name)
-            # Force a refresh to ensure it's available in the current transaction
-            ct.refresh_from_db()
-            return ct
-
     def _fetch_and_generate_field_attrs(
         self,
         fields,
         skip_object_fields=False,
-        generating_models=None,
     ):
         field_attrs = {
             "_primary_field_id": -1,
@@ -353,51 +342,8 @@ class CustomObjectType(PrimaryModel):
             field_type = FIELD_TYPE_CLASS[field.type]()
             field_name = field.name
 
-            # Pass generating models set to field generation to prevent infinite loops
-            field_type._generating_models = generating_models
-
-            # Check if we're in a recursion situation before generating the field
-            # Use depth-based recursion control: allow self-referential fields at level 0, skip at deeper levels
-            should_skip = False
-
-            # Calculate depth correctly: depth 0 is when we're generating the main model
-            # depth 1+ is when we're generating related models recursively
-            current_depth = len(generating_models) - 1 if generating_models else 0
-
-            if field.type in [CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT]:
-                if field.related_object_type:
-                    # Check if this field references the same CustomObjectType (self-referential)
-                    if field.related_object_type.app_label == APP_LABEL:
-                        # This is a custom object type
-                        from django.contrib.contenttypes.models import ContentType
-                        content_type = ContentType.objects.get(pk=field.related_object_type_id)
-                        if content_type.app_label == APP_LABEL:
-                            # Extract the custom object type ID from the model name
-                            # The model name format is "table{id}model" or similar
-                            model_name = content_type.model
-
-                            # Try to extract the ID from the model name
-                            id_match = re.search(r'table(\d+)model', model_name, re.IGNORECASE)
-                            if id_match:
-                                custom_object_type_id = int(id_match.group(1))
-
-                                if custom_object_type_id == self.id:
-                                    # This is a self-referential field
-                                    if current_depth == 0:
-                                        # At level 0, allow self-referential fields
-                                        should_skip = False
-                                    else:
-                                        # At deeper levels, skip self-referential fields to prevent infinite recursion
-                                        should_skip = True
-
-            if should_skip:
-                # Skip this field to prevent further recursion
-                field_attrs["_skipped_fields"].add(field.name)
-                continue
-
             field_attrs[field.name] = field_type.get_model_field(
                 field,
-                _generating_models=generating_models,  # Pass as prefixed parameter
             )
 
             # Add to field objects only if the field was successfully generated
@@ -507,63 +453,29 @@ class CustomObjectType(PrimaryModel):
 
     def get_model(
         self,
-        fields=None,
-        manytomany_models=None,
-        app_label=None,
         skip_object_fields=False,
         no_cache=False,
-        _generating_models=None,
     ):
         """
         Generates a temporary Django model based on available fields that belong to
         this table. Returns cached model if available, otherwise generates and caches it.
 
-        :param fields: Extra table field instances that need to be added the model.
-        :type fields: list
-        :param manytomany_models: In some cases with related fields a model has to be
-            generated in order to generate that model. In order to prevent a
-            recursion loop we cache the generated models and pass those along.
-        :type manytomany_models: dict
-        :param app_label: In some cases with related fields, the related models must
-            have the same app_label. If passed along in this parameter, then the
-            generated model will use that one instead of generating a unique one.
-        :type app_label: Optional[String]
         :param skip_object_fields: Don't add object or multiobject fields to the model
         :type skip_object_fields: bool
-        :param no_cache: Don't cache the generated model or attempt to pull from cache
+        :param no_cache: Force regeneration of the model, bypassing cache
         :type no_cache: bool
-        :param _generating_models: Internal parameter to track models being generated
-        :type _generating_models: set
         :return: The generated model.
         :rtype: Model
         """
 
-        # Check if we have a cached model for this CustomObjectType
-        if self.is_model_cached(self.id) and not no_cache:
-            model = self.get_cached_model(self.id)
-            # Ensure the serializer is registered even for cached models
-            from netbox_custom_objects.api.serializers import get_serializer_class
+        # Double-check pattern: check cache again after acquiring lock
+        with self._global_lock:
+            if self.is_model_cached(self.id) and not no_cache:
+                model = self.get_cached_model(self.id)
+                return model
 
-            get_serializer_class(model)
-            return model
-
-        # Circular reference detection using class-level tracking
-        if not hasattr(CustomObjectType, '_global_generating_models'):
-            CustomObjectType._global_generating_models = set()
-
-        if _generating_models is None:
-            _generating_models = CustomObjectType._global_generating_models
-
-        # Add this model to the set of models being generated
-        _generating_models.add(self.id)
-
-        if app_label is None:
-            app_label = APP_LABEL
-
+        # Generate the model outside the lock to avoid holding it during expensive operations
         model_name = self.get_table_model_name(self.pk)
-
-        if fields is None:
-            fields = []
 
         # TODO: Add other fields with "index" specified
         indexes = []
@@ -591,10 +503,10 @@ class CustomObjectType(PrimaryModel):
         }
 
         # Pass the generating models set to field generation
+        fields = []
         field_attrs = self._fetch_and_generate_field_attrs(
             fields,
             skip_object_fields=skip_object_fields,
-            generating_models=_generating_models
         )
 
         attrs.update(**field_attrs)
@@ -627,66 +539,124 @@ class CustomObjectType(PrimaryModel):
             TM.post_through_setup = original_post_through_setup
 
         # Register the main model with Django's app registry
-        try:
-            existing_model = apps.get_model(APP_LABEL, model_name)
-            # If model exists but is different, we have a problem
-            if existing_model is not model:
-                # Use the existing model to avoid conflicts
-                model = existing_model
-        except LookupError:
-            apps.register_model(APP_LABEL, model)
+        if model_name.lower() in apps.all_models[APP_LABEL]:
+            # Remove the existing model from all_models before registering the new one
+            del apps.all_models[APP_LABEL][model_name.lower()]
 
-        if not manytomany_models:
-            self._after_model_generation(attrs, model)
+        apps.register_model(APP_LABEL, model)
 
-        # Cache the generated model
-        if not no_cache:
+        self._after_model_generation(attrs, model)
+
+        # Cache the generated model (protected by lock for thread safety)
+        with self._global_lock:
             self._model_cache[self.id] = model
-            # Do the clear cache now that we have it in the cache so there
-            # is no recursion.
-            apps.clear_cache()
 
-        # Register the serializer for this model
-        if not manytomany_models:
-            from netbox_custom_objects.api.serializers import get_serializer_class
-
-            get_serializer_class(model)
+        # Do the clear cache now that we have it in the cache so there
+        # is no recursion.
+        apps.clear_cache()
+        ContentType.objects.clear_cache()
 
         # Register the global SearchIndex for this model
         self.register_custom_object_search_index(model)
 
-        # Clean up: remove this model from the set of models being generated
-        if _generating_models is not None:
-            _generating_models.discard(self.id)
-            # Also clean up from global tracking if this is the global set
-            if _generating_models is CustomObjectType._global_generating_models:
-                CustomObjectType._global_generating_models.discard(self.id)
-                # Clear global tracking when we're done to ensure clean state
-                if len(CustomObjectType._global_generating_models) == 0:
-                    CustomObjectType._global_generating_models.clear()
-
         return model
 
+    def get_model_with_serializer(self):
+        from netbox_custom_objects.api.serializers import get_serializer_class
+        model = self.get_model()
+        get_serializer_class(model)
+        self.register_custom_object_search_index(model)
+        return model
+
+    def _ensure_field_fk_constraint(self, model, field_name):
+        """
+        Ensure that a foreign key constraint is properly created at the database level
+        for a specific OBJECT type field with ON DELETE CASCADE. This is necessary because
+        models are created with managed=False, which may not properly create FK constraints
+        with CASCADE behavior.
+
+        :param model: The model containing the field
+        :param field_name: The name of the field to ensure FK constraint for
+        """
+        table_name = self.get_database_table_name()
+
+        # Get the model field
+        try:
+            model_field = model._meta.get_field(field_name)
+        except Exception:
+            return
+
+        if not (hasattr(model_field, 'remote_field') and model_field.remote_field):
+            return
+
+        # Get the referenced table
+        related_model = model_field.remote_field.model
+        related_table = related_model._meta.db_table
+        column_name = model_field.column
+
+        with connection.cursor() as cursor:
+            # Drop existing FK constraint if it exists
+            # Query for existing constraints
+            cursor.execute("""
+                SELECT constraint_name
+                FROM information_schema.table_constraints
+                WHERE table_name = %s
+                AND constraint_type = 'FOREIGN KEY'
+                AND constraint_name LIKE %s
+            """, [table_name, f"%{column_name}%"])
+
+            for row in cursor.fetchall():
+                constraint_name = row[0]
+                cursor.execute(f'ALTER TABLE "{table_name}" DROP CONSTRAINT IF EXISTS "{constraint_name}"')
+
+            # Create new FK constraint with ON DELETE CASCADE
+            constraint_name = f"{table_name}_{column_name}_fk_cascade"
+            cursor.execute(f"""
+                ALTER TABLE "{table_name}"
+                ADD CONSTRAINT "{constraint_name}"
+                FOREIGN KEY ("{column_name}")
+                REFERENCES "{related_table}" ("id")
+                ON DELETE CASCADE
+                DEFERRABLE INITIALLY DEFERRED
+            """)
+
+    def _ensure_all_fk_constraints(self, model):
+        """
+        Ensure that foreign key constraints are properly created at the database level
+        for ALL OBJECT type fields with ON DELETE CASCADE.
+
+        :param model: The model to ensure FK constraints for
+        """
+        # Query all OBJECT type fields for this CustomObjectType
+        object_fields = self.fields.filter(type=CustomFieldTypeChoices.TYPE_OBJECT)
+
+        for field in object_fields:
+            self._ensure_field_fk_constraint(model, field.name)
+
     def create_model(self):
+        from netbox_custom_objects.api.serializers import get_serializer_class
         # Get the model and ensure it's registered
         model = self.get_model()
 
         # Ensure the ContentType exists and is immediately available
-        ct = self.get_or_create_content_type()
         features = get_model_features(model)
-        ct.features = features + ['branching']
-        ct.public = True
-        ct.features = features
-        ct.save()
+        if 'branching' in features:
+            features.remove('branching')
+        self.object_type.features = features
+        self.object_type.public = True
+        self.object_type.save()
 
         with connection.schema_editor() as schema_editor:
             schema_editor.create_model(model)
 
+        get_serializer_class(model)
         self.register_custom_object_search_index(model)
 
     def save(self, *args, **kwargs):
         needs_db_create = self._state.adding
+
         super().save(*args, **kwargs)
+
         if needs_db_create:
             self.create_model()
         else:
@@ -700,7 +670,7 @@ class CustomObjectType(PrimaryModel):
         model = self.get_model()
 
         # Delete all CustomObjectTypeFields that reference this CustomObjectType
-        for field in CustomObjectTypeField.objects.filter(related_object_type=self.content_type):
+        for field in CustomObjectTypeField.objects.filter(related_object_type=self.object_type):
             field.delete()
 
         object_type = ObjectType.objects.get_for_model(model)
@@ -714,6 +684,19 @@ class CustomObjectType(PrimaryModel):
         with connection.schema_editor() as schema_editor:
             schema_editor.delete_model(model)
         pre_delete.connect(handle_deleted_object)
+
+
+@receiver(post_save, sender=CustomObjectType)
+def custom_object_type_post_save_handler(sender, instance, created, **kwargs):
+    if created:
+        # If creating a new object, get or create the ObjectType
+        content_type_name = instance.get_table_model_name(instance.id).lower()
+        ct, created = ObjectType.objects.get_or_create(
+            app_label=APP_LABEL,
+            model=content_type_name
+        )
+        instance.object_type = ct
+        instance.save()
 
 
 class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
@@ -903,6 +886,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         super().__init__(*args, **kwargs)
         self._name = self.__dict__.get("name")
         self._original_name = self.name
+        self._original_type = self.type
+        self._original_related_object_type_id = self.related_object_type_id
 
     def __str__(self):
         return self.label or self.name.replace("_", " ").capitalize()
@@ -1123,6 +1108,85 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                         )
                     }
                 )
+
+        # Check for recursion in object and multiobject fields
+        if (self.type in (
+            CustomFieldTypeChoices.TYPE_OBJECT,
+            CustomFieldTypeChoices.TYPE_MULTIOBJECT,
+        ) and self.related_object_type_id and
+            self.related_object_type.app_label == APP_LABEL):
+            self._check_recursion()
+
+    def _check_recursion(self):
+        """
+        Check for circular references in object and multiobject fields.
+        Raises ValidationError if recursion is detected.
+        """
+        # Check if this field points to the same custom object type (self-referential)
+        if self.related_object_type_id == self.custom_object_type.object_type_id:
+            return  # Self-referential fields are allowed
+
+        # Get the related custom object type directly from the object_type relationship
+        try:
+            related_custom_object_type = CustomObjectType.objects.get(object_type=self.related_object_type)
+        except CustomObjectType.DoesNotExist:
+            return  # Not a custom object type, no recursion possible
+
+        # Check for circular references by traversing the dependency chain
+        visited = {self.custom_object_type.id}
+        if self._has_circular_reference(related_custom_object_type, visited):
+            raise ValidationError(
+                {
+                    "related_object_type": _(
+                        "Circular reference detected. This field would create a circular dependency "
+                        "between custom object types."
+                    )
+                }
+            )
+
+    def _has_circular_reference(self, custom_object_type, visited):
+        """
+        Recursively check if there's a circular reference by following the dependency chain.
+
+        Args:
+            custom_object_type: The CustomObjectType object to check
+            visited: Set of custom object type IDs already visited in this traversal
+
+        Returns:
+            bool: True if a circular reference is detected, False otherwise
+        """
+        # If we've already visited this type, we have a cycle
+        if custom_object_type.id in visited:
+            return True
+
+        # Add this type to visited set
+        visited.add(custom_object_type.id)
+
+        # Check all object and multiobject fields in this custom object type
+        related_objects_checked = set()
+        for field in custom_object_type.fields.filter(
+            type__in=[
+                CustomFieldTypeChoices.TYPE_OBJECT,
+                CustomFieldTypeChoices.TYPE_MULTIOBJECT,
+            ],
+            related_object_type__isnull=False,
+            related_object_type__app_label=APP_LABEL
+        ):
+            if field.related_object_type in related_objects_checked:
+                continue
+            related_objects_checked.add(field.related_object_type)
+
+            # Get the related custom object type directly from the object_type relationship
+            try:
+                next_custom_object_type = CustomObjectType.objects.get(object_type=field.related_object_type)
+            except CustomObjectType.DoesNotExist:
+                continue
+
+            # Recursively check this dependency
+            if self._has_circular_reference(next_custom_object_type, visited):
+                return True
+
+        return False
 
     def serialize(self, value):
         """
@@ -1510,10 +1574,34 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     # Normal field alteration
                     schema_editor.alter_field(model, old_field, model_field)
 
+        # Ensure FK constraints are properly created for OBJECT fields with CASCADE behavior
+        should_ensure_fk = False
+        if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
+            if self._state.adding:
+                should_ensure_fk = True
+            else:
+                # Existing field - check if type changed to OBJECT or related_object_type changed
+                type_changed_to_object = (
+                    self._original_type != CustomFieldTypeChoices.TYPE_OBJECT
+                    and self.type == CustomFieldTypeChoices.TYPE_OBJECT
+                )
+                related_object_changed = (
+                    self._original_type == CustomFieldTypeChoices.TYPE_OBJECT
+                    and self.related_object_type_id != self._original_related_object_type_id
+                )
+                should_ensure_fk = type_changed_to_object or related_object_changed
+
         # Clear and refresh the model cache for this CustomObjectType when a field is modified
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)
 
         super().save(*args, **kwargs)
+
+        # Ensure FK constraints AFTER the transaction commits to avoid "pending trigger events" errors
+        if should_ensure_fk:
+            def ensure_constraint():
+                self.custom_object_type._ensure_field_fk_constraint(model, self.name)
+
+            transaction.on_commit(ensure_constraint)
 
         # Reregister SearchIndex with new set of searchable fields
         self.custom_object_type.register_custom_object_search_index(model)
@@ -1568,3 +1656,34 @@ class CustomObjectObjectType(ObjectType):
 
     class Meta:
         proxy = True
+
+
+# Signal handlers to clear model cache when definitions change
+
+
+@receiver(post_save, sender=CustomObjectType)
+def clear_cache_on_custom_object_type_save(sender, instance, **kwargs):
+    """
+    Clear the model cache when a CustomObjectType is saved.
+    """
+    CustomObjectType.clear_model_cache(instance.id)
+
+
+@receiver(post_save, sender=CustomObjectTypeField)
+def clear_cache_on_field_save(sender, instance, **kwargs):
+    """
+    Clear the model cache when a CustomObjectTypeField is saved.
+    This ensures the parent CustomObjectType's model is regenerated.
+    """
+    if instance.custom_object_type_id:
+        CustomObjectType.clear_model_cache(instance.custom_object_type_id)
+
+
+@receiver(pre_delete, sender=CustomObjectTypeField)
+def clear_cache_on_field_delete(sender, instance, **kwargs):
+    """
+    Clear the model cache when a CustomObjectTypeField is deleted.
+    This is in addition to the manual clear in the delete() method.
+    """
+    if instance.custom_object_type_id:
+        CustomObjectType.clear_model_cache(instance.custom_object_type_id)

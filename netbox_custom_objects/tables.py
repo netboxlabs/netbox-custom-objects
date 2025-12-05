@@ -58,6 +58,10 @@ class CustomObjectTypeTable(NetBoxTable):
     tags = columns.TagColumn(
         url_name='circuits:provider_list'
     )
+    name = tables.Column(
+        verbose_name=_('Name'),
+        linkify=True
+    )
 
     class Meta(NetBoxTable.Meta):
         model = CustomObjectType
@@ -65,6 +69,9 @@ class CustomObjectTypeTable(NetBoxTable):
             "pk",
             "id",
             "name",
+            "verbose_name",
+            "verbose_name_plural",
+            "slug",
             'description',
             'comments',
             'tags',

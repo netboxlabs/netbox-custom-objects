@@ -8,8 +8,9 @@ from netbox.api.serializers import NetBoxModelSerializer
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from rest_framework.reverse import reverse
+from rest_framework.utils import model_meta
 
-from netbox_custom_objects import field_types
+from netbox_custom_objects import constants, field_types
 from netbox_custom_objects.models import (CustomObject, CustomObjectType,
                                           CustomObjectTypeField)
 
@@ -42,11 +43,11 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
     class Meta:
         model = CustomObjectTypeField
         fields = (
-            # 'id', 'url', 'name', 'label', 'custom_object_type', 'field_type', 'content_type', 'many', 'options',
             "id",
             "name",
             "label",
             "custom_object_type",
+            "description",
             "type",
             "primary",
             "default",
@@ -57,6 +58,14 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
             "related_object_type",
             "app_label",
             "model",
+            "group_name",
+            "search_weight",
+            "filter_logic",
+            "ui_visible",
+            "ui_editable",
+            "weight",
+            "is_cloneable",
+            "comments",
         )
 
     def validate(self, attrs):
@@ -108,6 +117,8 @@ class CustomObjectTypeSerializer(NetBoxModelSerializer):
         read_only=True,
         many=True,
     )
+    table_model_name = serializers.SerializerMethodField()
+    object_type_name = serializers.SerializerMethodField()
 
     class Meta:
         model = CustomObjectType
@@ -123,8 +134,16 @@ class CustomObjectTypeSerializer(NetBoxModelSerializer):
             "created",
             "last_updated",
             "fields",
+            "table_model_name",
+            "object_type_name",
         ]
         brief_fields = ("id", "url", "name", "slug", "description")
+
+    def get_table_model_name(self, obj):
+        return obj.get_table_model_name(obj.id)
+
+    def get_object_type_name(self, obj):
+        return f"{constants.APP_LABEL}.{obj.get_table_model_name(obj.id).lower()}"
 
     def create(self, validated_data):
         return super().create(validated_data)
@@ -211,7 +230,16 @@ def get_serializer_class(model, skip_object_fields=False):
 
     # Create field list including all necessary fields
     base_fields = ["id", "url", "display", "created", "last_updated", "tags"]
-    custom_field_names = [field.name for field in model_fields]
+
+    # Only include custom field names that will actually be added to the serializer
+    custom_field_names = []
+    for field in model_fields:
+        if skip_object_fields and field.type in [
+            CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT
+        ]:
+            continue
+        custom_field_names.append(field.name)
+
     all_fields = base_fields + custom_field_names
 
     meta = type(
@@ -243,6 +271,44 @@ def get_serializer_class(model, skip_object_fields=False):
         """Get display representation of the object"""
         return str(obj)
 
+    # Stock DRF create() without raise_errors_on_nested_writes guard
+    def create(self, validated_data):
+        ModelClass = self.Meta.model
+
+        info = model_meta.get_field_info(ModelClass)
+        many_to_many = {}
+        for field_name, relation_info in info.relations.items():
+            if relation_info.to_many and (field_name in validated_data):
+                many_to_many[field_name] = validated_data.pop(field_name)
+
+        instance = ModelClass._default_manager.create(**validated_data)
+
+        if many_to_many:
+            for field_name, value in many_to_many.items():
+                field = getattr(instance, field_name)
+                field.set(value)
+
+        return instance
+
+    # Stock DRF update() with custom field.set() for M2M
+    def update(self, instance, validated_data):
+        info = model_meta.get_field_info(instance)
+
+        m2m_fields = []
+        for attr, value in validated_data.items():
+            if attr in info.relations and info.relations[attr].to_many:
+                m2m_fields.append((attr, value))
+            else:
+                setattr(instance, attr, value)
+
+        instance.save()
+
+        for attr, value in m2m_fields:
+            field = getattr(instance, attr)
+            field.set(value, clear=True)
+
+        return instance
+
     # Create basic attributes for the serializer
     attrs = {
         "Meta": meta,
@@ -251,6 +317,8 @@ def get_serializer_class(model, skip_object_fields=False):
         "get_url": get_url,
         "display": serializers.SerializerMethodField(),
         "get_display": get_display,
+        "create": create,
+        "update": update,
     }
 
     for field in model_fields:

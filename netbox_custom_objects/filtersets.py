@@ -1,7 +1,9 @@
 import django_filters
 from django.contrib.postgres.fields import ArrayField
-from django.db.models import JSONField
-from netbox.filtersets import BaseFilterSet, NetBoxModelFilterSet
+from django.db.models import JSONField, Q
+
+from extras.choices import CustomFieldTypeChoices
+from netbox.filtersets import NetBoxModelFilterSet
 
 from .models import CustomObjectType
 
@@ -51,13 +53,28 @@ def get_filterset_class(model):
         },
     )
 
+    def search(self, queryset, name, value):
+        if not value.strip():
+            return queryset
+        q = Q()
+        for field in model.custom_object_type.fields.all():
+            if field.type in [
+                CustomFieldTypeChoices.TYPE_TEXT,
+                CustomFieldTypeChoices.TYPE_LONGTEXT,
+                CustomFieldTypeChoices.TYPE_JSON,
+                CustomFieldTypeChoices.TYPE_URL,
+            ]:
+                q |= Q(**{f"{field.name}__icontains": value})
+        return queryset.filter(q)
+
     attrs = {
         "Meta": meta,
         "__module__": "database.filtersets",
+        "search": search,
     }
 
     return type(
         f"{model._meta.object_name}FilterSet",
-        (BaseFilterSet,),  # TODO: Should be a NetBoxModelFilterSet
+        (NetBoxModelFilterSet,),
         attrs,
     )

@@ -1,8 +1,6 @@
 import sys
 import warnings
 
-from django.core.exceptions import AppRegistryNotReady
-from django.db import transaction
 from django.db.utils import DatabaseError, OperationalError, ProgrammingError
 from netbox.plugins import PluginConfig
 
@@ -25,18 +23,23 @@ def check_custom_object_type_table_exists():
     Check if the CustomObjectType table exists in the database.
     Returns True if the table exists, False otherwise.
     """
+    from django.db import connection
     from .models import CustomObjectType
 
     try:
-        # Try to query the model - if the table doesn't exist, this will raise an exception
-        # this check and the transaction.atomic() is only required when running tests as the
-        # migration check doesn't work correctly in the test environment
-        with transaction.atomic():
-            # Force immediate execution by using first()
-            CustomObjectType.objects.first()
-        return True
+        # Use raw SQL to check table existence without generating ORM errors
+        with connection.cursor() as cursor:
+            table_name = CustomObjectType._meta.db_table
+            cursor.execute("""
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables
+                    WHERE table_name = %s
+                )
+            """, [table_name])
+            table_exists = cursor.fetchone()[0]
+            return table_exists
     except (OperationalError, ProgrammingError, DatabaseError):
-        # Catch database-specific errors (table doesn't exist, permission issues, etc.)
+        # Catch database-specific errors (permission issues, etc.)
         return False
 
 
@@ -45,23 +48,52 @@ class CustomObjectsPluginConfig(PluginConfig):
     name = "netbox_custom_objects"
     verbose_name = "Custom Objects"
     description = "A plugin to manage custom objects in NetBox"
-    version = "0.2.0"
+    version = "0.4.1"
+    author = 'Netbox Labs'
+    author_email = 'support@netboxlabs.com'
     base_url = "custom-objects"
     min_version = "4.4.0"
-    default_settings = {}
+    default_settings = {
+        # The maximum number of Custom Object Types that may be created
+        'max_custom_object_types': 50,
+    }
     required_settings = []
     template_extensions = "template_content.template_extensions"
 
+    def ready(self):
+        from .models import CustomObjectType
+        from netbox_custom_objects.api.serializers import get_serializer_class
+
+        # Suppress warnings about database calls during app initialization
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore", category=RuntimeWarning, message=".*database.*"
+            )
+            warnings.filterwarnings(
+                "ignore", category=UserWarning, message=".*database.*"
+            )
+
+            # Skip database calls if running during migration or if table doesn't exist
+            if is_running_migration() or not check_custom_object_type_table_exists():
+                super().ready()
+                return
+
+            qs = CustomObjectType.objects.all()
+            for obj in qs:
+                model = obj.get_model()
+                get_serializer_class(model)
+
+        super().ready()
+
     def get_model(self, model_name, require_ready=True):
+        self.apps.check_apps_ready()
         try:
             # if the model is already loaded, return it
             return super().get_model(model_name, require_ready)
         except LookupError:
-            try:
-                self.apps.check_apps_ready()
-            except AppRegistryNotReady:
-                raise
+            pass
 
+        model_name = model_name.lower()
         # only do database calls if we are sure the app is ready to avoid
         # Django warnings
         if "table" not in model_name.lower() or "model" not in model_name.lower():

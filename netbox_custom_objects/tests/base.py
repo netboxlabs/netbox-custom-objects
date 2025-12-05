@@ -23,6 +23,13 @@ class CustomObjectsTestCase:
         self.client = Client()
         self.client.force_login(self.user)
 
+    def tearDown(self):
+        """Clean up after each test."""
+        # Clear the model cache to ensure test isolation
+        # This prevents cached models with deleted fields from affecting other tests
+        CustomObjectType.clear_model_cache()
+        super().tearDown()
+
     @classmethod
     def create_custom_object_type(cls, **kwargs):
         """Helper method to create a custom object type."""
@@ -96,7 +103,8 @@ class CustomObjectsTestCase:
 
         return custom_object_type
 
-    def create_complex_custom_object_type(self, **kwargs):
+    @classmethod
+    def create_complex_custom_object_type(cls, **kwargs):
         """Create a complex custom object type with various field types."""
         custom_object_type = CustomObjectsTestCase.create_custom_object_type(**kwargs)
         choice_set = CustomObjectsTestCase.create_choice_set()
@@ -146,6 +154,15 @@ class CustomObjectsTestCase:
             name="device",
             label="Device",
             type="object",
+            related_object_type=device_object_type
+        )
+
+        # Multi-Object field (devices)
+        CustomObjectsTestCase.create_custom_object_type_field(
+            custom_object_type,
+            name="devices",
+            label="Devices",
+            type="multiobject",
             related_object_type=device_object_type
         )
 

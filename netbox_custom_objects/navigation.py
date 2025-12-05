@@ -18,6 +18,7 @@ custom_object_type_plugin_menu_item = PluginMenuItem(
             "mdi mdi-plus-thick",
         ),
     ),
+    auth_required=True,
 )
 
 
@@ -38,10 +39,22 @@ class CustomObjectTypeMenuItems:
                     "custom_object_type": custom_object_type.slug
                 },
             )
+            bulk_import_button = PluginMenuButton(
+                None,
+                _('Import'),
+                'mdi mdi-upload'
+            )
+            bulk_import_button.url = reverse_lazy(
+                f"plugins:{APP_LABEL}:customobject_bulk_import",
+                kwargs={
+                    "custom_object_type": custom_object_type.slug
+                },
+            )
             menu_item = PluginMenuItem(
                 link=None,
                 link_text=_(title(model._meta.verbose_name_plural)),
-                buttons=(add_button,),
+                buttons=(add_button, bulk_import_button),
+                auth_required=True,
             )
             menu_item.url = reverse_lazy(
                 f"plugins:{APP_LABEL}:customobject_list",

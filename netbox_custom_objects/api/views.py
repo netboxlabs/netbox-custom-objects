@@ -1,12 +1,18 @@
 from django.http import Http404
+from django.utils.translation import gettext_lazy as _
 from drf_spectacular.utils import extend_schema_view, extend_schema
 from rest_framework.routers import APIRootView
 from rest_framework.viewsets import ModelViewSet
+from rest_framework.exceptions import ValidationError
 
 from netbox_custom_objects.filtersets import get_filterset_class
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.utilities import is_in_branch
 
 from . import serializers
+
+# Constants
+BRANCH_ACTIVE_ERROR_MESSAGE = _("Please switch to the main branch to perform this operation.")
 
 
 class RootView(APIRootView):
@@ -50,7 +56,7 @@ class CustomObjectViewSet(ModelViewSet):
             )
         except CustomObjectType.DoesNotExist:
             raise Http404
-        self.model = custom_object_type.get_model()
+        self.model = custom_object_type.get_model_with_serializer()
         return self.model.objects.all()
 
     @property
@@ -59,6 +65,21 @@ class CustomObjectViewSet(ModelViewSet):
 
     def list(self, request, *args, **kwargs):
         return super().list(request, *args, **kwargs)
+
+    def create(self, request, *args, **kwargs):
+        if is_in_branch():
+            raise ValidationError(BRANCH_ACTIVE_ERROR_MESSAGE)
+        return super().create(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        if is_in_branch():
+            raise ValidationError(BRANCH_ACTIVE_ERROR_MESSAGE)
+        return super().update(request, *args, **kwargs)
+
+    def partial_update(self, request, *args, **kwargs):
+        if is_in_branch():
+            raise ValidationError(BRANCH_ACTIVE_ERROR_MESSAGE)
+        return super().partial_update(request, *args, **kwargs)
 
 
 class CustomObjectTypeFieldViewSet(ModelViewSet):

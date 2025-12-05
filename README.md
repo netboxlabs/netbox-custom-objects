@@ -6,7 +6,8 @@ You can find further documentation [here](https://github.com/netboxlabs/netbox-c
 
 ## Requirements
 
-* NetBox v4.4-beta or later
+* NetBox v4.4.0 or later
+* (Optional) NetBox Branching 0.7.1 or later
 
 ## Installation
 
@@ -36,6 +37,20 @@ $ ./manage.py migrate
 sudo systemctl restart netbox netbox-rq
 ```
 
+> [!NOTE]
+> If you are using NetBox Custom Objects with NetBox Branching, you need to insert the following into your `configuration.py`. See the docs for a full description of how NetBox Custom Objects currently works with NetBox Branching.  
+
+```
+PLUGINS_CONFIG = {
+    'netbox_branching': {
+        'exempt_models': [
+            'netbox_custom_objects.customobjecttype',
+            'netbox_custom_objects.customobjecttypefield',
+        ],
+    },
+}
+```
+
 ## Known Limitations
 
-The Public Preview of NetBox Custom Objects is under active development as we proceed towards the General Availability release around NetBox 4.4. The best place to look for the latest list of known limitations is the [issues](https://github.com/netboxlabs/netbox-custom-objects/issues) list on the GitHub repository.
+NetBox Custom Objects is now Generally Available which means you can use it in production and migrations to future versions will work. There are many upcoming features including GraphQL support - the best place to see what's on the way is the [issues](https://github.com/netboxlabs/netbox-custom-objects/issues) list on the GitHub repository.
