@@ -200,6 +200,10 @@ class CustomObjectType(NetBoxModel):
     verbose_name = models.CharField(max_length=100, blank=True)
     verbose_name_plural = models.CharField(max_length=100, blank=True)
     slug = models.SlugField(max_length=100, unique=True, db_index=True)
+    cache_timestamp = models.DateTimeField(
+        auto_now=True,
+        help_text=_("Timestamp used for cache invalidation across workers")
+    )
     object_type = models.OneToOneField(
         ObjectType,
         on_delete=models.CASCADE,
@@ -265,7 +269,25 @@ class CustomObjectType(NetBoxModel):
         :param custom_object_type_id: ID of the CustomObjectType
         :return: The cached model or None if not found
         """
-        return cls._model_cache.get(custom_object_type_id)
+        cache_entry = cls._model_cache.get(custom_object_type_id)
+        if cache_entry:
+            # Cache stores (model, timestamp) tuples
+            return cache_entry[0]
+        return None
+
+    @classmethod
+    def get_cached_timestamp(cls, custom_object_type_id):
+        """
+        Get the timestamp of a cached model for a specific CustomObjectType.
+
+        :param custom_object_type_id: ID of the CustomObjectType
+        :return: The cached timestamp or None if not found
+        """
+        cache_entry = cls._model_cache.get(custom_object_type_id)
+        if cache_entry:
+            # Cache stores (model, timestamp) tuples
+            return cache_entry[1]
+        return None
 
     @classmethod
     def is_model_cached(cls, custom_object_type_id):
@@ -471,8 +493,16 @@ class CustomObjectType(NetBoxModel):
         # Double-check pattern: check cache again after acquiring lock
         with self._global_lock:
             if self.is_model_cached(self.id) and not no_cache:
-                model = self.get_cached_model(self.id)
-                return model
+                # Check if cached timestamp matches current timestamp
+                cached_timestamp = self.get_cached_timestamp(self.id)
+                # If either timestamp is None or they match, use cached model
+                if cached_timestamp and self.cache_timestamp and cached_timestamp == self.cache_timestamp:
+                    # Cache is valid, return cached model
+                    model = self.get_cached_model(self.id)
+                    return model
+                else:
+                    # Cache is stale or timestamps unavailable, clear it and regenerate
+                    self.clear_model_cache(self.id)
 
         # Generate the model outside the lock to avoid holding it during expensive operations
         model_name = self.get_table_model_name(self.pk)
@@ -547,9 +577,9 @@ class CustomObjectType(NetBoxModel):
 
         self._after_model_generation(attrs, model)
 
-        # Cache the generated model (protected by lock for thread safety)
+        # Cache the generated model with its timestamp (protected by lock for thread safety)
         with self._global_lock:
-            self._model_cache[self.id] = model
+            self._model_cache[self.id] = (model, self.cache_timestamp)
 
         # Do the clear cache now that we have it in the cache so there
         # is no recursion.
@@ -1594,6 +1624,9 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         # Clear and refresh the model cache for this CustomObjectType when a field is modified
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)
 
+        # Update parent's cache_timestamp to invalidate cache across all workers
+        self.custom_object_type.save(update_fields=['cache_timestamp'])
+
         super().save(*args, **kwargs)
 
         # Ensure FK constraints AFTER the transaction commits to avoid "pending trigger events" errors
@@ -1621,6 +1654,9 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
         # Clear the model cache for this CustomObjectType when a field is deleted
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)
+
+        # Update parent's cache_timestamp to invalidate cache across all workers
+        self.custom_object_type.save(update_fields=['cache_timestamp'])
 
         super().delete(*args, **kwargs)
 
