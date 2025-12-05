@@ -19,6 +19,17 @@ def is_running_migration():
     return False
 
 
+def is_running_test():
+    """
+    Check if the code is currently running during Django tests.
+    """
+    # Check if 'test' command is in sys.argv
+    if "test" in sys.argv:
+        return True
+
+    return False
+
+
 def check_custom_object_type_table_exists():
     """
     Check if the CustomObjectType table exists in the database.
@@ -85,11 +96,14 @@ class CustomObjectsPluginConfig(PluginConfig):
                     for obj in qs:
                         model = obj.get_model()
                         get_serializer_class(model)
-            except (DatabaseError, OperationalError, ProgrammingError):
-                # Database schema may not match model during migrations
-                # The transaction.atomic() block will automatically rollback
-                # Skip loading custom object types in this case
-                pass
+            except (DatabaseError, OperationalError, ProgrammingError) as e:
+                # Only suppress exceptions during migrations/tests when schema may not match model
+                # During normal operation, re-raise to alert of actual problems
+                if is_running_migration() or is_running_test():
+                    # The transaction.atomic() block will automatically rollback
+                    pass
+                else:
+                    raise
 
         super().ready()
 
@@ -158,12 +172,15 @@ class CustomObjectsPluginConfig(PluginConfig):
                             if include_auto_created and hasattr(model, '_through_models'):
                                 for through_model in model._through_models:
                                     yield through_model
-            except (DatabaseError, OperationalError, ProgrammingError):
-                # Database schema may not match model during migrations
-                # (e.g., cache_timestamp column doesn't exist yet)
-                # The transaction.atomic() block will automatically rollback
-                # Skip loading custom object types in this case
-                pass
+            except (DatabaseError, OperationalError, ProgrammingError) as e:
+                # Only suppress exceptions during migrations/tests when schema may not match model
+                # (e.g., cache_timestamp column doesn't exist yet during migration/test setup)
+                # During normal operation, re-raise to alert of actual problems
+                if is_running_migration() or is_running_test():
+                    # The transaction.atomic() block will automatically rollback
+                    pass
+                else:
+                    raise
 
 
 config = CustomObjectsPluginConfig
