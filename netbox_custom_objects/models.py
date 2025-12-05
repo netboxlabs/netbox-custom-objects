@@ -202,7 +202,7 @@ class CustomObjectType(NetBoxModel):
     slug = models.SlugField(max_length=100, unique=True, db_index=True)
     cache_timestamp = models.DateTimeField(
         auto_now=True,
-        help_text=_("Timestamp used for cache invalidation across workers")
+        help_text=_("Timestamp used for cache invalidation")
     )
     object_type = models.OneToOneField(
         ObjectType,
@@ -490,18 +490,14 @@ class CustomObjectType(NetBoxModel):
         :rtype: Model
         """
 
-        # Double-check pattern: check cache again after acquiring lock
         with self._global_lock:
             if self.is_model_cached(self.id) and not no_cache:
-                # Check if cached timestamp matches current timestamp
                 cached_timestamp = self.get_cached_timestamp(self.id)
-                # If either timestamp is None or they match, use cached model
+                # Only use cache if the timestamps are available and match
                 if cached_timestamp and self.cache_timestamp and cached_timestamp == self.cache_timestamp:
-                    # Cache is valid, return cached model
                     model = self.get_cached_model(self.id)
                     return model
                 else:
-                    # Cache is stale or timestamps unavailable, clear it and regenerate
                     self.clear_model_cache(self.id)
 
         # Generate the model outside the lock to avoid holding it during expensive operations
