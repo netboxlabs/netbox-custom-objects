@@ -98,7 +98,6 @@ class CustomObjectsPluginConfig(PluginConfig):
                         get_serializer_class(model)
             except (DatabaseError, OperationalError, ProgrammingError) as e:
                 # Only suppress exceptions during tests when schema may not match model
-                # (is_running_migration is already handled by early return above)
                 # During normal operation, re-raise to alert of actual problems
                 if is_running_test():
                     # The transaction.atomic() block will automatically rollback
@@ -176,7 +175,6 @@ class CustomObjectsPluginConfig(PluginConfig):
             except (DatabaseError, OperationalError, ProgrammingError) as e:
                 # Only suppress exceptions during tests when schema may not match model
                 # (e.g., cache_timestamp column doesn't exist yet during test setup)
-                # (is_running_migration is already handled by early return above)
                 # During normal operation, re-raise to alert of actual problems
                 if is_running_test():
                     # The transaction.atomic() block will automatically rollback
