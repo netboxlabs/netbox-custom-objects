@@ -20,7 +20,7 @@ def ensure_existing_fk_constraints(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('netbox_custom_objects', '0001_initial'),
+        ('netbox_custom_objects', '0002_customobjecttype_cache_timestamp'),
     ]
 
     operations = [
