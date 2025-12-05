@@ -96,7 +96,7 @@ class CustomObjectsPluginConfig(PluginConfig):
                     for obj in qs:
                         model = obj.get_model()
                         get_serializer_class(model)
-            except (DatabaseError, OperationalError, ProgrammingError) as e:
+            except (DatabaseError, OperationalError, ProgrammingError):
                 # Only suppress exceptions during tests when schema may not match model
                 # During normal operation, re-raise to alert of actual problems
                 if is_running_test():
@@ -172,7 +172,7 @@ class CustomObjectsPluginConfig(PluginConfig):
                             if include_auto_created and hasattr(model, '_through_models'):
                                 for through_model in model._through_models:
                                     yield through_model
-            except (DatabaseError, OperationalError, ProgrammingError) as e:
+            except (DatabaseError, OperationalError, ProgrammingError):
                 # Only suppress exceptions during tests when schema may not match model
                 # (e.g., cache_timestamp column doesn't exist yet during test setup)
                 # During normal operation, re-raise to alert of actual problems
