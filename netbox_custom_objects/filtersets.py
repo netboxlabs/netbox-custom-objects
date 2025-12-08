@@ -53,6 +53,36 @@ def get_filterset_class(model):
         },
     )
 
+    attrs = {}
+    attrs["Meta"] = meta
+    attrs["__module__"] = "netbox_custom_objects.filtersets"
+
+    # For each custom field, add a corresponding filter
+    for field in model.custom_object_type.fields.all():
+        # Check field type and assign appropriate filter
+        if field.type in [CustomFieldTypeChoices.TYPE_TEXT, CustomFieldTypeChoices.TYPE_LONGTEXT]:
+            # CharFilter for text fields
+            attrs[field.name] = django_filters.CharFilter(field_name=field.name, lookup_expr='icontains', label=field.label)
+        elif field.type == CustomFieldTypeChoices.TYPE_INTEGER:
+            attrs[field.name] = django_filters.NumberFilter(field_name=field.name, lookup_expr="exact", label=field.label)
+        elif field.type == CustomFieldTypeChoices.TYPE_BOOLEAN:
+            attrs[field.name] = django_filters.BooleanFilter(field_name=field.name, label=field.label)
+        elif field.type == CustomFieldTypeChoices.TYPE_DATE:
+            attrs[field.name] = django_filters.DateFilter(field_name=field.name, lookup_expr='exact', label=field.label)
+        elif field.type == CustomFieldTypeChoices.TYPE_URL:
+            attrs[field.name] = django_filters.CharFilter(field_name=field.name, lookup_expr='icontains', label=field.label)
+        # Add other field types as needed
+        # For relationships, you might want ModelChoiceFilter or MultipleChoiceFilter
+        elif field.type == CustomFieldTypeChoices.TYPE_OBJECT:
+            # For related objects, assuming the field's related_object_type provides the model class
+            rel_model_class = field.related_object_type.model_class()
+            attrs[field.name] = django_filters.ModelChoiceFilter(
+                queryset=rel_model_class.objects.all(),
+                field_name=field.name,
+                label=field.label
+            )
+        # Continue for other field types...
+
     def search(self, queryset, name, value):
         if not value.strip():
             return queryset
