@@ -497,7 +497,19 @@ class ObjectFieldType(FieldType):
             )
 
     def get_filterform_field(self, field, **kwargs):
-        return None
+        """
+        Returns a filter form field for object relationships.
+        """
+        return DynamicModelChoiceField(
+            queryset=field.related_object_type.model_class().objects.all(),
+            required=field.required,
+            # Remove initial=field.default to allow Django to handle instance data properly
+            query_params=(
+                field.related_object_filter
+                if hasattr(field, "related_object_filter")
+                else None
+            ),
+        )
 
     def render_table_column(self, value):
         return linkify(value)
