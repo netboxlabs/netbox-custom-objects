@@ -222,7 +222,16 @@ class DecimalFieldType(FieldType):
             min_value=field.validation_minimum,
             max_value=field.validation_maximum,
         )
-
+    
+    def get_filterform_field(self, field, **kwargs):
+        return forms.DecimalField(
+            label=field,
+            required=False,
+            max_digits=12,
+            decimal_places=2,
+            min_value=field.validation_minimum,
+            max_value=field.validation_maximum,
+        )
 
 class BooleanFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
