@@ -81,7 +81,9 @@ class CustomObjectLink(PluginTemplateExtension):
                 {% for obj in linked_custom_objects %}
                   <tr>
                     <td>{{ obj.field.custom_object_type }}</td>
-                    <th scope="row"><a href="{{ obj.custom_object.get_absolute_url() }}">{{ obj.custom_object }}</a></th>
+                    <th scope="row">
+                      <a href="{{ obj.custom_object.get_absolute_url() }}">{{ obj.custom_object }}</a>
+                    </th>
                     <td>{{ obj.field }}</td>
                   </tr>
                 {% endfor %}
