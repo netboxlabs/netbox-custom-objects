@@ -817,7 +817,18 @@ class MultiObjectFieldType(FieldType):
             )
 
     def get_filterform_field(self, field, **kwargs):
-        return None
+        """
+        Returns a filter form field for multi-object relationships.
+        """
+        return DynamicModelMultipleChoiceField(
+            queryset=field.related_object_type.model_class().objects.all(),
+            required=field.required,
+            query_params=(
+                field.related_object_filter
+                if hasattr(field, "related_object_filter")
+                else None
+            ),
+        )
 
     def get_display_value(self, instance, field_name):
         field = getattr(instance, field_name)
