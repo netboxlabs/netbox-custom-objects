@@ -222,7 +222,7 @@ class DecimalFieldType(FieldType):
             min_value=field.validation_minimum,
             max_value=field.validation_maximum,
         )
-    
+
     def get_filterform_field(self, field, **kwargs):
         return forms.DecimalField(
             label=field,
