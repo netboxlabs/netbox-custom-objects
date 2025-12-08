@@ -48,7 +48,7 @@ class CustomObjectLink(PluginTemplateExtension):
         linked_custom_objects = []
         for field in custom_object_type_fields:
             model = field.custom_object_type.get_model()
-            for model_object in model.objects.all()[0:19]:
+            for model_object in model.objects.all():
                 model_field = getattr(model_object, field.name)
                 if model_field:
                     if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
@@ -77,13 +77,18 @@ class CustomObjectLink(PluginTemplateExtension):
                   <th>Field</th>
                 </tr>
               </thead>
-              {% for obj in linked_custom_objects %}
-                <tr>
-                  <td>{{ obj.field.custom_object_type }}</td>
-                  <th scope="row"><a href="{{ obj.custom_object.get_absolute_url() }}">{{ obj.custom_object }}</a></th>
-                  <td>{{ obj.field }}</td>
-                </tr>
-              {% endfor %}
+              {% if linked_custom_objects|count <= 20 %}
+                {% for obj in linked_custom_objects %}
+                  <tr>
+                    <td>{{ obj.field.custom_object_type }}</td>
+                    <th scope="row"><a href="{{ obj.custom_object.get_absolute_url() }}">{{ obj.custom_object }}</a></th>
+                    <td>{{ obj.field }}</td>
+                  </tr>
+                {% endfor %}
+              {% endif %}
+              <tr>
+                <td colspan="3">{{ linked_custom_objects|count }} objects</td>
+              </tr>
             </table>
           </div>
           """,
