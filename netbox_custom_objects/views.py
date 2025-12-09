@@ -66,6 +66,11 @@ class CustomJournalEntryEditView(generic.ObjectEditView):
     queryset = JournalEntry.objects.all()
     form = CustomJournalEntryForm
 
+    def alter_object(self, obj, request, args, kwargs):
+        if not obj.pk:
+            obj.created_by = request.user
+        return obj
+
     def get_return_url(self, request, instance):
         """
         Override to return the correct URL for custom objects.
