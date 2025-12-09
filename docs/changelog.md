@@ -10,7 +10,7 @@
 
 ### Bug Fixes
 
-- [#266](https://github.com/netboxlabs/netbox-custom-objects/issues/266) - Creating/editing Custom Object via API with field type Multiple Object fails
+- [#266](https://github.com/netboxlabs/netbox-custom-objects/issues/266) - Creating / editing Custom Object via API with field type Multiple Object fails
 - [#283](https://github.com/netboxlabs/netbox-custom-objects/issues/283) - IntegrityError when deleting a CO that is referenced by another CO
 - [#287](https://github.com/netboxlabs/netbox-custom-objects/issues/287) - Description field missing from API views
 - [#290](https://github.com/netboxlabs/netbox-custom-objects/issues/290) - Improve API object_types Labels for Custom Object Types
