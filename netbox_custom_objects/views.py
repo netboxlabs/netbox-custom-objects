@@ -20,6 +20,7 @@ from netbox.forms import (
 from netbox.views import generic
 from netbox.views.generic.mixins import TableMixin
 from utilities.forms import ConfirmationForm
+from utilities.forms.fields import TagFilterField
 from utilities.htmx import htmx_partial
 from utilities.views import ConditionalLoginRequiredMixin, ViewTab, get_viewname, register_model_view
 
@@ -345,6 +346,7 @@ class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
         attrs = {
             "model": model,
             "__module__": "database.filterset_forms",
+            "tag": TagFilterField(model),
         }
 
         for field in self.custom_object_type.fields.all():
