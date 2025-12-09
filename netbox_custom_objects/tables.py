@@ -9,7 +9,6 @@ from django.utils.translation import gettext_lazy as _
 from netbox.tables import NetBoxTable, columns
 from utilities.permissions import get_permission_for_model
 
-from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.models import CustomObject, CustomObjectType
 from netbox_custom_objects.utilities import get_viewname
 
@@ -95,8 +94,13 @@ class CustomObjectTagColumn(columns.TagColumn):
     template_code = """
     {% load helpers %}
     {% for tag in value.all %}
-        <a href="{% url 'plugins:netbox_custom_objects:customobject_list' custom_object_type=record.custom_object_type.slug %}?tag={{ tag.slug }}">
-            <span {% if tag.description %}title="{{ tag.description }}"{% endif %} class="badge" style="color: {{ tag.color|fgcolor }}; background-color: #{{ tag.color }}">{{ tag }}</span>
+        <a href="{% url 'plugins:netbox_custom_objects:customobject_list'
+                  custom_object_type=record.custom_object_type.slug %}?tag={{ tag.slug }}">
+            <span {% if tag.description %}title="{{ tag.description }}"{% endif %}
+                  class="badge"
+                  style="color: {{ tag.color|fgcolor }}; background-color: #{{ tag.color }}">
+                {{ tag }}
+            </span>
         </a>
     {% empty %}
         <span class="text-muted">&mdash;</span>
