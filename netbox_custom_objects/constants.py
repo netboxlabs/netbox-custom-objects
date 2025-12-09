@@ -7,43 +7,37 @@ INCLUDE_MODELS = (
 
 APP_LABEL = "netbox_custom_objects"
 
-# Field names that are reserved and cannot be used for custom object fields
+# Field names that are reserved and cannot be used for custom object fields.
+# Keep in alphabetical order for ease of reading error message.
 RESERVED_FIELD_NAMES = [
-    # Django model internals
     "_meta",
     "_state",
     "DoesNotExist",
     "MultipleObjectsReturned",
-    "objects",
-    # Primary key fields
-    "id",
-    "pk",
-    # Django model methods
+    "bookmarks",
     "clean",
-    "delete",
-    "full_clean",
-    "refresh_from_db",
-    "save",
-    # Custom object specific
     "clone",
+    "contacts",
+    "created",
+    "custom_field_data",
     "custom_object_type",
     "custom_object_type_id",
-    "custom_field_data",
-    "model",
-    # Change logging
-    "created",
-    "last_updated",
-    "serialize_object",
-    "snapshot",
-    "to_objectchange",
-    # Generic relations from mixins
-    "bookmarks",
-    "contacts",
+    "delete",
+    "full_clean",
+    "get_absolute_url",
+    "id",
     "images",
     "jobs",
     "journal_entries",
+    "last_updated",
+    "model",
+    "objects",
+    "pk",
+    "refresh_from_db",
+    "save",
+    "serialize_object",
+    "snapshot",
     "subscriptions",
     "tags",
-    # URL methods
-    "get_absolute_url",
+    "to_objectchange",
 ]
