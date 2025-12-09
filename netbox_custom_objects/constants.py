@@ -21,4 +21,5 @@ RESERVED_FIELD_NAMES = [
     "pk",
     "subscriptions",
     "tags",
+    "model",
 ]
