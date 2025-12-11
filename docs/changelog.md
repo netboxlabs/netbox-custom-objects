@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.3
+---
+
+### Bug Fixes
+
+- [#326](https://github.com/netboxlabs/netbox-custom-objects/issues/326) - Improve initialization code check when running migrations
+
+
 ## 0.4.2
 ---
 
