@@ -44,31 +44,6 @@ class CustomObjectsPluginConfig(PluginConfig):
         return "test" in sys.argv
 
     @staticmethod
-    def _check_custom_object_type_table_exists():
-        """
-        Check if the CustomObjectType table exists in the database.
-        Returns True if the table exists, False otherwise.
-        """
-        from django.db import connection
-        from .models import CustomObjectType
-
-        try:
-            # Use raw SQL to check table existence without generating ORM errors
-            with connection.cursor() as cursor:
-                table_name = CustomObjectType._meta.db_table
-                cursor.execute("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables
-                        WHERE table_name = %s
-                    )
-                """, [table_name])
-                table_exists = cursor.fetchone()[0]
-                return table_exists
-        except (OperationalError, ProgrammingError, DatabaseError):
-            # Catch database-specific errors (permission issues, etc.)
-            return False
-
-    @staticmethod
     def _all_migrations_applied():
         """
         Check if all migrations for this app are applied.
@@ -104,7 +79,6 @@ class CustomObjectsPluginConfig(PluginConfig):
             # or if not all migrations have been applied yet
             if (
                 self._is_running_migration()
-                or not self._check_custom_object_type_table_exists()
                 or not self._all_migrations_applied()
             ):
                 super().ready()
@@ -177,7 +151,6 @@ class CustomObjectsPluginConfig(PluginConfig):
             # or if not all migrations have been applied yet
             if (
                 self._is_running_migration()
-                or not self._check_custom_object_type_table_exists()
                 or not self._all_migrations_applied()
             ):
                 return
