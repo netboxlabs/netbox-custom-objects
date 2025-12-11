@@ -1,6 +1,8 @@
 import sys
 import warnings
 
+from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.db import transaction
 from django.db.utils import DatabaseError, OperationalError, ProgrammingError
 from netbox.plugins import PluginConfig
@@ -67,28 +69,26 @@ class CustomObjectsPluginConfig(PluginConfig):
             return False
 
     @staticmethod
-    def _check_cache_timestamp_field_exists():
+    def _all_migrations_applied():
         """
-        Check if the cache_timestamp field exists in the CustomObjectType table.
-        Returns True if the field exists, False otherwise.
+        Check if all migrations for this app are applied.
+        Returns True if all migrations are applied, False otherwise.
         """
-        from django.db import connection
-        from .models import CustomObjectType
-
         try:
-            # Use raw SQL to check column existence without generating ORM errors
-            with connection.cursor() as cursor:
-                table_name = CustomObjectType._meta.db_table
-                cursor.execute("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.columns
-                        WHERE table_name = %s AND column_name = %s
-                    )
-                """, [table_name, 'cache_timestamp'])
-                field_exists = cursor.fetchone()[0]
-                return field_exists
-        except (OperationalError, ProgrammingError, DatabaseError):
-            # Catch database-specific errors (permission issues, etc.)
+            # --check: exit non-zero (raise error) if unapplied migrations exist
+            # --dry-run: don't actually apply anything
+            call_command(
+                "migrate",
+                APP_LABEL,
+                check=True,
+                dry_run=True,
+                interactive=False,
+                verbosity=0,
+            )
+            return True
+        except (CommandError, Exception):
+            # CommandError is raised when --check fails (unapplied migrations exist)
+            # Catch other exceptions during migration check
             return False
 
     def ready(self):
@@ -105,7 +105,12 @@ class CustomObjectsPluginConfig(PluginConfig):
             )
 
             # Skip database calls if running during migration or if table doesn't exist
-            if self._is_running_migration() or not self._check_custom_object_type_table_exists():
+            # or if not all migrations have been applied yet
+            if (
+                self._is_running_migration()
+                or not self._check_custom_object_type_table_exists()
+                or not self._all_migrations_applied()
+            ):
                 super().ready()
                 return
 
@@ -173,11 +178,11 @@ class CustomObjectsPluginConfig(PluginConfig):
             )
 
             # Skip custom object type model loading if running during migration
-            # or if the cache_timestamp field doesn't exist yet (migration 0002 hasn't run)
+            # or if not all migrations have been applied yet
             if (
                 self._is_running_migration()
                 or not self._check_custom_object_type_table_exists()
-                or not self._check_cache_timestamp_field_exists()
+                or not self._all_migrations_applied()
             ):
                 return
 
