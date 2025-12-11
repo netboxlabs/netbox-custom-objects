@@ -66,6 +66,31 @@ class CustomObjectsPluginConfig(PluginConfig):
             # Catch database-specific errors (permission issues, etc.)
             return False
 
+    @staticmethod
+    def _check_cache_timestamp_field_exists():
+        """
+        Check if the cache_timestamp field exists in the CustomObjectType table.
+        Returns True if the field exists, False otherwise.
+        """
+        from django.db import connection
+        from .models import CustomObjectType
+
+        try:
+            # Use raw SQL to check column existence without generating ORM errors
+            with connection.cursor() as cursor:
+                table_name = CustomObjectType._meta.db_table
+                cursor.execute("""
+                    SELECT EXISTS (
+                        SELECT FROM information_schema.columns
+                        WHERE table_name = %s AND column_name = %s
+                    )
+                """, [table_name, 'cache_timestamp'])
+                field_exists = cursor.fetchone()[0]
+                return field_exists
+        except (OperationalError, ProgrammingError, DatabaseError):
+            # Catch database-specific errors (permission issues, etc.)
+            return False
+
     def ready(self):
         from .models import CustomObjectType
         from netbox_custom_objects.api.serializers import get_serializer_class
@@ -148,7 +173,12 @@ class CustomObjectsPluginConfig(PluginConfig):
             )
 
             # Skip custom object type model loading if running during migration
-            if self._is_running_migration() or not self._check_custom_object_type_table_exists():
+            # or if the cache_timestamp field doesn't exist yet (migration 0002 hasn't run)
+            if (
+                self._is_running_migration()
+                or not self._check_custom_object_type_table_exists()
+                or not self._check_cache_timestamp_field_exists()
+            ):
                 return
 
             # Add custom object type models
