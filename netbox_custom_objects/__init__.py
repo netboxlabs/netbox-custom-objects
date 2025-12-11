@@ -75,8 +75,6 @@ class CustomObjectsPluginConfig(PluginConfig):
         Returns True if all migrations are applied, False otherwise.
         """
         try:
-            # --check: exit non-zero (raise error) if unapplied migrations exist
-            # --dry-run: don't actually apply anything
             call_command(
                 "migrate",
                 APP_LABEL,
@@ -87,8 +85,6 @@ class CustomObjectsPluginConfig(PluginConfig):
             )
             return True
         except (CommandError, Exception):
-            # CommandError is raised when --check fails (unapplied migrations exist)
-            # Catch other exceptions during migration check
             return False
 
     def ready(self):
