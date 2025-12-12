@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.3
+---
+
+### Bug Fixes
+
+- [#299](https://github.com/netboxlabs/netbox-custom-objects/issues/299) - Add additional checks for restricted names of custom object types
+- [#326](https://github.com/netboxlabs/netbox-custom-objects/issues/326) - Improve initialization code check when running migrations
+- [#330](https://github.com/netboxlabs/netbox-custom-objects/issues/330) - Fix limit checking for max_custom_object_types
+
+
 ## 0.4.2
 ---
 
