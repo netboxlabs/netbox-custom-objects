@@ -56,7 +56,7 @@ class CustomObjectTypeTable(NetBoxTable):
         verbose_name=_('Comments'),
     )
     tags = columns.TagColumn(
-        url_name='circuits:provider_list'
+        url_name='plugins:netbox_custom_objects:customobjecttype_list'
     )
     name = tables.Column(
         verbose_name=_('Name'),
@@ -84,6 +84,36 @@ class CustomObjectTypeTable(NetBoxTable):
             "name",
             "created",
             "last_updated",
+        )
+
+
+class CustomObjectTagColumn(columns.TagColumn):
+    """
+    Custom TagColumn that generates tag filter URLs with the custom_object_type slug.
+    """
+    template_code = """
+    {% load helpers %}
+    {% for tag in value.all %}
+        <a href="{% url 'plugins:netbox_custom_objects:customobject_list'
+                  custom_object_type=record.custom_object_type.slug %}?tag={{ tag.slug }}">
+            <span {% if tag.description %}title="{{ tag.description }}"{% endif %}
+                  class="badge"
+                  style="color: {{ tag.color|fgcolor }}; background-color: #{{ tag.color }}">
+                {{ tag }}
+            </span>
+        </a>
+    {% empty %}
+        <span class="text-muted">&mdash;</span>
+    {% endfor %}
+    """
+
+    def __init__(self):
+        # Override parent __init__ to use our custom template
+        tables.TemplateColumn.__init__(
+            self,
+            orderable=False,
+            template_code=self.template_code,
+            verbose_name=_('Tags'),
         )
 
 
@@ -178,6 +208,7 @@ class CustomObjectTable(NetBoxTable):
     actions = CustomObjectActionsColumn(
         actions=('edit', 'delete'),
     )
+    tags = CustomObjectTagColumn()
 
     class Meta(NetBoxTable.Meta):
         model = CustomObject
@@ -188,6 +219,7 @@ class CustomObjectTable(NetBoxTable):
             "custom_object_type",
             "created",
             "last_updated",
+            "tags",
         )
         default_columns = (
             "pk",
