@@ -88,6 +88,7 @@ class CustomObjectTypeImportForm(NetBoxModelImportForm):
         model = CustomObjectType
         fields = (
             "name",
+            "slug",
             "description",
             "comments",
             "tags",
