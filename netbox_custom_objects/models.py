@@ -235,7 +235,7 @@ class CustomObjectType(NetBoxModel):
         # Enforce max number of COTs that may be created (max_custom_object_types)
         if not self.pk:
             max_cots = get_plugin_config("netbox_custom_objects", "max_custom_object_types")
-            if max_cots and CustomObjectType.objects.count() > max_cots:
+            if max_cots and CustomObjectType.objects.count() >= max_cots:
                 raise ValidationError(_(
                     f"Maximum number of Custom Object Types ({max_cots}) "
                     "exceeded; adjust max_custom_object_types to raise this limit"
