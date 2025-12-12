@@ -110,6 +110,9 @@ class FieldType:
     def get_table_column_field(self, field, **kwargs):
         raise NotImplementedError
 
+    def render_table_column_linkified(self, record):
+        return linkify(record)
+
     def after_model_generation(self, instance, model, field_name): ...
 
     def create_m2m_table(self, instance, model, field_name): ...
