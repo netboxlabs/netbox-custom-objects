@@ -1,6 +1,8 @@
 import sys
 import warnings
 
+from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.db import transaction
 from django.db.utils import DatabaseError, OperationalError, ProgrammingError
 from netbox.plugins import PluginConfig
@@ -42,28 +44,22 @@ class CustomObjectsPluginConfig(PluginConfig):
         return "test" in sys.argv
 
     @staticmethod
-    def _check_custom_object_type_table_exists():
+    def _all_migrations_applied():
         """
-        Check if the CustomObjectType table exists in the database.
-        Returns True if the table exists, False otherwise.
+        Check if all migrations for this app are applied.
+        Returns True if all migrations are applied, False otherwise.
         """
-        from django.db import connection
-        from .models import CustomObjectType
-
         try:
-            # Use raw SQL to check table existence without generating ORM errors
-            with connection.cursor() as cursor:
-                table_name = CustomObjectType._meta.db_table
-                cursor.execute("""
-                    SELECT EXISTS (
-                        SELECT FROM information_schema.tables
-                        WHERE table_name = %s
-                    )
-                """, [table_name])
-                table_exists = cursor.fetchone()[0]
-                return table_exists
-        except (OperationalError, ProgrammingError, DatabaseError):
-            # Catch database-specific errors (permission issues, etc.)
+            call_command(
+                "migrate",
+                APP_LABEL,
+                check=True,
+                dry_run=True,
+                interactive=False,
+                verbosity=0,
+            )
+            return True
+        except (CommandError, Exception):
             return False
 
     def ready(self):
@@ -80,7 +76,11 @@ class CustomObjectsPluginConfig(PluginConfig):
             )
 
             # Skip database calls if running during migration or if table doesn't exist
-            if self._is_running_migration() or not self._check_custom_object_type_table_exists():
+            # or if not all migrations have been applied yet
+            if (
+                self._is_running_migration()
+                or not self._all_migrations_applied()
+            ):
                 super().ready()
                 return
 
@@ -148,7 +148,11 @@ class CustomObjectsPluginConfig(PluginConfig):
             )
 
             # Skip custom object type model loading if running during migration
-            if self._is_running_migration() or not self._check_custom_object_type_table_exists():
+            # or if not all migrations have been applied yet
+            if (
+                self._is_running_migration()
+                or not self._all_migrations_applied()
+            ):
                 return
 
             # Add custom object type models
