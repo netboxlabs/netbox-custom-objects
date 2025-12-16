@@ -20,6 +20,7 @@ class CustomObjectsPluginConfig(PluginConfig):
     author_email = 'support@netboxlabs.com'
     base_url = "custom-objects"
     min_version = "4.4.0"
+    max_version = "4.5.99"
     default_settings = {
         # The maximum number of Custom Object Types that may be created
         'max_custom_object_types': 50,
