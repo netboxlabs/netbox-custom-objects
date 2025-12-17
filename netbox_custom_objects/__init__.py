@@ -55,12 +55,12 @@ class CustomObjectsPluginConfig(PluginConfig):
                 "migrate",
                 APP_LABEL,
                 check=True,
-                dry_run=True,
                 interactive=False,
                 verbosity=0,
             )
             return True
-        except (CommandError, Exception):
+        except CommandError:
+            # CommandError is raised when there are unapplied migrations
             return False
 
     def ready(self):
