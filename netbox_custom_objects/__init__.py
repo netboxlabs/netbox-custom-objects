@@ -52,7 +52,7 @@ class CustomObjectsPluginConfig(PluginConfig):
         Determine if dynamic model creation should be skipped.
 
         Returns True if dynamic models should not be created/loaded due to:
-        - Currently running migrations 
+        - Currently running migrations
         - Running tests
         - Required migration not yet applied
 
