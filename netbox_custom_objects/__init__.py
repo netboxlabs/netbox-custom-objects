@@ -1,13 +1,31 @@
+import contextvars
 import sys
 import warnings
 
-from django.core.management import call_command
-from django.core.management.base import CommandError
-from django.db import transaction
+from django.db import connection, transaction
+from django.db.migrations.recorder import MigrationRecorder
+from django.db.models.signals import pre_migrate, post_migrate
 from django.db.utils import DatabaseError, OperationalError, ProgrammingError
 from netbox.plugins import PluginConfig
 
 from .constants import APP_LABEL as APP_LABEL
+
+# Context variable to track if we're currently running migrations
+_is_migrating = contextvars.ContextVar('is_migrating', default=False)
+
+# Minimum migration required for the plugin to function properly
+# Update this when adding migrations that add fields to the plugin's models
+REQUIRED_MIGRATION = '0003_ensure_fk_constraints'
+
+
+def _migration_started(sender, **kwargs):
+    """Signal handler for pre_migrate - sets the migration flag."""
+    _is_migrating.set(True)
+
+
+def _migration_finished(sender, **kwargs):
+    """Signal handler for post_migrate - clears the migration flag."""
+    _is_migrating.set(False)
 
 
 # Plugin Configuration
@@ -29,43 +47,44 @@ class CustomObjectsPluginConfig(PluginConfig):
     template_extensions = "template_content.template_extensions"
 
     @staticmethod
-    def _is_running_migration():
+    def _should_skip_dynamic_model_creation():
         """
-        Check if the code is currently running during a Django migration.
-        """
-        # Check if 'makemigrations' or 'migrate' command is in sys.argv
-        return any(cmd in sys.argv for cmd in ["makemigrations", "migrate"])
+        Determine if dynamic model creation should be skipped.
 
-    @staticmethod
-    def _is_running_test():
-        """
-        Check if the code is currently running during Django tests.
-        """
-        # Check if 'test' command is in sys.argv
-        return "test" in sys.argv
+        Returns True if dynamic models should not be created/loaded due to:
+        - Currently running migrations 
+        - Running tests
+        - Required migration not yet applied
 
-    @staticmethod
-    def _all_migrations_applied():
+        Returns False if it's safe to proceed with dynamic model creation.
         """
-        Check if all migrations for this app are applied.
-        Returns True if all migrations are applied, False otherwise.
-        """
-        try:
-            call_command(
-                "migrate",
-                APP_LABEL,
-                check=True,
-                interactive=False,
-                verbosity=0,
-            )
+        # Skip if currently running migrations
+        if _is_migrating.get():
             return True
-        except CommandError:
-            # CommandError is raised when there are unapplied migrations
-            return False
+
+        # Skip if running tests
+        if "test" in sys.argv:
+            return True
+
+        # Skip if required migration hasn't been applied yet
+        try:
+            recorder = MigrationRecorder(connection)
+            applied_migrations = recorder.applied_migrations()
+            if ('netbox_custom_objects', REQUIRED_MIGRATION) not in applied_migrations:
+                return True
+        except (DatabaseError, OperationalError, ProgrammingError):
+            # If we can't check, assume migrations haven't been run
+            return True
+
+        return False
 
     def ready(self):
         from .models import CustomObjectType
         from netbox_custom_objects.api.serializers import get_serializer_class
+
+        # Connect migration signals to track migration state
+        pre_migrate.connect(_migration_started)
+        post_migrate.connect(_migration_finished)
 
         # Suppress warnings about database calls during app initialization
         with warnings.catch_warnings():
@@ -76,12 +95,8 @@ class CustomObjectsPluginConfig(PluginConfig):
                 "ignore", category=UserWarning, message=".*database.*"
             )
 
-            # Skip database calls if running during migration or tests, or if not all migrations have been applied yet
-            if (
-                self._is_running_migration()
-                or self._is_running_test()
-                or not self._all_migrations_applied()
-            ):
+            # Skip database calls if dynamic models can't be created yet
+            if self._should_skip_dynamic_model_creation():
                 super().ready()
                 return
 
@@ -94,7 +109,7 @@ class CustomObjectsPluginConfig(PluginConfig):
             except (DatabaseError, OperationalError, ProgrammingError):
                 # Only suppress exceptions during tests when schema may not match model
                 # During normal operation, re-raise to alert of actual problems
-                if self._is_running_test():
+                if "test" in sys.argv:
                     # The transaction.atomic() block will automatically rollback
                     pass
                 else:
@@ -148,13 +163,8 @@ class CustomObjectsPluginConfig(PluginConfig):
                 "ignore", category=UserWarning, message=".*database.*"
             )
 
-            # Skip custom object type model loading if running during migration or tests,
-            # or if not all migrations have been applied yet
-            if (
-                self._is_running_migration()
-                or self._is_running_test()
-                or not self._all_migrations_applied()
-            ):
+            # Skip custom object type model loading if dynamic models can't be created yet
+            if self._should_skip_dynamic_model_creation():
                 return
 
             # Add custom object type models
@@ -176,7 +186,7 @@ class CustomObjectsPluginConfig(PluginConfig):
                 # Only suppress exceptions during tests when schema may not match model
                 # (e.g., cache_timestamp column doesn't exist yet during test setup)
                 # During normal operation, re-raise to alert of actual problems
-                if self._is_running_test():
+                if "test" in sys.argv:
                     # The transaction.atomic() block will automatically rollback
                     pass
                 else:
