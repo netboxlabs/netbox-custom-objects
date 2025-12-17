@@ -199,7 +199,7 @@ class CustomObjectType(NetBoxModel):
     version = models.CharField(max_length=10, blank=True)
     verbose_name = models.CharField(max_length=100, blank=True)
     verbose_name_plural = models.CharField(max_length=100, blank=True)
-    slug = models.SlugField(max_length=100, unique=True, db_index=True)
+    slug = models.SlugField(max_length=100, unique=True, db_index=True, blank=False)
     cache_timestamp = models.DateTimeField(
         auto_now=True,
         help_text=_("Timestamp used for cache invalidation")
@@ -231,6 +231,11 @@ class CustomObjectType(NetBoxModel):
 
     def clean(self):
         super().clean()
+
+        if not self.slug:
+            raise ValidationError(
+                {"slug": _("Slug field cannot be empty.")}
+            )
 
         # Enforce max number of COTs that may be created (max_custom_object_types)
         if not self.pk:
