@@ -76,10 +76,10 @@ class CustomObjectsPluginConfig(PluginConfig):
                 "ignore", category=UserWarning, message=".*database.*"
             )
 
-            # Skip database calls if running during migration or if table doesn't exist
-            # or if not all migrations have been applied yet
+            # Skip database calls if running during migration or tests, or if not all migrations have been applied yet
             if (
                 self._is_running_migration()
+                or self._is_running_test()
                 or not self._all_migrations_applied()
             ):
                 super().ready()
@@ -148,10 +148,11 @@ class CustomObjectsPluginConfig(PluginConfig):
                 "ignore", category=UserWarning, message=".*database.*"
             )
 
-            # Skip custom object type model loading if running during migration
+            # Skip custom object type model loading if running during migration or tests,
             # or if not all migrations have been applied yet
             if (
                 self._is_running_migration()
+                or self._is_running_test()
                 or not self._all_migrations_applied()
             ):
                 return
