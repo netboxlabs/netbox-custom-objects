@@ -50,17 +50,14 @@ class CustomObjectLink(PluginTemplateExtension):
             model = field.custom_object_type.get_model()
 
             if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                # For many-to-many fields, query the through table directly
                 # Get the M2M field from the model
                 m2m_field = model._meta.get_field(field.name)
                 through_model = m2m_field.remote_field.through
 
-                # Query the through table to find all custom objects linked to this object
                 linked_ids = through_model.objects.filter(
                     target_id=self.context["object"].pk
                 ).values_list('source_id', flat=True)
 
-                # Fetch all linked custom objects in a single query
                 linked_objects = model.objects.filter(pk__in=linked_ids)
 
                 for model_object in linked_objects:
@@ -70,7 +67,6 @@ class CustomObjectLink(PluginTemplateExtension):
                         )
                     )
             else:
-                # For ForeignKey fields, use Django's reverse query
                 # Build a filter dynamically using the field name
                 filter_kwargs = {field.name: self.context["object"]}
                 linked_objects = model.objects.filter(**filter_kwargs)
