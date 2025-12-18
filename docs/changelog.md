@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.4
+---
+
+### Bug Fixes
+
+- [#230](https://github.com/netboxlabs/netbox-custom-objects/issues/230) - Warning on unique object type fields
+- [#284](https://github.com/netboxlabs/netbox-custom-objects/issues/284) - "Tags" field not listed in table config dialog
+- [#294](https://github.com/netboxlabs/netbox-custom-objects/issues/294) - Creating journal entry on custom object item leaves Created By blank
+- [#310](https://github.com/netboxlabs/netbox-custom-objects/issues/310) - Linkify primary field in custom object table view
+- [#336](https://github.com/netboxlabs/netbox-custom-objects/issues/336) - Support NetBox v4.5 (Beta)
+
+
 ## 0.4.3
 ---
 
