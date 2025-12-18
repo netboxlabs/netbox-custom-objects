@@ -127,9 +127,13 @@ class CustomObjectTableMixin(TableMixin):
                         field.name
                     )
                 )
-            # Primary field is linkified to the target Custom Object. Other fields may be rendered via
-            # field-specific "render_foo" methods as supported by django-tables2.
-            if field.primary:
+            # Primary field (if text-based) is linkified to the target Custom Object. Other fields may be
+            # rendered via field-specific "render_foo" methods as supported by django-tables2.
+            linkable_field_types = [
+                CustomFieldTypeChoices.TYPE_TEXT,
+                CustomFieldTypeChoices.TYPE_LONGTEXT,
+            ]
+            if field.primary and field.type in linkable_field_types:
                 attrs[f"render_{field.name}"] = field_type.render_table_column_linkified
             else:
                 # Define a method "render_table_column" method on any FieldType to customize output
