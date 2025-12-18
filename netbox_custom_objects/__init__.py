@@ -27,7 +27,6 @@ def _migration_finished(sender, **kwargs):
     """Signal handler for post_migrate - clears the migration flag and cache."""
     global _migrations_checked
     _is_migrating.set(False)
-    # Clear the cache after migrations run so we check again
     _migrations_checked = None
 
 
