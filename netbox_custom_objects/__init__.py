@@ -3,6 +3,7 @@ import sys
 import warnings
 
 from django.db import connection, transaction
+from django.db.migrations.loader import MigrationLoader
 from django.db.migrations.recorder import MigrationRecorder
 from django.db.models.signals import pre_migrate, post_migrate
 from django.db.utils import DatabaseError, OperationalError, ProgrammingError
@@ -13,9 +14,9 @@ from .constants import APP_LABEL as APP_LABEL
 # Context variable to track if we're currently running migrations
 _is_migrating = contextvars.ContextVar('is_migrating', default=False)
 
-# Minimum migration required for the plugin to function properly
-# Update this when adding migrations that add fields to the plugin's models
-REQUIRED_MIGRATION = '0003_ensure_fk_constraints'
+# Cache for migration check to avoid repeated expensive filesystem/database operations
+_migrations_checked = None
+_checking_migrations = False
 
 
 def _migration_started(sender, **kwargs):
@@ -24,8 +25,11 @@ def _migration_started(sender, **kwargs):
 
 
 def _migration_finished(sender, **kwargs):
-    """Signal handler for post_migrate - clears the migration flag."""
+    """Signal handler for post_migrate - clears the migration flag and cache."""
+    global _migrations_checked
     _is_migrating.set(False)
+    # Clear the cache after migrations run so we check again
+    _migrations_checked = None
 
 
 # Plugin Configuration
@@ -54,10 +58,12 @@ class CustomObjectsPluginConfig(PluginConfig):
         Returns True if dynamic models should not be created/loaded due to:
         - Currently running migrations
         - Running tests
-        - Required migration not yet applied
+        - All migrations not yet applied
 
         Returns False if it's safe to proceed with dynamic model creation.
         """
+        global _migrations_checked, _checking_migrations
+
         # Skip if currently running migrations
         if _is_migrating.get():
             return True
@@ -66,17 +72,47 @@ class CustomObjectsPluginConfig(PluginConfig):
         if "test" in sys.argv:
             return True
 
-        # Skip if required migration hasn't been applied yet
-        try:
-            recorder = MigrationRecorder(connection)
-            applied_migrations = recorder.applied_migrations()
-            if ('netbox_custom_objects', REQUIRED_MIGRATION) not in applied_migrations:
-                return True
-        except (DatabaseError, OperationalError, ProgrammingError):
-            # If we can't check, assume migrations haven't been run
+        # Below code is to check if the last migration is applied using the migration graph
+        # However, migrations can can call into get_models() which can call into this function again
+        # so we have checks to prevent recursion
+        if _checking_migrations:
             return True
 
-        return False
+        # Return cached result if available
+        if _migrations_checked is not None:
+            return _migrations_checked
+
+        _checking_migrations = True
+
+        try:
+            loader = MigrationLoader(connection)
+
+            # Get all migrations for our app from the migration graph
+            app_migrations = [
+                key[1] for key in loader.graph.nodes
+                if key[0] == APP_LABEL
+            ]
+
+            if not app_migrations:
+                result = True
+            else:
+                # Get and check if the last migration is applied
+                last_migration = sorted(app_migrations)[-1]
+                recorder = MigrationRecorder(connection)
+                applied_migrations = recorder.applied_migrations()
+
+                if (APP_LABEL, last_migration) not in applied_migrations:
+                    result = True
+                else:
+                    result = False
+
+            # Cache the result
+            _migrations_checked = result
+            return result
+
+        finally:
+            # Always clear the recursion flag
+            _checking_migrations = False
 
     def ready(self):
         from .models import CustomObjectType
