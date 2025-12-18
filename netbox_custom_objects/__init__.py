@@ -6,7 +6,6 @@ from django.db import connection, transaction
 from django.db.migrations.loader import MigrationLoader
 from django.db.migrations.recorder import MigrationRecorder
 from django.db.models.signals import pre_migrate, post_migrate
-from django.db.utils import DatabaseError, OperationalError, ProgrammingError
 from netbox.plugins import PluginConfig
 
 from .constants import APP_LABEL as APP_LABEL
