@@ -132,12 +132,21 @@ class CustomObjectTableMixin(TableMixin):
                         field.name
                     )
                 )
-            # Define a method "render_table_column" method on any FieldType to customize output
-            # See https://django-tables2.readthedocs.io/en/latest/pages/custom-data.html#table-render-foo-methods
-            try:
-                attrs[f"render_{field.name}"] = field_type.render_table_column
-            except AttributeError:
-                pass
+            # Primary field (if text-based) is linkified to the target Custom Object. Other fields may be
+            # rendered via field-specific "render_foo" methods as supported by django-tables2.
+            linkable_field_types = [
+                CustomFieldTypeChoices.TYPE_TEXT,
+                CustomFieldTypeChoices.TYPE_LONGTEXT,
+            ]
+            if field.primary and field.type in linkable_field_types:
+                attrs[f"render_{field.name}"] = field_type.render_table_column_linkified
+            else:
+                # Define a method "render_table_column" method on any FieldType to customize output
+                # See https://django-tables2.readthedocs.io/en/latest/pages/custom-data.html#table-render-foo-methods
+                try:
+                    attrs[f"render_{field.name}"] = field_type.render_table_column
+                except AttributeError:
+                    pass
 
         self.table = type(
             f"{data.model._meta.object_name}Table",
