@@ -38,7 +38,6 @@ class LinkedCustomObject:
 class CustomObjectLink(PluginTemplateExtension):
 
     def left_page(self):
-        # TODO: Improve performance of these nested queries
         content_type = ContentType.objects.get_for_model(
             self.context["object"]._meta.model
         )
@@ -46,25 +45,42 @@ class CustomObjectLink(PluginTemplateExtension):
             related_object_type=content_type
         )
         linked_custom_objects = []
+
         for field in custom_object_type_fields:
             model = field.custom_object_type.get_model()
-            for model_object in model.objects.all():
-                model_field = getattr(model_object, field.name)
-                if model_field:
-                    if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                        if model_field.filter(id=self.context["object"].pk).exists():
-                            linked_custom_objects.append(
-                                LinkedCustomObject(
-                                    custom_object=model_object, field=field
-                                )
-                            )
-                    else:
-                        if model_field.id == self.context["object"].pk:
-                            linked_custom_objects.append(
-                                LinkedCustomObject(
-                                    custom_object=model_object, field=field
-                                )
-                            )
+
+            if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+                # For many-to-many fields, query the through table directly
+                # Get the M2M field from the model
+                m2m_field = model._meta.get_field(field.name)
+                through_model = m2m_field.remote_field.through
+
+                # Query the through table to find all custom objects linked to this object
+                linked_ids = through_model.objects.filter(
+                    target_id=self.context["object"].pk
+                ).values_list('source_id', flat=True)
+
+                # Fetch all linked custom objects in a single query
+                linked_objects = model.objects.filter(pk__in=linked_ids)
+
+                for model_object in linked_objects:
+                    linked_custom_objects.append(
+                        LinkedCustomObject(
+                            custom_object=model_object, field=field
+                        )
+                    )
+            else:
+                # For ForeignKey fields, use Django's reverse query
+                # Build a filter dynamically using the field name
+                filter_kwargs = {field.name: self.context["object"]}
+                linked_objects = model.objects.filter(**filter_kwargs)
+
+                for model_object in linked_objects:
+                    linked_custom_objects.append(
+                        LinkedCustomObject(
+                            custom_object=model_object, field=field
+                        )
+                    )
         return render_jinja2(
             """
           <div class="card">
