@@ -88,6 +88,7 @@ class CustomObjectTypeImportForm(NetBoxModelImportForm):
         model = CustomObjectType
         fields = (
             "name",
+            "slug",
             "description",
             "comments",
             "tags",
@@ -181,6 +182,10 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
             self.fields["custom_object_type"].disabled = True
             if "related_object_type" in self.fields:
                 self.fields["related_object_type"].disabled = True
+
+        # Multi-object fields may not be set unique
+        if self.initial["type"] == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+            self.fields["unique"].disabled = True
 
     def clean_primary(self):
         primary_fields = self.cleaned_data["custom_object_type"].fields.filter(
