@@ -1039,10 +1039,10 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 }
             )
 
-        # Uniqueness can not be enforced for boolean fields
-        if self.unique and self.type == CustomFieldTypeChoices.TYPE_BOOLEAN:
+        # Uniqueness can not be enforced for boolean or multiobject fields
+        if self.unique and self.type in [CustomFieldTypeChoices.TYPE_BOOLEAN, CustomFieldTypeChoices.TYPE_MULTIOBJECT]:
             raise ValidationError(
-                {"unique": _("Uniqueness cannot be enforced for boolean fields")}
+                {"unique": _("Uniqueness cannot be enforced for boolean or multiobject fields")}
             )
 
         # Check if uniqueness constraint can be applied when changing from non-unique to unique
