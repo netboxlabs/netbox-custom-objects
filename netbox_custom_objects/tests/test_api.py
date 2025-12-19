@@ -11,6 +11,20 @@ from users.models import ObjectPermission, Token
 from virtualization.models import Cluster, ClusterType
 
 
+def create_token(user):
+    try:
+        # NetBox >= 4.5
+        from users.choices import TokenVersionChoices
+        token = Token(version=TokenVersionChoices.V1, user=user)
+        token.save()
+        return token.token
+    except ImportError:
+        # NetBox < 4.5
+        token = Token(user=user)
+        token.save()
+        return token.key
+
+
 class CustomObjectTest(CustomObjectsTestCase, APIViewTestCases.APIViewTestCase):
     model = None  # Will be set in setUpTestData
     brief_fields = ['created', 'display', 'id', 'last_updated', 'tags', 'test_field', 'url']
@@ -24,8 +38,8 @@ class CustomObjectTest(CustomObjectsTestCase, APIViewTestCases.APIViewTestCase):
         self.user = create_test_user('testuser')
 
         # Create token for API access
-        self.token = Token.objects.create(user=self.user)
-        self.header = {'HTTP_AUTHORIZATION': f'Token {self.token.key}'}
+        token_key = create_token(self.user)
+        self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
 
         # Ensure we have the model reference
         if self.model is None:
@@ -223,3 +237,58 @@ class CustomObjectTest(CustomObjectsTestCase, APIViewTestCases.APIViewTestCase):
 
     def test_graphql_get_object(self):
         ...
+
+
+class CustomObjectTypeAPITest(CustomObjectsTestCase):
+    """
+    Test CustomObjectType API endpoint validation.
+    """
+
+    def setUp(self):
+        """Set up test data."""
+        # Create a user
+        self.user = create_test_user('testuser')
+
+        # Create token for API access
+        self.token = Token.objects.create(user=self.user)
+        self.header = {'HTTP_AUTHORIZATION': f'Token {self.token.key}'}
+
+        # Add object-level permission
+        obj_perm = ObjectPermission(
+            name='Test permission',
+            actions=['add']
+        )
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        obj_perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
+
+    def test_create_custom_object_type_with_blank_slug(self):
+        """
+        Test that creating a CustomObjectType with a blank slug returns a validation error.
+        """
+        # Test with empty string slug
+        data = {
+            'name': 'test_blank_slug',
+            'slug': '',
+        }
+
+        url = reverse('plugins-api:netbox_custom_objects-api:customobjecttype-list')
+        response = self.client.post(url, data, format='json', **self.header)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('slug', response.data)
+
+    def test_create_custom_object_type_without_slug(self):
+        """
+        Test that creating a CustomObjectType without a slug field returns a validation error.
+        """
+        # Test without slug field at all
+        data = {
+            'name': 'test_no_slug',
+        }
+
+        url = reverse('plugins-api:netbox_custom_objects-api:customobjecttype-list')
+        response = self.client.post(url, data, format='json', **self.header)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('slug', response.data)

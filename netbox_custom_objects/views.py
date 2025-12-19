@@ -20,6 +20,7 @@ from netbox.forms import (
 from netbox.views import generic
 from netbox.views.generic.mixins import TableMixin
 from utilities.forms import ConfirmationForm
+from utilities.forms.fields import TagFilterField
 from utilities.htmx import htmx_partial
 from utilities.views import ConditionalLoginRequiredMixin, ViewTab, get_viewname, register_model_view
 
@@ -65,6 +66,11 @@ class CustomJournalEntryEditView(generic.ObjectEditView):
 
     queryset = JournalEntry.objects.all()
     form = CustomJournalEntryForm
+
+    def alter_object(self, obj, request, args, kwargs):
+        if not obj.pk:
+            obj.created_by = request.user
+        return obj
 
     def get_return_url(self, request, instance):
         """
@@ -127,12 +133,21 @@ class CustomObjectTableMixin(TableMixin):
                         field.name
                     )
                 )
-            # Define a method "render_table_column" method on any FieldType to customize output
-            # See https://django-tables2.readthedocs.io/en/latest/pages/custom-data.html#table-render-foo-methods
-            try:
-                attrs[f"render_{field.name}"] = field_type.render_table_column
-            except AttributeError:
-                pass
+            # Primary field (if text-based) is linkified to the target Custom Object. Other fields may be
+            # rendered via field-specific "render_foo" methods as supported by django-tables2.
+            linkable_field_types = [
+                CustomFieldTypeChoices.TYPE_TEXT,
+                CustomFieldTypeChoices.TYPE_LONGTEXT,
+            ]
+            if field.primary and field.type in linkable_field_types:
+                attrs[f"render_{field.name}"] = field_type.render_table_column_linkified
+            else:
+                # Define a method "render_table_column" method on any FieldType to customize output
+                # See https://django-tables2.readthedocs.io/en/latest/pages/custom-data.html#table-render-foo-methods
+                try:
+                    attrs[f"render_{field.name}"] = field_type.render_table_column
+                except AttributeError:
+                    pass
 
         self.table = type(
             f"{data.model._meta.object_name}Table",
@@ -345,6 +360,7 @@ class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
         attrs = {
             "model": model,
             "__module__": "database.filterset_forms",
+            "tag": TagFilterField(model),
         }
 
         for field in self.custom_object_type.fields.all():
