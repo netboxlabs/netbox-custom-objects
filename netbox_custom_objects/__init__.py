@@ -66,6 +66,9 @@ class CustomObjectsPluginConfig(PluginConfig):
         if _is_migrating.get():
             return True
 
+        if any(cmd in sys.argv for cmd in ["makemigrations", "migrate"]):
+            return True
+
         # Skip if running tests
         if "test" in sys.argv:
             return True
