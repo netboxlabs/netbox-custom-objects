@@ -39,6 +39,7 @@ class CustomObjectsPluginConfig(PluginConfig):
     author = 'Netbox Labs'
     author_email = 'support@netboxlabs.com'
     base_url = "custom-objects"
+    # Remember to update COMPATIBILITY.md when modifying the minimum/maximum supported NetBox versions.
     min_version = "4.4.0"
     max_version = "4.5.99"
     default_settings = {
@@ -64,6 +65,9 @@ class CustomObjectsPluginConfig(PluginConfig):
 
         # Skip if currently running migrations
         if _is_migrating.get():
+            return True
+
+        if any(cmd in sys.argv for cmd in ["makemigrations", "migrate"]):
             return True
 
         # Skip if running tests
