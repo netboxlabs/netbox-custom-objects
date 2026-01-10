@@ -71,7 +71,6 @@ def get_filterset_class(model):
             attrs[field.name] = django_filters.DateFilter(field_name=field.name, lookup_expr='exact', label=field.label)
         elif field.type == CustomFieldTypeChoices.TYPE_URL:
             attrs[field.name] = django_filters.CharFilter(field_name=field.name, lookup_expr='icontains', label=field.label)
-        # Add other field types as needed
         # For relationships, you might want ModelChoiceFilter or MultipleChoiceFilter
         elif field.type == CustomFieldTypeChoices.TYPE_OBJECT:
             # For related objects, assuming the field's related_object_type provides the model class
@@ -81,7 +80,10 @@ def get_filterset_class(model):
                 field_name=field.name,
                 label=field.label
             )
+        # Add other field types as needed
         # Continue for other field types...
+        else
+            return None
 
     def search(self, queryset, name, value):
         if not value.strip():
