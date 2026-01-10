@@ -58,6 +58,7 @@ class CustomObjectsPluginConfig(PluginConfig):
         - Currently running migrations
         - Running tests
         - All migrations not yet applied
+        - Running collectstatic
 
         Returns False if it's safe to proceed with dynamic model creation.
         """
@@ -67,11 +68,19 @@ class CustomObjectsPluginConfig(PluginConfig):
         if _is_migrating.get():
             return True
 
-        if any(cmd in sys.argv for cmd in ["makemigrations", "migrate"]):
-            return True
+        skip_commands = (
+            # Running migrations should skip.
+            "makemigrations",
+            "migrate",
 
-        # Skip if running tests
-        if "test" in sys.argv:
+            # The database isn't accessible during collect static so should skip.
+            "collectstatic",
+
+            # Skip during tests.
+            "test",
+        )
+
+        if any(cmd in sys.argv for cmd in skip_commands):
             return True
 
         # Below code is to check if the last migration is applied using the migration graph
