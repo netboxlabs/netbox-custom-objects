@@ -138,7 +138,7 @@ def get_filterset_class(model):
             },
         },
     )
-    
+
     def search(self, queryset, name, value):
         if not value.strip():
             return queryset
