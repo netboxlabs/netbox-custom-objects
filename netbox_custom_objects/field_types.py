@@ -506,7 +506,6 @@ class ObjectFieldType(FieldType):
         return DynamicModelChoiceField(
             queryset=field.related_object_type.model_class().objects.all(),
             required=False,
-            # Remove initial=field.default to allow Django to handle instance data properly
             query_params=(
                 field.related_object_filter
                 if hasattr(field, "related_object_filter")
