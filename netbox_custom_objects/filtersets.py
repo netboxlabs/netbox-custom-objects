@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional, Type
 
 from django.contrib.postgres.fields import ArrayField
-from django.db.models import JSONField, QuerySet
+from django.db.models import JSONField, QuerySet, Q
 
 from extras.choices import CustomFieldTypeChoices
 from netbox.filtersets import NetBoxModelFilterSet
@@ -137,10 +137,25 @@ def get_filterset_class(model):
             },
         },
     )
+    
+    def search(self, queryset, name, value):
+        if not value.strip():
+            return queryset
+        q = Q()
+        for field in model.custom_object_type.fields.all():
+            if field.type in [
+                CustomFieldTypeChoices.TYPE_TEXT,
+                CustomFieldTypeChoices.TYPE_LONGTEXT,
+                CustomFieldTypeChoices.TYPE_JSON,
+                CustomFieldTypeChoices.TYPE_URL,
+            ]:
+                q |= Q(**{f"{field.name}__icontains": value})
+        return queryset.filter(q)
 
     attrs = {
         "Meta": meta,
         "__module__": "netbox_custom_objects.filtersets",
+        "search": search,
     }
 
     # For each custom field, add a corresponding filter
