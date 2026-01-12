@@ -105,6 +105,7 @@ def build_filter_for_field(field) -> Optional[django_filters.Filter]:
         field_name=field.name,
         label=field.label,
         queryset=queryset,
+        **extra_kwargs,
     )
 
 
