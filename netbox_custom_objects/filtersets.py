@@ -64,11 +64,11 @@ FIELD_TYPE_FILTERS = {
     CustomFieldTypeChoices.TYPE_JSON: FilterSpec(django_filters.CharFilter, lookup_expr="icontains"),
     CustomFieldTypeChoices.TYPE_SELECT: FilterSpec(
         django_filters.ChoiceFilter,
-        extra_kwargs={"choices": lambda f: f.get_choices()}
+        extra_kwargs={"choices": lambda f: f.choices}
     ),
     CustomFieldTypeChoices.TYPE_MULTISELECT: FilterSpec(
         django_filters.MultipleChoiceFilter,
-        extra_kwargs={"choices": lambda f: f.get_choices()}
+        extra_kwargs={"choices": lambda f: f.choices}
     ),
     CustomFieldTypeChoices.TYPE_OBJECT: FilterSpec(django_filters.ModelChoiceFilter),
     CustomFieldTypeChoices.TYPE_MULTIOBJECT: FilterSpec(django_filters.ModelMultipleChoiceFilter),
