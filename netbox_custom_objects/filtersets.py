@@ -94,7 +94,12 @@ def build_filter_for_field(field) -> Optional[django_filters.Filter]:
         CustomFieldTypeChoices.TYPE_OBJECT,
         CustomFieldTypeChoices.TYPE_MULTIOBJECT,
     ):
-        queryset = field.related_object_type.model_class().objects.all()
+        related_object_type = getattr(field, "related_object_type", None)
+        if not related_object_type:
+            # Defensive guard: if data integrity is compromised and the related object type
+            # is missing, skip building a filter for this field rather than raising.
+            return None
+        queryset = related_object_type.model_class().objects.all()
 
     extra_kwargs = {}
     if spec.extra_kwargs:
