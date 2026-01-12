@@ -212,7 +212,7 @@ class DecimalFieldType(FieldType):
             null=True,
             blank=True,
             max_digits=8,
-            decimal_places=2,
+            decimal_places=4,
             **field_kwargs
         )
 
@@ -231,7 +231,7 @@ class DecimalFieldType(FieldType):
             label=field,
             required=False,
             max_digits=12,
-            decimal_places=2,
+            decimal_places=4,
             min_value=field.validation_minimum,
             max_value=field.validation_maximum,
         )
