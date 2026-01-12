@@ -150,7 +150,7 @@ def get_filterset_class(model):
             attrs[field.name] = filter_instance
 
     return type(
-        f"{model.__name__}FilterSet",
-        (django_filters.FilterSet,),
+        f"{model._meta.object_name}FilterSet",
+        (NetBoxModelFilterSet,),
         attrs,
     )
