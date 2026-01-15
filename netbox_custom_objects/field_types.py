@@ -236,6 +236,7 @@ class DecimalFieldType(FieldType):
             max_value=field.validation_maximum,
         )
 
+
 class BooleanFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
