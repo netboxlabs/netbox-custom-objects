@@ -26,7 +26,9 @@ class FilterSpec:
     lookup_expr: Optional[str] = None
     extra_kwargs: Optional[Dict[str, Any]] = None
 
-    def build(self, field_name: str, label: str, queryset: Optional[QuerySet] = None, **kwargs) -> django_filters.Filter:
+    def build(
+        self, field_name: str, label: str, queryset: Optional[QuerySet] = None, **kwargs
+        ) -> django_filters.Filter:
         """
         Instantiate and return a django-filter Filter.
         Allows overriding defaults via **kwargs.
