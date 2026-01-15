@@ -678,7 +678,10 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
         for field in self.custom_object_type.fields.all():
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
             try:
-                attrs[field.name] = field_type.get_annotated_form_field(field)
+                form_field = field_type.get_annotated_form_field(field)
+                # In bulk edit forms, all fields should be optional
+                form_field.required = False
+                attrs[field.name] = form_field
             except NotImplementedError:
                 logger.debug(
                     "bulk edit form: {} field is not supported".format(field.name)
