@@ -6,7 +6,7 @@
 ### Bug Fixes
 
 - [#264](https://github.com/netboxlabs/netbox-custom-objects/issues/264) - Make fields in bulk-edit not required
-- [#317](https://github.com/netboxlabs/netbox-custom-objects/issues/264) - Add missing serializer Fields to CustomObjectTypeSerializer
+- [#317](https://github.com/netboxlabs/netbox-custom-objects/issues/317) - Add missing serializer Fields to CustomObjectTypeSerializer
 - [#340](https://github.com/netboxlabs/netbox-custom-objects/issues/340) - Improve query performance for related models
 - [#351](https://github.com/netboxlabs/netbox-custom-objects/issues/351) - Prevent makemigrations from picking up custom object changes
 
