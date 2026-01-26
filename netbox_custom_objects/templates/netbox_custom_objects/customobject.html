@@ -112,7 +112,16 @@
               {% with is_visible_in_ui=object|get_field_is_ui_visible:field %}
                 {% if field.is_single_value and is_visible_in_ui %}
                   <tr>
-                    <th scope="row">{{ field }}</th>
+                    <th scope="row">{{ field }}
+                      {% if field.description %}
+                        <i
+                          class="mdi mdi-information text-primary"
+                          data-bs-toggle="tooltip"
+                          data-bs-placement="right"
+                          title="{{ field.description|escape }}"
+                        ></i>
+                      {% endif %}
+                    </th>
                     <td>
                       {% with customfield=field value=object|get_field_value:field %}
                         {% include "builtins/customfield_value.html" %}
