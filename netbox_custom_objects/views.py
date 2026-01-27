@@ -342,7 +342,7 @@ class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
         self.filterset_form = self.get_filterset_form()
 
     def get_queryset(self, request):
-        if self.queryset:
+        if self.queryset is not None:
             return self.queryset
         custom_object_type = self.kwargs.get("custom_object_type", None)
         self.custom_object_type = get_object_or_404(
