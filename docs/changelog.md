@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.6
+---
+
+### Bug Fixes
+
+- [#348](https://github.com/netboxlabs/netbox-custom-objects/issues/348) - Saving a custom object type field breaks object-field relationships
+- [#372](https://github.com/netboxlabs/netbox-custom-objects/issues/372) - Double queryset evaluation in custom object list view
+
+
 ## 0.4.5
 ---
 
