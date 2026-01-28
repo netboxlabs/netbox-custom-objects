@@ -1714,6 +1714,10 @@ def clear_cache_on_field_save(sender, instance, **kwargs):
     """
     if instance.custom_object_type_id:
         CustomObjectType.clear_model_cache(instance.custom_object_type_id)
+    for pointing_field in CustomObjectTypeField.objects.filter(
+        related_object_type=instance.custom_object_type.object_type
+    ):
+        CustomObjectType.clear_model_cache(pointing_field.custom_object_type_id)
 
 
 @receiver(pre_delete, sender=CustomObjectTypeField)
