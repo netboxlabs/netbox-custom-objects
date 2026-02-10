@@ -47,7 +47,7 @@ class CustomObjectLink(PluginTemplateExtension):
         linked_custom_objects = []
 
         for field in custom_object_type_fields:
-            model = field.custom_object_type.get_model()
+            model = field.custom_object_type.get_model(no_cache=True)
 
             if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                 # Get the M2M field from the model
