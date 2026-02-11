@@ -329,7 +329,7 @@ class CustomObjectTypeBulkDeleteView(generic.BulkDeleteView):
 # Custom Objects
 #
 
-
+@register_model_view(CustomObject, "list", path="", detail=False)
 class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
     queryset = None
     custom_object_type = None
