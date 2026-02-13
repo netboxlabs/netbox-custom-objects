@@ -216,10 +216,11 @@ class CustomObjectTypeFieldTable(NetBoxTable):
     primary = columns.BooleanColumn()
     required = columns.BooleanColumn()
 
+    exempt_columns = ('actions',)
+
     class Meta(NetBoxTable.Meta):
         model = CustomObjectTypeField
         fields = (
-            "pk",
             "id",
             "name",
             "type",
@@ -248,7 +249,6 @@ class CustomObjectTypeFieldTable(NetBoxTable):
             "last_updated",
         )
         default_columns = (
-            "pk",
             "id",
             "name",
             "type",
