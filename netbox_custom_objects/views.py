@@ -25,7 +25,7 @@ from utilities.htmx import htmx_partial
 from utilities.views import ConditionalLoginRequiredMixin, ViewTab, get_viewname, register_model_view
 
 from netbox_custom_objects.filtersets import get_filterset_class
-from netbox_custom_objects.tables import CustomObjectTable
+from netbox_custom_objects.tables import CustomObjectTable, CustomObjectTypeFieldTable
 from . import field_types, filtersets, forms, tables
 from .models import CustomObject, CustomObjectType, CustomObjectTypeField
 from extras.choices import CustomFieldTypeChoices
@@ -228,6 +228,23 @@ class CustomObjectTypeDeleteView(generic.ObjectDeleteView):
             dependent_objects[CustomObjectTypeField] = list(referencing_fields)
 
         return dependent_objects
+
+
+@register_model_view(CustomObjectType, 'fields', path='fields')
+class CustomObjectTypeFieldsView(generic.ObjectChildrenView):
+    queryset = CustomObjectType.objects.all()
+    table = CustomObjectTypeFieldTable
+    template_name = 'netbox_custom_objects/fields.html'
+    tab = ViewTab(
+        label=_('Fields'),
+        badge=lambda obj: CustomObjectTypeField.objects.filter(custom_object_type=obj).count(),
+        permission='netbox_custom_objects.view_customobjecttypefield',
+        weight=520,
+        hide_if_empty=False
+    )
+
+    def get_children(self, request, parent):
+        return CustomObjectTypeField.objects.restrict(request.user, 'view').filter(custom_object_type=parent)
 
 
 #
