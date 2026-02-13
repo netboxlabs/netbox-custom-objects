@@ -9,10 +9,10 @@ from django.utils.translation import gettext_lazy as _
 from netbox.tables import NetBoxTable, columns
 from utilities.permissions import get_permission_for_model
 
-from netbox_custom_objects.models import CustomObject, CustomObjectType
+from netbox_custom_objects.models import CustomObject, CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.utilities import get_viewname
 
-__all__ = ("CustomObjectTable",)
+__all__ = ("CustomObjectTable", "LinkedCustomObjectTable")
 
 
 OBJECTCHANGE_FULL_NAME = """
@@ -229,3 +229,21 @@ class CustomObjectTable(NetBoxTable):
             "created",
             "last_updated",
         )
+
+
+class LinkedCustomObjectTable(NetBoxTable):
+    custom_object_type = tables.Column(
+        accessor="custom_object__custom_object_type",
+        linkify=True,
+        verbose_name=_("Type"),
+    )
+    custom_object = tables.Column(
+        linkify=True,
+        verbose_name=_("Custom Object"),
+    )
+    field = tables.Column(verbose_name=_("Field"))
+
+    class Meta(NetBoxTable.Meta):
+        model = CustomObjectTypeField
+        fields = ("custom_object_type", "custom_object", "field")
+        default_columns = ("custom_object_type", "custom_object", "field")
