@@ -203,9 +203,9 @@ class CustomObjectActionsColumn(columns.ActionsColumn):
 
 
 class CustomObjectTypeFieldTable(NetBoxTable):
+    id = tables.Column()
     name = tables.Column(
         verbose_name=_('Name'),
-        linkify=True
     )
     unique = columns.BooleanColumn(
         verbose_name=_('Unique')
