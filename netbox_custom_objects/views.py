@@ -264,7 +264,7 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
     queryset = CustomObjectTypeField.objects.all()
 
     def get_return_url(self, request, obj=None):
-        return obj.custom_object_type.get_absolute_url()
+        return request.GET.get("return_url") or obj.custom_object_type.get_absolute_url()
 
     def get(self, request, *args, **kwargs):
         """
