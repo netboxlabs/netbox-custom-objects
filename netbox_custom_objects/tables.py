@@ -9,10 +9,10 @@ from django.utils.translation import gettext_lazy as _
 from netbox.tables import NetBoxTable, columns
 from utilities.permissions import get_permission_for_model
 
-from netbox_custom_objects.models import CustomObject, CustomObjectType
+from netbox_custom_objects.models import CustomObject, CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.utilities import get_viewname
 
-__all__ = ("CustomObjectTable",)
+__all__ = ("CustomObjectTable", "CustomObjectTypeFieldTable")
 
 
 OBJECTCHANGE_FULL_NAME = """
@@ -200,6 +200,63 @@ class CustomObjectActionsColumn(columns.ActionsColumn):
             html = template.render(context) + html
 
         return mark_safe(html)
+
+
+class CustomObjectTypeFieldTable(NetBoxTable):
+    id = tables.Column()
+    name = tables.Column(
+        verbose_name=_('Name'),
+    )
+    unique = columns.BooleanColumn(
+        verbose_name=_('Unique')
+    )
+    is_cloneable = columns.BooleanColumn(
+        verbose_name=_('Cloneable')
+    )
+    primary = columns.BooleanColumn()
+    required = columns.BooleanColumn()
+
+    exempt_columns = ('actions',)
+
+    class Meta(NetBoxTable.Meta):
+        model = CustomObjectTypeField
+        fields = (
+            "id",
+            "name",
+            "type",
+            "primary",
+            "related_object_type",
+            "label",
+            "group_name",
+            "description",
+            "required",
+            "unique",
+            "search_weight",
+            "filter_logic",
+            "default",
+            "related_object_filter",
+            "weight",
+            "validation_minimum",
+            "validation_maximum",
+            "validation_regex",
+            "choice_set",
+            "ui_visible",
+            "ui_editable",
+            "is_cloneable",
+            "comments",
+            "tags",
+            "created",
+            "last_updated",
+        )
+        default_columns = (
+            "id",
+            "name",
+            "type",
+            "primary",
+            "default",
+            "created",
+            "last_updated",
+        )
 
 
 class CustomObjectTable(NetBoxTable):

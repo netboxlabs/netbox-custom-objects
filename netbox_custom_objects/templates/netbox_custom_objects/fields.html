@@ -1,0 +1,20 @@
+{% extends "generic/object_children.html" %}
+{% load perms %}
+{% load plugins %}
+{% load i18n %}
+{% load custom_object_buttons %}
+
+{% block controls %}
+  <div class="btn-list">
+    {% plugin_list_buttons model %}
+    {% block extra_controls %}{% endblock %}
+    {% if perms.netbox_custom_objects.change_customobjecttype %}
+        <a href="{% url 'plugins:netbox_custom_objects:customobjecttypefield_add' %}?custom_object_type={{ object.pk }}&return_url={% url 'plugins:netbox_custom_objects:customobjecttype' pk=object.pk %}" class="btn btn-primary">
+            <i class="mdi mdi-plus-thick" aria-hidden="true"></i> {% trans "Add Field" %}
+        </a>
+    {% endif %}
+  </div>
+{% endblock controls %}
+
+{% block table_controls %}{% endblock %}
+{% block bulk_controls %}{% endblock %}
