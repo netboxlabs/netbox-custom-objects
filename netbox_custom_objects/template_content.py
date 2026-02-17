@@ -90,7 +90,7 @@ class CustomObjectLink(PluginTemplateExtension):
             {% load render_table from django_tables2 %}
             {% load i18n %}
             <div class="card">
-              <h2 class="card-header">Custom Objects linking to this object</h2>
+              <h2 class="card-header">{% trans "Custom Objects linking to this object" %}</h2>
               {% if table.rows %}
                 <div class="table-responsive">
                   {% render_table table 'inc/table.html' %}
