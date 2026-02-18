@@ -1,10 +1,12 @@
 from dataclasses import dataclass
 from typing import Any
 from django.contrib.contenttypes.models import ContentType
+from django.template import Template, Context
 from netbox.plugins import PluginTemplateExtension
 from extras.choices import CustomFieldTypeChoices
-from utilities.jinja2 import render_jinja2
+from utilities.paginator import EnhancedPaginator
 from netbox_custom_objects.models import CustomObjectTypeField
+from netbox_custom_objects.tables import LinkedCustomObjectTable
 
 __all__ = (
     "CustomObjectSchema",
@@ -38,6 +40,7 @@ class LinkedCustomObject:
 class CustomObjectLink(PluginTemplateExtension):
 
     def left_page(self):
+        # Get custom objects linking to this object
         content_type = ContentType.objects.get_for_model(
             self.context["object"]._meta.model
         )
@@ -77,37 +80,31 @@ class CustomObjectLink(PluginTemplateExtension):
                             custom_object=model_object, field=field
                         )
                     )
-        return render_jinja2(
-            """
-          <div class="card">
-            <h2 class="card-header">Custom Objects linking to this object</h2>
-            <table class="table table-hover attr-table">
-              <thead>
-                <tr>
-                  <th>Type</th>
-                  <th>Custom Object</th>
-                  <th>Field</th>
-                </tr>
-              </thead>
-              {% if linked_custom_objects|count <= 20 %}
-                {% for obj in linked_custom_objects %}
-                  <tr>
-                    <td>{{ obj.field.custom_object_type }}</td>
-                    <th scope="row">
-                      <a href="{{ obj.custom_object.get_absolute_url() }}">{{ obj.custom_object }}</a>
-                    </th>
-                    <td>{{ obj.field }}</td>
-                  </tr>
-                {% endfor %}
+
+        request = self.context["request"]
+        linked_objects_table = LinkedCustomObjectTable(linked_custom_objects, orderable=False)
+        linked_objects_table.configure(request)
+        linked_objects_table.paginate(page=request.GET.get("page", 1), per_page=50, paginator_class=EnhancedPaginator)
+
+        template_str = """
+            {% load render_table from django_tables2 %}
+            {% load i18n %}
+            <div class="card">
+              <h2 class="card-header">{% trans "Custom Objects linking to this object" %}</h2>
+              {% if table.rows %}
+                <div class="table-responsive">
+                  {% render_table table 'inc/table.html' %}
+                  {% include 'inc/paginator.html' with paginator=table.paginator page=table.page %}
+                </div>
+              {% else %}
+                <div class="card-body text-muted">{% trans "None" %}</div>
               {% endif %}
-              <tr>
-                <td colspan="3">{{ linked_custom_objects|count }} objects</td>
-              </tr>
-            </table>
-          </div>
-          """,
-            {"linked_custom_objects": linked_custom_objects},
-        )
+            </div>
+        """
+        template = Template(template_str)
+        context = Context({'table': linked_objects_table, "request": request})
+        rendered_content = template.render(context)
+        return rendered_content
 
 
 template_extensions = (
