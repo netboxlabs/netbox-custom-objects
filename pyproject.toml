@@ -48,12 +48,17 @@ license-files = ["LICENSE.md"]
 line-length = 120
 
 [tool.ruff.lint]
-extend-select = ["E1", "E2", "E3", "E501", "W"]
-ignore = ["F403", "F405"]
+extend-select = ["E1", "E2", "E3", "E501", "W", "I", "RET", "UP"]
+ignore = ["F403", "F405", "RET504", "UP032"]
 preview = true
+
+[tool.ruff.lint.isort]
+known-first-party = ["account", "circuits", "core", "dcim", "extras", "ipam", "netbox", "tenancy", "users", "utilities", "virtualization", "vpn", "wireless", ]
 
 [tool.ruff.format]
 quote-style = "single"
+indent-style = "space"
+line-ending = "lf"
 
 [build-system]
 requires = ["setuptools>=43.0.0", "wheel"]
