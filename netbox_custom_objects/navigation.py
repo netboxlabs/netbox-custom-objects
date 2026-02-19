@@ -9,13 +9,13 @@ from utilities.string import title
 from netbox_custom_objects.constants import APP_LABEL
 
 custom_object_type_plugin_menu_item = PluginMenuItem(
-    link="plugins:netbox_custom_objects:customobjecttype_list",
-    link_text=_("Custom Object Types"),
+    link='plugins:netbox_custom_objects:customobjecttype_list',
+    link_text=_('Custom Object Types'),
     buttons=(
         PluginMenuButton(
-            "plugins:netbox_custom_objects:customobjecttype_add",
-            _("Add"),
-            "mdi mdi-plus-thick",
+            'plugins:netbox_custom_objects:customobjecttype_add',
+            _('Add'),
+            'mdi mdi-plus-thick',
         ),
     ),
     auth_required=True,
@@ -23,32 +23,23 @@ custom_object_type_plugin_menu_item = PluginMenuItem(
 
 
 class CustomObjectTypeMenuItems:
-
     def __iter__(self):
-        CustomObjectType = apps.get_model(APP_LABEL, "CustomObjectType")
+        CustomObjectType = apps.get_model(APP_LABEL, 'CustomObjectType')
         for custom_object_type in CustomObjectType.objects.all():
             model = custom_object_type.get_model()
             add_button = PluginMenuButton(
                 None,
-                _("Add"),
-                "mdi mdi-plus-thick",
+                _('Add'),
+                'mdi mdi-plus-thick',
             )
             add_button.url = reverse_lazy(
-                f"plugins:{APP_LABEL}:customobject_add",
-                kwargs={
-                    "custom_object_type": custom_object_type.slug
-                },
+                f'plugins:{APP_LABEL}:customobject_add',
+                kwargs={'custom_object_type': custom_object_type.slug},
             )
-            bulk_import_button = PluginMenuButton(
-                None,
-                _('Import'),
-                'mdi mdi-upload'
-            )
+            bulk_import_button = PluginMenuButton(None, _('Import'), 'mdi mdi-upload')
             bulk_import_button.url = reverse_lazy(
-                f"plugins:{APP_LABEL}:customobject_bulk_import",
-                kwargs={
-                    "custom_object_type": custom_object_type.slug
-                },
+                f'plugins:{APP_LABEL}:customobject_bulk_import',
+                kwargs={'custom_object_type': custom_object_type.slug},
             )
             menu_item = PluginMenuItem(
                 link=None,
@@ -57,8 +48,8 @@ class CustomObjectTypeMenuItems:
                 auth_required=True,
             )
             menu_item.url = reverse_lazy(
-                f"plugins:{APP_LABEL}:customobject_list",
-                kwargs={"custom_object_type": custom_object_type.slug},
+                f'plugins:{APP_LABEL}:customobject_list',
+                kwargs={'custom_object_type': custom_object_type.slug},
             )
             yield menu_item
 
@@ -66,12 +57,12 @@ class CustomObjectTypeMenuItems:
 current_version = version.parse(settings.RELEASE.version)
 
 groups = [
-    (_("Object Types"), (custom_object_type_plugin_menu_item,)),
-    (_("Objects"), CustomObjectTypeMenuItems()),
+    (_('Object Types'), (custom_object_type_plugin_menu_item,)),
+    (_('Objects'), CustomObjectTypeMenuItems()),
 ]
 
 menu = PluginMenu(
-    label=_("Custom Objects"),
+    label=_('Custom Objects'),
     groups=tuple(groups),
-    icon_class="mdi mdi-toy-brick-outline",
+    icon_class='mdi mdi-toy-brick-outline',
 )

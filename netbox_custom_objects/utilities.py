@@ -5,18 +5,17 @@ from django.apps import apps
 from netbox_custom_objects.constants import APP_LABEL
 
 __all__ = (
-    "AppsProxy",
-    "generate_model",
-    "get_viewname",
-    "is_in_branch",
+    'AppsProxy',
+    'generate_model',
+    'get_viewname',
+    'is_in_branch',
 )
 
 
 class AppsProxy:
-
     def __init__(self, dynamic_models=None, app_label=None):
         self.dynamic_models = dynamic_models or {}
-        self.dynamic_app_label = app_label or "database_table"
+        self.dynamic_app_label = app_label or 'database_table'
 
     def get_models(self, *args, **kwargs):
         return apps.get_models(*args, **kwargs) + list(self.dynamic_models.values())
@@ -24,8 +23,8 @@ class AppsProxy:
     def register_model(self, app_label, model):
         with self._lock:
             model_name = model._meta.model_name.lower()
-            if not hasattr(model, "_generated_table_model"):
-                if not hasattr(self, "dynamic_models"):
+            if not hasattr(model, '_generated_table_model'):
+                if not hasattr(self, 'dynamic_models'):
                     self.dynamic_models = model._meta.auto_created.dynamic_models
 
             self.dynamic_models[model_name] = model
@@ -70,21 +69,21 @@ def get_viewname(model, action=None, rest_api=False):
     """
     is_plugin = True
     app_label = APP_LABEL
-    model_name = "customobject"
+    model_name = 'customobject'
 
     if rest_api:
-        viewname = f"{app_label}-api:{model_name}"
+        viewname = f'{app_label}-api:{model_name}'
         if is_plugin:
-            viewname = f"plugins-api:{viewname}"
+            viewname = f'plugins-api:{viewname}'
         if action:
-            viewname = f"{viewname}-{action}"
+            viewname = f'{viewname}-{action}'
 
     else:
-        viewname = f"{app_label}:{model_name}"
+        viewname = f'{app_label}:{model_name}'
         if is_plugin:
-            viewname = f"plugins:{viewname}"
+            viewname = f'plugins:{viewname}'
         if action:
-            viewname = f"{viewname}_{action}"
+            viewname = f'{viewname}_{action}'
 
     return viewname
 
@@ -99,9 +98,7 @@ def generate_model(*args, **kwargs):
     # Suppress RuntimeWarning about model already being registered
     # TODO: Remove this once we have a better way to handle model registration
     with warnings.catch_warnings():
-        warnings.filterwarnings(
-            "ignore", category=RuntimeWarning, message=".*was already registered.*"
-        )
+        warnings.filterwarnings('ignore', category=RuntimeWarning, message='.*was already registered.*')
 
         try:
             model = type(*args, **kwargs)
@@ -120,6 +117,7 @@ def is_in_branch():
     """
     try:
         from netbox_branching.contextvars import active_branch
+
         return active_branch.get() is not None
     except ImportError:
         # Branching plugin not installed

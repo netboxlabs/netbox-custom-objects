@@ -32,7 +32,7 @@ from extras.choices import CustomFieldTypeChoices
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.utilities import is_in_branch
 
-logger = logging.getLogger("netbox_custom_objects.views")
+logger = logging.getLogger('netbox_custom_objects.views')
 
 
 class CustomJournalEntryForm(JournalEntryForm):
@@ -41,7 +41,7 @@ class CustomJournalEntryForm(JournalEntryForm):
     """
 
     def __init__(self, *args, **kwargs):
-        self.custom_object = kwargs.pop("custom_object", None)
+        self.custom_object = kwargs.pop('custom_object', None)
         super().__init__(*args, **kwargs)
 
     def get_return_url(self):
@@ -50,10 +50,10 @@ class CustomJournalEntryForm(JournalEntryForm):
         """
         if self.custom_object:
             return reverse(
-                "plugins:netbox_custom_objects:customobject_journal",
+                'plugins:netbox_custom_objects:customobject_journal',
                 kwargs={
-                    "custom_object_type": self.custom_object.custom_object_type.slug,
-                    "pk": self.custom_object.pk,
+                    'custom_object_type': self.custom_object.custom_object_type.slug,
+                    'pk': self.custom_object.pk,
                 },
             )
         return super().get_return_url()
@@ -76,49 +76,45 @@ class CustomJournalEntryEditView(generic.ObjectEditView):
         """
         Override to return the correct URL for custom objects.
         """
-        if instance.assigned_object and hasattr(
-            instance.assigned_object, "custom_object_type"
-        ):
+        if instance.assigned_object and hasattr(instance.assigned_object, 'custom_object_type'):
             # This is a custom object
             return reverse(
-                "plugins:netbox_custom_objects:customobject_journal",
+                'plugins:netbox_custom_objects:customobject_journal',
                 kwargs={
-                    "custom_object_type": instance.assigned_object.custom_object_type.slug,
-                    "pk": instance.assigned_object.pk,
+                    'custom_object_type': instance.assigned_object.custom_object_type.slug,
+                    'pk': instance.assigned_object.pk,
                 },
             )
         # Fall back to standard behavior for non-custom objects
         if not instance.assigned_object:
-            return reverse("extras:journalentry_list")
+            return reverse('extras:journalentry_list')
         obj = instance.assigned_object
-        viewname = get_viewname(obj, "journal")
-        return reverse(viewname, kwargs={"pk": obj.pk})
+        viewname = get_viewname(obj, 'journal')
+        return reverse(viewname, kwargs={'pk': obj.pk})
 
 
 class CustomObjectTableMixin(TableMixin):
     def get_table(self, data, request, bulk_actions=True):
         model_fields = self.custom_object_type.fields.all()
-        fields = ["id"] + [
-            field.name
-            for field in model_fields
-            if field.ui_visible != CustomFieldUIVisibleChoices.HIDDEN
+        fields = ['id'] + [
+            field.name for field in model_fields if field.ui_visible != CustomFieldUIVisibleChoices.HIDDEN
         ]
 
         meta = type(
-            "Meta",
+            'Meta',
             (),
             {
-                "model": data.model,
-                "fields": fields,
-                "attrs": {
-                    "class": "table table-hover object-list",
+                'model': data.model,
+                'fields': fields,
+                'attrs': {
+                    'class': 'table table-hover object-list',
                 },
             },
         )
 
         attrs = {
-            "Meta": meta,
-            "__module__": "database.tables",
+            'Meta': meta,
+            '__module__': 'database.tables',
         }
 
         for field in model_fields:
@@ -128,11 +124,7 @@ class CustomObjectTableMixin(TableMixin):
             try:
                 attrs[field.name] = field_type.get_table_column_field(field)
             except NotImplementedError:
-                logger.debug(
-                    "table mixin: {} field is not implemented; using a default column".format(
-                        field.name
-                    )
-                )
+                logger.debug('table mixin: {} field is not implemented; using a default column'.format(field.name))
             # Primary field (if text-based) is linkified to the target Custom Object. Other fields may be
             # rendered via field-specific "render_foo" methods as supported by django-tables2.
             linkable_field_types = [
@@ -140,17 +132,17 @@ class CustomObjectTableMixin(TableMixin):
                 CustomFieldTypeChoices.TYPE_LONGTEXT,
             ]
             if field.primary and field.type in linkable_field_types:
-                attrs[f"render_{field.name}"] = field_type.render_table_column_linkified
+                attrs[f'render_{field.name}'] = field_type.render_table_column_linkified
             else:
                 # Define a method "render_table_column" method on any FieldType to customize output
                 # See https://django-tables2.readthedocs.io/en/latest/pages/custom-data.html#table-render-foo-methods
                 try:
-                    attrs[f"render_{field.name}"] = field_type.render_table_column
+                    attrs[f'render_{field.name}'] = field_type.render_table_column
                 except AttributeError:
                     pass
 
         self.table = type(
-            f"{data.model._meta.object_name}Table",
+            f'{data.model._meta.object_name}Table',
             (CustomObjectTable,),
             attrs,
         )
@@ -162,7 +154,7 @@ class CustomObjectTableMixin(TableMixin):
 #
 
 
-@register_model_view(CustomObjectType, "list", path="", detail=False)
+@register_model_view(CustomObjectType, 'list', path='', detail=False)
 class CustomObjectTypeListView(generic.ObjectListView):
     queryset = CustomObjectType.objects.all()
     filterset = filtersets.CustomObjectTypeFilterSet
@@ -184,7 +176,7 @@ class CustomObjectTypeView(CustomObjectTableMixin, generic.ObjectView):
         model = instance.get_model_with_serializer()
 
         # Get fields and group them by group_name
-        fields = instance.fields.all().order_by("group_name", "weight", "name")
+        fields = instance.fields.all().order_by('group_name', 'weight', 'name')
 
         # Group fields by group_name
         field_groups = {}
@@ -195,23 +187,23 @@ class CustomObjectTypeView(CustomObjectTableMixin, generic.ObjectView):
             field_groups[group_name].append(field)
 
         return {
-            "custom_objects": model.objects.all(),
-            "table": self.get_table(self.queryset, request),
-            "field_groups": field_groups,
+            'custom_objects': model.objects.all(),
+            'table': self.get_table(self.queryset, request),
+            'field_groups': field_groups,
         }
 
 
-@register_model_view(CustomObjectType, "add", detail=False)
-@register_model_view(CustomObjectType, "edit")
+@register_model_view(CustomObjectType, 'add', detail=False)
+@register_model_view(CustomObjectType, 'edit')
 class CustomObjectTypeEditView(generic.ObjectEditView):
     queryset = CustomObjectType.objects.all()
     form = forms.CustomObjectTypeForm
 
 
-@register_model_view(CustomObjectType, "delete")
+@register_model_view(CustomObjectType, 'delete')
 class CustomObjectTypeDeleteView(generic.ObjectDeleteView):
     queryset = CustomObjectType.objects.all()
-    default_return_url = "plugins:netbox_custom_objects:customobjecttype_list"
+    default_return_url = 'plugins:netbox_custom_objects:customobjecttype_list'
 
     def _get_dependent_objects(self, obj):
         dependent_objects = super()._get_dependent_objects(obj)
@@ -219,9 +211,7 @@ class CustomObjectTypeDeleteView(generic.ObjectDeleteView):
         dependent_objects[model] = list(model.objects.all())
 
         # Find CustomObjectTypeFields that reference this CustomObjectType
-        referencing_fields = CustomObjectTypeField.objects.filter(
-            related_object_type=obj.object_type
-        )
+        referencing_fields = CustomObjectTypeField.objects.filter(related_object_type=obj.object_type)
 
         # Add the CustomObjectTypeFields that reference this CustomObjectType
         if referencing_fields.exists():
@@ -235,15 +225,15 @@ class CustomObjectTypeDeleteView(generic.ObjectDeleteView):
 #
 
 
-@register_model_view(CustomObjectTypeField, "edit")
+@register_model_view(CustomObjectTypeField, 'edit')
 class CustomObjectTypeFieldEditView(generic.ObjectEditView):
     queryset = CustomObjectTypeField.objects.all()
     form = forms.CustomObjectTypeFieldForm
 
 
-@register_model_view(CustomObjectTypeField, "delete")
+@register_model_view(CustomObjectTypeField, 'delete')
 class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
-    template_name = "netbox_custom_objects/field_delete.html"
+    template_name = 'netbox_custom_objects/field_delete.html'
     queryset = CustomObjectTypeField.objects.all()
 
     def get_return_url(self, request, obj=None):
@@ -261,23 +251,23 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
 
         model = obj.custom_object_type.get_model_with_serializer()
         kwargs = {
-            f"{obj.name}__isnull": False,
+            f'{obj.name}__isnull': False,
         }
         num_dependent_objects = model.objects.filter(**kwargs).count()
 
         # If this is an HTMX request, return only the rendered deletion form as modal content
         if htmx_partial(request):
-            viewname = get_viewname(self.queryset.model, action="delete")
-            form_url = reverse(viewname, kwargs={"pk": obj.pk})
+            viewname = get_viewname(self.queryset.model, action='delete')
+            form_url = reverse(viewname, kwargs={'pk': obj.pk})
             return render(
                 request,
-                "htmx/delete_form.html",
+                'htmx/delete_form.html',
                 {
-                    "object": obj,
-                    "object_type": self.queryset.model._meta.verbose_name,
-                    "form": form,
-                    "form_url": form_url,
-                    "num_dependent_objects": num_dependent_objects,
+                    'object': obj,
+                    'object_type': self.queryset.model._meta.verbose_name,
+                    'form': form,
+                    'form_url': form_url,
+                    'num_dependent_objects': num_dependent_objects,
                     **self.get_extra_context(request, obj),
                 },
             )
@@ -286,10 +276,10 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
             request,
             self.template_name,
             {
-                "object": obj,
-                "form": form,
-                "return_url": self.get_return_url(request, obj),
-                "num_dependent_objects": num_dependent_objects,
+                'object': obj,
+                'form': form,
+                'return_url': self.get_return_url(request, obj),
+                'num_dependent_objects': num_dependent_objects,
                 **self.get_extra_context(request, obj),
             },
         )
@@ -298,19 +288,19 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
         dependent_objects = super()._get_dependent_objects(obj)
         model = obj.custom_object_type.get_model_with_serializer()
         kwargs = {
-            f"{obj.name}__isnull": False,
+            f'{obj.name}__isnull': False,
         }
         dependent_objects[model] = list(model.objects.filter(**kwargs))
         return dependent_objects
 
 
-@register_model_view(CustomObjectType, "bulk_import", path="import", detail=False)
+@register_model_view(CustomObjectType, 'bulk_import', path='import', detail=False)
 class CustomObjectTypeBulkImportView(generic.BulkImportView):
     queryset = CustomObjectType.objects.all()
     model_form = forms.CustomObjectTypeImportForm
 
 
-@register_model_view(CustomObjectType, "bulk_edit", path="edit", detail=False)
+@register_model_view(CustomObjectType, 'bulk_edit', path='edit', detail=False)
 class CustomObjectTypeBulkEditView(generic.BulkEditView):
     queryset = CustomObjectType.objects.all()
     filterset = filtersets.CustomObjectTypeFilterSet
@@ -318,7 +308,7 @@ class CustomObjectTypeBulkEditView(generic.BulkEditView):
     form = forms.CustomObjectTypeBulkEditForm
 
 
-@register_model_view(CustomObjectType, "bulk_delete", path="delete", detail=False)
+@register_model_view(CustomObjectType, 'bulk_delete', path='delete', detail=False)
 class CustomObjectTypeBulkDeleteView(generic.BulkDeleteView):
     queryset = CustomObjectType.objects.all()
     filterset = filtersets.CustomObjectTypeFilterSet
@@ -333,7 +323,7 @@ class CustomObjectTypeBulkDeleteView(generic.BulkDeleteView):
 class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
     queryset = None
     custom_object_type = None
-    template_name = "netbox_custom_objects/custom_object_list.html"
+    template_name = 'netbox_custom_objects/custom_object_list.html'
 
     def setup(self, request, *args, **kwargs):
         super().setup(request, *args, **kwargs)
@@ -344,10 +334,8 @@ class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
     def get_queryset(self, request):
         if self.queryset is not None:
             return self.queryset
-        custom_object_type = self.kwargs.get("custom_object_type", None)
-        self.custom_object_type = get_object_or_404(
-            CustomObjectType, slug=custom_object_type
-        )
+        custom_object_type = self.kwargs.get('custom_object_type', None)
+        self.custom_object_type = get_object_or_404(CustomObjectType, slug=custom_object_type)
         model = self.custom_object_type.get_model_with_serializer()
         return model.objects.all()
 
@@ -358,9 +346,9 @@ class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
         model = self.queryset.model
 
         attrs = {
-            "model": model,
-            "__module__": "database.filterset_forms",
-            "tag": TagFilterField(model),
+            'model': model,
+            '__module__': 'database.filterset_forms',
+            'tag': TagFilterField(model),
         }
 
         for field in self.custom_object_type.fields.all():
@@ -368,10 +356,10 @@ class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
             try:
                 attrs[field.name] = field_type.get_filterform_field(field)
             except NotImplementedError:
-                logger.debug("list view: {} field is not supported".format(field.name))
+                logger.debug('list view: {} field is not supported'.format(field.name))
 
         return type(
-            f"{model._meta.object_name}FilterForm",
+            f'{model._meta.object_name}FilterForm',
             (NetBoxModelFilterSetForm,),
             attrs,
         )
@@ -382,38 +370,30 @@ class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
 
     def get_extra_context(self, request):
         return {
-            "custom_object_type": self.custom_object_type,
+            'custom_object_type': self.custom_object_type,
         }
 
 
 @register_model_view(CustomObject)
 class CustomObjectView(generic.ObjectView):
-    template_name = "netbox_custom_objects/customobject.html"
+    template_name = 'netbox_custom_objects/customobject.html'
 
     def get_queryset(self, request):
-        custom_object_type = self.kwargs.get("custom_object_type", None)
-        object_type = get_object_or_404(
-            CustomObjectType, slug=custom_object_type
-        )
+        custom_object_type = self.kwargs.get('custom_object_type', None)
+        object_type = get_object_or_404(CustomObjectType, slug=custom_object_type)
         model = object_type.get_model_with_serializer()
         return model.objects.all()
 
     def get_object(self, **kwargs):
-        custom_object_type = self.kwargs.get("custom_object_type", None)
-        object_type = get_object_or_404(
-            CustomObjectType, slug=custom_object_type
-        )
+        custom_object_type = self.kwargs.get('custom_object_type', None)
+        object_type = get_object_or_404(CustomObjectType, slug=custom_object_type)
         model = object_type.get_model_with_serializer()
         # Filter out custom_object_type from kwargs for the object lookup
-        lookup_kwargs = {
-            k: v for k, v in self.kwargs.items() if k != "custom_object_type"
-        }
+        lookup_kwargs = {k: v for k, v in self.kwargs.items() if k != 'custom_object_type'}
         return get_object_or_404(model.objects.all(), **lookup_kwargs)
 
     def get_extra_context(self, request, instance):
-        fields = instance.custom_object_type.fields.all().order_by(
-            "group_name", "weight", "name"
-        )
+        fields = instance.custom_object_type.fields.all().order_by('group_name', 'weight', 'name')
 
         # Group fields by group_name
         field_groups = {}
@@ -424,14 +404,14 @@ class CustomObjectView(generic.ObjectView):
             field_groups[group_name].append(field)
 
         return {
-            "fields": fields,
-            "field_groups": field_groups,
+            'fields': fields,
+            'field_groups': field_groups,
         }
 
 
-@register_model_view(CustomObject, "edit")
+@register_model_view(CustomObject, 'edit')
 class CustomObjectEditView(generic.ObjectEditView):
-    template_name = "netbox_custom_objects/customobject_edit.html"
+    template_name = 'netbox_custom_objects/customobject_edit.html'
     form = None
     queryset = None
     object = None
@@ -449,55 +429,51 @@ class CustomObjectEditView(generic.ObjectEditView):
     def get_object(self, **kwargs):
         if self.object:
             return self.object
-        custom_object_type = self.kwargs.pop("custom_object_type", None)
-        object_type = get_object_or_404(
-            CustomObjectType, slug=custom_object_type
-        )
+        custom_object_type = self.kwargs.pop('custom_object_type', None)
+        object_type = get_object_or_404(CustomObjectType, slug=custom_object_type)
         model = object_type.get_model_with_serializer()
 
-        if not self.kwargs.get("pk", None):
+        if not self.kwargs.get('pk', None):
             # We're creating a new object
             return model()
         return get_object_or_404(model.objects.all(), **self.kwargs)
 
     def get_form(self, model):
         meta = type(
-            "Meta",
+            'Meta',
             (),
             {
-                "model": model,
-                "fields": "__all__",
+                'model': model,
+                'fields': '__all__',
             },
         )
 
         attrs = {
-            "Meta": meta,
-            "__module__": "database.forms",
-            "_errors": None,
-            "custom_object_type_fields": {},
-            "custom_object_type_field_groups": {},
+            'Meta': meta,
+            '__module__': 'database.forms',
+            '_errors': None,
+            'custom_object_type_fields': {},
+            'custom_object_type_field_groups': {},
         }
 
         # Process custom object type fields (with grouping)
-        for field in self.object.custom_object_type.fields.all().order_by(
-            "group_name", "weight", "name"
-        ):
+        for field in self.object.custom_object_type.fields.all().order_by('group_name', 'weight', 'name'):
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
             try:
                 field_name = field.name
                 attrs[field_name] = field_type.get_annotated_form_field(field)
 
                 # Annotate the field in the list of CustomField form fields
-                attrs["custom_object_type_fields"][field_name] = field
+                attrs['custom_object_type_fields'][field_name] = field
 
                 # Group fields by group_name (similar to NetBox custom fields)
                 group_name = field.group_name or None  # Use None for ungrouped fields
-                if group_name not in attrs["custom_object_type_field_groups"]:
-                    attrs["custom_object_type_field_groups"][group_name] = []
-                attrs["custom_object_type_field_groups"][group_name].append(field_name)
+                if group_name not in attrs['custom_object_type_field_groups']:
+                    attrs['custom_object_type_field_groups'][group_name] = []
+                attrs['custom_object_type_field_groups'][group_name].append(field_name)
 
             except NotImplementedError:
-                logger.debug("get_form: {} field is not supported".format(field.name))
+                logger.debug('get_form: {} field is not supported'.format(field.name))
 
         # Note: Regular model fields (non-custom fields) are automatically included
         # by the "fields": "__all__" setting in the Meta class, so we don't need
@@ -505,7 +481,7 @@ class CustomObjectEditView(generic.ObjectEditView):
         # The template will be able to access them directly through the form.
 
         form_class = type(
-            f"{model._meta.object_name}Form",
+            f'{model._meta.object_name}Form',
             (forms.NetBoxModelForm,),
             attrs,
         )
@@ -513,10 +489,8 @@ class CustomObjectEditView(generic.ObjectEditView):
         # Create a custom __init__ method to set instance attributes
         def custom_init(self, *args, **kwargs):
             # Set the grouping info as instance attributes from the outer scope
-            self.custom_object_type_fields = attrs["custom_object_type_fields"]
-            self.custom_object_type_field_groups = attrs[
-                "custom_object_type_field_groups"
-            ]
+            self.custom_object_type_fields = attrs['custom_object_type_fields']
+            self.custom_object_type_field_groups = attrs['custom_object_type_field_groups']
 
             # Handle default values for MultiObject fields BEFORE calling parent __init__
             # This ensures the initial values are set before Django processes the form
@@ -531,7 +505,8 @@ class CustomObjectEditView(generic.ObjectEditView):
                             if content_type.app_label == APP_LABEL:
                                 # Custom object type
                                 from netbox_custom_objects.models import CustomObjectType
-                                custom_object_type_id = content_type.model.replace("table", "").replace("model", "")
+
+                                custom_object_type_id = content_type.model.replace('table', '').replace('model', '')
                                 custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
                                 model = custom_object_type.get_model(skip_object_fields=True)
                             else:
@@ -595,11 +570,11 @@ class CustomObjectEditView(generic.ObjectEditView):
         }
 
 
-@register_model_view(CustomObject, "delete")
+@register_model_view(CustomObject, 'delete')
 class CustomObjectDeleteView(generic.ObjectDeleteView):
     queryset = None
     object = None
-    default_return_url = "plugins:netbox_custom_objects:customobject_list"
+    default_return_url = 'plugins:netbox_custom_objects:customobject_list'
 
     def setup(self, request, *args, **kwargs):
         super().setup(request, *args, **kwargs)
@@ -612,10 +587,8 @@ class CustomObjectDeleteView(generic.ObjectDeleteView):
     def get_object(self, **kwargs):
         if self.object:
             return self.object
-        custom_object_type = self.kwargs.pop("custom_object_type", None)
-        object_type = get_object_or_404(
-            CustomObjectType, slug=custom_object_type
-        )
+        custom_object_type = self.kwargs.pop('custom_object_type', None)
+        object_type = get_object_or_404(CustomObjectType, slug=custom_object_type)
         model = object_type.get_model_with_serializer()
         return get_object_or_404(model.objects.all(), **self.kwargs)
 
@@ -628,17 +601,17 @@ class CustomObjectDeleteView(generic.ObjectDeleteView):
             custom_object_type = obj.custom_object_type.slug
         else:
             # Fallback to getting it from kwargs if object is not available
-            custom_object_type = self.kwargs.get("custom_object_type")
+            custom_object_type = self.kwargs.get('custom_object_type')
 
         return reverse(
-            "plugins:netbox_custom_objects:customobject_list",
-            kwargs={"custom_object_type": custom_object_type},
+            'plugins:netbox_custom_objects:customobject_list',
+            kwargs={'custom_object_type': custom_object_type},
         )
 
 
-@register_model_view(CustomObject, "bulk_edit", path="edit", detail=False)
+@register_model_view(CustomObject, 'bulk_edit', path='edit', detail=False)
 class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
-    template_name = "netbox_custom_objects/custom_object_bulk_edit.html"
+    template_name = 'netbox_custom_objects/custom_object_bulk_edit.html'
     queryset = None
     custom_object_type = None
     table = None
@@ -653,26 +626,24 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
     def get_queryset(self, request):
         if self.queryset:
             return self.queryset
-        custom_object_type = self.kwargs.get("custom_object_type", None)
-        self.custom_object_type = CustomObjectType.objects.get(
-            slug=custom_object_type
-        )
+        custom_object_type = self.kwargs.get('custom_object_type', None)
+        self.custom_object_type = CustomObjectType.objects.get(slug=custom_object_type)
         model = self.custom_object_type.get_model_with_serializer()
         return model.objects.all()
 
     def get_form(self, queryset):
         meta = type(
-            "Meta",
+            'Meta',
             (),
             {
-                "model": queryset.model,
-                "fields": "__all__",
+                'model': queryset.model,
+                'fields': '__all__',
             },
         )
 
         attrs = {
-            "Meta": meta,
-            "__module__": "database.forms",
+            'Meta': meta,
+            '__module__': 'database.forms',
         }
 
         for field in self.custom_object_type.fields.all():
@@ -683,12 +654,10 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
                 form_field.required = False
                 attrs[field.name] = form_field
             except NotImplementedError:
-                logger.debug(
-                    "bulk edit form: {} field is not supported".format(field.name)
-                )
+                logger.debug('bulk edit form: {} field is not supported'.format(field.name))
 
         form = type(
-            f"{queryset.model._meta.object_name}BulkEditForm",
+            f'{queryset.model._meta.object_name}BulkEditForm',
             (NetBoxModelBulkEditForm,),
             attrs,
         )
@@ -704,7 +673,7 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
         }
 
 
-@register_model_view(CustomObject, "bulk_delete", path="delete", detail=False)
+@register_model_view(CustomObject, 'bulk_delete', path='delete', detail=False)
 class CustomObjectBulkDeleteView(CustomObjectTableMixin, generic.BulkDeleteView):
     queryset = None
     custom_object_type = None
@@ -719,17 +688,15 @@ class CustomObjectBulkDeleteView(CustomObjectTableMixin, generic.BulkDeleteView)
     def get_queryset(self, request):
         if self.queryset:
             return self.queryset
-        self.custom_object_type = self.kwargs.pop("custom_object_type", None)
-        self.custom_object_type = CustomObjectType.objects.get(
-            slug=self.custom_object_type
-        )
+        self.custom_object_type = self.kwargs.pop('custom_object_type', None)
+        self.custom_object_type = CustomObjectType.objects.get(slug=self.custom_object_type)
         model = self.custom_object_type.get_model_with_serializer()
         return model.objects.all()
 
 
-@register_model_view(CustomObject, "bulk_import", path="import", detail=False)
+@register_model_view(CustomObject, 'bulk_import', path='import', detail=False)
 class CustomObjectBulkImportView(generic.BulkImportView):
-    template_name = "netbox_custom_objects/custom_object_bulk_import.html"
+    template_name = 'netbox_custom_objects/custom_object_bulk_import.html'
     queryset = None
     model_form = None
     custom_object_type = None
@@ -750,39 +717,35 @@ class CustomObjectBulkImportView(generic.BulkImportView):
     def get_queryset(self, request):
         if self.queryset:
             return self.queryset
-        custom_object_type = self.kwargs.get("custom_object_type", None)
-        self.custom_object_type = CustomObjectType.objects.get(
-            slug=custom_object_type
-        )
+        custom_object_type = self.kwargs.get('custom_object_type', None)
+        self.custom_object_type = CustomObjectType.objects.get(slug=custom_object_type)
         model = self.custom_object_type.get_model_with_serializer()
         return model.objects.all()
 
     def get_model_form(self, queryset):
         meta = type(
-            "Meta",
+            'Meta',
             (),
             {
-                "model": queryset.model,
-                "fields": "__all__",
+                'model': queryset.model,
+                'fields': '__all__',
             },
         )
 
         attrs = {
-            "Meta": meta,
-            "__module__": "database.forms",
+            'Meta': meta,
+            '__module__': 'database.forms',
         }
 
         for field in self.custom_object_type.fields.all():
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
             try:
-                attrs[field.name] = field_type.get_annotated_form_field(
-                    field, for_csv_import=True
-                )
+                attrs[field.name] = field_type.get_annotated_form_field(field, for_csv_import=True)
             except NotImplementedError:
-                print(f"bulk import form: {field.name} field is not supported")
+                print(f'bulk import form: {field.name} field is not supported')
 
         form = type(
-            f"{queryset.model._meta.object_name}BulkImportForm",
+            f'{queryset.model._meta.object_name}BulkImportForm',
             (NetBoxModelImportForm,),
             attrs,
         )
@@ -802,46 +765,40 @@ class CustomObjectJournalView(ConditionalLoginRequiredMixin, View):
     """
 
     base_template = None
-    tab = ViewTab(
-        label=_("Journal"), permission="extras.view_journalentry", weight=5000
-    )
+    tab = ViewTab(label=_('Journal'), permission='extras.view_journalentry', weight=5000)
 
     def get(self, request, custom_object_type, **kwargs):
         # Get the custom object type and model
-        object_type = get_object_or_404(
-            CustomObjectType, slug=custom_object_type
-        )
+        object_type = get_object_or_404(CustomObjectType, slug=custom_object_type)
         model = object_type.get_model_with_serializer()
 
         # Get the specific object
-        lookup_kwargs = {k: v for k, v in kwargs.items() if k != "custom_object_type"}
+        lookup_kwargs = {k: v for k, v in kwargs.items() if k != 'custom_object_type'}
         obj = get_object_or_404(model.objects.all(), **lookup_kwargs)
 
         # Get journal entries for this object
         content_type = ContentType.objects.get_for_model(model)
         journal_entries = (
-            JournalEntry.objects.restrict(request.user, "view")
-            .prefetch_related("created_by")
+            JournalEntry.objects.restrict(request.user, 'view')
+            .prefetch_related('created_by')
             .filter(
                 assigned_object_type=content_type,
                 assigned_object_id=obj.pk,
             )
         )
 
-        journal_table = JournalEntryTable(
-            data=journal_entries, orderable=False, user=request.user
-        )
+        journal_table = JournalEntryTable(data=journal_entries, orderable=False, user=request.user)
         journal_table.configure(request)
-        journal_table.columns.hide("assigned_object_type")
-        journal_table.columns.hide("assigned_object")
+        journal_table.columns.hide('assigned_object_type')
+        journal_table.columns.hide('assigned_object')
 
         # Create form for new journal entry if user has permission
-        if request.user.has_perm("extras.add_journalentry"):
+        if request.user.has_perm('extras.add_journalentry'):
             form = CustomJournalEntryForm(
                 custom_object=obj,
                 initial={
-                    "assigned_object_type": content_type,
-                    "assigned_object_id": obj.pk,
+                    'assigned_object_type': content_type,
+                    'assigned_object_id': obj.pk,
                 },
             )
         else:
@@ -849,20 +806,18 @@ class CustomObjectJournalView(ConditionalLoginRequiredMixin, View):
 
         # Set base template
         if self.base_template is None:
-            self.base_template = "netbox_custom_objects/customobject.html"
+            self.base_template = 'netbox_custom_objects/customobject.html'
 
         return render(
             request,
-            "netbox_custom_objects/object_journal.html",
+            'netbox_custom_objects/object_journal.html',
             {
-                "object": obj,
-                "form": form,
-                "table": journal_table,
-                "base_template": self.base_template,
-                "tab": "journal",
-                "form_action": reverse(
-                    "plugins:netbox_custom_objects:custom_journalentry_add"
-                ),
+                'object': obj,
+                'form': form,
+                'table': journal_table,
+                'base_template': self.base_template,
+                'tab': 'journal',
+                'form_action': reverse('plugins:netbox_custom_objects:custom_journalentry_add'),
             },
         )
 
@@ -874,48 +829,42 @@ class CustomObjectChangeLogView(ConditionalLoginRequiredMixin, View):
     """
 
     base_template = None
-    tab = ViewTab(
-        label=_("Changelog"), permission="core.view_objectchange", weight=10000
-    )
+    tab = ViewTab(label=_('Changelog'), permission='core.view_objectchange', weight=10000)
 
     def get(self, request, custom_object_type, **kwargs):
         # Get the custom object type and model
-        object_type = get_object_or_404(
-            CustomObjectType, slug=custom_object_type
-        )
+        object_type = get_object_or_404(CustomObjectType, slug=custom_object_type)
         model = object_type.get_model_with_serializer()
 
         # Get the specific object
-        lookup_kwargs = {k: v for k, v in kwargs.items() if k != "custom_object_type"}
+        lookup_kwargs = {k: v for k, v in kwargs.items() if k != 'custom_object_type'}
         obj = get_object_or_404(model.objects.all(), **lookup_kwargs)
 
         # Gather all changes for this object (and its related objects)
         content_type = ContentType.objects.get_for_model(model)
         objectchanges = (
-            ObjectChange.objects.restrict(request.user, "view")
-            .prefetch_related("user", "changed_object_type")
+            ObjectChange.objects.restrict(request.user, 'view')
+            .prefetch_related('user', 'changed_object_type')
             .filter(
                 Q(changed_object_type=content_type, changed_object_id=obj.pk)
                 | Q(related_object_type=content_type, related_object_id=obj.pk)
             )
         )
 
-        objectchanges_table = ObjectChangeTable(
-            data=objectchanges, orderable=False, user=request.user
-        )
+        objectchanges_table = ObjectChangeTable(data=objectchanges, orderable=False, user=request.user)
         objectchanges_table.configure(request)
 
         # Set base template
         if self.base_template is None:
-            self.base_template = "netbox_custom_objects/customobject.html"
+            self.base_template = 'netbox_custom_objects/customobject.html'
 
         return render(
             request,
-            "extras/object_changelog.html",
+            'extras/object_changelog.html',
             {
-                "object": obj,
-                "table": objectchanges_table,
-                "base_template": self.base_template,
-                "tab": "changelog",
+                'object': obj,
+                'table': objectchanges_table,
+                'base_template': self.base_template,
+                'tab': 'changelog',
             },
         )

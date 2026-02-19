@@ -15,6 +15,7 @@ def create_token(user):
     try:
         # NetBox >= 4.5
         from users.choices import TokenVersionChoices
+
         token = Token(version=TokenVersionChoices.V1, user=user)
         token.save()
         return token.token
@@ -94,7 +95,7 @@ class CustomObjectTest(CustomObjectsTestCase, APIViewTestCases.APIViewTestCase):
                 site=sites[0],
                 rack=racks[0],
                 cluster=clusters[0],
-                local_context_data={'A': 1}
+                local_context_data={'A': 1},
             ),
             Device(
                 device_type=device_types[0],
@@ -103,7 +104,7 @@ class CustomObjectTest(CustomObjectsTestCase, APIViewTestCases.APIViewTestCase):
                 site=sites[0],
                 rack=racks[0],
                 cluster=clusters[0],
-                local_context_data={'B': 2}
+                local_context_data={'B': 2},
             ),
             Device(
                 device_type=device_types[0],
@@ -112,27 +113,27 @@ class CustomObjectTest(CustomObjectsTestCase, APIViewTestCases.APIViewTestCase):
                 site=sites[0],
                 rack=racks[0],
                 cluster=clusters[0],
-                local_context_data={'C': 3}
+                local_context_data={'C': 3},
             ),
         )
         Device.objects.bulk_create(devices)
 
         # Create test custom object types
         cls.custom_object_type1 = CustomObjectType.objects.create(
-            name="TestObject1",
-            description="First test custom object type",
-            verbose_name_plural="Test Objects 1",
-            slug="test-objects-1",
+            name='TestObject1',
+            description='First test custom object type',
+            verbose_name_plural='Test Objects 1',
+            slug='test-objects-1',
         )
 
         cls.custom_object_type2 = CustomObjectType.objects.create(
-            name="TestObject2",
-            description="Second test custom object type",
-            verbose_name_plural="Test Objects 2",
-            slug="test-objects-2",
+            name='TestObject2',
+            description='Second test custom object type',
+            verbose_name_plural='Test Objects 2',
+            slug='test-objects-2',
         )
 
-        cls.custom_object_type3 = cls.create_complex_custom_object_type(name="ComplexObject")
+        cls.custom_object_type3 = cls.create_complex_custom_object_type(name='ComplexObject')
 
         cls.model = cls.custom_object_type1.get_model()
         cls.create_custom_object_type_field(cls.custom_object_type1)
@@ -176,14 +177,11 @@ class CustomObjectTest(CustomObjectsTestCase, APIViewTestCases.APIViewTestCase):
         # TODO: Needs filtering by pk to work
         ...
 
-    def test_bulk_create_objects(self):
-        ...
+    def test_bulk_create_objects(self): ...
 
-    def test_bulk_delete_objects(self):
-        ...
+    def test_bulk_delete_objects(self): ...
 
-    def test_bulk_update_objects(self):
-        ...
+    def test_bulk_update_objects(self): ...
 
     def test_delete_object(self):
         # TODO: ObjectChange causes failure
@@ -199,10 +197,7 @@ class CustomObjectTest(CustomObjectsTestCase, APIViewTestCases.APIViewTestCase):
         self.model = model
 
         # Add object-level permission
-        obj_perm = ObjectPermission(
-            name='Test permission',
-            actions=['add']
-        )
+        obj_perm = ObjectPermission(name='Test permission', actions=['add'])
         obj_perm.save()
         obj_perm.users.add(self.user)
         obj_perm.object_types.add(ObjectType.objects.get_for_model(self.model))
@@ -224,19 +219,12 @@ class CustomObjectTest(CustomObjectsTestCase, APIViewTestCases.APIViewTestCase):
         self.assertHttpStatus(response, status.HTTP_201_CREATED)
         self.assertEqual(self._get_queryset().count(), initial_count + 1)
         instance = self._get_queryset().get(pk=response.data['id'])
-        self.assertInstanceEqual(
-            instance,
-            self.create_data[0],
-            exclude=self.validation_excluded_fields,
-            api=True
-        )
+        self.assertInstanceEqual(instance, self.create_data[0], exclude=self.validation_excluded_fields, api=True)
 
     # TODO: GraphQL
-    def test_graphql_list_objects(self):
-        ...
+    def test_graphql_list_objects(self): ...
 
-    def test_graphql_get_object(self):
-        ...
+    def test_graphql_get_object(self): ...
 
 
 class CustomObjectTypeAPITest(CustomObjectsTestCase):
@@ -254,10 +242,7 @@ class CustomObjectTypeAPITest(CustomObjectsTestCase):
         self.header = {'HTTP_AUTHORIZATION': f'Token {self.token.key}'}
 
         # Add object-level permission
-        obj_perm = ObjectPermission(
-            name='Test permission',
-            actions=['add']
-        )
+        obj_perm = ObjectPermission(name='Test permission', actions=['add'])
         obj_perm.save()
         obj_perm.users.add(self.user)
         obj_perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))

@@ -32,22 +32,22 @@ def _migration_finished(sender, **kwargs):
 
 # Plugin Configuration
 class CustomObjectsPluginConfig(PluginConfig):
-    name = "netbox_custom_objects"
-    verbose_name = "Custom Objects"
-    description = "A plugin to manage custom objects in NetBox"
-    version = "0.4.6"
+    name = 'netbox_custom_objects'
+    verbose_name = 'Custom Objects'
+    description = 'A plugin to manage custom objects in NetBox'
+    version = '0.4.6'
     author = 'Netbox Labs'
     author_email = 'support@netboxlabs.com'
-    base_url = "custom-objects"
+    base_url = 'custom-objects'
     # Remember to update COMPATIBILITY.md when modifying the minimum/maximum supported NetBox versions.
-    min_version = "4.4.0"
-    max_version = "4.5.99"
+    min_version = '4.4.0'
+    max_version = '4.5.99'
     default_settings = {
         # The maximum number of Custom Object Types that may be created
         'max_custom_object_types': 50,
     }
     required_settings = []
-    template_extensions = "template_content.template_extensions"
+    template_extensions = 'template_content.template_extensions'
 
     @staticmethod
     def _should_skip_dynamic_model_creation():
@@ -70,14 +70,12 @@ class CustomObjectsPluginConfig(PluginConfig):
 
         skip_commands = (
             # Running migrations should skip.
-            "makemigrations",
-            "migrate",
-
+            'makemigrations',
+            'migrate',
             # The database isn't accessible during collect static so should skip.
-            "collectstatic",
-
+            'collectstatic',
             # Skip during tests.
-            "test",
+            'test',
         )
 
         if any(cmd in sys.argv for cmd in skip_commands):
@@ -99,10 +97,7 @@ class CustomObjectsPluginConfig(PluginConfig):
             loader = MigrationLoader(connection)
 
             # Get all migrations for our app from the migration graph
-            app_migrations = [
-                key[1] for key in loader.graph.nodes
-                if key[0] == APP_LABEL
-            ]
+            app_migrations = [key[1] for key in loader.graph.nodes if key[0] == APP_LABEL]
 
             if not app_migrations:
                 result = True
@@ -135,12 +130,8 @@ class CustomObjectsPluginConfig(PluginConfig):
 
         # Suppress warnings about database calls during app initialization
         with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore", category=RuntimeWarning, message=".*database.*"
-            )
-            warnings.filterwarnings(
-                "ignore", category=UserWarning, message=".*database.*"
-            )
+            warnings.filterwarnings('ignore', category=RuntimeWarning, message='.*database.*')
+            warnings.filterwarnings('ignore', category=UserWarning, message='.*database.*')
 
             # Skip database calls if dynamic models can't be created yet
             if self._should_skip_dynamic_model_creation():
@@ -166,23 +157,17 @@ class CustomObjectsPluginConfig(PluginConfig):
         model_name = model_name.lower()
         # only do database calls if we are sure the app is ready to avoid
         # Django warnings
-        if "table" not in model_name.lower() or "model" not in model_name.lower():
-            raise LookupError(
-                "App '%s' doesn't have a '%s' model." % (self.label, model_name)
-            )
+        if 'table' not in model_name.lower() or 'model' not in model_name.lower():
+            raise LookupError("App '%s' doesn't have a '%s' model." % (self.label, model_name))
 
         from .models import CustomObjectType
 
-        custom_object_type_id = int(
-            model_name.replace("table", "").replace("model", "")
-        )
+        custom_object_type_id = int(model_name.replace('table', '').replace('model', ''))
 
         try:
             obj = CustomObjectType.objects.get(pk=custom_object_type_id)
         except CustomObjectType.DoesNotExist:
-            raise LookupError(
-                "App '%s' doesn't have a '%s' model." % (self.label, model_name)
-            )
+            raise LookupError("App '%s' doesn't have a '%s' model." % (self.label, model_name))
 
         return obj.get_model()
 
@@ -194,12 +179,8 @@ class CustomObjectsPluginConfig(PluginConfig):
 
         # Suppress warnings about database calls during model loading
         with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore", category=RuntimeWarning, message=".*database.*"
-            )
-            warnings.filterwarnings(
-                "ignore", category=UserWarning, message=".*database.*"
-            )
+            warnings.filterwarnings('ignore', category=RuntimeWarning, message='.*database.*')
+            warnings.filterwarnings('ignore', category=UserWarning, message='.*database.*')
 
             # Skip custom object type model loading if dynamic models can't be created yet
             if self._should_skip_dynamic_model_creation():

@@ -8,11 +8,9 @@ from netbox_custom_objects.models import CustomObjectType
 
 from . import views
 
-custom_object_list = views.CustomObjectViewSet.as_view(
-    {"get": "list", "post": "create"}
-)
+custom_object_list = views.CustomObjectViewSet.as_view({'get': 'list', 'post': 'create'})
 custom_object_detail = views.CustomObjectViewSet.as_view(
-    {"get": "retrieve", "put": "update", "patch": "partial_update", "delete": "destroy"}
+    {'get': 'retrieve', 'put': 'update', 'patch': 'partial_update', 'delete': 'destroy'}
 )
 
 
@@ -21,8 +19,9 @@ class CustomObjectsAPIRootView(APIView):
     This is the root of the NetBox Custom Objects plugin API. Custom Object Types defined at application startup
     are listed by lowercased name; e.g. `/api/plugins/custom-objects/cat/`.
     """
+
     def get_view_name(self):
-        return "Custom Objects API Root"
+        return 'Custom Objects API Root'
 
     _ignore_model_permissions = True
     schema = None  # exclude from schema
@@ -37,13 +36,7 @@ class CustomObjectsAPIRootView(APIView):
             if namespace:
                 url_name = namespace + ':' + url_name
             try:
-                ret[key] = reverse(
-                    url_name,
-                    args=args,
-                    kwargs=kwargs,
-                    request=request,
-                    format=kwargs.get('format')
-                )
+                ret[key] = reverse(url_name, args=args, kwargs=kwargs, request=request, format=kwargs.get('format'))
             except NoReverseMatch:
                 # Don't bail out if eg. no list routes exist, only detail routes.
                 continue
@@ -57,11 +50,7 @@ class CustomObjectsAPIRootView(APIView):
             if namespace:
                 url_name = namespace + ':' + url_name
             ret[cot_name] = reverse(
-                url_name,
-                args=args,
-                kwargs=local_kwargs,
-                request=request,
-                format=local_kwargs.get('format')
+                url_name, args=args, kwargs=local_kwargs, request=request, format=local_kwargs.get('format')
             )
 
         return Response(ret)
@@ -69,15 +58,15 @@ class CustomObjectsAPIRootView(APIView):
 
 router = NetBoxRouter()
 router.APIRootView = CustomObjectsAPIRootView
-router.register("custom-object-types", views.CustomObjectTypeViewSet)
-router.register("custom-object-type-fields", views.CustomObjectTypeFieldViewSet)
+router.register('custom-object-types', views.CustomObjectTypeViewSet)
+router.register('custom-object-type-fields', views.CustomObjectTypeFieldViewSet)
 
 urlpatterns = [
-    path("", include(router.urls)),
-    path("<str:custom_object_type>/", custom_object_list, name="customobject-list"),
+    path('', include(router.urls)),
+    path('<str:custom_object_type>/', custom_object_list, name='customobject-list'),
     path(
-        "<str:custom_object_type>/<int:pk>/",
+        '<str:custom_object_type>/<int:pk>/',
         custom_object_detail,
-        name="customobject-detail",
+        name='customobject-detail',
     ),
 ]

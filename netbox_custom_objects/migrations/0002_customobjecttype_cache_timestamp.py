@@ -4,15 +4,14 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
-        ("netbox_custom_objects", "0001_initial"),
+        ('netbox_custom_objects', '0001_initial'),
     ]
 
     operations = [
         migrations.AddField(
-            model_name="customobjecttype",
-            name="cache_timestamp",
+            model_name='customobjecttype',
+            name='cache_timestamp',
             field=models.DateTimeField(auto_now=True),
         ),
     ]

@@ -12,12 +12,12 @@ from netbox_custom_objects.utilities import is_in_branch
 from . import serializers
 
 # Constants
-BRANCH_ACTIVE_ERROR_MESSAGE = _("Please switch to the main branch to perform this operation.")
+BRANCH_ACTIVE_ERROR_MESSAGE = _('Please switch to the main branch to perform this operation.')
 
 
 class RootView(APIRootView):
     def get_view_name(self):
-        return "CustomObjects"
+        return 'CustomObjects'
 
 
 class CustomObjectTypeViewSet(ModelViewSet):
@@ -35,7 +35,7 @@ class CustomObjectTypeViewSet(ModelViewSet):
     create=extend_schema(exclude=True),
     update=extend_schema(exclude=True),
     partial_update=extend_schema(exclude=True),
-    destroy=extend_schema(exclude=True)
+    destroy=extend_schema(exclude=True),
 )
 class CustomObjectViewSet(ModelViewSet):
     serializer_class = serializers.CustomObjectSerializer
@@ -51,9 +51,7 @@ class CustomObjectViewSet(ModelViewSet):
 
     def get_queryset(self):
         try:
-            custom_object_type = CustomObjectType.objects.get(
-                slug=self.kwargs["custom_object_type"]
-            )
+            custom_object_type = CustomObjectType.objects.get(slug=self.kwargs['custom_object_type'])
         except CustomObjectType.DoesNotExist:
             raise Http404
         self.model = custom_object_type.get_model_with_serializer()

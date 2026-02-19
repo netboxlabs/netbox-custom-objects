@@ -12,7 +12,7 @@ from utilities.permissions import get_permission_for_model
 from netbox_custom_objects.models import CustomObject, CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.utilities import get_viewname
 
-__all__ = ("CustomObjectTable", "LinkedCustomObjectTable")
+__all__ = ('CustomObjectTable', 'LinkedCustomObjectTable')
 
 
 OBJECTCHANGE_FULL_NAME = """
@@ -55,35 +55,30 @@ class CustomObjectTypeTable(NetBoxTable):
     comments = columns.MarkdownColumn(
         verbose_name=_('Comments'),
     )
-    tags = columns.TagColumn(
-        url_name='plugins:netbox_custom_objects:customobjecttype_list'
-    )
-    name = tables.Column(
-        verbose_name=_('Name'),
-        linkify=True
-    )
+    tags = columns.TagColumn(url_name='plugins:netbox_custom_objects:customobjecttype_list')
+    name = tables.Column(verbose_name=_('Name'), linkify=True)
 
     class Meta(NetBoxTable.Meta):
         model = CustomObjectType
         fields = (
-            "pk",
-            "id",
-            "name",
-            "verbose_name",
-            "verbose_name_plural",
-            "slug",
+            'pk',
+            'id',
+            'name',
+            'verbose_name',
+            'verbose_name_plural',
+            'slug',
             'description',
             'comments',
             'tags',
-            "created",
-            "last_updated",
+            'created',
+            'last_updated',
         )
         default_columns = (
-            "pk",
-            "id",
-            "name",
-            "created",
-            "last_updated",
+            'pk',
+            'id',
+            'name',
+            'created',
+            'last_updated',
         )
 
 
@@ -91,6 +86,7 @@ class CustomObjectTagColumn(columns.TagColumn):
     """
     Custom TagColumn that generates tag filter URLs with the custom_object_type slug.
     """
+
     template_code = """
     {% load helpers %}
     {% for tag in value.all %}
@@ -118,38 +114,37 @@ class CustomObjectTagColumn(columns.TagColumn):
 
 
 class CustomObjectActionsColumn(columns.ActionsColumn):
-
     def render(self, record, table, **kwargs):
         model = table.Meta.model
 
         # Skip if no actions or extra buttons are defined
         if not (self.actions or self.extra_buttons):
-            return ""
+            return ''
         # Skip dummy records (e.g. available VLANs or IP ranges replacing individual IPs)
-        if type(record) is not model or not getattr(record, "pk", None):
-            return ""
+        if type(record) is not model or not getattr(record, 'pk', None):
+            return ''
 
-        if request := getattr(table, "context", {}).get("request"):
-            return_url = request.GET.get("return_url", request.get_full_path())
-            url_appendix = f"?return_url={quote(return_url)}"
+        if request := getattr(table, 'context', {}).get('request'):
+            return_url = request.GET.get('return_url', request.get_full_path())
+            url_appendix = f'?return_url={quote(return_url)}'
         else:
-            url_appendix = ""
+            url_appendix = ''
 
-        html = ""
+        html = ''
 
         # Compile actions menu
         button = None
-        dropdown_class = "secondary"
+        dropdown_class = 'secondary'
         dropdown_links = []
-        user = getattr(request, "user", AnonymousUser())
+        user = getattr(request, 'user', AnonymousUser())
         for idx, (action, attrs) in enumerate(self.actions.items()):
             permission = get_permission_for_model(model, attrs.permission)
             if attrs.permission is None or user.has_perm(permission):
                 url = reverse(
                     get_viewname(model, action),
                     kwargs={
-                        "pk": record.pk,
-                        "custom_object_type": record.custom_object_type.slug,
+                        'pk': record.pk,
+                        'custom_object_type': record.custom_object_type.slug,
                     },
                 )
 
@@ -170,16 +165,16 @@ class CustomObjectActionsColumn(columns.ActionsColumn):
                     )
 
         # Create the actions dropdown menu
-        toggle_text = _("Toggle Dropdown")
+        toggle_text = _('Toggle Dropdown')
         if button and dropdown_links:
             html += (
                 f'<span class="btn-group dropdown">'
-                f"  {button}"
+                f'  {button}'
                 f'  <a class="btn btn-sm btn-{dropdown_class} dropdown-toggle" type="button" data-bs-toggle="dropdown" '
                 f'style="padding-left: 2px">'
                 f'  <span class="visually-hidden">{toggle_text}</span></a>'
                 f'  <ul class="dropdown-menu">{"".join(dropdown_links)}</ul>'
-                f"</span>"
+                f'</span>'
             )
         elif button:
             html += button
@@ -189,14 +184,14 @@ class CustomObjectActionsColumn(columns.ActionsColumn):
                 f'  <a class="btn btn-sm btn-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">'
                 f'  <span class="visually-hidden">{toggle_text}</span></a>'
                 f'  <ul class="dropdown-menu">{"".join(dropdown_links)}</ul>'
-                f"</span>"
+                f'</span>'
             )
 
         # Render any extra buttons from template code
         if self.extra_buttons:
             template = Template(self.extra_buttons)
-            context = getattr(table, "context", Context())
-            context.update({"record": record})
+            context = getattr(table, 'context', Context())
+            context.update({'record': record})
             html = template.render(context) + html
 
         return mark_safe(html)
@@ -204,7 +199,7 @@ class CustomObjectActionsColumn(columns.ActionsColumn):
 
 class CustomObjectTable(NetBoxTable):
     pk = columns.ToggleColumn(visible=False)
-    id = tables.Column(linkify=True, verbose_name=_("ID"))
+    id = tables.Column(linkify=True, verbose_name=_('ID'))
     actions = CustomObjectActionsColumn(
         actions=('edit', 'delete'),
     )
@@ -213,37 +208,37 @@ class CustomObjectTable(NetBoxTable):
     class Meta(NetBoxTable.Meta):
         model = CustomObject
         fields = (
-            "pk",
-            "id",
-            "name",
-            "custom_object_type",
-            "created",
-            "last_updated",
-            "tags",
+            'pk',
+            'id',
+            'name',
+            'custom_object_type',
+            'created',
+            'last_updated',
+            'tags',
         )
         default_columns = (
-            "pk",
-            "id",
-            "name",
-            "custom_object_type",
-            "created",
-            "last_updated",
+            'pk',
+            'id',
+            'name',
+            'custom_object_type',
+            'created',
+            'last_updated',
         )
 
 
 class LinkedCustomObjectTable(NetBoxTable):
     custom_object_type = tables.Column(
-        accessor="custom_object__custom_object_type",
+        accessor='custom_object__custom_object_type',
         linkify=True,
-        verbose_name=_("Type"),
+        verbose_name=_('Type'),
     )
     custom_object = tables.Column(
         linkify=True,
-        verbose_name=_("Custom Object"),
+        verbose_name=_('Custom Object'),
     )
-    field = tables.Column(verbose_name=_("Field"))
+    field = tables.Column(verbose_name=_('Field'))
 
     class Meta(NetBoxTable.Meta):
         model = CustomObjectTypeField
-        fields = ("custom_object_type", "custom_object", "field")
-        default_columns = ("custom_object_type", "custom_object", "field")
+        fields = ('custom_object_type', 'custom_object', 'field')
+        default_columns = ('custom_object_type', 'custom_object', 'field')

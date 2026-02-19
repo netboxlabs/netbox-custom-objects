@@ -49,7 +49,7 @@ class CustomObjectsTestCase:
             'custom_object_type': custom_object_type,
             'name': 'test_field',
             'label': 'Test Field',
-            'type': 'text'
+            'type': 'text',
         }
         defaults.update(kwargs)
         return CustomObjectTypeField.objects.create(**defaults)
@@ -63,7 +63,7 @@ class CustomObjectsTestCase:
                 ['choice1', 'Choice 1'],
                 ['choice2', 'Choice 2'],
                 ['choice3', 'Choice 3'],
-            ]
+            ],
         }
         defaults.update(kwargs)
         return CustomFieldChoiceSet.objects.create(**defaults)
@@ -84,21 +84,12 @@ class CustomObjectsTestCase:
 
         # Add a text field as primary
         CustomObjectsTestCase.create_custom_object_type_field(
-            custom_object_type,
-            name="name",
-            label="Name",
-            type="text",
-            primary=True,
-            required=True
+            custom_object_type, name='name', label='Name', type='text', primary=True, required=True
         )
 
         # Add a description field
         CustomObjectsTestCase.create_custom_object_type_field(
-            custom_object_type,
-            name="description",
-            label="Description",
-            type="text",
-            required=False
+            custom_object_type, name='description', label='Description', type='text', required=False
         )
 
         return custom_object_type
@@ -112,58 +103,41 @@ class CustomObjectsTestCase:
 
         # Primary text field
         CustomObjectsTestCase.create_custom_object_type_field(
-            custom_object_type,
-            name="name",
-            label="Name",
-            type="text",
-            primary=True,
-            required=True
+            custom_object_type, name='name', label='Name', type='text', primary=True, required=True
         )
 
         # Integer field
         CustomObjectsTestCase.create_custom_object_type_field(
             custom_object_type,
-            name="count",
-            label="Count",
-            type="integer",
+            name='count',
+            label='Count',
+            type='integer',
             validation_minimum=0,
-            validation_maximum=100
+            validation_maximum=100,
         )
 
         # Boolean field
         CustomObjectsTestCase.create_custom_object_type_field(
-            custom_object_type,
-            name="active",
-            label="Active",
-            type="boolean",
-            default=True
+            custom_object_type, name='active', label='Active', type='boolean', default=True
         )
 
         # Select field
         CustomObjectsTestCase.create_custom_object_type_field(
-            custom_object_type,
-            name="status",
-            label="Status",
-            type="select",
-            choice_set=choice_set
+            custom_object_type, name='status', label='Status', type='select', choice_set=choice_set
         )
 
         # Object field (device)
         CustomObjectsTestCase.create_custom_object_type_field(
-            custom_object_type,
-            name="device",
-            label="Device",
-            type="object",
-            related_object_type=device_object_type
+            custom_object_type, name='device', label='Device', type='object', related_object_type=device_object_type
         )
 
         # Multi-Object field (devices)
         CustomObjectsTestCase.create_custom_object_type_field(
             custom_object_type,
-            name="devices",
-            label="Devices",
-            type="multiobject",
-            related_object_type=device_object_type
+            name='devices',
+            label='Devices',
+            type='multiobject',
+            related_object_type=device_object_type,
         )
 
         return custom_object_type
@@ -174,12 +148,7 @@ class CustomObjectsTestCase:
 
         # Primary text field
         CustomObjectsTestCase.create_custom_object_type_field(
-            custom_object_type,
-            name="name",
-            label="Name",
-            type="text",
-            primary=True,
-            required=True
+            custom_object_type, name='name', label='Name', type='text', primary=True, required=True
         )
 
         return custom_object_type
@@ -192,30 +161,21 @@ class CustomObjectsTestCase:
 
         # Primary text field
         CustomObjectsTestCase.create_custom_object_type_field(
-            custom_object_type,
-            name="name",
-            label="Name",
-            type="text",
-            primary=True,
-            required=True
+            custom_object_type, name='name', label='Name', type='text', primary=True, required=True
         )
 
         # Multi-object field (devices)
         CustomObjectsTestCase.create_custom_object_type_field(
             custom_object_type,
-            name="devices",
-            label="Devices",
-            type="multiobject",
-            related_object_type=device_object_type
+            name='devices',
+            label='Devices',
+            type='multiobject',
+            related_object_type=device_object_type,
         )
 
         # Multi-object field (sites)
         CustomObjectsTestCase.create_custom_object_type_field(
-            custom_object_type,
-            name="sites",
-            label="Sites",
-            type="multiobject",
-            related_object_type=site_object_type
+            custom_object_type, name='sites', label='Sites', type='multiobject', related_object_type=site_object_type
         )
 
         return custom_object_type

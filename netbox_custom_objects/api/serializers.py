@@ -11,15 +11,14 @@ from rest_framework.reverse import reverse
 from rest_framework.utils import model_meta
 
 from netbox_custom_objects import constants, field_types
-from netbox_custom_objects.models import (CustomObject, CustomObjectType,
-                                          CustomObjectTypeField)
+from netbox_custom_objects.models import CustomObject, CustomObjectType, CustomObjectTypeField
 
 logger = logging.getLogger('netbox_custom_objects.api.serializers')
 
 
 __all__ = (
-    "CustomObjectTypeSerializer",
-    "CustomObjectSerializer",
+    'CustomObjectTypeSerializer',
+    'CustomObjectSerializer',
 )
 
 
@@ -27,15 +26,15 @@ class ContentTypeSerializer(NetBoxModelSerializer):
     class Meta:
         model = ContentType
         fields = (
-            "id",
-            "app_label",
-            "model",
+            'id',
+            'app_label',
+            'model',
         )
 
 
 class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
     url = serializers.HyperlinkedIdentityField(
-        view_name="plugins-api:netbox_custom_objects-api:customobjecttypefield-detail"
+        view_name='plugins-api:netbox_custom_objects-api:customobjecttypefield-detail'
     )
     app_label = serializers.CharField(required=False)
     model = serializers.CharField(required=False)
@@ -43,57 +42,51 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
     class Meta:
         model = CustomObjectTypeField
         fields = (
-            "id",
-            "name",
-            "label",
-            "custom_object_type",
-            "description",
-            "type",
-            "primary",
-            "required",
-            "unique",
-            "default",
-            "choice_set",
-            "validation_regex",
-            "validation_minimum",
-            "validation_maximum",
-            "related_object_type",
-            "related_object_filter",
-            "app_label",
-            "model",
-            "group_name",
-            "search_weight",
-            "filter_logic",
-            "ui_visible",
-            "ui_editable",
-            "weight",
-            "is_cloneable",
-            "comments",
+            'id',
+            'name',
+            'label',
+            'custom_object_type',
+            'description',
+            'type',
+            'primary',
+            'required',
+            'unique',
+            'default',
+            'choice_set',
+            'validation_regex',
+            'validation_minimum',
+            'validation_maximum',
+            'related_object_type',
+            'related_object_filter',
+            'app_label',
+            'model',
+            'group_name',
+            'search_weight',
+            'filter_logic',
+            'ui_visible',
+            'ui_editable',
+            'weight',
+            'is_cloneable',
+            'comments',
         )
 
     def validate(self, attrs):
-        app_label = attrs.pop("app_label", None)
-        model = attrs.pop("model", None)
-        if attrs["type"] in [
+        app_label = attrs.pop('app_label', None)
+        model = attrs.pop('model', None)
+        if attrs['type'] in [
             CustomFieldTypeChoices.TYPE_OBJECT,
             CustomFieldTypeChoices.TYPE_MULTIOBJECT,
         ]:
             try:
-                attrs["related_object_type"] = ObjectType.objects.get(
-                    app_label=app_label, model=model
-                )
+                attrs['related_object_type'] = ObjectType.objects.get(app_label=app_label, model=model)
             except ObjectType.DoesNotExist:
-                raise ValidationError(
-                    "Must provide valid app_label and model for object field type."
-                )
-        if attrs["type"] in [
+                raise ValidationError('Must provide valid app_label and model for object field type.')
+        if attrs['type'] in [
             CustomFieldTypeChoices.TYPE_SELECT,
             CustomFieldTypeChoices.TYPE_MULTISELECT,
         ]:
-            if not attrs.get("choice_set", None):
-                raise ValidationError(
-                    "Must provide choice_set with valid PK for select field type."
-                )
+            if not attrs.get('choice_set', None):
+                raise ValidationError('Must provide choice_set with valid PK for select field type.')
         return super().validate(attrs)
 
     def create(self, validated_data):
@@ -113,7 +106,7 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
 
 class CustomObjectTypeSerializer(NetBoxModelSerializer):
     url = serializers.HyperlinkedIdentityField(
-        view_name="plugins-api:netbox_custom_objects-api:customobjecttype-detail"
+        view_name='plugins-api:netbox_custom_objects-api:customobjecttype-detail'
     )
     fields = CustomObjectTypeFieldSerializer(
         nested=True,
@@ -126,27 +119,27 @@ class CustomObjectTypeSerializer(NetBoxModelSerializer):
     class Meta:
         model = CustomObjectType
         fields = [
-            "id",
-            "url",
-            "name",
-            "verbose_name",
-            "verbose_name_plural",
-            "slug",
-            "description",
-            "tags",
-            "created",
-            "last_updated",
-            "fields",
-            "table_model_name",
-            "object_type_name",
+            'id',
+            'url',
+            'name',
+            'verbose_name',
+            'verbose_name_plural',
+            'slug',
+            'description',
+            'tags',
+            'created',
+            'last_updated',
+            'fields',
+            'table_model_name',
+            'object_type_name',
         ]
-        brief_fields = ("id", "url", "name", "slug", "description")
+        brief_fields = ('id', 'url', 'name', 'slug', 'description')
 
     def get_table_model_name(self, obj):
         return obj.get_table_model_name(obj.id)
 
     def get_object_type_name(self, obj):
-        return f"{constants.APP_LABEL}.{obj.get_table_model_name(obj.id).lower()}"
+        return f'{constants.APP_LABEL}.{obj.get_table_model_name(obj.id).lower()}'
 
     def create(self, validated_data):
         return super().create(validated_data)
@@ -163,26 +156,26 @@ class CustomObjectSerializer(NetBoxModelSerializer):
     class Meta:
         model = CustomObject
         fields = [
-            "id",
-            "url",
-            "name",
-            "display",
-            "custom_object_type",
-            "tags",
-            "created",
-            "last_updated",
-            "data",
-            "field_data",
+            'id',
+            'url',
+            'name',
+            'display',
+            'custom_object_type',
+            'tags',
+            'created',
+            'last_updated',
+            'data',
+            'field_data',
         ]
         brief_fields = (
-            "id",
-            "url",
-            "name",
-            "custom_object_type",
+            'id',
+            'url',
+            'name',
+            'custom_object_type',
         )
 
     def get_display(self, obj):
-        return f"{obj.custom_object_type}: {obj.name}"
+        return f'{obj.custom_object_type}: {obj.name}'
 
     def validate(self, attrs):
         return super().validate(attrs)
@@ -192,7 +185,7 @@ class CustomObjectSerializer(NetBoxModelSerializer):
         pass
 
     def create(self, validated_data):
-        model = validated_data["custom_object_type"].get_model()
+        model = validated_data['custom_object_type'].get_model()
         instance = model.objects.create(**validated_data)
 
         return instance
@@ -210,17 +203,17 @@ class CustomObjectSerializer(NetBoxModelSerializer):
         attributes are not configured to correctly match the URL conf.
         """
         # Unsaved objects will not yet have a valid URL.
-        if hasattr(obj, "pk") and obj.pk in (None, ""):
+        if hasattr(obj, 'pk') and obj.pk in (None, ''):
             return None
 
-        view_name = "plugins-api:netbox_custom_objects-api:customobject-detail"
-        lookup_value = getattr(obj, "pk")
+        view_name = 'plugins-api:netbox_custom_objects-api:customobject-detail'
+        lookup_value = getattr(obj, 'pk')
         kwargs = {
-            "pk": lookup_value,
-            "custom_object_type": obj.custom_object_type.slug,
+            'pk': lookup_value,
+            'custom_object_type': obj.custom_object_type.slug,
         }
-        request = self.context["request"]
-        format = self.context.get("format")
+        request = self.context['request']
+        format = self.context.get('format')
         return reverse(view_name, kwargs=kwargs, request=request, format=format)
 
     def get_field_data(self, obj):
@@ -232,13 +225,14 @@ def get_serializer_class(model, skip_object_fields=False):
     model_fields = model.custom_object_type.fields.all()
 
     # Create field list including all necessary fields
-    base_fields = ["id", "url", "display", "created", "last_updated", "tags"]
+    base_fields = ['id', 'url', 'display', 'created', 'last_updated', 'tags']
 
     # Only include custom field names that will actually be added to the serializer
     custom_field_names = []
     for field in model_fields:
         if skip_object_fields and field.type in [
-            CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT
+            CustomFieldTypeChoices.TYPE_OBJECT,
+            CustomFieldTypeChoices.TYPE_MULTIOBJECT,
         ]:
             continue
         custom_field_names.append(field.name)
@@ -246,28 +240,28 @@ def get_serializer_class(model, skip_object_fields=False):
     all_fields = base_fields + custom_field_names
 
     meta = type(
-        "Meta",
+        'Meta',
         (),
         {
-            "model": model,
-            "fields": all_fields,
-            "brief_fields": ("id", "url", "display"),
+            'model': model,
+            'fields': all_fields,
+            'brief_fields': ('id', 'url', 'display'),
         },
     )
 
     def get_url(self, obj):
         """Generate the API URL for this object"""
-        if hasattr(obj, "pk") and obj.pk in (None, ""):
+        if hasattr(obj, 'pk') and obj.pk in (None, ''):
             return None
 
-        view_name = "plugins-api:netbox_custom_objects-api:customobject-detail"
-        lookup_value = getattr(obj, "pk")
+        view_name = 'plugins-api:netbox_custom_objects-api:customobject-detail'
+        lookup_value = getattr(obj, 'pk')
         kwargs = {
-            "pk": lookup_value,
-            "custom_object_type": obj.custom_object_type.slug,
+            'pk': lookup_value,
+            'custom_object_type': obj.custom_object_type.slug,
         }
-        request = self.context["request"]
-        format = self.context.get("format")
+        request = self.context['request']
+        format = self.context.get('format')
         return reverse(view_name, kwargs=kwargs, request=request, format=format)
 
     def get_display(self, obj):
@@ -314,30 +308,29 @@ def get_serializer_class(model, skip_object_fields=False):
 
     # Create basic attributes for the serializer
     attrs = {
-        "Meta": meta,
-        "__module__": "netbox_custom_objects.api.serializers",
-        "url": serializers.SerializerMethodField(),
-        "get_url": get_url,
-        "display": serializers.SerializerMethodField(),
-        "get_display": get_display,
-        "create": create,
-        "update": update,
+        'Meta': meta,
+        '__module__': 'netbox_custom_objects.api.serializers',
+        'url': serializers.SerializerMethodField(),
+        'get_url': get_url,
+        'display': serializers.SerializerMethodField(),
+        'get_display': get_display,
+        'create': create,
+        'update': update,
     }
 
     for field in model_fields:
         if skip_object_fields and field.type in [
-            CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT
+            CustomFieldTypeChoices.TYPE_OBJECT,
+            CustomFieldTypeChoices.TYPE_MULTIOBJECT,
         ]:
             continue
         field_type = field_types.FIELD_TYPE_CLASS[field.type]()
         try:
             attrs[field.name] = field_type.get_serializer_field(field)
         except NotImplementedError:
-            logger.debug(
-                "serializer: {} field is not implemented; using a default serializer field".format(field.name)
-            )
+            logger.debug('serializer: {} field is not implemented; using a default serializer field'.format(field.name))
 
-    serializer_name = f"{model._meta.object_name}Serializer"
+    serializer_name = f'{model._meta.object_name}Serializer'
     serializer = type(
         serializer_name,
         (NetBoxModelSerializer,),
