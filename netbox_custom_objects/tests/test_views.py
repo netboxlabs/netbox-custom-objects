@@ -1,10 +1,11 @@
 from django.urls import reverse
+
+from core.models.object_types import ObjectType
 from extras.models import CustomFieldChoiceSet
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from utilities.testing import ViewTestCases
 
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from .base import CustomObjectsTestCase
-from core.models.object_types import ObjectType
 
 
 class CustomObjectTypeViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase):
@@ -531,7 +532,7 @@ class ObjectFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObject
 
         # Create test instances (if DCIM models are available)
         try:
-            from dcim.models import Device, Site, DeviceRole, DeviceType, Manufacturer
+            from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
 
             # Create test site
             cls.site = Site.objects.create(name='Test Site', slug='test-site')

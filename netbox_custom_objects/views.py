@@ -1,14 +1,15 @@
 import logging
 
-from core.models import ObjectChange
-from core.tables import ObjectChangeTable
 from django.contrib.contenttypes.models import ContentType
 from django.db.models import Q
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 from django.views.generic import View
-from extras.choices import CustomFieldUIVisibleChoices
+
+from core.models import ObjectChange
+from core.tables import ObjectChangeTable
+from extras.choices import CustomFieldTypeChoices, CustomFieldUIVisibleChoices
 from extras.forms import JournalEntryForm
 from extras.models import JournalEntry
 from extras.tables import JournalEntryTable
@@ -19,18 +20,17 @@ from netbox.forms import (
 )
 from netbox.views import generic
 from netbox.views.generic.mixins import TableMixin
+from netbox_custom_objects.constants import APP_LABEL
+from netbox_custom_objects.filtersets import get_filterset_class
+from netbox_custom_objects.tables import CustomObjectTable
+from netbox_custom_objects.utilities import is_in_branch
 from utilities.forms import ConfirmationForm
 from utilities.forms.fields import TagFilterField
 from utilities.htmx import htmx_partial
 from utilities.views import ConditionalLoginRequiredMixin, ViewTab, get_viewname, register_model_view
 
-from netbox_custom_objects.filtersets import get_filterset_class
-from netbox_custom_objects.tables import CustomObjectTable
 from . import field_types, filtersets, forms, tables
 from .models import CustomObject, CustomObjectType, CustomObjectTypeField
-from extras.choices import CustomFieldTypeChoices
-from netbox_custom_objects.constants import APP_LABEL
-from netbox_custom_objects.utilities import is_in_branch
 
 logger = logging.getLogger('netbox_custom_objects.views')
 

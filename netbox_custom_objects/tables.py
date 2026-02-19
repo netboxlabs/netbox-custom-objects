@@ -6,11 +6,11 @@ from django.template import Context, Template
 from django.urls import reverse
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
-from netbox.tables import NetBoxTable, columns
-from utilities.permissions import get_permission_for_model
 
+from netbox.tables import NetBoxTable, columns
 from netbox_custom_objects.models import CustomObject, CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.utilities import get_viewname
+from utilities.permissions import get_permission_for_model
 
 __all__ = ('CustomObjectTable', 'LinkedCustomObjectTable')
 

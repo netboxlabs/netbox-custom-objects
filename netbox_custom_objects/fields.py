@@ -1,9 +1,9 @@
 from django.conf import settings
 from django.forms import BoundField
 from django.urls import reverse
-from utilities.forms.fields.dynamic import DynamicModelChoiceField, DynamicModelMultipleChoiceField
 
 from netbox_custom_objects.utilities import get_viewname
+from utilities.forms.fields.dynamic import DynamicModelChoiceField, DynamicModelMultipleChoiceField
 
 __all__ = ('CustomObjectDynamicModelChoiceField',)
 

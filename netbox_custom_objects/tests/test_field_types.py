@@ -1,6 +1,7 @@
-from unittest import skip
 from datetime import date, datetime
 from decimal import Decimal
+from unittest import skip
+
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 
@@ -551,7 +552,7 @@ class ObjectFieldTypeTestCase(FieldTypeTestCase):
 
         # Create a test device (if available)
         try:
-            from dcim.models import Device, Site, DeviceRole, DeviceType, Manufacturer
+            from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
 
             site = Site.objects.create(name='Test Site', slug='test-site')
             manufacturer = Manufacturer.objects.create(name='Test Manufacturer', slug='test-manufacturer')
@@ -602,7 +603,7 @@ class MultiObjectFieldTypeTestCase(FieldTypeTestCase):
 
         # Create test devices (if available)
         try:
-            from dcim.models import Device, Site, DeviceRole, DeviceType, Manufacturer
+            from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
 
             site = Site.objects.create(name='Test Site', slug='test-site')
             manufacturer = Manufacturer.objects.create(name='Test Manufacturer', slug='test-manufacturer')

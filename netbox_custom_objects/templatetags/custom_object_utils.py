@@ -1,6 +1,6 @@
 from django import template
-from extras.choices import CustomFieldTypeChoices, CustomFieldUIVisibleChoices
 
+from extras.choices import CustomFieldTypeChoices, CustomFieldUIVisibleChoices
 from netbox_custom_objects.models import CustomObjectTypeField
 
 __all__ = (

@@ -1,14 +1,14 @@
 from django.urls import reverse
-
-from utilities.testing import APIViewTestCases, create_test_user
 from rest_framework import status
 
-from netbox_custom_objects.models import CustomObjectType
-from .base import CustomObjectsTestCase
 from core.models import ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Rack, Site
+from netbox_custom_objects.models import CustomObjectType
 from users.models import ObjectPermission, Token
+from utilities.testing import APIViewTestCases, create_test_user
 from virtualization.models import Cluster, ClusterType
+
+from .base import CustomObjectsTestCase
 
 
 def create_token(user):

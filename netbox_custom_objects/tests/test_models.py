@@ -1,5 +1,5 @@
-from unittest import skip
 from decimal import Decimal
+from unittest import skip
 
 from django.core.exceptions import ValidationError
 from django.db import connection
@@ -7,8 +7,9 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from netbox_custom_objects.models import CustomObjectTypeField
 from core.models import ObjectType
+from netbox_custom_objects.models import CustomObjectTypeField
+
 from .base import CustomObjectsTestCase
 
 

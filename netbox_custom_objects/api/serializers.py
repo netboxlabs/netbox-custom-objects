@@ -1,15 +1,15 @@
 import logging
 import sys
 
-from core.models import ObjectType
 from django.contrib.contenttypes.models import ContentType
-from extras.choices import CustomFieldTypeChoices
-from netbox.api.serializers import NetBoxModelSerializer
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from rest_framework.reverse import reverse
 from rest_framework.utils import model_meta
 
+from core.models import ObjectType
+from extras.choices import CustomFieldTypeChoices
+from netbox.api.serializers import NetBoxModelSerializer
 from netbox_custom_objects import constants, field_types
 from netbox_custom_objects.models import CustomObject, CustomObjectType, CustomObjectTypeField
 

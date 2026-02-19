@@ -1,12 +1,12 @@
-from core.models import ObjectType
 from django import template
 from django.contrib.contenttypes.models import ContentType
 from django.urls import NoReverseMatch, reverse
+
+from core.models import ObjectType
 from extras.models import Bookmark, ExportTemplate, Subscription
 from netbox.models.features import NotificationsMixin
-from utilities.querydict import prepare_cloned_fields
-
 from netbox_custom_objects.utilities import get_viewname
+from utilities.querydict import prepare_cloned_fields
 
 __all__ = (
     'custom_object_add_button',

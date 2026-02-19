@@ -4,21 +4,22 @@ import threading
 from datetime import date, datetime
 
 import django_filters
-from core.models import ObjectType, ObjectChange
-from core.models.object_types import ObjectTypeManager
 from django.apps import apps
 from django.conf import settings
 
 # from django.contrib.contenttypes.management import create_contenttypes
 from django.contrib.contenttypes.models import ContentType
 from django.core.validators import RegexValidator, ValidationError
-from django.db import connection, IntegrityError, models, transaction
+from django.db import IntegrityError, connection, models, transaction
 from django.db.models import Q
 from django.db.models.functions import Lower
-from django.db.models.signals import pre_delete, post_save
+from django.db.models.signals import post_save, pre_delete
 from django.dispatch import receiver
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
+
+from core.models import ObjectChange, ObjectType
+from core.models.object_types import ObjectTypeManager
 from core.signals import handle_deleted_object
 from extras.choices import (
     CustomFieldFilterLogicChoices,
@@ -44,16 +45,15 @@ from netbox.models.features import (
 from netbox.plugins import get_plugin_config
 from netbox.registry import registry
 from netbox.search import SearchIndex
+from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
+from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
+from netbox_custom_objects.utilities import generate_model
 from utilities import filters
 from utilities.datetime import datetime_from_timestamp
 from utilities.object_types import object_type_name
 from utilities.querysets import RestrictedQuerySet
 from utilities.string import title
 from utilities.validators import validate_regex
-
-from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
-from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
-from netbox_custom_objects.utilities import generate_model
 
 
 class UniquenessConstraintTestError(Exception):
@@ -476,8 +476,7 @@ class CustomObjectType(NetBoxModel):
                 if cached_timestamp and self.cache_timestamp and cached_timestamp == self.cache_timestamp:
                     model = self.get_cached_model(self.id)
                     return model
-                else:
-                    self.clear_model_cache(self.id)
+                self.clear_model_cache(self.id)
 
         # Generate the model outside the lock to avoid holding it during expensive operations
         model_name = self.get_table_model_name(self.pk)

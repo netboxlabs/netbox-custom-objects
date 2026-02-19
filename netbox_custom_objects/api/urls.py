@@ -1,8 +1,10 @@
 from copy import deepcopy
-from django.urls import include, path, NoReverseMatch
+
+from django.urls import NoReverseMatch, include, path
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
 from rest_framework.views import APIView
+
 from netbox.api.routers import NetBoxRouter
 from netbox_custom_objects.models import CustomObjectType
 

@@ -5,7 +5,8 @@ import warnings
 from django.db import connection, transaction
 from django.db.migrations.loader import MigrationLoader
 from django.db.migrations.recorder import MigrationRecorder
-from django.db.models.signals import pre_migrate, post_migrate
+from django.db.models.signals import post_migrate, pre_migrate
+
 from netbox.plugins import PluginConfig
 
 from .constants import APP_LABEL as APP_LABEL
@@ -121,8 +122,9 @@ class CustomObjectsPluginConfig(PluginConfig):
             _checking_migrations = False
 
     def ready(self):
-        from .models import CustomObjectType
         from netbox_custom_objects.api.serializers import get_serializer_class
+
+        from .models import CustomObjectType
 
         # Connect migration signals to track migration state
         pre_migrate.connect(_migration_started)

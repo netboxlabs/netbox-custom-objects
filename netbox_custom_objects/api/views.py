@@ -1,9 +1,9 @@
 from django.http import Http404
 from django.utils.translation import gettext_lazy as _
-from drf_spectacular.utils import extend_schema_view, extend_schema
+from drf_spectacular.utils import extend_schema, extend_schema_view
+from rest_framework.exceptions import ValidationError
 from rest_framework.routers import APIRootView
 from rest_framework.viewsets import ModelViewSet
-from rest_framework.exceptions import ValidationError
 
 from netbox_custom_objects.filtersets import get_filterset_class
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField

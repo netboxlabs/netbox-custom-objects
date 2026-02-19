@@ -2,11 +2,11 @@ from django.apps import apps
 from django.conf import settings
 from django.urls import reverse_lazy
 from django.utils.translation import gettext_lazy as _
-from netbox.plugins import PluginMenu, PluginMenuButton, PluginMenuItem
 from packaging import version
-from utilities.string import title
 
+from netbox.plugins import PluginMenu, PluginMenuButton, PluginMenuItem
 from netbox_custom_objects.constants import APP_LABEL
+from utilities.string import title
 
 custom_object_type_plugin_menu_item = PluginMenuItem(
     link='plugins:netbox_custom_objects:customobjecttype_list',

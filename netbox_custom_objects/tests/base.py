@@ -1,10 +1,10 @@
 # Test utilities for netbox_custom_objects plugin
 from django.test import Client
+
 from core.models import ObjectType
 from extras.models import CustomFieldChoiceSet
-from utilities.testing import create_test_user
-
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from utilities.testing import create_test_user
 
 
 class CustomObjectsTestCase:

@@ -12,7 +12,11 @@ from django.db.models.manager import Manager
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
+
 from extras.choices import CustomFieldTypeChoices, CustomFieldUIEditableChoices
+from netbox.tables.columns import BooleanColumn
+from netbox_custom_objects.constants import APP_LABEL
+from netbox_custom_objects.utilities import generate_model
 from utilities.api import get_serializer_for_model
 from utilities.forms.fields import (
     CSVChoiceField,
@@ -34,10 +38,6 @@ from utilities.forms.widgets import (
     DateTimePicker,
 )
 from utilities.templatetags.builtins.filters import linkify, render_markdown
-from netbox.tables.columns import BooleanColumn
-
-from netbox_custom_objects.constants import APP_LABEL
-from netbox_custom_objects.utilities import generate_model
 
 
 class LazyForeignKey(ForeignKey):
@@ -308,15 +308,14 @@ class SelectFieldType(FieldType):
         if for_csv_import:
             field_class = CSVChoiceField
             return field_class(choices=choices, required=field.required, initial=initial)
-        else:
-            field_class = DynamicChoiceField
-            widget_class = APISelect
-            return field_class(
-                choices=choices,
-                required=field.required,
-                initial=initial,
-                widget=widget_class(api_url=f'/api/extras/custom-field-choice-sets/{field.choice_set.pk}/choices/'),
-            )
+        field_class = DynamicChoiceField
+        widget_class = APISelect
+        return field_class(
+            choices=choices,
+            required=field.required,
+            initial=initial,
+            widget=widget_class(api_url=f'/api/extras/custom-field-choice-sets/{field.choice_set.pk}/choices/'),
+        )
 
 
 class MultiSelectFieldType(FieldType):
@@ -345,15 +344,14 @@ class MultiSelectFieldType(FieldType):
         if for_csv_import:
             field_class = CSVMultipleChoiceField
             return field_class(choices=choices, required=field.required, initial=initial)
-        else:
-            field_class = DynamicMultipleChoiceField
-            widget_class = APISelectMultiple
-            return field_class(
-                choices=choices,
-                required=field.required,
-                initial=initial,
-                widget=widget_class(api_url=f'/api/extras/custom-field-choice-sets/{field.choice_set.pk}/choices/'),
-            )
+        field_class = DynamicMultipleChoiceField
+        widget_class = APISelectMultiple
+        return field_class(
+            choices=choices,
+            required=field.required,
+            initial=initial,
+            widget=widget_class(api_url=f'/api/extras/custom-field-choice-sets/{field.choice_set.pk}/choices/'),
+        )
 
     # TODO: Implement this
     # def get_form_field(self, field, required, label, **kwargs):
@@ -397,9 +395,8 @@ class ObjectFieldType(FieldType):
                     **field_kwargs,
                 )
                 return f
-            else:
-                # For cross-referential fields, use skip_object_fields to avoid infinite loops
-                model = custom_object_type.get_model(skip_object_fields=True)
+            # For cross-referential fields, use skip_object_fields to avoid infinite loops
+            model = custom_object_type.get_model(skip_object_fields=True)
         else:
             # to_model = content_type.model_class()._meta.object_name
             to_ct = f'{content_type.app_label}.{to_model}'
@@ -444,15 +441,14 @@ class ObjectFieldType(FieldType):
                 # Remove initial=field.default to allow Django to handle instance data properly
                 to_field_name=to_field_name,
             )
-        else:
-            field_class = DynamicModelChoiceField
-            return field_class(
-                queryset=model.objects.all(),
-                required=field.required,
-                # Remove initial=field.default to allow Django to handle instance data properly
-                query_params=(field.related_object_filter if hasattr(field, 'related_object_filter') else None),
-                selector=model._meta.app_label != APP_LABEL,
-            )
+        field_class = DynamicModelChoiceField
+        return field_class(
+            queryset=model.objects.all(),
+            required=field.required,
+            # Remove initial=field.default to allow Django to handle instance data properly
+            query_params=(field.related_object_filter if hasattr(field, 'related_object_filter') else None),
+            selector=model._meta.app_label != APP_LABEL,
+        )
 
     def get_filterform_field(self, field, **kwargs):
         return None
@@ -732,14 +728,13 @@ class MultiObjectFieldType(FieldType):
                 required=field.required,
                 to_field_name=to_field_name,
             )
-        else:
-            field_class = DynamicModelMultipleChoiceField
-            return field_class(
-                queryset=model.objects.all(),
-                required=field.required,
-                query_params=(field.related_object_filter if hasattr(field, 'related_object_filter') else None),
-                selector=model._meta.app_label != APP_LABEL,
-            )
+        field_class = DynamicModelMultipleChoiceField
+        return field_class(
+            queryset=model.objects.all(),
+            required=field.required,
+            query_params=(field.related_object_filter if hasattr(field, 'related_object_filter') else None),
+            selector=model._meta.app_label != APP_LABEL,
+        )
 
     def get_filterform_field(self, field, **kwargs):
         return None

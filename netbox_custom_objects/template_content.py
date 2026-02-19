@@ -1,12 +1,14 @@
 from dataclasses import dataclass
 from typing import Any
+
 from django.contrib.contenttypes.models import ContentType
-from django.template import Template, Context
-from netbox.plugins import PluginTemplateExtension
+from django.template import Context, Template
+
 from extras.choices import CustomFieldTypeChoices
-from utilities.paginator import EnhancedPaginator
+from netbox.plugins import PluginTemplateExtension
 from netbox_custom_objects.models import CustomObjectTypeField
 from netbox_custom_objects.tables import LinkedCustomObjectTable
+from utilities.paginator import EnhancedPaginator
 
 __all__ = (
     'CustomObjectSchema',
