@@ -160,7 +160,7 @@ class CustomObjectsPluginConfig(PluginConfig):
         # only do database calls if we are sure the app is ready to avoid
         # Django warnings
         if 'table' not in model_name.lower() or 'model' not in model_name.lower():
-            raise LookupError("App '%s' doesn't have a '%s' model." % (self.label, model_name))
+            raise LookupError(f"App {self.label} doesn't have a {model_name} model.")
 
         from .models import CustomObjectType
 
@@ -169,7 +169,7 @@ class CustomObjectsPluginConfig(PluginConfig):
         try:
             obj = CustomObjectType.objects.get(pk=custom_object_type_id)
         except CustomObjectType.DoesNotExist:
-            raise LookupError("App '%s' doesn't have a '%s' model." % (self.label, model_name))
+            raise LookupError(f"App {self.label} doesn't have a {model_name} model.")
 
         return obj.get_model()
 
@@ -201,7 +201,7 @@ class CustomObjectsPluginConfig(PluginConfig):
                         # If include_auto_created is True, also yield through models
                         if include_auto_created and hasattr(model, '_through_models'):
                             for through_model in model._through_models:
-                                yield through_model
+                                yield from through_model
 
 
 config = CustomObjectsPluginConfig

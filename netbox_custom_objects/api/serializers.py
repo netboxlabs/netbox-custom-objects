@@ -102,6 +102,7 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
                 app_label=obj.related_object_type.app_label,
                 model=obj.related_object_type.model,
             )
+        return None
 
 
 class CustomObjectTypeSerializer(NetBoxModelSerializer):

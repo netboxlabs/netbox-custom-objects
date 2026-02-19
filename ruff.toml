@@ -65,11 +65,6 @@ known-first-party = [
     "wireless",
 ]
 
-[lint.per-file-ignores]
-"template_code.py" = ["E501"]
-"netbox/netbox/graphql/filter_lookups.py" = ["UP046"]  # Strawberry typing: keep `Generic[T]` for now
-"netbox/netbox/graphql/scalars.py" = ["UP007"]         # Strawberry scalar typing: `Union[...]` required
-
 [format]
 # Use single quotes for strings.
 quote-style = "single"
