@@ -200,6 +200,12 @@ class CustomObjectType(NetBoxModel):
     verbose_name = models.CharField(max_length=100, blank=True)
     verbose_name_plural = models.CharField(max_length=100, blank=True)
     slug = models.SlugField(max_length=100, unique=True, db_index=True, blank=False)
+    group_name = models.CharField(
+        max_length=100,
+        db_index=True,
+        blank=True,
+        help_text=_("Used to group similar custom object types in the navigation menu")
+    )
     cache_timestamp = models.DateTimeField(
         auto_now=True,
         help_text=_("Timestamp used for cache invalidation")

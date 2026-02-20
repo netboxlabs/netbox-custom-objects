@@ -23,10 +23,14 @@ custom_object_type_plugin_menu_item = PluginMenuItem(
 
 
 class CustomObjectTypeMenuItems:
+    group_name = ""
+
+    def __init__(self, group_name=""):
+        self.group_name = group_name
 
     def __iter__(self):
         CustomObjectType = apps.get_model(APP_LABEL, "CustomObjectType")
-        for custom_object_type in CustomObjectType.objects.all():
+        for custom_object_type in CustomObjectType.objects.filter(group_name=self.group_name):
             model = custom_object_type.get_model()
             add_button = PluginMenuButton(
                 None,
@@ -65,10 +69,25 @@ class CustomObjectTypeMenuItems:
 
 current_version = version.parse(settings.RELEASE.version)
 
-groups = [
-    (_("Object Types"), (custom_object_type_plugin_menu_item,)),
-    (_("Objects"), CustomObjectTypeMenuItems()),
-]
+
+def get_grouped_menu_items():
+    CustomObjectType = apps.get_model(APP_LABEL, "CustomObjectType")
+    groups = []
+    for group_name in set(CustomObjectType.objects.exclude(group_name="").values_list("group_name", flat=True)):
+        groups.append((group_name, CustomObjectTypeMenuItems(group_name=group_name)))
+    return groups
+
+
+def get_groups():
+    return [
+        (_("Object Types"), (custom_object_type_plugin_menu_item,))
+    ] + get_grouped_menu_items() + [
+        (_("Objects"), CustomObjectTypeMenuItems())
+    ]
+
+
+groups = get_groups()
+
 
 menu = PluginMenu(
     label=_("Custom Objects"),
