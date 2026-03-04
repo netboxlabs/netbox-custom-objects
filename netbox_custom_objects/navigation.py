@@ -1,4 +1,3 @@
-import warnings
 from django.apps import apps
 from django.conf import settings
 from django.urls import reverse_lazy
@@ -72,15 +71,14 @@ current_version = version.parse(settings.RELEASE.version)
 
 
 def get_grouped_menu_items():
-    try:
-        CustomObjectType = apps.get_model(APP_LABEL, "CustomObjectType")
-        groups = []
-        for group_name in set(CustomObjectType.objects.exclude(group_name="").values_list("group_name", flat=True)):
-            groups.append((group_name, CustomObjectTypeMenuItems(group_name=group_name)))
-        return groups
-    except Exception as e:
-        warnings.warn(str(e))
+    app_config = apps.get_app_config("netbox_custom_objects")
+    if app_config.should_skip_dynamic_model_creation():
         return []
+    CustomObjectType = apps.get_model(APP_LABEL, "CustomObjectType")
+    groups = []
+    for group_name in set(CustomObjectType.objects.exclude(group_name="").values_list("group_name", flat=True)):
+        groups.append((group_name, CustomObjectTypeMenuItems(group_name=group_name)))
+    return groups
 
 
 def get_groups():
