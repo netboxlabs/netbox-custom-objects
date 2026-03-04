@@ -9,12 +9,15 @@ def ensure_existing_fk_constraints(apps, schema_editor):
     # Import the actual model class (not the historical version) to access methods
     from netbox_custom_objects.models import CustomObjectType
 
-    for custom_object_type in CustomObjectType.objects.all():
-        try:
-            model = custom_object_type.get_model()
-            custom_object_type._ensure_all_fk_constraints(model)
-        except Exception as e:
-            print(f"Warning: Could not ensure FK constraints for {custom_object_type}: {e}")
+    try:
+        for custom_object_type in CustomObjectType.objects.all():
+            try:
+                model = custom_object_type.get_model()
+                custom_object_type._ensure_all_fk_constraints(model)
+            except Exception as e:
+                print(f"Warning: Could not ensure FK constraints for {custom_object_type}: {e}")
+    except Exception as e:
+        print(f"Warning: Database not available: {e}")
 
 
 class Migration(migrations.Migration):
