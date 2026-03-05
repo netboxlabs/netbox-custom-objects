@@ -2,6 +2,7 @@ from django.apps import apps
 from django.conf import settings
 from django.urls import reverse_lazy
 from django.utils.translation import gettext_lazy as _
+from netbox.navigation import MenuGroup
 from netbox.plugins import PluginMenu, PluginMenuButton, PluginMenuItem
 from packaging import version
 from utilities.string import title
@@ -76,7 +77,9 @@ def get_grouped_menu_items():
         return []
     CustomObjectType = apps.get_model(APP_LABEL, "CustomObjectType")
     groups = []
-    for group_name in set(CustomObjectType.objects.exclude(group_name="").values_list("group_name", flat=True)):
+    for group_name in sorted(set(
+        CustomObjectType.objects.exclude(group_name="").values_list("group_name", flat=True)
+    )):
         groups.append((group_name, CustomObjectTypeMenuItems(group_name=group_name)))
     return groups
 
@@ -89,11 +92,20 @@ def get_groups():
     ]
 
 
-groups = get_groups()
+class _DynamicPluginMenu(PluginMenu):
+    def __init__(self, label, groups_fn, icon_class=None):
+        self.label = label
+        self._groups_fn = groups_fn
+        if icon_class is not None:
+            self.icon_class = icon_class
+
+    @property
+    def groups(self):
+        return [MenuGroup(label, items) for label, items in self._groups_fn()]
 
 
-menu = PluginMenu(
+menu = _DynamicPluginMenu(
     label=_("Custom Objects"),
-    groups=tuple(groups),
+    groups_fn=get_groups,
     icon_class="mdi mdi-toy-brick-outline",
 )
