@@ -2,6 +2,7 @@ from django.apps import apps
 from django.conf import settings
 from django.urls import reverse_lazy
 from django.utils.translation import gettext_lazy as _
+from netbox.navigation import MenuGroup
 from netbox.plugins import PluginMenu, PluginMenuButton, PluginMenuItem
 from packaging import version
 from utilities.string import title
@@ -23,10 +24,14 @@ custom_object_type_plugin_menu_item = PluginMenuItem(
 
 
 class CustomObjectTypeMenuItems:
+    group_name = ""
+
+    def __init__(self, group_name=""):
+        self.group_name = group_name
 
     def __iter__(self):
         CustomObjectType = apps.get_model(APP_LABEL, "CustomObjectType")
-        for custom_object_type in CustomObjectType.objects.all():
+        for custom_object_type in CustomObjectType.objects.filter(group_name=self.group_name):
             model = custom_object_type.get_model()
             add_button = PluginMenuButton(
                 None,
@@ -65,13 +70,42 @@ class CustomObjectTypeMenuItems:
 
 current_version = version.parse(settings.RELEASE.version)
 
-groups = [
-    (_("Object Types"), (custom_object_type_plugin_menu_item,)),
-    (_("Objects"), CustomObjectTypeMenuItems()),
-]
 
-menu = PluginMenu(
+def get_grouped_menu_items():
+    app_config = apps.get_app_config("netbox_custom_objects")
+    if app_config.should_skip_dynamic_model_creation():
+        return []
+    CustomObjectType = apps.get_model(APP_LABEL, "CustomObjectType")
+    groups = []
+    for group_name in sorted(set(
+        CustomObjectType.objects.exclude(group_name="").values_list("group_name", flat=True)
+    )):
+        groups.append((group_name, CustomObjectTypeMenuItems(group_name=group_name)))
+    return groups
+
+
+def get_groups():
+    return [
+        (_("Object Types"), (custom_object_type_plugin_menu_item,))
+    ] + get_grouped_menu_items() + [
+        (_("Objects"), CustomObjectTypeMenuItems())
+    ]
+
+
+class _DynamicPluginMenu(PluginMenu):
+    def __init__(self, label, groups_fn, icon_class=None):
+        self.label = label
+        self._groups_fn = groups_fn
+        if icon_class is not None:
+            self.icon_class = icon_class
+
+    @property
+    def groups(self):
+        return [MenuGroup(label, items) for label, items in self._groups_fn()]
+
+
+menu = _DynamicPluginMenu(
     label=_("Custom Objects"),
-    groups=tuple(groups),
+    groups_fn=get_groups,
     icon_class="mdi mdi-toy-brick-outline",
 )

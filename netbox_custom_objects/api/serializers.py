@@ -132,6 +132,7 @@ class CustomObjectTypeSerializer(NetBoxModelSerializer):
             "verbose_name",
             "verbose_name_plural",
             "slug",
+            "group_name",
             "description",
             "tags",
             "created",
