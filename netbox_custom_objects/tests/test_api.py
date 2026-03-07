@@ -1,3 +1,4 @@
+from django.test import TestCase
 from django.urls import reverse
 
 from utilities.testing import APIViewTestCases, create_test_user
@@ -237,6 +238,126 @@ class CustomObjectTest(CustomObjectsTestCase, APIViewTestCases.APIViewTestCase):
 
     def test_graphql_get_object(self):
         ...
+
+
+class LinkedObjectsAPITest(CustomObjectsTestCase, TestCase):
+    """
+    Tests for the GET /api/plugins/custom-objects/linked-objects/ endpoint.
+    """
+
+    def setUp(self):
+        self.user = create_test_user('linkedobjectstestuser')
+        token_key = create_token(self.user)
+        self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
+
+        # Build a custom object type with both an FK and a M2M device field
+        self.cot = CustomObjectsTestCase.create_complex_custom_object_type(
+            name='LinkedTest',
+            slug='linked-test',
+        )
+        self.model = self.cot.get_model()
+
+        # Create a device to link against
+        manufacturer = Manufacturer.objects.create(
+            name='LO Manufacturer', slug='lo-manufacturer'
+        )
+        device_type = DeviceType.objects.create(
+            manufacturer=manufacturer, model='LO Type', slug='lo-type'
+        )
+        role = DeviceRole.objects.create(
+            name='LO Role', slug='lo-role', color='ffffff'
+        )
+        site = Site.objects.create(name='LO Site', slug='lo-site')
+        self.device = Device.objects.create(
+            device_type=device_type, role=role, name='LO Device', site=site
+        )
+
+    def tearDown(self):
+        CustomObjectType.clear_model_cache()
+        super().tearDown()
+
+    def _url(self, **params):
+        base = reverse('plugins-api:netbox_custom_objects-api:linked-objects')
+        if params:
+            base += '?' + '&'.join(f'{k}={v}' for k, v in params.items())
+        return base
+
+    def test_fk_field_linked_object_appears(self):
+        """An object linked via a FK field is returned in the results."""
+        linked = self.model.objects.create(
+            custom_object_type=self.cot,
+            name='linked-fk',
+            device=self.device,
+        )
+        url = self._url(object_type='dcim.device', object_id=self.device.pk)
+        response = self.client.get(url, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = response.data['results']
+        fk_results = [r for r in results if r['field_name'] == 'device']
+        self.assertTrue(
+            any(r['object']['id'] == linked.pk for r in fk_results),
+            "Linked FK object not found in results"
+        )
+
+    def test_m2m_field_linked_object_appears(self):
+        """An object linked via a M2M field is returned in the results."""
+        linked = self.model.objects.create(
+            custom_object_type=self.cot,
+            name='linked-m2m',
+        )
+        # Attach the device via the M2M field
+        linked.devices.add(self.device)
+
+        url = self._url(object_type='dcim.device', object_id=self.device.pk)
+        response = self.client.get(url, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = response.data['results']
+        m2m_results = [r for r in results if r['field_name'] == 'devices']
+        self.assertTrue(
+            any(r['object']['id'] == linked.pk for r in m2m_results),
+            "Linked M2M object not found in results"
+        )
+
+    def test_no_linked_objects_returns_empty(self):
+        """An object with no linked custom objects returns count=0 and empty results."""
+        url = self._url(object_type='dcim.device', object_id=self.device.pk)
+        response = self.client.get(url, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['count'], 0)
+        self.assertEqual(response.data['results'], [])
+
+    def test_missing_params_returns_400(self):
+        """Omitting required query params returns 400."""
+        url = reverse('plugins-api:netbox_custom_objects-api:linked-objects')
+        response = self.client.get(url, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_invalid_object_type_returns_400(self):
+        """A non-existent object_type returns 400."""
+        url = self._url(object_type='nonexistent.model', object_id=1)
+        response = self.client.get(url, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_nonexistent_object_id_returns_404(self):
+        """A valid object_type but non-existent object_id returns 404."""
+        url = self._url(object_type='dcim.device', object_id=999999)
+        response = self.client.get(url, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_response_shape(self):
+        """Each result contains custom_object_type, field_name, and object keys."""
+        self.model.objects.create(
+            custom_object_type=self.cot,
+            name='shape-test',
+            device=self.device,
+        )
+        url = self._url(object_type='dcim.device', object_id=self.device.pk)
+        response = self.client.get(url, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        result = response.data['results'][0]
+        self.assertIn('custom_object_type', result)
+        self.assertIn('field_name', result)
+        self.assertIn('object', result)
 
 
 class CustomObjectTypeAPITest(CustomObjectsTestCase):

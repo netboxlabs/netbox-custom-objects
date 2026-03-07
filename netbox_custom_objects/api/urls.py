@@ -48,6 +48,21 @@ class CustomObjectsAPIRootView(APIView):
                 # Don't bail out if eg. no list routes exist, only detail routes.
                 continue
 
+        # Add linked-objects endpoint
+        linked_url_name = 'linked-objects'
+        if namespace:
+            linked_url_name = namespace + ':' + linked_url_name
+        try:
+            ret['linked-objects'] = reverse(
+                linked_url_name,
+                args=args,
+                kwargs=kwargs,
+                request=request,
+                format=kwargs.get('format')
+            )
+        except NoReverseMatch:
+            pass
+
         # Extra logic to populate roots for custom object type lists
         for custom_object_type in CustomObjectType.objects.all():
             local_kwargs = deepcopy(kwargs)
@@ -74,6 +89,7 @@ router.register("custom-object-type-fields", views.CustomObjectTypeFieldViewSet)
 
 urlpatterns = [
     path("", include(router.urls)),
+    path("linked-objects/", views.LinkedObjectsView.as_view(), name="linked-objects"),
     path("<str:custom_object_type>/", custom_object_list, name="customobject-list"),
     path(
         "<str:custom_object_type>/<int:pk>/",
