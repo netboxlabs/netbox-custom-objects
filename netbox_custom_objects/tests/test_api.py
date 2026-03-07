@@ -285,7 +285,6 @@ class LinkedObjectsAPITest(CustomObjectsTestCase, TestCase):
     def test_fk_field_linked_object_appears(self):
         """An object linked via a FK field is returned in the results."""
         linked = self.model.objects.create(
-            custom_object_type=self.cot,
             name='linked-fk',
             device=self.device,
         )
@@ -302,7 +301,6 @@ class LinkedObjectsAPITest(CustomObjectsTestCase, TestCase):
     def test_m2m_field_linked_object_appears(self):
         """An object linked via a M2M field is returned in the results."""
         linked = self.model.objects.create(
-            custom_object_type=self.cot,
             name='linked-m2m',
         )
         # Attach the device via the M2M field
@@ -347,7 +345,6 @@ class LinkedObjectsAPITest(CustomObjectsTestCase, TestCase):
     def test_response_shape(self):
         """Each result contains custom_object_type, field_name, and object keys."""
         self.model.objects.create(
-            custom_object_type=self.cot,
             name='shape-test',
             device=self.device,
         )
