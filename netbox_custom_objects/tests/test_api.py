@@ -357,7 +357,7 @@ class LinkedObjectsAPITest(CustomObjectsTestCase, TestCase):
         self.assertIn('object', result)
 
 
-class CustomObjectTypeAPITest(CustomObjectsTestCase):
+class CustomObjectTypeAPITest(CustomObjectsTestCase, TestCase):
     """
     Test CustomObjectType API endpoint validation.
     """
@@ -367,9 +367,9 @@ class CustomObjectTypeAPITest(CustomObjectsTestCase):
         # Create a user
         self.user = create_test_user('testuser')
 
-        # Create token for API access
-        self.token = Token.objects.create(user=self.user)
-        self.header = {'HTTP_AUTHORIZATION': f'Token {self.token.key}'}
+        # Create token for API access (compatible with NetBox >= 4.5 and < 4.5)
+        token_key = create_token(self.user)
+        self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
 
         # Add object-level permission
         obj_perm = ObjectPermission(
@@ -410,3 +410,46 @@ class CustomObjectTypeAPITest(CustomObjectsTestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn('slug', response.data)
+
+    def _add_view_permission(self):
+        obj_perm = ObjectPermission(name='View permission', actions=['view'])
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        obj_perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
+
+    def test_group_name_serialized_in_api_response(self):
+        """group_name set on a CustomObjectType is returned in the API detail response."""
+        self._add_view_permission()
+        cot = CustomObjectType.objects.create(
+            name='grouped_type',
+            slug='grouped-type',
+            group_name='my-group',
+        )
+
+        url = reverse(
+            'plugins-api:netbox_custom_objects-api:customobjecttype-detail',
+            kwargs={'pk': cot.pk},
+        )
+        response = self.client.get(url, **self.header)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('group_name', response.data)
+        self.assertEqual(response.data['group_name'], 'my-group')
+
+    def test_group_name_empty_by_default_in_api_response(self):
+        """group_name defaults to an empty string when not set."""
+        self._add_view_permission()
+        cot = CustomObjectType.objects.create(
+            name='ungrouped_type',
+            slug='ungrouped-type',
+        )
+
+        url = reverse(
+            'plugins-api:netbox_custom_objects-api:customobjecttype-detail',
+            kwargs={'pk': cot.pk},
+        )
+        response = self.client.get(url, **self.header)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('group_name', response.data)
+        self.assertEqual(response.data['group_name'], '')
