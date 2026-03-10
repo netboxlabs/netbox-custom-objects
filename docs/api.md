@@ -166,6 +166,32 @@ The response will include the created object with its assigned ID and additional
 }
 ```
 
+### Linked Objects
+
+Any object in NetBox (whether a core object such as Device or Site, or a Custom Object) can be pointed to by one or more Custom Objects via `object` or `multiobject` fields. You can get a list of all these "linked" Custom Objects (analogous to the "Custom Objects linking to this object" table in the NetBox UI) by querying the following endpoint:
+
+`/api/plugins/custom-objects/linked-objects/?object_type=<object_type>&object_id=<object_id>`
+
+Both query parameters `<object_type>` and `<object_id>` are required.
+
+- `object_type`: target model in `app_label.model` form, e.g. `dcim.device`
+- `object_id`: primary key of the target object
+
+This returns a list of results like the following:
+
+```json
+{
+    "count": 1,
+    "results": [
+        {
+            "custom_object_type": {"id": 1, "name": "My Type", "slug": "my-type"},
+            "field_name": "device",
+            "object": {"id": 7, "display": "My Custom Object", ...}
+        }
+    ]
+}
+```
+
 ### API output in the browser
 
 As with other NetBox objects, you can also view the API output for given Custom Objects by prepending `api/` to the URL, e.g. `api/plugins/custom-objects/dhcp_scopes/`
