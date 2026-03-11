@@ -696,8 +696,13 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
             try:
                 form_field = field_type.get_annotated_form_field(field)
-                # In bulk edit forms, all fields should be optional
+                # In bulk edit forms, all fields should be optional and start blank.
+                # Setting required=False prevents validation errors; setting initial=None
+                # ensures has_changed() only returns True when the user explicitly sets a
+                # value, preventing spurious updates when the field default is non-None.
                 form_field.required = False
+                form_field.widget.is_required = False
+                form_field.initial = None
                 attrs[field.name] = form_field
             except NotImplementedError:
                 logger.debug(
