@@ -212,7 +212,7 @@ class DecimalFieldType(FieldType):
             null=True,
             blank=True,
             max_digits=8,
-            decimal_places=2,
+            decimal_places=4,
             **field_kwargs
         )
 
@@ -220,6 +220,16 @@ class DecimalFieldType(FieldType):
         return forms.DecimalField(
             required=field.required,
             initial=field.default,
+            max_digits=12,
+            decimal_places=4,
+            min_value=field.validation_minimum,
+            max_value=field.validation_maximum,
+        )
+
+    def get_filterform_field(self, field, **kwargs):
+        return forms.DecimalField(
+            label=field,
+            required=False,
             max_digits=12,
             decimal_places=4,
             min_value=field.validation_minimum,
@@ -491,7 +501,18 @@ class ObjectFieldType(FieldType):
             )
 
     def get_filterform_field(self, field, **kwargs):
-        return None
+        """
+        Returns a filter form field for object relationships.
+        """
+        return DynamicModelChoiceField(
+            queryset=field.related_object_type.model_class().objects.all(),
+            required=False,
+            query_params=(
+                field.related_object_filter
+                if hasattr(field, "related_object_filter")
+                else None
+            ),
+        )
 
     def render_table_column(self, value):
         return linkify(value)
@@ -799,7 +820,18 @@ class MultiObjectFieldType(FieldType):
             )
 
     def get_filterform_field(self, field, **kwargs):
-        return None
+        """
+        Returns a filter form field for multi-object relationships.
+        """
+        return DynamicModelMultipleChoiceField(
+            queryset=field.related_object_type.model_class().objects.all(),
+            required=False,
+            query_params=(
+                field.related_object_filter
+                if hasattr(field, "related_object_filter")
+                else None
+            ),
+        )
 
     def get_display_value(self, instance, field_name):
         field = getattr(instance, field_name)
