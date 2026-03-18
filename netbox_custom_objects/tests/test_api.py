@@ -453,3 +453,109 @@ class CustomObjectTypeAPITest(CustomObjectsTestCase, TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIn('group_name', response.data)
         self.assertEqual(response.data['group_name'], '')
+
+
+class CustomObjectTypeFieldObjectResolutionTest(CustomObjectsTestCase, TestCase):
+    """
+    Tests for app_label/model resolution in CustomObjectTypeFieldSerializer.validate().
+
+    The serializer must accept both user-friendly identifiers and internal Django values:
+      - app_label: "custom-objects" (public URL slug) or "netbox_custom_objects" (internal)
+      - model:     CustomObjectType slug (e.g. "cpe") or internal table name (e.g. "table3model")
+    """
+
+    field_url = 'plugins-api:netbox_custom_objects-api:customobjecttypefield-list'
+
+    def setUp(self):
+        self.user = create_test_user('fieldresolutionuser')
+        token_key = create_token(self.user)
+        self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
+
+        # Permission to add fields
+        obj_perm = ObjectPermission(name='Field resolution add perm', actions=['add'])
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        from netbox_custom_objects.models import CustomObjectTypeField
+        obj_perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectTypeField))
+
+        # The parent COT that owns the new field
+        self.parent_cot = CustomObjectType.objects.create(
+            name='ParentObject',
+            slug='parent-object',
+        )
+
+        # A target COT that the object field will point to
+        self.target_cot = CustomObjectType.objects.create(
+            name='TargetObject',
+            slug='target-object',
+        )
+        # Ensure ObjectType (ContentType) exists for the target COT
+        self.target_object_type = ObjectType.objects.get(
+            app_label='netbox_custom_objects',
+            model=self.target_cot.get_table_model_name(self.target_cot.id).lower(),
+        )
+
+    def _post_field(self, app_label, model, field_type='object'):
+        data = {
+            'name': 'related_field',
+            'custom_object_type': self.parent_cot.pk,
+            'type': field_type,
+            'label': 'Related Field',
+            'app_label': app_label,
+            'model': model,
+        }
+        url = reverse(self.field_url)
+        return self.client.post(url, data, format='json', **self.header)
+
+    def _internal_model_name(self):
+        return self.target_cot.get_table_model_name(self.target_cot.id).lower()
+
+    def test_public_app_label_with_slug_accepted(self):
+        """app_label='custom-objects' + model=<cot slug> must succeed."""
+        response = self._post_field('custom-objects', self.target_cot.slug)
+        self.assertEqual(
+            response.status_code, status.HTTP_201_CREATED,
+            f"Expected 201, got {response.status_code}: {response.data}",
+        )
+
+    def test_public_app_label_with_internal_model_name_accepted(self):
+        """app_label='custom-objects' + model=<table{N}model> must succeed."""
+        response = self._post_field('custom-objects', self._internal_model_name())
+        self.assertEqual(
+            response.status_code, status.HTTP_201_CREATED,
+            f"Expected 201, got {response.status_code}: {response.data}",
+        )
+
+    def test_internal_app_label_with_slug_accepted(self):
+        """app_label='netbox_custom_objects' + model=<cot slug> must succeed."""
+        response = self._post_field('netbox_custom_objects', self.target_cot.slug)
+        self.assertEqual(
+            response.status_code, status.HTTP_201_CREATED,
+            f"Expected 201, got {response.status_code}: {response.data}",
+        )
+
+    def test_internal_app_label_with_internal_model_name_accepted(self):
+        """app_label='netbox_custom_objects' + model=<table{N}model> must succeed (original behaviour)."""
+        response = self._post_field('netbox_custom_objects', self._internal_model_name())
+        self.assertEqual(
+            response.status_code, status.HTTP_201_CREATED,
+            f"Expected 201, got {response.status_code}: {response.data}",
+        )
+
+    def test_multiobject_public_app_label_with_slug_accepted(self):
+        """Same resolution must work for multiobject field type."""
+        response = self._post_field('custom-objects', self.target_cot.slug, field_type='multiobject')
+        self.assertEqual(
+            response.status_code, status.HTTP_201_CREATED,
+            f"Expected 201, got {response.status_code}: {response.data}",
+        )
+
+    def test_nonexistent_slug_returns_400(self):
+        """An unknown slug with custom-objects app_label must return 400."""
+        response = self._post_field('custom-objects', 'does-not-exist')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_invalid_app_label_returns_400(self):
+        """An unknown app_label must still return 400."""
+        response = self._post_field('invalid-app', self._internal_model_name())
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
