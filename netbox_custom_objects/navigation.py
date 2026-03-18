@@ -20,6 +20,7 @@ custom_object_type_plugin_menu_item = PluginMenuItem(
         ),
     ),
     auth_required=True,
+    permissions=['netbox_custom_objects.view_customobjecttype'],
 )
 
 
@@ -60,6 +61,7 @@ class CustomObjectTypeMenuItems:
                 link_text=_(title(model._meta.verbose_name_plural)),
                 buttons=(add_button, bulk_import_button),
                 auth_required=True,
+                permissions=[f'netbox_custom_objects.view_{model._meta.model_name}'],
             )
             menu_item.url = reverse_lazy(
                 f"plugins:{APP_LABEL}:customobject_list",
