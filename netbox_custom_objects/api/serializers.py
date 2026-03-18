@@ -1,4 +1,5 @@
 import logging
+import re
 import sys
 
 from core.models import ObjectType
@@ -13,6 +14,11 @@ from rest_framework.utils import model_meta
 from netbox_custom_objects import constants, field_types
 from netbox_custom_objects.models import (CustomObject, CustomObjectType,
                                           CustomObjectTypeField)
+
+# Public URL slug used in API paths (e.g. /api/plugins/custom-objects/)
+_PUBLIC_APP_LABEL = "custom-objects"
+# Pattern for internally generated model names like "table3model"
+_TABLE_MODEL_PATTERN = re.compile(r'^table\d+model$', re.IGNORECASE)
 
 logger = logging.getLogger('netbox_custom_objects.api.serializers')
 
@@ -78,6 +84,20 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
             CustomFieldTypeChoices.TYPE_OBJECT,
             CustomFieldTypeChoices.TYPE_MULTIOBJECT,
         ]:
+            # Allow the public URL slug "custom-objects" as an alias for the internal app label
+            if app_label == _PUBLIC_APP_LABEL:
+                app_label = constants.APP_LABEL
+
+            # When targeting custom objects, allow the CustomObjectType slug as the model name
+            if app_label == constants.APP_LABEL and model and not _TABLE_MODEL_PATTERN.match(model):
+                try:
+                    cot = CustomObjectType.objects.get(slug=model)
+                    model = CustomObjectType.get_table_model_name(cot.id).lower()
+                except CustomObjectType.DoesNotExist:
+                    raise ValidationError(
+                        "Must provide valid app_label and model for object field type."
+                    )
+
             try:
                 attrs["related_object_type"] = ObjectType.objects.get(
                     app_label=app_label, model=model
