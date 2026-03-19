@@ -1,3 +1,4 @@
+from django.test import TestCase
 from django.urls import reverse
 
 from utilities.testing import APIViewTestCases, create_test_user
@@ -239,7 +240,124 @@ class CustomObjectTest(CustomObjectsTestCase, APIViewTestCases.APIViewTestCase):
         ...
 
 
-class CustomObjectTypeAPITest(CustomObjectsTestCase):
+class LinkedObjectsAPITest(CustomObjectsTestCase, TestCase):
+    """
+    Tests for the GET /api/plugins/custom-objects/linked-objects/ endpoint.
+    """
+
+    def setUp(self):
+        self.user = create_test_user('linkedobjectstestuser')
+        token_key = create_token(self.user)
+        self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
+
+        # Build a custom object type with both an FK and a M2M device field
+        self.cot = CustomObjectsTestCase.create_complex_custom_object_type(
+            name='LinkedTest',
+            slug='linked-test',
+        )
+        self.model = self.cot.get_model()
+
+        # Create a device to link against
+        manufacturer = Manufacturer.objects.create(
+            name='LO Manufacturer', slug='lo-manufacturer'
+        )
+        device_type = DeviceType.objects.create(
+            manufacturer=manufacturer, model='LO Type', slug='lo-type'
+        )
+        role = DeviceRole.objects.create(
+            name='LO Role', slug='lo-role', color='ffffff'
+        )
+        site = Site.objects.create(name='LO Site', slug='lo-site')
+        self.device = Device.objects.create(
+            device_type=device_type, role=role, name='LO Device', site=site
+        )
+
+    def tearDown(self):
+        CustomObjectType.clear_model_cache()
+        super().tearDown()
+
+    def _url(self, **params):
+        base = reverse('plugins-api:netbox_custom_objects-api:linked-objects')
+        if params:
+            base += '?' + '&'.join(f'{k}={v}' for k, v in params.items())
+        return base
+
+    def test_fk_field_linked_object_appears(self):
+        """An object linked via a FK field is returned in the results."""
+        linked = self.model.objects.create(
+            name='linked-fk',
+            device=self.device,
+        )
+        url = self._url(object_type='dcim.device', object_id=self.device.pk)
+        response = self.client.get(url, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = response.data['results']
+        fk_results = [r for r in results if r['field_name'] == 'device']
+        self.assertTrue(
+            any(r['object']['id'] == linked.pk for r in fk_results),
+            "Linked FK object not found in results"
+        )
+
+    def test_m2m_field_linked_object_appears(self):
+        """An object linked via a M2M field is returned in the results."""
+        linked = self.model.objects.create(
+            name='linked-m2m',
+        )
+        # Attach the device via the M2M field
+        linked.devices.add(self.device)
+
+        url = self._url(object_type='dcim.device', object_id=self.device.pk)
+        response = self.client.get(url, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = response.data['results']
+        m2m_results = [r for r in results if r['field_name'] == 'devices']
+        self.assertTrue(
+            any(r['object']['id'] == linked.pk for r in m2m_results),
+            "Linked M2M object not found in results"
+        )
+
+    def test_no_linked_objects_returns_empty(self):
+        """An object with no linked custom objects returns count=0 and empty results."""
+        url = self._url(object_type='dcim.device', object_id=self.device.pk)
+        response = self.client.get(url, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['count'], 0)
+        self.assertEqual(response.data['results'], [])
+
+    def test_missing_params_returns_400(self):
+        """Omitting required query params returns 400."""
+        url = reverse('plugins-api:netbox_custom_objects-api:linked-objects')
+        response = self.client.get(url, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_invalid_object_type_returns_400(self):
+        """A non-existent object_type returns 400."""
+        url = self._url(object_type='nonexistent.model', object_id=1)
+        response = self.client.get(url, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_nonexistent_object_id_returns_404(self):
+        """A valid object_type but non-existent object_id returns 404."""
+        url = self._url(object_type='dcim.device', object_id=999999)
+        response = self.client.get(url, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_response_shape(self):
+        """Each result contains custom_object_type, field_name, and object keys."""
+        self.model.objects.create(
+            name='shape-test',
+            device=self.device,
+        )
+        url = self._url(object_type='dcim.device', object_id=self.device.pk)
+        response = self.client.get(url, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        result = response.data['results'][0]
+        self.assertIn('custom_object_type', result)
+        self.assertIn('field_name', result)
+        self.assertIn('object', result)
+
+
+class CustomObjectTypeAPITest(CustomObjectsTestCase, TestCase):
     """
     Test CustomObjectType API endpoint validation.
     """
@@ -249,9 +367,9 @@ class CustomObjectTypeAPITest(CustomObjectsTestCase):
         # Create a user
         self.user = create_test_user('testuser')
 
-        # Create token for API access
-        self.token = Token.objects.create(user=self.user)
-        self.header = {'HTTP_AUTHORIZATION': f'Token {self.token.key}'}
+        # Create token for API access (compatible with NetBox >= 4.5 and < 4.5)
+        token_key = create_token(self.user)
+        self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
 
         # Add object-level permission
         obj_perm = ObjectPermission(
@@ -292,3 +410,152 @@ class CustomObjectTypeAPITest(CustomObjectsTestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn('slug', response.data)
+
+    def _add_view_permission(self):
+        obj_perm = ObjectPermission(name='View permission', actions=['view'])
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        obj_perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
+
+    def test_group_name_serialized_in_api_response(self):
+        """group_name set on a CustomObjectType is returned in the API detail response."""
+        self._add_view_permission()
+        cot = CustomObjectType.objects.create(
+            name='grouped_type',
+            slug='grouped-type',
+            group_name='my-group',
+        )
+
+        url = reverse(
+            'plugins-api:netbox_custom_objects-api:customobjecttype-detail',
+            kwargs={'pk': cot.pk},
+        )
+        response = self.client.get(url, **self.header)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('group_name', response.data)
+        self.assertEqual(response.data['group_name'], 'my-group')
+
+    def test_group_name_empty_by_default_in_api_response(self):
+        """group_name defaults to an empty string when not set."""
+        self._add_view_permission()
+        cot = CustomObjectType.objects.create(
+            name='ungrouped_type',
+            slug='ungrouped-type',
+        )
+
+        url = reverse(
+            'plugins-api:netbox_custom_objects-api:customobjecttype-detail',
+            kwargs={'pk': cot.pk},
+        )
+        response = self.client.get(url, **self.header)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('group_name', response.data)
+        self.assertEqual(response.data['group_name'], '')
+
+
+class CustomObjectTypeFieldObjectResolutionTest(CustomObjectsTestCase, TestCase):
+    """
+    Tests for app_label/model resolution in CustomObjectTypeFieldSerializer.validate().
+
+    The serializer must accept both user-friendly identifiers and internal Django values:
+      - app_label: "custom-objects" (public URL slug) or "netbox_custom_objects" (internal)
+      - model:     CustomObjectType slug (e.g. "cpe") or internal table name (e.g. "table3model")
+    """
+
+    field_url = 'plugins-api:netbox_custom_objects-api:customobjecttypefield-list'
+
+    def setUp(self):
+        self.user = create_test_user('fieldresolutionuser')
+        token_key = create_token(self.user)
+        self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
+
+        # Permission to add fields
+        obj_perm = ObjectPermission(name='Field resolution add perm', actions=['add'])
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        from netbox_custom_objects.models import CustomObjectTypeField
+        obj_perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectTypeField))
+
+        # The parent COT that owns the new field
+        self.parent_cot = CustomObjectType.objects.create(
+            name='ParentObject',
+            slug='parent-object',
+        )
+
+        # A target COT that the object field will point to
+        self.target_cot = CustomObjectType.objects.create(
+            name='TargetObject',
+            slug='target-object',
+        )
+        # Ensure ObjectType (ContentType) exists for the target COT
+        self.target_object_type = ObjectType.objects.get(
+            app_label='netbox_custom_objects',
+            model=self.target_cot.get_table_model_name(self.target_cot.id).lower(),
+        )
+
+    def _post_field(self, app_label, model, field_type='object'):
+        data = {
+            'name': 'related_field',
+            'custom_object_type': self.parent_cot.pk,
+            'type': field_type,
+            'label': 'Related Field',
+            'app_label': app_label,
+            'model': model,
+        }
+        url = reverse(self.field_url)
+        return self.client.post(url, data, format='json', **self.header)
+
+    def _internal_model_name(self):
+        return self.target_cot.get_table_model_name(self.target_cot.id).lower()
+
+    def test_public_app_label_with_slug_accepted(self):
+        """app_label='custom-objects' + model=<cot slug> must succeed."""
+        response = self._post_field('custom-objects', self.target_cot.slug)
+        self.assertEqual(
+            response.status_code, status.HTTP_201_CREATED,
+            f"Expected 201, got {response.status_code}: {response.data}",
+        )
+
+    def test_public_app_label_with_internal_model_name_accepted(self):
+        """app_label='custom-objects' + model=<table{N}model> must succeed."""
+        response = self._post_field('custom-objects', self._internal_model_name())
+        self.assertEqual(
+            response.status_code, status.HTTP_201_CREATED,
+            f"Expected 201, got {response.status_code}: {response.data}",
+        )
+
+    def test_internal_app_label_with_slug_accepted(self):
+        """app_label='netbox_custom_objects' + model=<cot slug> must succeed."""
+        response = self._post_field('netbox_custom_objects', self.target_cot.slug)
+        self.assertEqual(
+            response.status_code, status.HTTP_201_CREATED,
+            f"Expected 201, got {response.status_code}: {response.data}",
+        )
+
+    def test_internal_app_label_with_internal_model_name_accepted(self):
+        """app_label='netbox_custom_objects' + model=<table{N}model> must succeed (original behaviour)."""
+        response = self._post_field('netbox_custom_objects', self._internal_model_name())
+        self.assertEqual(
+            response.status_code, status.HTTP_201_CREATED,
+            f"Expected 201, got {response.status_code}: {response.data}",
+        )
+
+    def test_multiobject_public_app_label_with_slug_accepted(self):
+        """Same resolution must work for multiobject field type."""
+        response = self._post_field('custom-objects', self.target_cot.slug, field_type='multiobject')
+        self.assertEqual(
+            response.status_code, status.HTTP_201_CREATED,
+            f"Expected 201, got {response.status_code}: {response.data}",
+        )
+
+    def test_nonexistent_slug_returns_400(self):
+        """An unknown slug with custom-objects app_label must return 400."""
+        response = self._post_field('custom-objects', 'does-not-exist')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_invalid_app_label_returns_400(self):
+        """An unknown app_label must still return 400."""
+        response = self._post_field('invalid-app', self._internal_model_name())
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)

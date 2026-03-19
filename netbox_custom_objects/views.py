@@ -25,7 +25,7 @@ from utilities.htmx import htmx_partial
 from utilities.views import ConditionalLoginRequiredMixin, ViewTab, get_viewname, register_model_view
 
 from netbox_custom_objects.filtersets import get_filterset_class
-from netbox_custom_objects.tables import CustomObjectTable
+from netbox_custom_objects.tables import CustomObjectTable, CustomObjectTypeFieldTable
 from . import field_types, filtersets, forms, tables
 from .models import CustomObject, CustomObjectType, CustomObjectTypeField
 from extras.choices import CustomFieldTypeChoices
@@ -230,6 +230,23 @@ class CustomObjectTypeDeleteView(generic.ObjectDeleteView):
         return dependent_objects
 
 
+@register_model_view(CustomObjectType, 'fields', path='fields')
+class CustomObjectTypeFieldsView(generic.ObjectChildrenView):
+    queryset = CustomObjectType.objects.all()
+    table = CustomObjectTypeFieldTable
+    template_name = 'netbox_custom_objects/fields.html'
+    tab = ViewTab(
+        label=_('Fields'),
+        badge=lambda obj: CustomObjectTypeField.objects.filter(custom_object_type=obj).count(),
+        permission='netbox_custom_objects.view_customobjecttypefield',
+        weight=520,
+        hide_if_empty=False
+    )
+
+    def get_children(self, request, parent):
+        return CustomObjectTypeField.objects.restrict(request.user, 'view').filter(custom_object_type=parent)
+
+
 #
 # Custom Object Type Fields
 #
@@ -247,7 +264,7 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
     queryset = CustomObjectTypeField.objects.all()
 
     def get_return_url(self, request, obj=None):
-        return obj.custom_object_type.get_absolute_url()
+        return request.GET.get("return_url") or obj.custom_object_type.get_absolute_url()
 
     def get(self, request, *args, **kwargs):
         """
@@ -329,7 +346,7 @@ class CustomObjectTypeBulkDeleteView(generic.BulkDeleteView):
 # Custom Objects
 #
 
-
+@register_model_view(CustomObject, "list", path="", detail=False)
 class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
     queryset = None
     custom_object_type = None
@@ -342,7 +359,7 @@ class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
         self.filterset_form = self.get_filterset_form()
 
     def get_queryset(self, request):
-        if self.queryset:
+        if self.queryset is not None:
             return self.queryset
         custom_object_type = self.kwargs.get("custom_object_type", None)
         self.custom_object_type = get_object_or_404(
@@ -679,8 +696,13 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
             try:
                 form_field = field_type.get_annotated_form_field(field)
-                # In bulk edit forms, all fields should be optional
+                # In bulk edit forms, all fields should be optional and start blank.
+                # Setting required=False prevents validation errors; setting initial=None
+                # ensures has_changed() only returns True when the user explicitly sets a
+                # value, preventing spurious updates when the field default is non-None.
                 form_field.required = False
+                form_field.widget.is_required = False
+                form_field.initial = None
                 attrs[field.name] = form_field
             except NotImplementedError:
                 logger.debug(

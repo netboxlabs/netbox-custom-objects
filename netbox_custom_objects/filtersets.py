@@ -83,6 +83,7 @@ class CustomObjectTypeFilterSet(NetBoxModelFilterSet):
         fields = (
             "id",
             "name",
+            "group_name",
         )
 
 
