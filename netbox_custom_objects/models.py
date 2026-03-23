@@ -720,6 +720,28 @@ class CustomObjectType(NetBoxModel):
         object_type.delete()
         with connection.schema_editor() as schema_editor:
             schema_editor.delete_model(model)
+
+        # Unregister the model and its through-models from Django's app registry so
+        # that subsequent ORM operations (e.g. deleting a related device) do not try
+        # to query the now-dropped table and receive a
+        # "relation 'custom_objects_<id>' does not exist" error.
+        # Use _global_lock to prevent a concurrent get_model() call from racing
+        # against this de-registration and re-adding the model mid-cleanup.
+        with self._global_lock:
+            model_name = model.__name__.lower()
+            if model_name in apps.all_models.get(APP_LABEL, {}):
+                del apps.all_models[APP_LABEL][model_name]
+
+            for through_model in getattr(model, '_through_models', []):
+                through_name = through_model.__name__.lower()
+                if through_name in apps.all_models.get(APP_LABEL, {}):
+                    del apps.all_models[APP_LABEL][through_name]
+
+        # Clear Django's internal relation/field caches so the removed model is no
+        # longer discovered during cascade-delete collector traversal.
+        apps.get_models.cache_clear()
+        apps.clear_cache()
+
         pre_delete.connect(handle_deleted_object)
 
 
