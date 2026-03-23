@@ -88,8 +88,7 @@ class CustomObjectTypeFilterSet(NetBoxModelFilterSet):
 
 
 def build_filter_for_field(field) -> Optional[django_filters.Filter]:
-    spec = FIELD_TYPE_FILTERS.get(field.type)
-    if not spec:
+    if not (spec := FIELD_TYPE_FILTERS.get(field.type)):
         return None
 
     queryset = None
