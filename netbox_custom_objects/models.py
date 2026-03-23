@@ -739,9 +739,12 @@ class CustomObjectType(NetBoxModel):
 
         # Clear Django's internal relation/field caches so the removed model is no
         # longer discovered during cascade-delete collector traversal.
-        apps.get_models.cache_clear()
         apps.clear_cache()
 
+        # Re-clear the model cache to remove re-cached model from get_model.
+        self.clear_model_cache(self.id)
+
+        # Reconnect the pre_delete handler after all cleanup is done.
         pre_delete.connect(handle_deleted_object)
 
 
