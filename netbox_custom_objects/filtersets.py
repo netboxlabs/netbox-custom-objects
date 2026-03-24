@@ -74,6 +74,35 @@ def get_filterset_class(model):
         "search": search,
     }
 
+    # Add filters for M2M (multiobject) fields, which are not in model._meta.fields.
+    # By the time get_filterset_class() is called (at request time), after_model_generation()
+    # will have already resolved m2m_field.remote_field.model and .through to actual model
+    # classes. Calling this during app startup (before model generation) would fail.
+    for m2m_field in model._meta.many_to_many:
+        field_name = m2m_field.name
+        through_model = m2m_field.remote_field.through
+        related_model = m2m_field.remote_field.model
+
+        def make_m2m_filter(through, fname):
+            def filter_m2m(self, queryset, name, value):
+                if not value:
+                    return queryset
+                ids = [v.pk for v in value]
+                source_ids = through.objects.filter(
+                    target_id__in=ids
+                ).values_list("source_id", flat=True)
+                return queryset.filter(pk__in=source_ids)
+            filter_m2m.__name__ = f"filter_{fname}"
+            return filter_m2m
+
+        method_name = f"filter_{field_name}"
+        attrs[method_name] = make_m2m_filter(through_model, field_name)
+        attrs[field_name] = django_filters.ModelMultipleChoiceFilter(
+            queryset=related_model.objects.all(),
+            method=method_name,
+            label=field_name,
+        )
+
     return type(
         f"{model._meta.object_name}FilterSet",
         (NetBoxModelFilterSet,),

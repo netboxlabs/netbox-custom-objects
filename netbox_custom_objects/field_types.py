@@ -491,7 +491,20 @@ class ObjectFieldType(FieldType):
             )
 
     def get_filterform_field(self, field, **kwargs):
-        return None
+        content_type = ContentType.objects.get(pk=field.related_object_type_id)
+        if content_type.app_label == APP_LABEL:
+            from netbox_custom_objects.models import CustomObjectType
+            custom_object_type_id = content_type.model.replace("table", "").replace("model", "")
+            custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
+            model = custom_object_type.get_model()
+        else:
+            model = content_type.model_class()
+        return DynamicModelChoiceField(
+            queryset=model.objects.all(),
+            required=False,
+            label=field,
+            selector=model._meta.app_label != APP_LABEL,
+        )
 
     def render_table_column(self, value):
         return linkify(value)
@@ -799,7 +812,20 @@ class MultiObjectFieldType(FieldType):
             )
 
     def get_filterform_field(self, field, **kwargs):
-        return None
+        content_type = ContentType.objects.get(pk=field.related_object_type_id)
+        if content_type.app_label == APP_LABEL:
+            from netbox_custom_objects.models import CustomObjectType
+            custom_object_type_id = content_type.model.replace("table", "").replace("model", "")
+            custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
+            model = custom_object_type.get_model()
+        else:
+            model = content_type.model_class()
+        return DynamicModelMultipleChoiceField(
+            queryset=model.objects.all(),
+            required=False,
+            label=field,
+            selector=model._meta.app_label != APP_LABEL,
+        )
 
     def get_display_value(self, instance, field_name):
         field = getattr(instance, field_name)
