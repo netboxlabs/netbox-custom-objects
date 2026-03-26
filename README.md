@@ -46,6 +46,26 @@ PLUGINS_CONFIG = {
 }
 ```
 
+## Related Object Tabs
+
+When a Custom Object Type has fields referencing other NetBox objects (e.g., a "Firewall Rules" type with a Device field), a **Combined "Custom Objects" tab** automatically appears on the detail pages of those referenced objects, showing all linked custom objects.
+
+You can also enable **dedicated typed tabs** for specific Custom Object Types by adding their slugs to `PLUGINS_CONFIG`:
+
+```python
+PLUGINS_CONFIG = {
+    'netbox_custom_objects': {
+        'typed_tab_slugs': [
+            'firewall-rules',
+            'security-audits',
+        ],
+    },
+}
+```
+
+> [!NOTE]
+> After adding or removing slugs from `typed_tab_slugs`, a NetBox restart is required for the changes to take effect. The combined tab is always active and requires no configuration.
+
 ## Known Limitations
 
 NetBox Custom Objects is now Generally Available which means you can use it in production and migrations to future versions will work. There are many upcoming features including GraphQL support - the best place to see what's on the way is the [issues](https://github.com/netboxlabs/netbox-custom-objects/issues) list on the GitHub repository.
