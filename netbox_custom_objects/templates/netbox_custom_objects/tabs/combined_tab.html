@@ -1,0 +1,142 @@
+{% extends base_template %}
+{% load i18n perms helpers %}
+{% block content %}
+    {# Controls row — Quick search + Configure Table #}
+    <div class="row mb-3" id="results">
+        <div class="col-auto d-print-none">
+            <form method="get" class="input-group input-group-flat me-2 quicksearch">
+                <input type="search" name="q" value="{{ q }}" class="form-control"
+                       placeholder="{% trans 'Quick search' %}">
+                <span class="input-group-text py-1">
+                    {% if q %}
+                        <a href="?" class="text-secondary"><i class="mdi mdi-close-circle"></i></a>
+                    {% endif %}
+                </span>
+            </form>
+        </div>
+        <div class="col-auto ms-auto d-print-none">
+            <div class="table-configure btn-group">
+                <button type="button" data-bs-toggle="modal" title="{% trans 'Configure Table' %}"
+                        data-bs-target="#CustomObjectsTabTable_config" class="btn">
+                    <i class="mdi mdi-cog"></i> {% trans "Configure Table" %}
+                </button>
+            </div>
+        </div>
+    </div>
+    {# Table in card #}
+    <div class="card">
+        {% if page_rows %}
+            <div class="table-responsive">
+                <table class="table table-hover object-list mb-0">
+                    <thead>
+                        <tr>
+                            {% if 'type' in selected_columns %}
+                                <th>{% trans "Type" %}</th>
+                            {% endif %}
+                            {% if 'object' in selected_columns %}
+                                <th>{% trans "Object" %}</th>
+                            {% endif %}
+                            {% if 'value' in selected_columns %}
+                                <th>{% trans "Value" %}</th>
+                            {% endif %}
+                            {% if 'field' in selected_columns %}
+                                <th>{% trans "Field" %}</th>
+                            {% endif %}
+                            {% if 'tags' in selected_columns %}
+                                <th>{% trans "Tags" %}</th>
+                            {% endif %}
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for obj, field, value in page_rows %}
+                            <tr>
+                                {% if 'type' in selected_columns %}
+                                    <td>
+                                        {% if request.user|can_view:field.custom_object_type %}
+                                            <a href="{{ field.custom_object_type.get_absolute_url }}">{{ field.custom_object_type }}</a>
+                                        {% else %}
+                                            {{ field.custom_object_type }}
+                                        {% endif %}
+                                    </td>
+                                {% endif %}
+                                {% if 'object' in selected_columns %}
+                                    <td>
+                                        <a href="{{ obj.get_absolute_url }}">{{ obj }}</a>
+                                    </td>
+                                {% endif %}
+                                {% if 'value' in selected_columns %}
+                                    <td>
+                                        {% if field.type == 'object' %}
+                                            {% if value %}
+                                                <a href="{{ value.get_absolute_url }}">{{ value }}</a>
+                                            {% else %}
+                                                &mdash;
+                                            {% endif %}
+                                        {% elif field.type == 'multiobject' %}
+                                            {% if value %}
+                                                {% for related_obj in value|slice:":3" %}
+                                                    <a href="{{ related_obj.get_absolute_url }}">{{ related_obj }}</a>
+                                                    {% if not forloop.last %},{% endif %}
+                                                {% endfor %}
+                                                {% if value|length > 3 %}&hellip;{% endif %}
+                                            {% else %}
+                                                &mdash;
+                                            {% endif %}
+                                        {% else %}
+                                            &mdash;
+                                        {% endif %}
+                                    </td>
+                                {% endif %}
+                                {% if 'field' in selected_columns %}<td>{{ field }}</td>{% endif %}
+                                {% if 'tags' in selected_columns %}
+                                    <td>
+                                        {% for t in obj.tags.all %}
+                                            {% tag t %}
+                                        {% empty %}
+                                            &mdash;
+                                        {% endfor %}
+                                    </td>
+                                {% endif %}
+                                <td class="text-end text-nowrap noprint">
+                                    <span class="btn-group dropdown">
+                                        {% if request.user|can_change:obj %}
+                                            <a class="btn btn-sm btn-warning"
+                                               href="{% url 'plugins:netbox_custom_objects:customobject_edit' pk=obj.pk custom_object_type=obj.custom_object_type.slug %}?return_url={{ return_url|urlencode }}"
+                                               aria-label="Edit">
+                                                <i class="mdi mdi-pencil"></i>
+                                            </a>
+                                            <a class="btn btn-sm btn-warning dropdown-toggle" type="button"
+                                               data-bs-toggle="dropdown" style="padding-left: 2px">
+                                                <span class="visually-hidden">Toggle Dropdown</span>
+                                            </a>
+                                            <ul class="dropdown-menu">
+                                                {% if request.user|can_delete:obj %}
+                                                    <li>
+                                                        <a class="dropdown-item"
+                                                           href="{% url 'plugins:netbox_custom_objects:customobject_delete' pk=obj.pk custom_object_type=obj.custom_object_type.slug %}?return_url={{ return_url|urlencode }}">
+                                                            <i class="mdi mdi-trash-can-outline"></i> {% trans "Delete" %}
+                                                        </a>
+                                                    </li>
+                                                {% endif %}
+                                            </ul>
+                                        {% endif %}
+                                    </span>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% include 'inc/paginator.html' with paginator=paginator page=page_obj placement='bottom' %}
+        {% else %}
+            <div class="card-body text-muted">
+                {% trans "No custom objects are linked to this object." %}
+            </div>
+        {% endif %}
+    </div>
+{% endblock content %}
+{% block modals %}
+    {{ block.super }}
+    {% table_config_form tab_table %}
+{% endblock modals %}

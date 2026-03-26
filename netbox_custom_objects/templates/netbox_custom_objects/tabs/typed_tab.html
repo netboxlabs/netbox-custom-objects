@@ -1,0 +1,72 @@
+{% extends base_template %}
+{% load helpers %}
+{% load render_table from django_tables2 %}
+{% load i18n %}
+{% block content %}
+    {% if table %}
+        {# Results / Filters sub-tabs (standard NetBox list view pattern) #}
+        <ul class="nav nav-tabs" role="tablist">
+            <li class="nav-item" role="presentation">
+                <a class="nav-link active" id="object-list-tab" data-bs-toggle="tab"
+                   data-bs-target="#object-list" type="button" role="tab"
+                   aria-controls="object-list" aria-selected="true">
+                    {% trans "Results" %}
+                    <span class="badge text-bg-secondary total-object-count">{{ table.page.paginator.count }}</span>
+                </a>
+            </li>
+            {% if filter_form %}
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="filters-form-tab" data-bs-toggle="tab"
+                            data-bs-target="#filters-form" type="button" role="tab"
+                            aria-controls="filters-form" aria-selected="false">
+                        {% trans "Filters" %}
+                        {% badge filter_form.changed_data|length bg_color="primary" %}
+                    </button>
+                </li>
+            {% endif %}
+        </ul>
+        {# Results tab pane #}
+        <div class="tab-pane show active mt-3" id="object-list" role="tabpanel" aria-labelledby="object-list-tab">
+            {% if filter_form %}
+                {% applied_filters model filter_form request.GET %}
+            {% endif %}
+            {% include 'inc/table_controls_htmx.html' with table_modal=table.name|add:"_config" %}
+            <form method="post">
+                {% csrf_token %}
+                <input type="hidden" name="return_url" value="{{ return_url }}">
+                <div class="card">
+                    <div class="htmx-container table-responsive" id="object_list">
+                        {% include 'htmx/table.html' %}
+                    </div>
+                </div>
+                <div class="d-print-none mt-2">
+                    <button type="submit" name="_edit"
+                            formaction="{% url 'plugins:netbox_custom_objects:customobject_bulk_edit' custom_object_type=custom_object_type.slug %}?return_url={{ return_url|urlencode:'' }}"
+                            class="btn btn-yellow">
+                        <i class="mdi mdi-pencil" aria-hidden="true"></i> Edit Selected
+                    </button>
+                    <button type="submit" name="_delete"
+                            formaction="{% url 'plugins:netbox_custom_objects:customobject_bulk_delete' custom_object_type=custom_object_type.slug %}?return_url={{ return_url|urlencode:'' }}"
+                            class="btn btn-red">
+                        <i class="mdi mdi-trash-can-outline" aria-hidden="true"></i> Delete Selected
+                    </button>
+                </div>
+            </form>
+        </div>
+        {# Filters tab pane #}
+        {% if filter_form %}
+            <div class="tab-pane show mt-3" id="filters-form" role="tabpanel" aria-labelledby="filters-form-tab">
+                {% include 'inc/filter_list.html' %}
+            </div>
+        {% endif %}
+    {% else %}
+        <div class="card">
+            <div class="card-body text-muted">{% trans "No custom objects are linked to this object." %}</div>
+        </div>
+    {% endif %}
+{% endblock content %}
+{% block modals %}
+    {% if table %}
+        {% table_config_form table %}
+    {% endif %}
+{% endblock modals %}
