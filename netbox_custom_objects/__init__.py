@@ -81,6 +81,10 @@ class CustomObjectsPluginConfig(PluginConfig):
     default_settings = {
         # The maximum number of Custom Object Types that may be created
         'max_custom_object_types': 50,
+        # List of COT slugs that get dedicated typed tabs on related object detail pages.
+        # Requires server restart after changes.
+        # Example: ['firewall-rules', 'security-audits']
+        'typed_tab_slugs': [],
     }
     required_settings = []
     template_extensions = "template_content.template_extensions"
@@ -204,7 +208,18 @@ class CustomObjectsPluginConfig(PluginConfig):
                 super().ready()
                 return
 
+            # Register related-object tabs (combined + typed)
+            from .tab_views import register_all_tabs
+            register_all_tabs()
+
         super().ready()
+
+        # These must run AFTER super().ready() which registers journal/changelog views
+        # and triggers URL conf generation via register_models()
+        if not self.should_skip_dynamic_model_creation():
+            from .tab_views import inject_co_urls, deduplicate_registry
+            inject_co_urls()
+            deduplicate_registry()
 
     def get_model(self, model_name, require_ready=True):
         self.apps.check_apps_ready()
