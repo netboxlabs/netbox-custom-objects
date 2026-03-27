@@ -136,7 +136,7 @@ class TextFieldType(FieldType):
                 RegexValidator(
                     regex=field.validation_regex,
                     message=mark_safe(
-                        _('Values must match this regex: <code>{regex}</code>').format(
+                        _("Values must match this regex: <code>{regex}</code>").format(
                             regex=escape(field.validation_regex)
                         )
                     ),
@@ -166,7 +166,7 @@ class LongTextFieldType(FieldType):
                 RegexValidator(
                     regex=field.validation_regex,
                     message=mark_safe(
-                        _('Values must match this regex: <code>{regex}</code>').format(
+                        _("Values must match this regex: <code>{regex}</code>").format(
                             regex=escape(field.validation_regex)
                         )
                     ),
@@ -240,9 +240,9 @@ class BooleanFieldType(FieldType):
 
     def get_form_field(self, field, **kwargs):
         choices = (
-            (None, '---------'),
-            (True, _('True')),
-            (False, _('False')),
+            (None, "---------"),
+            (True, _("True")),
+            (False, _("False")),
         )
         return forms.NullBooleanField(
             required=field.required,
@@ -331,7 +331,7 @@ class SelectFieldType(FieldType):
 
 class MultiSelectFieldType(FieldType):
     def get_display_value(self, instance, field_name):
-        return ', '.join(getattr(instance, field_name) or [])
+        return ", ".join(getattr(instance, field_name) or [])
 
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
@@ -372,7 +372,7 @@ class MultiSelectFieldType(FieldType):
     #     )
 
     def render_table_column(self, value):
-        return ', '.join(value)
+        return ", ".join(value)
 
 
 class RelatedObjectFilterFormMixin:
@@ -437,7 +437,7 @@ class ObjectFieldType(RelatedObjectFilterFormMixin, FieldType):
                 model = custom_object_type.get_model(skip_object_fields=True)
         else:
             # to_model = content_type.model_class()._meta.object_name
-            to_ct = f'{content_type.app_label}.{to_model}'
+            to_ct = f"{content_type.app_label}.{to_model}"
             model = apps.get_model(to_ct)
 
         # Generate a unique related_name to prevent reverse accessor conflicts
@@ -520,7 +520,7 @@ class CustomManyToManyManager(Manager):
         self.field = instance._meta.get_field(self.field_name)
         self.model = self.field.remote_field.model
         self.through = self.field.remote_field.through
-        self.core_filters = {'source_id': instance.pk}
+        self.core_filters = {"source_id": instance.pk}
         self.prefetch_cache_name = self.field_name
 
     def get_prefetch_queryset(self, instances, queryset=None):
@@ -568,7 +568,7 @@ class CustomManyToManyManager(Manager):
         )
 
         # Add default ordering by pk
-        return qs.order_by('pk')
+        return qs.order_by("pk")
 
     def add(self, *objs):
         for obj in objs:
@@ -624,17 +624,17 @@ class CustomManyToManyField(models.ManyToManyField):
         self.concrete = False
 
     def m2m_field_name(self):
-        return 'source_id'
+        return "source_id"
 
     def m2m_reverse_field_name(self):
-        return 'target_id'
+        return "target_id"
 
     def get_foreign_related_value(self, instance):
         """Get the related value for the instance."""
         return (instance.pk,)
 
     def get_attname(self):
-        return f'{self.name}_id'
+        return f"{self.name}_id"
 
     def get_attname_column(self):
         return self.name, None
@@ -645,8 +645,8 @@ class CustomManyToManyField(models.ManyToManyField):
 
     def get_joining_columns(self, reverse_join=False):
         if reverse_join:
-            return ((self.m2m_reverse_field_name(), 'id'),)
-        return ((self.m2m_field_name(), 'id'),)
+            return ((self.m2m_reverse_field_name(), "id"),)
+        return ((self.m2m_field_name(), "id"),)
 
 
 class MultiObjectFieldType(RelatedObjectFilterFormMixin, FieldType):
@@ -660,14 +660,14 @@ class MultiObjectFieldType(RelatedObjectFilterFormMixin, FieldType):
         # app_label = str(uuid.uuid4()) + "_database_table"
         # apps = AppsProxy(dynamic_models=None, app_label=app_label)
         meta = type(
-            'Meta',
+            "Meta",
             (),
             {
-                'db_table': field.through_table_name,
-                'app_label': APP_LABEL,
-                'apps': apps,
-                'managed': True,
-                'unique_together': ('source', 'target'),
+                "db_table": field.through_table_name,
+                "app_label": APP_LABEL,
+                "apps": apps,
+                "managed": True,
+                "unique_together": ("source", "target"),
             },
         )
 
@@ -679,20 +679,20 @@ class MultiObjectFieldType(RelatedObjectFilterFormMixin, FieldType):
         )
 
         attrs = {
-            '__module__': 'netbox_custom_objects.models',
-            'Meta': meta,
-            'id': models.AutoField(primary_key=True),
-            'source': models.ForeignKey(
+            "__module__": "netbox_custom_objects.models",
+            "Meta": meta,
+            "id": models.AutoField(primary_key=True),
+            "source": models.ForeignKey(
                 model_string,
                 on_delete=models.CASCADE,
-                related_name='+',
-                db_column='source_id',
+                related_name="+",
+                db_column="source_id",
             ),
-            'target': models.ForeignKey(
+            "target": models.ForeignKey(
                 'self' if is_self_referential else model_string,
                 on_delete=models.CASCADE,
-                related_name='+',
-                db_column='target_id',
+                related_name="+",
+                db_column="target_id",
             ),
         }
 
@@ -725,10 +725,10 @@ class MultiObjectFieldType(RelatedObjectFilterFormMixin, FieldType):
         m2m_field = CustomManyToManyField(
             to='self' if is_self_referential else model_string,
             through=through,
-            through_fields=('source', 'target'),
+            through_fields=("source", "target"),
             blank=True,
-            related_name='+',
-            related_query_name='+',
+            related_name="+",
+            related_query_name="+",
             **field_kwargs,
         )
 
@@ -799,7 +799,7 @@ class MultiObjectFieldType(RelatedObjectFilterFormMixin, FieldType):
         field = model._meta.get_field(field_name)
 
         # Skip model resolution for self-referential fields
-        if getattr(field, '_is_self_referential', False):
+        if getattr(field, "_is_self_referential", False):
             field.remote_field.model = model
             through_model = field.remote_field.through
 
@@ -837,7 +837,7 @@ class MultiObjectFieldType(RelatedObjectFilterFormMixin, FieldType):
             else:
                 to_model = custom_object_type.get_model()
         else:
-            to_ct = f'{content_type.app_label}.{content_type.model}'
+            to_ct = f"{content_type.app_label}.{content_type.model}"
             to_model = apps.get_model(to_ct)
 
         # Update through model's fields
@@ -846,7 +846,7 @@ class MultiObjectFieldType(RelatedObjectFilterFormMixin, FieldType):
         # Update through model's target field
         through_model = field.remote_field.through
         source_field = through_model._meta.get_field('source')
-        target_field = through_model._meta.get_field('target')
+        target_field = through_model._meta.get_field("target")
 
         # Source field should point to the current model
         source_field.remote_field.model = model
@@ -866,7 +866,7 @@ class MultiObjectFieldType(RelatedObjectFilterFormMixin, FieldType):
         field = model._meta.get_field(field_name)
 
         # For self-referential fields, use the current model
-        if getattr(field, '_is_self_referential', False):
+        if getattr(field, "_is_self_referential", False):
             to_model = model
         else:
             content_type = ContentType.objects.get(pk=instance.related_object_type_id)
