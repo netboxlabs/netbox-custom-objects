@@ -17,8 +17,8 @@ from utilities.filters import (
 from .models import CustomObjectType
 
 __all__ = (
-    'CustomObjectTypeFilterSet',
-    'get_filterset_class',
+    "CustomObjectTypeFilterSet",
+    "get_filterset_class",
 )
 
 
@@ -86,9 +86,9 @@ class CustomObjectTypeFilterSet(NetBoxModelFilterSet):
     class Meta:
         model = CustomObjectType
         fields = (
-            'id',
-            'name',
-            'group_name',
+            "id",
+            "name",
+            "group_name",
         )
 
 
@@ -129,22 +129,24 @@ def get_filterset_class(model):
     fields = [field.name for field in model._meta.fields]
 
     meta = type(
-        'Meta',
+        "Meta",
         (),
         {
-            'model': model,
-            'fields': fields,
-            'filter_overrides': {
+            "model": model,
+            "fields": fields,
+            # TODO: overrides should come from FieldType
+            # These are placeholders; should use different logic
+            "filter_overrides": {
                 JSONField: {
-                    'filter_class': django_filters.CharFilter,
-                    'extra': lambda f: {
-                        'lookup_expr': 'icontains',
+                    "filter_class": django_filters.CharFilter,
+                    "extra": lambda f: {
+                        "lookup_expr": "icontains",
                     },
                 },
                 ArrayField: {
-                    'filter_class': django_filters.CharFilter,
-                    'extra': lambda f: {
-                        'lookup_expr': 'icontains',
+                    "filter_class": django_filters.CharFilter,
+                    "extra": lambda f: {
+                        "lookup_expr": "icontains",
                     },
                 },
             },
@@ -162,13 +164,13 @@ def get_filterset_class(model):
                 CustomFieldTypeChoices.TYPE_JSON,
                 CustomFieldTypeChoices.TYPE_URL,
             ]:
-                q |= Q(**{f'{field.name}__icontains': value})
+                q |= Q(**{f"{field.name}__icontains": value})
         return queryset.filter(q)
 
     attrs = {
-        'Meta': meta,
-        '__module__': 'netbox_custom_objects.filtersets',
-        'search': search,
+        "Meta": meta,
+        "__module__": "netbox_custom_objects.filtersets",
+        "search": search,
     }
 
     # For each custom field, add a corresponding filter.
@@ -194,13 +196,15 @@ def get_filterset_class(model):
                 if not value:
                     return queryset
                 ids = [v.pk for v in value]
-                source_ids = through.objects.filter(target_id__in=ids).values_list('source_id', flat=True)
+                source_ids = through.objects.filter(
+                    target_id__in=ids
+                ).values_list("source_id", flat=True)
                 return queryset.filter(pk__in=source_ids)
 
-            filter_m2m.__name__ = f'filter_{fname}'
+            filter_m2m.__name__ = f"filter_{fname}"
             return filter_m2m
 
-        method_name = f'filter_{field_name}'
+        method_name = f"filter_{field_name}"
         attrs[method_name] = make_m2m_filter(through_model, field_name)
         attrs[field_name] = django_filters.ModelMultipleChoiceFilter(
             queryset=related_model.objects.all(),
@@ -209,7 +213,7 @@ def get_filterset_class(model):
         )
 
     return type(
-        f'{model._meta.object_name}FilterSet',
+        f"{model._meta.object_name}FilterSet",
         (NetBoxModelFilterSet,),
         attrs,
     )
