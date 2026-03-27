@@ -1,0 +1,313 @@
+import datetime
+from decimal import Decimal
+from itertools import chain
+
+import django_filters
+from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
+from django.contrib.contenttypes.models import ContentType
+from django.db.models import ForeignKey, ManyToManyField, ManyToManyRel, ManyToOneRel, OneToOneRel
+from django.test import TestCase
+
+try:
+    from taggit.managers import TaggableManager
+except ImportError:
+    TaggableManager = None
+
+from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
+
+from netbox_custom_objects.filtersets import CustomObjectTypeFilterSet, get_filterset_class
+from netbox_custom_objects.models import CustomObjectType
+from .base import CustomObjectsTestCase
+
+
+EXEMPT_MODEL_FIELDS = (
+    'comments',
+    'custom_field_data',
+    'level',
+    'lft',
+    'rght',
+    'tree_id',
+)
+
+
+class BaseFilterSetTests:
+    """
+    Mixin that asserts every model field has a corresponding filter defined on its FilterSet.
+    Fields intentionally not filterable should be listed in ignore_fields.
+    """
+
+    ignore_fields = ()
+
+    def _get_filters_for_field(self, field):
+        if issubclass(field.__class__, ForeignKey) or type(field) is OneToOneRel:
+            if field.related_model is ContentType:
+                return [(None, None)]
+            return [(f'{field.name}_id', django_filters.ModelMultipleChoiceFilter)]
+
+        if type(field) in (ManyToManyField, ManyToManyRel):
+            if field.related_model is ContentType:
+                return [
+                    ('object_type', None),
+                    ('object_type_id', django_filters.ModelMultipleChoiceFilter),
+                ]
+            related_name = field.related_model._meta.verbose_name.lower().replace(' ', '_')
+            return [(f'{related_name}_id', django_filters.ModelMultipleChoiceFilter)]
+
+        if TaggableManager is not None and type(field) is TaggableManager:
+            return [('tag', None)]
+
+        return [(field.name, None)]
+
+    def test_missing_filters(self):
+        model = self.queryset.model
+        defined_filters = self.filterset.get_filters()
+
+        for model_field in model._meta.get_fields():
+            if model_field.name.startswith('_'):
+                continue
+            if model_field.name in chain(self.ignore_fields, EXEMPT_MODEL_FIELDS):
+                continue
+            if type(model_field) is ManyToOneRel:
+                continue
+            if type(model_field) in (GenericForeignKey, GenericRelation):
+                continue
+
+            for filter_name, filter_class in self._get_filters_for_field(model_field):
+                if filter_name is None:
+                    continue
+                self.assertIn(
+                    filter_name,
+                    defined_filters.keys(),
+                    f'No filter defined for {filter_name} ({model_field.name})!',
+                )
+                if filter_class is not None:
+                    self.assertIsInstance(
+                        defined_filters[filter_name],
+                        filter_class,
+                        f'Invalid filter class for {filter_name} (expected {filter_class})!',
+                    )
+
+
+class CustomObjectTypeFilterSetTestCase(CustomObjectsTestCase, TestCase, BaseFilterSetTests):
+    filterset = CustomObjectTypeFilterSet
+    # Fields intentionally not covered by CustomObjectTypeFilterSet
+    ignore_fields = (
+        'slug',
+        'description',
+        'verbose_name_plural',
+    )
+
+    @classmethod
+    def setUpTestData(cls):
+        CustomObjectType.objects.create(name='Type 1', slug='type-1')
+        CustomObjectType.objects.create(name='Type 2', slug='type-2', group_name='Group A')
+        CustomObjectType.objects.create(name='Type 3', slug='type-3', group_name='Group A')
+
+    @property
+    def queryset(self):
+        return CustomObjectType.objects.all()
+
+    def test_id(self):
+        params = {'id': list(CustomObjectType.objects.values_list('pk', flat=True)[:2])}
+        self.assertEqual(self.filterset(params, CustomObjectType.objects.all()).qs.count(), 2)
+
+    def test_name(self):
+        params = {'name': ['Type 1', 'Type 2']}
+        self.assertEqual(self.filterset(params, CustomObjectType.objects.all()).qs.count(), 2)
+
+    def test_group_name(self):
+        params = {'group_name': ['Group A']}
+        self.assertEqual(self.filterset(params, CustomObjectType.objects.all()).qs.count(), 2)
+
+    def test_q(self):
+        params = {'q': 'Type 1'}
+        self.assertEqual(self.filterset(params, CustomObjectType.objects.all()).qs.count(), 1)
+
+
+class CustomObjectFilterSetTestCase(CustomObjectsTestCase, TestCase):
+    """
+    Tests for dynamically generated filtersets on custom object instances.
+    Verifies that a filter for each supported field type is functional and
+    returns the correct results. Range filters (__lte/__gte) on date and numeric
+    fields are auto-generated by NetBoxModelFilterSet via get_additional_lookups().
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        # Devices used for object/multiobject field tests
+        manufacturer = Manufacturer.objects.create(name='FS Manufacturer', slug='fs-manufacturer')
+        device_type = DeviceType.objects.create(
+            manufacturer=manufacturer, model='FS Device Type', slug='fs-device-type'
+        )
+        role = DeviceRole.objects.create(name='FS Role', slug='fs-role', color='ff0000')
+        site = Site.objects.create(name='FS Site', slug='fs-site')
+        cls.device1 = Device.objects.create(name='FS Device 1', device_type=device_type, role=role, site=site)
+        cls.device2 = Device.objects.create(name='FS Device 2', device_type=device_type, role=role, site=site)
+
+        choice_set = CustomObjectsTestCase.create_choice_set(name='FS Choice Set')
+        device_object_type = CustomObjectsTestCase.get_device_object_type()
+
+        cls.cot = CustomObjectsTestCase.create_custom_object_type(name='FilterSetObject', slug='filterset-objects')
+
+        for field_def in [
+            {'name': 'text_field', 'label': 'Text Field', 'type': 'text'},
+            {'name': 'longtext_field', 'label': 'Long Text Field', 'type': 'longtext'},
+            {'name': 'int_field', 'label': 'Integer Field', 'type': 'integer'},
+            {'name': 'decimal_field', 'label': 'Decimal Field', 'type': 'decimal'},
+            {'name': 'bool_field', 'label': 'Boolean Field', 'type': 'boolean'},
+            {'name': 'date_field', 'label': 'Date Field', 'type': 'date'},
+            {'name': 'url_field', 'label': 'URL Field', 'type': 'url'},
+            {'name': 'json_field', 'label': 'JSON Field', 'type': 'json'},
+        ]:
+            CustomObjectsTestCase.create_custom_object_type_field(cls.cot, **field_def)
+
+        CustomObjectsTestCase.create_custom_object_type_field(
+            cls.cot, name='select_field', label='Select Field', type='select', choice_set=choice_set
+        )
+        CustomObjectsTestCase.create_custom_object_type_field(
+            cls.cot, name='device_field', label='Device Field', type='object', related_object_type=device_object_type
+        )
+        CustomObjectsTestCase.create_custom_object_type_field(
+            cls.cot,
+            name='devices_field',
+            label='Devices Field',
+            type='multiobject',
+            related_object_type=device_object_type,
+        )
+
+        cls.model = cls.cot.get_model()
+        cls.filterset = get_filterset_class(cls.model)
+
+        cls.obj1 = cls.model.objects.create(
+            text_field='Alpha value',
+            longtext_field='Alpha long text',
+            int_field=10,
+            decimal_field=Decimal('1.5000'),
+            bool_field=True,
+            date_field=datetime.date(2024, 1, 1),
+            url_field='https://alpha.example.com',
+            json_field={'tag': 'alpha'},
+            select_field='choice1',
+            device_field=cls.device1,
+        )
+        cls.obj2 = cls.model.objects.create(
+            text_field='Beta value',
+            longtext_field='Beta long text',
+            int_field=20,
+            decimal_field=Decimal('2.5000'),
+            bool_field=False,
+            date_field=datetime.date(2024, 6, 15),
+            url_field='https://beta.example.com',
+            json_field={'tag': 'beta'},
+            select_field='choice2',
+            device_field=cls.device2,
+        )
+        cls.obj3 = cls.model.objects.create(
+            text_field='Gamma value',
+            longtext_field='Gamma long text',
+            int_field=30,
+            decimal_field=Decimal('3.5000'),
+            bool_field=True,
+            date_field=datetime.date(2024, 12, 31),
+            url_field='https://gamma.example.com',
+            json_field={'tag': 'gamma'},
+            select_field='choice1',
+            device_field=cls.device1,
+        )
+
+        cls.obj1.devices_field.add(cls.device1)
+        cls.obj2.devices_field.add(cls.device2)
+        cls.obj3.devices_field.add(cls.device1, cls.device2)
+
+    @property
+    def queryset(self):
+        return self.model.objects.all()
+
+    # --- Text types (icontains) ---
+
+    def test_text_field(self):
+        params = {'text_field': 'alpha'}
+        self.assertEqual(self.filterset(params, self.queryset).qs.count(), 1)
+
+    def test_longtext_field(self):
+        params = {'longtext_field': 'beta'}
+        self.assertEqual(self.filterset(params, self.queryset).qs.count(), 1)
+
+    def test_url_field(self):
+        params = {'url_field': 'gamma'}
+        self.assertEqual(self.filterset(params, self.queryset).qs.count(), 1)
+
+    def test_json_field(self):
+        params = {'json_field': 'alpha'}
+        self.assertEqual(self.filterset(params, self.queryset).qs.count(), 1)
+
+    # --- Numeric types (exact + range lookups) ---
+
+    def test_integer_field(self):
+        params = {'int_field': 20}
+        self.assertEqual(self.filterset(params, self.queryset).qs.count(), 1)
+
+    def test_integer_field_lte(self):
+        params = {'int_field__lte': 20}
+        self.assertEqual(self.filterset(params, self.queryset).qs.count(), 2)
+
+    def test_integer_field_gte(self):
+        params = {'int_field__gte': 20}
+        self.assertEqual(self.filterset(params, self.queryset).qs.count(), 2)
+
+    def test_decimal_field(self):
+        params = {'decimal_field': '2.5'}
+        self.assertEqual(self.filterset(params, self.queryset).qs.count(), 1)
+
+    def test_decimal_field_lte(self):
+        params = {'decimal_field__lte': '2.5'}
+        self.assertEqual(self.filterset(params, self.queryset).qs.count(), 2)
+
+    def test_decimal_field_gte(self):
+        params = {'decimal_field__gte': '2.5'}
+        self.assertEqual(self.filterset(params, self.queryset).qs.count(), 2)
+
+    # --- Boolean ---
+
+    def test_boolean_field_true(self):
+        params = {'bool_field': True}
+        self.assertEqual(self.filterset(params, self.queryset).qs.count(), 2)
+
+    def test_boolean_field_false(self):
+        params = {'bool_field': False}
+        self.assertEqual(self.filterset(params, self.queryset).qs.count(), 1)
+
+    # --- Date (exact + range lookups auto-generated by NetBoxModelFilterSet) ---
+
+    def test_date_field(self):
+        params = {'date_field': '2024-01-01'}
+        self.assertEqual(self.filterset(params, self.queryset).qs.count(), 1)
+
+    def test_date_field_lte(self):
+        # obj1 (2024-01-01) and obj2 (2024-06-15) are on or before 2024-06-15
+        params = {'date_field__lte': '2024-06-15'}
+        self.assertEqual(self.filterset(params, self.queryset).qs.count(), 2)
+
+    def test_date_field_gte(self):
+        # obj2 (2024-06-15) and obj3 (2024-12-31) are on or after 2024-06-15
+        params = {'date_field__gte': '2024-06-15'}
+        self.assertEqual(self.filterset(params, self.queryset).qs.count(), 2)
+
+    # --- Choice ---
+
+    def test_select_field(self):
+        # obj1 and obj3 have choice1
+        params = {'select_field': 'choice1'}
+        self.assertEqual(self.filterset(params, self.queryset).qs.count(), 2)
+
+    # --- Object references ---
+
+    def test_object_field(self):
+        # obj1 and obj3 reference device1
+        params = {'device_field': self.device1.pk}
+        self.assertEqual(self.filterset(params, self.queryset).qs.count(), 2)
+
+    def test_multiobject_field(self):
+        # obj2 and obj3 reference device2
+        params = {'devices_field': [self.device2.pk]}
+        self.assertEqual(self.filterset(params, self.queryset).qs.count(), 2)
