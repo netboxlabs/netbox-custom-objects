@@ -174,6 +174,95 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
             tables = connection.introspection.table_names(cursor)
             self.assertNotIn(table_name, tables)
 
+    def test_delete_unregisters_model_from_app_registry(self):
+        """
+        Regression test for: deleting a Custom Object then its Custom Object Type
+        leaves the dynamically-generated model in Django's app registry.  When a
+        related model (e.g. dcim.Device) is subsequently deleted, Django's ORM
+        Collector discovers the stale model class, tries to query the dropped table
+        and raises "relation '<table>' does not exist".
+        """
+        from django.apps import apps as django_apps
+        from netbox_custom_objects.constants import APP_LABEL
+
+        custom_object_type = self.create_custom_object_type(
+            name="RegTestObject", slug="reg-test-object"
+        )
+        self.create_custom_object_type_field(
+            custom_object_type,
+            name="name",
+            label="Name",
+            type="text",
+            primary=True,
+            required=True,
+        )
+        model = custom_object_type.get_model()
+        model_name = model.__name__.lower()
+
+        # Confirm the model is registered before deletion
+        self.assertIn(model_name, django_apps.all_models.get(APP_LABEL, {}))
+
+        custom_object_type.delete()
+
+        # After deletion the model must be removed from the app registry so that
+        # Django's cascade-delete collector no longer tries to query the dropped table.
+        self.assertNotIn(model_name, django_apps.all_models.get(APP_LABEL, {}))
+
+    def test_stale_registry_entry_causes_relation_error_on_related_object_delete(self):
+        """
+        Demonstrates the failure mode for issue #429.
+
+        Re-registers the stale model class after deletion (simulating the pre-fix
+        state) and confirms that deleting a related NetBox object then raises
+        ProgrammingError('relation "custom_objects_<id>" does not exist').
+
+        The test uses a savepoint so the aborted PostgreSQL transaction does not
+        poison the surrounding test transaction.
+        """
+        from django.apps import apps as django_apps
+        from django.db import ProgrammingError, transaction
+        from dcim.models import Site
+        from netbox_custom_objects.constants import APP_LABEL
+
+        site = Site.objects.create(name='Stale Registry Test Site', slug='stale-registry-test-site')
+
+        cot = self.create_custom_object_type(name='SiteLinked', slug='site-linked')
+        self.create_custom_object_type_field(
+            cot,
+            name='linked_site',
+            label='Linked Site',
+            type='object',
+            related_object_type=self.get_site_object_type(),
+        )
+
+        stale_model = cot.get_model()
+        stale_model_name = stale_model.__name__.lower()
+
+        # Delete the COT; the fix removes the model from apps.all_models.
+        cot.delete()
+        self.assertNotIn(stale_model_name, django_apps.all_models.get(APP_LABEL, {}))
+
+        # Simulate pre-fix state: put the stale model back in the registry and
+        # force Django to rebuild its relation trees from the now-stale registry.
+        django_apps.all_models[APP_LABEL][stale_model_name] = stale_model
+        django_apps.clear_cache()
+
+        try:
+            # Deleting the site now triggers Django's cascade-delete Collector,
+            # which finds the stale FK, queries the dropped table, and fails.
+            sid = transaction.savepoint()
+            try:
+                site.delete()
+                transaction.savepoint_commit(sid)
+                self.fail('Expected ProgrammingError was not raised — the bug is not being reproduced')
+            except ProgrammingError as exc:
+                transaction.savepoint_rollback(sid)
+                self.assertIn('does not exist', str(exc))
+        finally:
+            # Restore clean registry state so subsequent tests are unaffected.
+            django_apps.all_models[APP_LABEL].pop(stale_model_name, None)
+            django_apps.clear_cache()
+
 
 class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
     """Test cases for CustomObjectTypeField model."""

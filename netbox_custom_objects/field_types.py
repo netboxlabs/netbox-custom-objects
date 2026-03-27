@@ -381,10 +381,20 @@ class RelatedObjectFilterFormMixin:
     _filterform_field_class = None
 
     def get_filterform_field(self, field, **kwargs):
+        content_type = ContentType.objects.get(pk=field.related_object_type_id)
+        if content_type.app_label == APP_LABEL:
+            from netbox_custom_objects.models import CustomObjectType
+
+            custom_object_type_id = content_type.model.replace('table', '').replace('model', '')
+            custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
+            model = custom_object_type.get_model()
+        else:
+            model = content_type.model_class()
         return self._filterform_field_class(
-            queryset=field.related_object_type.model_class().objects.all(),
+            queryset=model.objects.all(),
             required=False,
-            query_params=(field.related_object_filter if hasattr(field, 'related_object_filter') else None),
+            label=field,
+            selector=model._meta.app_label != APP_LABEL,
         )
 
 
