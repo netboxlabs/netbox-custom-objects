@@ -9,7 +9,7 @@ from django.utils import timezone
 
 from extras.models import CachedValue
 from netbox.search.backends import get_backend
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.models import CustomObjectTypeField
 from core.models import ObjectType
 from .base import CustomObjectsTestCase
 
