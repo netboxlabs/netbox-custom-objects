@@ -1,9 +1,13 @@
+"""
+Tests for all the different field types supported by Custom Object Type Fields.
+"""
 from unittest import skip
 from datetime import date, datetime
 from decimal import Decimal
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 
+from netbox_custom_objects.models import CustomObjectTypeField
 from .base import CustomObjectsTestCase
 
 
@@ -725,54 +729,48 @@ class MultiObjectFieldTypeTestCase(FieldTypeTestCase):
 
 
 class SelfReferentialFieldTestCase(FieldTypeTestCase):
-    """Test cases for self-referential object fields."""
+    """Test cases for self-referential object fields.
 
-    @skip("Causes infinite recursion error")
+    The recursion guard in CustomObjectTypeField._check_recursion() explicitly
+    permits self-referential fields (#263), so these tests should pass without
+    any skip decorator.
+    """
+
     def test_self_referential_object_field(self):
-        """Test creating a self-referential object field."""
-        # Add a self-referential object field
+        """#263 – A COT may have an FK object field pointing to itself."""
         field = self.create_custom_object_type_field(
             self.custom_object_type,
             name="parent",
             label="Parent",
             type="object",
-            related_object_type=self.custom_object_type.object_type
+            related_object_type=self.custom_object_type.object_type,
         )
         field  # To silence ruff error
 
         model = self.custom_object_type.get_model()
 
-        # Create parent instance
         parent = model.objects.create(name="Parent Instance")
-
-        # Create child instance with parent reference
         child = model.objects.create(name="Child Instance", parent=parent)
 
         self.assertEqual(child.parent, parent)
 
-    @skip("Causes infinite recursion error")
     def test_self_referential_multiobject_field(self):
-        """Test creating a self-referential multiobject field."""
-        # Add a self-referential multiobject field
+        """#263 – A COT may have a M2M multiobject field pointing to itself."""
         field = self.create_custom_object_type_field(
             self.custom_object_type,
             name="children",
             label="Children",
             type="multiobject",
-            related_object_type=self.custom_object_type.object_type
+            related_object_type=self.custom_object_type.object_type,
         )
         field  # To silence ruff error
 
         model = self.custom_object_type.get_model()
 
-        # Create parent instance
         parent = model.objects.create(name="Parent Instance")
-
-        # Create child instances
         child1 = model.objects.create(name="Child 1")
         child2 = model.objects.create(name="Child 2")
 
-        # Add children to parent
         parent.children.add(child1, child2)
 
         self.assertEqual(parent.children.count(), 2)
@@ -852,3 +850,245 @@ class CrossReferentialFieldTestCase(FieldTypeTestCase):
         self.assertEqual(obj1.related_objects.count(), 2)
         self.assertIn(obj2_1, obj1.related_objects.all())
         self.assertIn(obj2_2, obj1.related_objects.all())
+
+
+class MultipleObjectFieldsToSameCOTTestCase(FieldTypeTestCase):
+    """Test cases for multiple object/multiobject fields pointing to the same COT.
+
+    Issue #237: multiple FK/M2M fields targeting the same related COT should all
+    be created without name collisions and must remain independently queryable.
+    """
+
+    def test_two_fk_fields_to_same_cot(self):
+        """#237 – Two FK object fields on the same COT can point to the same target COT."""
+        # Create a second COT that will be the shared target
+        target = self.create_custom_object_type(name="SharedTarget", slug="shared-target")
+        self.create_custom_object_type_field(
+            target,
+            name="name",
+            label="Name",
+            type="text",
+            primary=True,
+            required=True,
+        )
+
+        # Add two independent FK fields on the existing COT pointing to target
+        self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="primary_ref",
+            label="Primary Reference",
+            type="object",
+            related_object_type=target.object_type,
+        )
+        self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="secondary_ref",
+            label="Secondary Reference",
+            type="object",
+            related_object_type=target.object_type,
+        )
+
+        target_model = target.get_model()
+        model = self.custom_object_type.get_model()
+
+        t1 = target_model.objects.create(name="Target 1")
+        t2 = target_model.objects.create(name="Target 2")
+
+        obj = model.objects.create(name="Source Object", primary_ref=t1, secondary_ref=t2)
+
+        self.assertEqual(obj.primary_ref, t1)
+        self.assertEqual(obj.secondary_ref, t2)
+
+    def test_two_m2m_fields_to_same_cot(self):
+        """#237 – Two M2M multiobject fields on the same COT can point to the same target COT."""
+        target = self.create_custom_object_type(name="M2MTarget", slug="m2m-target")
+        self.create_custom_object_type_field(
+            target,
+            name="name",
+            label="Name",
+            type="text",
+            primary=True,
+            required=True,
+        )
+
+        self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="primary_refs",
+            label="Primary References",
+            type="multiobject",
+            related_object_type=target.object_type,
+        )
+        self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="secondary_refs",
+            label="Secondary References",
+            type="multiobject",
+            related_object_type=target.object_type,
+        )
+
+        target_model = target.get_model()
+        model = self.custom_object_type.get_model()
+
+        t1 = target_model.objects.create(name="Target 1")
+        t2 = target_model.objects.create(name="Target 2")
+        t3 = target_model.objects.create(name="Target 3")
+
+        obj = model.objects.create(name="Source Object")
+        obj.primary_refs.add(t1, t2)
+        obj.secondary_refs.add(t2, t3)
+
+        # The two M2M relations are independent
+        self.assertEqual(obj.primary_refs.count(), 2)
+        self.assertEqual(obj.secondary_refs.count(), 2)
+        self.assertIn(t1, obj.primary_refs.all())
+        self.assertIn(t3, obj.secondary_refs.all())
+        # t2 appears in both without conflict
+        self.assertIn(t2, obj.primary_refs.all())
+        self.assertIn(t2, obj.secondary_refs.all())
+
+    def test_fk_and_m2m_fields_to_same_cot(self):
+        """#237 – One FK and one M2M field pointing to the same target COT coexist."""
+        target = self.create_custom_object_type(name="MixedTarget", slug="mixed-target")
+        self.create_custom_object_type_field(
+            target,
+            name="name",
+            label="Name",
+            type="text",
+            primary=True,
+            required=True,
+        )
+
+        self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="single_ref",
+            label="Single Reference",
+            type="object",
+            related_object_type=target.object_type,
+        )
+        self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="multi_refs",
+            label="Multi References",
+            type="multiobject",
+            related_object_type=target.object_type,
+        )
+
+        target_model = target.get_model()
+        model = self.custom_object_type.get_model()
+
+        t1 = target_model.objects.create(name="Target 1")
+        t2 = target_model.objects.create(name="Target 2")
+
+        obj = model.objects.create(name="Source Object", single_ref=t1)
+        obj.multi_refs.add(t1, t2)
+
+        self.assertEqual(obj.single_ref, t1)
+        self.assertEqual(obj.multi_refs.count(), 2)
+
+
+class PrimaryFieldChangeTestCase(FieldTypeTestCase):
+    """Test changing which field is designated as the primary (display) field.
+
+    Issue #348: switching the primary flag to a different field while object
+    references exist must not break __str__ or queryset access.
+    """
+
+    def test_change_primary_field_updates_str(self):
+        """#348 – __str__ on existing instances reflects the new primary field after change."""
+        # The base FieldTypeTestCase already has a primary 'name' text field.
+        # Add a second text field and then switch primary to it.
+        second_field = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="label",
+            label="Label",
+            type="text",
+        )
+        model = self.custom_object_type.get_model()
+        instance = model.objects.create(name="OldPrimary", label="NewPrimary")
+
+        # Before the switch, __str__ uses 'name'
+        self.assertIn("OldPrimary", str(instance))
+
+        # Promote 'label' to primary, demote 'name'.
+        # Re-fetch from DB so that _original is populated (required by save()).
+        existing_primary = CustomObjectTypeField.objects.filter(
+            custom_object_type=self.custom_object_type, primary=True
+        ).first()
+        self.assertIsNotNone(existing_primary, "Expected a primary field to exist on the COT.")
+        existing_primary.primary = False
+        existing_primary.save()
+
+        fresh_second_field = CustomObjectTypeField.objects.get(pk=second_field.pk)
+        fresh_second_field.primary = True
+        fresh_second_field.save()
+
+        # Refresh instance after cache invalidation
+        self.custom_object_type.clear_model_cache(self.custom_object_type.id)
+        new_model = self.custom_object_type.get_model()
+        refreshed = new_model.objects.get(pk=instance.pk)
+
+        # __str__ should now reflect the 'label' field value
+        self.assertIn("NewPrimary", str(refreshed))
+
+    def test_change_primary_field_with_object_references(self):
+        """#348 – Changing the primary field does not break object fields that reference the COT."""
+        # Build a second COT that holds a reference to self.custom_object_type
+        ref_cot = self.create_custom_object_type(name="RefHolder", slug="ref-holder")
+        self.create_custom_object_type_field(
+            ref_cot,
+            name="name",
+            label="Name",
+            type="text",
+            primary=True,
+        )
+        self.create_custom_object_type_field(
+            ref_cot,
+            name="ref",
+            label="Reference",
+            type="object",
+            related_object_type=self.custom_object_type.object_type,
+        )
+
+        model_target = self.custom_object_type.get_model()
+        model_ref = ref_cot.get_model()
+
+        target_instance = model_target.objects.create(name="Target")
+        ref_instance = model_ref.objects.create(name="Holder", ref=target_instance)
+
+        # Change the primary field on the target COT.
+        # Re-fetch from DB so that _original is populated (required by save()).
+        second_field = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="code",
+            label="Code",
+            type="text",
+        )
+
+        # Give the target instance a 'code' value now that the column exists,
+        # so the __str__ assertion below is meaningful after the primary swap.
+        self.custom_object_type.clear_model_cache(self.custom_object_type.id)
+        model_target_v2 = self.custom_object_type.get_model()
+        model_target_v2.objects.filter(pk=target_instance.pk).update(code="T-001")
+
+        existing_primary = CustomObjectTypeField.objects.filter(
+            custom_object_type=self.custom_object_type, primary=True
+        ).first()
+        self.assertIsNotNone(existing_primary, "Expected a primary field to exist on the COT.")
+        existing_primary.primary = False
+        existing_primary.save()
+
+        fresh_second_field = CustomObjectTypeField.objects.get(pk=second_field.pk)
+        fresh_second_field.primary = True
+        fresh_second_field.save()
+
+        # The FK relationship must still be intact after the primary field swap
+        self.custom_object_type.clear_model_cache(self.custom_object_type.id)
+        ref_cot.clear_model_cache(ref_cot.id)
+
+        new_target_model = self.custom_object_type.get_model()
+        refreshed_ref = model_ref.objects.get(pk=ref_instance.pk)
+        self.assertEqual(refreshed_ref.ref_id, target_instance.pk)
+
+        # __str__ on the referenced target must reflect the new primary field ('code')
+        refreshed_target = new_target_model.objects.get(pk=target_instance.pk)
+        self.assertIn("T-001", str(refreshed_target))

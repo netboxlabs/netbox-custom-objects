@@ -1,3 +1,6 @@
+"""
+Tests for the UI sidebar navigation menu.
+"""
 from unittest.mock import patch
 
 from django.test import TestCase

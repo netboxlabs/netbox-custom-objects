@@ -1,3 +1,6 @@
+"""
+Tests for filtersets used by the plugin's UI and API views.
+"""
 from django.test import TestCase
 
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site

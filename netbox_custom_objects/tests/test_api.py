@@ -1,3 +1,6 @@
+"""
+Tests for API code paths.
+"""
 from django.test import TestCase
 from django.urls import reverse
 
@@ -173,22 +176,111 @@ class CustomObjectTest(CustomObjectsTestCase, APIViewTestCases.APIViewTestCase):
         viewname = 'plugins-api:netbox_custom_objects-api:customobject-list'
         return reverse(viewname, kwargs={'custom_object_type': self.custom_object_type1.slug})
 
+    def _add_permission(self, action, name=None):
+        """Grant the test user a permission for the current model."""
+        perm = ObjectPermission(
+            name=name or f'Test {action} permission',
+            actions=[action],
+        )
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+        return perm
+
     def test_list_objects(self):
-        # TODO: Needs filtering by pk to work
-        ...
+        """GET the list URL returns only objects for the requested COT."""
+        self._add_permission('view', 'List view perm')
+
+        response = self.client.get(self._get_list_url(), **self.header)
+
+        self.assertHttpStatus(response, 200)
+        # The three objects created in setUpTestData must be present.
+        self.assertGreaterEqual(response.data['count'], 3)
 
     def test_bulk_create_objects(self):
-        ...
+        """Create multiple objects with required fields via individual POST requests.
+
+        CustomObjectViewSet uses a standard DRF ModelViewSet which does not expose a
+        bulk-create endpoint, so we exercise per-object creation to verify required
+        field enforcement and response shape.
+        """
+        self._add_permission('add', 'Bulk create perm')
+
+        initial_count = self._get_queryset().count()
+        for data in self.create_data:
+            response = self.client.post(
+                self._get_list_url(), data, format='json', **self.header
+            )
+            self.assertHttpStatus(response, 201)
+
+        self.assertEqual(self._get_queryset().count(), initial_count + len(self.create_data))
 
     def test_bulk_delete_objects(self):
-        ...
+        """Delete multiple objects via individual DELETE requests.
+
+        CustomObjectViewSet uses a standard DRF ModelViewSet which does not expose a
+        bulk-delete endpoint, so we exercise per-object deletion.
+        """
+        self._add_permission('delete', 'Bulk delete perm')
+
+        initial_count = self._get_queryset().count()
+        self.assertGreaterEqual(initial_count, 2, "Need at least 2 objects to test bulk delete.")
+        instances = list(self._get_queryset()[:2])
+
+        for instance in instances:
+            response = self.client.delete(self._get_detail_url(instance), **self.header)
+            self.assertHttpStatus(response, 204)
+
+        self.assertEqual(self._get_queryset().count(), initial_count - 2)
+        for instance in instances:
+            self.assertFalse(
+                self._get_queryset().filter(pk=instance.pk).exists(),
+                f"Object {instance.pk} should have been deleted.",
+            )
 
     def test_bulk_update_objects(self):
-        ...
+        """Partial-update (PATCH) multiple objects — required fields are not enforced.
+
+        CustomObjectViewSet uses a standard DRF ModelViewSet which does not expose a
+        bulk-update endpoint, so we exercise per-object PATCH to verify that required
+        fields need not be re-supplied on each update.
+        """
+        self._add_permission('change', 'Bulk update perm')
+
+        instances = list(self._get_queryset()[:2])
+        updates = {
+            instances[0].pk: 'Updated 001',
+            instances[1].pk: 'Updated 002',
+        }
+
+        for instance in instances:
+            response = self.client.patch(
+                self._get_detail_url(instance),
+                {'test_field': updates[instance.pk]},
+                format='json',
+                **self.header,
+            )
+            self.assertHttpStatus(response, 200)
+
+        instances[0].refresh_from_db()
+        instances[1].refresh_from_db()
+        self.assertEqual(instances[0].test_field, 'Updated 001')
+        self.assertEqual(instances[1].test_field, 'Updated 002')
 
     def test_delete_object(self):
-        # TODO: ObjectChange causes failure
-        ...
+        """DELETE a single object returns 204 and removes the record."""
+        self._add_permission('delete', 'Delete perm')
+
+        instance = self._get_queryset().first()
+        url = self._get_detail_url(instance)
+
+        response = self.client.delete(url, **self.header)
+
+        self.assertHttpStatus(response, 204)
+        self.assertFalse(
+            self._get_queryset().filter(pk=instance.pk).exists(),
+            "Deleted object should no longer exist in the database.",
+        )
 
     def test_create_with_nested_serializers(self):
         """
@@ -559,3 +651,121 @@ class CustomObjectTypeFieldObjectResolutionTest(CustomObjectsTestCase, TestCase)
         """An unknown app_label must still return 400."""
         response = self._post_field('invalid-app', self._internal_model_name())
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class SerializerFieldCoverageTest(CustomObjectsTestCase, TestCase):
+    """
+    Verify that the dynamic serializer produced by get_serializer_class() exposes
+    the expected fields in API responses.
+    """
+
+    def setUp(self):
+        self.user = create_test_user('serluser')
+        token_key = create_token(self.user)
+        self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
+
+        self.cot = CustomObjectsTestCase.create_custom_object_type(
+            name='SerializerTest', slug='serializer-test'
+        )
+        # Primary text field
+        CustomObjectsTestCase.create_custom_object_type_field(
+            self.cot,
+            name='label',
+            label='Label',
+            type='text',
+            primary=True,
+            required=True,
+        )
+        # Integer field
+        CustomObjectsTestCase.create_custom_object_type_field(
+            self.cot,
+            name='count',
+            label='Count',
+            type='integer',
+        )
+        # Object field (device)
+        device_ct = CustomObjectsTestCase.get_device_object_type()
+        CustomObjectsTestCase.create_custom_object_type_field(
+            self.cot,
+            name='device',
+            label='Device',
+            type='object',
+            related_object_type=device_ct,
+        )
+
+        self.model = self.cot.get_model()
+
+        obj_perm = ObjectPermission(name='Serializer view perm', actions=['view'])
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        obj_perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+    def tearDown(self):
+        CustomObjectType.clear_model_cache()
+        super().tearDown()
+
+    def _list_url(self):
+        return reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-list',
+            kwargs={'custom_object_type': self.cot.slug},
+        )
+
+    def _detail_url(self, instance):
+        return reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-detail',
+            kwargs={'pk': instance.pk, 'custom_object_type': self.cot.slug},
+        )
+
+    def test_detail_response_contains_netbox_standard_fields(self):
+        """Detail response must include the standard NetBox envelope fields."""
+        instance = self.model.objects.create(label='Test Instance', count=5)
+        response = self.client.get(self._detail_url(instance), **self.header)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        for field in ('id', 'url', 'display', 'created', 'last_updated', 'tags'):
+            self.assertIn(field, response.data, f"Standard field '{field}' missing from response")
+
+    def test_detail_response_contains_custom_fields(self):
+        """Detail response includes fields defined on the COT."""
+        instance = self.model.objects.create(label='My Label', count=42)
+        response = self.client.get(self._detail_url(instance), **self.header)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('label', response.data)
+        self.assertEqual(response.data['label'], 'My Label')
+        self.assertIn('count', response.data)
+        self.assertEqual(response.data['count'], 42)
+
+    def test_detail_response_contains_object_field(self):
+        """Object fields (FK) are serialised as nested representations."""
+        instance = self.model.objects.create(label='Device Holder')
+        response = self.client.get(self._detail_url(instance), **self.header)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('device', response.data)
+        # When no device is set the field must be present but null
+        self.assertIsNone(response.data['device'])
+
+    def test_list_response_shape(self):
+        """List response wraps results in count/next/previous/results envelope."""
+        self.model.objects.create(label='A')
+        self.model.objects.create(label='B')
+        response = self.client.get(self._list_url(), **self.header)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        for key in ('count', 'next', 'previous', 'results'):
+            self.assertIn(key, response.data, f"Envelope key '{key}' missing from list response")
+        self.assertGreaterEqual(response.data['count'], 2)
+
+    def test_url_field_is_absolute(self):
+        """The 'url' field in the response must be an absolute HTTP URL."""
+        instance = self.model.objects.create(label='URL Test')
+        response = self.client.get(self._detail_url(instance), **self.header)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        url_value = response.data.get('url', '')
+        self.assertRegex(
+            url_value,
+            r'^https?://',
+            f"'url' field should be an absolute HTTP(S) URL, got: {url_value!r}",
+        )
