@@ -1,4 +1,5 @@
 from unittest import skip
+from unittest.mock import patch
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
@@ -7,7 +8,6 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
-from unittest.mock import patch
 
 from django.contrib.contenttypes.models import ContentType
 from extras.models import CachedValue
@@ -862,3 +862,33 @@ class SearchReindexTestCase(CustomObjectsTestCase, TestCase):
             CachedValue.objects.filter(object_type=ct, object_id=self.instance.pk, field="title", weight=500).count(),
             0,
         )
+
+    def test_job_name_includes_cot_name(self):
+        """Enqueued job name includes the COT name for observability."""
+        from core.models import Job
+        job = ReindexCustomObjectTypeJob.enqueue(cot_id=self.cot.pk, immediate=True)
+        self.assertEqual(job.name, f'Reindex Custom Object Type: {self.cot.name}')
+
+    def test_job_data_contains_cot_id(self):
+        """Job.data is populated with cot_id and job_class for UI visibility and deduplication."""
+        from core.models import Job
+        job = ReindexCustomObjectTypeJob.enqueue(cot_id=self.cot.pk, immediate=True)
+        self.assertEqual(job.data['cot_id'], self.cot.pk)
+        self.assertEqual(job.data['job_class'], 'ReindexCustomObjectTypeJob')
+
+    def test_duplicate_job_not_enqueued(self):
+        """A second enqueue for the same COT returns the existing pending job without creating a new one."""
+        from core.choices import JobStatusChoices
+        from core.models import Job
+
+        with patch('django_rq.get_queue'):
+            first_job = ReindexCustomObjectTypeJob.enqueue(cot_id=self.cot.pk)
+        # Simulate the first job still pending
+        first_job.status = JobStatusChoices.STATUS_PENDING
+        first_job.save(update_fields=['status'])
+
+        with patch('django_rq.get_queue'):
+            second_job = ReindexCustomObjectTypeJob.enqueue(cot_id=self.cot.pk)
+
+        self.assertEqual(first_job.pk, second_job.pk)
+        self.assertEqual(Job.objects.filter(data__cot_id=self.cot.pk).count(), 1)

@@ -13,6 +13,42 @@ class ReindexCustomObjectTypeJob(JobRunner):
     class Meta:
         name = 'Reindex Custom Object Type'
 
+    @classmethod
+    def enqueue(cls, *args, **kwargs):
+        # All imports deferred to avoid circular import: models.py imports this module at the top level
+        from core.choices import JobStatusChoices
+        from core.models import Job
+        from netbox_custom_objects.models import CustomObjectType
+
+        cot_id = kwargs.get('cot_id')
+
+        # Deduplicate: if a pending or running job for this COT already exists, return it unchanged
+        if not kwargs.get('immediate') and cot_id is not None:
+            existing = Job.objects.filter(
+                status__in=JobStatusChoices.ENQUEUED_STATE_CHOICES,
+                data__cot_id=cot_id,
+                data__job_class=cls.__name__,
+            ).first()
+            if existing:
+                return existing
+
+        # Include the COT name in the job name for observability in the jobs list
+        if 'name' not in kwargs and cot_id is not None:
+            try:
+                cot_name = CustomObjectType.objects.values_list('name', flat=True).get(pk=cot_id)
+                kwargs['name'] = f'{cls.name}: {cot_name}'
+            except CustomObjectType.DoesNotExist:
+                pass
+
+        job = super().enqueue(*args, **kwargs)
+
+        # Persist cot_id in Job.data so it is visible in the UI and queryable for deduplication
+        if job is not None:
+            job.data = {'cot_id': cot_id, 'job_class': cls.__name__}
+            job.save(update_fields=['data'])
+
+        return job
+
     def run(self, *args, **kwargs):
         # Deferred to avoid circular import: models.py imports this module at the top level
         from netbox_custom_objects.models import CustomObjectType
