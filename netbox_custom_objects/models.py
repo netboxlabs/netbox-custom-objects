@@ -44,6 +44,7 @@ from netbox.models.features import (
 from netbox.plugins import get_plugin_config
 from netbox.registry import registry
 from netbox.search import SearchIndex
+from netbox.search.backends import get_backend
 from utilities import filters
 from utilities.datetime import datetime_from_timestamp
 from utilities.object_types import object_type_name
@@ -1527,6 +1528,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         return f"Through_{self.through_table_name}"
 
     def save(self, *args, **kwargs):
+        is_new = self._state.adding
         field_type = FIELD_TYPE_CLASS[self.type]()
         model_field = field_type.get_model_field(self)
         model = self.custom_object_type.get_model()
@@ -1671,6 +1673,20 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         # Reregister SearchIndex with new set of searchable fields
         self.custom_object_type.register_custom_object_search_index(model)
 
+        # Reindex all objects of this type if search indexing was affected
+        if is_new:
+            needs_reindex = self.search_weight > 0
+        else:
+            needs_reindex = self.search_weight != self.original.search_weight
+        if needs_reindex:
+            _cot_id = self.custom_object_type_id
+
+            def _reindex_on_field_save():
+                cot = CustomObjectType.objects.get(pk=_cot_id)
+                get_backend().cache(cot.get_model().objects.all())
+
+            transaction.on_commit(_reindex_on_field_save)
+
     def delete(self, *args, **kwargs):
         field_type = FIELD_TYPE_CLASS[self.type]()
         model_field = field_type.get_model_field(self)
@@ -1694,6 +1710,16 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
         # Reregister SearchIndex with new set of searchable fields
         self.custom_object_type.register_custom_object_search_index(model)
+
+        # Reindex all objects of this type since a searchable field was removed
+        if self.search_weight > 0:
+            _cot_id = self.custom_object_type_id
+
+            def _reindex_on_field_delete():
+                cot = CustomObjectType.objects.get(pk=_cot_id)
+                get_backend().cache(cot.get_model().objects.all())
+
+            transaction.on_commit(_reindex_on_field_delete)
 
 
 class CustomObjectObjectTypeManager(ObjectTypeManager):
