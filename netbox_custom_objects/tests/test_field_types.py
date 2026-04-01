@@ -73,14 +73,13 @@ class TextFieldTypeTestCase(FieldTypeTestCase):
 
     def test_text_field_model_generation(self):
         """Test text field model generation."""
-        field = self.create_custom_object_type_field(
+        self.create_custom_object_type_field(
             self.custom_object_type,
             name="description",
             label="Description",
             type="text",
             required=True
         )
-        field  # To silence ruff error
 
         model = self.custom_object_type.get_model()
         instance = model.objects.create(name="Test", description="Test description")
@@ -105,13 +104,12 @@ class LongTextFieldTypeTestCase(FieldTypeTestCase):
 
     def test_long_text_field_model_generation(self):
         """Test long text field model generation."""
-        field = self.create_custom_object_type_field(
+        self.create_custom_object_type_field(
             self.custom_object_type,
             name="content",
             label="Content",
             type="longtext"
         )
-        field  # To silence ruff error
 
         model = self.custom_object_type.get_model()
         long_content = "This is a very long text content that should be stored in a TextField."
@@ -168,14 +166,13 @@ class IntegerFieldTypeTestCase(FieldTypeTestCase):
 
     def test_integer_field_model_generation(self):
         """Test integer field model generation."""
-        field = self.create_custom_object_type_field(
+        self.create_custom_object_type_field(
             self.custom_object_type,
             name="count",
             label="Count",
             type="integer",
             default=10
         )
-        field  # To silence ruff error
 
         model = self.custom_object_type.get_model()
         instance = model.objects.create(name="Test", count=25)
@@ -231,14 +228,13 @@ class DecimalFieldTypeTestCase(FieldTypeTestCase):
 
     def test_decimal_field_model_generation(self):
         """Test decimal field model generation."""
-        field = self.create_custom_object_type_field(
+        self.create_custom_object_type_field(
             self.custom_object_type,
             name="price",
             label="Price",
             type="decimal",
             default=10.50
         )
-        field  # To silence ruff error
 
         model = self.custom_object_type.get_model()
         instance = model.objects.create(name="Test", price=Decimal("25.75"))
@@ -283,14 +279,13 @@ class BooleanFieldTypeTestCase(FieldTypeTestCase):
 
     def test_boolean_field_model_generation(self):
         """Test boolean field model generation."""
-        field = self.create_custom_object_type_field(
+        self.create_custom_object_type_field(
             self.custom_object_type,
             name="active",
             label="Active",
             type="boolean",
             default=True
         )
-        field  # To silence ruff error
 
         model = self.custom_object_type.get_model()
         instance = model.objects.create(name="Test", active=False)
@@ -335,13 +330,12 @@ class DateFieldTypeTestCase(FieldTypeTestCase):
 
     def test_date_field_model_generation(self):
         """Test date field model generation."""
-        field = self.create_custom_object_type_field(
+        self.create_custom_object_type_field(
             self.custom_object_type,
             name="created_date",
             label="Created Date",
             type="date"
         )
-        field  # To silence ruff error
 
         model = self.custom_object_type.get_model()
         test_date = date(2023, 1, 1)
@@ -387,13 +381,12 @@ class DateTimeFieldTypeTestCase(FieldTypeTestCase):
 
     def test_datetime_field_model_generation(self):
         """Test datetime field model generation."""
-        field = self.create_custom_object_type_field(
+        self.create_custom_object_type_field(
             self.custom_object_type,
             name="created_datetime",
             label="Created DateTime",
             type="datetime"
         )
-        field  # To silence ruff error
 
         model = self.custom_object_type.get_model()
         test_datetime = datetime(2023, 1, 1, 12, 0, 0)
@@ -438,13 +431,12 @@ class URLFieldTypeTestCase(FieldTypeTestCase):
 
     def test_url_field_model_generation(self):
         """Test URL field model generation."""
-        field = self.create_custom_object_type_field(
+        self.create_custom_object_type_field(
             self.custom_object_type,
             name="website",
             label="Website",
             type="url"
         )
-        field  # To silence ruff error
 
         model = self.custom_object_type.get_model()
         instance = model.objects.create(name="Test", website="https://example.com")
@@ -470,13 +462,12 @@ class JSONFieldTypeTestCase(FieldTypeTestCase):
 
     def test_json_field_model_generation(self):
         """Test JSON field model generation."""
-        field = self.create_custom_object_type_field(
+        self.create_custom_object_type_field(
             self.custom_object_type,
             name="metadata",
             label="Metadata",
             type="json"
         )
-        field  # To silence ruff error
 
         model = self.custom_object_type.get_model()
         test_data = {"key": "value", "number": 42, "list": [1, 2, 3]}
@@ -527,7 +518,7 @@ class SelectFieldTypeTestCase(FieldTypeTestCase):
 
     def test_select_field_model_generation(self):
         """Test select field model generation."""
-        field = self.create_custom_object_type_field(
+        self.create_custom_object_type_field(
             self.custom_object_type,
             name="status",
             label="Status",
@@ -535,7 +526,6 @@ class SelectFieldTypeTestCase(FieldTypeTestCase):
             choice_set=self.choice_set,
             default="choice1"
         )
-        field  # To silence ruff error
 
         model = self.custom_object_type.get_model()
         instance = model.objects.create(name="Test", status="choice2")
@@ -585,14 +575,13 @@ class MultiSelectFieldTypeTestCase(FieldTypeTestCase):
 
     def test_multiselect_field_model_generation(self):
         """Test multiselect field model generation."""
-        field = self.create_custom_object_type_field(
+        self.create_custom_object_type_field(
             self.custom_object_type,
             name="tags",
             label="Tags",
             type="multiselect",
             choice_set=self.choice_set
         )
-        field  # To silence ruff error
 
         model = self.custom_object_type.get_model()
         instance = model.objects.create(name="Test", tags=["choice1", "choice3"])
@@ -623,40 +612,35 @@ class ObjectFieldTypeTestCase(FieldTypeTestCase):
 
     def test_object_field_model_generation(self):
         """Test object field model generation."""
-        field = self.create_custom_object_type_field(
+        self.create_custom_object_type_field(
             self.custom_object_type,
             name="device",
             label="Device",
             type="object",
             related_object_type=self.device_object_type
         )
-        field  # To silence ruff error
+
+        from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
 
         model = self.custom_object_type.get_model()
 
-        # Create a test device (if available)
-        try:
-            from dcim.models import Device, Site, DeviceRole, DeviceType, Manufacturer
-            site = Site.objects.create(name="Test Site", slug="test-site")
-            manufacturer = Manufacturer.objects.create(name="Test Manufacturer", slug="test-manufacturer")
-            device_type = DeviceType.objects.create(
-                manufacturer=manufacturer,
-                model="Test Model",
-                slug="test-model"
-            )
-            device_role = DeviceRole.objects.create(name="Test Role", slug="test-role")
-            device = Device.objects.create(
-                name="Test Device",
-                site=site,
-                device_type=device_type,
-                role=device_role
-            )
+        site = Site.objects.create(name="Test Site", slug="test-site")
+        manufacturer = Manufacturer.objects.create(name="Test Manufacturer", slug="test-manufacturer")
+        device_type = DeviceType.objects.create(
+            manufacturer=manufacturer,
+            model="Test Model",
+            slug="test-model"
+        )
+        device_role = DeviceRole.objects.create(name="Test Role", slug="test-role")
+        device = Device.objects.create(
+            name="Test Device",
+            site=site,
+            device_type=device_type,
+            role=device_role
+        )
 
-            instance = model.objects.create(name="Test", device=device)
-            self.assertEqual(instance.device, device)
-        except ImportError:
-            # Skip if DCIM models are not available
-            pass
+        instance = model.objects.create(name="Test", device=device)
+        self.assertEqual(instance.device, device)
 
 
 class MultiObjectFieldTypeTestCase(FieldTypeTestCase):
@@ -682,50 +666,45 @@ class MultiObjectFieldTypeTestCase(FieldTypeTestCase):
 
     def test_multiobject_field_model_generation(self):
         """Test multiobject field model generation."""
-        field = self.create_custom_object_type_field(
+        self.create_custom_object_type_field(
             self.custom_object_type,
             name="devices",
             label="Devices",
             type="multiobject",
             related_object_type=self.device_object_type
         )
-        field  # To silence ruff error
+
+        from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
 
         model = self.custom_object_type.get_model()
 
-        # Create test devices (if available)
-        try:
-            from dcim.models import Device, Site, DeviceRole, DeviceType, Manufacturer
-            site = Site.objects.create(name="Test Site", slug="test-site")
-            manufacturer = Manufacturer.objects.create(name="Test Manufacturer", slug="test-manufacturer")
-            device_type = DeviceType.objects.create(
-                manufacturer=manufacturer,
-                model="Test Model",
-                slug="test-model"
-            )
-            device_role = DeviceRole.objects.create(name="Test Role", slug="test-role")
-            device1 = Device.objects.create(
-                name="Test Device 1",
-                site=site,
-                device_type=device_type,
-                role=device_role
-            )
-            device2 = Device.objects.create(
-                name="Test Device 2",
-                site=site,
-                device_type=device_type,
-                role=device_role
-            )
+        site = Site.objects.create(name="Test Site", slug="test-site")
+        manufacturer = Manufacturer.objects.create(name="Test Manufacturer", slug="test-manufacturer")
+        device_type = DeviceType.objects.create(
+            manufacturer=manufacturer,
+            model="Test Model",
+            slug="test-model"
+        )
+        device_role = DeviceRole.objects.create(name="Test Role", slug="test-role")
+        device1 = Device.objects.create(
+            name="Test Device 1",
+            site=site,
+            device_type=device_type,
+            role=device_role
+        )
+        device2 = Device.objects.create(
+            name="Test Device 2",
+            site=site,
+            device_type=device_type,
+            role=device_role
+        )
 
-            instance = model.objects.create(name="Test")
-            instance.devices.add(device1, device2)
+        instance = model.objects.create(name="Test")
+        instance.devices.add(device1, device2)
 
-            self.assertEqual(instance.devices.count(), 2)
-            self.assertIn(device1, instance.devices.all())
-            self.assertIn(device2, instance.devices.all())
-        except ImportError:
-            # Skip if DCIM models are not available
-            pass
+        self.assertEqual(instance.devices.count(), 2)
+        self.assertIn(device1, instance.devices.all())
+        self.assertIn(device2, instance.devices.all())
 
 
 class SelfReferentialFieldTestCase(FieldTypeTestCase):
@@ -738,14 +717,13 @@ class SelfReferentialFieldTestCase(FieldTypeTestCase):
 
     def test_self_referential_object_field(self):
         """#263 – A COT may have an FK object field pointing to itself."""
-        field = self.create_custom_object_type_field(
+        self.create_custom_object_type_field(
             self.custom_object_type,
             name="parent",
             label="Parent",
             type="object",
             related_object_type=self.custom_object_type.object_type,
         )
-        field  # To silence ruff error
 
         model = self.custom_object_type.get_model()
 
@@ -756,14 +734,13 @@ class SelfReferentialFieldTestCase(FieldTypeTestCase):
 
     def test_self_referential_multiobject_field(self):
         """#263 – A COT may have a M2M multiobject field pointing to itself."""
-        field = self.create_custom_object_type_field(
+        self.create_custom_object_type_field(
             self.custom_object_type,
             name="children",
             label="Children",
             type="multiobject",
             related_object_type=self.custom_object_type.object_type,
         )
-        field  # To silence ruff error
 
         model = self.custom_object_type.get_model()
 
@@ -795,14 +772,13 @@ class CrossReferentialFieldTestCase(FieldTypeTestCase):
         )
 
         # Add object field referencing second type
-        field = self.create_custom_object_type_field(
+        self.create_custom_object_type_field(
             self.custom_object_type,
             name="related_object",
             label="Related Object",
             type="object",
             related_object_type=second_type.object_type
         )
-        field  # To silence ruff error
 
         model1 = self.custom_object_type.get_model()
         model2 = second_type.get_model()
@@ -827,14 +803,13 @@ class CrossReferentialFieldTestCase(FieldTypeTestCase):
         )
 
         # Add multiobject field referencing second type
-        field = self.create_custom_object_type_field(
+        self.create_custom_object_type_field(
             self.custom_object_type,
             name="related_objects",
             label="Related Objects",
             type="multiobject",
             related_object_type=second_type.object_type
         )
-        field  # To silence ruff error
 
         model1 = self.custom_object_type.get_model()
         model2 = second_type.get_model()

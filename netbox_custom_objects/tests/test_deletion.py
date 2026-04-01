@@ -14,10 +14,10 @@ from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 
-from .base import CustomObjectsTestCase
+from .base import CustomObjectsTestCase, TransactionCleanupMixin
 
 
-class DeletionTestCase(CustomObjectsTestCase, TransactionTestCase):
+class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
     """Test deletion scenarios with cascading effects."""
 
     def setUp(self):
@@ -36,18 +36,6 @@ class DeletionTestCase(CustomObjectsTestCase, TransactionTestCase):
             django_apps.all_models[APP_LABEL].pop(name, None)
         if stale:
             django_apps.clear_cache()
-
-    def tearDown(self):
-        """Remove any COTs that were not deleted as part of the test so that
-        their backing tables are dropped before the database flush."""
-        for cot in CustomObjectType.objects.all():
-            try:
-                cot.delete()
-            except Exception as exc:
-                # Log but do not re-raise: tearDown must not mask the original
-                # test failure.  A best-effort cleanup is still better than none.
-                print(f"WARNING: tearDown could not delete COT {cot.pk}: {exc}")
-        super().tearDown()
 
     # ------------------------------------------------------------------
     # Helpers

@@ -11,22 +11,12 @@ from django.core.management import call_command
 from django.test import TransactionTestCase
 
 from netbox_custom_objects.constants import APP_LABEL
-from netbox_custom_objects.models import CustomObjectType
 
-from .base import CustomObjectsTestCase
+from .base import CustomObjectsTestCase, TransactionCleanupMixin
 
 
-class SchemaOperationsTestCase(CustomObjectsTestCase, TransactionTestCase):
+class SchemaOperationsTestCase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
     """Test database schema operations and related cache/registry behaviour."""
-
-    def tearDown(self):
-        """Clean up dynamic tables created during tests."""
-        for cot in CustomObjectType.objects.all():
-            try:
-                cot.delete()
-            except Exception as exc:
-                print(f"WARNING: tearDown could not delete COT {cot.pk}: {exc}")
-        super().tearDown()
 
     # ------------------------------------------------------------------
     # Cache invalidation
@@ -176,11 +166,8 @@ class SchemaOperationsTestCase(CustomObjectsTestCase, TransactionTestCase):
         try:
             call_command('migrate', '--check', verbosity=0, stdout=out, stderr=out)
         except SystemExit as exc:
-            # Exit code 1 means unapplied migrations; any non-zero code is a failure.
-            self.assertEqual(
-                exc.code, 0,
-                f"migrate --check detected unapplied migrations: {out.getvalue()}",
-            )
+            # If we reach here, migrate --check found unapplied migrations or the plugin crashed.
+            self.fail(f"migrate --check exited with code {exc.code}: {out.getvalue()}")
 
     def test_collectstatic_without_database(self):
         """#347 – collectstatic should complete without requiring database access."""

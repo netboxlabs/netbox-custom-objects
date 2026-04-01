@@ -302,8 +302,9 @@ class CustomObjectTest(CustomObjectsTestCase, APIViewTestCases.APIViewTestCase):
 
         devices = Device.objects.all()
 
+        # custom_object_type3 (ComplexObject) uses 'name' as its primary text field
         data = {
-            'test_field': 'Test 004',
+            'name': 'Test Nested 001',
             'device': devices[0].id,
             'devices': [devices[1].id, devices[2].id],
         }
@@ -317,11 +318,12 @@ class CustomObjectTest(CustomObjectsTestCase, APIViewTestCases.APIViewTestCase):
         self.assertHttpStatus(response, status.HTTP_201_CREATED)
         self.assertEqual(self._get_queryset().count(), initial_count + 1)
         instance = self._get_queryset().get(pk=response.data['id'])
-        self.assertInstanceEqual(
-            instance,
-            self.create_data[0],
-            exclude=self.validation_excluded_fields,
-            api=True
+        # Assert all fields sent in data, including the nested FK and M2M object fields
+        self.assertEqual(instance.name, data['name'])
+        self.assertEqual(instance.device_id, data['device'])
+        self.assertSetEqual(
+            set(instance.devices.values_list('id', flat=True)),
+            set(data['devices']),
         )
 
     # TODO: GraphQL
