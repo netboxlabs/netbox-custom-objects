@@ -865,13 +865,11 @@ class SearchReindexTestCase(CustomObjectsTestCase, TestCase):
 
     def test_job_name_includes_cot_name(self):
         """Enqueued job name includes the COT name for observability."""
-        from core.models import Job
         job = ReindexCustomObjectTypeJob.enqueue(cot_id=self.cot.pk, immediate=True)
         self.assertEqual(job.name, f'Reindex Custom Object Type: {self.cot.name}')
 
     def test_job_data_contains_cot_id(self):
         """Job.data is populated with cot_id and job_class for UI visibility and deduplication."""
-        from core.models import Job
         job = ReindexCustomObjectTypeJob.enqueue(cot_id=self.cot.pk, immediate=True)
         self.assertEqual(job.data['cot_id'], self.cot.pk)
         self.assertEqual(job.data['job_class'], 'ReindexCustomObjectTypeJob')
