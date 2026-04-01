@@ -22,6 +22,7 @@ from netbox.views.generic.mixins import TableMixin
 from utilities.forms import ConfirmationForm
 from utilities.forms.fields import DynamicModelMultipleChoiceField, TagFilterField
 from utilities.htmx import htmx_partial
+from utilities.object_types import object_type_name
 from utilities.views import ConditionalLoginRequiredMixin, ViewTab, get_viewname, register_model_view
 
 from netbox_custom_objects.filtersets import get_filterset_class
@@ -488,12 +489,22 @@ class CustomObjectEditView(generic.ObjectEditView):
         return get_object_or_404(model.objects.all(), **self.kwargs)
 
     def get_form(self, model):
+        # Collect raw GFK column names to exclude from the auto-generated form fields.
+        # For each polymorphic Object field "foo", Django adds "foo_content_type" and
+        # "foo_object_id" as real model columns; we replace those with per-type selects.
+        poly_obj_raw_exclude = []
+        for f in self.object.custom_object_type.fields.filter(
+            type=CustomFieldTypeChoices.TYPE_OBJECT, is_polymorphic=True
+        ):
+            poly_obj_raw_exclude += [f"{f.name}_content_type", f"{f.name}_object_id"]
+
         meta = type(
             "Meta",
             (),
             {
                 "model": model,
                 "fields": "__all__",
+                "exclude": poly_obj_raw_exclude,
             },
         )
 
@@ -505,6 +516,8 @@ class CustomObjectEditView(generic.ObjectEditView):
             "custom_object_type_field_groups": {},
             # Maps polymorphic M2M field name → list of sub-field names (one per allowed type)
             "custom_object_type_poly_m2m_fields": {},
+            # Maps polymorphic Object field name → list of sub-field names (one per allowed type)
+            "custom_object_type_poly_obj_fields": {},
         }
 
         # Process custom object type fields (with grouping)
@@ -514,11 +527,33 @@ class CustomObjectEditView(generic.ObjectEditView):
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
             group_name = field.group_name or None
 
-            # Polymorphic multiobject: render one sub-field per related type
-            if (
-                field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
-                and field.is_polymorphic
-            ):
+            # Polymorphic single-object: render one DynamicModelChoiceField per related type
+            if field.type == CustomFieldTypeChoices.TYPE_OBJECT and field.is_polymorphic:
+                from utilities.forms.fields import DynamicModelChoiceField
+                sub_names = []
+                for ot in field.related_object_types.all():
+                    sub_name = f"{field.name}__{ot.app_label}__{ot.model}"
+                    sub_model = ot.model_class()
+                    if sub_model is None:
+                        continue
+                    sub_field = DynamicModelChoiceField(
+                        queryset=sub_model.objects.all(),
+                        required=False,
+                        label=f"{field.label or field.name.replace('_', ' ').title()} ({object_type_name(ot)})",
+                        selector=ot.app_label != APP_LABEL,
+                    )
+                    attrs[sub_name] = sub_field
+                    sub_names.append(sub_name)
+
+                    if group_name not in attrs["custom_object_type_field_groups"]:
+                        attrs["custom_object_type_field_groups"][group_name] = []
+                    attrs["custom_object_type_field_groups"][group_name].append(sub_name)
+
+                attrs["custom_object_type_poly_obj_fields"][field.name] = sub_names
+                continue
+
+            # Polymorphic multiobject: render one DynamicModelMultipleChoiceField per related type
+            if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT and field.is_polymorphic:
                 sub_names = []
                 for ot in field.related_object_types.all():
                     sub_name = f"{field.name}__{ot.app_label}__{ot.model}"
@@ -528,7 +563,7 @@ class CustomObjectEditView(generic.ObjectEditView):
                     sub_field = DynamicModelMultipleChoiceField(
                         queryset=sub_model.objects.all(),
                         required=False,
-                        label=f"{field.label or field.name} ({ot.app_label}.{ot.model})",
+                        label=f"{field.label or field.name.replace('_', ' ').title()} ({object_type_name(ot)})",
                         selector=ot.app_label != APP_LABEL,
                     )
                     attrs[sub_name] = sub_field
@@ -556,11 +591,6 @@ class CustomObjectEditView(generic.ObjectEditView):
             except NotImplementedError:
                 logger.debug("get_form: {} field is not supported".format(field.name))
 
-        # Note: Regular model fields (non-custom fields) are automatically included
-        # by the "fields": "__all__" setting in the Meta class, so we don't need
-        # to manually add them to the form attributes or grouping structure.
-        # The template will be able to access them directly through the form.
-
         form_class = type(
             f"{model._meta.object_name}Form",
             (forms.NetBoxModelForm,),
@@ -573,6 +603,7 @@ class CustomObjectEditView(generic.ObjectEditView):
             self.custom_object_type_fields = attrs["custom_object_type_fields"]
             self.custom_object_type_field_groups = attrs["custom_object_type_field_groups"]
             self.custom_object_type_poly_m2m_fields = attrs["custom_object_type_poly_m2m_fields"]
+            self.custom_object_type_poly_obj_fields = attrs["custom_object_type_poly_obj_fields"]
 
             instance = kwargs.get('instance', None)
 
@@ -630,6 +661,23 @@ class CustomObjectEditView(generic.ObjectEditView):
                     except Exception:
                         pass
 
+            # Set initial values for polymorphic Object sub-fields from the existing GFK value
+            if instance and instance.pk:
+                from django.contrib.contenttypes.models import ContentType as CT
+                for field_name, sub_names in self.custom_object_type_poly_obj_fields.items():
+                    try:
+                        gfk_value = getattr(instance, field_name, None)
+                        if gfk_value is not None:
+                            ct = CT.objects.get_for_model(gfk_value)
+                            for sub_name in sub_names:
+                                suffix = sub_name[len(field_name) + 2:]
+                                app_label, model_name = suffix.split("__", 1)
+                                if ct.app_label == app_label and ct.model == model_name:
+                                    kwargs['initial'][sub_name] = gfk_value.pk
+                                    break
+                    except Exception:
+                        pass
+
             # Now call the parent __init__ with the modified kwargs
             forms.NetBoxModelForm.__init__(self, *args, **kwargs)
 
@@ -650,6 +698,18 @@ class CustomObjectEditView(generic.ObjectEditView):
                             instance_field.clear()
                             if current_value:
                                 instance_field.set(current_value)
+
+                # Handle polymorphic single-object sub-fields: use the first non-empty selection
+                for field_name, sub_names in self.custom_object_type_poly_obj_fields.items():
+                    chosen = None
+                    for sub_name in sub_names:
+                        val = self.cleaned_data.get(sub_name)
+                        if val is not None:
+                            chosen = val
+                            break
+                    setattr(instance, field_name, chosen)
+                if self.custom_object_type_poly_obj_fields:
+                    instance.save()
 
                 # Handle polymorphic M2M sub-fields: aggregate per-type selections
                 for field_name, sub_names in self.custom_object_type_poly_m2m_fields.items():
@@ -741,28 +801,76 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
         return model.objects.all()
 
     def get_form(self, queryset):
+        from utilities.forms.fields import DynamicModelChoiceField
+
+        poly_obj_raw_exclude = []
+        for f in self.custom_object_type.fields.filter(
+            type=CustomFieldTypeChoices.TYPE_OBJECT, is_polymorphic=True
+        ):
+            poly_obj_raw_exclude += [f"{f.name}_content_type", f"{f.name}_object_id"]
+
         meta = type(
             "Meta",
             (),
             {
                 "model": queryset.model,
                 "fields": "__all__",
+                "exclude": poly_obj_raw_exclude,
             },
         )
 
         attrs = {
             "Meta": meta,
             "__module__": "database.forms",
+            "_poly_obj_field_map": {},   # field_name → [sub_names]
+            "_poly_m2m_field_map": {},   # field_name → [sub_names]
         }
 
         for field in self.custom_object_type.fields.all():
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
+            field_label = field.label or field.name.replace("_", " ").title()
+
+            if field.type == CustomFieldTypeChoices.TYPE_OBJECT and field.is_polymorphic:
+                sub_names = []
+                for ot in field.related_object_types.all():
+                    sub_model = ot.model_class()
+                    if sub_model is None:
+                        continue
+                    sub_name = f"{field.name}__{ot.app_label}__{ot.model}"
+                    sub_field = DynamicModelChoiceField(
+                        queryset=sub_model.objects.all(),
+                        required=False,
+                        label=f"{field_label} ({object_type_name(ot)})",
+                        selector=ot.app_label != APP_LABEL,
+                    )
+                    sub_field.initial = None
+                    attrs[sub_name] = sub_field
+                    sub_names.append(sub_name)
+                attrs["_poly_obj_field_map"][field.name] = sub_names
+                continue
+
+            if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT and field.is_polymorphic:
+                sub_names = []
+                for ot in field.related_object_types.all():
+                    sub_model = ot.model_class()
+                    if sub_model is None:
+                        continue
+                    sub_name = f"{field.name}__{ot.app_label}__{ot.model}"
+                    sub_field = DynamicModelMultipleChoiceField(
+                        queryset=sub_model.objects.all(),
+                        required=False,
+                        label=f"{field_label} ({object_type_name(ot)})",
+                        selector=ot.app_label != APP_LABEL,
+                    )
+                    sub_field.initial = None
+                    attrs[sub_name] = sub_field
+                    sub_names.append(sub_name)
+                attrs["_poly_m2m_field_map"][field.name] = sub_names
+                continue
+
             try:
                 form_field = field_type.get_annotated_form_field(field)
                 # In bulk edit forms, all fields should be optional and start blank.
-                # Setting required=False prevents validation errors; setting initial=None
-                # ensures has_changed() only returns True when the user explicitly sets a
-                # value, preventing spurious updates when the field default is non-None.
                 form_field.required = False
                 form_field.widget.is_required = False
                 form_field.initial = None
@@ -777,11 +885,35 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
             (NetBoxModelBulkEditForm,),
             attrs,
         )
-
-        # Set the model attribute that NetBox form mixins expect
         form.model = queryset.model
-
         return form
+
+    def post_save_operations(self, form, obj):
+        super().post_save_operations(form, obj)
+
+        # Apply polymorphic single-object sub-fields (first non-empty selection wins)
+        needs_save = False
+        for field_name, sub_names in form._poly_obj_field_map.items():
+            for sub_name in sub_names:
+                val = form.cleaned_data.get(sub_name)
+                if val is not None:
+                    setattr(obj, field_name, val)
+                    needs_save = True
+                    break
+        if needs_save:
+            obj.save()
+
+        # Apply polymorphic M2M sub-fields (union of all selected types)
+        for field_name, sub_names in form._poly_m2m_field_map.items():
+            combined = []
+            has_any = False
+            for sub_name in sub_names:
+                vals = form.cleaned_data.get(sub_name) or []
+                if vals:
+                    has_any = True
+                    combined.extend(vals)
+            if has_any:
+                getattr(obj, field_name).set(combined)
 
     def get_extra_context(self, request):
         return {
