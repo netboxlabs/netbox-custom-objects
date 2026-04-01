@@ -7,8 +7,12 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
+from unittest.mock import patch
+
+from django.contrib.contenttypes.models import ContentType
 from extras.models import CachedValue
 from netbox.search.backends import get_backend
+from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
 from netbox_custom_objects.models import CustomObjectTypeField
 from core.models import ObjectType
 from .base import CustomObjectsTestCase
@@ -757,7 +761,7 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
 
 
 class SearchReindexTestCase(CustomObjectsTestCase, TestCase):
-    """Test that search CachedValues are updated when CustomObjectTypeField search weights change."""
+    """Test that ReindexCustomObjectTypeJob is triggered when field search weights change."""
 
     def setUp(self):
         super().setUp()
@@ -774,44 +778,34 @@ class SearchReindexTestCase(CustomObjectsTestCase, TestCase):
         )
         self.model = self.cot.get_model()
         self.instance = self.model.objects.create(title="Hello World")
-        # Prime the search cache for the existing instance
-        get_backend().cache(self.model.objects.all())
 
-    def _cached_values_for_instance(self):
-        from django.contrib.contenttypes.models import ContentType
-        ct = ContentType.objects.get_for_model(self.model)
-        return CachedValue.objects.filter(object_type=ct, object_id=self.instance.pk)
-
-    def test_reindex_on_field_weight_change(self):
-        """Changing search_weight on a field triggers reindex of all objects."""
-        # Verify initial cache has the old weight
-        self.assertEqual(self._cached_values_for_instance().filter(field="title", weight=500).count(), 1)
-
-        # Reload from DB to get _original populated, then change search_weight
+    def test_job_enqueued_on_field_weight_change(self):
+        """Changing search_weight on a field enqueues a reindex job."""
         field = CustomObjectTypeField.objects.get(pk=self.field.pk)
         field.search_weight = 100
-        with self.captureOnCommitCallbacks(execute=True):
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
             field.save()
+        mock_enqueue.assert_called_once_with(cot_id=self.cot.pk)
 
-        # CachedValues should now reflect the new weight
-        self.assertEqual(self._cached_values_for_instance().filter(field="title", weight=100).count(), 1)
-        self.assertEqual(self._cached_values_for_instance().filter(field="title", weight=500).count(), 0)
+    def test_job_enqueued_on_field_weight_zeroed(self):
+        """Changing search_weight to 0 enqueues a reindex job."""
+        field = CustomObjectTypeField.objects.get(pk=self.field.pk)
+        field.search_weight = 0
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
+            field.save()
+        mock_enqueue.assert_called_once_with(cot_id=self.cot.pk)
 
-    def test_no_reindex_when_weight_unchanged(self):
-        """Saving a field without changing search_weight does not alter cached weights."""
-        # Reload from DB to get _original populated, then change only the label
+    def test_job_not_enqueued_when_weight_unchanged(self):
+        """Saving a field without changing search_weight does not enqueue a reindex job."""
         field = CustomObjectTypeField.objects.get(pk=self.field.pk)
         field.label = "Modified Title"
-        with self.captureOnCommitCallbacks(execute=True):
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
             field.save()
+        mock_enqueue.assert_not_called()
 
-        # Weight should be unchanged in the cache
-        self.assertEqual(self._cached_values_for_instance().filter(field="title", weight=500).count(), 1)
-
-    def test_reindex_on_searchable_field_creation(self):
-        """Adding a new field with search_weight > 0 triggers reindex of all objects."""
-        # Add a new searchable field with a default value so existing objects get indexed
-        with self.captureOnCommitCallbacks(execute=True):
+    def test_job_enqueued_on_searchable_field_creation(self):
+        """Adding a new field with search_weight > 0 enqueues a reindex job."""
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
             new_field = self.create_custom_object_type_field(
                 self.cot,
                 name="subtitle",
@@ -819,18 +813,12 @@ class SearchReindexTestCase(CustomObjectsTestCase, TestCase):
                 type="text",
                 search_weight=300,
             )
+        self.addCleanup(new_field.delete)
+        mock_enqueue.assert_called_once_with(cot_id=self.cot.pk)
 
-        # The instance won't have a value for the new field (no default), but
-        # the reindex should have run without error and the existing field remains cached
-        self.assertEqual(self._cached_values_for_instance().filter(field="title", weight=500).count(), 1)
-
-        new_field.delete()
-
-    def test_no_reindex_on_non_searchable_field_creation(self):
-        """Adding a field with search_weight=0 does not trigger a reindex."""
-        initial_count = self._cached_values_for_instance().count()
-
-        with self.captureOnCommitCallbacks(execute=False) as callbacks:
+    def test_job_not_enqueued_on_non_searchable_field_creation(self):
+        """Adding a field with search_weight=0 does not enqueue a reindex job."""
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
             non_search_field = self.create_custom_object_type_field(
                 self.cot,
                 name="notes",
@@ -838,20 +826,39 @@ class SearchReindexTestCase(CustomObjectsTestCase, TestCase):
                 type="text",
                 search_weight=0,
             )
+        self.addCleanup(non_search_field.delete)
+        mock_enqueue.assert_not_called()
 
-        # No on_commit callbacks should have been registered for reindexing
-        self.assertEqual(len(callbacks), 0)
-        self.assertEqual(self._cached_values_for_instance().count(), initial_count)
-
-        non_search_field.delete()
-
-    def test_reindex_on_searchable_field_deletion(self):
-        """Deleting a field with search_weight > 0 triggers reindex of all objects."""
-        # Verify the field is currently indexed
-        self.assertEqual(self._cached_values_for_instance().filter(field="title").count(), 1)
-
-        with self.captureOnCommitCallbacks(execute=True):
+    def test_job_enqueued_on_searchable_field_deletion(self):
+        """Deleting a field with search_weight > 0 enqueues a reindex job."""
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
             self.field.delete()
+        mock_enqueue.assert_called_once_with(cot_id=self.cot.pk)
 
-        # After deletion and reindex, no CachedValues for this field should remain
-        self.assertEqual(self._cached_values_for_instance().filter(field="title").count(), 0)
+    def test_job_run_updates_cached_values(self):
+        """The job's run() method re-caches all objects using the updated SearchIndex."""
+        # Prime the cache with the initial weight
+        get_backend().cache(self.model.objects.all())
+        ct = ContentType.objects.get_for_model(self.model)
+        self.assertEqual(
+            CachedValue.objects.filter(object_type=ct, object_id=self.instance.pk, field="title", weight=500).count(),
+            1,
+        )
+
+        # Save the field with a new weight (suppress automatic enqueue)
+        field = CustomObjectTypeField.objects.get(pk=self.field.pk)
+        field.search_weight = 100
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue'):
+            field.save()
+
+        # Run the job synchronously via immediate=True
+        ReindexCustomObjectTypeJob.enqueue(cot_id=self.cot.pk, immediate=True)
+
+        self.assertEqual(
+            CachedValue.objects.filter(object_type=ct, object_id=self.instance.pk, field="title", weight=100).count(),
+            1,
+        )
+        self.assertEqual(
+            CachedValue.objects.filter(object_type=ct, object_id=self.instance.pk, field="title", weight=500).count(),
+            0,
+        )
