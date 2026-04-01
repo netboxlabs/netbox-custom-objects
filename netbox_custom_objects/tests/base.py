@@ -7,6 +7,22 @@ from utilities.testing import create_test_user
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 
 
+class TransactionCleanupMixin:
+    """Mixin for TransactionTestCase subclasses that create CustomObjectType instances.
+
+    Deletes all COTs in tearDown so their backing tables are dropped before the
+    database flush that TransactionTestCase performs between tests.
+    """
+
+    def tearDown(self):
+        for cot in CustomObjectType.objects.all():
+            try:
+                cot.delete()
+            except Exception as exc:
+                print(f"WARNING: tearDown could not delete COT {cot.pk}: {exc}")
+        super().tearDown()
+
+
 class CustomObjectsTestCase:
     """
     Base test case for custom objects tests.

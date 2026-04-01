@@ -1,3 +1,6 @@
+"""
+Tests for all UI views.
+"""
 from django.urls import reverse
 from extras.models import CustomFieldChoiceSet
 from utilities.testing import ViewTestCases

@@ -1,3 +1,6 @@
+"""
+Tests for the concrete and dynamically generated models that are managed by this plugin.
+"""
 from unittest import skip
 from decimal import Decimal
 
