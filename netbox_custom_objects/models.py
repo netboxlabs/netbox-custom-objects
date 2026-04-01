@@ -1679,7 +1679,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         else:
             needs_reindex = self.search_weight != self.original.search_weight
         if needs_reindex:
-            ReindexCustomObjectTypeJob.enqueue(cot_id=self.custom_object_type_id)
+            _cot_id = self.custom_object_type_id
+            transaction.on_commit(lambda: ReindexCustomObjectTypeJob.enqueue(cot_id=_cot_id))
 
     def delete(self, *args, **kwargs):
         field_type = FIELD_TYPE_CLASS[self.type]()
@@ -1707,7 +1708,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
         # Reindex all objects of this type since a searchable field was removed
         if self.search_weight > 0:
-            ReindexCustomObjectTypeJob.enqueue(cot_id=self.custom_object_type_id)
+            _cot_id = self.custom_object_type_id
+            transaction.on_commit(lambda: ReindexCustomObjectTypeJob.enqueue(cot_id=_cot_id))
 
 
 class CustomObjectObjectTypeManager(ObjectTypeManager):

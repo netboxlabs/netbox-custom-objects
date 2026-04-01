@@ -42,9 +42,10 @@ class ReindexCustomObjectTypeJob(JobRunner):
 
         job = super().enqueue(*args, **kwargs)
 
-        # Persist cot_id in Job.data so it is visible in the UI and queryable for deduplication
+        # Persist cot_id in Job.data so it is visible in the UI and queryable for deduplication.
+        # Merge rather than overwrite in case super().enqueue() populates data itself.
         if job is not None:
-            job.data = {'cot_id': cot_id, 'job_class': cls.__name__}
+            job.data = {**(job.data or {}), 'cot_id': cot_id, 'job_class': cls.__name__}
             job.save(update_fields=['data'])
 
         return job
@@ -52,5 +53,8 @@ class ReindexCustomObjectTypeJob(JobRunner):
     def run(self, *args, **kwargs):
         # Deferred to avoid circular import: models.py imports this module at the top level
         from netbox_custom_objects.models import CustomObjectType
-        cot = CustomObjectType.objects.get(pk=kwargs['cot_id'])
+        cot_id = kwargs.get('cot_id')
+        if not cot_id:
+            raise ValueError('cot_id is required to run ReindexCustomObjectTypeJob')
+        cot = CustomObjectType.objects.get(pk=cot_id)
         get_backend().cache(cot.get_model().objects.all())
