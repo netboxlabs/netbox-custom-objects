@@ -39,12 +39,71 @@ class ContentTypeSerializer(NetBoxModelSerializer):
         )
 
 
+class PolymorphicObjectSerializerField(serializers.Field):
+    """
+    Serializer field for polymorphic GenericForeignKey Object fields.
+    On read: returns a nested object representation with _content_type annotation.
+    On write: accepts {"content_type_id": X, "object_id": Y} or
+              {"app_label": "...", "model": "...", "object_id": Y}.
+    For many=True (MultiObject polymorphic), wrap in a ListSerializer automatically.
+    """
+
+    def to_representation(self, value):
+        if value is None:
+            return None
+        try:
+            ct = ContentType.objects.get_for_model(value)
+            result = {
+                "_content_type": f"{ct.app_label}.{ct.model}",
+                "id": value.pk,
+                "display": str(value),
+            }
+            return result
+        except Exception:
+            return None
+
+    def to_internal_value(self, data):
+        if not isinstance(data, dict):
+            raise serializers.ValidationError("Expected a dict with object reference.")
+        try:
+            if "content_type_id" in data:
+                ct = ContentType.objects.get(pk=data["content_type_id"])
+            elif "app_label" in data and "model" in data:
+                ct = ContentType.objects.get(app_label=data["app_label"], model=data["model"])
+            else:
+                raise serializers.ValidationError(
+                    "Must provide content_type_id or (app_label + model)."
+                )
+            model_class = ct.model_class()
+            if model_class is None:
+                raise serializers.ValidationError(f"Cannot resolve model for content type {ct}.")
+            obj_id = data.get("object_id") or data.get("id")
+            if obj_id is None:
+                raise serializers.ValidationError("Must provide object_id.")
+            return model_class.objects.get(pk=obj_id)
+        except ContentType.DoesNotExist:
+            raise serializers.ValidationError("Invalid content type.")
+        except Exception as e:
+            raise serializers.ValidationError(f"Invalid object reference: {e}")
+
+
 class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
     url = serializers.HyperlinkedIdentityField(
         view_name="plugins-api:netbox_custom_objects-api:customobjecttypefield-detail"
     )
-    app_label = serializers.CharField(required=False)
-    model = serializers.CharField(required=False)
+    app_label = serializers.CharField(required=False, write_only=True)
+    model = serializers.CharField(required=False, write_only=True)
+    # Read-only nested representation of the single related object type (non-polymorphic)
+    related_object_type = serializers.SerializerMethodField()
+    # Read-only nested representation of multiple allowed types (polymorphic)
+    related_object_types = serializers.SerializerMethodField()
+    # For polymorphic fields: list of {app_label, model} dicts
+    related_object_types_input = serializers.ListField(
+        child=serializers.DictField(),
+        required=False,
+        write_only=True,
+        help_text="List of {app_label, model} dicts for polymorphic field types",
+    )
 
     class Meta:
         model = CustomObjectTypeField
@@ -63,10 +122,13 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
             "validation_regex",
             "validation_minimum",
             "validation_maximum",
+            "is_polymorphic",
             "related_object_type",
+            "related_object_types",
             "related_object_filter",
             "app_label",
             "model",
+            "related_object_types_input",
             "group_name",
             "search_weight",
             "filter_logic",
@@ -77,36 +139,63 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
             "comments",
         )
 
+    def _resolve_object_type(self, app_label, model):
+        """Resolve a single app_label+model pair to an ObjectType, handling aliases."""
+        if app_label == _PUBLIC_APP_LABEL:
+            app_label = constants.APP_LABEL
+        if app_label == constants.APP_LABEL and model and not _TABLE_MODEL_PATTERN.match(model):
+            try:
+                cot = CustomObjectType.objects.get(slug=model)
+                model = CustomObjectType.get_table_model_name(cot.id).lower()
+            except CustomObjectType.DoesNotExist:
+                raise ValidationError(
+                    f"Unknown custom object type slug: {model}"
+                )
+        try:
+            return ObjectType.objects.get(app_label=app_label, model=model)
+        except ObjectType.DoesNotExist:
+            raise ValidationError(
+                f"Must provide valid app_label and model for object field type. "
+                f"Got: {app_label}.{model}"
+            )
+
     def validate(self, attrs):
         app_label = attrs.pop("app_label", None)
         model = attrs.pop("model", None)
-        if attrs["type"] in [
+        related_object_types_input = attrs.pop("related_object_types_input", None)
+        is_polymorphic = attrs.get("is_polymorphic", False)
+
+        field_type = attrs.get("type")
+
+        if field_type in [
             CustomFieldTypeChoices.TYPE_OBJECT,
             CustomFieldTypeChoices.TYPE_MULTIOBJECT,
         ]:
-            # Allow the public URL slug "custom-objects" as an alias for the internal app label
-            if app_label == _PUBLIC_APP_LABEL:
-                app_label = constants.APP_LABEL
-
-            # When targeting custom objects, allow the CustomObjectType slug as the model name
-            if app_label == constants.APP_LABEL and model and not _TABLE_MODEL_PATTERN.match(model):
-                try:
-                    cot = CustomObjectType.objects.get(slug=model)
-                    model = CustomObjectType.get_table_model_name(cot.id).lower()
-                except CustomObjectType.DoesNotExist:
+            if is_polymorphic:
+                # Polymorphic: resolve from related_object_types_input list
+                if related_object_types_input:
+                    resolved = []
+                    for entry in related_object_types_input:
+                        al = entry.get("app_label", "")
+                        m = entry.get("model", "")
+                        resolved.append(self._resolve_object_type(al, m))
+                    attrs["related_object_types"] = resolved
+                elif not attrs.get("related_object_types"):
                     raise ValidationError(
-                        "Must provide valid app_label and model for object field type."
+                        "Polymorphic object fields require related_object_types_input or related_object_types."
+                    )
+            else:
+                # Non-polymorphic: resolve single type from app_label+model or related_object_type
+                if app_label or model:
+                    attrs["related_object_type"] = self._resolve_object_type(
+                        app_label or "", model or ""
+                    )
+                elif not attrs.get("related_object_type"):
+                    raise ValidationError(
+                        "Must provide app_label and model (or related_object_type) for object field type."
                     )
 
-            try:
-                attrs["related_object_type"] = ObjectType.objects.get(
-                    app_label=app_label, model=model
-                )
-            except ObjectType.DoesNotExist:
-                raise ValidationError(
-                    "Must provide valid app_label and model for object field type."
-                )
-        if attrs["type"] in [
+        if field_type in [
             CustomFieldTypeChoices.TYPE_SELECT,
             CustomFieldTypeChoices.TYPE_MULTISELECT,
         ]:
@@ -129,6 +218,13 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
                 app_label=obj.related_object_type.app_label,
                 model=obj.related_object_type.model,
             )
+        return None
+
+    def get_related_object_types(self, obj):
+        return [
+            dict(id=ot.id, app_label=ot.app_label, model=ot.model)
+            for ot in obj.related_object_types.all()
+        ]
 
 
 class CustomObjectTypeSerializer(NetBoxModelSerializer):
@@ -295,6 +391,18 @@ def get_serializer_class(model, skip_object_fields=False):
         """Get display representation of the object"""
         return str(obj)
 
+    # Collect polymorphic field names for special handling in create/update
+    _poly_obj_fields = {
+        f.name for f in model.custom_object_type.fields.filter(
+            type=CustomFieldTypeChoices.TYPE_OBJECT, is_polymorphic=True
+        )
+    }
+    _poly_m2m_fields = {
+        f.name for f in model.custom_object_type.fields.filter(
+            type=CustomFieldTypeChoices.TYPE_MULTIOBJECT, is_polymorphic=True
+        )
+    }
+
     # Stock DRF create() without raise_errors_on_nested_writes guard
     def create(self, validated_data):
         ModelClass = self.Meta.model
@@ -305,6 +413,18 @@ def get_serializer_class(model, skip_object_fields=False):
             if relation_info.to_many and (field_name in validated_data):
                 many_to_many[field_name] = validated_data.pop(field_name)
 
+        # Pop polymorphic GFK fields (set after instance creation via descriptor)
+        poly_gfk = {}
+        for field_name in _poly_obj_fields:
+            if field_name in validated_data:
+                poly_gfk[field_name] = validated_data.pop(field_name)
+
+        # Pop polymorphic M2M fields (set after instance creation via manager)
+        poly_m2m = {}
+        for field_name in _poly_m2m_fields:
+            if field_name in validated_data:
+                poly_m2m[field_name] = validated_data.pop(field_name)
+
         instance = ModelClass._default_manager.create(**validated_data)
 
         if many_to_many:
@@ -312,11 +432,32 @@ def get_serializer_class(model, skip_object_fields=False):
                 field = getattr(instance, field_name)
                 field.set(value)
 
+        for field_name, value in poly_gfk.items():
+            setattr(instance, field_name, value)
+        if poly_gfk:
+            instance.save()
+
+        for field_name, value in poly_m2m.items():
+            mgr = getattr(instance, field_name)
+            mgr.set(value)
+
         return instance
 
     # Stock DRF update() with custom field.set() for M2M
     def update(self, instance, validated_data):
         info = model_meta.get_field_info(instance)
+
+        # Pop polymorphic GFK fields
+        poly_gfk = {}
+        for field_name in _poly_obj_fields:
+            if field_name in validated_data:
+                poly_gfk[field_name] = validated_data.pop(field_name)
+
+        # Pop polymorphic M2M fields
+        poly_m2m = {}
+        for field_name in _poly_m2m_fields:
+            if field_name in validated_data:
+                poly_m2m[field_name] = validated_data.pop(field_name)
 
         m2m_fields = []
         for attr, value in validated_data.items():
@@ -325,11 +466,18 @@ def get_serializer_class(model, skip_object_fields=False):
             else:
                 setattr(instance, attr, value)
 
+        for field_name, value in poly_gfk.items():
+            setattr(instance, field_name, value)
+
         instance.save()
 
         for attr, value in m2m_fields:
             field = getattr(instance, attr)
             field.set(value, clear=True)
+
+        for field_name, value in poly_m2m.items():
+            mgr = getattr(instance, field_name)
+            mgr.set(value)
 
         return instance
 

@@ -46,4 +46,4 @@ def get_field_is_ui_visible(obj, field: CustomObjectTypeField) -> bool:
 
 @register.filter(name="get_child_relations")
 def get_child_relations(obj, field: CustomObjectTypeField):
-    return getattr(obj, field.name).all()
+    return getattr(obj, field.name)

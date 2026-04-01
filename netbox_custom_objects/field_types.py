@@ -3,10 +3,11 @@ import json
 import django_tables2 as tables
 from django import forms
 from django.apps import apps
+from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
 from django.core.validators import RegexValidator
-from django.db import models
+from django.db import connection, models
 from django.db.models.fields.related import ForeignKey, ManyToManyDescriptor
 from django.db.models.manager import Manager
 from django.utils.html import escape
@@ -395,6 +396,23 @@ class MultiSelectFieldType(FieldType):
 
 class ObjectFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
+        if field.is_polymorphic:
+            # Polymorphic Object: two concrete columns + one virtual GFK descriptor
+            ct_field_name = f"{field.name}_content_type"
+            oid_field_name = f"{field.name}_object_id"
+            return {
+                ct_field_name: models.ForeignKey(
+                    "contenttypes.ContentType",
+                    null=True,
+                    blank=True,
+                    on_delete=models.SET_NULL,
+                    related_name="+",
+                    db_column=f"{field.name}_content_type_id",
+                ),
+                oid_field_name: models.PositiveIntegerField(null=True, blank=True),
+                field.name: GenericForeignKey(ct_field_name, oid_field_name),
+            }
+
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
         to_model = content_type.model
 
@@ -450,6 +468,10 @@ class ObjectFieldType(FieldType):
         For custom objects, uses CustomObjectDynamicModelChoiceField.
         For regular NetBox objects, uses DynamicModelChoiceField.
         """
+        if field.is_polymorphic:
+            # Polymorphic form field not yet supported in the UI; skip gracefully
+            raise NotImplementedError("Polymorphic object fields are managed via the API")
+
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
 
         if content_type.app_label == APP_LABEL:
@@ -491,6 +513,8 @@ class ObjectFieldType(FieldType):
             )
 
     def get_filterform_field(self, field, **kwargs):
+        if field.is_polymorphic:
+            return None  # Filtering polymorphic fields not supported yet
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
         if content_type.app_label == APP_LABEL:
             from netbox_custom_objects.models import CustomObjectType
@@ -510,6 +534,9 @@ class ObjectFieldType(FieldType):
         return linkify(value)
 
     def get_serializer_field(self, field, **kwargs):
+        if field.is_polymorphic:
+            from netbox_custom_objects.api.serializers import PolymorphicObjectSerializerField
+            return PolymorphicObjectSerializerField(required=field.required, allow_null=not field.required)
         related_model_class = field.related_object_type.model_class()
         if related_model_class._meta.app_label == APP_LABEL:
             from netbox_custom_objects.api.serializers import get_serializer_class
@@ -523,10 +550,60 @@ class ObjectFieldType(FieldType):
         Resolve lazy references after the model is fully generated.
         This ensures that self-referential fields point to the correct model class.
         """
+        if instance.is_polymorphic:
+            return  # GFK needs no post-generation resolution
         # Check if this field has a resolution method
         if resolve_method := getattr(model, f'_resolve_{field_name}_model', None):
             resolve_method(model)
 
+    def add_polymorphic_object_columns(self, field_instance, model, schema_editor):
+        """
+        Add the two concrete DB columns (content_type FK + object_id) for a polymorphic
+        Object field, plus a composite index on both columns.
+        """
+        ct_field_name = f"{field_instance.name}_content_type"
+        oid_field_name = f"{field_instance.name}_object_id"
+
+        ct_field = models.ForeignKey(
+            "contenttypes.ContentType",
+            null=True,
+            blank=True,
+            on_delete=models.SET_NULL,
+            related_name="+",
+            db_column=f"{field_instance.name}_content_type_id",
+        )
+        ct_field.contribute_to_class(model, ct_field_name)
+        schema_editor.add_field(model, ct_field)
+
+        oid_field = models.PositiveIntegerField(null=True, blank=True)
+        oid_field.contribute_to_class(model, oid_field_name)
+        schema_editor.add_field(model, oid_field)
+
+        # Composite index as recommended in issue #31
+        idx_name = f"co_{field_instance.custom_object_type_id}_{field_instance.name}_gfk"
+        # Truncate to 30 chars to stay within DB identifier limits
+        idx_name = idx_name[:30].rstrip("_")
+        idx = models.Index(fields=[ct_field_name, oid_field_name], name=idx_name)
+        schema_editor.add_index(model, idx)
+
+    def remove_polymorphic_object_columns(self, field_instance, model):
+        """
+        Remove the concrete DB columns for a polymorphic Object field.
+        """
+        ct_field_name = f"{field_instance.name}_content_type"
+        oid_field_name = f"{field_instance.name}_object_id"
+
+        with connection.schema_editor() as schema_editor:
+            try:
+                oid_field = model._meta.get_field(oid_field_name)
+                schema_editor.remove_field(model, oid_field)
+            except Exception:
+                pass
+            try:
+                ct_field = model._meta.get_field(ct_field_name)
+                schema_editor.remove_field(model, ct_field)
+            except Exception:
+                pass
 
 class CustomManyToManyManager(Manager):
     def __init__(self, instance=None, field_name=None):
@@ -729,6 +806,11 @@ class MultiObjectFieldType(FieldType):
         """
         Creates the M2M field with appropriate model references
         """
+        if field.is_polymorphic:
+            # Polymorphic MultiObject: return a descriptor instead of a real M2M field.
+            # The descriptor manages a through table with (source_id, content_type_id, object_id).
+            return PolymorphicM2MDescriptor(through_model_name=field.through_model_name)
+
         # Check if this is a self-referential M2M
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
         custom_object_type_id = content_type.model.replace("table", "").replace(
@@ -773,6 +855,9 @@ class MultiObjectFieldType(FieldType):
         Returns a form field for multi-object relationships.
         Uses DynamicModelMultipleChoiceField for both custom objects and regular NetBox objects.
         """
+        if field.is_polymorphic:
+            raise NotImplementedError("Polymorphic multi-object fields are managed via the API")
+
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
 
         if content_type.app_label == APP_LABEL:
@@ -811,7 +896,33 @@ class MultiObjectFieldType(FieldType):
                 selector=model._meta.app_label != APP_LABEL,
             )
 
+    def get_display_value(self, instance, field_name):
+        field = getattr(instance, field_name)
+        return ", ".join(str(s) for s in field.all())
+
+    def get_table_column_field(self, field, **kwargs):
+        return tables.ManyToManyColumn(linkify_item=True, orderable=False)
+
+    def get_serializer_field(self, field, **kwargs):
+        if field.is_polymorphic:
+            from netbox_custom_objects.api.serializers import PolymorphicObjectSerializerField
+            from rest_framework import serializers as drf_serializers
+            return drf_serializers.ListField(
+                child=PolymorphicObjectSerializerField(),
+                required=field.required,
+                allow_empty=True,
+            )
+        related_model_class = field.related_object_type.model_class()
+        if related_model_class._meta.app_label == APP_LABEL:
+            from netbox_custom_objects.api.serializers import get_serializer_class
+            serializer = get_serializer_class(related_model_class, skip_object_fields=True)
+        else:
+            serializer = get_serializer_for_model(related_model_class)
+        return serializer(required=field.required, nested=True, many=True)
+
     def get_filterform_field(self, field, **kwargs):
+        if field.is_polymorphic:
+            return None  # Filtering polymorphic fields not supported yet
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
         if content_type.app_label == APP_LABEL:
             from netbox_custom_objects.models import CustomObjectType
@@ -827,26 +938,13 @@ class MultiObjectFieldType(FieldType):
             selector=model._meta.app_label != APP_LABEL,
         )
 
-    def get_display_value(self, instance, field_name):
-        field = getattr(instance, field_name)
-        return ", ".join(str(s) for s in field.all())
-
-    def get_table_column_field(self, field, **kwargs):
-        return tables.ManyToManyColumn(linkify_item=True, orderable=False)
-
-    def get_serializer_field(self, field, **kwargs):
-        related_model_class = field.related_object_type.model_class()
-        if related_model_class._meta.app_label == APP_LABEL:
-            from netbox_custom_objects.api.serializers import get_serializer_class
-            serializer = get_serializer_class(related_model_class, skip_object_fields=True)
-        else:
-            serializer = get_serializer_for_model(related_model_class)
-        return serializer(required=field.required, nested=True, many=True)
-
     def after_model_generation(self, instance, model, field_name):
         """
         After both models are generated, update the field's remote model references
         """
+        if instance.is_polymorphic:
+            return  # PolymorphicM2MDescriptor needs no post-generation resolution
+
         field = model._meta.get_field(field_name)
 
         # Skip model resolution for self-referential fields
@@ -975,6 +1073,202 @@ class MultiObjectFieldType(FieldType):
                 tables = connection.introspection.table_names(cursor)
                 if table_name not in tables:
                     schema_editor.create_model(through_model)
+
+    def get_polymorphic_through_model(self, field_instance, source_model_string):
+        """
+        Creates a through model for a polymorphic MultiObject field.
+        Columns: source_id (FK to custom object), content_type_id (FK to ContentType),
+        object_id (PositiveIntegerField).
+        """
+        meta = type(
+            "Meta",
+            (),
+            {
+                "db_table": field_instance.through_table_name,
+                "app_label": APP_LABEL,
+                "apps": apps,
+                "managed": True,
+                "unique_together": (("source", "content_type", "object_id"),),
+                "indexes": [
+                    models.Index(
+                        fields=["content_type", "object_id"],
+                        name=(
+                            f"co_{field_instance.custom_object_type_id}"
+                            f"_{field_instance.name}_pgfk"
+                        )[:30].rstrip("_"),
+                    )
+                ],
+            },
+        )
+
+        attrs = {
+            "__module__": "netbox_custom_objects.models",
+            "Meta": meta,
+            "id": models.AutoField(primary_key=True),
+            "source": models.ForeignKey(
+                source_model_string,
+                on_delete=models.CASCADE,
+                related_name="+",
+                db_column="source_id",
+            ),
+            "content_type": models.ForeignKey(
+                "contenttypes.ContentType",
+                on_delete=models.CASCADE,
+                related_name="+",
+                db_column="content_type_id",
+            ),
+            "object_id": models.PositiveIntegerField(db_column="object_id"),
+        }
+
+        return generate_model(field_instance.through_model_name, (models.Model,), attrs)
+
+    def create_polymorphic_m2m_table(self, field_instance, model):
+        """
+        Creates the DB table for a polymorphic MultiObject through model.
+        """
+        source_model_string = f"{APP_LABEL}.{model.__name__}"
+        through = self.get_polymorphic_through_model(field_instance, source_model_string)
+
+        # Update source FK to point to the actual model
+        source_field = through._meta.get_field("source")
+        source_field.remote_field.model = model
+        source_field.related_model = model
+
+        # Register with Django's app registry
+        _apps = model._meta.apps
+        try:
+            through_model = _apps.get_model(APP_LABEL, field_instance.through_model_name)
+        except LookupError:
+            _apps.register_model(APP_LABEL, through)
+            through_model = through
+
+        with connection.schema_editor() as schema_editor:
+            table_name = through_model._meta.db_table
+            with connection.cursor() as cursor:
+                existing_tables = connection.introspection.table_names(cursor)
+                if table_name not in existing_tables:
+                    schema_editor.create_model(through_model)
+
+    def drop_polymorphic_m2m_table(self, field_instance, model):
+        """
+        Drops the DB table for a polymorphic MultiObject through model.
+        """
+        _apps = model._meta.apps
+        try:
+            through_model = _apps.get_model(APP_LABEL, field_instance.through_model_name)
+            with connection.schema_editor() as schema_editor:
+                schema_editor.delete_model(through_model)
+        except LookupError:
+            pass  # Already dropped or never created
+
+
+class PolymorphicManyToManyManager:
+    """
+    Manager for polymorphic many-to-many relationships.
+    Handles objects from multiple model types via a through table with
+    (source_id, content_type_id, object_id) columns.
+    """
+
+    def __init__(self, instance, field_name, through_model_name):
+        self.instance = instance
+        self.field_name = field_name
+        self.through_model_name = through_model_name
+
+    def _get_through_model(self):
+        return apps.get_model(APP_LABEL, self.through_model_name)
+
+    def _get_objects(self):
+        through = self._get_through_model()
+        rows = through.objects.filter(
+            source_id=self.instance.pk
+        ).values_list("content_type_id", "object_id").order_by("id")
+
+        ct_model_cache = {}
+        for ct_id, obj_id in rows:
+            if ct_id not in ct_model_cache:
+                try:
+                    ct = ContentType.objects.get(pk=ct_id)
+                    ct_model_cache[ct_id] = ct.model_class()
+                except ContentType.DoesNotExist:
+                    ct_model_cache[ct_id] = None
+            model_class = ct_model_cache[ct_id]
+            if model_class:
+                try:
+                    yield model_class.objects.get(pk=obj_id)
+                except model_class.DoesNotExist:
+                    pass
+
+    def all(self):
+        return list(self._get_objects())
+
+    def exists(self):
+        return self._get_through_model().objects.filter(source_id=self.instance.pk).exists()
+
+    def add(self, *objs):
+        through = self._get_through_model()
+        for obj in objs:
+            ct = ContentType.objects.get_for_model(obj)
+            through.objects.get_or_create(
+                source_id=self.instance.pk,
+                content_type_id=ct.pk,
+                object_id=obj.pk,
+            )
+
+    def remove(self, *objs):
+        through = self._get_through_model()
+        for obj in objs:
+            ct = ContentType.objects.get_for_model(obj)
+            through.objects.filter(
+                source_id=self.instance.pk,
+                content_type_id=ct.pk,
+                object_id=obj.pk,
+            ).delete()
+
+    def clear(self):
+        self._get_through_model().objects.filter(source_id=self.instance.pk).delete()
+
+    def set(self, objs, clear=True):
+        if clear:
+            self.clear()
+        self.add(*objs)
+
+    def __iter__(self):
+        return self._get_objects()
+
+
+class PolymorphicM2MDescriptor:
+    """
+    Descriptor for polymorphic many-to-many fields.
+    Added directly to the model's class attrs during model generation.
+    """
+
+    def __init__(self, through_model_name):
+        self.through_model_name = through_model_name
+        self.field_name = None
+
+    def __set_name__(self, owner, name):
+        self.field_name = name
+
+    def contribute_to_class(self, cls, name):
+        self.field_name = name
+        setattr(cls, name, self)
+
+    def __get__(self, instance, owner=None):
+        if instance is None:
+            return self
+        return PolymorphicManyToManyManager(
+            instance=instance,
+            field_name=self.field_name,
+            through_model_name=self.through_model_name,
+        )
+
+    @property
+    def many_to_many(self):
+        return True
+
+    @property
+    def concrete(self):
+        return False
 
 
 FIELD_TYPE_CLASS = {

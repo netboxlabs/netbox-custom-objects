@@ -375,9 +375,13 @@ class CustomObjectType(NetBoxModel):
             field_type = FIELD_TYPE_CLASS[field.type]()
             field_name = field.name
 
-            field_attrs[field.name] = field_type.get_model_field(
-                field,
-            )
+            model_field = field_type.get_model_field(field)
+
+            if isinstance(model_field, dict):
+                # Polymorphic Object field: dict of {attr_name: field_or_descriptor}
+                field_attrs.update(model_field)
+            else:
+                field_attrs[field.name] = model_field
 
             # Add to field objects only if the field was successfully generated
             field_attrs["_field_objects"][field.id] = {
@@ -405,6 +409,7 @@ class CustomObjectType(NetBoxModel):
 
         for field_object in all_field_objects.values():
             field_name = field_object["name"]
+            field_instance = field_object["field"]
 
             # Skip fields that were skipped due to recursion
             if field_name in skipped_fields:
@@ -414,6 +419,32 @@ class CustomObjectType(NetBoxModel):
             # Fields might be skipped due to recursion prevention
             if hasattr(model._meta, 'get_field'):
                 try:
+                    # For polymorphic Object fields, check the content_type sub-field instead
+                    if field_instance.is_polymorphic:
+                        if field_instance.type == CustomFieldTypeChoices.TYPE_OBJECT:
+                            # Collect through models is not applicable; GFK has no through
+                            # The GFK itself needs no resolution
+                            pass
+                        elif field_instance.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+                            # Ensure the polymorphic through model is in the app registry.
+                            # On server restart the registry is cleared; re-register if needed.
+                            _apps = model._meta.apps
+                            try:
+                                through_model = _apps.get_model(APP_LABEL, field_instance.through_model_name)
+                            except LookupError:
+                                field_type_obj = FIELD_TYPE_CLASS[CustomFieldTypeChoices.TYPE_MULTIOBJECT]()
+                                source_model_str = f"{APP_LABEL}.{model.__name__}"
+                                through_model = field_type_obj.get_polymorphic_through_model(
+                                    field_instance, source_model_str
+                                )
+                                source_field = through_model._meta.get_field("source")
+                                source_field.remote_field.model = model
+                                source_field.related_model = model
+                                _apps.register_model(APP_LABEL, through_model)
+                            if through_model and through_model not in through_models:
+                                through_models.append(through_model)
+                        continue
+
                     field = model._meta.get_field(field_name)
                     # Field exists, process it
                     field_object["type"].after_model_generation(
@@ -706,9 +737,17 @@ class CustomObjectType(NetBoxModel):
 
         model = self.get_model()
 
-        # Delete all CustomObjectTypeFields that reference this CustomObjectType
+        # Delete all CustomObjectTypeFields that reference this CustomObjectType (non-polymorphic)
         for field in CustomObjectTypeField.objects.filter(related_object_type=self.object_type):
             field.delete()
+
+        # Handle polymorphic fields that include this CustomObjectType among their allowed types
+        for field in CustomObjectTypeField.objects.filter(
+            is_polymorphic=True, related_object_types=self.object_type
+        ):
+            field.related_object_types.remove(self.object_type)
+            if not field.related_object_types.exists():
+                field.delete()
 
         object_type = ObjectType.objects.get_for_model(model)
         ObjectChange.objects.filter(changed_object_type=object_type).delete()
@@ -784,7 +823,22 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         on_delete=models.PROTECT,
         blank=True,
         null=True,
-        help_text=_("The type of NetBox object this field maps to (for object fields)"),
+        help_text=_("The type of NetBox object this field maps to (for non-polymorphic object fields)"),
+    )
+    is_polymorphic = models.BooleanField(
+        default=False,
+        verbose_name=_("polymorphic"),
+        help_text=_(
+            "When enabled, this field uses a generic foreign key and may reference objects of multiple types. "
+            "Set the allowed types in 'Related object types'."
+        ),
+    )
+    related_object_types = models.ManyToManyField(
+        to="core.ObjectType",
+        blank=True,
+        related_name="polymorphic_custom_object_type_fields",
+        verbose_name=_("related object types"),
+        help_text=_("The types of objects this polymorphic field may reference (used when 'Polymorphic' is enabled)."),
     )
     name = models.CharField(
         verbose_name=_("name"),
@@ -950,12 +1004,15 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         self._original_name = self.name
         self._original_type = self.type
         self._original_related_object_type_id = self.related_object_type_id
+        self._original_is_polymorphic = self.__dict__.get("is_polymorphic", False)
 
     def __str__(self):
         return self.label or self.name.replace("_", " ").capitalize()
 
     @property
     def model_class(self):
+        if self.is_polymorphic:
+            raise ValueError("Polymorphic fields reference multiple model classes; use related_object_types instead.")
         return apps.get_model(
             self.related_object_type.app_label, self.related_object_type.model
         )
@@ -993,6 +1050,21 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
     @property
     def related_object_type_label(self):
+        if self.is_polymorphic:
+            labels = []
+            for ot in self.related_object_types.all():
+                if ot.app_label == APP_LABEL:
+                    cot_id = ot.model.replace("table", "").replace("model", "")
+                    if cot_id.isdigit():
+                        try:
+                            labels.append(CustomObjectType.get_content_type_label(cot_id))
+                            continue
+                        except CustomObjectType.DoesNotExist:
+                            pass
+                labels.append(object_type_name(ot, include_app=True))
+            return ", ".join(labels) if labels else "—"
+        if not self.related_object_type:
+            return "—"
         if self.related_object_type.app_label == APP_LABEL:
             custom_object_type_id = self.related_object_type.model.replace(
                 "table", ""
@@ -1132,19 +1204,40 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             CustomFieldTypeChoices.TYPE_OBJECT,
             CustomFieldTypeChoices.TYPE_MULTIOBJECT,
         ):
-            if not self.related_object_type:
-                raise ValidationError(
-                    {
-                        "related_object_type": _(
-                            "Object fields must define an object type."
-                        )
-                    }
-                )
+            if self.is_polymorphic:
+                # For polymorphic fields, related_object_type must be null
+                if self.related_object_type:
+                    raise ValidationError(
+                        {
+                            "related_object_type": _(
+                                "Polymorphic object fields must not define a single object type; "
+                                "use 'Related object types' instead."
+                            )
+                        }
+                    )
+                # related_object_types validation happens in forms (M2M set after save)
+            else:
+                if not self.related_object_type:
+                    raise ValidationError(
+                        {
+                            "related_object_type": _(
+                                "Object fields must define an object type."
+                            )
+                        }
+                    )
         elif self.related_object_type:
             raise ValidationError(
                 {
                     "type": _("{type} fields may not define an object type.").format(
                         type=self.get_type_display()
+                    )
+                }
+            )
+        elif self.is_polymorphic:
+            raise ValidationError(
+                {
+                    "is_polymorphic": _(
+                        "Only Object and Multi-Object fields may be polymorphic."
                     )
                 }
             )
@@ -1171,8 +1264,9 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     }
                 )
 
-        # Check for recursion in object and multiobject fields
-        if (self.type in (
+        # Check for recursion in object and multiobject fields (non-polymorphic only;
+        # polymorphic fields' types are set after save via M2M, so recursion is checked in save())
+        if (not self.is_polymorphic and self.type in (
             CustomFieldTypeChoices.TYPE_OBJECT,
             CustomFieldTypeChoices.TYPE_MULTIOBJECT,
         ) and self.related_object_type_id and
@@ -1264,8 +1358,17 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         ):
             return value.isoformat()
         if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
+            if self.is_polymorphic and value is not None:
+                ct = ContentType.objects.get_for_model(value)
+                return {"content_type_id": ct.pk, "object_id": value.pk}
             return value.pk
         if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+            if self.is_polymorphic:
+                result = []
+                for obj in value:
+                    ct = ContentType.objects.get_for_model(obj)
+                    result.append({"content_type_id": ct.pk, "object_id": obj.pk})
+                return result or None
             return [obj.pk for obj in value] or None
         return value
 
@@ -1286,9 +1389,34 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             except ValueError:
                 return value
         if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
+            if self.is_polymorphic and isinstance(value, dict):
+                try:
+                    ct = ContentType.objects.get(pk=value["content_type_id"])
+                    model = ct.model_class()
+                    return model.objects.filter(pk=value["object_id"]).first() if model else None
+                except (ContentType.DoesNotExist, KeyError):
+                    return None
+            if not self.related_object_type:
+                return None
             model = self.related_object_type.model_class()
             return model.objects.filter(pk=value).first()
         if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+            if self.is_polymorphic and isinstance(value, list):
+                results = []
+                for item in value:
+                    if isinstance(item, dict):
+                        try:
+                            ct = ContentType.objects.get(pk=item["content_type_id"])
+                            model = ct.model_class()
+                            if model:
+                                obj = model.objects.filter(pk=item["object_id"]).first()
+                                if obj:
+                                    results.append(obj)
+                        except (ContentType.DoesNotExist, KeyError):
+                            pass
+                return results
+            if not self.related_object_type:
+                return []
             model = self.related_object_type.model_class()
             return model.objects.filter(pk__in=value)
         return value
@@ -1528,117 +1656,131 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
     def save(self, *args, **kwargs):
         field_type = FIELD_TYPE_CLASS[self.type]()
-        model_field = field_type.get_model_field(self)
         model = self.custom_object_type.get_model()
-        model_field.contribute_to_class(model, self.name)
 
         with connection.schema_editor() as schema_editor:
             if self._state.adding:
-                schema_editor.add_field(model, model_field)
-                if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                    field_type.create_m2m_table(self, model, self.name)
-            else:
-                old_field = field_type.get_model_field(self.original)
-                old_field.contribute_to_class(model, self._original_name)
-
-                # Special handling for MultiObject fields when the name changes
-                if (
-                    self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
-                    and self.name != self._original_name
-                ):
-                    # For renamed MultiObject fields, we just need to rename the through table
-                    old_through_table_name = self.original.through_table_name
-                    new_through_table_name = self.through_table_name
-
-                    # Check if old through table exists
-                    with connection.cursor() as cursor:
-                        tables = connection.introspection.table_names(cursor)
-                        old_table_exists = old_through_table_name in tables
-
-                    if old_table_exists:
-                        # Create temporary models to represent the old and new through table states
-                        old_through_meta = type(
-                            "Meta",
-                            (),
-                            {
-                                "db_table": old_through_table_name,
-                                "app_label": APP_LABEL,
-                                "managed": True,
-                            },
-                        )
-                        old_through_model = generate_model(
-                            f"TempOld{self.original.through_model_name}",
-                            (models.Model,),
-                            {
-                                "__module__": "netbox_custom_objects.models",
-                                "Meta": old_through_meta,
-                                "id": models.AutoField(primary_key=True),
-                                "source": models.ForeignKey(
-                                    model,
-                                    on_delete=models.CASCADE,
-                                    db_column="source_id",
-                                    related_name="+",
-                                ),
-                                "target": models.ForeignKey(
-                                    model,
-                                    on_delete=models.CASCADE,
-                                    db_column="target_id",
-                                    related_name="+",
-                                ),
-                            },
-                        )
-
-                        new_through_meta = type(
-                            "Meta",
-                            (),
-                            {
-                                "db_table": new_through_table_name,
-                                "app_label": APP_LABEL,
-                                "managed": True,
-                            },
-                        )
-                        new_through_model = generate_model(
-                            f"TempNew{self.through_model_name}",
-                            (models.Model,),
-                            {
-                                "__module__": "netbox_custom_objects.models",
-                                "Meta": new_through_meta,
-                                "id": models.AutoField(primary_key=True),
-                                "source": models.ForeignKey(
-                                    model,
-                                    on_delete=models.CASCADE,
-                                    db_column="source_id",
-                                    related_name="+",
-                                ),
-                                "target": models.ForeignKey(
-                                    model,
-                                    on_delete=models.CASCADE,
-                                    db_column="target_id",
-                                    related_name="+",
-                                ),
-                            },
-                        )
-                        new_through_model  # To silence ruff error
-
-                        # Rename the table using Django's schema editor
-                        schema_editor.alter_db_table(
-                            old_through_model,
-                            old_through_table_name,
-                            new_through_table_name,
-                        )
-                    else:
-                        # No old table exists, create the new through table
-                        field_type.create_m2m_table(self, model, self.name)
-
-                    # Alter the field normally (this updates the field definition)
-                    schema_editor.alter_field(model, old_field, model_field)
+                if self.is_polymorphic:
+                    # Polymorphic Object: add content_type + object_id columns + index
+                    # Polymorphic MultiObject: create through table with content_type + object_id
+                    if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
+                        field_type.add_polymorphic_object_columns(self, model, schema_editor)
+                    elif self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+                        field_type.create_polymorphic_m2m_table(self, model)
                 else:
-                    # Normal field alteration
-                    schema_editor.alter_field(model, old_field, model_field)
+                    model_field = field_type.get_model_field(self)
+                    model_field.contribute_to_class(model, self.name)
+                    schema_editor.add_field(model, model_field)
+                    if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+                        field_type.create_m2m_table(self, model, self.name)
+            else:
+                # Polymorphic fields are locked after creation (type and polymorphic cannot change)
+                if self.is_polymorphic or self._original_is_polymorphic:
+                    pass  # No schema changes for polymorphic fields on update
+                else:
+                    old_field = field_type.get_model_field(self.original)
+                    old_field.contribute_to_class(model, self._original_name)
 
-        # Ensure FK constraints are properly created for OBJECT fields with CASCADE behavior
+                    # Special handling for MultiObject fields when the name changes
+                    if (
+                        self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
+                        and self.name != self._original_name
+                    ):
+                        # For renamed MultiObject fields, we just need to rename the through table
+                        old_through_table_name = self.original.through_table_name
+                        new_through_table_name = self.through_table_name
+
+                        # Check if old through table exists
+                        with connection.cursor() as cursor:
+                            tables = connection.introspection.table_names(cursor)
+                            old_table_exists = old_through_table_name in tables
+
+                        if old_table_exists:
+                            # Create temporary models to represent the old and new through table states
+                            old_through_meta = type(
+                                "Meta",
+                                (),
+                                {
+                                    "db_table": old_through_table_name,
+                                    "app_label": APP_LABEL,
+                                    "managed": True,
+                                },
+                            )
+                            old_through_model = generate_model(
+                                f"TempOld{self.original.through_model_name}",
+                                (models.Model,),
+                                {
+                                    "__module__": "netbox_custom_objects.models",
+                                    "Meta": old_through_meta,
+                                    "id": models.AutoField(primary_key=True),
+                                    "source": models.ForeignKey(
+                                        model,
+                                        on_delete=models.CASCADE,
+                                        db_column="source_id",
+                                        related_name="+",
+                                    ),
+                                    "target": models.ForeignKey(
+                                        model,
+                                        on_delete=models.CASCADE,
+                                        db_column="target_id",
+                                        related_name="+",
+                                    ),
+                                },
+                            )
+
+                            new_through_meta = type(
+                                "Meta",
+                                (),
+                                {
+                                    "db_table": new_through_table_name,
+                                    "app_label": APP_LABEL,
+                                    "managed": True,
+                                },
+                            )
+                            new_through_model = generate_model(
+                                f"TempNew{self.through_model_name}",
+                                (models.Model,),
+                                {
+                                    "__module__": "netbox_custom_objects.models",
+                                    "Meta": new_through_meta,
+                                    "id": models.AutoField(primary_key=True),
+                                    "source": models.ForeignKey(
+                                        model,
+                                        on_delete=models.CASCADE,
+                                        db_column="source_id",
+                                        related_name="+",
+                                    ),
+                                    "target": models.ForeignKey(
+                                        model,
+                                        on_delete=models.CASCADE,
+                                        db_column="target_id",
+                                        related_name="+",
+                                    ),
+                                },
+                            )
+                            new_through_model  # To silence ruff error
+
+                            # Rename the table using Django's schema editor
+                            schema_editor.alter_db_table(
+                                old_through_model,
+                                old_through_table_name,
+                                new_through_table_name,
+                            )
+                        else:
+                            # No old table exists, create the new through table
+                            field_type.create_m2m_table(self, model, self.name)
+
+                        # Alter the field normally (this updates the field definition)
+                        schema_editor.alter_field(model, old_field, model_field)
+                    else:
+                        # Normal field alteration
+                        model_field = field_type.get_model_field(self)
+                        model_field.contribute_to_class(model, self.name)
+                        schema_editor.alter_field(model, old_field, model_field)
+
+        # Ensure FK constraints are properly created for non-polymorphic OBJECT fields
         should_ensure_fk = False
-        if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
+        if self.type == CustomFieldTypeChoices.TYPE_OBJECT and not self.is_polymorphic:
             if self._state.adding:
                 should_ensure_fk = True
             else:
@@ -1673,16 +1815,23 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
     def delete(self, *args, **kwargs):
         field_type = FIELD_TYPE_CLASS[self.type]()
-        model_field = field_type.get_model_field(self)
         model = self.custom_object_type.get_model()
-        model_field.contribute_to_class(model, self.name)
 
-        with connection.schema_editor() as schema_editor:
-            if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                apps = model._meta.apps
-                through_model = apps.get_model(APP_LABEL, self.through_model_name)
-                schema_editor.delete_model(through_model)
-            schema_editor.remove_field(model, model_field)
+        if self.is_polymorphic:
+            if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
+                field_type.remove_polymorphic_object_columns(self, model)
+            elif self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+                field_type.drop_polymorphic_m2m_table(self, model)
+        else:
+            model_field = field_type.get_model_field(self)
+            model_field.contribute_to_class(model, self.name)
+
+            with connection.schema_editor() as schema_editor:
+                if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+                    _apps = model._meta.apps
+                    through_model = _apps.get_model(APP_LABEL, self.through_model_name)
+                    schema_editor.delete_model(through_model)
+                schema_editor.remove_field(model, model_field)
 
         # Clear the model cache for this CustomObjectType when a field is deleted
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)
@@ -1745,8 +1894,15 @@ def clear_cache_on_field_save(sender, instance, **kwargs):
     """
     if instance.custom_object_type_id:
         CustomObjectType.clear_model_cache(instance.custom_object_type_id)
+    # Clear caches for non-polymorphic fields pointing to this custom object type
     for pointing_field in CustomObjectTypeField.objects.filter(
         related_object_type=instance.custom_object_type.object_type
+    ):
+        CustomObjectType.clear_model_cache(pointing_field.custom_object_type_id)
+    # Clear caches for polymorphic fields that include this custom object type
+    for pointing_field in CustomObjectTypeField.objects.filter(
+        is_polymorphic=True,
+        related_object_types=instance.custom_object_type.object_type,
     ):
         CustomObjectType.clear_model_cache(pointing_field.custom_object_type_id)
 

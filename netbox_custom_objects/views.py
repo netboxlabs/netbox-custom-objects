@@ -20,7 +20,7 @@ from netbox.forms import (
 from netbox.views import generic
 from netbox.views.generic.mixins import TableMixin
 from utilities.forms import ConfirmationForm
-from utilities.forms.fields import TagFilterField
+from utilities.forms.fields import DynamicModelMultipleChoiceField, TagFilterField
 from utilities.htmx import htmx_partial
 from utilities.views import ConditionalLoginRequiredMixin, ViewTab, get_viewname, register_model_view
 
@@ -277,10 +277,20 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
         form = ConfirmationForm(initial=request.GET)
 
         model = obj.custom_object_type.get_model_with_serializer()
-        kwargs = {
-            f"{obj.name}__isnull": False,
-        }
-        num_dependent_objects = model.objects.filter(**kwargs).count()
+        if obj.is_polymorphic and obj.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+            # Polymorphic M2M: count via the through table (field is a descriptor, not a real FK)
+            from django.apps import apps as django_apps
+            try:
+                through = django_apps.get_model(APP_LABEL, obj.through_model_name)
+                num_dependent_objects = through.objects.values("source_id").distinct().count()
+            except LookupError:
+                num_dependent_objects = 0
+        elif obj.is_polymorphic and obj.type == CustomFieldTypeChoices.TYPE_OBJECT:
+            # Polymorphic Object (GFK): query via the concrete content_type column
+            ct_field = f"{obj.name}_content_type__isnull"
+            num_dependent_objects = model.objects.filter(**{ct_field: False}).count()
+        else:
+            num_dependent_objects = model.objects.filter(**{f"{obj.name}__isnull": False}).count()
 
         # If this is an HTMX request, return only the rendered deletion form as modal content
         if htmx_partial(request):
@@ -493,6 +503,8 @@ class CustomObjectEditView(generic.ObjectEditView):
             "_errors": None,
             "custom_object_type_fields": {},
             "custom_object_type_field_groups": {},
+            # Maps polymorphic M2M field name → list of sub-field names (one per allowed type)
+            "custom_object_type_poly_m2m_fields": {},
         }
 
         # Process custom object type fields (with grouping)
@@ -500,6 +512,35 @@ class CustomObjectEditView(generic.ObjectEditView):
             "group_name", "weight", "name"
         ):
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
+            group_name = field.group_name or None
+
+            # Polymorphic multiobject: render one sub-field per related type
+            if (
+                field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
+                and field.is_polymorphic
+            ):
+                sub_names = []
+                for ot in field.related_object_types.all():
+                    sub_name = f"{field.name}__{ot.app_label}__{ot.model}"
+                    sub_model = ot.model_class()
+                    if sub_model is None:
+                        continue
+                    sub_field = DynamicModelMultipleChoiceField(
+                        queryset=sub_model.objects.all(),
+                        required=False,
+                        label=f"{field.label or field.name} ({ot.app_label}.{ot.model})",
+                        selector=ot.app_label != APP_LABEL,
+                    )
+                    attrs[sub_name] = sub_field
+                    sub_names.append(sub_name)
+
+                    if group_name not in attrs["custom_object_type_field_groups"]:
+                        attrs["custom_object_type_field_groups"][group_name] = []
+                    attrs["custom_object_type_field_groups"][group_name].append(sub_name)
+
+                attrs["custom_object_type_poly_m2m_fields"][field.name] = sub_names
+                continue
+
             try:
                 field_name = field.name
                 attrs[field_name] = field_type.get_annotated_form_field(field)
@@ -508,7 +549,6 @@ class CustomObjectEditView(generic.ObjectEditView):
                 attrs["custom_object_type_fields"][field_name] = field
 
                 # Group fields by group_name (similar to NetBox custom fields)
-                group_name = field.group_name or None  # Use None for ungrouped fields
                 if group_name not in attrs["custom_object_type_field_groups"]:
                     attrs["custom_object_type_field_groups"][group_name] = []
                 attrs["custom_object_type_field_groups"][group_name].append(field_name)
@@ -531,43 +571,64 @@ class CustomObjectEditView(generic.ObjectEditView):
         def custom_init(self, *args, **kwargs):
             # Set the grouping info as instance attributes from the outer scope
             self.custom_object_type_fields = attrs["custom_object_type_fields"]
-            self.custom_object_type_field_groups = attrs[
-                "custom_object_type_field_groups"
-            ]
+            self.custom_object_type_field_groups = attrs["custom_object_type_field_groups"]
+            self.custom_object_type_poly_m2m_fields = attrs["custom_object_type_poly_m2m_fields"]
 
-            # Handle default values for MultiObject fields BEFORE calling parent __init__
-            # This ensures the initial values are set before Django processes the form
             instance = kwargs.get('instance', None)
+
+            if 'initial' not in kwargs:
+                kwargs['initial'] = {}
+
+            # Set initial values for non-polymorphic MultiObject defaults on new instances
             if not instance or not instance.pk:
-                # Only set defaults for new instances (not when editing existing ones)
                 for field_name, field_obj in self.custom_object_type_fields.items():
                     if field_obj.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                         if field_obj.default and isinstance(field_obj.default, list):
-                            # Get the related model
                             content_type = field_obj.related_object_type
                             if content_type.app_label == APP_LABEL:
-                                # Custom object type
                                 from netbox_custom_objects.models import CustomObjectType
                                 custom_object_type_id = content_type.model.replace("table", "").replace("model", "")
                                 custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
-                                model = custom_object_type.get_model(skip_object_fields=True)
+                                related_model = custom_object_type.get_model(skip_object_fields=True)
                             else:
-                                # Regular NetBox model
-                                model = content_type.model_class()
-
+                                related_model = content_type.model_class()
                             try:
-                                # Query the database to get the actual objects
-                                initial_objects = model.objects.filter(pk__in=field_obj.default)
-                                # Convert to list of IDs for ModelMultipleChoiceField
-                                initial_ids = list(initial_objects.values_list('pk', flat=True))
-
-                                # Set the initial value in the form's initial data
-                                if 'initial' not in kwargs:
-                                    kwargs['initial'] = {}
+                                initial_ids = list(
+                                    related_model.objects.filter(pk__in=field_obj.default)
+                                    .values_list('pk', flat=True)
+                                )
                                 kwargs['initial'][field_name] = initial_ids
                             except Exception:
-                                # If there's an error, don't set initial values
                                 pass
+
+            # Set initial values for polymorphic M2M sub-fields from the through table
+            if instance and instance.pk:
+                from django.contrib.contenttypes.models import ContentType as CT
+                from django.apps import apps as django_apps
+                for field_name, sub_names in self.custom_object_type_poly_m2m_fields.items():
+                    try:
+                        # Find the CustomObjectTypeField to get the through model name
+                        field_obj = instance.custom_object_type.fields.get(name=field_name)
+                        through = django_apps.get_model(APP_LABEL, field_obj.through_model_name)
+                        rows = through.objects.filter(source_id=instance.pk).values_list(
+                            "content_type_id", "object_id"
+                        )
+                        # Group by content_type
+                        by_ct = {}
+                        for ct_id, obj_id in rows:
+                            by_ct.setdefault(ct_id, []).append(obj_id)
+
+                        for sub_name in sub_names:
+                            # sub_name = "{field_name}__{app_label}__{model}"
+                            suffix = sub_name[len(field_name) + 2:]  # strip "{field_name}__"
+                            app_label, model_name = suffix.split("__", 1)
+                            try:
+                                ct = CT.objects.get(app_label=app_label, model=model_name)
+                                kwargs['initial'][sub_name] = by_ct.get(ct.pk, [])
+                            except CT.DoesNotExist:
+                                pass
+                    except Exception:
+                        pass
 
             # Now call the parent __init__ with the modified kwargs
             forms.NetBoxModelForm.__init__(self, *args, **kwargs)
@@ -580,21 +641,23 @@ class CustomObjectEditView(generic.ObjectEditView):
             if commit:
                 instance.save()
 
-                # Handle M2M fields manually to ensure proper clearing and setting
+                # Handle non-polymorphic M2M fields
                 for field_name, field_obj in self.custom_object_type_fields.items():
                     if field_obj.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                        # Get the current value from the form
                         current_value = self.cleaned_data.get(field_name, [])
-
-                        # Get the field from the instance
                         instance_field = getattr(instance, field_name)
-
-                        # Clear existing relationships and set new ones
                         if hasattr(instance_field, 'clear') and hasattr(instance_field, 'set'):
                             instance_field.clear()
-
                             if current_value:
                                 instance_field.set(current_value)
+
+                # Handle polymorphic M2M sub-fields: aggregate per-type selections
+                for field_name, sub_names in self.custom_object_type_poly_m2m_fields.items():
+                    combined = []
+                    for sub_name in sub_names:
+                        combined.extend(self.cleaned_data.get(sub_name, []))
+                    instance_field = getattr(instance, field_name)
+                    instance_field.set(combined)
 
                 # Save M2M relationships
                 self.save_m2m()
