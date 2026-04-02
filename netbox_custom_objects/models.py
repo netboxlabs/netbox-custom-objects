@@ -15,7 +15,7 @@ from django.core.validators import RegexValidator, ValidationError
 from django.db import connection, IntegrityError, models, transaction
 from django.db.models import Q
 from django.db.models.functions import Lower
-from django.db.models.signals import pre_delete, post_save
+from django.db.models.signals import m2m_changed, pre_delete, post_save
 from django.dispatch import receiver
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
@@ -1274,8 +1274,9 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     }
                 )
 
-        # Check for recursion in object and multiobject fields (non-polymorphic only;
-        # polymorphic fields' types are set after save via M2M, so recursion is checked in save())
+        # Check for recursion in object and multiobject fields (non-polymorphic only).
+        # Polymorphic fields' allowed types are a M2M set after save(), so their recursion
+        # check runs in the check_polymorphic_recursion m2m_changed signal handler instead.
         if (not self.is_polymorphic and self.type in (
             CustomFieldTypeChoices.TYPE_OBJECT,
             CustomFieldTypeChoices.TYPE_MULTIOBJECT,
@@ -1894,6 +1895,38 @@ def clear_cache_on_custom_object_type_save(sender, instance, **kwargs):
     Clear the model cache when a CustomObjectType is saved.
     """
     CustomObjectType.clear_model_cache(instance.id)
+
+
+@receiver(m2m_changed, sender=CustomObjectTypeField.related_object_types.through)
+def check_polymorphic_recursion(sender, instance, action, pk_set, **kwargs):
+    """
+    Prevent circular references in polymorphic field allowed-type lists.
+
+    clean() cannot check this because related_object_types is a M2M that is set
+    after the instance is saved.  m2m_changed fires on pre_add, which lets us abort
+    the operation before any rows are written.
+    """
+    if action != "pre_add" or not pk_set:
+        return
+
+    own_object_type_id = instance.custom_object_type.object_type_id
+
+    for ot_pk in pk_set:
+        if ot_pk == own_object_type_id:
+            # Self-reference is permitted (same pattern as non-polymorphic check).
+            continue
+        try:
+            related_cot = CustomObjectType.objects.get(object_type_id=ot_pk)
+        except CustomObjectType.DoesNotExist:
+            continue  # Native NetBox type — no COT dependency chain to traverse.
+        visited = {instance.custom_object_type_id}
+        if instance._has_circular_reference(related_cot, visited):
+            raise ValidationError(
+                _(
+                    "Circular reference detected: one of the selected object types would "
+                    "create a circular dependency between custom object types."
+                )
+            )
 
 
 @receiver(post_save, sender=CustomObjectTypeField)

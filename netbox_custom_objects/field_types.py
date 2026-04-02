@@ -1,5 +1,6 @@
 import hashlib
 import json
+import logging
 
 import django_tables2 as tables
 from django import forms
@@ -7,6 +8,7 @@ from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
+from django.core.exceptions import FieldDoesNotExist
 from django.core.validators import RegexValidator
 from django.db import connection, models
 from django.db.models.fields.related import ForeignKey, ManyToManyDescriptor
@@ -34,6 +36,8 @@ from netbox.tables.columns import BooleanColumn
 
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.utilities import generate_model
+
+logger = logging.getLogger(__name__)
 
 # PostgreSQL's hard limit for identifier names is 63 bytes.
 _PG_MAX_IDENTIFIER_LEN = 63
@@ -490,7 +494,9 @@ class ObjectFieldType(FieldType):
         """
         if field.is_polymorphic:
             # Polymorphic form field not yet supported in the UI; skip gracefully
-            raise NotImplementedError("Polymorphic object fields are managed via the API")
+            raise NotImplementedError(
+                "Polymorphic object form fields are rendered by the view layer, not via this method."
+            )
 
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
 
@@ -622,13 +628,23 @@ class ObjectFieldType(FieldType):
             try:
                 oid_field = model._meta.get_field(oid_field_name)
                 schema_editor.remove_field(model, oid_field)
+            except FieldDoesNotExist:
+                pass  # Column already absent — nothing to remove.
             except Exception:
-                pass
+                logger.warning(
+                    "Failed to remove polymorphic object_id column %r from %r",
+                    oid_field_name, model._meta.db_table, exc_info=True,
+                )
             try:
                 ct_field = model._meta.get_field(ct_field_name)
                 schema_editor.remove_field(model, ct_field)
+            except FieldDoesNotExist:
+                pass  # Column already absent — nothing to remove.
             except Exception:
-                pass
+                logger.warning(
+                    "Failed to remove polymorphic content_type column %r from %r",
+                    ct_field_name, model._meta.db_table, exc_info=True,
+                )
 
 
 class CustomManyToManyManager(Manager):

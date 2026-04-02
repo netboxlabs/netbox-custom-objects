@@ -103,9 +103,7 @@ class PolymorphicObjectSerializerField(serializers.Field):
         except model_class.DoesNotExist:
             raise serializers.ValidationError("No matching object found.")
         except (ValueError, TypeError):
-            raise serializers.ValidationError(
-                f"Invalid pk value: {obj_id!r}."
-            )
+            raise serializers.ValidationError("Invalid pk value.")
 
 
 class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
@@ -518,19 +516,18 @@ def get_serializer_class(model, skip_object_fields=False):
         return instance
 
     def validate(self, data):
-        # ValidatedModelSerializer.validate() does attrs = data.copy() then
-        # Model(**attrs). Polymorphic GFK and M2M fields are not real Django model
-        # fields so they'd cause TypeError. Pop them, let parent run, then restore.
-        # Note: super() can't be used here because this function is defined outside
-        # a class body and has no __class__ cell. Walk the MRO instead.
+        # NetBoxModelSerializer.validate() calls Model(**attrs) to check field
+        # values. Polymorphic GFK and M2M fields are not real Django model fields,
+        # so they'd cause a TypeError. Pop them before delegating to the parent,
+        # then restore them afterward.
+        # super() is unavailable here because this function is defined outside a
+        # class body (no __class__ cell). The generated class has a single base
+        # (NetBoxModelSerializer), so calling it directly is equivalent.
         saved = {}
         for field_name in (*_poly_obj_fields, *_poly_m2m_fields):
             if field_name in data:
                 saved[field_name] = data.pop(field_name)
-        for parent_cls in NetBoxModelSerializer.__mro__:
-            if 'validate' in parent_cls.__dict__:
-                data = parent_cls.validate(self, data)
-                break
+        data = NetBoxModelSerializer.validate(self, data)
         data.update(saved)
         return data
 

@@ -56,6 +56,39 @@ def _parse_poly_sub_name(field_name: str, sub_name: str) -> tuple[str, str]:
     return app_label, model
 
 
+def _build_poly_subfields(field, set_initial: bool = False):
+    """
+    Build per-type form sub-fields for a polymorphic Object or MultiObject field.
+
+    Yields ``(sub_name, sub_field)`` pairs — one per allowed object type whose
+    model class can be resolved.  Types whose ``model_class()`` returns ``None``
+    (e.g. orphaned ContentType rows) are silently skipped.
+
+    Args:
+        field: A ``CustomObjectTypeField`` instance with ``is_polymorphic=True``.
+        set_initial: When ``True``, sets ``sub_field.initial = None`` on each
+            generated field (required for bulk-edit forms).
+    """
+    is_multi = field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
+    field_class = DynamicModelMultipleChoiceField if is_multi else DynamicModelChoiceField
+    field_label = field.label or field.name.replace("_", " ").title()
+
+    for ot in field.related_object_types.all():
+        sub_model = ot.model_class()
+        if sub_model is None:
+            continue
+        sub_name = _poly_sub_name(field.name, ot.app_label, ot.model)
+        sub_field = field_class(
+            queryset=sub_model.objects.all(),
+            required=False,
+            label=f"{field_label} ({object_type_name(ot)})",
+            selector=ot.app_label != APP_LABEL,
+        )
+        if set_initial:
+            sub_field.initial = None
+        yield sub_name, sub_field
+
+
 class CustomJournalEntryForm(JournalEntryForm):
     """
     Custom journal entry form that handles return URLs for custom objects.
@@ -547,52 +580,25 @@ class CustomObjectEditView(generic.ObjectEditView):
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
             group_name = field.group_name or None
 
-            # Polymorphic single-object: render one DynamicModelChoiceField per related type
-            if field.type == CustomFieldTypeChoices.TYPE_OBJECT and field.is_polymorphic:
+            # Polymorphic object/multiobject: one form sub-field per allowed type
+            if field.is_polymorphic and field.type in (
+                CustomFieldTypeChoices.TYPE_OBJECT,
+                CustomFieldTypeChoices.TYPE_MULTIOBJECT,
+            ):
                 sub_names = []
-                for ot in field.related_object_types.all():
-                    sub_name = _poly_sub_name(field.name, ot.app_label, ot.model)
-                    sub_model = ot.model_class()
-                    if sub_model is None:
-                        continue
-                    sub_field = DynamicModelChoiceField(
-                        queryset=sub_model.objects.all(),
-                        required=False,
-                        label=f"{field.label or field.name.replace('_', ' ').title()} ({object_type_name(ot)})",
-                        selector=ot.app_label != APP_LABEL,
-                    )
+                for sub_name, sub_field in _build_poly_subfields(field):
                     attrs[sub_name] = sub_field
                     sub_names.append(sub_name)
-
                     if group_name not in attrs["custom_object_type_field_groups"]:
                         attrs["custom_object_type_field_groups"][group_name] = []
                     attrs["custom_object_type_field_groups"][group_name].append(sub_name)
 
-                attrs["custom_object_type_poly_obj_fields"][field.name] = sub_names
-                continue
-
-            # Polymorphic multiobject: render one DynamicModelMultipleChoiceField per related type
-            if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT and field.is_polymorphic:
-                sub_names = []
-                for ot in field.related_object_types.all():
-                    sub_name = _poly_sub_name(field.name, ot.app_label, ot.model)
-                    sub_model = ot.model_class()
-                    if sub_model is None:
-                        continue
-                    sub_field = DynamicModelMultipleChoiceField(
-                        queryset=sub_model.objects.all(),
-                        required=False,
-                        label=f"{field.label or field.name.replace('_', ' ').title()} ({object_type_name(ot)})",
-                        selector=ot.app_label != APP_LABEL,
-                    )
-                    attrs[sub_name] = sub_field
-                    sub_names.append(sub_name)
-
-                    if group_name not in attrs["custom_object_type_field_groups"]:
-                        attrs["custom_object_type_field_groups"][group_name] = []
-                    attrs["custom_object_type_field_groups"][group_name].append(sub_name)
-
-                attrs["custom_object_type_poly_m2m_fields"][field.name] = sub_names
+                dest_key = (
+                    "custom_object_type_poly_obj_fields"
+                    if field.type == CustomFieldTypeChoices.TYPE_OBJECT
+                    else "custom_object_type_poly_m2m_fields"
+                )
+                attrs[dest_key][field.name] = sub_names
                 continue
 
             try:
@@ -843,8 +849,6 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
         return model.objects.all()
 
     def get_form(self, queryset):
-        from utilities.forms.fields import DynamicModelChoiceField
-
         poly_obj_raw_exclude = []
         for f in self.custom_object_type.fields.filter(
             type=CustomFieldTypeChoices.TYPE_OBJECT, is_polymorphic=True
@@ -870,44 +874,23 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
 
         for field in self.custom_object_type.fields.prefetch_related('related_object_types').all():
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
-            field_label = field.label or field.name.replace("_", " ").title()
 
-            if field.type == CustomFieldTypeChoices.TYPE_OBJECT and field.is_polymorphic:
+            # Polymorphic object/multiobject: one form sub-field per allowed type
+            if field.is_polymorphic and field.type in (
+                CustomFieldTypeChoices.TYPE_OBJECT,
+                CustomFieldTypeChoices.TYPE_MULTIOBJECT,
+            ):
                 sub_names = []
-                for ot in field.related_object_types.all():
-                    sub_model = ot.model_class()
-                    if sub_model is None:
-                        continue
-                    sub_name = _poly_sub_name(field.name, ot.app_label, ot.model)
-                    sub_field = DynamicModelChoiceField(
-                        queryset=sub_model.objects.all(),
-                        required=False,
-                        label=f"{field_label} ({object_type_name(ot)})",
-                        selector=ot.app_label != APP_LABEL,
-                    )
-                    sub_field.initial = None
+                for sub_name, sub_field in _build_poly_subfields(field, set_initial=True):
                     attrs[sub_name] = sub_field
                     sub_names.append(sub_name)
-                attrs["_poly_obj_field_map"][field.name] = sub_names
-                continue
 
-            if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT and field.is_polymorphic:
-                sub_names = []
-                for ot in field.related_object_types.all():
-                    sub_model = ot.model_class()
-                    if sub_model is None:
-                        continue
-                    sub_name = _poly_sub_name(field.name, ot.app_label, ot.model)
-                    sub_field = DynamicModelMultipleChoiceField(
-                        queryset=sub_model.objects.all(),
-                        required=False,
-                        label=f"{field_label} ({object_type_name(ot)})",
-                        selector=ot.app_label != APP_LABEL,
-                    )
-                    sub_field.initial = None
-                    attrs[sub_name] = sub_field
-                    sub_names.append(sub_name)
-                attrs["_poly_m2m_field_map"][field.name] = sub_names
+                dest_key = (
+                    "_poly_obj_field_map"
+                    if field.type == CustomFieldTypeChoices.TYPE_OBJECT
+                    else "_poly_m2m_field_map"
+                )
+                attrs[dest_key][field.name] = sub_names
                 continue
 
             try:
@@ -945,7 +928,10 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
         if needs_save:
             obj.save()
 
-        # Apply polymorphic M2M sub-fields (union of all selected types)
+        # Apply polymorphic M2M sub-fields (union of all selected types).
+        # set() replaces existing values, matching NetBox's standard bulk-edit
+        # behavior for direct M2M fields (see BulkEditView lines 718-723).
+        # Fields left blank are skipped so existing data is preserved.
         for field_name, sub_names in form._poly_m2m_field_map.items():
             combined = []
             has_any = False
