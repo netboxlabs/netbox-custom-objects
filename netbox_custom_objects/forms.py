@@ -8,6 +8,7 @@ from utilities.forms.fields import (CommentField, ContentTypeChoiceField,
                                     ContentTypeMultipleChoiceField,
                                     DynamicModelChoiceField, SlugField, TagFilterField)
 from utilities.forms.rendering import FieldSet
+from utilities.forms.utils import get_field_value
 from utilities.object_types import object_type_name
 
 from netbox_custom_objects.choices import SearchWeightChoices
@@ -215,19 +216,62 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        # Disable changing the custom object type or related object type of a field
+        # Toggling the polymorphic checkbox should re-render the form so only the
+        # relevant related-object field is shown.
+        self.fields['is_polymorphic'].widget.attrs.update({
+            'hx-get': '.',
+            'hx-include': '#form_fields',
+            'hx-target': '#form_fields',
+        })
+
+        # Determine current field type and polymorphic state.
+        # For existing instances is_polymorphic cannot be changed, so read it from the
+        # instance directly; for new fields use whatever the form currently carries.
+        field_type = get_field_value(self, 'type')
+        if self.instance.pk:
+            is_polymorphic = self.instance.is_polymorphic
+        elif self.is_bound:
+            # get_field_value() falls back to initial for BooleanField (no valid_value);
+            # read the submitted checkbox value from self.data directly instead.
+            is_polymorphic = bool(self.data.get('is_polymorphic'))
+        else:
+            is_polymorphic = bool(get_field_value(self, 'is_polymorphic'))
+
+        # Show only the relevant related-object field and rebuild fieldsets cleanly.
+        # The parent __init__ inserts a simple FieldSet('related_object_type', ...) for
+        # object/multiobject types, which would create a duplicate section; replacing
+        # self.fieldsets here keeps a single "Related Object" group.
+        if field_type in (CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT):
+            if is_polymorphic:
+                if 'related_object_type' in self.fields:
+                    del self.fields['related_object_type']
+                related_obj_fields = ('is_polymorphic', 'related_object_types', 'related_object_filter')
+            else:
+                if 'related_object_types' in self.fields:
+                    del self.fields['related_object_types']
+                related_obj_fields = ('is_polymorphic', 'related_object_type', 'related_object_filter')
+            self.fieldsets = (
+                CustomObjectTypeFieldForm.fieldsets[0],
+                FieldSet(*related_obj_fields, name=_('Related Object')),
+                CustomObjectTypeFieldForm.fieldsets[2],
+            )
+        else:
+            # Parent already removed related_object_type/related_object_filter;
+            # remove related_object_types too.
+            if 'related_object_types' in self.fields:
+                del self.fields['related_object_types']
+
+        # Disable immutable fields on existing instances.
         if self.instance.pk:
             self.fields["custom_object_type"].disabled = True
             self.fields["is_polymorphic"].disabled = True
-            if self.instance.is_polymorphic:
-                if "related_object_types" in self.fields:
-                    self.fields["related_object_types"].disabled = True
-            else:
-                if "related_object_type" in self.fields:
-                    self.fields["related_object_type"].disabled = True
+            if 'related_object_types' in self.fields:
+                self.fields["related_object_types"].disabled = True
+            if 'related_object_type' in self.fields:
+                self.fields["related_object_type"].disabled = True
 
         # Multi-object fields may not be set unique
-        if self.initial.get("type") == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+        if field_type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
             self.fields["unique"].disabled = True
 
     def clean(self):
