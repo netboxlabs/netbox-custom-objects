@@ -630,7 +630,10 @@ class CustomObjectEditView(generic.ObjectEditView):
                                 )
                                 kwargs['initial'][field_name] = initial_ids
                             except Exception:
-                                pass
+                                logger.debug(
+                                    "Failed to load default initial values for field %r",
+                                    field_name, exc_info=True,
+                                )
 
             # Set initial values for polymorphic M2M sub-fields from the through table
             if instance and instance.pk:
@@ -659,7 +662,10 @@ class CustomObjectEditView(generic.ObjectEditView):
                             except CT.DoesNotExist:
                                 pass
                     except Exception:
-                        pass
+                        logger.debug(
+                            "Failed to load polymorphic M2M initial values for field %r",
+                            field_name, exc_info=True,
+                        )
 
             # Set initial values for polymorphic Object sub-fields from the existing GFK value
             if instance and instance.pk:
@@ -676,7 +682,10 @@ class CustomObjectEditView(generic.ObjectEditView):
                                     kwargs['initial'][sub_name] = gfk_value.pk
                                     break
                     except Exception:
-                        pass
+                        logger.debug(
+                            "Failed to load polymorphic GFK initial value for field %r",
+                            field_name, exc_info=True,
+                        )
 
             # Now call the parent __init__ with the modified kwargs
             forms.NetBoxModelForm.__init__(self, *args, **kwargs)
@@ -724,7 +733,26 @@ class CustomObjectEditView(generic.ObjectEditView):
 
             return instance
 
+        def custom_clean(self):
+            # Call parent for side effects (custom field processing etc.).
+            # CheckLastUpdatedMixin.clean() does not propagate its return value,
+            # so the chain returns None; read self.cleaned_data directly instead.
+            forms.NetBoxModelForm.clean(self)
+            # Enforce that at most one sub-field is filled for each polymorphic
+            # single-object field.  Multiple non-None values are ambiguous and
+            # would otherwise be silently resolved by "first non-empty wins".
+            for field_name, sub_names in self.custom_object_type_poly_obj_fields.items():
+                filled = [sn for sn in sub_names if self.cleaned_data.get(sn) is not None]
+                if len(filled) > 1:
+                    for sub_name in filled:
+                        self.add_error(
+                            sub_name,
+                            _("Only one type may be selected for this field — clear all but one."),
+                        )
+            return self.cleaned_data
+
         form_class.__init__ = custom_init
+        form_class.clean = custom_clean
         form_class.save = custom_save
 
         return form_class

@@ -58,20 +58,18 @@ class PolymorphicObjectSerializerField(serializers.Field):
     def to_representation(self, value):
         if value is None:
             return None
-        try:
-            ct = ContentType.objects.get_for_model(value)
-            result = {
-                "_content_type": f"{ct.app_label}.{ct.model}",
-                "id": value.pk,
-                "display": str(value),
-            }
-            return result
-        except Exception:
-            return None
+        ct = ContentType.objects.get_for_model(value)
+        return {
+            "_content_type": f"{ct.app_label}.{ct.model}",
+            "id": value.pk,
+            "display": str(value),
+        }
 
     def to_internal_value(self, data):
         if not isinstance(data, dict):
             raise serializers.ValidationError("Expected a dict with object reference.")
+
+        # Resolve ContentType
         try:
             if "content_type_id" in data:
                 ct = ContentType.objects.get(pk=data["content_type_id"])
@@ -81,24 +79,35 @@ class PolymorphicObjectSerializerField(serializers.Field):
                 raise serializers.ValidationError(
                     "Must provide content_type_id or (app_label + model)."
                 )
-            if (
-                self.allowed_content_type_ids is not None
-                and ct.id not in self.allowed_content_type_ids
-            ):
-                raise serializers.ValidationError(
-                    f"Object type '{ct.app_label}.{ct.model}' is not allowed for this field."
-                )
-            model_class = ct.model_class()
-            if model_class is None:
-                raise serializers.ValidationError(f"Cannot resolve model for content type {ct}.")
-            obj_id = data.get("object_id") or data.get("id")
-            if obj_id is None:
-                raise serializers.ValidationError("Must provide object_id.")
-            return model_class.objects.get(pk=obj_id)
         except ContentType.DoesNotExist:
             raise serializers.ValidationError("Invalid content type.")
-        except Exception as e:
-            raise serializers.ValidationError(f"Invalid object reference: {e}")
+
+        if (
+            self.allowed_content_type_ids is not None
+            and ct.id not in self.allowed_content_type_ids
+        ):
+            raise serializers.ValidationError(
+                f"Object type '{ct.app_label}.{ct.model}' is not allowed for this field."
+            )
+
+        model_class = ct.model_class()
+        if model_class is None:
+            raise serializers.ValidationError(f"Cannot resolve model for content type {ct}.")
+
+        obj_id = data.get("object_id") or data.get("id")
+        if obj_id is None:
+            raise serializers.ValidationError("Must provide object_id.")
+
+        try:
+            return model_class.objects.get(pk=obj_id)
+        except model_class.DoesNotExist:
+            raise serializers.ValidationError(
+                f"No {ct.model} with pk={obj_id!r}."
+            )
+        except (ValueError, TypeError):
+            raise serializers.ValidationError(
+                f"Invalid pk value: {obj_id!r}."
+            )
 
 
 class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):

@@ -495,6 +495,28 @@ class PolymorphicFieldUITest(TransactionCleanupMixin, CustomObjectsTestCase, Tra
         obj.refresh_from_db()
         self.assertEqual(obj.poly_obj, self.site1)
 
+    def test_submit_edit_form_rejects_multiple_gfk_subfields(self):
+        """POST with more than one GFK sub-field filled returns a form error."""
+        obj = self.model.objects.create(name="multi-gfk-obj")
+        data = {
+            "name": "multi-gfk-obj",
+            # Both sub-fields filled — should be rejected
+            "poly_obj__dcim__site": self.site1.pk,
+            "poly_obj__ipam__prefix": self.prefix1.pk,
+            "csrfmiddlewaretoken": "fake",
+        }
+        # Don't follow redirects: success redirects (302), validation error re-renders (200)
+        response = self.client.post(self._edit_url(obj.pk), data)
+        self.assertEqual(response.status_code, 200, "Expected form to be re-rendered with errors")
+        form = response.context["form"]
+        self.assertTrue(form.errors, "Expected form errors but found none")
+        # Both conflicting sub-fields should carry an error
+        self.assertIn("poly_obj__dcim__site", form.errors)
+        self.assertIn("poly_obj__ipam__prefix", form.errors)
+        # Object must not have been modified
+        obj.refresh_from_db()
+        self.assertIsNone(obj.poly_obj)
+
     def test_submit_edit_form_clears_gfk_when_no_subfield_selected(self):
         """POST with no sub-field selected clears an existing GFK value."""
         obj = self.model.objects.create(name="clear-gfk-obj")
