@@ -433,7 +433,7 @@ class ObjectFieldType(FieldType):
                     related_name="+",
                     db_column=f"{field.name}_content_type_id",
                 ),
-                oid_field_name: models.PositiveIntegerField(null=True, blank=True),
+                oid_field_name: models.PositiveBigIntegerField(null=True, blank=True),
                 field.name: GenericForeignKey(ct_field_name, oid_field_name),
             }
 
@@ -602,7 +602,7 @@ class ObjectFieldType(FieldType):
         ct_field.contribute_to_class(model, ct_field_name)
         schema_editor.add_field(model, ct_field)
 
-        oid_field = models.PositiveIntegerField(null=True, blank=True)
+        oid_field = models.PositiveBigIntegerField(null=True, blank=True)
         oid_field.contribute_to_class(model, oid_field_name)
         schema_editor.add_field(model, oid_field)
 
@@ -1162,7 +1162,7 @@ class MultiObjectFieldType(FieldType):
         """
         Creates a through model for a polymorphic MultiObject field.
         Columns: source_id (FK to custom object), content_type_id (FK to ContentType),
-        object_id (PositiveIntegerField).
+        object_id (PositiveBigIntegerField).
         """
         meta = type(
             "Meta",
@@ -1201,7 +1201,7 @@ class MultiObjectFieldType(FieldType):
                 related_name="+",
                 db_column="content_type_id",
             ),
-            "object_id": models.PositiveIntegerField(db_column="object_id"),
+            "object_id": models.PositiveBigIntegerField(db_column="object_id"),
         }
 
         return generate_model(field_instance.through_model_name, (models.Model,), attrs)

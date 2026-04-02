@@ -105,10 +105,10 @@ class PolymorphicObjectSerializerField(serializers.Field):
 
         try:
             return model_class.objects.get(pk=obj_id)
-        except model_class.DoesNotExist:
+        except (model_class.DoesNotExist, ValueError, TypeError, OverflowError):
             raise serializers.ValidationError("No matching object found.") from None
-        except (ValueError, TypeError, OverflowError):
-            raise serializers.ValidationError("Invalid pk value.") from None
+        except Exception:
+            raise serializers.ValidationError("Invalid request.") from None
 
 
 class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
@@ -188,18 +188,34 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
                     {"is_polymorphic": "Cannot change the polymorphic flag after field creation."}
                 )
             if attrs.get("related_object_types_input") is not None:
-                incoming = frozenset(
-                    (entry.get("app_label", ""), entry.get("model", ""))
-                    for entry in attrs["related_object_types_input"]
-                )
-                existing = frozenset(
-                    (ot.app_label, ot.model)
-                    for ot in self.instance.related_object_types.all()
-                )
-                if incoming != existing:
-                    raise ValidationError(
-                        {"related_object_types_input": "Cannot change allowed object types after field creation."}
+                # Resolve aliases (public app_label, COT slug as model name) before
+                # comparing so that a PUT/PATCH round-tripping the same logical types
+                # using alias forms is not rejected as a change.
+                # If resolution raises ValidationError here (invalid type in the
+                # payload) we skip the immutability guard — the error will surface
+                # again when the same entry is resolved in the normal validation path.
+                try:
+                    resolved_incoming = [
+                        self._resolve_object_type(
+                            entry.get("app_label", ""), entry.get("model", "")
+                        )
+                        for entry in attrs["related_object_types_input"]
+                    ]
+                except ValidationError:
+                    resolved_incoming = None
+
+                if resolved_incoming is not None:
+                    incoming = frozenset(
+                        (ot.app_label, ot.model) for ot in resolved_incoming
                     )
+                    existing = frozenset(
+                        (ot.app_label, ot.model)
+                        for ot in self.instance.related_object_types.all()
+                    )
+                    if incoming != existing:
+                        raise ValidationError(
+                            {"related_object_types_input": "Cannot change allowed object types after field creation."}
+                        )
             if attrs.get("app_label") or attrs.get("model"):
                 raise ValidationError(
                     "Cannot change the related object type after field creation."
