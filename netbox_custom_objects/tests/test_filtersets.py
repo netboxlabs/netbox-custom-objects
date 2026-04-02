@@ -12,6 +12,7 @@ from extras.models import CustomFieldChoiceSet
 from netbox_custom_objects.field_types import MultiObjectFieldType, ObjectFieldType
 from netbox_custom_objects.filtersets import get_filterset_class
 from netbox_custom_objects.models import CustomObjectTypeField
+from extras.models import CustomFieldChoiceSet
 from utilities.forms.fields import (
     DynamicModelChoiceField,
     DynamicModelMultipleChoiceField,
