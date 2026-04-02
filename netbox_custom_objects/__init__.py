@@ -30,6 +30,56 @@ def _migration_finished(sender, **kwargs):
     _migrations_checked = None
 
 
+def _patch_object_selector_view():
+    """
+    Patch ObjectSelectorView to support dynamically-generated custom object models.
+
+    Core NetBox's ObjectSelectorView._get_form_class() and _get_filterset_class()
+    use import_string() to find classes by convention (e.g.
+    ``netbox_custom_objects.forms.Table1ModelFilterForm``).  Dynamically generated
+    custom object models have no such importable classes, so the import raises an
+    ImportError and the HTMX request returns a 500 error.
+
+    This patch intercepts the lookup for models whose app_label is APP_LABEL and
+    builds the form/filterset dynamically using the same logic as
+    CustomObjectListView.
+    """
+    from netbox.views.htmx import ObjectSelectorView
+
+    _original_get_form_class = ObjectSelectorView._get_form_class
+    _original_get_filterset_class = ObjectSelectorView._get_filterset_class
+
+    def _patched_get_form_class(self, model):
+        if model._meta.app_label == APP_LABEL:
+            from netbox_custom_objects import field_types as _field_types
+            from netbox.forms import NetBoxModelFilterSetForm
+            from utilities.forms.fields import TagFilterField
+
+            custom_object_type = model.custom_object_type
+            attrs = {
+                'model': model,
+                '__module__': 'database.filterset_forms',
+                'tag': TagFilterField(model),
+            }
+            for field in custom_object_type.fields.all():
+                field_type = _field_types.FIELD_TYPE_CLASS[field.type]()
+                try:
+                    attrs[field.name] = field_type.get_filterform_field(field)
+                except NotImplementedError:
+                    pass
+            return type(f'{model.__name__}FilterForm', (NetBoxModelFilterSetForm,), attrs)
+        return _original_get_form_class(self, model)
+
+    def _patched_get_filterset_class(self, model):
+        if model._meta.app_label == APP_LABEL:
+            from netbox_custom_objects.filtersets import get_filterset_class
+            return get_filterset_class(model)
+        return _original_get_filterset_class(self, model)
+
+    ObjectSelectorView._get_form_class = _patched_get_form_class
+    ObjectSelectorView._get_filterset_class = _patched_get_filterset_class
+
+
 # Plugin Configuration
 class CustomObjectsPluginConfig(PluginConfig):
     name = "netbox_custom_objects"
@@ -132,6 +182,9 @@ class CustomObjectsPluginConfig(PluginConfig):
         # Connect migration signals to track migration state
         pre_migrate.connect(_migration_started)
         post_migrate.connect(_migration_finished)
+
+        # Patch ObjectSelectorView to support dynamically-generated custom object models
+        _patch_object_selector_view()
 
         # Suppress warnings about database calls during app initialization
         with warnings.catch_warnings():
