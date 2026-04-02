@@ -903,17 +903,19 @@ class ReferencedObjectDeletionTest(
         site_pk = self.site.pk
         self.site.delete()
 
-        # The through-table row is NOT cascade-deleted (only the content_type FK
-        # cascade would fire if the ContentType row itself were deleted).
-        from django.apps import apps as django_apps
-        from netbox_custom_objects.constants import APP_LABEL
-        through = django_apps.get_model(APP_LABEL, self.m2m_field.through_model_name)
+        # Verify the stale row persists: the through table has no DB-level FK from
+        # object_id to dcim_site, so deleting a Site cannot cascade into the through
+        # table.  Fetch the through model directly from the manager to avoid a
+        # global app-registry lookup that could resolve to a stale model from a
+        # prior test run when using --keepdb.
+        manager = obj.poly_multi  # PolymorphicManyToManyManager
+        through = manager._get_through_model()
         self.assertTrue(
             through.objects.filter(source_id=obj.pk, object_id=site_pk).exists(),
             "Stale through-table row should remain after target deletion (no DB FK on object_id).",
         )
 
-        # But all() skips the stale row — the result list must be empty.
+        # all() skips the stale row — the result list must be empty.
         self.assertEqual(list(obj.poly_multi.all()), [])
 
     def test_deleting_custom_object_type_drops_db_table_and_deregisters_model(self):
