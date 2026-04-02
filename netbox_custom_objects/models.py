@@ -1803,7 +1803,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                                     "managed": True,
                                 },
                             )
-                            _ = generate_model(
+                            _old_through_model = generate_model(
                                 f"TempOld{self.original.through_model_name}",
                                 (models.Model,),
                                 {
