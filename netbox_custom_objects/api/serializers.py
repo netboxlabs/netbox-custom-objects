@@ -94,7 +94,7 @@ class PolymorphicObjectSerializerField(serializers.Field):
         if model_class is None:
             raise serializers.ValidationError("Cannot resolve the specified object type.")
 
-        obj_id = data.get("object_id") or data.get("id")
+        obj_id = data.get("object_id") if "object_id" in data else data.get("id")
         if obj_id is None:
             raise serializers.ValidationError("Must provide object_id.")
 

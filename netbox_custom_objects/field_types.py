@@ -613,34 +613,39 @@ class ObjectFieldType(FieldType):
         idx = models.Index(fields=[ct_field_name, oid_field_name], name=idx_name)
         schema_editor.add_index(model, idx)
 
-    def remove_polymorphic_object_columns(self, field_instance, model):
+    def remove_polymorphic_object_columns(self, field_instance, model, schema_editor):
         """
         Remove the concrete DB columns for a polymorphic Object field.
+
+        ``schema_editor`` must be supplied by the caller so that all DDL in a
+        single operation (e.g. field deletion) runs within one schema editor
+        context.  Opening a nested ``with connection.schema_editor()`` here
+        would cause deferred_sql from the outer context to be flushed at the
+        wrong time on some backends.
         """
         ct_field_name = f"{field_instance.name}_content_type"
         oid_field_name = f"{field_instance.name}_object_id"
 
-        with connection.schema_editor() as schema_editor:
-            try:
-                oid_field = model._meta.get_field(oid_field_name)
-                schema_editor.remove_field(model, oid_field)
-            except FieldDoesNotExist:
-                pass  # Column already absent — nothing to remove.
-            except Exception:
-                logger.warning(
-                    "Failed to remove polymorphic object_id column %r from %r",
-                    oid_field_name, model._meta.db_table, exc_info=True,
-                )
-            try:
-                ct_field = model._meta.get_field(ct_field_name)
-                schema_editor.remove_field(model, ct_field)
-            except FieldDoesNotExist:
-                pass  # Column already absent — nothing to remove.
-            except Exception:
-                logger.warning(
-                    "Failed to remove polymorphic content_type column %r from %r",
-                    ct_field_name, model._meta.db_table, exc_info=True,
-                )
+        try:
+            oid_field = model._meta.get_field(oid_field_name)
+            schema_editor.remove_field(model, oid_field)
+        except FieldDoesNotExist:
+            pass  # Column already absent — nothing to remove.
+        except Exception:
+            logger.warning(
+                "Failed to remove polymorphic object_id column %r from %r",
+                oid_field_name, model._meta.db_table, exc_info=True,
+            )
+        try:
+            ct_field = model._meta.get_field(ct_field_name)
+            schema_editor.remove_field(model, ct_field)
+        except FieldDoesNotExist:
+            pass  # Column already absent — nothing to remove.
+        except Exception:
+            logger.warning(
+                "Failed to remove polymorphic content_type column %r from %r",
+                ct_field_name, model._meta.db_table, exc_info=True,
+            )
 
 
 # WHY CustomManyToManyManager / CustomManyToManyDescriptor / CustomManyToManyField
@@ -1228,15 +1233,18 @@ class MultiObjectFieldType(FieldType):
                 if table_name not in existing_tables:
                     schema_editor.create_model(through_model)
 
-    def drop_polymorphic_m2m_table(self, field_instance, model):
+    def drop_polymorphic_m2m_table(self, field_instance, model, schema_editor):
         """
         Drops the DB table for a polymorphic MultiObject through model.
+
+        ``schema_editor`` must be supplied by the caller for the same reason as
+        ``remove_polymorphic_object_columns``: all DDL in a single operation
+        should share one schema editor context.
         """
         _apps = model._meta.apps
         try:
             through_model = _apps.get_model(APP_LABEL, field_instance.through_model_name)
-            with connection.schema_editor() as schema_editor:
-                schema_editor.delete_model(through_model)
+            schema_editor.delete_model(through_model)
         except LookupError:
             pass  # Already dropped or never created
 

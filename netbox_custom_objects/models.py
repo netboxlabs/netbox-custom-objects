@@ -1299,6 +1299,28 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 {"is_polymorphic": _("Cannot change the polymorphic flag after field creation.")}
             )
 
+        # Prevent renaming a polymorphic field.
+        #
+        # For a polymorphic GFK field the concrete DB columns are named
+        # "{name}_content_type" and "{name}_object_id"; for a polymorphic
+        # MultiObject field the through table is named
+        # "custom_objects_{cot_id}_{name}".  The save() path currently has no
+        # logic to rename these artefacts (it falls through to `pass`), so
+        # allowing a rename would silently leave the DB schema out of sync with
+        # the field name stored in the row — causing query failures at runtime.
+        #
+        # Until explicit rename logic is implemented (renaming the GFK columns
+        # and/or the through table analogously to the non-polymorphic rename path
+        # at save() line ~1749), we reject renames outright.
+        if (
+            self.pk
+            and (self.is_polymorphic or self._original_is_polymorphic)
+            and self.name != self._original_name
+        ):
+            raise ValidationError(
+                {"name": _("Cannot rename a polymorphic field after creation.")}
+            )
+
         # Check for recursion in object and multiobject fields (non-polymorphic only).
         # Polymorphic fields' allowed types are a M2M set after save(), so their recursion
         # check runs in the check_polymorphic_recursion m2m_changed signal handler instead.
@@ -1354,7 +1376,21 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         # Add this type to visited set
         visited.add(custom_object_type.id)
 
-        # Check all object and multiobject fields in this custom object type
+        # Check all *non-polymorphic* object and multiobject fields in this COT.
+        #
+        # KNOWN LIMITATION: polymorphic fields (is_polymorphic=True) store their
+        # allowed target types on the related_object_types M2M, not on the
+        # related_object_type FK.  This DFS therefore does not traverse edges
+        # introduced by polymorphic fields.  A cycle that passes entirely through
+        # polymorphic legs (e.g. A →(poly) B →(poly) A) will go undetected.
+        #
+        # Fixing this requires also iterating field.related_object_types.filter(
+        # app_label=APP_LABEL) and recursing into each.  The check_polymorphic_recursion
+        # signal already guards the direct A→B assignment, but cannot see multi-hop
+        # cycles that depend on polymorphic fields already on intermediate types.
+        #
+        # TODO: extend this DFS to also traverse polymorphic related_object_types
+        # so that multi-hop polymorphic cycles are detected at assignment time.
         related_objects_checked = set()
         for field in custom_object_type.fields.filter(
             type__in=[
@@ -1729,9 +1765,15 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                         field_type.create_m2m_table(self, model, self.name)
             else:
-                # Polymorphic fields are locked after creation (type and polymorphic cannot change)
+                # Polymorphic fields: renames and type changes are rejected by clean().
+                # Non-schema attributes (label, description, …) may still change here.
+                # If clean() was bypassed and a rename slipped through, raise rather
+                # than silently leaving DB columns / through table out of sync.
                 if self.is_polymorphic or self._original_is_polymorphic:
-                    pass  # No schema changes for polymorphic fields on update
+                    if self.name != self._original_name:
+                        raise ValidationError(
+                            {"name": _("Cannot rename a polymorphic field after creation.")}
+                        )
                 else:
                     old_field = field_type.get_model_field(self.original)
                     old_field.contribute_to_class(model, self._original_name)
@@ -1872,16 +1914,16 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         field_type = FIELD_TYPE_CLASS[self.type]()
         model = self.custom_object_type.get_model()
 
-        if self.is_polymorphic:
-            if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
-                field_type.remove_polymorphic_object_columns(self, model)
-            elif self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                field_type.drop_polymorphic_m2m_table(self, model)
-        else:
-            model_field = field_type.get_model_field(self)
-            model_field.contribute_to_class(model, self.name)
+        with connection.schema_editor() as schema_editor:
+            if self.is_polymorphic:
+                if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
+                    field_type.remove_polymorphic_object_columns(self, model, schema_editor)
+                elif self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+                    field_type.drop_polymorphic_m2m_table(self, model, schema_editor)
+            else:
+                model_field = field_type.get_model_field(self)
+                model_field.contribute_to_class(model, self.name)
 
-            with connection.schema_editor() as schema_editor:
                 if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                     _apps = model._meta.apps
                     through_model = _apps.get_model(APP_LABEL, self.through_model_name)
