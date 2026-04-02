@@ -9,7 +9,7 @@ from django.db.models.signals import pre_migrate, post_migrate
 from netbox.plugins import PluginConfig
 
 from .constants import APP_LABEL as APP_LABEL
-from .utilities import extract_cot_id_from_model_name
+from .utilities import extract_cot_id_from_model_name, install_clear_cache_suppressor
 
 # Context variable to track if we're currently running migrations
 _is_migrating = contextvars.ContextVar('is_migrating', default=False)
@@ -127,6 +127,10 @@ class CustomObjectsPluginConfig(PluginConfig):
             _checking_migrations = False
 
     def ready(self):
+        # Install the thread-safe apps.clear_cache wrapper before any dynamic
+        # model is registered (must happen exactly once, before get_model() runs).
+        install_clear_cache_suppressor()
+
         from .models import CustomObjectType
         from netbox_custom_objects.api.serializers import get_serializer_class
 

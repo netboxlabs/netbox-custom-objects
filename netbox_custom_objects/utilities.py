@@ -1,5 +1,7 @@
 import re
+import threading
 import warnings
+from contextlib import contextmanager
 
 from django.apps import apps
 
@@ -10,8 +12,62 @@ __all__ = (
     "extract_cot_id_from_model_name",
     "generate_model",
     "get_viewname",
+    "install_clear_cache_suppressor",
     "is_in_branch",
+    "suppress_clear_cache",
 )
+
+# ---------------------------------------------------------------------------
+# Thread-safe apps.clear_cache suppression
+# ---------------------------------------------------------------------------
+# Django's apps.register_model() calls apps.clear_cache(), which triggers our
+# get_models() override → get_model() for every known COT → potential infinite
+# recursion and spurious cache invalidations during dynamic model registration.
+#
+# Rather than monkey-patching the module-level apps.clear_cache attribute on
+# every call (which is not thread-safe), we install *one* wrapper at startup
+# and use a thread-local depth counter to suppress clear_cache per-thread.
+# This means concurrent requests on other threads always see real cache
+# invalidation behaviour — only the thread doing model registration is
+# suppressed, and only for the duration of the critical window.
+# ---------------------------------------------------------------------------
+
+_suppress_tl = threading.local()   # thread-local suppression depth counter
+_real_clear_cache = None           # set by install_clear_cache_suppressor()
+
+
+def _wrapped_clear_cache():
+    """apps.clear_cache replacement — skips if this thread is suppressing."""
+    if getattr(_suppress_tl, "depth", 0) > 0:
+        return
+    _real_clear_cache()
+
+
+def install_clear_cache_suppressor():
+    """Install the thread-aware wrapper on apps.clear_cache (idempotent).
+
+    Must be called once from AppConfig.ready() before any dynamic model is
+    registered.  Safe to call multiple times — subsequent calls are no-ops.
+    """
+    global _real_clear_cache
+    if apps.clear_cache is _wrapped_clear_cache:
+        return  # already installed
+    _real_clear_cache = apps.clear_cache
+    apps.clear_cache = _wrapped_clear_cache
+
+
+@contextmanager
+def suppress_clear_cache():
+    """Context manager: suppress apps.clear_cache() in the current thread.
+
+    Reentrant — uses a depth counter so nested calls don't prematurely
+    re-enable the real clear_cache before the outermost block exits.
+    """
+    _suppress_tl.depth = getattr(_suppress_tl, "depth", 0) + 1
+    try:
+        yield
+    finally:
+        _suppress_tl.depth -= 1
 
 # Internal model names for custom object types follow the pattern "table<id>model"
 # (e.g. "table3model" for CustomObjectType with pk=3).
@@ -121,14 +177,10 @@ def generate_model(*args, **kwargs):
             "ignore", category=RuntimeWarning, message=".*was already registered.*"
         )
 
-        # Temporarily suppress apps.clear_cache during model type() creation to
-        # avoid invalidating the app registry cache on every dynamic model build.
-        _original_clear_cache = apps.clear_cache
-        apps.clear_cache = lambda: None
-        try:
+        # Suppress apps.clear_cache during model type() creation to avoid
+        # invalidating the app registry cache on every dynamic model build.
+        with suppress_clear_cache():
             model = type(*args, **kwargs)
-        finally:
-            apps.clear_cache = _original_clear_cache
 
     return model
 

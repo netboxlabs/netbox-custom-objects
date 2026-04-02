@@ -107,7 +107,7 @@ class PolymorphicObjectSerializerField(serializers.Field):
             return model_class.objects.get(pk=obj_id)
         except model_class.DoesNotExist:
             raise serializers.ValidationError("No matching object found.") from None
-        except (ValueError, TypeError):
+        except (ValueError, TypeError, OverflowError):
             raise serializers.ValidationError("Invalid pk value.") from None
 
 

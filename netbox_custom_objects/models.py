@@ -54,7 +54,7 @@ from utilities.validators import validate_regex
 
 from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
-from netbox_custom_objects.utilities import extract_cot_id_from_model_name, generate_model
+from netbox_custom_objects.utilities import extract_cot_id_from_model_name, generate_model, suppress_clear_cache
 
 
 class UniquenessConstraintTestError(Exception):
@@ -619,13 +619,12 @@ class CustomObjectType(NetBoxModel):
         # _model_cache that re-entrant get_model() call would itself call
         # register_model() → clear_cache() → get_models() → ... → infinite recursion.
         #
-        # We suppress clear_cache for the entire window from register_model() through
-        # the cache write, then restore and call once — at which point the model IS
-        # in _model_cache so the re-entrant get_model() calls return from cache
-        # without triggering another register_model().
-        _original_clear_cache = apps.clear_cache
-        apps.clear_cache = lambda: None
-        try:
+        # suppress_clear_cache() (thread-local, installed once in AppConfig.ready())
+        # blocks the wrapper for this thread only for the window from register_model()
+        # through the cache write.  Once the context exits, the single explicit
+        # apps.clear_cache() call below is safe: this COT is now in _model_cache so
+        # re-entrant get_model() calls return from cache without recursing.
+        with suppress_clear_cache():
             if model_name.lower() in apps.all_models[APP_LABEL]:
                 # Remove the existing model from all_models before registering the new one
                 del apps.all_models[APP_LABEL][model_name.lower()]
@@ -637,8 +636,6 @@ class CustomObjectType(NetBoxModel):
             # Cache the generated model with its timestamp (protected by lock for thread safety)
             with self._global_lock:
                 self._model_cache[self.id] = (model, self.cache_timestamp)
-        finally:
-            apps.clear_cache = _original_clear_cache
 
         # Now that the model is in _model_cache, clear_cache() is safe: re-entrant
         # get_model() calls for this COT will hit the cache and return immediately

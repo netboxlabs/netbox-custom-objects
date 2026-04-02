@@ -1386,6 +1386,12 @@ class PolymorphicM2MDescriptor:
             through_model_name=self.through_model_name,
         )
 
+    def __set__(self, instance, value):
+        raise AttributeError(
+            f"Direct assignment to '{self.field_name}' is not supported. "
+            f"Use '{self.field_name}.set(objs)' to update polymorphic M2M fields."
+        )
+
     @property
     def many_to_many(self):
         return True
