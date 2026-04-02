@@ -1,4 +1,5 @@
 import decimal
+import logging
 import re
 import threading
 from datetime import date, datetime
@@ -55,6 +56,8 @@ from utilities.validators import validate_regex
 from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name, generate_model, suppress_clear_cache
+
+logger = logging.getLogger(__name__)
 
 
 class UniquenessConstraintTestError(Exception):
@@ -671,6 +674,12 @@ class CustomObjectType(NetBoxModel):
         try:
             model_field = model._meta.get_field(field_name)
         except Exception:
+            logger.warning(
+                "_ensure_field_fk_constraint: could not get field %r on model %r; "
+                "FK constraint will not be created.",
+                field_name, model.__name__,
+                exc_info=True,
+            )
             return
 
         if not (hasattr(model_field, 'remote_field') and model_field.remote_field):

@@ -1249,6 +1249,49 @@ class MultiObjectFieldType(FieldType):
             pass  # Already dropped or never created
 
 
+class PolymorphicResultList:
+    """
+    Lazy, cacheable result returned by PolymorphicManyToManyManager.all().
+
+    The underlying DB queries are deferred until first access.  Subsequent
+    accesses of the *same instance* use a cached list, so templates that
+    test both ``{% if obj.poly_field %}`` and ``{% for x in obj.poly_field.all %}``
+    only issue one round of queries.
+
+    This is intentionally NOT a QuerySet — the objects come from multiple
+    model classes and cannot be combined into a single SQL result set.
+    It supports the subset of the list/queryset interface that templates and
+    common callers need: iteration, ``len()``, ``bool()``, and index access.
+    """
+
+    __slots__ = ("_factory", "_cache")
+
+    def __init__(self, factory):
+        # factory is a zero-argument callable that returns an iterator of objects.
+        self._factory = factory
+        self._cache = None
+
+    def _evaluate(self):
+        if self._cache is None:
+            self._cache = list(self._factory())
+        return self._cache
+
+    def __iter__(self):
+        return iter(self._evaluate())
+
+    def __len__(self):
+        return len(self._evaluate())
+
+    def __bool__(self):
+        return bool(self._evaluate())
+
+    def __getitem__(self, index):
+        return self._evaluate()[index]
+
+    def __repr__(self):
+        return repr(self._evaluate())
+
+
 class PolymorphicManyToManyManager:
     """
     Manager for polymorphic many-to-many relationships.
@@ -1295,7 +1338,7 @@ class PolymorphicManyToManyManager:
                 yield obj
 
     def all(self):
-        return list(self._get_objects())
+        return PolymorphicResultList(self._get_objects)
 
     def count(self):
         return self._get_through_model().objects.filter(source_id=self.instance.pk).count()
@@ -1357,7 +1400,7 @@ class PolymorphicManyToManyManager:
                 ).delete()
 
     def __iter__(self):
-        return self._get_objects()
+        return iter(self.all())
 
 
 class PolymorphicM2MDescriptor:

@@ -351,9 +351,6 @@ class CustomObjectSerializer(NetBoxModelSerializer):
     def get_display(self, obj):
         return f"{obj.custom_object_type}: {obj.name}"
 
-    def validate(self, attrs):
-        return super().validate(attrs)
-
     def update_relation_fields(self, instance):
         # TODO: Implement this
         pass
@@ -431,7 +428,8 @@ def get_serializer_class(model, skip_object_fields=False):
     )
 
     def get_url(self, obj):
-        """Generate the API URL for this object"""
+        """Generate the API URL for this object, or None if the URL cannot be
+        resolved (e.g. the COT slug changed since the object was serialized)."""
         if hasattr(obj, "pk") and obj.pk in (None, ""):
             return None
 
@@ -443,7 +441,10 @@ def get_serializer_class(model, skip_object_fields=False):
         }
         request = self.context["request"]
         format = self.context.get("format")
-        return reverse(view_name, kwargs=kwargs, request=request, format=format)
+        try:
+            return reverse(view_name, kwargs=kwargs, request=request, format=format)
+        except NoReverseMatch:
+            return None
 
     def get_display(self, obj):
         """Get display representation of the object"""
@@ -577,9 +578,22 @@ def get_serializer_class(model, skip_object_fields=False):
         try:
             attrs[field.name] = field_type.get_serializer_field(field)
         except NotImplementedError:
+            # Field type intentionally has no serializer representation; omit it.
             logger.debug(
-                "serializer: {} field is not implemented; using a default serializer field".format(field.name)
+                "serializer: field %r (type %r) has no serializer implementation; skipping",
+                field.name, field.type,
             )
+        except Exception as exc:
+            # Unexpected error (e.g. ContentType.DoesNotExist from a deleted
+            # ContentType row).  Fall back to a permissive JSONField so the
+            # serializer remains functional and the error doesn't surface as a
+            # 500 to the caller.  Log at WARNING so it's visible in production.
+            logger.warning(
+                "serializer: failed to build serializer field for %r (type %r): %s; "
+                "falling back to JSONField",
+                field.name, field.type, exc,
+            )
+            attrs[field.name] = serializers.JSONField(required=False, allow_null=True)
 
     serializer_name = f"{model._meta.object_name}Serializer"
     serializer = type(
