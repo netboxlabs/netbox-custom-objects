@@ -11,22 +11,71 @@ _DYNAMIC_TABLE_PREFIX = "custom_objects_"
 
 
 def _drop_dynamic_tables():
-    """Drop any leftover dynamic custom-object tables from the database.
+    """Drop leftover dynamic custom-object tables and purge stale app-registry state.
 
-    Django's ``flush`` command uses ``django_table_names()`` which only returns
-    tables registered with the ORM. Dynamic tables created by the plugin live
-    outside that registry, so ``flush`` doesn't TRUNCATE them — but they DO
-    have foreign keys to ``django_content_type``, causing PostgreSQL to reject
-    the TRUNCATE with "cannot truncate a table referenced in a foreign key
-    constraint". Dropping these orphan tables first fixes that.
+    Two problems arise from --keepdb runs:
+
+    1. DB tables — Django's ``flush`` command uses ``django_table_names()`` which
+       only returns ORM-registered tables.  Dynamic tables created by this plugin
+       live outside that registry, so ``flush`` doesn't TRUNCATE them — but they
+       DO have foreign keys to ``django_content_type``, causing PostgreSQL to
+       reject the TRUNCATE with "cannot truncate a table referenced in a foreign
+       key constraint".  Dropping these orphan tables first fixes that.
+
+    2. App-registry models — stale dynamic models from prior runs may still be
+       registered in Django's in-process app registry even after their DB tables
+       are dropped.  Django's deletion collector walks ``Site._meta.related_objects``
+       (and similar) and queries every registered model that has a FK to the object
+       being deleted.  If a stale model points to a now-dropped table the query
+       raises ``ProgrammingError``.  We must deregister those models AND delete the
+       corresponding CustomObjectType rows from the DB before calling
+       ``apps.clear_cache()`` so that the next ``get_models()`` invocation rebuilds
+       ``_meta.related_objects`` without phantom FK references.
     """
+    from django.apps import apps as django_apps
+    from netbox_custom_objects.constants import APP_LABEL
+    from netbox_custom_objects.models import CustomObjectType
+
+    # Step 1 — clear the plugin's own model cache so get_model() doesn't hand out
+    # stale model objects that still reference non-existent through tables.
+    CustomObjectType.clear_model_cache()
+
+    # Step 2 — remove stale dynamic models from apps.all_models.
+    # We deliberately do NOT call apps.clear_cache() here: clear_cache() triggers
+    # get_models() on each AppConfig, and our override in __init__.py calls
+    # get_model() for every row in CustomObjectType.objects.all().  Any stale COT
+    # rows still in the DB would be immediately re-registered, undoing this cleanup.
+    app_models = django_apps.all_models.get(APP_LABEL, {})
+    stale_names = [
+        name for name, model in list(app_models.items())
+        if hasattr(model, '_meta') and model._meta.db_table.startswith(_DYNAMIC_TABLE_PREFIX)
+    ]
+    for name in stale_names:
+        del app_models[name]
+
+    # Step 3 — delete stale CustomObjectType rows via queryset (direct SQL DELETE,
+    # not the custom cot.delete() method which tries schema operations on tables
+    # that no longer exist).  Wrapped in a broad except so a partially-migrated
+    # schema never blocks test startup.
+    try:
+        CustomObjectType.objects.all().delete()
+    except Exception:
+        pass
+
+    # Step 4 — drop all dynamic DB tables.
     all_tables = connection.introspection.table_names()
     dynamic = [t for t in all_tables if t.startswith(_DYNAMIC_TABLE_PREFIX)]
-    if not dynamic:
-        return
-    with connection.cursor() as cursor:
-        for table in dynamic:
-            cursor.execute(f'DROP TABLE IF EXISTS "{table}" CASCADE')
+    if dynamic:
+        with connection.cursor() as cursor:
+            for table in dynamic:
+                cursor.execute(f'DROP TABLE IF EXISTS "{table}" CASCADE')
+
+    # Step 5 — rebuild the app registry cache now that both the stale model
+    # entries (step 2) and the stale COT rows (step 3) are gone.  get_models()
+    # finds no CustomObjectType rows so nothing is re-registered, and
+    # Site._meta.related_objects (etc.) is rebuilt without phantom FK pointers.
+    if stale_names:
+        django_apps.clear_cache()
 
 
 class TransactionCleanupMixin:
