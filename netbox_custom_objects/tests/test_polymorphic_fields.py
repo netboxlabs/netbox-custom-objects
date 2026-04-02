@@ -7,12 +7,12 @@ Covers both API and UI (form) paths for:
 """
 import json
 
-from django.test import TestCase, TransactionTestCase
+from django.test import TransactionTestCase
 from django.urls import reverse
 from rest_framework import status
 
 from core.models import ObjectType
-from dcim.models import Manufacturer, Site, DeviceType, DeviceRole, Device
+from dcim.models import Site
 from ipam.models import Prefix, IPAddress
 from ipam.choices import PrefixStatusChoices
 from users.models import ObjectPermission, Token
@@ -196,7 +196,9 @@ class PolymorphicFieldAPITest(TransactionCleanupMixin, CustomObjectsTestCase, Tr
             "name": "gfk-test-obj",
             "poly_obj": {"content_type_id": site_ct.pk, "object_id": self.site.pk},
         }
-        response = self.client.post(self._obj_list_url(), json.dumps(data), content_type="application/json", **self.header)
+        response = self.client.post(
+            self._obj_list_url(), json.dumps(data), content_type="application/json", **self.header
+        )
         self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.content)
         obj = self.model.objects.get(pk=json.loads(response.content)["id"])
         self.assertEqual(obj.poly_obj, self.site)
@@ -210,7 +212,9 @@ class PolymorphicFieldAPITest(TransactionCleanupMixin, CustomObjectsTestCase, Tr
             "name": "gfk-prefix-obj",
             "poly_obj": {"content_type_id": prefix_ct.pk, "object_id": self.prefix.pk},
         }
-        response = self.client.post(self._obj_list_url(), json.dumps(data), content_type="application/json", **self.header)
+        response = self.client.post(
+            self._obj_list_url(), json.dumps(data), content_type="application/json", **self.header
+        )
         self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.content)
         obj = self.model.objects.get(pk=json.loads(response.content)["id"])
         self.assertEqual(obj.poly_obj, self.prefix)
@@ -261,7 +265,9 @@ class PolymorphicFieldAPITest(TransactionCleanupMixin, CustomObjectsTestCase, Tr
                 {"content_type_id": prefix_ct.pk, "object_id": self.prefix.pk},
             ],
         }
-        response = self.client.post(self._obj_list_url(), json.dumps(data), content_type="application/json", **self.header)
+        response = self.client.post(
+            self._obj_list_url(), json.dumps(data), content_type="application/json", **self.header
+        )
         self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.content)
         obj = self.model.objects.get(pk=json.loads(response.content)["id"])
         members = obj.poly_multi.all()

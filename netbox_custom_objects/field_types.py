@@ -610,6 +610,7 @@ class ObjectFieldType(FieldType):
             except Exception:
                 pass
 
+
 class CustomManyToManyManager(Manager):
     def __init__(self, instance=None, field_name=None):
         super().__init__()
