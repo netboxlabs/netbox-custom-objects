@@ -62,6 +62,11 @@ class UniquenessConstraintTestError(Exception):
     pass
 
 
+def _table_exists(table_name):
+    """Return True if *table_name* exists in the current database."""
+    return table_name in connection.introspection.table_names()
+
+
 USER_TABLE_DATABASE_NAME_PREFIX = "custom_objects_"
 
 
@@ -758,6 +763,11 @@ class CustomObjectType(NetBoxModel):
         pre_delete.disconnect(handle_deleted_object)
         object_type.delete()
         with connection.schema_editor() as schema_editor:
+            # Drop polymorphic through tables first (they have FKs to django_content_type
+            # and to the main table, so they must be dropped before the main table).
+            for through_model in getattr(model, '_through_models', []):
+                if _table_exists(through_model._meta.db_table):
+                    schema_editor.delete_model(through_model)
             schema_editor.delete_model(model)
 
         # Unregister the model and its through-models from Django's app registry so

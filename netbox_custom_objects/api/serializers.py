@@ -46,7 +46,14 @@ class PolymorphicObjectSerializerField(serializers.Field):
     On write: accepts {"content_type_id": X, "object_id": Y} or
               {"app_label": "...", "model": "...", "object_id": Y}.
     For many=True (MultiObject polymorphic), wrap in a ListSerializer automatically.
+
+    Pass ``allowed_content_type_ids`` (a set of ContentType PKs) to restrict which
+    object types may be submitted.  Unrecognised types are rejected with HTTP 400.
     """
+
+    def __init__(self, allowed_content_type_ids=None, **kwargs):
+        self.allowed_content_type_ids = allowed_content_type_ids
+        super().__init__(**kwargs)
 
     def to_representation(self, value):
         if value is None:
@@ -73,6 +80,13 @@ class PolymorphicObjectSerializerField(serializers.Field):
             else:
                 raise serializers.ValidationError(
                     "Must provide content_type_id or (app_label + model)."
+                )
+            if (
+                self.allowed_content_type_ids is not None
+                and ct.id not in self.allowed_content_type_ids
+            ):
+                raise serializers.ValidationError(
+                    f"Object type '{ct.app_label}.{ct.model}' is not allowed for this field."
                 )
             model_class = ct.model_class()
             if model_class is None:
@@ -481,6 +495,23 @@ def get_serializer_class(model, skip_object_fields=False):
 
         return instance
 
+    def validate(self, data):
+        # ValidatedModelSerializer.validate() does attrs = data.copy() then
+        # Model(**attrs). Polymorphic GFK and M2M fields are not real Django model
+        # fields so they'd cause TypeError. Pop them, let parent run, then restore.
+        # Note: super() can't be used here because this function is defined outside
+        # a class body and has no __class__ cell. Walk the MRO instead.
+        saved = {}
+        for field_name in (*_poly_obj_fields, *_poly_m2m_fields):
+            if field_name in data:
+                saved[field_name] = data.pop(field_name)
+        for parent_cls in NetBoxModelSerializer.__mro__:
+            if 'validate' in parent_cls.__dict__:
+                data = parent_cls.validate(self, data)
+                break
+        data.update(saved)
+        return data
+
     # Create basic attributes for the serializer
     attrs = {
         "Meta": meta,
@@ -491,6 +522,7 @@ def get_serializer_class(model, skip_object_fields=False):
         "get_display": get_display,
         "create": create,
         "update": update,
+        "validate": validate,
     }
 
     for field in model_fields:

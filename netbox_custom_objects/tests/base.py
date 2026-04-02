@@ -1,4 +1,5 @@
 # Test utilities for netbox_custom_objects plugin
+from django.db import connection
 from django.test import Client
 from core.models import ObjectType
 from extras.models import CustomFieldChoiceSet
@@ -6,13 +7,58 @@ from utilities.testing import create_test_user
 
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 
+_DYNAMIC_TABLE_PREFIX = "custom_objects_"
+
+
+def _drop_dynamic_tables():
+    """Drop any leftover dynamic custom-object tables from the database.
+
+    Django's ``flush`` command uses ``django_table_names()`` which only returns
+    tables registered with the ORM. Dynamic tables created by the plugin live
+    outside that registry, so ``flush`` doesn't TRUNCATE them — but they DO
+    have foreign keys to ``django_content_type``, causing PostgreSQL to reject
+    the TRUNCATE with "cannot truncate a table referenced in a foreign key
+    constraint". Dropping these orphan tables first fixes that.
+    """
+    all_tables = connection.introspection.table_names()
+    dynamic = [t for t in all_tables if t.startswith(_DYNAMIC_TABLE_PREFIX)]
+    if not dynamic:
+        return
+    with connection.cursor() as cursor:
+        for table in dynamic:
+            cursor.execute(f'DROP TABLE IF EXISTS "{table}" CASCADE')
+
 
 class TransactionCleanupMixin:
     """Mixin for TransactionTestCase subclasses that create CustomObjectType instances.
 
     Deletes all COTs in tearDown so their backing tables are dropped before the
-    database flush that TransactionTestCase performs between tests.
+    database flush that TransactionTestCase performs between tests.  Also drops
+    any leftover dynamic tables before the flush so a dirty database from a
+    previous (failed) run cannot block the TRUNCATE.
+
+    Django 5.2 notes:
+    - _pre_setup / _fixture_setup are classmethods called once per class.
+    - _fixture_teardown is an instance method called after *every* test.
+    - Overriding _fixture_teardown is the correct place to drop dynamic tables
+      because it always runs, even when setUp raised an exception.
+    - Overriding _pre_setup (as classmethod) handles leftover tables from a
+      previous run before the first test of the current run.
     """
+
+    @classmethod
+    def _pre_setup(cls):
+        # Drop leftovers from any previous (possibly failed) run first, so the
+        # normal fixture setup that follows isn't blocked by orphan tables.
+        _drop_dynamic_tables()
+        super()._pre_setup()
+
+    def _fixture_teardown(self):
+        # Drop dynamic tables before Django's flush; without this, the flush
+        # command's TRUNCATE of django_content_type fails because our through
+        # tables have FK references to it.
+        _drop_dynamic_tables()
+        super()._fixture_teardown()
 
     def tearDown(self):
         for cot in CustomObjectType.objects.all():

@@ -536,7 +536,12 @@ class ObjectFieldType(FieldType):
     def get_serializer_field(self, field, **kwargs):
         if field.is_polymorphic:
             from netbox_custom_objects.api.serializers import PolymorphicObjectSerializerField
-            return PolymorphicObjectSerializerField(required=field.required, allow_null=not field.required)
+            allowed_ids = {ot.id for ot in field.related_object_types.all()}
+            return PolymorphicObjectSerializerField(
+                allowed_content_type_ids=allowed_ids,
+                required=field.required,
+                allow_null=not field.required,
+            )
         related_model_class = field.related_object_type.model_class()
         if related_model_class._meta.app_label == APP_LABEL:
             from netbox_custom_objects.api.serializers import get_serializer_class
@@ -907,8 +912,9 @@ class MultiObjectFieldType(FieldType):
         if field.is_polymorphic:
             from netbox_custom_objects.api.serializers import PolymorphicObjectSerializerField
             from rest_framework import serializers as drf_serializers
+            allowed_ids = {ot.id for ot in field.related_object_types.all()}
             return drf_serializers.ListField(
-                child=PolymorphicObjectSerializerField(),
+                child=PolymorphicObjectSerializerField(allowed_content_type_ids=allowed_ids),
                 required=field.required,
                 allow_empty=True,
             )
