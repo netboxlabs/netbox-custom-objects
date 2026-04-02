@@ -257,14 +257,26 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
             )
         else:
             # Parent already removed related_object_type/related_object_filter;
-            # remove related_object_types too.
-            if 'related_object_types' in self.fields:
-                del self.fields['related_object_types']
+            # remove the remaining related-object fields too.
+            for fname in ('related_object_types', 'is_polymorphic'):
+                if fname in self.fields:
+                    del self.fields[fname]
+            # Drop the Related Object fieldset entirely so no empty section header renders.
+            # Filter by checking that every item in a fieldset belongs to the related-object
+            # field set (handles both our full FieldSet and any parent-inserted simple one).
+            _related_names = frozenset({
+                'is_polymorphic', 'related_object_type', 'related_object_types', 'related_object_filter',
+            })
+            self.fieldsets = tuple(
+                fs for fs in self.fieldsets
+                if not all(isinstance(item, str) and item in _related_names for item in fs.items)
+            )
 
         # Disable immutable fields on existing instances.
         if self.instance.pk:
             self.fields["custom_object_type"].disabled = True
-            self.fields["is_polymorphic"].disabled = True
+            if 'is_polymorphic' in self.fields:
+                self.fields["is_polymorphic"].disabled = True
             if 'related_object_types' in self.fields:
                 self.fields["related_object_types"].disabled = True
             if 'related_object_type' in self.fields:
