@@ -2,6 +2,7 @@
 Tests for filtersets used by the plugin's UI and API views.
 """
 import datetime
+from decimal import Decimal
 
 from django.test import TestCase
 
@@ -10,6 +11,7 @@ from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
 from netbox_custom_objects.field_types import MultiObjectFieldType, ObjectFieldType
 from netbox_custom_objects.filtersets import get_filterset_class
 from netbox_custom_objects.models import CustomObjectTypeField
+from extras.models import CustomFieldChoiceSet
 from utilities.forms.fields import (
     DynamicModelChoiceField,
     DynamicModelMultipleChoiceField,
@@ -460,7 +462,6 @@ class DecimalPrimaryFieldSearchTestCase(CustomObjectsTestCase, TestCase):
         )
 
         model = cls.cot.get_model()
-        from decimal import Decimal
         cls.obj_11 = model.objects.create(price=Decimal("1.1"))
         cls.obj_03 = model.objects.create(price=Decimal("0.3"))
 
@@ -491,7 +492,6 @@ class SelectPrimaryFieldSearchTestCase(CustomObjectsTestCase, TestCase):
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
-        from extras.models import CustomFieldChoiceSet
         cls.choice_set = CustomFieldChoiceSet.objects.create(
             name="StatusChoices440",
             extra_choices=[["active", "Active"], ["planned", "Planned"], ["retired", "Retired"]],
@@ -598,7 +598,6 @@ class MultiSelectPrimaryFieldSearchTestCase(CustomObjectsTestCase, TestCase):
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
-        from extras.models import CustomFieldChoiceSet
         cls.choice_set = CustomFieldChoiceSet.objects.create(
             name="TagChoices440",
             extra_choices=[["red", "Red"], ["green", "Green"], ["blue", "Blue"]],
