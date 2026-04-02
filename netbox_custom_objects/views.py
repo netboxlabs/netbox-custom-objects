@@ -378,10 +378,24 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
     def _get_dependent_objects(self, obj):
         dependent_objects = super()._get_dependent_objects(obj)
         model = obj.custom_object_type.get_model_with_serializer()
-        kwargs = {
-            f"{obj.name}__isnull": False,
-        }
-        dependent_objects[model] = list(model.objects.filter(**kwargs))
+
+        if obj.is_polymorphic and obj.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+            # Polymorphic M2M: the field is a descriptor, not a real column — query
+            # via the through table and return the source objects.
+            from django.apps import apps as django_apps
+            try:
+                through = django_apps.get_model(APP_LABEL, obj.through_model_name)
+                source_ids = through.objects.values_list("source_id", flat=True).distinct()
+                dependent_objects[model] = list(model.objects.filter(pk__in=source_ids))
+            except LookupError:
+                dependent_objects[model] = []
+        elif obj.is_polymorphic and obj.type == CustomFieldTypeChoices.TYPE_OBJECT:
+            # Polymorphic GFK: filter on the concrete content_type column.
+            ct_field = f"{obj.name}_content_type__isnull"
+            dependent_objects[model] = list(model.objects.filter(**{ct_field: False}))
+        else:
+            dependent_objects[model] = list(model.objects.filter(**{f"{obj.name}__isnull": False}))
+
         return dependent_objects
 
 

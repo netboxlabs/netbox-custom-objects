@@ -80,7 +80,7 @@ class PolymorphicObjectSerializerField(serializers.Field):
                     "Must provide content_type_id or (app_label + model)."
                 )
         except ContentType.DoesNotExist:
-            raise serializers.ValidationError("Invalid content type.")
+            raise serializers.ValidationError("Invalid content type.") from None
 
         if (
             self.allowed_content_type_ids is not None
@@ -101,9 +101,9 @@ class PolymorphicObjectSerializerField(serializers.Field):
         try:
             return model_class.objects.get(pk=obj_id)
         except model_class.DoesNotExist:
-            raise serializers.ValidationError("No matching object found.")
+            raise serializers.ValidationError("No matching object found.") from None
         except (ValueError, TypeError):
-            raise serializers.ValidationError("Invalid pk value.")
+            raise serializers.ValidationError("Invalid pk value.") from None
 
 
 class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
@@ -183,9 +183,18 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
                     {"is_polymorphic": "Cannot change the polymorphic flag after field creation."}
                 )
             if attrs.get("related_object_types_input") is not None:
-                raise ValidationError(
-                    {"related_object_types_input": "Cannot change allowed object types after field creation."}
+                incoming = frozenset(
+                    (entry.get("app_label", ""), entry.get("model", ""))
+                    for entry in attrs["related_object_types_input"]
                 )
+                existing = frozenset(
+                    (ot.app_label, ot.model)
+                    for ot in self.instance.related_object_types.all()
+                )
+                if incoming != existing:
+                    raise ValidationError(
+                        {"related_object_types_input": "Cannot change allowed object types after field creation."}
+                    )
             if attrs.get("app_label") or attrs.get("model"):
                 raise ValidationError(
                     "Cannot change the related object type after field creation."
@@ -235,12 +244,6 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
                     "Must provide choice_set with valid PK for select field type."
                 )
         return super().validate(attrs)
-
-    def create(self, validated_data):
-        """
-        Record the user who created the Custom Object as its owner.
-        """
-        return super().create(validated_data)
 
     def get_related_object_type(self, obj):
         if obj.related_object_type:

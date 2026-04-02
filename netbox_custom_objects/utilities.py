@@ -114,9 +114,6 @@ def generate_model(*args, **kwargs):
     """
     Create a model.
     """
-    # Monkey patch apps.clear_cache to do nothing
-    apps.clear_cache = lambda: None
-
     # Suppress RuntimeWarning about model already being registered
     # TODO: Remove this once we have a better way to handle model registration
     with warnings.catch_warnings():
@@ -124,10 +121,14 @@ def generate_model(*args, **kwargs):
             "ignore", category=RuntimeWarning, message=".*was already registered.*"
         )
 
+        # Temporarily suppress apps.clear_cache during model type() creation to
+        # avoid invalidating the app registry cache on every dynamic model build.
+        _original_clear_cache = apps.clear_cache
+        apps.clear_cache = lambda: None
         try:
             model = type(*args, **kwargs)
         finally:
-            apps.clear_cache = apps.clear_cache
+            apps.clear_cache = _original_clear_cache
 
     return model
 

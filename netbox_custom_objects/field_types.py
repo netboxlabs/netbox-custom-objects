@@ -448,9 +448,7 @@ class ObjectFieldType(FieldType):
         if content_type.app_label == APP_LABEL:
             from netbox_custom_objects.models import CustomObjectType
 
-            custom_object_type_id = content_type.model.replace("table", "").replace(
-                "model", ""
-            )
+            custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
 
             # Check if this is a self-referential field
@@ -504,9 +502,7 @@ class ObjectFieldType(FieldType):
             # This is a custom object type
             from netbox_custom_objects.models import CustomObjectType
 
-            custom_object_type_id = content_type.model.replace("table", "").replace(
-                "model", ""
-            )
+            custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
 
             model = custom_object_type.get_model()
@@ -647,6 +643,38 @@ class ObjectFieldType(FieldType):
                 )
 
 
+# WHY CustomManyToManyManager / CustomManyToManyDescriptor / CustomManyToManyField
+# exist instead of using Django's built-in ManyToManyField
+# ──────────────────────────────────────────────────────────────────────────────
+# Django's ManyToManyField assumes both sides of the relation are registered in
+# the app registry *before* any model is instantiated.  Custom object types are
+# defined at runtime by end-users and their models are generated dynamically via
+# `type(...)`.  This creates two problems:
+#
+#   1. The through model does not exist in the app registry at import time, so
+#      Django's ManyRelatedManager cannot resolve `field.remote_field.through`
+#      during class construction.  Attempting to register it later causes
+#      "model was already registered" RuntimeWarnings (suppressed in
+#      generate_model()) and occasional stale-cache issues.
+#
+#   2. Django's `get_prefetch_queryset` (and the newer `get_prefetch_querysets`
+#      introduced in Django 4.2) builds its result queryset from the through
+#      model's manager, which requires the through model to be stable in the
+#      registry.  Because our through models are regenerated on every server
+#      restart (and on every schema change), the registry entry can be stale,
+#      causing prefetch_related() to fetch from the wrong table.
+#
+# CustomManyToManyManager sidesteps both issues by resolving the through model
+# directly from the field instance at access time rather than from the registry,
+# and by implementing get_prefetch_queryset with explicit source/target subquery
+# joins that work regardless of registry state.
+#
+# MAINTENANCE NOTE: get_prefetch_queryset returns a private Django tuple format.
+# The six-element tuple (queryset, fk_getter, rel_obj_getter, single, cache_name,
+# is_descriptor) is documented only in Django internals and may change between
+# major versions.  If a Django upgrade breaks prefetch_related() for custom M2M
+# fields, this is the first place to check.  The Django source to compare against
+# is django/db/models/fields/related_managers.py :: ManyRelatedManager.
 class CustomManyToManyManager(Manager):
     def __init__(self, instance=None, field_name=None):
         super().__init__()
@@ -729,7 +757,25 @@ class CustomManyToManyManager(Manager):
     def set(self, objs, clear=False):
         if clear:
             self.clear()
-        self.add(*objs)
+            self.add(*objs)
+        else:
+            # Diff-based replacement: add new, remove old.  Matches Django's
+            # standard ManyRelatedManager.set(clear=False) behaviour.
+            objs = tuple(objs)
+            new_pks = {obj.pk for obj in objs}
+            existing_pks = set(
+                self.through.objects.filter(source_id=self.instance.pk)
+                .values_list("target_id", flat=True)
+            )
+            to_add = [obj for obj in objs if obj.pk not in existing_pks]
+            to_remove_pks = existing_pks - new_pks
+            if to_add:
+                self.add(*to_add)
+            if to_remove_pks:
+                self.through.objects.filter(
+                    source_id=self.instance.pk,
+                    target_id__in=to_remove_pks,
+                ).delete()
 
 
 class CustomManyToManyDescriptor(ManyToManyDescriptor):
@@ -816,9 +862,7 @@ class MultiObjectFieldType(FieldType):
 
         # Check if this is a self-referential M2M
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
-        custom_object_type_id = content_type.model.replace("table", "").replace(
-            "model", ""
-        )
+        custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
         is_self_referential = (
             content_type.app_label == APP_LABEL
             and field.custom_object_type.id == custom_object_type_id
@@ -855,9 +899,7 @@ class MultiObjectFieldType(FieldType):
 
         # Check if this is a self-referential M2M
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
-        custom_object_type_id = content_type.model.replace("table", "").replace(
-            "model", ""
-        )
+        custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
 
         # Extract our custom parameters and keep only Django field parameters
         field_kwargs = {k: v for k, v in kwargs.items() if not k.startswith('_')}
@@ -906,9 +948,7 @@ class MultiObjectFieldType(FieldType):
             # This is a custom object type
             from netbox_custom_objects.models import CustomObjectType
 
-            custom_object_type_id = content_type.model.replace("table", "").replace(
-                "model", ""
-            )
+            custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
 
             model = custom_object_type.get_model(skip_object_fields=True)
@@ -1018,9 +1058,7 @@ class MultiObjectFieldType(FieldType):
         if content_type.app_label == APP_LABEL:
             from netbox_custom_objects.models import CustomObjectType
 
-            custom_object_type_id = content_type.model.replace("table", "").replace(
-                "model", ""
-            )
+            custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
 
             # For self-referential fields, we need to resolve them to the current model
@@ -1067,9 +1105,7 @@ class MultiObjectFieldType(FieldType):
             if content_type.app_label == APP_LABEL:
                 from netbox_custom_objects.models import CustomObjectType
 
-                custom_object_type_id = content_type.model.replace("table", "").replace(
-                    "model", ""
-                )
+                custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
                 custom_object_type = CustomObjectType.objects.get(
                     pk=custom_object_type_id
                 )
@@ -1285,7 +1321,32 @@ class PolymorphicManyToManyManager:
     def set(self, objs, clear=True):
         if clear:
             self.clear()
-        self.add(*objs)
+            self.add(*objs)
+        else:
+            # Diff-based replacement: add new, remove old.  Matches Django's
+            # standard ManyRelatedManager.set(clear=False) behaviour.
+            objs = tuple(objs)
+            through = self._get_through_model()
+            existing = {
+                (ct_id, obj_id)
+                for ct_id, obj_id in through.objects.filter(source_id=self.instance.pk)
+                .values_list("content_type_id", "object_id")
+            }
+            # Pre-compute (ct_id, obj_pk) once per object to avoid duplicate CT lookups.
+            new_items = [
+                (ContentType.objects.get_for_model(obj).pk, obj.pk, obj) for obj in objs
+            ]
+            new_keys = {(ct_id, obj_pk) for ct_id, obj_pk, _ in new_items}
+            to_add = [obj for ct_id, obj_pk, obj in new_items if (ct_id, obj_pk) not in existing]
+            to_remove = existing - new_keys
+            if to_add:
+                self.add(*to_add)
+            for ct_id, obj_id in to_remove:
+                through.objects.filter(
+                    source_id=self.instance.pk,
+                    content_type_id=ct_id,
+                    object_id=obj_id,
+                ).delete()
 
     def __iter__(self):
         return self._get_objects()

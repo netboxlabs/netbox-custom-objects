@@ -813,3 +813,137 @@ class PolymorphicThroughModelRegistrationTest(
                 f"Through model '{through_name}' not in app registry after get_model()."
             )
         self.assertIsNotNone(through)
+
+
+# ---------------------------------------------------------------------------
+# Referenced-object deletion
+# ---------------------------------------------------------------------------
+
+class ReferencedObjectDeletionTest(
+    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
+):
+    """
+    Tests for the on_delete behaviour when a referenced object (e.g. a Site) or
+    the CustomObjectType itself is deleted.
+
+    GFK fields use on_delete=SET_NULL on the content_type FK (so deleting the
+    ContentType row nulls the pointer), but there is no DB-level FK from
+    object_id to the concrete target table — generic relations cannot express
+    that.  Deleting a Site therefore leaves a stale object_id; Django's GFK
+    accessor silently returns None in that case.
+
+    Polymorphic M2M through-tables store (source_id, content_type_id, object_id).
+    The content_type FK has on_delete=CASCADE (so deleting the ContentType drops
+    the through-table rows), but again there is no FK from object_id to the
+    concrete target table.  Deleting a Site leaves a stale through-table row;
+    PolymorphicManyToManyManager._get_objects() already skips such rows because
+    the batch-fetch query returns no matching object for the deleted PK.
+    """
+
+    def setUp(self):
+        super().setUp()
+
+        self.site = Site.objects.create(name="Del Site", slug="del-site")
+        self.site_ot = ObjectType.objects.get(app_label="dcim", model="site")
+        self.prefix_ot = ObjectType.objects.get(app_label="ipam", model="prefix")
+
+        self.cot = CustomObjectType.objects.create(
+            name="DelTest", slug="del-test",
+            verbose_name_plural="Del Tests",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name="name", type="text", primary=True, required=True,
+        )
+        self.gfk_field = CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name="poly_obj", label="Poly Obj", type="object",
+            is_polymorphic=True,
+        )
+        self.gfk_field.related_object_types.set([self.site_ot, self.prefix_ot])
+
+        self.m2m_field = CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name="poly_multi", label="Poly Multi", type="multiobject",
+            is_polymorphic=True,
+        )
+        self.m2m_field.related_object_types.set([self.site_ot, self.prefix_ot])
+
+        self.model = self.cot.get_model()
+
+    def test_deleting_referenced_site_nulls_gfk_accessor(self):
+        """
+        Deleting a Site that is referenced by a polymorphic GFK field does not
+        raise an exception and causes the accessor to return None.
+
+        There is no DB FK from object_id → dcim_site, so the row is not touched
+        at the DB level; Django's GenericForeignKey.__get__ returns None when
+        the target object no longer exists.
+        """
+        obj = self.model.objects.create(name="stale-gfk")
+        obj.poly_obj = self.site
+        obj.save()
+
+        self.site.delete()
+
+        obj.refresh_from_db()
+        # The content_type column still points to the Site ContentType (site still
+        # exists in the app registry), but the object is gone — accessor returns None.
+        self.assertIsNone(obj.poly_obj)
+
+    def test_deleting_referenced_site_leaves_stale_m2m_row_excluded_from_all(self):
+        """
+        Deleting a Site that is in a polymorphic M2M through table leaves a stale
+        row in the through table (no DB FK on object_id), but all() gracefully
+        excludes it because the batch-fetch query returns no matching object.
+        """
+        obj = self.model.objects.create(name="stale-m2m")
+        obj.poly_multi.add(self.site)
+
+        site_pk = self.site.pk
+        self.site.delete()
+
+        # The through-table row is NOT cascade-deleted (only the content_type FK
+        # cascade would fire if the ContentType row itself were deleted).
+        from django.apps import apps as django_apps
+        from netbox_custom_objects.constants import APP_LABEL
+        through = django_apps.get_model(APP_LABEL, self.m2m_field.through_model_name)
+        self.assertTrue(
+            through.objects.filter(source_id=obj.pk, object_id=site_pk).exists(),
+            "Stale through-table row should remain after target deletion (no DB FK on object_id).",
+        )
+
+        # But all() skips the stale row — the result list must be empty.
+        self.assertEqual(list(obj.poly_multi.all()), [])
+
+    def test_deleting_custom_object_type_drops_db_table_and_deregisters_model(self):
+        """
+        Deleting a CustomObjectType drops its DB table, drops polymorphic through
+        tables, and removes the model from Django's app registry.
+        """
+        from django.apps import apps as django_apps
+        from django.db import connection
+        from netbox_custom_objects.constants import APP_LABEL
+
+        main_table = self.cot.get_database_table_name()
+        through_table = self.m2m_field.through_table_name
+        through_model_name = self.m2m_field.through_model_name
+        model_name = self.model.__name__.lower()
+
+        # Create a row so the delete path exercises cascade logic too.
+        obj = self.model.objects.create(name="to-be-cascaded")
+        obj.poly_multi.add(self.site)
+
+        self.cot.delete()
+
+        with connection.cursor() as cursor:
+            existing_tables = connection.introspection.table_names(cursor)
+
+        self.assertNotIn(main_table, existing_tables, "Main DB table should be dropped.")
+        self.assertNotIn(through_table, existing_tables, "Through table should be dropped.")
+
+        # Model and through model must be de-registered from the app registry.
+        self.assertNotIn(model_name, django_apps.all_models.get(APP_LABEL, {}))
+        self.assertNotIn(
+            through_model_name.lower(), django_apps.all_models.get(APP_LABEL, {})
+        )

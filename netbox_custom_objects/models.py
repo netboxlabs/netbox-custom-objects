@@ -11,6 +11,7 @@ from django.conf import settings
 
 # from django.contrib.contenttypes.management import create_contenttypes
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import FieldDoesNotExist
 from django.core.validators import RegexValidator, ValidationError
 from django.db import connection, IntegrityError, models, transaction
 from django.db.models import Q
@@ -423,51 +424,50 @@ class CustomObjectType(NetBoxModel):
             # Only process fields that actually exist on the model
             # Fields might be skipped due to recursion prevention
             if hasattr(model._meta, 'get_field'):
-                try:
-                    # For polymorphic Object fields, check the content_type sub-field instead
-                    if field_instance.is_polymorphic:
-                        if field_instance.type == CustomFieldTypeChoices.TYPE_OBJECT:
-                            # Collect through models is not applicable; GFK has no through
-                            # The GFK itself needs no resolution
-                            pass
-                        elif field_instance.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                            # Ensure the polymorphic through model is in the app registry.
-                            # On server restart the registry is cleared; re-register if needed.
-                            _apps = model._meta.apps
-                            try:
-                                through_model = _apps.get_model(APP_LABEL, field_instance.through_model_name)
-                            except LookupError:
-                                field_type_obj = FIELD_TYPE_CLASS[CustomFieldTypeChoices.TYPE_MULTIOBJECT]()
-                                source_model_str = f"{APP_LABEL}.{model.__name__}"
-                                through_model = field_type_obj.get_polymorphic_through_model(
-                                    field_instance, source_model_str
-                                )
-                                source_field = through_model._meta.get_field("source")
-                                source_field.remote_field.model = model
-                                source_field.related_model = model
-                                _apps.register_model(APP_LABEL, through_model)
-                            if through_model and through_model not in through_models:
-                                through_models.append(through_model)
-                        continue
-
-                    field = model._meta.get_field(field_name)
-                    # Field exists, process it
-                    field_object["type"].after_model_generation(
-                        field_object["field"], model, field_name
-                    )
-
-                    # Collect through models from M2M fields
-                    if hasattr(field, 'remote_field') and hasattr(field.remote_field, 'through'):
-                        through_model = field.remote_field.through
-                        # Only collect custom through models, not auto-created Django ones
-                        if (through_model and through_model not in through_models and
-                            hasattr(through_model._meta, 'app_label') and
-                            through_model._meta.app_label == APP_LABEL):
+                # For polymorphic Object fields, check the content_type sub-field instead
+                if field_instance.is_polymorphic:
+                    if field_instance.type == CustomFieldTypeChoices.TYPE_OBJECT:
+                        # Collect through models is not applicable; GFK has no through
+                        # The GFK itself needs no resolution
+                        pass
+                    elif field_instance.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+                        # Ensure the polymorphic through model is in the app registry.
+                        # On server restart the registry is cleared; re-register if needed.
+                        _apps = model._meta.apps
+                        try:
+                            through_model = _apps.get_model(APP_LABEL, field_instance.through_model_name)
+                        except LookupError:
+                            field_type_obj = FIELD_TYPE_CLASS[CustomFieldTypeChoices.TYPE_MULTIOBJECT]()
+                            source_model_str = f"{APP_LABEL}.{model.__name__}"
+                            through_model = field_type_obj.get_polymorphic_through_model(
+                                field_instance, source_model_str
+                            )
+                            source_field = through_model._meta.get_field("source")
+                            source_field.remote_field.model = model
+                            source_field.related_model = model
+                            _apps.register_model(APP_LABEL, through_model)
+                        if through_model and through_model not in through_models:
                             through_models.append(through_model)
-
-                except Exception:
-                    # Field doesn't exist (likely skipped due to recursion), skip processing
                     continue
+
+                try:
+                    field = model._meta.get_field(field_name)
+                except FieldDoesNotExist:
+                    # Field skipped during generation (e.g. due to recursion guard).
+                    continue
+
+                field_object["type"].after_model_generation(
+                    field_object["field"], model, field_name
+                )
+
+                # Collect through models from M2M fields
+                if hasattr(field, 'remote_field') and hasattr(field.remote_field, 'through'):
+                    through_model = field.remote_field.through
+                    # Only collect custom through models, not auto-created Django ones
+                    if (through_model and through_model not in through_models and
+                        hasattr(through_model._meta, 'app_label') and
+                        through_model._meta.app_label == APP_LABEL):
+                        through_models.append(through_model)
 
         # Store through models on the model for yielding in get_models()
         model._through_models = through_models
@@ -1274,6 +1274,14 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     }
                 )
 
+        # Prevent flipping is_polymorphic on an existing field.  The DB schema
+        # (concrete GFK columns or through table) was created for the original value;
+        # changing it would leave the schema in an inconsistent state.
+        if self.pk and bool(self.is_polymorphic) != bool(self._original_is_polymorphic):
+            raise ValidationError(
+                {"is_polymorphic": _("Cannot change the polymorphic flag after field creation.")}
+            )
+
         # Check for recursion in object and multiobject fields (non-polymorphic only).
         # Polymorphic fields' allowed types are a M2M set after save(), so their recursion
         # check runs in the check_polymorphic_recursion m2m_changed signal handler instead.
@@ -1659,10 +1667,29 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
     @property
     def through_table_name(self):
+        # STABILITY CONTRACT — do not change this formula without a data migration.
+        #
+        # The table name is computed from (custom_object_type_id, name) and is
+        # never stored in the database.  It is used as the physical PostgreSQL
+        # table name for polymorphic M2M through tables and as part of the
+        # in-memory Django model name returned by through_model_name.
+        #
+        # Consequences of changing the formula:
+        #   • Existing through tables in live databases would be orphaned (the
+        #     new name would not match any table on disk).
+        #   • Any serialised reference to the through model (e.g. in cached app
+        #     state or migration history) would become unresolvable.
+        #
+        # If the formula must change, write a data migration that renames every
+        # affected table with ALTER TABLE … RENAME TO before deploying the new
+        # code, and update through_model_name to match.
         return f"custom_objects_{self.custom_object_type_id}_{self.name}"
 
     @property
     def through_model_name(self):
+        # Derived directly from through_table_name; see its stability contract above.
+        # The "Through_" prefix ensures the in-memory model name is unique within
+        # the app registry and does not collide with user-visible model names.
         return f"Through_{self.through_table_name}"
 
     def save(self, *args, **kwargs):
