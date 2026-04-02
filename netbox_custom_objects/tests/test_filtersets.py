@@ -448,6 +448,43 @@ class IntegerPrimaryFieldSearchTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(self._search("").count(), 2)
 
 
+class DecimalPrimaryFieldSearchTestCase(CustomObjectsTestCase, TestCase):
+    """Typeahead search uses Decimal (not float) for TYPE_DECIMAL to preserve full precision."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(name="PriceObj440", slug="price-obj-440")
+        cls.create_custom_object_type_field(
+            cls.cot, name="price", label="Price", type="decimal", primary=True, required=True
+        )
+
+        model = cls.cot.get_model()
+        from decimal import Decimal
+        cls.obj_11 = model.objects.create(price=Decimal("1.1"))
+        cls.obj_03 = model.objects.create(price=Decimal("0.3"))
+
+    def _search(self, value):
+        model = self.cot.get_model()
+        return get_filterset_class(model)({"q": value}, model.objects.all()).qs
+
+    def test_search_exact_decimal_finds_match(self):
+        pks = list(self._search("1.1").values_list("pk", flat=True))
+        self.assertIn(self.obj_11.pk, pks)
+        self.assertNotIn(self.obj_03.pk, pks)
+
+    def test_search_imprecise_float_value_finds_match(self):
+        # 0.3 cannot be represented exactly in IEEE 754 float, but Decimal("0.3") is exact.
+        pks = list(self._search("0.3").values_list("pk", flat=True))
+        self.assertIn(self.obj_03.pk, pks)
+        self.assertNotIn(self.obj_11.pk, pks)
+
+    def test_search_non_numeric_returns_no_results(self):
+        pks = list(self._search("abc").values_list("pk", flat=True))
+        self.assertNotIn(self.obj_11.pk, pks)
+        self.assertNotIn(self.obj_03.pk, pks)
+
+
 class SelectPrimaryFieldSearchTestCase(CustomObjectsTestCase, TestCase):
     """Typeahead search finds objects when the primary field is a Select."""
 
@@ -522,3 +559,91 @@ class DatePrimaryFieldSearchTestCase(CustomObjectsTestCase, TestCase):
         pks = list(self._search("not-a-date").values_list("pk", flat=True))
         self.assertNotIn(self.obj_jan.pk, pks)
         self.assertNotIn(self.obj_feb.pk, pks)
+
+
+class DateTimePrimaryFieldSearchTestCase(CustomObjectsTestCase, TestCase):
+    """Typeahead search finds objects when the primary field is a DateTime."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(name="DtObj440", slug="dt-obj-440")
+        cls.create_custom_object_type_field(
+            cls.cot, name="ts", label="Timestamp", type="datetime", primary=True, required=True
+        )
+
+        model = cls.cot.get_model()
+        cls.obj_morning = model.objects.create(ts=datetime.datetime(2025, 3, 10, 9, 0, 0))
+        cls.obj_evening = model.objects.create(ts=datetime.datetime(2025, 3, 10, 18, 30, 0))
+
+    def _search(self, value):
+        model = self.cot.get_model()
+        return get_filterset_class(model)({"q": value}, model.objects.all()).qs
+
+    def test_search_by_datetime_finds_match(self):
+        pks = list(self._search("2025-03-10 09:00:00").values_list("pk", flat=True))
+        self.assertIn(self.obj_morning.pk, pks)
+        self.assertNotIn(self.obj_evening.pk, pks)
+
+    def test_search_invalid_datetime_returns_no_results(self):
+        pks = list(self._search("not-a-datetime").values_list("pk", flat=True))
+        self.assertNotIn(self.obj_morning.pk, pks)
+        self.assertNotIn(self.obj_evening.pk, pks)
+
+
+class MultiSelectPrimaryFieldSearchTestCase(CustomObjectsTestCase, TestCase):
+    """Typeahead search for a multiselect (ArrayField) primary field uses array containment,
+    not icontains, to avoid a FieldError on PostgreSQL array columns."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        from extras.models import CustomFieldChoiceSet
+        cls.choice_set = CustomFieldChoiceSet.objects.create(
+            name="TagChoices440",
+            extra_choices=[["red", "Red"], ["green", "Green"], ["blue", "Blue"]],
+        )
+        cls.cot = cls.create_custom_object_type(name="TagObj440", slug="tag-obj-440")
+        cls.create_custom_object_type_field(
+            cls.cot,
+            name="colors",
+            label="Colors",
+            type="multiselect",
+            primary=True,
+            required=False,
+            choice_set=cls.choice_set,
+        )
+
+        model = cls.cot.get_model()
+        cls.obj_red = model.objects.create(colors=["red"])
+        cls.obj_multi = model.objects.create(colors=["red", "blue"])
+        cls.obj_green = model.objects.create(colors=["green"])
+
+    def _search(self, value):
+        model = self.cot.get_model()
+        return get_filterset_class(model)({"q": value}, model.objects.all()).qs
+
+    def test_search_finds_exact_element(self):
+        pks = list(self._search("red").values_list("pk", flat=True))
+        self.assertIn(self.obj_red.pk, pks)
+        self.assertIn(self.obj_multi.pk, pks)
+        self.assertNotIn(self.obj_green.pk, pks)
+
+    def test_search_no_match_returns_empty(self):
+        pks = list(self._search("yellow").values_list("pk", flat=True))
+        self.assertNotIn(self.obj_red.pk, pks)
+        self.assertNotIn(self.obj_multi.pk, pks)
+        self.assertNotIn(self.obj_green.pk, pks)
+
+    def test_search_does_not_raise_on_array_field(self):
+        # Regression: must not raise FieldError/DatabaseError from icontains on ArrayField.
+        try:
+            list(self._search("blue").values_list("pk", flat=True))
+        except Exception as exc:
+            self.fail(f"search raised unexpectedly: {exc}")
+
+    def test_search_finds_element_in_multi_value(self):
+        # obj_multi has both "red" and "blue"; searching "blue" should find it.
+        pks = list(self._search("blue").values_list("pk", flat=True))
+        self.assertIn(self.obj_multi.pk, pks)
+        self.assertNotIn(self.obj_red.pk, pks)
