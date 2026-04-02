@@ -1326,7 +1326,7 @@ class PolymorphicManyToManyManager:
     def clear(self):
         self._get_through_model().objects.filter(source_id=self.instance.pk).delete()
 
-    def set(self, objs, clear=True):
+    def set(self, objs, clear=False):
         if clear:
             self.clear()
             self.add(*objs)

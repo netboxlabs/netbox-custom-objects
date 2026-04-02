@@ -4,6 +4,7 @@ import sys
 
 from core.models import ObjectType
 from django.contrib.contenttypes.models import ContentType
+from django.urls import NoReverseMatch
 from extras.choices import CustomFieldTypeChoices
 from netbox.api.serializers import NetBoxModelSerializer
 from rest_framework import serializers
@@ -45,6 +46,10 @@ class PolymorphicObjectSerializerField(serializers.Field):
     On read: returns a nested object representation with _content_type annotation.
     On write: accepts {"content_type_id": X, "object_id": Y} or
               {"app_label": "...", "model": "...", "object_id": Y}.
+              ``"id"`` is accepted as an alias for ``"object_id"`` so that the
+              dict emitted by ``to_representation`` (which uses ``"id"``) can be
+              round-tripped directly as write input.  When both keys are present
+              ``"object_id"`` takes precedence; ``"id"`` is ignored.
     For many=True (MultiObject polymorphic), wrap in a ListSerializer automatically.
 
     Pass ``allowed_content_type_ids`` (a set of ContentType PKs) to restrict which
@@ -355,10 +360,9 @@ class CustomObjectSerializer(NetBoxModelSerializer):
 
     def get_url(self, obj):
         """
-        Given an object, return the URL that hyperlinks to the object.
-
-        May raise a `NoReverseMatch` if the `view_name` and `lookup_field`
-        attributes are not configured to correctly match the URL conf.
+        Given an object, return the URL that hyperlinks to the object, or None
+        if the URL cannot be resolved (e.g. the COT slug has changed since the
+        object was serialised, or the URL conf is misconfigured).
         """
         # Unsaved objects will not yet have a valid URL.
         if hasattr(obj, "pk") and obj.pk in (None, ""):
@@ -372,7 +376,10 @@ class CustomObjectSerializer(NetBoxModelSerializer):
         }
         request = self.context["request"]
         format = self.context.get("format")
-        return reverse(view_name, kwargs=kwargs, request=request, format=format)
+        try:
+            return reverse(view_name, kwargs=kwargs, request=request, format=format)
+        except NoReverseMatch:
+            return None
 
     def get_field_data(self, obj):
         result = {}
@@ -517,7 +524,7 @@ def get_serializer_class(model, skip_object_fields=False):
 
         for field_name, value in poly_m2m.items():
             mgr = getattr(instance, field_name)
-            mgr.set(value)
+            mgr.set(value, clear=True)
 
         return instance
 
