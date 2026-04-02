@@ -69,6 +69,7 @@ def suppress_clear_cache():
     finally:
         _suppress_tl.depth -= 1
 
+
 # Internal model names for custom object types follow the pattern "table<id>model"
 # (e.g. "table3model" for CustomObjectType with pk=3).
 _COT_MODEL_RE = re.compile(r"^table(\d+)model$")
