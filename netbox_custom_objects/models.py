@@ -611,21 +611,38 @@ class CustomObjectType(NetBoxModel):
         finally:
             TM.post_through_setup = original_post_through_setup
 
-        # Register the main model with Django's app registry
-        if model_name.lower() in apps.all_models[APP_LABEL]:
-            # Remove the existing model from all_models before registering the new one
-            del apps.all_models[APP_LABEL][model_name.lower()]
+        # Register the main model with Django's app registry.
+        #
+        # apps.register_model() unconditionally calls apps.clear_cache(), which
+        # in turn calls our overridden get_models() (see __init__.py), which calls
+        # get_model() for every known COT.  If the current COT is not yet in
+        # _model_cache that re-entrant get_model() call would itself call
+        # register_model() → clear_cache() → get_models() → ... → infinite recursion.
+        #
+        # We suppress clear_cache for the entire window from register_model() through
+        # the cache write, then restore and call once — at which point the model IS
+        # in _model_cache so the re-entrant get_model() calls return from cache
+        # without triggering another register_model().
+        _original_clear_cache = apps.clear_cache
+        apps.clear_cache = lambda: None
+        try:
+            if model_name.lower() in apps.all_models[APP_LABEL]:
+                # Remove the existing model from all_models before registering the new one
+                del apps.all_models[APP_LABEL][model_name.lower()]
 
-        apps.register_model(APP_LABEL, model)
+            apps.register_model(APP_LABEL, model)
 
-        self._after_model_generation(attrs, model)
+            self._after_model_generation(attrs, model)
 
-        # Cache the generated model with its timestamp (protected by lock for thread safety)
-        with self._global_lock:
-            self._model_cache[self.id] = (model, self.cache_timestamp)
+            # Cache the generated model with its timestamp (protected by lock for thread safety)
+            with self._global_lock:
+                self._model_cache[self.id] = (model, self.cache_timestamp)
+        finally:
+            apps.clear_cache = _original_clear_cache
 
-        # Do the clear cache now that we have it in the cache so there
-        # is no recursion.
+        # Now that the model is in _model_cache, clear_cache() is safe: re-entrant
+        # get_model() calls for this COT will hit the cache and return immediately
+        # without calling register_model() again.
         apps.clear_cache()
         ContentType.objects.clear_cache()
 
