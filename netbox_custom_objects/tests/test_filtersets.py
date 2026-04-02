@@ -1,6 +1,8 @@
 """
 Tests for filtersets used by the plugin's UI and API views.
 """
+import datetime
+
 from django.test import TestCase
 
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
@@ -400,3 +402,123 @@ class CustomObjectTargetMultiObjectFieldTestCase(CustomObjectsTestCase, TestCase
             {"related_items": [self.target1.pk, self.target2.pk]}, source_model.objects.all()
         ).qs
         self.assertEqual(qs.filter(pk=self.source_both.pk).count(), 1)
+
+
+# ---------------------------------------------------------------------------
+# Typeahead search for non-text primary fields (issue #440)
+# ---------------------------------------------------------------------------
+
+
+class IntegerPrimaryFieldSearchTestCase(CustomObjectsTestCase, TestCase):
+    """Typeahead search finds objects when the primary field is an Integer."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(name="NetArea", slug="netarea")
+        cls.create_custom_object_type_field(
+            cls.cot, name="major", label="Major", type="integer", primary=True, required=True
+        )
+
+        model = cls.cot.get_model()
+        cls.obj_311 = model.objects.create(major=311)
+        cls.obj_400 = model.objects.create(major=400)
+
+    def _search(self, value):
+        model = self.cot.get_model()
+        return get_filterset_class(model)({"q": value}, model.objects.all()).qs
+
+    def test_search_by_integer_value_finds_match(self):
+        pks = list(self._search("311").values_list("pk", flat=True))
+        self.assertIn(self.obj_311.pk, pks)
+        self.assertNotIn(self.obj_400.pk, pks)
+
+    def test_search_by_integer_no_match_returns_empty(self):
+        pks = list(self._search("999").values_list("pk", flat=True))
+        self.assertNotIn(self.obj_311.pk, pks)
+        self.assertNotIn(self.obj_400.pk, pks)
+
+    def test_search_non_numeric_string_returns_no_results(self):
+        # Non-numeric search against an integer-only COT should return nothing,
+        # not raise an exception.
+        pks = list(self._search("abc").values_list("pk", flat=True))
+        self.assertNotIn(self.obj_311.pk, pks)
+
+    def test_search_empty_string_returns_all(self):
+        self.assertEqual(self._search("").count(), 2)
+
+
+class SelectPrimaryFieldSearchTestCase(CustomObjectsTestCase, TestCase):
+    """Typeahead search finds objects when the primary field is a Select."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        from extras.models import CustomFieldChoiceSet
+        cls.choice_set = CustomFieldChoiceSet.objects.create(
+            name="StatusChoices440",
+            extra_choices=[["active", "Active"], ["planned", "Planned"], ["retired", "Retired"]],
+        )
+        cls.cot = cls.create_custom_object_type(name="StatusObj440", slug="status-obj-440")
+        cls.create_custom_object_type_field(
+            cls.cot,
+            name="status",
+            label="Status",
+            type="select",
+            primary=True,
+            required=True,
+            choice_set=cls.choice_set,
+        )
+
+        model = cls.cot.get_model()
+        cls.obj_active = model.objects.create(status="active")
+        cls.obj_planned = model.objects.create(status="planned")
+
+    def _search(self, value):
+        model = self.cot.get_model()
+        return get_filterset_class(model)({"q": value}, model.objects.all()).qs
+
+    def test_search_by_select_value_finds_match(self):
+        pks = list(self._search("active").values_list("pk", flat=True))
+        self.assertIn(self.obj_active.pk, pks)
+        self.assertNotIn(self.obj_planned.pk, pks)
+
+    def test_search_partial_match(self):
+        pks = list(self._search("plan").values_list("pk", flat=True))
+        self.assertIn(self.obj_planned.pk, pks)
+        self.assertNotIn(self.obj_active.pk, pks)
+
+    def test_search_no_match_returns_empty(self):
+        pks = list(self._search("retired").values_list("pk", flat=True))
+        self.assertNotIn(self.obj_active.pk, pks)
+        self.assertNotIn(self.obj_planned.pk, pks)
+
+
+class DatePrimaryFieldSearchTestCase(CustomObjectsTestCase, TestCase):
+    """Typeahead search finds objects when the primary field is a Date."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(name="DateObj440", slug="date-obj-440")
+        cls.create_custom_object_type_field(
+            cls.cot, name="start_date", label="Start Date", type="date", primary=True, required=True
+        )
+
+        model = cls.cot.get_model()
+        cls.obj_jan = model.objects.create(start_date=datetime.date(2025, 1, 15))
+        cls.obj_feb = model.objects.create(start_date=datetime.date(2025, 2, 20))
+
+    def _search(self, value):
+        model = self.cot.get_model()
+        return get_filterset_class(model)({"q": value}, model.objects.all()).qs
+
+    def test_search_by_date_finds_match(self):
+        pks = list(self._search("2025-01-15").values_list("pk", flat=True))
+        self.assertIn(self.obj_jan.pk, pks)
+        self.assertNotIn(self.obj_feb.pk, pks)
+
+    def test_search_invalid_date_returns_no_results(self):
+        pks = list(self._search("not-a-date").values_list("pk", flat=True))
+        self.assertNotIn(self.obj_jan.pk, pks)
+        self.assertNotIn(self.obj_feb.pk, pks)
