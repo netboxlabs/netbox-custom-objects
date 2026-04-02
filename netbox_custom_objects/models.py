@@ -1716,7 +1716,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                                     "managed": True,
                                 },
                             )
-                            old_through_model = generate_model(
+                            _ = generate_model(
                                 f"TempOld{self.original.through_model_name}",
                                 (models.Model,),
                                 {
@@ -1768,11 +1768,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                                     ),
                                 },
                             )
-                            new_through_model  # To silence ruff error
-
-                            # Rename the table using Django's schema editor
+                            # Rename the table using Django's schema editor.
+                            # new_through_model is passed as the first argument so Django
+                            # can rename associated sequences (e.g. on PostgreSQL).
                             schema_editor.alter_db_table(
-                                old_through_model,
+                                new_through_model,
                                 old_through_table_name,
                                 new_through_table_name,
                             )

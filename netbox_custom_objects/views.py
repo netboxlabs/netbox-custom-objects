@@ -20,7 +20,7 @@ from netbox.forms import (
 from netbox.views import generic
 from netbox.views.generic.mixins import TableMixin
 from utilities.forms import ConfirmationForm
-from utilities.forms.fields import DynamicModelMultipleChoiceField, TagFilterField
+from utilities.forms.fields import DynamicModelChoiceField, DynamicModelMultipleChoiceField, TagFilterField
 from utilities.htmx import htmx_partial
 from utilities.object_types import object_type_name
 from utilities.views import ConditionalLoginRequiredMixin, ViewTab, get_viewname, register_model_view
@@ -34,6 +34,26 @@ from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.utilities import is_in_branch
 
 logger = logging.getLogger("netbox_custom_objects.views")
+
+
+# ---------------------------------------------------------------------------
+# Sub-field naming helpers for polymorphic form fields
+#
+# Polymorphic GFK and M2M fields are split into one form sub-field per allowed
+# content type, named "{field_name}__{app_label}__{model}".  These helpers
+# centralise that convention so it isn't repeated across build and parse sites.
+# ---------------------------------------------------------------------------
+
+def _poly_sub_name(field_name: str, app_label: str, model: str) -> str:
+    """Return the form sub-field name for one content type of a polymorphic field."""
+    return f"{field_name}__{app_label}__{model}"
+
+
+def _parse_poly_sub_name(field_name: str, sub_name: str) -> tuple[str, str]:
+    """Parse a polymorphic sub-field name and return (app_label, model)."""
+    suffix = sub_name[len(field_name) + 2:]   # strip "{field_name}__"
+    app_label, model = suffix.split("__", 1)
+    return app_label, model
 
 
 class CustomJournalEntryForm(JournalEntryForm):
@@ -521,18 +541,17 @@ class CustomObjectEditView(generic.ObjectEditView):
         }
 
         # Process custom object type fields (with grouping)
-        for field in self.object.custom_object_type.fields.all().order_by(
-            "group_name", "weight", "name"
-        ):
+        for field in self.object.custom_object_type.fields.prefetch_related(
+            'related_object_types'
+        ).order_by("group_name", "weight", "name"):
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
             group_name = field.group_name or None
 
             # Polymorphic single-object: render one DynamicModelChoiceField per related type
             if field.type == CustomFieldTypeChoices.TYPE_OBJECT and field.is_polymorphic:
-                from utilities.forms.fields import DynamicModelChoiceField
                 sub_names = []
                 for ot in field.related_object_types.all():
-                    sub_name = f"{field.name}__{ot.app_label}__{ot.model}"
+                    sub_name = _poly_sub_name(field.name, ot.app_label, ot.model)
                     sub_model = ot.model_class()
                     if sub_model is None:
                         continue
@@ -556,7 +575,7 @@ class CustomObjectEditView(generic.ObjectEditView):
             if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT and field.is_polymorphic:
                 sub_names = []
                 for ot in field.related_object_types.all():
-                    sub_name = f"{field.name}__{ot.app_label}__{ot.model}"
+                    sub_name = _poly_sub_name(field.name, ot.app_label, ot.model)
                     sub_model = ot.model_class()
                     if sub_model is None:
                         continue
@@ -635,27 +654,25 @@ class CustomObjectEditView(generic.ObjectEditView):
                                     field_name, exc_info=True,
                                 )
 
-            # Set initial values for polymorphic M2M sub-fields from the through table
+            # Set initial values for polymorphic sub-fields from the existing instance
             if instance and instance.pk:
                 from django.contrib.contenttypes.models import ContentType as CT
                 from django.apps import apps as django_apps
+
+                # M2M: read through-table rows and group by content type
                 for field_name, sub_names in self.custom_object_type_poly_m2m_fields.items():
                     try:
-                        # Find the CustomObjectTypeField to get the through model name
                         field_obj = instance.custom_object_type.fields.get(name=field_name)
                         through = django_apps.get_model(APP_LABEL, field_obj.through_model_name)
                         rows = through.objects.filter(source_id=instance.pk).values_list(
                             "content_type_id", "object_id"
                         )
-                        # Group by content_type
                         by_ct = {}
                         for ct_id, obj_id in rows:
                             by_ct.setdefault(ct_id, []).append(obj_id)
 
                         for sub_name in sub_names:
-                            # sub_name = "{field_name}__{app_label}__{model}"
-                            suffix = sub_name[len(field_name) + 2:]  # strip "{field_name}__"
-                            app_label, model_name = suffix.split("__", 1)
+                            app_label, model_name = _parse_poly_sub_name(field_name, sub_name)
                             try:
                                 ct = CT.objects.get(app_label=app_label, model=model_name)
                                 kwargs['initial'][sub_name] = by_ct.get(ct.pk, [])
@@ -667,17 +684,14 @@ class CustomObjectEditView(generic.ObjectEditView):
                             field_name, exc_info=True,
                         )
 
-            # Set initial values for polymorphic Object sub-fields from the existing GFK value
-            if instance and instance.pk:
-                from django.contrib.contenttypes.models import ContentType as CT
+                # GFK: pre-populate the matching type's sub-field
                 for field_name, sub_names in self.custom_object_type_poly_obj_fields.items():
                     try:
                         gfk_value = getattr(instance, field_name, None)
                         if gfk_value is not None:
                             ct = CT.objects.get_for_model(gfk_value)
                             for sub_name in sub_names:
-                                suffix = sub_name[len(field_name) + 2:]
-                                app_label, model_name = suffix.split("__", 1)
+                                app_label, model_name = _parse_poly_sub_name(field_name, sub_name)
                                 if ct.app_label == app_label and ct.model == model_name:
                                     kwargs['initial'][sub_name] = gfk_value.pk
                                     break
@@ -854,7 +868,7 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
             "_poly_m2m_field_map": {},   # field_name → [sub_names]
         }
 
-        for field in self.custom_object_type.fields.all():
+        for field in self.custom_object_type.fields.prefetch_related('related_object_types').all():
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
             field_label = field.label or field.name.replace("_", " ").title()
 
@@ -864,7 +878,7 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
                     sub_model = ot.model_class()
                     if sub_model is None:
                         continue
-                    sub_name = f"{field.name}__{ot.app_label}__{ot.model}"
+                    sub_name = _poly_sub_name(field.name, ot.app_label, ot.model)
                     sub_field = DynamicModelChoiceField(
                         queryset=sub_model.objects.all(),
                         required=False,
@@ -883,7 +897,7 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
                     sub_model = ot.model_class()
                     if sub_model is None:
                         continue
-                    sub_name = f"{field.name}__{ot.app_label}__{ot.model}"
+                    sub_name = _poly_sub_name(field.name, ot.app_label, ot.model)
                     sub_field = DynamicModelMultipleChoiceField(
                         queryset=sub_model.objects.all(),
                         required=False,

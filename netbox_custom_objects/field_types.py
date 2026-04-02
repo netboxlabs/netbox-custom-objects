@@ -1,3 +1,4 @@
+import hashlib
 import json
 
 import django_tables2 as tables
@@ -33,6 +34,25 @@ from netbox.tables.columns import BooleanColumn
 
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.utilities import generate_model
+
+# PostgreSQL's hard limit for identifier names is 63 bytes.
+_PG_MAX_IDENTIFIER_LEN = 63
+
+
+def _safe_index_name(full_name: str) -> str:
+    """
+    Return a DB-safe index name that fits within PostgreSQL's 63-char identifier limit.
+
+    If the full name fits, it is returned unchanged.  If it is too long, the name is
+    truncated and an 8-character MD5 digest of the *full* name is appended so that
+    different long names with a shared prefix do not collide.
+    """
+    if len(full_name) <= _PG_MAX_IDENTIFIER_LEN:
+        return full_name
+    digest = hashlib.md5(full_name.encode()).hexdigest()[:8]
+    # Reserve 9 chars for "_" + 8-char digest; strip trailing underscores from the prefix.
+    prefix = full_name[:_PG_MAX_IDENTIFIER_LEN - 9].rstrip("_")
+    return f"{prefix}_{digest}"
 
 
 class LazyForeignKey(ForeignKey):
@@ -585,9 +605,9 @@ class ObjectFieldType(FieldType):
         schema_editor.add_field(model, oid_field)
 
         # Composite index as recommended in issue #31
-        idx_name = f"co_{field_instance.custom_object_type_id}_{field_instance.name}_gfk"
-        # Truncate to 30 chars to stay within DB identifier limits
-        idx_name = idx_name[:30].rstrip("_")
+        idx_name = _safe_index_name(
+            f"co_{field_instance.custom_object_type_id}_{field_instance.name}_gfk"
+        )
         idx = models.Index(fields=[ct_field_name, oid_field_name], name=idx_name)
         schema_editor.add_index(model, idx)
 
@@ -1099,10 +1119,10 @@ class MultiObjectFieldType(FieldType):
                 "indexes": [
                     models.Index(
                         fields=["content_type", "object_id"],
-                        name=(
+                        name=_safe_index_name(
                             f"co_{field_instance.custom_object_type_id}"
                             f"_{field_instance.name}_pgfk"
-                        )[:30].rstrip("_"),
+                        ),
                     )
                 ],
             },

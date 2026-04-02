@@ -92,7 +92,7 @@ class PolymorphicObjectSerializerField(serializers.Field):
 
         model_class = ct.model_class()
         if model_class is None:
-            raise serializers.ValidationError(f"Cannot resolve model for content type {ct}.")
+            raise serializers.ValidationError("Cannot resolve the specified object type.")
 
         obj_id = data.get("object_id") or data.get("id")
         if obj_id is None:
@@ -101,9 +101,7 @@ class PolymorphicObjectSerializerField(serializers.Field):
         try:
             return model_class.objects.get(pk=obj_id)
         except model_class.DoesNotExist:
-            raise serializers.ValidationError(
-                f"No {ct.model} with pk={obj_id!r}."
-            )
+            raise serializers.ValidationError("No matching object found.")
         except (ValueError, TypeError):
             raise serializers.ValidationError(
                 f"Invalid pk value: {obj_id!r}."
@@ -183,6 +181,21 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
             )
 
     def validate(self, attrs):
+        # Guard immutable fields on existing instances.
+        if self.instance and self.instance.pk:
+            if "is_polymorphic" in attrs and bool(attrs["is_polymorphic"]) != bool(self.instance.is_polymorphic):
+                raise ValidationError(
+                    {"is_polymorphic": "Cannot change the polymorphic flag after field creation."}
+                )
+            if attrs.get("related_object_types_input") is not None:
+                raise ValidationError(
+                    {"related_object_types_input": "Cannot change allowed object types after field creation."}
+                )
+            if attrs.get("app_label") or attrs.get("model"):
+                raise ValidationError(
+                    "Cannot change the related object type after field creation."
+                )
+
         app_label = attrs.pop("app_label", None)
         model = attrs.pop("model", None)
         related_object_types_input = attrs.pop("related_object_types_input", None)

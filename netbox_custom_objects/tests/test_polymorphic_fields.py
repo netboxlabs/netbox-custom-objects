@@ -173,6 +173,103 @@ class PolymorphicFieldAPITest(TransactionCleanupMixin, CustomObjectsTestCase, Tr
         self.assertIn(("dcim", "site"), app_models)
         self.assertIn(("ipam", "prefix"), app_models)
 
+    # --- Immutability: is_polymorphic and related types cannot change after creation ---
+
+    def test_patch_is_polymorphic_false_on_existing_polymorphic_field_rejected(self):
+        """PATCH is_polymorphic=False on an existing polymorphic field returns 400."""
+        _grant_perm(self.user, "change", CustomObjectTypeField, "field-change")
+        url = reverse(
+            "plugins-api:netbox_custom_objects-api:customobjecttypefield-detail",
+            kwargs={"pk": self.gfk_field.pk},
+        )
+        response = self.client.patch(
+            url,
+            json.dumps({"is_polymorphic": False}),
+            content_type="application/json",
+            **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+        self.gfk_field.refresh_from_db()
+        self.assertTrue(self.gfk_field.is_polymorphic)
+
+    def test_patch_related_object_types_input_on_existing_field_rejected(self):
+        """PATCH related_object_types_input on an existing polymorphic field returns 400."""
+        _grant_perm(self.user, "change", CustomObjectTypeField, "field-change")
+        url = reverse(
+            "plugins-api:netbox_custom_objects-api:customobjecttypefield-detail",
+            kwargs={"pk": self.gfk_field.pk},
+        )
+        response = self.client.patch(
+            url,
+            json.dumps({"related_object_types_input": [{"app_label": "dcim", "model": "site"}]}),
+            content_type="application/json",
+            **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+
+    def test_patch_app_label_model_on_existing_non_polymorphic_field_rejected(self):
+        """PATCH app_label+model on an existing non-polymorphic object field returns 400."""
+        _grant_perm(self.user, "change", CustomObjectTypeField, "field-change")
+        # Create a non-polymorphic object field
+        site_ot = ObjectType.objects.get(app_label="dcim", model="site")
+        non_poly_field = CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name="single_obj", label="Single Obj", type="object",
+            is_polymorphic=False,
+            related_object_type=site_ot,
+        )
+        url = reverse(
+            "plugins-api:netbox_custom_objects-api:customobjecttypefield-detail",
+            kwargs={"pk": non_poly_field.pk},
+        )
+        response = self.client.patch(
+            url,
+            json.dumps({"app_label": "ipam", "model": "prefix"}),
+            content_type="application/json",
+            **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+        non_poly_field.refresh_from_db()
+        self.assertEqual(non_poly_field.related_object_type, site_ot)
+
+    # --- Field name collision ---
+
+    def test_create_polymorphic_field_with_duplicate_name_rejected(self):
+        """POST a polymorphic field whose name already exists on the same COT returns 400."""
+        _grant_perm(self.user, "add", CustomObjectTypeField, "field-add-dup")
+        url = reverse("plugins-api:netbox_custom_objects-api:customobjecttypefield-list")
+        data = {
+            "custom_object_type": self.cot.pk,
+            # "poly_obj" already exists on self.cot (created in setUp)
+            "name": "poly_obj",
+            "label": "Duplicate Poly",
+            "type": "object",
+            "is_polymorphic": True,
+            "related_object_types_input": [
+                {"app_label": "dcim", "model": "site"},
+            ],
+        }
+        response = self.client.post(url, json.dumps(data), content_type="application/json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+
+    def test_rename_polymorphic_field_to_collide_with_existing_field_rejected(self):
+        """PATCH name of a polymorphic field to an already-taken name returns 400."""
+        _grant_perm(self.user, "change", CustomObjectTypeField, "field-change-dup")
+        url = reverse(
+            "plugins-api:netbox_custom_objects-api:customobjecttypefield-detail",
+            kwargs={"pk": self.m2m_field.pk},
+        )
+        # Rename poly_multi → poly_obj which is already taken
+        response = self.client.patch(
+            url,
+            json.dumps({"name": "poly_obj"}),
+            content_type="application/json",
+            **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+        self.m2m_field.refresh_from_db()
+        self.assertEqual(self.m2m_field.name, "poly_multi")
+
     # --- Custom object CRUD with polymorphic GFK ---
 
     def _obj_list_url(self):
@@ -307,6 +404,40 @@ class PolymorphicFieldAPITest(TransactionCleanupMixin, CustomObjectsTestCase, Tr
         members = obj.poly_multi.all()
         self.assertNotIn(self.site, members)
         self.assertIn(self.prefix, members)
+
+    # --- Orphaned / unresolvable content type ---
+
+    def test_create_custom_object_with_unresolvable_content_type_rejected(self):
+        """POST with a content_type_id whose model_class() is None returns 400."""
+        _grant_perm(self.user, "add", self.model, "co-add")
+
+        # ObjectType is a proxy for ContentType.  An entry with a nonexistent app/model
+        # gives a row whose model_class() returns None.  Use get_or_create so the test
+        # is idempotent when run with --keepdb.
+        orphan_ot, _ = ObjectType.objects.get_or_create(
+            app_label="nonexistent_app", model="nonexistentmodel"
+        )
+        # Add to allowed types so we pass the allow-list check and reach model_class().
+        self.gfk_field.related_object_types.add(orphan_ot)
+
+        data = {
+            "name": "orphan-ct-obj",
+            "poly_obj": {"content_type_id": orphan_ot.pk, "object_id": 1},
+        }
+        response = self.client.post(
+            self._obj_list_url(),
+            json.dumps(data),
+            content_type="application/json",
+            **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.content)
+        # Should return the sanitized message, not internal CT details.
+        self.assertNotIn(b"nonexistentmodel", response.content)
+        self.assertNotIn(b"nonexistent_app", response.content)
+
+        # Remove from M2M before tearDown drops the through table; leaving the
+        # stale django_content_type row itself is harmless.
+        self.gfk_field.related_object_types.remove(orphan_ot)
 
     # --- Content-type enforcement tests ---
 

@@ -25,7 +25,7 @@ class RootView(APIRootView):
 
 
 class CustomObjectTypeViewSet(ModelViewSet):
-    queryset = CustomObjectType.objects.all()
+    queryset = CustomObjectType.objects.prefetch_related('fields__related_object_types')
     serializer_class = serializers.CustomObjectTypeSerializer
 
 
@@ -87,7 +87,7 @@ class CustomObjectViewSet(ModelViewSet):
 
 
 class CustomObjectTypeFieldViewSet(ModelViewSet):
-    queryset = CustomObjectTypeField.objects.all()
+    queryset = CustomObjectTypeField.objects.prefetch_related('related_object_types')
     serializer_class = serializers.CustomObjectTypeFieldSerializer
 
 
