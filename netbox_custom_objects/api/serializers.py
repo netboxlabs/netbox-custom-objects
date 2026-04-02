@@ -107,8 +107,6 @@ class PolymorphicObjectSerializerField(serializers.Field):
             return model_class.objects.get(pk=obj_id)
         except (model_class.DoesNotExist, ValueError, TypeError, OverflowError):
             raise serializers.ValidationError("No matching object found.") from None
-        except Exception:
-            raise serializers.ValidationError("Invalid request.") from None
 
 
 class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
@@ -319,9 +317,6 @@ class CustomObjectTypeSerializer(NetBoxModelSerializer):
 
     def get_object_type_name(self, obj):
         return f"{constants.APP_LABEL}.{obj.get_table_model_name(obj.id).lower()}"
-
-    def create(self, validated_data):
-        return super().create(validated_data)
 
 
 # TODO: Remove or reduce to a stub (not needed as all custom object serializers are generated via get_serializer_class)

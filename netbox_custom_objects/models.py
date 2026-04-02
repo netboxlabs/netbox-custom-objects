@@ -1090,9 +1090,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         if not self.related_object_type:
             return "—"
         if self.related_object_type.app_label == APP_LABEL:
-            custom_object_type_id = self.related_object_type.model.replace(
-                "table", ""
-            ).replace("model", "")
+            custom_object_type_id = extract_cot_id_from_model_name(self.related_object_type.model)
             return CustomObjectType.get_content_type_label(custom_object_type_id)
         return object_type_name(self.related_object_type, include_app=True)
 
@@ -1676,7 +1674,18 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
             # Validate selected object
             elif self.type == CustomFieldTypeChoices.TYPE_OBJECT:
-                if type(value) is not int:
+                if self.is_polymorphic:
+                    # Polymorphic value is {"content_type_id": int, "object_id": int}
+                    if not isinstance(value, dict) or not isinstance(
+                        value.get("content_type_id"), int
+                    ) or not isinstance(value.get("object_id"), int):
+                        raise ValidationError(
+                            _(
+                                "Polymorphic object value must be a dict with integer "
+                                "content_type_id and object_id keys, not {type}."
+                            ).format(type=type(value).__name__)
+                        )
+                elif type(value) is not int:
                     raise ValidationError(
                         _("Value must be an object ID, not {type}").format(
                             type=type(value).__name__
@@ -1692,7 +1701,18 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                         )
                     )
                 for id in value:
-                    if type(id) is not int:
+                    if self.is_polymorphic:
+                        # Each polymorphic entry is {"content_type_id": int, "object_id": int}
+                        if not isinstance(id, dict) or not isinstance(
+                            id.get("content_type_id"), int
+                        ) or not isinstance(id.get("object_id"), int):
+                            raise ValidationError(
+                                _(
+                                    "Each polymorphic multiobject value must be a dict with "
+                                    "integer content_type_id and object_id keys."
+                                )
+                            )
+                    elif type(id) is not int:
                         raise ValidationError(
                             _("Found invalid object ID: {id}").format(id=id)
                         )
