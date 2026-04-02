@@ -1,3 +1,4 @@
+import re
 import warnings
 
 from django.apps import apps
@@ -6,10 +7,15 @@ from netbox_custom_objects.constants import APP_LABEL
 
 __all__ = (
     "AppsProxy",
+    "extract_cot_id_from_model_name",
     "generate_model",
     "get_viewname",
     "is_in_branch",
 )
+
+# Internal model names for custom object types follow the pattern "table<id>model"
+# (e.g. "table3model" for CustomObjectType with pk=3).
+_COT_MODEL_RE = re.compile(r"^table(\d+)model$")
 
 
 class AppsProxy:
@@ -58,6 +64,21 @@ class AppsProxy:
 
     def __getattr__(self, attr):
         return getattr(apps, attr)
+
+
+def extract_cot_id_from_model_name(model_name: str) -> str | None:
+    """
+    Extract the CustomObjectType primary key from an internal model name.
+
+    Internal model names follow the pattern ``table<id>model`` (e.g. ``table3model``
+    for CustomObjectType pk=3).  Returns the id as a string, or ``None`` if the name
+    does not match the pattern.
+
+    Use this instead of chained ``.replace("table", "").replace("model", "")`` calls,
+    which corrupt model names that contain "table" or "model" as substrings.
+    """
+    m = _COT_MODEL_RE.match(model_name)
+    return m.group(1) if m else None
 
 
 def get_viewname(model, action=None, rest_api=False):

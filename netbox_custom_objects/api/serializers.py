@@ -167,15 +167,12 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
                 cot = CustomObjectType.objects.get(slug=model)
                 model = CustomObjectType.get_table_model_name(cot.id).lower()
             except CustomObjectType.DoesNotExist:
-                raise ValidationError(
-                    f"Unknown custom object type slug: {model}"
-                )
+                raise ValidationError("Invalid custom object type slug.")
         try:
             return ObjectType.objects.get(app_label=app_label, model=model)
         except ObjectType.DoesNotExist:
             raise ValidationError(
-                f"Must provide valid app_label and model for object field type. "
-                f"Got: {app_label}.{model}"
+                "Must provide a valid app_label and model for the object field type."
             )
 
     def validate(self, attrs):
@@ -380,6 +377,12 @@ class CustomObjectSerializer(NetBoxModelSerializer):
 
 
 def get_serializer_class(model, skip_object_fields=False):
+    # This function is intentionally not cached at the serializer level.
+    # It is called per-request (via CustomObjectViewSet.get_serializer_class →
+    # get_model_with_serializer), and the model itself is cache-invalidated on
+    # field post_save/pre_delete via clear_model_cache().  Keeping serializer
+    # generation fresh ensures _poly_obj_fields/_poly_m2m_fields always reflect
+    # the current set of polymorphic fields without a separate invalidation path.
     model_fields = model.custom_object_type.fields.all()
 
     # Create field list including all necessary fields

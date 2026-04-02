@@ -53,7 +53,7 @@ from utilities.validators import validate_regex
 
 from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
-from netbox_custom_objects.utilities import generate_model
+from netbox_custom_objects.utilities import extract_cot_id_from_model_name, generate_model
 
 
 class UniquenessConstraintTestError(Exception):
@@ -1064,8 +1064,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             labels = []
             for ot in self.related_object_types.all():
                 if ot.app_label == APP_LABEL:
-                    cot_id = ot.model.replace("table", "").replace("model", "")
-                    if cot_id.isdigit():
+                    cot_id = extract_cot_id_from_model_name(ot.model)
+                    if cot_id is not None:
                         try:
                             labels.append(CustomObjectType.get_content_type_label(cot_id))
                             continue

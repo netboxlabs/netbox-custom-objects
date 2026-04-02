@@ -13,6 +13,7 @@ from utilities.object_types import object_type_name
 
 from netbox_custom_objects.choices import SearchWeightChoices
 from netbox_custom_objects.constants import APP_LABEL
+from netbox_custom_objects.utilities import extract_cot_id_from_model_name
 from netbox_custom_objects.models import (CustomObjectObjectType,
                                           CustomObjectType,
                                           CustomObjectTypeField)
@@ -108,8 +109,8 @@ class CustomContentTypeChoiceField(ContentTypeChoiceField):
 
     def label_from_instance(self, obj):
         if obj.app_label == APP_LABEL:
-            custom_object_type_id = obj.model.replace("table", "").replace("model", "")
-            if custom_object_type_id.isdigit():
+            custom_object_type_id = extract_cot_id_from_model_name(obj.model)
+            if custom_object_type_id is not None:
                 try:
                     return CustomObjectType.get_content_type_label(
                         custom_object_type_id
@@ -127,8 +128,8 @@ class CustomContentTypeMultipleChoiceField(ContentTypeMultipleChoiceField):
 
     def label_from_instance(self, obj):
         if obj.app_label == APP_LABEL:
-            custom_object_type_id = obj.model.replace("table", "").replace("model", "")
-            if custom_object_type_id.isdigit():
+            custom_object_type_id = extract_cot_id_from_model_name(obj.model)
+            if custom_object_type_id is not None:
                 try:
                     return CustomObjectType.get_content_type_label(
                         custom_object_type_id

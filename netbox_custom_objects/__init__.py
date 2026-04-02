@@ -9,6 +9,7 @@ from django.db.models.signals import pre_migrate, post_migrate
 from netbox.plugins import PluginConfig
 
 from .constants import APP_LABEL as APP_LABEL
+from .utilities import extract_cot_id_from_model_name
 
 # Context variable to track if we're currently running migrations
 _is_migrating = contextvars.ContextVar('is_migrating', default=False)
@@ -173,9 +174,7 @@ class CustomObjectsPluginConfig(PluginConfig):
 
         from .models import CustomObjectType
 
-        custom_object_type_id = int(
-            model_name.replace("table", "").replace("model", "")
-        )
+        custom_object_type_id = int(extract_cot_id_from_model_name(model_name))
 
         try:
             obj = CustomObjectType.objects.get(pk=custom_object_type_id)

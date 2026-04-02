@@ -35,7 +35,7 @@ from utilities.templatetags.builtins.filters import linkify, render_markdown
 from netbox.tables.columns import BooleanColumn
 
 from netbox_custom_objects.constants import APP_LABEL
-from netbox_custom_objects.utilities import generate_model
+from netbox_custom_objects.utilities import extract_cot_id_from_model_name, generate_model
 
 logger = logging.getLogger(__name__)
 
@@ -544,7 +544,7 @@ class ObjectFieldType(FieldType):
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
         if content_type.app_label == APP_LABEL:
             from netbox_custom_objects.models import CustomObjectType
-            custom_object_type_id = content_type.model.replace("table", "").replace("model", "")
+            custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
             model = custom_object_type.get_model()
         else:
@@ -969,7 +969,7 @@ class MultiObjectFieldType(FieldType):
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
         if content_type.app_label == APP_LABEL:
             from netbox_custom_objects.models import CustomObjectType
-            custom_object_type_id = content_type.model.replace("table", "").replace("model", "")
+            custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
             model = custom_object_type.get_model()
         else:
@@ -1222,27 +1222,39 @@ class PolymorphicManyToManyManager:
 
     def _get_objects(self):
         through = self._get_through_model()
-        rows = through.objects.filter(
-            source_id=self.instance.pk
-        ).values_list("content_type_id", "object_id").order_by("id")
+        rows = list(
+            through.objects.filter(source_id=self.instance.pk)
+            .values_list("content_type_id", "object_id")
+            .order_by("id")
+        )
 
-        ct_model_cache = {}
+        # Group object IDs by content type so we can batch-fetch per model class
+        # (one SELECT per type) rather than issuing one SELECT per row.
+        by_ct: dict[int, list] = {}
         for ct_id, obj_id in rows:
-            if ct_id not in ct_model_cache:
-                try:
-                    ct = ContentType.objects.get(pk=ct_id)
-                    ct_model_cache[ct_id] = ct.model_class()
-                except ContentType.DoesNotExist:
-                    ct_model_cache[ct_id] = None
-            model_class = ct_model_cache[ct_id]
-            if model_class:
-                try:
-                    yield model_class.objects.get(pk=obj_id)
-                except model_class.DoesNotExist:
-                    pass
+            by_ct.setdefault(ct_id, []).append(obj_id)
+
+        # Build a lookup map: (ct_id, obj_id) → object, preserving row order below.
+        obj_map: dict[tuple, object] = {}
+        for ct_id, obj_ids in by_ct.items():
+            ct = ContentType.objects.get_for_id(ct_id)
+            model_class = ct.model_class()
+            if model_class is None:
+                continue
+            for obj in model_class.objects.filter(pk__in=obj_ids):
+                obj_map[(ct_id, obj.pk)] = obj
+
+        # Yield in original insertion order, skipping stale references.
+        for ct_id, obj_id in rows:
+            obj = obj_map.get((ct_id, obj_id))
+            if obj is not None:
+                yield obj
 
     def all(self):
         return list(self._get_objects())
+
+    def count(self):
+        return self._get_through_model().objects.filter(source_id=self.instance.pk).count()
 
     def exists(self):
         return self._get_through_model().objects.filter(source_id=self.instance.pk).exists()
