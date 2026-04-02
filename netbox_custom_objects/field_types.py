@@ -1251,12 +1251,16 @@ class MultiObjectFieldType(FieldType):
 
 class PolymorphicResultList:
     """
-    Lazy, cacheable result returned by PolymorphicManyToManyManager.all().
+    Lazy result returned by PolymorphicManyToManyManager.all().
 
-    The underlying DB queries are deferred until first access.  Subsequent
-    accesses of the *same instance* use a cached list, so templates that
-    test both ``{% if obj.poly_field %}`` and ``{% for x in obj.poly_field.all %}``
-    only issue one round of queries.
+    The underlying DB queries are deferred until first access and cached
+    within this object's lifetime.  Because PolymorphicM2MDescriptor creates
+    a new manager on every attribute access, and the manager's all() creates a
+    new PolymorphicResultList, the cache only helps *within a single call
+    chain* — e.g. a template that calls ``|length`` and then iterates the same
+    ``all()`` return value will only issue one round of queries.  Calling
+    ``obj.poly_field.all()`` twice, however, creates two separate instances and
+    issues two rounds of queries.
 
     This is intentionally NOT a QuerySet — the objects come from multiple
     model classes and cannot be combined into a single SQL result set.
