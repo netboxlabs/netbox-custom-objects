@@ -794,8 +794,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         validators=(
             RegexValidator(
                 regex=r"^[a-z0-9_]+$",
-                message=_("Only alphanumeric characters and underscores are allowed."),
-                flags=re.IGNORECASE,
+                message=_("Only lowercase alphanumeric characters and underscores are allowed."),
             ),
             RegexValidator(
                 regex=r"__",
@@ -867,6 +866,24 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         help_text=_(
             "Filter the object selection choices using a query_params dict (must be a JSON value)."
             'Encapsulate strings with double quotes (e.g. "Foo").'
+        ),
+    )
+    related_name = models.CharField(
+        verbose_name=_("reverse relation name"),
+        max_length=100,
+        blank=True,
+        validators=(
+            RegexValidator(
+                regex=r"^[a-z0-9_]+$",
+                message=_("Only lowercase alphanumeric characters and underscores are allowed."),
+            ),
+        ),
+        help_text=_(
+            "Name for the reverse relation accessor on the related object (for Object and MultiObject fields only). "
+            'For example, setting this to "ssl_profiles" on a Certificate\u2192SLB field allows '
+            "<code>slb.ssl_profiles.all()</code> in export templates. "
+            "If left blank, a unique auto-generated name is used for Object fields and reverse access is "
+            "disabled for MultiObject fields."
         ),
     )
     weight = models.PositiveSmallIntegerField(
@@ -942,6 +959,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             models.UniqueConstraint(
                 fields=("name", "custom_object_type"),
                 name="%(app_label)s_%(class)s_unique_name",
+            ),
+            models.UniqueConstraint(
+                fields=("related_object_type", "related_name"),
+                condition=Q(related_name__gt=""),
+                name="%(app_label)s_%(class)s_unique_related_name",
             ),
         )
 
@@ -1168,6 +1190,39 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     {
                         "related_object_filter": _(
                             "Filter must be defined as a dictionary mapping attributes to values."
+                        )
+                    }
+                )
+
+        # related_name can only be set for object-type fields
+        if self.related_name and self.type not in (
+            CustomFieldTypeChoices.TYPE_OBJECT,
+            CustomFieldTypeChoices.TYPE_MULTIOBJECT,
+        ):
+            raise ValidationError(
+                {
+                    "related_name": _(
+                        "A reverse relation name can only be set for Object and MultiObject fields."
+                    )
+                }
+            )
+
+        # related_name must be unique per related_object_type (when set)
+        if self.related_name and self.related_object_type_id:
+            conflict = CustomObjectTypeField.objects.filter(
+                related_object_type_id=self.related_object_type_id,
+                related_name=self.related_name,
+            ).exclude(pk=self.pk).first()
+            if conflict:
+                raise ValidationError(
+                    {
+                        "related_name": _(
+                            'Reverse relation name "{name}" is already used by field '
+                            '"{field}" on "{object_type}".'
+                        ).format(
+                            name=self.related_name,
+                            field=conflict.name,
+                            object_type=conflict.custom_object_type,
                         )
                     }
                 )

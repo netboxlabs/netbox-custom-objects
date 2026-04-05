@@ -65,6 +65,7 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
             "validation_maximum",
             "related_object_type",
             "related_object_filter",
+            "related_name",
             "app_label",
             "model",
             "group_name",
