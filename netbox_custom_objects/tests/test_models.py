@@ -803,7 +803,7 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
 
     def test_related_name_invalid_characters_rejected(self):
         """related_name must contain only lowercase alphanumeric characters and underscores."""
-        for bad_value in ("My-Name", "has space", "UPPER", "has--double"):
+        for bad_value in ("My-Name", "has space", "UPPER", "has--double", "has__double"):
             with self.subTest(value=bad_value):
                 field = CustomObjectTypeField(
                     custom_object_type=self.cert_cot,
