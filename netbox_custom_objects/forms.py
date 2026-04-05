@@ -188,6 +188,19 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
         if self.initial["type"] == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
             self.fields["unique"].disabled = True
 
+        # Add related_name to the Related Object fieldset for object/multiobject fields.
+        # The parent CustomFieldForm.__init__ removes related_object_type from self.fields
+        # for non-object types, so we use its presence as a signal.
+        if "related_object_type" in self.fields:
+            self.fieldsets = tuple(
+                FieldSet(*fs.items, "related_name", name=fs.name)
+                if "related_object_type" in fs.items
+                else fs
+                for fs in self.fieldsets
+            )
+        else:
+            del self.fields["related_name"]
+
     def clean_primary(self):
         primary_fields = self.cleaned_data["custom_object_type"].fields.filter(
             primary=True
