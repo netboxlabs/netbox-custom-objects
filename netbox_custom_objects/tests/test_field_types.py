@@ -1186,6 +1186,11 @@ class ContextFieldWidgetTestCase(CustomObjectsTestCase, TestCase):
             ),
         )
 
+    @classmethod
+    def tearDownClass(cls):
+        CustomObjectType.clear_model_cache()
+        super().tearDownClass()
+
     # --- ObjectFieldType ---
 
     def test_object_field_with_context_sets_ts_parent_field(self):
