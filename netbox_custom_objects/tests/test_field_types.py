@@ -9,7 +9,7 @@ from django.test import TestCase
 
 from core.models import ObjectType
 from netbox_custom_objects.field_types import MultiObjectFieldType, ObjectFieldType
-from netbox_custom_objects.models import CustomObjectTypeField
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from .base import CustomObjectsTestCase
 
 
