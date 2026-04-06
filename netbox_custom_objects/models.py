@@ -197,7 +197,7 @@ class CustomObjectType(NetBoxModel):
         verbose_name=_('comments'),
         blank=True
     )
-    version = models.CharField(max_length=10, blank=True)
+    version = models.CharField(max_length=50, blank=True)
     verbose_name = models.CharField(max_length=100, blank=True)
     verbose_name_plural = models.CharField(max_length=100, blank=True)
     slug = models.SlugField(max_length=100, unique=True, db_index=True, blank=False)
@@ -206,6 +206,14 @@ class CustomObjectType(NetBoxModel):
         db_index=True,
         blank=True,
         help_text=_("Used to group similar custom object types in the navigation menu")
+    )
+    schema_document = models.JSONField(
+        blank=True,
+        null=True,
+        help_text=_(
+            "The last applied or exported schema document for this Custom Object Type. "
+            "Serves as the source of truth for schema history, including tombstoned fields."
+        ),
     )
     cache_timestamp = models.DateTimeField(
         auto_now=True,
@@ -924,6 +932,35 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         help_text=_("Replicate this value when cloning objects"),
     )
     comments = models.TextField(verbose_name=_("comments"), blank=True)
+    schema_id = models.PositiveSmallIntegerField(
+        blank=True,
+        null=True,
+        verbose_name=_("schema ID"),
+        help_text=_(
+            "Stable numeric identifier for this field used during schema diffing. "
+            "Auto-assigned on creation; never changes and never reused within this Custom Object Type."
+        ),
+    )
+    deprecated = models.BooleanField(
+        default=False,
+        verbose_name=_("deprecated"),
+        help_text=_(
+            "Mark this field as deprecated. Deprecated fields remain in the database but "
+            "are read-only in the UI and should not be used in new objects."
+        ),
+    )
+    deprecated_since = models.CharField(
+        max_length=50,
+        blank=True,
+        verbose_name=_("deprecated since"),
+        help_text=_("Schema version in which this field was marked deprecated (e.g. '2.0.0')."),
+    )
+    scheduled_removal = models.CharField(
+        max_length=50,
+        blank=True,
+        verbose_name=_("scheduled removal"),
+        help_text=_("Schema version in which this field is planned to be removed (e.g. '3.0.0')."),
+    )
 
     clone_fields = ("custom_object_type",)
 
@@ -942,6 +979,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             models.UniqueConstraint(
                 fields=("name", "custom_object_type"),
                 name="%(app_label)s_%(class)s_unique_name",
+            ),
+            models.UniqueConstraint(
+                fields=("schema_id", "custom_object_type"),
+                name="%(app_label)s_%(class)s_unique_schema_id",
+                condition=models.Q(schema_id__isnull=False),
             ),
         )
 
@@ -1529,6 +1571,20 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
     def save(self, *args, **kwargs):
         is_new = self._state.adding
+
+        # Auto-assign schema_id for new fields that don't have one yet.
+        # Locks existing rows for this COT to prevent concurrent assignment of the same ID.
+        if self._state.adding and self.schema_id is None:
+            with transaction.atomic():
+                locked_ids = list(
+                    CustomObjectTypeField.objects
+                    .filter(custom_object_type=self.custom_object_type)
+                    .select_for_update()
+                    .values_list('schema_id', flat=True)
+                )
+                used_ids = [i for i in locked_ids if i is not None]
+                self.schema_id = max(used_ids, default=0) + 1
+
         field_type = FIELD_TYPE_CLASS[self.type]()
         model_field = field_type.get_model_field(self)
         model = self.custom_object_type.get_model()

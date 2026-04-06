@@ -50,6 +50,7 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
         model = CustomObjectTypeField
         fields = (
             "id",
+            "url",
             "name",
             "label",
             "custom_object_type",
@@ -75,6 +76,10 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
             "weight",
             "is_cloneable",
             "comments",
+            "schema_id",
+            "deprecated",
+            "deprecated_since",
+            "scheduled_removal",
         )
 
     def validate(self, attrs):
@@ -152,12 +157,14 @@ class CustomObjectTypeSerializer(NetBoxModelSerializer):
             "verbose_name",
             "verbose_name_plural",
             "slug",
+            "version",
             "group_name",
             "description",
             "tags",
             "created",
             "last_updated",
             "fields",
+            "schema_document",
             "table_model_name",
             "object_type_name",
         ]
