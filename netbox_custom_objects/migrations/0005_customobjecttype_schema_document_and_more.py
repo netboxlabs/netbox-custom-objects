@@ -44,6 +44,10 @@ class Migration(migrations.Migration):
         ),
         migrations.AddConstraint(
             model_name='customobjecttypefield',
-            constraint=models.UniqueConstraint(condition=models.Q(('schema_id__isnull', False)), fields=('schema_id', 'custom_object_type'), name='netbox_custom_objects_customobjecttypefield_unique_schema_id'),
+            constraint=models.UniqueConstraint(
+                condition=models.Q(('schema_id__isnull', False)),
+                fields=('schema_id', 'custom_object_type'),
+                name='netbox_custom_objects_customobjecttypefield_unique_schema_id',
+            ),
         ),
     ]

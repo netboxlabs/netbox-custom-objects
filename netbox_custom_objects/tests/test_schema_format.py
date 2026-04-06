@@ -1,0 +1,475 @@
+"""
+Tests for the COT portable schema format (issue #386).
+
+Covers:
+- schema_id auto-assignment and uniqueness on CustomObjectTypeField
+- deprecated / deprecated_since / scheduled_removal field behaviour
+- schema_document and version fields on CustomObjectType
+- JSON Schema document validation via cot_schema_v1.json
+"""
+import json
+import unittest
+from pathlib import Path
+
+from django.db import IntegrityError
+from django.test import TestCase, TransactionTestCase
+
+from netbox_custom_objects.schema_format import (
+    CHOICES_TO_SCHEMA_TYPE,
+    SCHEMA_FORMAT_VERSION,
+    SCHEMA_TYPE_TO_CHOICES,
+)
+
+from .base import CustomObjectsTestCase, TransactionCleanupMixin
+
+# ---------------------------------------------------------------------------
+# Optional jsonschema dependency — skip structural-validation tests if absent
+# ---------------------------------------------------------------------------
+try:
+    import jsonschema
+    HAS_JSONSCHEMA = True
+except ImportError:
+    HAS_JSONSCHEMA = False
+
+_SCHEMA_PATH = (
+    Path(__file__).resolve().parent.parent / "schemas" / "cot_schema_v1.json"
+)
+
+
+# ===========================================================================
+# schema_id / deprecated model field tests (require TransactionTestCase)
+# ===========================================================================
+
+class SchemaIdAutoAssignmentTestCase(
+    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
+):
+    """schema_id is auto-assigned on field creation and never reused."""
+
+    def test_schema_id_assigned_on_create(self):
+        """A new field with no explicit schema_id gets one automatically."""
+        cot = self.create_custom_object_type(name='schidtest', slug='sch-id-test')
+        field = self.create_custom_object_type_field(cot, name='label', type='text')
+
+        self.assertIsNotNone(field.schema_id, "schema_id must be set after save.")
+        self.assertGreaterEqual(field.schema_id, 1)
+
+    def test_schema_ids_are_sequential(self):
+        """Each new field in the same COT gets the next available integer."""
+        cot = self.create_custom_object_type(name='schseq', slug='sch-seq')
+        f1 = self.create_custom_object_type_field(cot, name='first', type='text')
+        f2 = self.create_custom_object_type_field(cot, name='second', type='text')
+        f3 = self.create_custom_object_type_field(cot, name='third', type='text')
+
+        ids = sorted([f1.schema_id, f2.schema_id, f3.schema_id])
+        self.assertEqual(ids, list(range(ids[0], ids[0] + 3)),
+                         "schema_ids must form a contiguous sequence within the COT.")
+
+    def test_schema_id_scoped_to_cot(self):
+        """Two different COTs can have fields with the same schema_id."""
+        cot_a = self.create_custom_object_type(name='schcota', slug='sch-cot-a')
+        cot_b = self.create_custom_object_type(name='schcotb', slug='sch-cot-b')
+
+        fa = self.create_custom_object_type_field(cot_a, name='label', type='text')
+        fb = self.create_custom_object_type_field(cot_b, name='label', type='text')
+
+        # Both are assigned ID 1 — that is fine because uniqueness is per-COT.
+        self.assertEqual(fa.schema_id, fb.schema_id,
+                         "First field in each COT should both receive schema_id=1.")
+
+    def test_explicit_schema_id_is_respected(self):
+        """A field created with an explicit schema_id keeps that value."""
+        cot = self.create_custom_object_type(name='schexpl', slug='sch-expl')
+        field = self.create_custom_object_type_field(
+            cot, name='label', type='text', schema_id=42
+        )
+        self.assertEqual(field.schema_id, 42)
+
+    def test_duplicate_schema_id_within_cot_raises(self):
+        """Assigning the same schema_id to two fields in the same COT is rejected."""
+        cot = self.create_custom_object_type(name='schdup', slug='sch-dup')
+        self.create_custom_object_type_field(
+            cot, name='first', type='text', schema_id=7
+        )
+        with self.assertRaises(IntegrityError):
+            self.create_custom_object_type_field(
+                cot, name='second', type='text', schema_id=7
+            )
+
+    def test_schema_id_gap_after_deletion(self):
+        """
+        After a field is deleted its schema_id is not reused; the next
+        auto-assigned ID continues from the highest ever used.
+        """
+        cot = self.create_custom_object_type(name='schgap', slug='sch-gap')
+        self.create_custom_object_type_field(cot, name='first', type='text')
+        f2 = self.create_custom_object_type_field(cot, name='second', type='text')
+        id_before_delete = f2.schema_id
+
+        f2.delete()
+
+        f3 = self.create_custom_object_type_field(cot, name='third', type='text')
+        self.assertGreater(
+            f3.schema_id, id_before_delete,
+            "Auto-assigned schema_id must not reuse a previously deleted field's ID.",
+        )
+
+
+class DeprecationFieldsTestCase(
+    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
+):
+    """deprecated, deprecated_since, and scheduled_removal field behaviour."""
+
+    def test_deprecated_defaults_to_false(self):
+        cot = self.create_custom_object_type(name='depdefault', slug='dep-default')
+        field = self.create_custom_object_type_field(cot, name='label', type='text')
+        self.assertFalse(field.deprecated)
+
+    def test_can_mark_field_deprecated(self):
+        cot = self.create_custom_object_type(name='depmark', slug='dep-mark')
+        field = self.create_custom_object_type_field(cot, name='label', type='text')
+
+        field.deprecated = True
+        field.deprecated_since = '2.0.0'
+        field.scheduled_removal = '3.0.0'
+        field.save()
+
+        field.refresh_from_db()
+        self.assertTrue(field.deprecated)
+        self.assertEqual(field.deprecated_since, '2.0.0')
+        self.assertEqual(field.scheduled_removal, '3.0.0')
+
+    def test_deprecation_version_strings_accept_semver(self):
+        """Long semver strings (pre-release, build metadata) fit in max_length=50."""
+        cot = self.create_custom_object_type(name='depsemver', slug='dep-semver')
+        field = self.create_custom_object_type_field(cot, name='label', type='text')
+
+        field.deprecated = True
+        field.deprecated_since = '1.0.0-alpha.1+build.42'
+        field.scheduled_removal = '2.0.0-beta.3'
+        field.save()
+
+        field.refresh_from_db()
+        self.assertEqual(field.deprecated_since, '1.0.0-alpha.1+build.42')
+
+
+# ===========================================================================
+# schema_document and version field tests (plain TestCase — no DDL needed)
+# ===========================================================================
+
+class SchemaDocumentFieldTestCase(CustomObjectsTestCase, TestCase):
+    """schema_document and version fields on CustomObjectType."""
+
+    def test_schema_document_defaults_to_null(self):
+        cot = self.create_custom_object_type(name='schemadoc', slug='schema-doc')
+        self.assertIsNone(cot.schema_document)
+
+    def test_schema_document_can_store_json(self):
+        cot = self.create_custom_object_type(name='schemadoc2', slug='schema-doc-2')
+        document = {
+            "schema_version": "1",
+            "name": "schemadoc2",
+            "slug": "schema-doc-2",
+            "version": "1.0.0",
+            "fields": [],
+            "removed_fields": [],
+        }
+        cot.schema_document = document
+        cot.save()
+
+        cot.refresh_from_db()
+        self.assertEqual(cot.schema_document, document)
+
+    def test_version_field_accepts_long_semver(self):
+        """version field max_length=50 accommodates pre-release semver strings."""
+        cot = self.create_custom_object_type(
+            name='semvertest', slug='semver-test', version='10.200.300-alpha.1'
+        )
+        cot.refresh_from_db()
+        self.assertEqual(cot.version, '10.200.300-alpha.1')
+
+    def test_version_field_optional(self):
+        """version is not required; blank is accepted."""
+        cot = self.create_custom_object_type(name='nover', slug='no-ver')
+        self.assertEqual(cot.version, '')
+
+
+# ===========================================================================
+# schema_format.py constants tests
+# ===========================================================================
+
+class SchemaFormatConstantsTestCase(TestCase):
+    """Sanity checks on schema_format module constants."""
+
+    def test_format_version_is_string(self):
+        self.assertIsInstance(SCHEMA_FORMAT_VERSION, str)
+        self.assertEqual(SCHEMA_FORMAT_VERSION, "1")
+
+    def test_type_mapping_is_bijective(self):
+        """CHOICES_TO_SCHEMA_TYPE and SCHEMA_TYPE_TO_CHOICES must be inverses."""
+        for choices_val, schema_name in CHOICES_TO_SCHEMA_TYPE.items():
+            self.assertEqual(
+                SCHEMA_TYPE_TO_CHOICES[schema_name], choices_val,
+                f"Round-trip failed for {choices_val!r} ↔ {schema_name!r}",
+            )
+
+    def test_all_field_types_are_mapped(self):
+        """Every CustomFieldTypeChoices value must have a schema type entry."""
+        from extras.choices import CustomFieldTypeChoices
+        for attr in dir(CustomFieldTypeChoices):
+            if attr.startswith('TYPE_'):
+                value = getattr(CustomFieldTypeChoices, attr)
+                self.assertIn(
+                    value, CHOICES_TO_SCHEMA_TYPE,
+                    f"CustomFieldTypeChoices.{attr} ({value!r}) is missing from CHOICES_TO_SCHEMA_TYPE",
+                )
+
+
+# ===========================================================================
+# JSON Schema structural validation tests
+# ===========================================================================
+
+@unittest.skipUnless(HAS_JSONSCHEMA, "jsonschema library not installed")
+class COTJsonSchemaTestCase(TestCase):
+    """Validate that cot_schema_v1.json correctly accepts/rejects documents."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        with open(_SCHEMA_PATH) as fh:
+            cls.schema = json.load(fh)
+        cls.validator_cls = jsonschema.Draft202012Validator
+        cls.validator_cls.check_schema(cls.schema)
+
+    def _validate(self, document):
+        """Return a list of validation errors (empty means valid)."""
+        v = self.validator_cls(self.schema)
+        return list(v.iter_errors(document))
+
+    def _assert_valid(self, document):
+        errors = self._validate(document)
+        self.assertEqual(errors, [], f"Expected valid document but got errors: {errors}")
+
+    def _assert_invalid(self, document):
+        errors = self._validate(document)
+        self.assertGreater(len(errors), 0, "Expected invalid document but it passed validation.")
+
+    # ------------------------------------------------------------------
+    # Valid documents
+    # ------------------------------------------------------------------
+
+    def test_minimal_valid_document(self):
+        """A document with only the required fields is valid."""
+        self._assert_valid({
+            "schema_version": "1",
+            "types": [
+                {"name": "widget", "slug": "widget"}
+            ],
+        })
+
+    def test_full_valid_document(self):
+        """A document exercising all field types passes validation."""
+        self._assert_valid({
+            "schema_version": "1",
+            "types": [
+                {
+                    "name": "circuit_endpoint",
+                    "slug": "circuit-endpoint",
+                    "version": "1.2.0",
+                    "verbose_name": "Circuit Endpoint",
+                    "verbose_name_plural": "Circuit Endpoints",
+                    "description": "One end of a circuit",
+                    "group_name": "Circuits",
+                    "fields": [
+                        {"id": 1, "name": "label", "type": "text", "primary": True, "required": True},
+                        {"id": 2, "name": "notes", "type": "longtext"},
+                        {"id": 3, "name": "speed", "type": "integer", "validation_minimum": 0},
+                        {"id": 4, "name": "ratio", "type": "decimal"},
+                        {"id": 5, "name": "active", "type": "boolean"},
+                        {"id": 6, "name": "install_date", "type": "date"},
+                        {"id": 7, "name": "last_seen", "type": "datetime"},
+                        {"id": 8, "name": "docs_url", "type": "url"},
+                        {"id": 9, "name": "metadata", "type": "json"},
+                        {"id": 10, "name": "status", "type": "select", "choice_set": "endpoint_statuses"},
+                        {"id": 11, "name": "tags", "type": "multiselect", "choice_set": "endpoint_tags"},
+                        {"id": 12, "name": "device", "type": "object", "related_object_type": "dcim/device"},
+                        {"id": 13, "name": "sites", "type": "multiobject", "related_object_type": "dcim/site"},
+                    ],
+                    "removed_fields": [
+                        {"id": 14, "name": "old_code", "type": "text", "removed_in": "1.1.0"}
+                    ],
+                }
+            ],
+        })
+
+    def test_cot_reference_to_another_cot(self):
+        """related_object_type using 'custom-objects/<slug>' format is valid."""
+        self._assert_valid({
+            "schema_version": "1",
+            "types": [
+                {
+                    "name": "endpoint",
+                    "slug": "endpoint",
+                    "fields": [
+                        {
+                            "id": 1,
+                            "name": "circuit",
+                            "type": "object",
+                            "related_object_type": "custom-objects/circuit",
+                        }
+                    ],
+                }
+            ],
+        })
+
+    def test_deprecated_field_is_valid(self):
+        self._assert_valid({
+            "schema_version": "1",
+            "types": [
+                {
+                    "name": "widget",
+                    "slug": "widget",
+                    "fields": [
+                        {
+                            "id": 1,
+                            "name": "legacy_code",
+                            "type": "text",
+                            "deprecated": True,
+                            "deprecated_since": "2.0.0",
+                            "scheduled_removal": "3.0.0",
+                        }
+                    ],
+                }
+            ],
+        })
+
+    def test_multi_type_export(self):
+        """Multiple COT definitions in a single document are valid."""
+        self._assert_valid({
+            "schema_version": "1",
+            "types": [
+                {"name": "circuit", "slug": "circuit"},
+                {"name": "endpoint", "slug": "endpoint"},
+            ],
+        })
+
+    # ------------------------------------------------------------------
+    # Invalid documents
+    # ------------------------------------------------------------------
+
+    def test_missing_schema_version_is_invalid(self):
+        self._assert_invalid({
+            "types": [{"name": "widget", "slug": "widget"}],
+        })
+
+    def test_wrong_schema_version_is_invalid(self):
+        self._assert_invalid({
+            "schema_version": "99",
+            "types": [{"name": "widget", "slug": "widget"}],
+        })
+
+    def test_missing_types_is_invalid(self):
+        self._assert_invalid({"schema_version": "1"})
+
+    def test_empty_types_list_is_invalid(self):
+        self._assert_invalid({"schema_version": "1", "types": []})
+
+    def test_field_missing_id_is_invalid(self):
+        self._assert_invalid({
+            "schema_version": "1",
+            "types": [
+                {
+                    "name": "widget",
+                    "slug": "widget",
+                    "fields": [{"name": "label", "type": "text"}],
+                }
+            ],
+        })
+
+    def test_field_missing_name_is_invalid(self):
+        self._assert_invalid({
+            "schema_version": "1",
+            "types": [
+                {
+                    "name": "widget",
+                    "slug": "widget",
+                    "fields": [{"id": 1, "type": "text"}],
+                }
+            ],
+        })
+
+    def test_field_missing_type_is_invalid(self):
+        self._assert_invalid({
+            "schema_version": "1",
+            "types": [
+                {
+                    "name": "widget",
+                    "slug": "widget",
+                    "fields": [{"id": 1, "name": "label"}],
+                }
+            ],
+        })
+
+    def test_select_field_missing_choice_set_is_invalid(self):
+        self._assert_invalid({
+            "schema_version": "1",
+            "types": [
+                {
+                    "name": "widget",
+                    "slug": "widget",
+                    "fields": [{"id": 1, "name": "status", "type": "select"}],
+                }
+            ],
+        })
+
+    def test_object_field_missing_related_object_type_is_invalid(self):
+        self._assert_invalid({
+            "schema_version": "1",
+            "types": [
+                {
+                    "name": "widget",
+                    "slug": "widget",
+                    "fields": [{"id": 1, "name": "device", "type": "object"}],
+                }
+            ],
+        })
+
+    def test_unknown_field_type_is_invalid(self):
+        self._assert_invalid({
+            "schema_version": "1",
+            "types": [
+                {
+                    "name": "widget",
+                    "slug": "widget",
+                    "fields": [{"id": 1, "name": "thing", "type": "frobnitz"}],
+                }
+            ],
+        })
+
+    def test_invalid_filter_logic_value_is_invalid(self):
+        self._assert_invalid({
+            "schema_version": "1",
+            "types": [
+                {
+                    "name": "widget",
+                    "slug": "widget",
+                    "fields": [
+                        {"id": 1, "name": "label", "type": "text", "filter_logic": "fuzzy"}
+                    ],
+                }
+            ],
+        })
+
+    def test_removed_field_with_extra_properties_is_invalid(self):
+        """removed_field uses additionalProperties: false, so unknown keys are rejected."""
+        self._assert_invalid({
+            "schema_version": "1",
+            "types": [
+                {
+                    "name": "widget",
+                    "slug": "widget",
+                    "removed_fields": [
+                        {"id": 5, "name": "old", "type": "text", "unexpected_key": True}
+                    ],
+                }
+            ],
+        })

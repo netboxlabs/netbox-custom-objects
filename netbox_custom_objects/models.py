@@ -1574,6 +1574,9 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
         # Auto-assign schema_id for new fields that don't have one yet.
         # Locks existing rows for this COT to prevent concurrent assignment of the same ID.
+        # Note: bulk_create() bypasses save() entirely, so auto-assignment will NOT fire for
+        # fields created via CustomObjectTypeField.objects.bulk_create(...). Always set
+        # schema_id explicitly when using bulk_create.
         if self._state.adding and self.schema_id is None:
             with transaction.atomic():
                 locked_ids = list(
