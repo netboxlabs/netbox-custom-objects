@@ -259,7 +259,7 @@ def get_serializer_class(model, skip_object_fields=False):
     # Include _context field when the model has designated context fields
     has_context_fields = bool(getattr(model, '_context_field_ids', []))
     if has_context_fields:
-        base_fields = ["id", "url", "display", "_context", "created", "last_updated", "tags"]
+        base_fields.insert(base_fields.index("display") + 1, "_context")
 
     # Only include custom field names that will actually be added to the serializer
     custom_field_names = []
