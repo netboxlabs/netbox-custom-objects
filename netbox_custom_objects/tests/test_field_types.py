@@ -1225,3 +1225,58 @@ class ContextFieldWidgetTestCase(CustomObjectsTestCase, TestCase):
         """ts-parent-field must be set when the target has more than one context field."""
         form_field = ObjectFieldType().get_form_field(self.field_obj_multi_ctx)
         self.assertEqual(form_field.widget.attrs.get("ts-parent-field"), "_context")
+
+
+# ---------------------------------------------------------------------------
+# Context field — model validation
+# ---------------------------------------------------------------------------
+
+
+class ContextFieldValidationTestCase(CustomObjectsTestCase, TestCase):
+    """A field cannot be simultaneously marked as primary and context."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(
+            name="ctxvalidationcot", slug="ctx-validation-cot"
+        )
+
+    def test_primary_and_context_raises_validation_error(self):
+        """clean() must reject a field with both primary=True and context=True."""
+        from netbox_custom_objects.models import CustomObjectTypeField
+        field = CustomObjectTypeField(
+            custom_object_type=self.cot,
+            name="dual",
+            type="text",
+            primary=True,
+            context=True,
+        )
+        with self.assertRaises(ValidationError):
+            field.full_clean()
+
+    def test_primary_only_is_valid(self):
+        """primary=True without context=True must pass validation."""
+        from netbox_custom_objects.models import CustomObjectTypeField
+        field = CustomObjectTypeField(
+            custom_object_type=self.cot,
+            name="primaryonly",
+            type="text",
+            primary=True,
+            context=False,
+        )
+        # Should not raise
+        field.full_clean()
+
+    def test_context_only_is_valid(self):
+        """context=True without primary=True must pass validation."""
+        from netbox_custom_objects.models import CustomObjectTypeField
+        field = CustomObjectTypeField(
+            custom_object_type=self.cot,
+            name="contextonly",
+            type="text",
+            primary=False,
+            context=True,
+        )
+        # Should not raise
+        field.full_clean()
