@@ -1014,6 +1014,12 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     def clean(self):
         super().clean()
 
+        # A field cannot serve as both the primary display name and a context field
+        if self.primary and self.context:
+            raise ValidationError(
+                _("A field cannot be both the primary display field and a context field.")
+            )
+
         # Check if the field name is reserved
         if self.name in RESERVED_FIELD_NAMES:
             raise ValidationError(
