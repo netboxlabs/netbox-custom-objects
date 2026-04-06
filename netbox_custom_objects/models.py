@@ -356,6 +356,7 @@ class CustomObjectType(NetBoxModel):
     ):
         field_attrs = {
             "_primary_field_id": -1,
+            "_context_field_ids": [],
             # An object containing the table fields, field types and the chosen
             # names with the table field id as key.
             "_field_objects": {},
@@ -390,6 +391,8 @@ class CustomObjectType(NetBoxModel):
             # TODO: Add "primary" support
             if field.primary:
                 field_attrs["_primary_field_id"] = field.id
+            if field.context:
+                field_attrs["_context_field_ids"].append(field.id)
 
         return field_attrs
 
@@ -778,6 +781,13 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         default=False,
         help_text=_(
             "Indicates that this field's value will be used as the object's displayed name"
+        ),
+    )
+    context = models.BooleanField(
+        verbose_name=_("context field"),
+        default=False,
+        help_text=_(
+            "Indicates that this field's value will be shown as context when this object is referenced by other objects"
         ),
     )
     related_object_type = models.ForeignKey(

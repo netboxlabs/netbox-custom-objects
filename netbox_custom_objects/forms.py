@@ -152,6 +152,7 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
             "name",
             "label",
             "primary",
+            "context",
             "group_name",
             "description",
             "type",
