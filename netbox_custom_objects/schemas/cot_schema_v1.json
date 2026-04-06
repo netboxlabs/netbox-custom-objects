@@ -13,7 +13,7 @@
 
     "identifier": {
       "type": "string",
-      "description": "Lowercase alphanumeric characters and single underscores only.",
+      "description": "Lowercase alphanumeric characters and single underscores only. Note: this pattern is intentionally more restrictive than the model validator (^[a-z0-9_]+$) — it disallows leading/trailing underscores and double underscores. A valid DB field name that violates this pattern will fail schema export.",
       "pattern": "^[a-z0-9]+(_[a-z0-9]+)*$"
     },
 
@@ -242,7 +242,10 @@
         { "$ref": "#/$defs/multiobject_field" },
         { "$ref": "#/$defs/simple_field" }
       ],
-      "discriminator": { "propertyName": "type" }
+      "discriminator": {
+        "propertyName": "type",
+        "$comment": "discriminator is an OpenAPI 3.x extension, not part of JSON Schema 2020-12. Standard validators (including the jsonschema library) will silently ignore it. The oneOf above is what actually enforces field type constraints; the discriminator is present only as documentation for tooling that understands it."
+      }
     },
 
     "removed_field": {
@@ -285,7 +288,8 @@
           "type": "array",
           "items": { "$ref": "#/$defs/removed_field" },
           "description": "Tombstone records for permanently removed fields. IDs here must not appear in 'fields'."
-        }
+        },
+        "$comment": "The 'comments' field present on both CustomObjectType and CustomObjectTypeField is intentionally excluded from this schema format. It is editorial annotation, not structural schema, and would create noise in diffs and cross-installation sharing."
       }
     }
   },

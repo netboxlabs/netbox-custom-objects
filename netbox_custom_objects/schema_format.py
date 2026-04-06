@@ -64,7 +64,9 @@ CUSTOM_OBJECTS_APP_LABEL_SLUG = "custom-objects"
 # Attributes that match these defaults MAY be omitted from the schema document.
 # The importer applies them when a key is absent.
 FIELD_DEFAULTS = {
-    "label": "",          # resolves to name.replace("_", " ").capitalize() at runtime
+    # label resolves to name.replace("_", " ").capitalize() at runtime. Importer must implement this same logic.
+    # An empty or absent label means "derive from name".
+    "label": "",
     "description": "",
     "group_name": "",
     "primary": False,
@@ -90,6 +92,7 @@ FIELD_DEFAULTS = {
 # ── Field groups by type ─────────────────────────────────────────────────────
 # Which type-specific attributes are valid for each field type.
 # Used by the exporter to omit irrelevant keys and by the JSON Schema.
+# Note: The exporter should use FIELD_TYPE_ATTRS to drop irrelevant keys inherited from field_base.
 FIELD_TYPE_ATTRS = {
     FIELD_TYPE_TEXT: {"validation_regex"},
     FIELD_TYPE_LONGTEXT: {"validation_regex"},

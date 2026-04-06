@@ -168,6 +168,7 @@ class CustomObjectTypeSerializer(NetBoxModelSerializer):
             "table_model_name",
             "object_type_name",
         ]
+        read_only_fields = ("schema_document",)
         brief_fields = ("id", "url", "name", "slug", "description")
 
     def get_table_model_name(self, obj):
