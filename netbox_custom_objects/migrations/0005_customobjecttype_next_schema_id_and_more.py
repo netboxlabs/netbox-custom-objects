@@ -15,7 +15,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='customobjecttype',
             name='next_schema_id',
-            field=models.PositiveSmallIntegerField(default=0, editable=False),
+            field=models.PositiveIntegerField(default=0, editable=False),
         ),
         migrations.AddField(
             model_name='customobjecttype',
@@ -40,7 +40,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='customobjecttypefield',
             name='schema_id',
-            field=models.PositiveSmallIntegerField(blank=True, null=True),
+            field=models.PositiveIntegerField(blank=True, null=True),
         ),
         migrations.AlterField(
             model_name='customobjecttype',

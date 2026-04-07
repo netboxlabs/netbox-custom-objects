@@ -215,7 +215,7 @@ class CustomObjectType(NetBoxModel):
             "Serves as the source of truth for schema history, including tombstoned fields."
         ),
     )
-    next_schema_id = models.PositiveSmallIntegerField(
+    next_schema_id = models.PositiveIntegerField(
         default=0,
         editable=False,
         help_text=_(
