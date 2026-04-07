@@ -53,6 +53,7 @@ from utilities.validators import validate_regex
 
 from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
+from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
 from netbox_custom_objects.utilities import generate_model
 
 
@@ -1527,6 +1528,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         return f"Through_{self.through_table_name}"
 
     def save(self, *args, **kwargs):
+        is_new = self._state.adding
         field_type = FIELD_TYPE_CLASS[self.type]()
         model_field = field_type.get_model_field(self)
         model = self.custom_object_type.get_model()
@@ -1671,6 +1673,15 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         # Reregister SearchIndex with new set of searchable fields
         self.custom_object_type.register_custom_object_search_index(model)
 
+        # Reindex all objects of this type if search indexing was affected
+        if is_new:
+            needs_reindex = self.search_weight > 0
+        else:
+            needs_reindex = self.search_weight != self.original.search_weight
+        if needs_reindex:
+            _cot_id = self.custom_object_type_id
+            transaction.on_commit(lambda: ReindexCustomObjectTypeJob.enqueue(cot_id=_cot_id))
+
     def delete(self, *args, **kwargs):
         field_type = FIELD_TYPE_CLASS[self.type]()
         model_field = field_type.get_model_field(self)
@@ -1694,6 +1705,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
         # Reregister SearchIndex with new set of searchable fields
         self.custom_object_type.register_custom_object_search_index(model)
+
+        # Reindex all objects of this type since a searchable field was removed
+        if self.search_weight > 0:
+            _cot_id = self.custom_object_type_id
+            transaction.on_commit(lambda: ReindexCustomObjectTypeJob.enqueue(cot_id=_cot_id))
 
 
 class CustomObjectObjectTypeManager(ObjectTypeManager):

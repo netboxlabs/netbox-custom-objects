@@ -1,6 +1,8 @@
 import django_filters
+from decimal import Decimal, InvalidOperation
 from django.contrib.postgres.fields import ArrayField
 from django.db.models import JSONField, Q
+from django.utils.dateparse import parse_date, parse_datetime
 
 from extras.choices import CustomFieldTypeChoices
 from netbox.filtersets import NetBoxModelFilterSet
@@ -64,8 +66,32 @@ def get_filterset_class(model):
                 CustomFieldTypeChoices.TYPE_LONGTEXT,
                 CustomFieldTypeChoices.TYPE_JSON,
                 CustomFieldTypeChoices.TYPE_URL,
+                CustomFieldTypeChoices.TYPE_SELECT,
             ]:
                 q |= Q(**{f"{field.name}__icontains": value})
+            elif field.type == CustomFieldTypeChoices.TYPE_MULTISELECT:
+                # ArrayField does not support icontains; use array containment
+                # to check whether the searched value is an element in the array.
+                q |= Q(**{f"{field.name}__contains": [value]})
+            elif field.type in [
+                CustomFieldTypeChoices.TYPE_INTEGER,
+                CustomFieldTypeChoices.TYPE_DECIMAL,
+            ]:
+                try:
+                    numeric = int(value) if field.type == CustomFieldTypeChoices.TYPE_INTEGER else Decimal(value)
+                    q |= Q(**{f"{field.name}__exact": numeric})
+                except (ValueError, TypeError, InvalidOperation):
+                    pass
+            elif field.type == CustomFieldTypeChoices.TYPE_DATE:
+                parsed = parse_date(value)
+                if parsed is not None:
+                    q |= Q(**{f"{field.name}__exact": parsed})
+            elif field.type == CustomFieldTypeChoices.TYPE_DATETIME:
+                parsed = parse_datetime(value)
+                if parsed is not None:
+                    q |= Q(**{f"{field.name}__exact": parsed})
+        if not q:
+            return queryset.none()
         return queryset.filter(q)
 
     attrs = {

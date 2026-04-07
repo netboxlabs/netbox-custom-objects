@@ -2,6 +2,7 @@
 Tests for the concrete and dynamically generated models that are managed by this plugin.
 """
 from unittest import skip
+from unittest.mock import patch
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
@@ -10,6 +11,11 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
+
+from django.contrib.contenttypes.models import ContentType
+from extras.models import CachedValue
+from netbox.search.backends import get_backend
+from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
 from netbox_custom_objects.models import CustomObjectTypeField
 from core.models import ObjectType
 from .base import CustomObjectsTestCase
@@ -755,3 +761,142 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
 
         # Verify it's gone
         self.assertEqual(self.model.objects.count(), 0)
+
+
+class SearchReindexTestCase(CustomObjectsTestCase, TestCase):
+    """Test that ReindexCustomObjectTypeJob is triggered when field search weights change."""
+
+    def setUp(self):
+        super().setUp()
+        self.cot = self.create_custom_object_type(
+            name="ReindexTest",
+            slug="reindex-test",
+        )
+        self.field = self.create_custom_object_type_field(
+            self.cot,
+            name="title",
+            label="Title",
+            type="text",
+            search_weight=500,
+        )
+        self.model = self.cot.get_model()
+        self.instance = self.model.objects.create(title="Hello World")
+
+    def test_job_enqueued_on_field_weight_change(self):
+        """Changing search_weight on a field enqueues a reindex job after the transaction commits."""
+        field = CustomObjectTypeField.objects.get(pk=self.field.pk)
+        field.search_weight = 100
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
+            with self.captureOnCommitCallbacks(execute=True):
+                field.save()
+        mock_enqueue.assert_called_once_with(cot_id=self.cot.pk)
+
+    def test_job_enqueued_on_field_weight_zeroed(self):
+        """Changing search_weight to 0 enqueues a reindex job after the transaction commits."""
+        field = CustomObjectTypeField.objects.get(pk=self.field.pk)
+        field.search_weight = 0
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
+            with self.captureOnCommitCallbacks(execute=True):
+                field.save()
+        mock_enqueue.assert_called_once_with(cot_id=self.cot.pk)
+
+    def test_job_not_enqueued_when_weight_unchanged(self):
+        """Saving a field without changing search_weight does not enqueue a reindex job."""
+        field = CustomObjectTypeField.objects.get(pk=self.field.pk)
+        field.label = "Modified Title"
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
+            with self.captureOnCommitCallbacks(execute=True):
+                field.save()
+        mock_enqueue.assert_not_called()
+
+    def test_job_enqueued_on_searchable_field_creation(self):
+        """Adding a new field with search_weight > 0 enqueues a reindex job after the transaction commits."""
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
+            with self.captureOnCommitCallbacks(execute=True):
+                new_field = self.create_custom_object_type_field(
+                    self.cot,
+                    name="subtitle",
+                    label="Subtitle",
+                    type="text",
+                    search_weight=300,
+                )
+        self.addCleanup(new_field.delete)
+        mock_enqueue.assert_called_once_with(cot_id=self.cot.pk)
+
+    def test_job_not_enqueued_on_non_searchable_field_creation(self):
+        """Adding a field with search_weight=0 does not enqueue a reindex job."""
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
+            with self.captureOnCommitCallbacks(execute=True):
+                non_search_field = self.create_custom_object_type_field(
+                    self.cot,
+                    name="notes",
+                    label="Notes",
+                    type="text",
+                    search_weight=0,
+                )
+        self.addCleanup(non_search_field.delete)
+        mock_enqueue.assert_not_called()
+
+    def test_job_enqueued_on_searchable_field_deletion(self):
+        """Deleting a field with search_weight > 0 enqueues a reindex job after the transaction commits."""
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
+            with self.captureOnCommitCallbacks(execute=True):
+                self.field.delete()
+        mock_enqueue.assert_called_once_with(cot_id=self.cot.pk)
+
+    def test_job_run_updates_cached_values(self):
+        """The job's run() method re-caches all objects using the updated SearchIndex."""
+        # Prime the cache with the initial weight
+        get_backend().cache(self.model.objects.all())
+        ct = ContentType.objects.get_for_model(self.model)
+        self.assertEqual(
+            CachedValue.objects.filter(object_type=ct, object_id=self.instance.pk, field="title", weight=500).count(),
+            1,
+        )
+
+        # Save the field with a new weight (suppress automatic enqueue)
+        field = CustomObjectTypeField.objects.get(pk=self.field.pk)
+        field.search_weight = 100
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue'):
+            with self.captureOnCommitCallbacks(execute=True):
+                field.save()
+
+        # Run the job synchronously via immediate=True
+        ReindexCustomObjectTypeJob.enqueue(cot_id=self.cot.pk, immediate=True)
+
+        self.assertEqual(
+            CachedValue.objects.filter(object_type=ct, object_id=self.instance.pk, field="title", weight=100).count(),
+            1,
+        )
+        self.assertEqual(
+            CachedValue.objects.filter(object_type=ct, object_id=self.instance.pk, field="title", weight=500).count(),
+            0,
+        )
+
+    def test_job_name_includes_cot_name(self):
+        """Enqueued job name includes the COT name for observability."""
+        job = ReindexCustomObjectTypeJob.enqueue(cot_id=self.cot.pk, immediate=True)
+        self.assertEqual(job.name, f'Reindex Custom Object Type: {self.cot.name}')
+
+    def test_job_data_contains_cot_id(self):
+        """Job.data is populated with cot_id and job_class for UI visibility and deduplication."""
+        job = ReindexCustomObjectTypeJob.enqueue(cot_id=self.cot.pk, immediate=True)
+        self.assertEqual(job.data['cot_id'], self.cot.pk)
+        self.assertEqual(job.data['job_class'], 'ReindexCustomObjectTypeJob')
+
+    def test_duplicate_job_not_enqueued(self):
+        """A second enqueue for the same COT returns the existing pending job without creating a new one."""
+        from core.choices import JobStatusChoices
+        from core.models import Job
+
+        with patch('django_rq.get_queue'):
+            first_job = ReindexCustomObjectTypeJob.enqueue(cot_id=self.cot.pk)
+        # Simulate the first job still pending
+        first_job.status = JobStatusChoices.STATUS_PENDING
+        first_job.save(update_fields=['status'])
+
+        with patch('django_rq.get_queue'):
+            second_job = ReindexCustomObjectTypeJob.enqueue(cot_id=self.cot.pk)
+
+        self.assertEqual(first_job.pk, second_job.pk)
+        self.assertEqual(Job.objects.filter(data__cot_id=self.cot.pk).count(), 1)
