@@ -1,8 +1,8 @@
 import logging
 
-from netbox_custom_objects import field_types
 from netbox.forms import NetBoxModelFilterSetForm
 from utilities.forms.fields import TagFilterField
+from . import field_types
 
 
 logger = logging.getLogger("netbox_custom_objects.dynamic_forms")
