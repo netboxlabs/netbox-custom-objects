@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.8
+---
+
+**Note:** See also v0.4.7 for recent bug fixes and enhancements, as this release is a fast-follow.
+
+### Bug Fixes
+
+- [#441](https://github.com/netboxlabs/netbox-custom-objects/issues/441) - ObjectSelectorView does not support targeting custom objects from core custom fields
+
+
 ## 0.4.7
 ---
 
