@@ -215,6 +215,14 @@ class CustomObjectType(NetBoxModel):
             "Serves as the source of truth for schema history, including tombstoned fields."
         ),
     )
+    next_schema_id = models.PositiveSmallIntegerField(
+        default=0,
+        editable=False,
+        help_text=_(
+            "Monotonically increasing counter tracking the highest schema_id ever assigned "
+            "to a field on this Custom Object Type. Never decreases, even after field deletion."
+        ),
+    )
     cache_timestamp = models.DateTimeField(
         auto_now=True,
         help_text=_("Timestamp used for cache invalidation")
@@ -1573,20 +1581,21 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         is_new = self._state.adding
 
         # Auto-assign schema_id for new fields that don't have one yet.
-        # Locks existing rows for this COT to prevent concurrent assignment of the same ID.
+        # Increments the monotonic counter on the parent CustomObjectType so that IDs are
+        # never reused, even after a field is deleted.  The UniqueConstraint on
+        # (schema_id, custom_object_type) is the safety net against races; a concurrent
+        # writer would get an IntegrityError and must retry.
         # Note: bulk_create() bypasses save() entirely, so auto-assignment will NOT fire for
         # fields created via CustomObjectTypeField.objects.bulk_create(...). Always set
         # schema_id explicitly when using bulk_create.
         if self._state.adding and self.schema_id is None:
             with transaction.atomic():
-                locked_ids = list(
-                    CustomObjectTypeField.objects
-                    .filter(custom_object_type=self.custom_object_type)
-                    .select_for_update()
-                    .values_list('schema_id', flat=True)
+                cot = CustomObjectType.objects.select_for_update().get(
+                    pk=self.custom_object_type_id
                 )
-                used_ids = [i for i in locked_ids if i is not None]
-                self.schema_id = max(used_ids, default=0) + 1
+                cot.next_schema_id = cot.next_schema_id + 1
+                cot.save(update_fields=['next_schema_id'])
+                self.schema_id = cot.next_schema_id
 
         field_type = FIELD_TYPE_CLASS[self.type]()
         model_field = field_type.get_model_field(self)

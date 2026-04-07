@@ -11,7 +11,7 @@ import json
 import unittest
 from pathlib import Path
 
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from django.test import TestCase, TransactionTestCase
 
 from netbox_custom_objects.schema_format import (
@@ -90,10 +90,15 @@ class SchemaIdAutoAssignmentTestCase(
         self.create_custom_object_type_field(
             cot, name='first', type='text', schema_id=7
         )
+        # Wrap in transaction.atomic() so that when IntegrityError is raised and caught
+        # by assertRaises, the savepoint is rolled back cleanly. Without this, PostgreSQL
+        # leaves the connection in an aborted-transaction state and all subsequent SQL
+        # calls (including tearDown) fail with "connection is closed".
         with self.assertRaises(IntegrityError):
-            self.create_custom_object_type_field(
-                cot, name='second', type='text', schema_id=7
-            )
+            with transaction.atomic():
+                self.create_custom_object_type_field(
+                    cot, name='second', type='text', schema_id=7
+                )
 
     def test_schema_id_gap_after_deletion(self):
         """
@@ -126,8 +131,12 @@ class DeprecationFieldsTestCase(
 
     def test_can_mark_field_deprecated(self):
         cot = self.create_custom_object_type(name='depmark', slug='dep-mark')
-        field = self.create_custom_object_type_field(cot, name='label', type='text')
+        self.create_custom_object_type_field(cot, name='label', type='text')
 
+        # Re-fetch from DB so that from_db() is called and self.original is set,
+        # which the save() method requires when updating an existing field.
+        from netbox_custom_objects.models import CustomObjectTypeField
+        field = CustomObjectTypeField.objects.get(custom_object_type=cot, name='label')
         field.deprecated = True
         field.deprecated_since = '2.0.0'
         field.scheduled_removal = '3.0.0'
@@ -141,8 +150,10 @@ class DeprecationFieldsTestCase(
     def test_deprecation_version_strings_accept_semver(self):
         """Long semver strings (pre-release, build metadata) fit in max_length=50."""
         cot = self.create_custom_object_type(name='depsemver', slug='dep-semver')
-        field = self.create_custom_object_type_field(cot, name='label', type='text')
+        self.create_custom_object_type_field(cot, name='label', type='text')
 
+        from netbox_custom_objects.models import CustomObjectTypeField
+        field = CustomObjectTypeField.objects.get(custom_object_type=cot, name='label')
         field.deprecated = True
         field.deprecated_since = '1.0.0-alpha.1+build.42'
         field.scheduled_removal = '2.0.0-beta.3'
