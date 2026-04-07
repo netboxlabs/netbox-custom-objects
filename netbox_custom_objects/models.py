@@ -1593,9 +1593,15 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 cot = CustomObjectType.objects.select_for_update().get(
                     pk=self.custom_object_type_id
                 )
-                cot.next_schema_id = cot.next_schema_id + 1
-                cot.save(update_fields=['next_schema_id'])
-                self.schema_id = cot.next_schema_id
+                new_schema_id = cot.next_schema_id + 1
+                # Use update() rather than save() to avoid dispatching post_save on
+                # CustomObjectType, which would clear the model cache prematurely.
+                # The model cache must remain valid until this field's own save() calls
+                # get_model() below (to contribute the new field and alter the DB table).
+                CustomObjectType.objects.filter(pk=self.custom_object_type_id).update(
+                    next_schema_id=new_schema_id
+                )
+                self.schema_id = new_schema_id
 
         field_type = FIELD_TYPE_CLASS[self.type]()
         model_field = field_type.get_model_field(self)
