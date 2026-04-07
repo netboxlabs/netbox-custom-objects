@@ -51,23 +51,8 @@ def _patch_object_selector_view():
 
     def _patched_get_form_class(self, model):
         if model._meta.app_label == APP_LABEL:
-            from netbox_custom_objects import field_types as _field_types
-            from netbox.forms import NetBoxModelFilterSetForm
-            from utilities.forms.fields import TagFilterField
-
-            custom_object_type = model.custom_object_type
-            attrs = {
-                'model': model,
-                '__module__': 'database.filterset_forms',
-                'tag': TagFilterField(model),
-            }
-            for field in custom_object_type.fields.all():
-                field_type = _field_types.FIELD_TYPE_CLASS[field.type]()
-                try:
-                    attrs[field.name] = field_type.get_filterform_field(field)
-                except NotImplementedError:
-                    pass
-            return type(f'{model.__name__}FilterForm', (NetBoxModelFilterSetForm,), attrs)
+            from netbox_custom_objects.dynamic_forms import build_filterset_form_class
+            return build_filterset_form_class(model)
         return _original_get_form_class(self, model)
 
     def _patched_get_filterset_class(self, model):

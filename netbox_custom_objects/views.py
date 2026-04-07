@@ -14,13 +14,11 @@ from extras.models import JournalEntry
 from extras.tables import JournalEntryTable
 from netbox.forms import (
     NetBoxModelBulkEditForm,
-    NetBoxModelFilterSetForm,
     NetBoxModelImportForm,
 )
 from netbox.views import generic
 from netbox.views.generic.mixins import TableMixin
 from utilities.forms import ConfirmationForm
-from utilities.forms.fields import TagFilterField
 from utilities.htmx import htmx_partial
 from utilities.views import ConditionalLoginRequiredMixin, ViewTab, get_viewname, register_model_view
 
@@ -30,6 +28,7 @@ from . import field_types, filtersets, forms, tables
 from .models import CustomObject, CustomObjectType, CustomObjectTypeField
 from extras.choices import CustomFieldTypeChoices
 from netbox_custom_objects.constants import APP_LABEL
+from netbox_custom_objects.dynamic_forms import build_filterset_form_class
 from netbox_custom_objects.utilities import is_in_branch
 
 logger = logging.getLogger("netbox_custom_objects.views")
@@ -372,26 +371,7 @@ class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
         return get_filterset_class(self.queryset.model)
 
     def get_filterset_form(self):
-        model = self.queryset.model
-
-        attrs = {
-            "model": model,
-            "__module__": "database.filterset_forms",
-            "tag": TagFilterField(model),
-        }
-
-        for field in self.custom_object_type.fields.all():
-            field_type = field_types.FIELD_TYPE_CLASS[field.type]()
-            try:
-                attrs[field.name] = field_type.get_filterform_field(field)
-            except NotImplementedError:
-                logger.debug("list view: {} field is not supported".format(field.name))
-
-        return type(
-            f"{model._meta.object_name}FilterForm",
-            (NetBoxModelFilterSetForm,),
-            attrs,
-        )
+        return build_filterset_form_class(self.queryset.model)
 
     def get(self, request, custom_object_type):
         # Necessary because get() in ObjectListView only takes request and no **kwargs
