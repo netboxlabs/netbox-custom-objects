@@ -323,8 +323,9 @@ class ExporterDeprecationTestCase(CustomObjectsTestCase, TestCase):
         self.assertNotIn("removed_fields", cot_def)
 
 
-class ExporterSchemaIdTestCase(CustomObjectsTestCase, TransactionTestCase,
-                               TransactionCleanupMixin):
+class ExporterSchemaIdTestCase(
+    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
+):
     """Fields without schema_id are skipped with a warning."""
 
     def test_field_without_schema_id_is_skipped(self):

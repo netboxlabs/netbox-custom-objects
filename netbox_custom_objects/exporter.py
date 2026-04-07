@@ -115,7 +115,11 @@ def _export_field(field) -> dict:
     # ── Type-specific attributes ─────────────────────────────────────────────
     for attr in sorted(FIELD_TYPE_ATTRS[schema_type]):
         if attr == "choice_set":
-            # Required for select/multiselect; always present.
+            # Required for select/multiselect; validate.
+            if field.choice_set is None:
+                raise ValueError(
+                    f"Field {field.name!r} is type {schema_type!r} but has no choice_set assigned."
+                )
             result["choice_set"] = field.choice_set.name
         elif attr == "related_object_type":
             # Required for object/multiobject; always present.
@@ -142,6 +146,9 @@ def _removed_fields_from_document(cot) -> list:
     """
     if not cot.schema_document:
         return []
+    # NOTE: matches by COT name. If the COT is renamed after tombstones
+    # are persisted, they will not be found. This will be addressed when
+    # #390 (apply) is implemented and tombstones are managed more explicitly.
     for type_def in cot.schema_document.get("types", []):
         if type_def.get("name") == cot.name:
             return list(type_def.get("removed_fields", []))
@@ -209,6 +216,8 @@ def export_cots(cots) -> dict:
 
     *cots* may be any iterable of ``CustomObjectType`` instances.
     """
+    if not cots:
+        raise ValueError("Minimum 1 Custom Object Type required.")
     return {
         "schema_version": SCHEMA_FORMAT_VERSION,
         "types": [export_cot(cot) for cot in cots],
