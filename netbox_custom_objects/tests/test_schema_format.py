@@ -12,13 +12,17 @@ import unittest
 from pathlib import Path
 
 from django.db import IntegrityError, transaction
+from django.db.models.fields import NOT_PROVIDED
 from django.test import TestCase, TransactionTestCase
 
+from netbox_custom_objects.models import CustomObjectTypeField
 from netbox_custom_objects.schema_format import (
     CHOICES_TO_SCHEMA_TYPE,
+    FIELD_DEFAULTS,
     SCHEMA_FORMAT_VERSION,
     SCHEMA_TYPE_TO_CHOICES,
 )
+from extras.choices import CustomFieldTypeChoices
 
 from .base import CustomObjectsTestCase, TransactionCleanupMixin
 
@@ -135,7 +139,6 @@ class DeprecationFieldsTestCase(
 
         # Re-fetch from DB so that from_db() is called and self.original is set,
         # which the save() method requires when updating an existing field.
-        from netbox_custom_objects.models import CustomObjectTypeField
         field = CustomObjectTypeField.objects.get(custom_object_type=cot, name='label')
         field.deprecated = True
         field.deprecated_since = '2.0.0'
@@ -152,7 +155,6 @@ class DeprecationFieldsTestCase(
         cot = self.create_custom_object_type(name='depsemver', slug='dep-semver')
         self.create_custom_object_type_field(cot, name='label', type='text')
 
-        from netbox_custom_objects.models import CustomObjectTypeField
         field = CustomObjectTypeField.objects.get(custom_object_type=cot, name='label')
         field.deprecated = True
         field.deprecated_since = '1.0.0-alpha.1+build.42'
@@ -208,6 +210,90 @@ class SchemaDocumentFieldTestCase(CustomObjectsTestCase, TestCase):
 # schema_format.py constants tests
 # ===========================================================================
 
+class FieldDefaultsConsistencyTestCase(TestCase):
+    """
+    FIELD_DEFAULTS in schema_format.py must stay in sync with the corresponding
+    Django model field defaults on CustomObjectTypeField.
+
+    When a model field's default changes, the test will fail and remind the
+    developer to update FIELD_DEFAULTS to match.
+    """
+
+    # Maps each FIELD_DEFAULTS key to the field name on CustomObjectTypeField.
+    # Only includes fields that carry an explicit model-level default= argument.
+    # Fields that are blank=True / null=True without an explicit default are
+    # tracked in _NO_MODEL_DEFAULT_SENTINELS below.
+    _MODEL_DEFAULT_FIELDS = {
+        "primary": "primary",
+        "required": "required",
+        "unique": "unique",
+        "weight": "weight",
+        "search_weight": "search_weight",
+        "filter_logic": "filter_logic",
+        "ui_visible": "ui_visible",
+        "ui_editable": "ui_editable",
+        "is_cloneable": "is_cloneable",
+        "deprecated": "deprecated",
+    }
+
+    # Fields where the model has no explicit default (blank/null only).
+    # FIELD_DEFAULTS should use "" or None as the schema-level sentinel.
+    _NO_MODEL_DEFAULT_SENTINELS = {
+        "label": "",
+        "description": "",
+        "group_name": "",
+        "deprecated_since": "",
+        "scheduled_removal": "",
+        "validation_regex": "",
+        "validation_minimum": None,
+        "validation_maximum": None,
+        "related_object_filter": None,
+        "default": None,
+    }
+
+    def test_field_defaults_match_model_defaults(self):
+        """Every FIELD_DEFAULTS entry with a model-level default must match it."""
+        for schema_key, model_field_name in self._MODEL_DEFAULT_FIELDS.items():
+            with self.subTest(field=schema_key):
+                model_field = CustomObjectTypeField._meta.get_field(model_field_name)
+                self.assertIsNot(
+                    model_field.default,
+                    NOT_PROVIDED,
+                    f"{model_field_name} no longer has a model default — "
+                    f"move {schema_key!r} to _NO_MODEL_DEFAULT_SENTINELS.",
+                )
+                self.assertEqual(
+                    model_field.default,
+                    FIELD_DEFAULTS[schema_key],
+                    f"FIELD_DEFAULTS[{schema_key!r}] is {FIELD_DEFAULTS[schema_key]!r} "
+                    f"but {model_field_name}.default is {model_field.default!r}. "
+                    f"Update schema_format.FIELD_DEFAULTS to match the model.",
+                )
+
+    def test_no_model_default_sentinels_are_correct(self):
+        """Fields without model defaults should use '' or None in FIELD_DEFAULTS."""
+        for schema_key, expected_sentinel in self._NO_MODEL_DEFAULT_SENTINELS.items():
+            with self.subTest(field=schema_key):
+                self.assertEqual(
+                    FIELD_DEFAULTS[schema_key],
+                    expected_sentinel,
+                    f"FIELD_DEFAULTS[{schema_key!r}] should be {expected_sentinel!r} "
+                    f"(no model default exists for this field).",
+                )
+                # Also verify the model field genuinely has no explicit default.
+                try:
+                    model_field = CustomObjectTypeField._meta.get_field(schema_key)
+                    self.assertIs(
+                        model_field.default,
+                        NOT_PROVIDED,
+                        f"{schema_key} now has a model default — "
+                        f"move it to _MODEL_DEFAULT_FIELDS.",
+                    )
+                except Exception:
+                    # Field may not exist on the model (type-specific virtual attrs).
+                    pass
+
+
 class SchemaFormatConstantsTestCase(TestCase):
     """Sanity checks on schema_format module constants."""
 
@@ -225,7 +311,6 @@ class SchemaFormatConstantsTestCase(TestCase):
 
     def test_all_field_types_are_mapped(self):
         """Every CustomFieldTypeChoices value must have a schema type entry."""
-        from extras.choices import CustomFieldTypeChoices
         for attr in dir(CustomFieldTypeChoices):
             if attr.startswith('TYPE_'):
                 value = getattr(CustomFieldTypeChoices, attr)
@@ -480,6 +565,21 @@ class COTJsonSchemaTestCase(TestCase):
                     "slug": "widget",
                     "removed_fields": [
                         {"id": 5, "name": "old", "type": "text", "unexpected_key": True}
+                    ],
+                }
+            ],
+        })
+
+    def test_active_field_with_unknown_key_is_invalid(self):
+        """Active fields use unevaluatedProperties: false, so unknown keys are rejected."""
+        self._assert_invalid({
+            "schema_version": "1",
+            "types": [
+                {
+                    "name": "widget",
+                    "slug": "widget",
+                    "fields": [
+                        {"id": 1, "name": "label", "type": "text", "unexpected_key": True}
                     ],
                 }
             ],
