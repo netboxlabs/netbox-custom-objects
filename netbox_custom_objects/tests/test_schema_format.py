@@ -189,6 +189,7 @@ class SchemaIdBackfillTestCase(
         )
         # The function accepts (apps, schema_editor) but only uses apps.get_model().
         # We pass a lightweight shim that delegates to the real models.
+
         class _AppsShim:
             @staticmethod
             def get_model(app_label, model_name):
@@ -219,7 +220,7 @@ class SchemaIdBackfillTestCase(
 
     def test_assigned_ids_are_sequential_from_one(self):
         cot = self.create_custom_object_type(name='bf2', slug='bf-2')
-        fields = [
+        [
             self.create_custom_object_type_field(cot, name=f'f{i}', type='text')
             for i in range(1, 4)
         ]

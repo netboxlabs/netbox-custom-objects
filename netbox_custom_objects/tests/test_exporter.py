@@ -18,7 +18,7 @@ from pathlib import Path
 from django.test import TestCase, TransactionTestCase
 
 from netbox_custom_objects.exporter import export_cot, export_cots
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.models import CustomObjectTypeField
 from netbox_custom_objects.schema_format import SCHEMA_FORMAT_VERSION
 
 from .base import CustomObjectsTestCase, TransactionCleanupMixin
@@ -392,7 +392,7 @@ class ExporterSchemaValidationTestCase(CustomObjectsTestCase, TestCase):
         errors = list(self._validator.iter_errors(doc))
         if errors:
             self.fail(
-                f"Schema validation failed:\n"
+                "Schema validation failed:\n"
                 + "\n".join(f"  {e.json_path}: {e.message}" for e in errors)
             )
 
