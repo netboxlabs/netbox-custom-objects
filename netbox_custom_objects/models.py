@@ -975,7 +975,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         help_text=_("Replicate this value when cloning objects"),
     )
     comments = models.TextField(verbose_name=_("comments"), blank=True)
-    schema_id = models.PositiveSmallIntegerField(
+    schema_id = models.PositiveIntegerField(
         blank=True,
         null=True,
         verbose_name=_("schema ID"),
