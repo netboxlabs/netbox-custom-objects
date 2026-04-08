@@ -900,3 +900,79 @@ class SearchReindexTestCase(CustomObjectsTestCase, TestCase):
 
         self.assertEqual(first_job.pk, second_job.pk)
         self.assertEqual(Job.objects.filter(data__cot_id=self.cot.pk).count(), 1)
+
+
+# ---------------------------------------------------------------------------
+# Semver / version string validation (issue #392)
+# ---------------------------------------------------------------------------
+
+class SemverValidationTestCase(CustomObjectsTestCase, TestCase):
+    """Validate that version-string fields reject non-PEP-440 values."""
+
+    # ------------------------------------------------------------------
+    # CustomObjectType.version
+    # ------------------------------------------------------------------
+
+    def test_cot_version_blank_is_valid(self):
+        cot = self.create_custom_object_type(name='semver_cot', slug='semver-cot')
+        cot.version = ''
+        cot.full_clean()  # must not raise
+
+    def test_cot_version_valid_semver(self):
+        cot = self.create_custom_object_type(name='semver_cot2', slug='semver-cot-2')
+        for v in ('1.0.0', '2.3.4', '0.0.1', '1.0.0.post1', '1.0.0a1'):
+            cot.version = v
+            cot.full_clean()  # must not raise
+
+    def test_cot_version_invalid_raises_validation_error(self):
+        cot = self.create_custom_object_type(name='semver_cot3', slug='semver-cot-3')
+        for bad in ('not-a-version', '1.x.0', 'latest', '!!invalid!!'):
+            cot.version = bad
+            with self.assertRaises(ValidationError, msg=f"Expected ValidationError for version={bad!r}"):
+                cot.full_clean()
+
+    # ------------------------------------------------------------------
+    # CustomObjectTypeField.deprecated_since
+    # ------------------------------------------------------------------
+
+    def test_field_deprecated_since_blank_is_valid(self):
+        cot = self.create_custom_object_type(name='semver_f1', slug='semver-f1')
+        field = self.create_custom_object_type_field(cot, name='alpha', type='text')
+        field.deprecated_since = ''
+        field.full_clean()
+
+    def test_field_deprecated_since_valid_semver(self):
+        cot = self.create_custom_object_type(name='semver_f2', slug='semver-f2')
+        field = self.create_custom_object_type_field(cot, name='beta', type='text')
+        field.deprecated_since = '2.0.0'
+        field.full_clean()
+
+    def test_field_deprecated_since_invalid_raises(self):
+        cot = self.create_custom_object_type(name='semver_f3', slug='semver-f3')
+        field = self.create_custom_object_type_field(cot, name='gamma', type='text')
+        field.deprecated_since = 'not-a-version'
+        with self.assertRaises(ValidationError):
+            field.full_clean()
+
+    # ------------------------------------------------------------------
+    # CustomObjectTypeField.scheduled_removal
+    # ------------------------------------------------------------------
+
+    def test_field_scheduled_removal_blank_is_valid(self):
+        cot = self.create_custom_object_type(name='semver_f4', slug='semver-f4')
+        field = self.create_custom_object_type_field(cot, name='delta', type='text')
+        field.scheduled_removal = ''
+        field.full_clean()
+
+    def test_field_scheduled_removal_valid_semver(self):
+        cot = self.create_custom_object_type(name='semver_f5', slug='semver-f5')
+        field = self.create_custom_object_type_field(cot, name='epsilon', type='text')
+        field.scheduled_removal = '3.0.0'
+        field.full_clean()
+
+    def test_field_scheduled_removal_invalid_raises(self):
+        cot = self.create_custom_object_type(name='semver_f6', slug='semver-f6')
+        field = self.create_custom_object_type_field(cot, name='zeta', type='text')
+        field.scheduled_removal = 'v-bad'
+        with self.assertRaises(ValidationError):
+            field.full_clean()
