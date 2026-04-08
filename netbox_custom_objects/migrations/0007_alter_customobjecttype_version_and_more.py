@@ -14,17 +14,29 @@ class Migration(migrations.Migration):
         migrations.AlterField(
             model_name='customobjecttype',
             name='version',
-            field=models.CharField(blank=True, max_length=50, validators=[netbox_custom_objects.models._validate_semver]),
+            field=models.CharField(
+                blank=True,
+                max_length=50,
+                validators=[netbox_custom_objects.models._validate_semver],
+            ),
         ),
         migrations.AlterField(
             model_name='customobjecttypefield',
             name='deprecated_since',
-            field=models.CharField(blank=True, max_length=50, validators=[netbox_custom_objects.models._validate_semver]),
+            field=models.CharField(
+                blank=True,
+                max_length=50,
+                validators=[netbox_custom_objects.models._validate_semver],
+            ),
         ),
         migrations.AlterField(
             model_name='customobjecttypefield',
             name='scheduled_removal',
-            field=models.CharField(blank=True, max_length=50, validators=[netbox_custom_objects.models._validate_semver]),
+            field=models.CharField(
+                blank=True,
+                max_length=50,
+                validators=[netbox_custom_objects.models._validate_semver],
+            ),
         ),
         migrations.AlterField(
             model_name='customobjecttypefield',
