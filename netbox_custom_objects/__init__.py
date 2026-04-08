@@ -209,6 +209,12 @@ class CustomObjectsPluginConfig(PluginConfig):
                 "App '%s' doesn't have a '%s' model." % (self.label, model_name)
             )
 
+        # Guard against querying the DB when migrations haven't run yet
+        if self.should_skip_dynamic_model_creation():
+            raise LookupError(
+                "App '%s' doesn't have a '%s' model." % (self.label, model_name)
+            )
+
         from .models import CustomObjectType
 
         custom_object_type_id = int(
