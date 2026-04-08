@@ -55,7 +55,7 @@ def assign_schema_ids(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('netbox_custom_objects', '0005_customobjecttype_next_schema_id_and_more'),
+        ('netbox_custom_objects', '0007_customobjecttype_next_schema_id_and_more'),
     ]
 
     operations = [
