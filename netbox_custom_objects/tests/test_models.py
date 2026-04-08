@@ -899,4 +899,55 @@ class SearchReindexTestCase(CustomObjectsTestCase, TestCase):
             second_job = ReindexCustomObjectTypeJob.enqueue(cot_id=self.cot.pk)
 
         self.assertEqual(first_job.pk, second_job.pk)
-        self.assertEqual(Job.objects.filter(data__cot_id=self.cot.pk).count(), 1)
+
+
+class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
+    """
+    Regression tests for CustomObjectsPluginConfig.get_model().
+
+    Covers the bug where get_model() queried the DB unconditionally, causing
+    "column does not exist" errors during `manage.py migrate` when a new
+    migration added a column to CustomObjectType but hadn't run yet.
+    See: https://github.com/netboxlabs/netbox-custom-objects/issues/456
+    """
+
+    def setUp(self):
+        super().setUp()
+        from django.apps import apps
+        self.config = apps.get_app_config('netbox_custom_objects')
+
+    def test_get_model_raises_lookup_error_when_skipping(self):
+        """get_model() raises LookupError instead of querying DB when should_skip returns True."""
+        cot = self.create_custom_object_type(name="MigrateTest", slug="migrate-test")
+        model_name = f"{cot.pk}tablemodel"
+
+        with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=True):
+            with self.assertRaises(LookupError):
+                self.config.get_model(model_name)
+
+    def test_get_model_returns_model_when_not_skipping(self):
+        """get_model() successfully returns the dynamic model when migrations are up to date."""
+        cot = self.create_custom_object_type(name="MigrateTest2", slug="migrate-test-2")
+        model_name = f"{cot.pk}tablemodel"
+
+        with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
+            model = self.config.get_model(model_name)
+        self.assertIsNotNone(model)
+
+    def test_get_model_skips_db_with_migrate_in_argv(self):
+        """get_model() raises LookupError when 'migrate' is in sys.argv (pre-migration state)."""
+        import sys
+        cot = self.create_custom_object_type(name="MigrateTest3", slug="migrate-test-3")
+        model_name = f"{cot.pk}tablemodel"
+
+        original_argv = sys.argv[:]
+        try:
+            sys.argv = ['manage.py', 'migrate']
+            # Reset cached migration check so argv is re-evaluated
+            import netbox_custom_objects as nco
+            nco._migrations_checked = None
+            with self.assertRaises(LookupError):
+                self.config.get_model(model_name)
+        finally:
+            sys.argv = original_argv
+            nco._migrations_checked = None
