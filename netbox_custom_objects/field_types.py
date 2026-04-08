@@ -415,9 +415,14 @@ class ObjectFieldType(FieldType):
             if custom_object_type.id == field.custom_object_type.id:
                 # For self-referential fields, use LazyForeignKey to defer resolution
                 model_name = f"{APP_LABEL}.{custom_object_type.get_table_model_name(custom_object_type.id)}"
-                # Generate a unique related_name to prevent reverse accessor conflicts
-                table_model_name = field.custom_object_type.get_table_model_name(field.custom_object_type.id).lower()
-                related_name = f"{table_model_name}_{field.name}_set"
+                # Use user-specified related_name if provided, otherwise generate a unique one
+                if field.related_name:
+                    related_name = field.related_name
+                else:
+                    table_model_name = field.custom_object_type.get_table_model_name(
+                        field.custom_object_type.id
+                    ).lower()
+                    related_name = f"{table_model_name}_{field.name}_set"
                 f = LazyForeignKey(
                     model_name,
                     null=True,
@@ -435,9 +440,12 @@ class ObjectFieldType(FieldType):
             to_ct = f"{content_type.app_label}.{to_model}"
             model = apps.get_model(to_ct)
 
-        # Generate a unique related_name to prevent reverse accessor conflicts
-        table_model_name = field.custom_object_type.get_table_model_name(field.custom_object_type.id).lower()
-        related_name = f"{table_model_name}_{field.name}_set"
+        # Use user-specified related_name if provided, otherwise generate a unique one
+        if field.related_name:
+            related_name = field.related_name
+        else:
+            table_model_name = field.custom_object_type.get_table_model_name(field.custom_object_type.id).lower()
+            related_name = f"{table_model_name}_{field.name}_set"
         f = models.ForeignKey(
             model, null=True, blank=True, on_delete=models.CASCADE, related_name=related_name, **field_kwargs
         )
@@ -756,14 +764,22 @@ class MultiObjectFieldType(FieldType):
         model_string = f"{field.related_object_type.app_label}.{field.related_object_type.model}"
         through = self.get_through_model(field, model_string)
 
+        # Use user-specified related_name if provided; otherwise disable reverse access
+        if field.related_name:
+            m2m_related_name = field.related_name
+            m2m_related_query_name = field.related_name
+        else:
+            m2m_related_name = "+"
+            m2m_related_query_name = "+"
+
         # For self-referential fields, use 'self' as the target
         m2m_field = CustomManyToManyField(
             to="self" if is_self_referential else model_string,
             through=through,
             through_fields=("source", "target"),
             blank=True,
-            related_name="+",
-            related_query_name="+",
+            related_name=m2m_related_name,
+            related_query_name=m2m_related_query_name,
             **field_kwargs
         )
 
