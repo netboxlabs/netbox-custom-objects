@@ -10,7 +10,7 @@ class Migration(migrations.Migration):
     dependencies = [
         ('core', '0021_job_queue_name'),
         ('extras', '0134_owner'),
-        ('netbox_custom_objects', '0004_customobjecttype_group_name'),
+        ('netbox_custom_objects', '0005_customobjecttype_next_schema_id_and_more'),
     ]
 
     operations = [
