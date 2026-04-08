@@ -166,6 +166,197 @@ class DeprecationFieldsTestCase(
 
 
 # ===========================================================================
+# Backfill migration logic tests (TransactionTestCase — uses DDL)
+# ===========================================================================
+
+class SchemaIdBackfillTestCase(
+    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
+):
+    """
+    Tests for the 0006_backfill_schema_ids migration logic.
+
+    Rather than exercising the migration runner itself (which would require
+    replaying the full migration history), these tests call the same backfill
+    function directly and verify its behaviour against real model instances.
+    """
+
+    @staticmethod
+    def _run_backfill():
+        """Execute the backfill function directly against the live DB."""
+        import importlib
+        mod = importlib.import_module(
+            'netbox_custom_objects.migrations.0006_backfill_schema_ids'
+        )
+        # The function accepts (apps, schema_editor) but only uses apps.get_model().
+        # We pass a lightweight shim that delegates to the real models.
+
+        class _AppsShim:
+            @staticmethod
+            def get_model(app_label, model_name):
+                from django.apps import apps
+                return apps.get_model(app_label, model_name)
+
+        mod.assign_schema_ids(_AppsShim(), None)
+
+    # ------------------------------------------------------------------
+    # Core backfill behaviour
+    # ------------------------------------------------------------------
+
+    def test_fields_without_schema_id_are_assigned(self):
+        cot = self.create_custom_object_type(name='bf1', slug='bf-1')
+        f1 = self.create_custom_object_type_field(cot, name='alpha', type='text')
+        f2 = self.create_custom_object_type_field(cot, name='beta', type='text')
+        # Force both to NULL (simulate pre-feature state)
+        CustomObjectTypeField.objects.filter(
+            custom_object_type=cot
+        ).update(schema_id=None)
+
+        self._run_backfill()
+
+        f1.refresh_from_db()
+        f2.refresh_from_db()
+        self.assertIsNotNone(f1.schema_id)
+        self.assertIsNotNone(f2.schema_id)
+
+    def test_assigned_ids_are_sequential_from_one(self):
+        cot = self.create_custom_object_type(name='bf2', slug='bf-2')
+        [
+            self.create_custom_object_type_field(cot, name=f'f{i}', type='text')
+            for i in range(1, 4)
+        ]
+        CustomObjectTypeField.objects.filter(
+            custom_object_type=cot
+        ).update(schema_id=None)
+
+        self._run_backfill()
+
+        ids = sorted(
+            CustomObjectTypeField.objects.filter(custom_object_type=cot)
+            .values_list('schema_id', flat=True)
+        )
+        self.assertEqual(ids, [1, 2, 3])
+
+    def test_existing_schema_ids_are_not_changed(self):
+        cot = self.create_custom_object_type(name='bf3', slug='bf-3')
+        f_existing = self.create_custom_object_type_field(cot, name='kept', type='text')
+        existing_id = f_existing.schema_id  # set by auto-assign
+        self.assertIsNotNone(existing_id)
+
+        # Add a second field and force it to NULL
+        f_new = self.create_custom_object_type_field(cot, name='new_one', type='text')
+        CustomObjectTypeField.objects.filter(pk=f_new.pk).update(schema_id=None)
+
+        self._run_backfill()
+
+        f_existing.refresh_from_db()
+        f_new.refresh_from_db()
+        self.assertEqual(f_existing.schema_id, existing_id, "Pre-existing ID must not change")
+        self.assertIsNotNone(f_new.schema_id)
+        self.assertGreater(f_new.schema_id, existing_id, "New ID must follow existing max")
+
+    def test_backfill_continues_from_existing_max(self):
+        """New IDs start after the highest already-assigned ID."""
+        cot = self.create_custom_object_type(name='bf4', slug='bf-4')
+        # Manually assign schema_id=5 to simulate a gap
+        f1 = self.create_custom_object_type_field(cot, name='five', type='text')
+        CustomObjectTypeField.objects.filter(pk=f1.pk).update(schema_id=5)
+
+        f2 = self.create_custom_object_type_field(cot, name='null_one', type='text')
+        CustomObjectTypeField.objects.filter(pk=f2.pk).update(schema_id=None)
+
+        self._run_backfill()
+
+        f2.refresh_from_db()
+        self.assertEqual(f2.schema_id, 6)
+
+    def test_next_schema_id_updated_on_cot(self):
+        from netbox_custom_objects.models import CustomObjectType
+        cot = self.create_custom_object_type(name='bf5', slug='bf-5')
+        for i in range(1, 4):
+            self.create_custom_object_type_field(cot, name=f'g{i}', type='text')
+        # Force all to NULL and reset counter
+        CustomObjectTypeField.objects.filter(
+            custom_object_type=cot
+        ).update(schema_id=None)
+        CustomObjectType.objects.filter(pk=cot.pk).update(next_schema_id=0)
+
+        self._run_backfill()
+
+        cot.refresh_from_db()
+        self.assertEqual(cot.next_schema_id, 3)
+
+    def test_next_schema_id_never_decreases(self):
+        """If next_schema_id is already high, the backfill must not lower it."""
+        from netbox_custom_objects.models import CustomObjectType
+        cot = self.create_custom_object_type(name='bf6', slug='bf-6')
+        f = self.create_custom_object_type_field(cot, name='only', type='text')
+        CustomObjectTypeField.objects.filter(pk=f.pk).update(schema_id=None)
+        # Artificially set next_schema_id to a large value
+        CustomObjectType.objects.filter(pk=cot.pk).update(next_schema_id=99)
+
+        self._run_backfill()
+
+        cot.refresh_from_db()
+        self.assertGreaterEqual(cot.next_schema_id, 99)
+
+    def test_ids_unique_within_cot(self):
+        cot = self.create_custom_object_type(name='bf7', slug='bf-7')
+        for i in range(1, 6):
+            self.create_custom_object_type_field(cot, name=f'h{i}', type='text')
+        CustomObjectTypeField.objects.filter(
+            custom_object_type=cot
+        ).update(schema_id=None)
+
+        self._run_backfill()
+
+        ids = list(
+            CustomObjectTypeField.objects.filter(custom_object_type=cot)
+            .values_list('schema_id', flat=True)
+        )
+        self.assertEqual(len(ids), len(set(ids)), "All schema_ids must be unique within COT")
+
+    def test_ids_scoped_per_cot(self):
+        """Two different COTs both start their IDs from 1."""
+        cotA = self.create_custom_object_type(name='bfA', slug='bf-a')
+        cotB = self.create_custom_object_type(name='bfB', slug='bf-b')
+        fa = self.create_custom_object_type_field(cotA, name='x', type='text')
+        fb = self.create_custom_object_type_field(cotB, name='x', type='text')
+        CustomObjectTypeField.objects.filter(pk__in=[fa.pk, fb.pk]).update(schema_id=None)
+        from netbox_custom_objects.models import CustomObjectType
+        CustomObjectType.objects.filter(pk__in=[cotA.pk, cotB.pk]).update(next_schema_id=0)
+
+        self._run_backfill()
+
+        fa.refresh_from_db()
+        fb.refresh_from_db()
+        self.assertEqual(fa.schema_id, 1)
+        self.assertEqual(fb.schema_id, 1)
+
+    def test_idempotent(self):
+        """Running the backfill twice must not change any already-assigned IDs."""
+        cot = self.create_custom_object_type(name='bfIdem', slug='bf-idem')
+        for i in range(1, 4):
+            self.create_custom_object_type_field(cot, name=f'i{i}', type='text')
+        CustomObjectTypeField.objects.filter(
+            custom_object_type=cot
+        ).update(schema_id=None)
+
+        self._run_backfill()
+        ids_after_first = list(
+            CustomObjectTypeField.objects.filter(custom_object_type=cot)
+            .order_by('id').values_list('schema_id', flat=True)
+        )
+
+        self._run_backfill()
+        ids_after_second = list(
+            CustomObjectTypeField.objects.filter(custom_object_type=cot)
+            .order_by('id').values_list('schema_id', flat=True)
+        )
+
+        self.assertEqual(ids_after_first, ids_after_second)
+
+
+# ===========================================================================
 # schema_document and version field tests (plain TestCase — no DDL needed)
 # ===========================================================================
 
