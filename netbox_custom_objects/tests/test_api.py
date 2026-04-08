@@ -771,3 +771,191 @@ class SerializerFieldCoverageTest(CustomObjectsTestCase, TestCase):
             r'^https?://',
             f"'url' field should be an absolute HTTP(S) URL, got: {url_value!r}",
         )
+
+
+# ---------------------------------------------------------------------------
+# Context field — serializer and API response
+# ---------------------------------------------------------------------------
+
+
+class ContextFieldApiTestCase(CustomObjectsTestCase, TestCase):
+    """
+    Verify the _context field in API responses when a COT has a context field.
+
+    Two display scenarios are exercised:
+      • COT with a primary field  → display = primary field value
+      • COT with no primary field → display = fallback "{COT display_name} {id}"
+    In both cases _context.display must equal the context field value.
+    """
+
+    def setUp(self):
+        self.user = create_test_user('ctxapiuser')
+        token_key = create_token(self.user)
+        self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
+
+        # --- COT A: primary field + context field ---
+        self.cot_with_primary = CustomObjectsTestCase.create_custom_object_type(
+            name='ctxapiprimary', slug='ctx-api-primary'
+        )
+        CustomObjectsTestCase.create_custom_object_type_field(
+            self.cot_with_primary, name='name', type='text', primary=True
+        )
+        CustomObjectsTestCase.create_custom_object_type_field(
+            self.cot_with_primary, name='owner', type='text', context=True
+        )
+        self.model_with_primary = self.cot_with_primary.get_model()
+
+        perm_a = ObjectPermission(name='ctx-api-perm-a', actions=['view'])
+        perm_a.save()
+        perm_a.users.add(self.user)
+        perm_a.object_types.add(
+            ObjectType.objects.get_for_model(self.model_with_primary)
+        )
+
+        # --- COT B: no primary field + context field (fallback display) ---
+        self.cot_no_primary = CustomObjectsTestCase.create_custom_object_type(
+            name='ctxapinoprimary', slug='ctx-api-no-primary'
+        )
+        CustomObjectsTestCase.create_custom_object_type_field(
+            self.cot_no_primary, name='owner', type='text', context=True
+        )
+        self.model_no_primary = self.cot_no_primary.get_model()
+
+        perm_b = ObjectPermission(name='ctx-api-perm-b', actions=['view'])
+        perm_b.save()
+        perm_b.users.add(self.user)
+        perm_b.object_types.add(
+            ObjectType.objects.get_for_model(self.model_no_primary)
+        )
+
+        # --- COT C: primary field + two context fields ---
+        self.cot_multi_ctx = CustomObjectsTestCase.create_custom_object_type(
+            name='ctxapimultictx', slug='ctx-api-multi-ctx'
+        )
+        CustomObjectsTestCase.create_custom_object_type_field(
+            self.cot_multi_ctx, name='name', type='text', primary=True
+        )
+        CustomObjectsTestCase.create_custom_object_type_field(
+            self.cot_multi_ctx, name='owner', type='text', context=True
+        )
+        CustomObjectsTestCase.create_custom_object_type_field(
+            self.cot_multi_ctx, name='region', type='text', context=True
+        )
+        self.model_multi_ctx = self.cot_multi_ctx.get_model()
+
+        perm_c = ObjectPermission(name='ctx-api-perm-c', actions=['view'])
+        perm_c.save()
+        perm_c.users.add(self.user)
+        perm_c.object_types.add(
+            ObjectType.objects.get_for_model(self.model_multi_ctx)
+        )
+
+    def tearDown(self):
+        CustomObjectType.clear_model_cache()
+        super().tearDown()
+
+    def _detail_url(self, cot, instance):
+        return reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-detail',
+            kwargs={'pk': instance.pk, 'custom_object_type': cot.slug},
+        )
+
+    # --- Serializer class structure ---
+
+    def test_serializer_meta_includes_context_field(self):
+        """get_serializer_class() must add _context to Meta.fields and brief_fields."""
+        from netbox_custom_objects.api.serializers import get_serializer_class
+        cls = get_serializer_class(self.model_with_primary)
+        self.assertIn('_context', cls.Meta.fields)
+        self.assertIn('_context', cls.Meta.brief_fields)
+
+    def test_serializer_meta_excludes_context_when_no_context_fields(self):
+        """_context must not appear when the COT has no context fields."""
+        from netbox_custom_objects.api.serializers import get_serializer_class
+        cot = CustomObjectsTestCase.create_custom_object_type(
+            name='ctxapinoctx', slug='ctx-api-no-ctx'
+        )
+        CustomObjectsTestCase.create_custom_object_type_field(
+            cot, name='name', type='text', primary=True
+        )
+        model = cot.get_model()
+        cls = get_serializer_class(model)
+        self.assertNotIn('_context', cls.Meta.fields)
+        self.assertNotIn('_context', cls.Meta.brief_fields)
+
+    # --- Primary field present ---
+
+    def test_display_equals_primary_field_value(self):
+        """display must be the primary field value, not the fallback."""
+        instance = self.model_with_primary.objects.create(name='Route-A', owner='Alice')
+        response = self.client.get(
+            self._detail_url(self.cot_with_primary, instance), **self.header
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['display'], 'Route-A')
+
+    def test_context_display_value_with_primary_field(self):
+        """_context.display must equal the context field value when primary is set."""
+        instance = self.model_with_primary.objects.create(name='Route-A', owner='Alice')
+        response = self.client.get(
+            self._detail_url(self.cot_with_primary, instance), **self.header
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNotNone(response.data['_context'])
+        self.assertEqual(response.data['_context']['display'], 'Alice')
+
+    def test_context_null_when_context_field_has_no_value(self):
+        """_context must be null when the context field carries no value."""
+        instance = self.model_with_primary.objects.create(name='Route-B')
+        response = self.client.get(
+            self._detail_url(self.cot_with_primary, instance), **self.header
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNone(response.data['_context'])
+
+    # --- No primary field (fallback display) ---
+
+    def test_display_uses_fallback_when_no_primary_field(self):
+        """display must use the fallback format when no primary field is configured."""
+        instance = self.model_no_primary.objects.create(owner='Bob')
+        expected = f"{self.cot_no_primary.display_name} {instance.id}"
+        response = self.client.get(
+            self._detail_url(self.cot_no_primary, instance), **self.header
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['display'], expected)
+
+    def test_context_display_value_with_fallback_display(self):
+        """_context.display must work correctly even when display uses the fallback name."""
+        instance = self.model_no_primary.objects.create(owner='Bob')
+        response = self.client.get(
+            self._detail_url(self.cot_no_primary, instance), **self.header
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNotNone(response.data['_context'])
+        self.assertEqual(response.data['_context']['display'], 'Bob')
+
+    # --- Multiple context fields ---
+
+    def test_multiple_context_fields_joined_in_display(self):
+        """_context.display must join all context field values with ', '."""
+        instance = self.model_multi_ctx.objects.create(
+            name='Route-C', owner='Carol', region='EU'
+        )
+        response = self.client.get(
+            self._detail_url(self.cot_multi_ctx, instance), **self.header
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNotNone(response.data['_context'])
+        self.assertEqual(response.data['_context']['display'], 'Carol, EU')
+
+    def test_multiple_context_fields_omits_empty_values(self):
+        """_context.display must only include context fields that have a value."""
+        instance = self.model_multi_ctx.objects.create(name='Route-D', owner='Dave')
+        # region (second context field) is not set
+        response = self.client.get(
+            self._detail_url(self.cot_multi_ctx, instance), **self.header
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNotNone(response.data['_context'])
+        self.assertEqual(response.data['_context']['display'], 'Dave')

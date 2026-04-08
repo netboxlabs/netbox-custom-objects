@@ -452,6 +452,7 @@ class ObjectFieldType(FieldType):
         """
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
 
+        has_context = False
         if content_type.app_label == APP_LABEL:
             # This is a custom object type
             from netbox_custom_objects.models import CustomObjectType
@@ -462,6 +463,7 @@ class ObjectFieldType(FieldType):
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
 
             model = custom_object_type.get_model()
+            has_context = bool(getattr(model, '_context_field_ids', []))
         else:
             # This is a regular NetBox model
             model = content_type.model_class()
@@ -478,7 +480,7 @@ class ObjectFieldType(FieldType):
             )
         else:
             field_class = DynamicModelChoiceField
-            return field_class(
+            form_field = field_class(
                 queryset=model.objects.all(),
                 required=field.required,
                 # Remove initial=field.default to allow Django to handle instance data properly
@@ -489,6 +491,9 @@ class ObjectFieldType(FieldType):
                 ),
                 selector=model._meta.app_label != APP_LABEL,
             )
+            if has_context:
+                form_field.widget.attrs['ts-parent-field'] = '_context'
+            return form_field
 
     def get_filterform_field(self, field, **kwargs):
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
@@ -775,6 +780,7 @@ class MultiObjectFieldType(FieldType):
         """
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
 
+        has_context = False
         if content_type.app_label == APP_LABEL:
             # This is a custom object type
             from netbox_custom_objects.models import CustomObjectType
@@ -785,6 +791,7 @@ class MultiObjectFieldType(FieldType):
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
 
             model = custom_object_type.get_model(skip_object_fields=True)
+            has_context = bool(getattr(model, '_context_field_ids', []))
         else:
             # This is a regular NetBox model
             model = content_type.model_class()
@@ -800,7 +807,7 @@ class MultiObjectFieldType(FieldType):
             )
         else:
             field_class = DynamicModelMultipleChoiceField
-            return field_class(
+            form_field = field_class(
                 queryset=model.objects.all(),
                 required=field.required,
                 query_params=(
@@ -810,6 +817,9 @@ class MultiObjectFieldType(FieldType):
                 ),
                 selector=model._meta.app_label != APP_LABEL,
             )
+            if has_context:
+                form_field.widget.attrs['ts-parent-field'] = '_context'
+            return form_field
 
     def get_filterform_field(self, field, **kwargs):
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
