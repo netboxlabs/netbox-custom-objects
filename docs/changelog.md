@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.9
+---
+
+### Bug Fixes
+
+- [#456](https://github.com/netboxlabs/netbox-custom-objects/issues/456) - Error executing migration due to missing `group_name` column when upgrading from v0.4.6
+
+
 ## 0.4.8
 ---
 
