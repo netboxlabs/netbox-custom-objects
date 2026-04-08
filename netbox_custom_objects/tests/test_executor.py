@@ -30,7 +30,7 @@ from netbox_custom_objects.executor import (
     apply_diffs,
 )
 from netbox_custom_objects.exporter import export_cot
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.models import CustomObjectType
 
 from .base import CustomObjectsTestCase, TransactionCleanupMixin
 
