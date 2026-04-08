@@ -887,7 +887,6 @@ class SearchReindexTestCase(CustomObjectsTestCase, TestCase):
     def test_duplicate_job_not_enqueued(self):
         """A second enqueue for the same COT returns the existing pending job without creating a new one."""
         from core.choices import JobStatusChoices
-        from core.models import Job
 
         with patch('django_rq.get_queue'):
             first_job = ReindexCustomObjectTypeJob.enqueue(cot_id=self.cot.pk)
