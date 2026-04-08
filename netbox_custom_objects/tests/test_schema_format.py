@@ -173,7 +173,7 @@ class SchemaIdBackfillTestCase(
     TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
 ):
     """
-    Tests for the 0006_backfill_schema_ids migration logic.
+    Tests for the 0008_backfill_schema_ids migration logic.
 
     Rather than exercising the migration runner itself (which would require
     replaying the full migration history), these tests call the same backfill
@@ -185,7 +185,7 @@ class SchemaIdBackfillTestCase(
         """Execute the backfill function directly against the live DB."""
         import importlib
         mod = importlib.import_module(
-            'netbox_custom_objects.migrations.0006_backfill_schema_ids'
+            'netbox_custom_objects.migrations.0008_backfill_schema_ids'
         )
         # The function accepts (apps, schema_editor) but only uses apps.get_model().
         # We pass a lightweight shim that delegates to the real models.
