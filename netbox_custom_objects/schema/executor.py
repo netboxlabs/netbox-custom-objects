@@ -73,6 +73,10 @@ class UnknownObjectTypeError(Exception):
     """Raised when a related_object_type referenced in the schema does not exist."""
 
 
+class UnknownFieldTypeError(Exception):
+    """Raised when a field type string in the schema has no matching DB choice."""
+
+
 # ---------------------------------------------------------------------------
 # Dependency ordering
 # ---------------------------------------------------------------------------
@@ -194,6 +198,11 @@ def _schema_def_to_field_kwargs(schema_def: dict) -> dict:
     from extras.models import CustomFieldChoiceSet  # noqa: PLC0415
 
     schema_type = schema_def["type"]
+    if schema_type not in SCHEMA_TYPE_TO_CHOICES:
+        raise UnknownFieldTypeError(
+            f"Unknown field type {schema_type!r} in field {schema_def.get('name')!r}. "
+            f"Valid types: {sorted(SCHEMA_TYPE_TO_CHOICES)}"
+        )
     type_choice = SCHEMA_TYPE_TO_CHOICES[schema_type]
 
     kwargs: dict = {
@@ -439,10 +448,11 @@ def _phase2_fields(ordered_diffs, cot_map, *, allow_destructive: bool) -> None:
             if fc.op is FieldOp.ADD:
                 _apply_field_add(cot, fc)
             elif fc.op is FieldOp.REMOVE:
-                # allow_destructive=False would have raised before we got here;
-                # the conditional is a defensive belt-and-suspenders check.
-                if allow_destructive:
-                    _apply_field_remove(cot, fc)
+                assert allow_destructive, (
+                    "_phase2_fields called with a REMOVE op but allow_destructive=False; "
+                    "the pre-flight guard in apply_diffs should have prevented this."
+                )
+                _apply_field_remove(cot, fc)
             elif fc.op is FieldOp.ALTER:
                 _apply_field_alter(cot, fc)
 
@@ -458,7 +468,7 @@ def apply_diffs(
     allow_destructive: bool = False,
 ) -> None:
     """
-    Apply a list of :class:`~netbox_custom_objects.comparator.COTDiff` objects
+    Apply a list of :class:`~netbox_custom_objects.schema.comparator.COTDiff` objects
     to the live DB.
 
     *type_defs_by_slug* must be a ``{slug: type_def_dict}`` mapping covering
@@ -490,7 +500,8 @@ def apply_diffs(
         # Finalise: persist schema_document and sync next_schema_id counters.
         for diff in ordered:
             cot = cot_map[diff.slug]
-            _update_schema_document(cot, type_defs_by_slug[diff.slug])
+            if diff.is_new or diff.has_changes:
+                _update_schema_document(cot, type_defs_by_slug[diff.slug])
             _sync_next_schema_id(cot, diff)
 
 
@@ -502,10 +513,10 @@ def apply_document(
     """
     Diff and apply a complete schema document against the live DB.
 
-    Internally calls :func:`~netbox_custom_objects.comparator.diff_document`
+    Internally calls :func:`~netbox_custom_objects.schema.comparator.diff_document`
     to compute the diff, then delegates to :func:`apply_diffs`.
 
-    Returns the list of :class:`~netbox_custom_objects.comparator.COTDiff`
+    Returns the list of :class:`~netbox_custom_objects.schema.comparator.COTDiff`
     objects that were computed and applied (regardless of whether each had
     changes).
     """

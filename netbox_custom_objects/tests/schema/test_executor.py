@@ -25,6 +25,7 @@ from netbox_custom_objects.schema.executor import (
     CircularDependencyError,
     DestructiveChangesError,
     UnknownChoiceSetError,
+    UnknownFieldTypeError,
     UnknownObjectTypeError,
     _build_dep_order,
     apply_document,
@@ -368,6 +369,13 @@ class ExecutorFieldAddTestCase(_ExecutorTestBase):
             "related_object_type": "does/notexist",
         })
         with self.assertRaises(UnknownObjectTypeError):
+            apply_document({"schema_version": "1", "types": [type_def]})
+
+    def test_unknown_field_type_raises(self):
+        type_def = export_cot(self.cot)
+        next_id = self.cot.next_schema_id + 1
+        type_def["fields"].append({"id": next_id, "name": "bad", "type": "nosuchtype"})
+        with self.assertRaises(UnknownFieldTypeError):
             apply_document({"schema_version": "1", "types": [type_def]})
 
     def test_malformed_related_object_type_raises(self):
