@@ -6,6 +6,7 @@ from django.db import connection, transaction
 from django.db.migrations.loader import MigrationLoader
 from django.db.migrations.recorder import MigrationRecorder
 from django.db.models.signals import pre_migrate, post_migrate
+from django.db.utils import OperationalError, ProgrammingError
 from netbox.plugins import PluginConfig
 
 from .constants import APP_LABEL as APP_LABEL
@@ -185,11 +186,17 @@ class CustomObjectsPluginConfig(PluginConfig):
                 super().ready()
                 return
 
-            with transaction.atomic():
-                qs = CustomObjectType.objects.all()
-                for obj in qs:
-                    model = obj.get_model()
-                    get_serializer_class(model)
+            try:
+                with transaction.atomic():
+                    qs = CustomObjectType.objects.all()
+                    for obj in qs:
+                        model = obj.get_model()
+                        get_serializer_class(model)
+            except (ProgrammingError, OperationalError):
+                # DB schema is incomplete (unapplied migrations). Skip dynamic
+                # model registration — it will happen after migrations finish.
+                super().ready()
+                return
 
         super().ready()
 
@@ -223,7 +230,11 @@ class CustomObjectsPluginConfig(PluginConfig):
 
         try:
             obj = CustomObjectType.objects.get(pk=custom_object_type_id)
-        except CustomObjectType.DoesNotExist:
+        except (CustomObjectType.DoesNotExist, ProgrammingError, OperationalError):
+            # ProgrammingError/OperationalError covers an incomplete DB schema
+            # (e.g. unapplied migrations). Treat all three as "model not found"
+            # so callers get a predictable LookupError rather than a raw DB
+            # error that would abort manage.py migrate.
             raise LookupError(
                 "App '%s' doesn't have a '%s' model." % (self.label, model_name)
             )
@@ -252,17 +263,22 @@ class CustomObjectsPluginConfig(PluginConfig):
             # Add custom object type models
             from .models import CustomObjectType
 
-            with transaction.atomic():
-                custom_object_types = CustomObjectType.objects.all()
-                for custom_type in custom_object_types:
-                    model = custom_type.get_model()
-                    if model:
-                        yield model
+            try:
+                with transaction.atomic():
+                    custom_object_types = CustomObjectType.objects.all()
+                    for custom_type in custom_object_types:
+                        model = custom_type.get_model()
+                        if model:
+                            yield model
 
-                        # If include_auto_created is True, also yield through models
-                        if include_auto_created and hasattr(model, '_through_models'):
-                            for through_model in model._through_models:
-                                yield through_model
+                            # If include_auto_created is True, also yield through models
+                            if include_auto_created and hasattr(model, '_through_models'):
+                                for through_model in model._through_models:
+                                    yield through_model
+            except (ProgrammingError, OperationalError):
+                # DB schema is incomplete (unapplied migrations). Yield nothing —
+                # dynamic models will be available once migrations have run.
+                return
 
 
 config = CustomObjectsPluginConfig
