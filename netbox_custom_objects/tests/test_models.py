@@ -1039,3 +1039,44 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
             with patch.object(CustomObjectType.objects, 'all',
                               side_effect=OperationalError("no such table")):
                 list(self.config.get_models())
+
+    def test_should_skip_returns_true_on_programming_error(self):
+        """
+        should_skip_dynamic_model_creation() must return True (skip) when the
+        migration infrastructure raises ProgrammingError, e.g. on a fresh install
+        before the django_migrations table exists.  An uncaught exception here
+        would bypass all the guards in ready(), get_model(), and get_models().
+        """
+        import netbox_custom_objects as nco
+        from django.db.utils import ProgrammingError
+
+        original_checked = nco._migrations_checked
+        nco._migrations_checked = None  # force the migration-loader path
+        try:
+            with patch('netbox_custom_objects.MigrationLoader',
+                       side_effect=ProgrammingError("relation does not exist")):
+                result = self.config.should_skip_dynamic_model_creation()
+            self.assertTrue(result)
+            # Must not be cached so the next call retries once the DB is ready.
+            self.assertIsNone(nco._migrations_checked)
+        finally:
+            nco._migrations_checked = original_checked
+
+    def test_should_skip_returns_true_on_operational_error(self):
+        """
+        should_skip_dynamic_model_creation() must return True when the migration
+        infrastructure raises OperationalError (e.g. django_migrations missing).
+        """
+        import netbox_custom_objects as nco
+        from django.db.utils import OperationalError
+
+        original_checked = nco._migrations_checked
+        nco._migrations_checked = None
+        try:
+            with patch('netbox_custom_objects.MigrationLoader',
+                       side_effect=OperationalError("no such table: django_migrations")):
+                result = self.config.should_skip_dynamic_model_creation()
+            self.assertTrue(result)
+            self.assertIsNone(nco._migrations_checked)
+        finally:
+            nco._migrations_checked = original_checked

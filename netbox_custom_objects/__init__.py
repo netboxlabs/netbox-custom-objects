@@ -157,6 +157,12 @@ class CustomObjectsPluginConfig(PluginConfig):
             _migrations_checked = result
             return result
 
+        except (ProgrammingError, OperationalError):
+            # The migration infrastructure itself is unavailable (e.g. the
+            # django_migrations table doesn't exist on a brand-new install).
+            # Treat this as "not ready" — don't cache so the next call retries.
+            return True
+
         finally:
             # Always clear the recursion flag
             _checking_migrations = False
@@ -230,16 +236,17 @@ class CustomObjectsPluginConfig(PluginConfig):
 
         try:
             obj = CustomObjectType.objects.get(pk=custom_object_type_id)
+            return obj.get_model()
         except (CustomObjectType.DoesNotExist, ProgrammingError, OperationalError):
             # ProgrammingError/OperationalError covers an incomplete DB schema
             # (e.g. unapplied migrations). Treat all three as "model not found"
             # so callers get a predictable LookupError rather than a raw DB
-            # error that would abort manage.py migrate.
+            # error that would abort manage.py migrate.  obj.get_model() is
+            # inside the block because it also queries CustomObjectTypeField,
+            # which could be missing or have an absent column.
             raise LookupError(
                 "App '%s' doesn't have a '%s' model." % (self.label, model_name)
             )
-
-        return obj.get_model()
 
     def get_models(self, include_auto_created=False, include_swapped=False):
         """Return all models for this plugin, including custom object type models."""
