@@ -792,7 +792,8 @@ class ContextFieldApiTestCase(CustomObjectsTestCase, TestCase):
     def setUp(self):
         self.user = create_test_user('ctxapiuser')
         token_key = create_token(self.user)
-        self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
+        self.client = APIClient()
+        self.client.credentials(HTTP_AUTHORIZATION=f'Token {token_key}')
 
         # --- COT A: primary field + context field ---
         self.cot_with_primary = CustomObjectsTestCase.create_custom_object_type(
@@ -890,7 +891,7 @@ class ContextFieldApiTestCase(CustomObjectsTestCase, TestCase):
         """display must be the primary field value, not the fallback."""
         instance = self.model_with_primary.objects.create(name='Route-A', owner='Alice')
         response = self.client.get(
-            self._detail_url(self.cot_with_primary, instance), **self.header
+            self._detail_url(self.cot_with_primary, instance)
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['display'], 'Route-A')
@@ -899,7 +900,7 @@ class ContextFieldApiTestCase(CustomObjectsTestCase, TestCase):
         """_context.display must equal the context field value when primary is set."""
         instance = self.model_with_primary.objects.create(name='Route-A', owner='Alice')
         response = self.client.get(
-            self._detail_url(self.cot_with_primary, instance), **self.header
+            self._detail_url(self.cot_with_primary, instance)
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIsNotNone(response.data['_context'])
@@ -909,7 +910,7 @@ class ContextFieldApiTestCase(CustomObjectsTestCase, TestCase):
         """_context must be null when the context field carries no value."""
         instance = self.model_with_primary.objects.create(name='Route-B')
         response = self.client.get(
-            self._detail_url(self.cot_with_primary, instance), **self.header
+            self._detail_url(self.cot_with_primary, instance)
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIsNone(response.data['_context'])
@@ -921,7 +922,7 @@ class ContextFieldApiTestCase(CustomObjectsTestCase, TestCase):
         instance = self.model_no_primary.objects.create(owner='Bob')
         expected = f"{self.cot_no_primary.display_name} {instance.id}"
         response = self.client.get(
-            self._detail_url(self.cot_no_primary, instance), **self.header
+            self._detail_url(self.cot_no_primary, instance)
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['display'], expected)
@@ -930,7 +931,7 @@ class ContextFieldApiTestCase(CustomObjectsTestCase, TestCase):
         """_context.display must work correctly even when display uses the fallback name."""
         instance = self.model_no_primary.objects.create(owner='Bob')
         response = self.client.get(
-            self._detail_url(self.cot_no_primary, instance), **self.header
+            self._detail_url(self.cot_no_primary, instance)
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIsNotNone(response.data['_context'])
@@ -944,7 +945,7 @@ class ContextFieldApiTestCase(CustomObjectsTestCase, TestCase):
             name='Route-C', owner='Carol', region='EU'
         )
         response = self.client.get(
-            self._detail_url(self.cot_multi_ctx, instance), **self.header
+            self._detail_url(self.cot_multi_ctx, instance)
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIsNotNone(response.data['_context'])
@@ -955,7 +956,7 @@ class ContextFieldApiTestCase(CustomObjectsTestCase, TestCase):
         instance = self.model_multi_ctx.objects.create(name='Route-D', owner='Dave')
         # region (second context field) is not set
         response = self.client.get(
-            self._detail_url(self.cot_multi_ctx, instance), **self.header
+            self._detail_url(self.cot_multi_ctx, instance)
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIsNotNone(response.data['_context'])

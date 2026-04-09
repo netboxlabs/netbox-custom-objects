@@ -1240,9 +1240,10 @@ class SemverValidationTestCase(CustomObjectsTestCase, TestCase):
     def test_field_deprecated_since_invalid_raises(self):
         cot = self.create_custom_object_type(name='semver_f3', slug='semver-f3')
         field = self.create_custom_object_type_field(cot, name='gamma', type='text')
-        field.deprecated_since = 'not-a-version'
-        with self.assertRaises(ValidationError):
-            field.full_clean()
+        for bad in ('not-a-version', '1.x.0', 'latest', '!!invalid!!'):
+            field.deprecated_since = bad
+            with self.assertRaises(ValidationError, msg=f"Expected ValidationError for deprecated_since={bad!r}"):
+                field.full_clean()
 
     # ------------------------------------------------------------------
     # CustomObjectTypeField.scheduled_removal
@@ -1263,6 +1264,7 @@ class SemverValidationTestCase(CustomObjectsTestCase, TestCase):
     def test_field_scheduled_removal_invalid_raises(self):
         cot = self.create_custom_object_type(name='semver_f6', slug='semver-f6')
         field = self.create_custom_object_type_field(cot, name='zeta', type='text')
-        field.scheduled_removal = 'v-bad'
-        with self.assertRaises(ValidationError):
-            field.full_clean()
+        for bad in ('v-bad', '1.x.0', 'latest', '!!invalid!!'):
+            field.scheduled_removal = bad
+            with self.assertRaises(ValidationError, msg=f"Expected ValidationError for scheduled_removal={bad!r}"):
+                field.full_clean()
