@@ -59,6 +59,12 @@ class _SchemaAPIBase(TransactionCleanupMixin, CustomObjectsTestCase, Transaction
     def _apply_body(self, schema_doc, allow_destructive=False):
         return {"schema": schema_doc, "allow_destructive": allow_destructive}
 
+    @staticmethod
+    def _next_field_id(cot):
+        # next_schema_id stores the *last assigned* ID; +1 is the next available one,
+        # mirroring the auto-assign logic in CustomObjectTypeField.save().
+        return cot.next_schema_id + 1
+
 
 # ---------------------------------------------------------------------------
 # Preview endpoint
@@ -105,7 +111,7 @@ class SchemaPreviewTestCase(_SchemaAPIBase):
     def test_preview_detects_field_add(self):
         self.cot.refresh_from_db()
         type_def = export_cot(self.cot)
-        next_id = self.cot.next_schema_id + 1
+        next_id = self._next_field_id(self.cot)
         type_def["fields"].append({"id": next_id, "name": "beta", "type": "text"})
         resp = self.client.post(
             self.preview_url,
@@ -137,7 +143,7 @@ class SchemaPreviewTestCase(_SchemaAPIBase):
     def test_preview_does_not_modify_db(self):
         self.cot.refresh_from_db()
         type_def = export_cot(self.cot)
-        next_id = self.cot.next_schema_id + 1
+        next_id = self._next_field_id(self.cot)
         type_def["fields"].append({"id": next_id, "name": "ghost", "type": "text"})
         self.client.post(
             self.preview_url,
@@ -237,7 +243,7 @@ class SchemaApplyTestCase(_SchemaAPIBase):
         self.create_custom_object_type_field(cot, name='exists', type='text')
         cot.refresh_from_db()
         type_def = export_cot(cot)
-        next_id = cot.next_schema_id + 1
+        next_id = self._next_field_id(cot)
         type_def["fields"].append({"id": next_id, "name": "added", "type": "text"})
         schema_doc = {"schema_version": "1", "types": [type_def]}
         resp = self.client.post(self.apply_url, data=self._apply_body(schema_doc), format="json")
@@ -324,7 +330,7 @@ class SchemaApplyTestCase(_SchemaAPIBase):
         self.create_custom_object_type_field(cot, name='ok', type='text')
         cot.refresh_from_db()
         type_def = export_cot(cot)
-        next_id = cot.next_schema_id + 1
+        next_id = self._next_field_id(cot)
         type_def["fields"].append({
             "id": next_id, "name": "bad_obj", "type": "object",
             "related_object_type": "does/notexist",
@@ -339,7 +345,7 @@ class SchemaApplyTestCase(_SchemaAPIBase):
         self.create_custom_object_type_field(cot, name='ok', type='text')
         cot.refresh_from_db()
         type_def = export_cot(cot)
-        next_id = cot.next_schema_id + 1
+        next_id = self._next_field_id(cot)
         type_def["fields"].append({
             "id": next_id, "name": "bad_sel", "type": "select",
             "choice_set": "NoSuchSet",
@@ -356,3 +362,25 @@ class SchemaApplyTestCase(_SchemaAPIBase):
         self.client.post(self.apply_url, data=self._apply_body(schema_doc), format="json")
         cot.refresh_from_db()
         self.assertIsNotNone(cot.schema_document)
+
+    def test_apply_noop_returns_200(self):
+        cot = self.create_custom_object_type(name='applynoop', slug='apply-noop')
+        self.create_custom_object_type_field(cot, name='stable', type='text')
+        type_def = export_cot(cot)
+        schema_doc = {"schema_version": "1", "types": [type_def]}
+        # First apply initialises schema_document; second apply is a true no-op.
+        self.client.post(self.apply_url, data=self._apply_body(schema_doc), format="json")
+        resp = self.client.post(self.apply_url, data=self._apply_body(schema_doc), format="json")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertTrue(resp.data["applied"])
+        self.assertFalse(resp.data["diffs"][0]["has_changes"])
+
+    def test_apply_allow_destructive_string_returns_400(self):
+        schema_doc = {"schema_version": "1", "types": []}
+        resp = self.client.post(
+            self.apply_url,
+            data={"schema": schema_doc, "allow_destructive": "true"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("allow_destructive", resp.data)
