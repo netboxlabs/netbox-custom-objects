@@ -7,7 +7,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('netbox_custom_objects', '0006_backfill_schema_ids'),
+        ('netbox_custom_objects', '0008_backfill_schema_ids'),
     ]
 
     operations = [
