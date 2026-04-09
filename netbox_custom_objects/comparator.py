@@ -42,8 +42,12 @@ Notes
 import re
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from netbox_custom_objects import constants
+
+if TYPE_CHECKING:
+    from django.contrib.contenttypes.models import ContentType
 from netbox_custom_objects.schema_format import (
     CUSTOM_OBJECTS_APP_LABEL_SLUG,
     FIELD_DEFAULTS,
@@ -154,7 +158,7 @@ class COTDiff:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _encode_rot(rot, cot_slug_cache: dict, warnings: list) -> str:
+def _encode_rot(rot: "ContentType", cot_slug_cache: dict, warnings: list) -> str:
     """
     Encode a related ObjectType FK as a schema ``related_object_type`` string.
     Mirrors the logic in exporter._encode_related_object_type.
@@ -259,6 +263,9 @@ def _compare_cot_attrs(cot, type_def: dict) -> dict[str, tuple]:
     """
     changes: dict[str, tuple] = {}
     for attr in _COT_ATTRS:
+        # All _COT_ATTRS are string fields; None and "" both mean "absent" — same
+        # convention as the exporter.  _COT_ATTRS must never include numeric or
+        # boolean fields, as `or ""` would swallow falsy values like 0 or False.
         db_val = getattr(cot, attr) or ""
         schema_val = type_def.get(attr) or ""
         if db_val != schema_val:
@@ -319,11 +326,16 @@ def diff_cot(type_def: dict) -> COTDiff:
     tombstoned: dict[int, dict] = {
         rf["id"]: rf for rf in type_def.get("removed_fields", [])
     }
-    db_fields: dict[int, object] = {
-        f.schema_id: f
-        for f in cot.fields.filter(schema_id__isnull=False)
-        .select_related("choice_set", "related_object_type")
-    }
+    # Single query for all fields; partition into tracked/untracked in Python.
+    db_fields: dict[int, object] = {}
+    for f in cot.fields.select_related("choice_set", "related_object_type"):
+        if f.schema_id is None:
+            diff.warnings.append(
+                f"Field {f.name!r} (pk={f.pk}) has no schema_id and cannot be "
+                "tracked by the schema diff. It will not be affected by apply operations."
+            )
+        else:
+            db_fields[f.schema_id] = f
 
     # Pre-fetch slugs for all custom-COT related_object_type references in a
     # single query to avoid one DB round-trip per object/multiobject field.
@@ -337,14 +349,6 @@ def diff_cot(type_def: dict) -> COTDiff:
         dict(CustomObjectType.objects.filter(pk__in=cot_ids).values_list("pk", "slug"))
         if cot_ids else {}
     )
-
-    # Warn about DB fields with no schema_id (invisible to the diff).
-    untracked = cot.fields.filter(schema_id__isnull=True)
-    for f in untracked:
-        diff.warnings.append(
-            f"Field {f.name!r} (pk={f.pk}) has no schema_id and cannot be "
-            "tracked by the schema diff. It will not be affected by apply operations."
-        )
 
     # ── Schema fields → ADD or ALTER ─────────────────────────────────────────
     for schema_id, schema_field in schema_fields.items():

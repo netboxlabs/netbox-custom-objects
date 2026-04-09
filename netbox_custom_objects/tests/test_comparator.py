@@ -13,7 +13,7 @@ Covers:
 - Field ALTER: related_object_filter change
 - Untracked fields (no schema_id) → warning, not REMOVE
 - DB field absent from schema AND not tombstoned → warning, not REMOVE
-- Multi-COT document
+- Multi-COT document (including empty/missing types key)
 - has_changes / has_destructive_changes / adds / removes / alters helpers
 """
 
@@ -448,6 +448,12 @@ class ComparatorMultiCOTTestCase(CustomObjectsTestCase, TestCase):
         new_ = next(d for d in diffs if d.slug == "brand-new")
         self.assertFalse(existing.is_new)
         self.assertTrue(new_.is_new)
+
+    def test_document_missing_types_key_returns_empty(self):
+        self.assertEqual(diff_document({}), [])
+
+    def test_document_empty_types_list_returns_empty(self):
+        self.assertEqual(diff_document({"types": []}), [])
 
 
 class ComparatorHelperPropertiesTestCase(CustomObjectsTestCase, TestCase):
