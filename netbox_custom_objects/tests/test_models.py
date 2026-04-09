@@ -1190,3 +1190,133 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
         finally:
             sys.argv = original_argv
             nco._migrations_checked = None
+
+    def test_get_model_converts_programming_error_to_lookup_error(self):
+        """
+        Regression: get_model() must not let ProgrammingError escape when the DB
+        schema is incomplete (e.g. a new column was added by a migration that
+        hasn't run yet).  Reproduces the failure reported in issue #456 where
+        upgrading from v0.4.6 to v0.4.7 aborted `manage.py migrate` with
+        "column netbox_custom_objects_customobjecttype.group_name does not exist".
+
+        Use a model_name with a non-existent COT ID so the dynamic model is not
+        already in the app registry; this ensures we reach the objects.get() call
+        that needs to be guarded.
+        """
+        from django.db.utils import ProgrammingError
+        from netbox_custom_objects.models import CustomObjectType
+
+        model_name = "table99998model"  # no such COT — not in the app registry
+
+        with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
+            with patch.object(CustomObjectType.objects, 'get',
+                              side_effect=ProgrammingError("column does not exist")):
+                with self.assertRaises(LookupError):
+                    self.config.get_model(model_name)
+
+    def test_get_model_converts_operational_error_to_lookup_error(self):
+        """
+        get_model() must convert OperationalError (e.g. table missing entirely)
+        to LookupError for the same reason as ProgrammingError above.
+        """
+        from django.db.utils import OperationalError
+        from netbox_custom_objects.models import CustomObjectType
+
+        model_name = "table99999model"  # no such COT — not in the app registry
+
+        with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
+            with patch.object(CustomObjectType.objects, 'get',
+                              side_effect=OperationalError("no such table")):
+                with self.assertRaises(LookupError):
+                    self.config.get_model(model_name)
+
+    def test_ready_survives_programming_error(self):
+        """
+        ready() must not propagate ProgrammingError from an incomplete DB schema.
+        Calling ready() a second time is safe — signals are re-connected idempotently
+        and the dynamic model loop is the only part that can raise here.
+        """
+        from django.db.utils import ProgrammingError
+        from netbox_custom_objects.models import CustomObjectType
+
+        with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
+            with patch.object(CustomObjectType.objects, 'all',
+                              side_effect=ProgrammingError("column does not exist")):
+                # Must not raise — bad schema should be silently skipped.
+                self.config.ready()
+
+    def test_ready_survives_operational_error(self):
+        """ready() must not propagate OperationalError from a missing table."""
+        from django.db.utils import OperationalError
+        from netbox_custom_objects.models import CustomObjectType
+
+        with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
+            with patch.object(CustomObjectType.objects, 'all',
+                              side_effect=OperationalError("no such table")):
+                self.config.ready()
+
+    def test_get_models_survives_programming_error(self):
+        """
+        get_models() must not propagate ProgrammingError when the DB schema is
+        incomplete.  The DB-driven portion yields nothing; static models already
+        in the app registry are still returned via super().get_models().
+        """
+        from django.db.utils import ProgrammingError
+        from netbox_custom_objects.models import CustomObjectType
+
+        with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
+            with patch.object(CustomObjectType.objects, 'all',
+                              side_effect=ProgrammingError("column does not exist")):
+                # Consuming the generator must not raise.
+                list(self.config.get_models())
+
+    def test_get_models_survives_operational_error(self):
+        """get_models() must not propagate OperationalError from a missing table."""
+        from django.db.utils import OperationalError
+        from netbox_custom_objects.models import CustomObjectType
+
+        with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
+            with patch.object(CustomObjectType.objects, 'all',
+                              side_effect=OperationalError("no such table")):
+                list(self.config.get_models())
+
+    def test_should_skip_returns_true_on_programming_error(self):
+        """
+        should_skip_dynamic_model_creation() must return True (skip) when the
+        migration infrastructure raises ProgrammingError, e.g. on a fresh install
+        before the django_migrations table exists.  An uncaught exception here
+        would bypass all the guards in ready(), get_model(), and get_models().
+        """
+        import netbox_custom_objects as nco
+        from django.db.utils import ProgrammingError
+
+        original_checked = nco._migrations_checked
+        nco._migrations_checked = None  # force the migration-loader path
+        try:
+            with patch('netbox_custom_objects.MigrationLoader',
+                       side_effect=ProgrammingError("relation does not exist")):
+                result = self.config.should_skip_dynamic_model_creation()
+            self.assertTrue(result)
+            # Must not be cached so the next call retries once the DB is ready.
+            self.assertIsNone(nco._migrations_checked)
+        finally:
+            nco._migrations_checked = original_checked
+
+    def test_should_skip_returns_true_on_operational_error(self):
+        """
+        should_skip_dynamic_model_creation() must return True when the migration
+        infrastructure raises OperationalError (e.g. django_migrations missing).
+        """
+        import netbox_custom_objects as nco
+        from django.db.utils import OperationalError
+
+        original_checked = nco._migrations_checked
+        nco._migrations_checked = None
+        try:
+            with patch('netbox_custom_objects.MigrationLoader',
+                       side_effect=OperationalError("no such table: django_migrations")):
+                result = self.config.should_skip_dynamic_model_creation()
+            self.assertTrue(result)
+            self.assertIsNone(nco._migrations_checked)
+        finally:
+            nco._migrations_checked = original_checked
