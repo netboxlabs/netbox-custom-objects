@@ -13,6 +13,7 @@ Covers:
 - Field ALTER: related_object_filter change
 - Untracked fields (no schema_id) → warning, not REMOVE
 - DB field absent from schema AND not tombstoned → warning, not REMOVE
+- _encode_related_object_type deleted-COT path → warning + stable fallback string
 - Multi-COT document (including empty/missing types key)
 - has_changes / has_destructive_changes / adds / removes / alters helpers
 """
@@ -21,6 +22,7 @@ from django.test import TestCase
 
 from netbox_custom_objects.comparator import (
     FieldOp,
+    _encode_related_object_type,
     diff_cot,
     diff_document,
 )
@@ -108,6 +110,14 @@ class ComparatorNewCOTTestCase(CustomObjectsTestCase, TestCase):
         result = diff_cot({"name": "empty", "slug": "empty"})
         self.assertTrue(result.is_new)
         self.assertEqual(result.field_changes, [])
+
+    def test_missing_required_keys_raises_value_error(self):
+        with self.assertRaises(ValueError):
+            diff_cot({"name": "no-slug"})
+        with self.assertRaises(ValueError):
+            diff_cot({"slug": "no-name"})
+        with self.assertRaises(ValueError):
+            diff_cot({})
 
 
 class ComparatorCOTAttrsTestCase(CustomObjectsTestCase, TestCase):
@@ -250,6 +260,8 @@ class ComparatorFieldAlterTestCase(CustomObjectsTestCase, TestCase):
             if sf["name"] == field_name:
                 sf.update(overrides)
                 break
+        else:
+            raise AssertionError(f"field {field_name!r} not found in exported schema")
         return diff_cot(type_def)
 
     def test_rename_detected(self):
@@ -398,6 +410,22 @@ class ComparatorWarningsTestCase(CustomObjectsTestCase, TestCase):
         type_def = export_cot(self.cot)
         result = diff_cot(type_def)
         self.assertEqual(result.field_changes, [])
+
+    def test_encode_related_object_type_deleted_cot_emits_warning(self):
+        """_encode_related_object_type emits a warning and returns a stable fallback string when
+        the referenced CustomObjectType no longer exists (slug not in cache).
+        This is the only warning path in comparator.py that can't be triggered
+        via diff_cot because CustomObjectType.delete() removes referencing fields
+        before deleting the ObjectType, making the state unreachable via normal
+        model deletion.
+        """
+        target = self.create_custom_object_type(name='rot-target', slug='rot-target')
+        rot = target.object_type  # ObjectType with app_label matching constants.APP_LABEL
+        warnings = []
+        result = _encode_related_object_type(rot, cot_slug_cache={}, warnings=warnings)
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("no longer exists", warnings[0])
+        self.assertIn("<deleted:", result)
 
     def test_db_field_absent_from_schema_and_not_tombstoned_emits_warning(self):
         self.create_custom_object_type_field(

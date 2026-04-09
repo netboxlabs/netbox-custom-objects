@@ -33,7 +33,10 @@ Notes
   and schema.removed_fields is ambiguous (possibly added outside the workflow)
   and generates a warning instead.
 - Type changes are included in changed_attrs but are not validated here; the
-  executor decides whether to allow or reject them.
+  executor decides whether to allow or reject them.  When the type changes,
+  type-specific attributes from the *old* DB type (e.g. validation_regex on a
+  text field being converted to integer) are not included in the diff — only
+  attributes relevant to the incoming schema type are compared.
 - related_object_type values are compared in their encoded schema form
   ("app_label/model" or "custom-objects/<slug>") so the diff output is
   round-trip compatible with the schema format.
@@ -56,7 +59,7 @@ from netbox_custom_objects.schema_format import (
 )
 
 # Matches Table<id>Model (generated model names for custom object types).
-_TABLE_MODEL_RE = re.compile(r'^table(\d+)model$', re.IGNORECASE)
+_TABLE_MODEL_RE = re.compile(r'^table(\d+)model$')
 
 # Ordered base attributes compared between DB and schema for each field.
 # Does NOT include 'name' or 'type' — those are handled separately.
@@ -134,6 +137,13 @@ class COTDiff:
 
     @property
     def has_changes(self) -> bool:
+        """True if there are attribute-level or field-level changes to apply.
+
+        Note: a brand-new COT with no fields yields ``is_new=True`` but
+        ``has_changes=False`` — there are no individual changes to apply, but
+        the COT itself must still be created.  Callers should check ``is_new``
+        independently when deciding whether to run a create operation.
+        """
         return bool(self.cot_changes or self.field_changes)
 
     @property
@@ -158,10 +168,12 @@ class COTDiff:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _encode_rot(rot: "ContentType", cot_slug_cache: dict, warnings: list) -> str:
+def _encode_related_object_type(rot: "ContentType", cot_slug_cache: dict, warnings: list) -> str:
     """
     Encode a related ObjectType FK as a schema ``related_object_type`` string.
-    Mirrors the logic in exporter._encode_related_object_type.
+    Shares the same encoding logic as ``exporter._encode_related_object_type``
+    but uses a pre-fetched slug cache and a warnings list rather than a live
+    DB query, making it safe to call in a tight loop.
 
     *cot_slug_cache* is a ``{pk: slug}`` dict pre-fetched in :func:`diff_cot`
     to avoid one DB query per object field.  If a custom COT is referenced but
@@ -240,7 +252,7 @@ def _compare_field_attrs(db_field, schema_field: dict, cot_slug_cache: dict, war
 
     if "related_object_type" in type_specific:
         dv = (
-            _encode_rot(db_field.related_object_type, cot_slug_cache, warnings)
+            _encode_related_object_type(db_field.related_object_type, cot_slug_cache, warnings)
         ) if db_field.related_object_type_id else None
         sv = schema_field.get("related_object_type")
         if dv != sv:
@@ -286,6 +298,12 @@ def diff_cot(type_def: dict) -> COTDiff:
 
     Returns a :class:`COTDiff` describing what would need to change.
     """
+    missing = [k for k in ("slug", "name") if k not in type_def]
+    if missing:
+        raise ValueError(
+            f"type_def is missing required key(s) {missing}; got keys: {list(type_def)}"
+        )
+
     from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
 
     slug = type_def["slug"]
