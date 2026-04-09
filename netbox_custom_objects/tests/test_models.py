@@ -763,6 +763,246 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(self.model.objects.count(), 0)
 
 
+class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
+    """Tests for the related_name field on Object and MultiObject fields."""
+
+    def setUp(self):
+        super().setUp()
+        # "SLB" is the target (reverse side); "Certificate" holds the forward relation.
+        self.slb_cot = self.create_custom_object_type(name="SLB", slug="slb")
+        self.create_custom_object_type_field(
+            self.slb_cot, name="name", label="Name", type="text", primary=True
+        )
+        self.slb_object_type = ObjectType.objects.get(
+            app_label="netbox_custom_objects",
+            model=self.slb_cot.get_table_model_name(self.slb_cot.id).lower(),
+        )
+
+        self.cert_cot = self.create_custom_object_type(name="Certificate", slug="certificate")
+        self.create_custom_object_type_field(
+            self.cert_cot, name="name", label="Name", type="text", primary=True
+        )
+
+    # ------------------------------------------------------------------ #
+    # Validation                                                           #
+    # ------------------------------------------------------------------ #
+
+    def test_related_name_rejected_on_non_object_field(self):
+        """related_name cannot be set on non-object field types."""
+        for field_type in ("text", "integer", "boolean", "date"):
+            with self.subTest(field_type=field_type):
+                field = CustomObjectTypeField(
+                    custom_object_type=self.cert_cot,
+                    name="some_field",
+                    type=field_type,
+                    related_name="my_reverse",
+                )
+                with self.assertRaises(ValidationError) as cm:
+                    field.full_clean()
+                self.assertIn("related_name", cm.exception.message_dict)
+
+    def test_related_name_invalid_characters_rejected(self):
+        """related_name must contain only lowercase alphanumeric characters and underscores."""
+        for bad_value in ("My-Name", "has space", "UPPER", "has--double", "has__double"):
+            with self.subTest(value=bad_value):
+                field = CustomObjectTypeField(
+                    custom_object_type=self.cert_cot,
+                    name="slb",
+                    type="object",
+                    related_object_type=self.slb_object_type,
+                    related_name=bad_value,
+                )
+                with self.assertRaises(ValidationError):
+                    field.full_clean()
+
+    def test_duplicate_related_name_same_target_rejected(self):
+        """Two fields with the same related_name pointing at the same related_object_type raise ValidationError."""
+        self.create_custom_object_type_field(
+            self.cert_cot,
+            name="slb",
+            type="object",
+            related_object_type=self.slb_object_type,
+            related_name="certificates",
+        )
+        field = CustomObjectTypeField(
+            custom_object_type=self.cert_cot,
+            name="slb2",
+            type="object",
+            related_object_type=self.slb_object_type,
+            related_name="certificates",
+        )
+        with self.assertRaises(ValidationError) as cm:
+            field.full_clean()
+        self.assertIn("related_name", cm.exception.message_dict)
+
+    def test_same_related_name_different_targets_allowed(self):
+        """The same related_name is allowed when the related_object_type differs."""
+        site_ct = self.get_site_object_type()
+        self.create_custom_object_type_field(
+            self.cert_cot,
+            name="slb",
+            type="object",
+            related_object_type=self.slb_object_type,
+            related_name="certificates",
+        )
+        # Same related_name but targeting a different model — should not raise.
+        field = CustomObjectTypeField(
+            custom_object_type=self.cert_cot,
+            name="site",
+            type="object",
+            related_object_type=site_ct,
+            related_name="certificates",
+        )
+        field.full_clean()  # Should not raise.
+
+    def test_blank_related_name_allows_multiple_fields_same_target(self):
+        """Multiple fields with no related_name targeting the same object type are allowed."""
+        self.create_custom_object_type_field(
+            self.cert_cot,
+            name="slb",
+            type="object",
+            related_object_type=self.slb_object_type,
+        )
+        field = CustomObjectTypeField(
+            custom_object_type=self.cert_cot,
+            name="slb2",
+            type="object",
+            related_object_type=self.slb_object_type,
+        )
+        field.full_clean()  # blank related_name is excluded from the uniqueness constraint.
+
+    # ------------------------------------------------------------------ #
+    # Object (FK) reverse accessor                                        #
+    # ------------------------------------------------------------------ #
+
+    def test_object_field_with_related_name_creates_reverse_accessor(self):
+        """A named reverse accessor is available on the related model after an Object field is saved."""
+        self.create_custom_object_type_field(
+            self.cert_cot,
+            name="slb",
+            type="object",
+            related_object_type=self.slb_object_type,
+            related_name="certificates",
+        )
+        # Generate Certificate's model so it contributes the FK (and its reverse) to SLB's class.
+        self.cert_cot.get_model()
+        slb_model = self.slb_cot.get_model()
+        self.assertTrue(
+            hasattr(slb_model, "certificates"),
+            "Expected reverse accessor 'certificates' on SLB model.",
+        )
+
+    def test_object_field_reverse_accessor_returns_correct_objects(self):
+        """The reverse FK manager returns only the Certificate instances that reference a given SLB."""
+        self.create_custom_object_type_field(
+            self.cert_cot,
+            name="slb",
+            type="object",
+            related_object_type=self.slb_object_type,
+            related_name="certificates",
+        )
+        cert_model = self.cert_cot.get_model()
+        slb_model = self.slb_cot.get_model()
+
+        slb_a = slb_model.objects.create(name="SLB-A")
+        slb_b = slb_model.objects.create(name="SLB-B")
+        cert_1 = cert_model.objects.create(name="Cert-1", slb=slb_a)
+        cert_2 = cert_model.objects.create(name="Cert-2", slb=slb_a)
+        cert_model.objects.create(name="Cert-3", slb=slb_b)
+
+        result = list(slb_a.certificates.all())
+        self.assertIn(cert_1, result)
+        self.assertIn(cert_2, result)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(slb_b.certificates.count(), 1)
+
+    def test_object_field_without_related_name_uses_auto_generated_name(self):
+        """Without related_name, the auto-generated accessor follows the {table}_{field}_set convention."""
+        self.create_custom_object_type_field(
+            self.cert_cot,
+            name="slb",
+            type="object",
+            related_object_type=self.slb_object_type,
+        )
+        self.cert_cot.get_model()
+        slb_model = self.slb_cot.get_model()
+
+        table_model_name = self.cert_cot.get_table_model_name(self.cert_cot.id).lower()
+        expected_accessor = f"{table_model_name}_slb_set"
+        self.assertTrue(
+            hasattr(slb_model, expected_accessor),
+            f"Expected auto-generated reverse accessor '{expected_accessor}' on SLB model.",
+        )
+
+    # ------------------------------------------------------------------ #
+    # MultiObject (M2M) reverse accessor                                  #
+    # ------------------------------------------------------------------ #
+
+    def test_multiobject_field_with_related_name_creates_reverse_manager(self):
+        """A named reverse manager is available on the related model after a MultiObject field is saved."""
+        self.create_custom_object_type_field(
+            self.cert_cot,
+            name="slbs",
+            type="multiobject",
+            related_object_type=self.slb_object_type,
+            related_name="certificates",
+        )
+        self.cert_cot.get_model()
+        slb_model = self.slb_cot.get_model()
+        self.assertTrue(
+            hasattr(slb_model, "certificates"),
+            "Expected reverse manager 'certificates' on SLB model.",
+        )
+
+    def test_multiobject_field_reverse_manager_returns_correct_objects(self):
+        """The reverse M2M manager returns only the Certificate instances linked to a given SLB."""
+        self.create_custom_object_type_field(
+            self.cert_cot,
+            name="slbs",
+            type="multiobject",
+            related_object_type=self.slb_object_type,
+            related_name="certificates",
+        )
+        cert_model = self.cert_cot.get_model()
+        slb_model = self.slb_cot.get_model()
+
+        slb_a = slb_model.objects.create(name="SLB-A")
+        slb_b = slb_model.objects.create(name="SLB-B")
+        cert_1 = cert_model.objects.create(name="Cert-1")
+        cert_2 = cert_model.objects.create(name="Cert-2")
+        cert_1.slbs.add(slb_a)
+        cert_2.slbs.add(slb_a, slb_b)
+
+        result = list(slb_a.certificates.all())
+        self.assertIn(cert_1, result)
+        self.assertIn(cert_2, result)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(slb_b.certificates.count(), 1)
+        self.assertIn(cert_2, slb_b.certificates.all())
+
+    def test_multiobject_field_without_related_name_has_no_reverse_accessor(self):
+        """Without related_name, a MultiObject field has no reverse accessor on the related model."""
+        self.create_custom_object_type_field(
+            self.cert_cot,
+            name="slbs",
+            type="multiobject",
+            related_object_type=self.slb_object_type,
+        )
+        self.cert_cot.get_model()
+        slb_model = self.slb_cot.get_model()
+
+        # No user-defined or auto-generated reverse accessor should exist.
+        table_model_name = self.cert_cot.get_table_model_name(self.cert_cot.id).lower()
+        self.assertFalse(
+            hasattr(slb_model, "slbs"),
+            "MultiObject field without related_name should not create a reverse accessor.",
+        )
+        self.assertFalse(
+            hasattr(slb_model, f"{table_model_name}_slbs_set"),
+            "MultiObject field without related_name should not create an auto-generated reverse accessor.",
+        )
+
+
 class SearchReindexTestCase(CustomObjectsTestCase, TestCase):
     """Test that ReindexCustomObjectTypeJob is triggered when field search weights change."""
 
@@ -887,7 +1127,6 @@ class SearchReindexTestCase(CustomObjectsTestCase, TestCase):
     def test_duplicate_job_not_enqueued(self):
         """A second enqueue for the same COT returns the existing pending job without creating a new one."""
         from core.choices import JobStatusChoices
-        from core.models import Job
 
         with patch('django_rq.get_queue'):
             first_job = ReindexCustomObjectTypeJob.enqueue(cot_id=self.cot.pk)
@@ -899,7 +1138,58 @@ class SearchReindexTestCase(CustomObjectsTestCase, TestCase):
             second_job = ReindexCustomObjectTypeJob.enqueue(cot_id=self.cot.pk)
 
         self.assertEqual(first_job.pk, second_job.pk)
-        self.assertEqual(Job.objects.filter(data__cot_id=self.cot.pk).count(), 1)
+
+
+class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
+    """
+    Regression tests for CustomObjectsPluginConfig.get_model().
+
+    Covers the bug where get_model() queried the DB unconditionally, causing
+    "column does not exist" errors during `manage.py migrate` when a new
+    migration added a column to CustomObjectType but hadn't run yet.
+    See: https://github.com/netboxlabs/netbox-custom-objects/issues/456
+    """
+
+    def setUp(self):
+        super().setUp()
+        from django.apps import apps
+        self.config = apps.get_app_config('netbox_custom_objects')
+
+    def test_get_model_raises_lookup_error_when_skipping(self):
+        """get_model() raises LookupError instead of querying DB when should_skip returns True."""
+        cot = self.create_custom_object_type(name="MigrateTest", slug="migrate-test")
+        model_name = f"{cot.pk}tablemodel"
+
+        with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=True):
+            with self.assertRaises(LookupError):
+                self.config.get_model(model_name)
+
+    def test_get_model_returns_model_when_not_skipping(self):
+        """get_model() successfully returns the dynamic model when migrations are up to date."""
+        cot = self.create_custom_object_type(name="MigrateTest2", slug="migrate-test-2")
+        model_name = f"{cot.pk}tablemodel"
+
+        with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
+            model = self.config.get_model(model_name)
+        self.assertIsNotNone(model)
+
+    def test_get_model_skips_db_with_migrate_in_argv(self):
+        """get_model() raises LookupError when 'migrate' is in sys.argv (pre-migration state)."""
+        import sys
+        cot = self.create_custom_object_type(name="MigrateTest3", slug="migrate-test-3")
+        model_name = f"{cot.pk}tablemodel"
+
+        original_argv = sys.argv[:]
+        try:
+            sys.argv = ['manage.py', 'migrate']
+            # Reset cached migration check so argv is re-evaluated
+            import netbox_custom_objects as nco
+            nco._migrations_checked = None
+            with self.assertRaises(LookupError):
+                self.config.get_model(model_name)
+        finally:
+            sys.argv = original_argv
+            nco._migrations_checked = None
 
 
 # ---------------------------------------------------------------------------

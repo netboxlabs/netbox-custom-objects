@@ -17,11 +17,11 @@ from pathlib import Path
 
 from django.test import TestCase, TransactionTestCase
 
-from netbox_custom_objects.exporter import export_cot, export_cots
+from netbox_custom_objects.schema.exporter import export_cot, export_cots
 from netbox_custom_objects.models import CustomObjectTypeField
-from netbox_custom_objects.schema_format import SCHEMA_FORMAT_VERSION
+from netbox_custom_objects.schema.format import SCHEMA_FORMAT_VERSION
 
-from .base import CustomObjectsTestCase, TransactionCleanupMixin
+from ..base import CustomObjectsTestCase, TransactionCleanupMixin
 
 try:
     import jsonschema
@@ -30,7 +30,7 @@ except ImportError:
     HAS_JSONSCHEMA = False
 
 _SCHEMA_PATH = (
-    Path(__file__).resolve().parent.parent / "schemas" / "cot_schema_v1.json"
+    Path(__file__).resolve().parent.parent.parent / "schema" / "cot_schema_v1.json"
 )
 
 
@@ -334,7 +334,7 @@ class ExporterSchemaIdTestCase(
         # Force schema_id to None after creation (simulating a pre-feature field)
         CustomObjectTypeField.objects.filter(pk=field.pk).update(schema_id=None)
 
-        with self.assertLogs('netbox_custom_objects.exporter', level='WARNING') as cm:
+        with self.assertLogs('netbox_custom_objects.schema.exporter', level='WARNING') as cm:
             cot_def = export_cot(cot)
 
         self.assertNotIn("fields", cot_def)

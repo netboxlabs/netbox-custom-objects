@@ -16,7 +16,7 @@ from django.db.models.fields import NOT_PROVIDED
 from django.test import TestCase, TransactionTestCase
 
 from netbox_custom_objects.models import CustomObjectTypeField
-from netbox_custom_objects.schema_format import (
+from netbox_custom_objects.schema.format import (
     CHOICES_TO_SCHEMA_TYPE,
     FIELD_DEFAULTS,
     SCHEMA_FORMAT_VERSION,
@@ -24,7 +24,7 @@ from netbox_custom_objects.schema_format import (
 )
 from extras.choices import CustomFieldTypeChoices
 
-from .base import CustomObjectsTestCase, TransactionCleanupMixin
+from ..base import CustomObjectsTestCase, TransactionCleanupMixin
 
 # ---------------------------------------------------------------------------
 # Optional jsonschema dependency — skip structural-validation tests if absent
@@ -36,7 +36,7 @@ except ImportError:
     HAS_JSONSCHEMA = False
 
 _SCHEMA_PATH = (
-    Path(__file__).resolve().parent.parent / "schemas" / "cot_schema_v1.json"
+    Path(__file__).resolve().parent.parent.parent / "schema" / "cot_schema_v1.json"
 )
 
 
@@ -173,7 +173,7 @@ class SchemaIdBackfillTestCase(
     TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
 ):
     """
-    Tests for the 0006_backfill_schema_ids migration logic.
+    Tests for the 0008_backfill_schema_ids migration logic.
 
     Rather than exercising the migration runner itself (which would require
     replaying the full migration history), these tests call the same backfill
@@ -185,7 +185,7 @@ class SchemaIdBackfillTestCase(
         """Execute the backfill function directly against the live DB."""
         import importlib
         mod = importlib.import_module(
-            'netbox_custom_objects.migrations.0006_backfill_schema_ids'
+            'netbox_custom_objects.migrations.0008_backfill_schema_ids'
         )
         # The function accepts (apps, schema_editor) but only uses apps.get_model().
         # We pass a lightweight shim that delegates to the real models.

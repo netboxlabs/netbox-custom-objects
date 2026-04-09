@@ -13,32 +13,21 @@ Covers:
 """
 
 
+import unittest
+
 from django.urls import reverse
+from django.test import TransactionTestCase
 from rest_framework import status
 from rest_framework.test import APIClient
-from django.test import TransactionTestCase
 
-from users.models import Token
+from netbox_custom_objects.api.views import _HAS_JSONSCHEMA
+
 from utilities.testing import create_test_user
 
-from netbox_custom_objects.exporter import export_cot
+from netbox_custom_objects.schema.exporter import export_cot
 from netbox_custom_objects.models import CustomObjectType
 
-from .base import CustomObjectsTestCase, TransactionCleanupMixin
-
-
-# ---------------------------------------------------------------------------
-# Token helper (copied from test_api.py to avoid cross-test import)
-# ---------------------------------------------------------------------------
-
-def _create_token(user):
-    try:
-        from users.choices import TokenVersionChoices
-        token = Token(version=TokenVersionChoices.V1, user=user)
-    except ImportError:
-        token = Token(user=user)
-    token.save()
-    return token
+from ..base import CustomObjectsTestCase, TransactionCleanupMixin, create_api_token
 
 
 # ---------------------------------------------------------------------------
@@ -51,7 +40,7 @@ class _SchemaAPIBase(TransactionCleanupMixin, CustomObjectsTestCase, Transaction
     def setUp(self):
         super().setUp()
         self.user = create_test_user('schema_api_user')
-        self.token = _create_token(self.user)
+        self.token = create_api_token(self.user)
         try:
             token_key = self.token.token  # NetBox ≥ 4.5
         except AttributeError:
@@ -69,6 +58,12 @@ class _SchemaAPIBase(TransactionCleanupMixin, CustomObjectsTestCase, Transaction
 
     def _apply_body(self, schema_doc, allow_destructive=False):
         return {"schema": schema_doc, "allow_destructive": allow_destructive}
+
+    @staticmethod
+    def _next_field_id(cot):
+        # next_schema_id stores the *last assigned* ID; +1 is the next available one,
+        # mirroring the auto-assign logic in CustomObjectTypeField.save().
+        return cot.next_schema_id + 1
 
 
 # ---------------------------------------------------------------------------
@@ -116,7 +111,7 @@ class SchemaPreviewTestCase(_SchemaAPIBase):
     def test_preview_detects_field_add(self):
         self.cot.refresh_from_db()
         type_def = export_cot(self.cot)
-        next_id = self.cot.next_schema_id + 1
+        next_id = self._next_field_id(self.cot)
         type_def["fields"].append({"id": next_id, "name": "beta", "type": "text"})
         resp = self.client.post(
             self.preview_url,
@@ -148,7 +143,7 @@ class SchemaPreviewTestCase(_SchemaAPIBase):
     def test_preview_does_not_modify_db(self):
         self.cot.refresh_from_db()
         type_def = export_cot(self.cot)
-        next_id = self.cot.next_schema_id + 1
+        next_id = self._next_field_id(self.cot)
         type_def["fields"].append({"id": next_id, "name": "ghost", "type": "text"})
         self.client.post(
             self.preview_url,
@@ -176,16 +171,15 @@ class SchemaPreviewTestCase(_SchemaAPIBase):
         )
         self.assertIn(resp.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
 
+    @unittest.skipUnless(_HAS_JSONSCHEMA, "jsonschema not installed")
     def test_preview_invalid_schema_doc_returns_400(self):
-        # schema_version must be "1" (const)
+        # schema_version must be "1" (const in cot_schema_v1.json)
         resp = self.client.post(
             self.preview_url,
             data={"schema_version": "99", "types": [{"name": "x", "slug": "x"}]},
             format="json",
         )
-        # If jsonschema is installed this returns 400; otherwise passes through.
-        # Either way it should not crash (500).
-        self.assertNotEqual(resp.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
     def test_preview_destructive_change_does_not_raise_error(self):
         """Preview reports has_destructive_changes=True but does NOT raise 409."""
@@ -249,7 +243,7 @@ class SchemaApplyTestCase(_SchemaAPIBase):
         self.create_custom_object_type_field(cot, name='exists', type='text')
         cot.refresh_from_db()
         type_def = export_cot(cot)
-        next_id = cot.next_schema_id + 1
+        next_id = self._next_field_id(cot)
         type_def["fields"].append({"id": next_id, "name": "added", "type": "text"})
         schema_doc = {"schema_version": "1", "types": [type_def]}
         resp = self.client.post(self.apply_url, data=self._apply_body(schema_doc), format="json")
@@ -336,7 +330,7 @@ class SchemaApplyTestCase(_SchemaAPIBase):
         self.create_custom_object_type_field(cot, name='ok', type='text')
         cot.refresh_from_db()
         type_def = export_cot(cot)
-        next_id = cot.next_schema_id + 1
+        next_id = self._next_field_id(cot)
         type_def["fields"].append({
             "id": next_id, "name": "bad_obj", "type": "object",
             "related_object_type": "does/notexist",
@@ -351,7 +345,7 @@ class SchemaApplyTestCase(_SchemaAPIBase):
         self.create_custom_object_type_field(cot, name='ok', type='text')
         cot.refresh_from_db()
         type_def = export_cot(cot)
-        next_id = cot.next_schema_id + 1
+        next_id = self._next_field_id(cot)
         type_def["fields"].append({
             "id": next_id, "name": "bad_sel", "type": "select",
             "choice_set": "NoSuchSet",
@@ -368,3 +362,25 @@ class SchemaApplyTestCase(_SchemaAPIBase):
         self.client.post(self.apply_url, data=self._apply_body(schema_doc), format="json")
         cot.refresh_from_db()
         self.assertIsNotNone(cot.schema_document)
+
+    def test_apply_noop_returns_200(self):
+        cot = self.create_custom_object_type(name='applynoop', slug='apply-noop')
+        self.create_custom_object_type_field(cot, name='stable', type='text')
+        type_def = export_cot(cot)
+        schema_doc = {"schema_version": "1", "types": [type_def]}
+        # First apply initialises schema_document; second apply is a true no-op.
+        self.client.post(self.apply_url, data=self._apply_body(schema_doc), format="json")
+        resp = self.client.post(self.apply_url, data=self._apply_body(schema_doc), format="json")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertTrue(resp.data["applied"])
+        self.assertFalse(resp.data["diffs"][0]["has_changes"])
+
+    def test_apply_allow_destructive_string_returns_400(self):
+        schema_doc = {"schema_version": "1", "types": []}
+        resp = self.client.post(
+            self.apply_url,
+            data={"schema": schema_doc, "allow_destructive": "true"},
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("allow_destructive", resp.data)

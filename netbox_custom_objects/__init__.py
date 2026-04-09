@@ -70,7 +70,7 @@ class CustomObjectsPluginConfig(PluginConfig):
     name = "netbox_custom_objects"
     verbose_name = "Custom Objects"
     description = "A plugin to manage custom objects in NetBox"
-    version = "0.4.8"
+    version = "0.4.9"
     author = 'Netbox Labs'
     author_email = 'support@netboxlabs.com'
     base_url = "custom-objects"
@@ -205,6 +205,12 @@ class CustomObjectsPluginConfig(PluginConfig):
         # only do database calls if we are sure the app is ready to avoid
         # Django warnings
         if "table" not in model_name.lower() or "model" not in model_name.lower():
+            raise LookupError(
+                "App '%s' doesn't have a '%s' model." % (self.label, model_name)
+            )
+
+        # Guard against querying the DB when migrations haven't run yet
+        if self.should_skip_dynamic_model_creation():
             raise LookupError(
                 "App '%s' doesn't have a '%s' model." % (self.label, model_name)
             )

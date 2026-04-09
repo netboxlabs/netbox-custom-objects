@@ -1,5 +1,6 @@
 import json
-import os
+import logging
+from pathlib import Path
 
 from django.contrib.contenttypes.models import ContentType
 from django.http import Http404
@@ -13,20 +14,21 @@ from rest_framework.views import APIView
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.exceptions import ValidationError
 
+from netbox.api.authentication import IsAuthenticatedOrLoginNotRequired, TokenWritePermission
+
 from netbox_custom_objects.filtersets import get_filterset_class
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.utilities import is_in_branch
 
 from . import serializers
 
+logger = logging.getLogger(__name__)
+
 # ---------------------------------------------------------------------------
 # Schema document helpers
 # ---------------------------------------------------------------------------
 
-_SCHEMA_FILE = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)),
-    "schemas", "cot_schema_v1.json",
-)
+_SCHEMA_FILE = Path(__file__).parent.parent / "schema" / "cot_schema_v1.json"
 
 try:
     import jsonschema as _jsonschema
@@ -34,7 +36,8 @@ try:
         _COT_SCHEMA = json.load(_f)
     _VALIDATOR = _jsonschema.Draft202012Validator(_COT_SCHEMA)
     _HAS_JSONSCHEMA = True
-except Exception:  # jsonschema not installed or schema file missing
+except (ImportError, OSError, json.JSONDecodeError) as exc:
+    logger.warning("COT schema validation unavailable: %s", exc)
     _HAS_JSONSCHEMA = False
     _VALIDATOR = None
 
@@ -293,10 +296,12 @@ class SchemaPreviewView(APIView):
         }
     """
 
-    _ignore_model_permissions = True
+    permission_classes = [IsAuthenticatedOrLoginNotRequired]
 
     def post(self, request, *args, **kwargs):
-        from netbox_custom_objects.comparator import diff_document  # noqa: PLC0415
+        # Deferred import: the schema package imports Django models at module level, which
+        # triggers app-registry access before it is ready if imported at the top of views.py.
+        from netbox_custom_objects.schema.comparator import diff_document  # noqa: PLC0415
 
         schema_doc = request.data
         _validate_schema_doc(schema_doc)
@@ -346,20 +351,36 @@ class SchemaApplyView(APIView):
 
     **400 Bad Request** — circular COT dependency, unresolvable FK target,
     or invalid schema document structure.
+
+    Unexpected DB errors (e.g. ``IntegrityError`` from a constraint violation
+    unrelated to the COT schema logic) are not caught and will surface as
+    **500 Internal Server Error**.  The entire apply is wrapped in
+    ``transaction.atomic()``, so any such failure leaves the DB unchanged.
     """
 
-    _ignore_model_permissions = True
+    permission_classes = [IsAuthenticatedOrLoginNotRequired, TokenWritePermission]
 
     def post(self, request, *args, **kwargs):
-        from netbox_custom_objects.executor import (  # noqa: PLC0415
+        # TODO: Schema apply is blocked while in a branch context because the executor
+        # performs direct DDL (ALTER/DROP TABLE) that is not branch-aware.  When branching
+        # is extended to support schema operations, remove this guard and wire up the
+        # appropriate branch-scoped apply path.
+        if is_in_branch():
+            raise ValidationError(BRANCH_ACTIVE_ERROR_MESSAGE)
+
+        # Deferred import: same app-registry concern as the comparator import above.
+        from netbox_custom_objects.schema.executor import (  # noqa: PLC0415
             apply_document,
             CircularDependencyError,
             DestructiveChangesError,
             UnknownChoiceSetError,
+            UnknownFieldTypeError,
             UnknownObjectTypeError,
         )
 
-        allow_destructive = bool(request.data.get("allow_destructive", False))
+        allow_destructive = request.data.get("allow_destructive", False)
+        if not isinstance(allow_destructive, bool):
+            raise ValidationError({"allow_destructive": _("'allow_destructive' must be a boolean.")})
         schema_doc = request.data.get("schema")
         if not isinstance(schema_doc, dict):
             raise ValidationError(
@@ -384,7 +405,7 @@ class SchemaApplyView(APIView):
                 {"error": "circular_dependency", "detail": str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        except (UnknownChoiceSetError, UnknownObjectTypeError) as exc:
+        except (UnknownChoiceSetError, UnknownFieldTypeError, UnknownObjectTypeError) as exc:
             return Response(
                 {"error": "unresolvable_reference", "detail": str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
