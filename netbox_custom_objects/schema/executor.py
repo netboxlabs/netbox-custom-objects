@@ -33,8 +33,9 @@ import logging
 from django.db import transaction
 
 from netbox_custom_objects import constants
-from netbox_custom_objects.schema_format import (
+from netbox_custom_objects.schema.format import (
     CUSTOM_OBJECTS_APP_LABEL_SLUG,
+    FIELD_BASE_ATTRS,
     FIELD_DEFAULTS,
     FIELD_TYPE_ATTRS,
     SCHEMA_FORMAT_VERSION,
@@ -162,6 +163,10 @@ def _resolve_related_object_type(rot_str: str):
                 f"ObjectType for COT {slug!r} (model={model_name!r}) not found."
             )
     else:
+        if "/" not in rot_str:
+            raise UnknownObjectTypeError(
+                f"related_object_type {rot_str!r} is not in 'app_label/model' format."
+            )
         app_label, model = rot_str.split("/", 1)
         try:
             return ObjectType.objects.get(app_label=app_label, model=model)
@@ -174,26 +179,6 @@ def _resolve_related_object_type(rot_str: str):
 # ---------------------------------------------------------------------------
 # Schema-field → model-field kwargs conversion
 # ---------------------------------------------------------------------------
-
-_FIELD_BASE_ATTRS = (
-    "label",
-    "description",
-    "group_name",
-    "primary",
-    "required",
-    "unique",
-    "default",
-    "weight",
-    "search_weight",
-    "filter_logic",
-    "ui_visible",
-    "ui_editable",
-    "is_cloneable",
-    "deprecated",
-    "deprecated_since",
-    "scheduled_removal",
-)
-
 
 def _schema_def_to_field_kwargs(schema_def: dict) -> dict:
     """
@@ -217,7 +202,7 @@ def _schema_def_to_field_kwargs(schema_def: dict) -> dict:
     }
 
     # Base scalar attributes — use FIELD_DEFAULTS when absent from schema_def.
-    for attr in _FIELD_BASE_ATTRS:
+    for attr in FIELD_BASE_ATTRS:
         kwargs[attr] = schema_def.get(attr, FIELD_DEFAULTS.get(attr))
 
     # Type-specific attributes — only include those valid for this field type.
@@ -373,7 +358,7 @@ def _sync_next_schema_id(cot, diff) -> None:
 
     Uses ``QuerySet.update()`` to avoid dispatching ``post_save``.
     """
-    from netbox_custom_objects.comparator import FieldOp  # noqa: PLC0415
+    from netbox_custom_objects.schema.comparator import FieldOp  # noqa: PLC0415
     from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
 
     added_ids = [fc.schema_id for fc in diff.field_changes if fc.op is FieldOp.ADD]
@@ -443,7 +428,7 @@ def _phase2_fields(ordered_diffs, cot_map, *, allow_destructive: bool) -> None:
     All COT tables are guaranteed to exist at this point (created in Phase 1),
     so cross-COT object-field references can be resolved freely.
     """
-    from netbox_custom_objects.comparator import FieldOp  # noqa: PLC0415
+    from netbox_custom_objects.schema.comparator import FieldOp  # noqa: PLC0415
 
     for diff in ordered_diffs:
         cot = cot_map[diff.slug]
@@ -521,7 +506,7 @@ def apply_document(
     objects that were computed and applied (regardless of whether each had
     changes).
     """
-    from netbox_custom_objects.comparator import diff_document  # noqa: PLC0415
+    from netbox_custom_objects.schema.comparator import diff_document  # noqa: PLC0415
 
     diffs = diff_document(schema_doc)
     type_defs_by_slug = {

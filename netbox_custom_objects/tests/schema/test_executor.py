@@ -15,12 +15,12 @@ Covers:
 
 from django.test import SimpleTestCase, TransactionTestCase
 
-from netbox_custom_objects.comparator import (
+from netbox_custom_objects.schema.comparator import (
     COTDiff,
     FieldChange,
     FieldOp,
 )
-from netbox_custom_objects.executor import (
+from netbox_custom_objects.schema.executor import (
     CircularDependencyError,
     DestructiveChangesError,
     UnknownChoiceSetError,
@@ -29,10 +29,10 @@ from netbox_custom_objects.executor import (
     apply_document,
     apply_diffs,
 )
-from netbox_custom_objects.exporter import export_cot
+from netbox_custom_objects.schema.exporter import export_cot
 from netbox_custom_objects.models import CustomObjectType
 
-from .base import CustomObjectsTestCase, TransactionCleanupMixin
+from ..base import CustomObjectsTestCase, TransactionCleanupMixin
 
 
 # ---------------------------------------------------------------------------
@@ -669,7 +669,7 @@ class ExecutorApplyDiffsTestCase(_ExecutorTestBase):
 
     def test_apply_diffs_with_type_defs_by_slug(self):
         """apply_diffs works with pre-computed diffs and a type_defs_by_slug map."""
-        from netbox_custom_objects.comparator import diff_document
+        from netbox_custom_objects.schema.comparator import diff_document
 
         cot = self.create_custom_object_type(name='directdiff', slug='direct-diff')
         self.create_custom_object_type_field(cot, name='alpha', type='text')
@@ -687,7 +687,7 @@ class ExecutorApplyDiffsTestCase(_ExecutorTestBase):
         self.assertTrue(cot.fields.filter(name="beta").exists())
 
     def test_apply_diffs_raises_destructive_without_flag(self):
-        from netbox_custom_objects.comparator import diff_document
+        from netbox_custom_objects.schema.comparator import diff_document
 
         cot = self.create_custom_object_type(name='diffdest', slug='diff-dest')
         f = self.create_custom_object_type_field(cot, name='bye', type='text')

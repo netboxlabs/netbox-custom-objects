@@ -25,7 +25,7 @@ import logging
 import re
 
 from netbox_custom_objects import constants
-from netbox_custom_objects.schema_format import (
+from netbox_custom_objects.schema.format import (
     CHOICES_TO_SCHEMA_TYPE,
     CUSTOM_OBJECTS_APP_LABEL_SLUG,
     FIELD_DEFAULTS,

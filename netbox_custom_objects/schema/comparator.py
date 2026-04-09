@@ -51,8 +51,9 @@ from netbox_custom_objects import constants
 
 if TYPE_CHECKING:
     from django.contrib.contenttypes.models import ContentType
-from netbox_custom_objects.schema_format import (
+from netbox_custom_objects.schema.format import (
     CUSTOM_OBJECTS_APP_LABEL_SLUG,
+    FIELD_BASE_ATTRS,
     FIELD_DEFAULTS,
     FIELD_TYPE_ATTRS,
     SCHEMA_TYPE_TO_CHOICES,
@@ -61,26 +62,6 @@ from netbox_custom_objects.schema_format import (
 # Matches Table<id>Model (generated model names for custom object types).
 _TABLE_MODEL_RE = re.compile(r'^table(\d+)model$')
 
-# Ordered base attributes compared between DB and schema for each field.
-# Does NOT include 'name' or 'type' — those are handled separately.
-_FIELD_BASE_ATTRS = (
-    "label",
-    "description",
-    "group_name",
-    "primary",
-    "required",
-    "unique",
-    "default",
-    "weight",
-    "search_weight",
-    "filter_logic",
-    "ui_visible",
-    "ui_editable",
-    "is_cloneable",
-    "deprecated",
-    "deprecated_since",
-    "scheduled_removal",
-)
 
 # COT-level attributes that may change between schema versions.
 # Each maps to its schema-absent default (empty string).
@@ -217,7 +198,7 @@ def _compare_field_attrs(db_field, schema_field: dict, cot_slug_cache: dict, war
         changes["type"] = (db_field.type, expected_choice)
 
     # ── base scalar attributes ───────────────────────────────────────────────
-    for attr in _FIELD_BASE_ATTRS:
+    for attr in FIELD_BASE_ATTRS:
         db_val = getattr(db_field, attr)
         schema_val = schema_field.get(attr, FIELD_DEFAULTS.get(attr))
         if db_val != schema_val:
