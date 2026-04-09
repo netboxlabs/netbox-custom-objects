@@ -235,7 +235,9 @@ def _compare_field_attrs(db_field, schema_field: dict, cot_slug_cache: dict, war
             changes["choice_set"] = (dv, sv)
 
     if "related_object_type" in type_specific:
-        dv = _encode_rot(db_field.related_object_type, cot_slug_cache, warnings) if db_field.related_object_type_id else None
+        dv = (
+            _encode_rot(db_field.related_object_type, cot_slug_cache, warnings)
+        ) if db_field.related_object_type_id else None
         sv = schema_field.get("related_object_type")
         if dv != sv:
             changes["related_object_type"] = (dv, sv)
