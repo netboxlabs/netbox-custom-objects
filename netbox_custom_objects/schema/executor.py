@@ -500,7 +500,7 @@ def apply_diffs(
         # Finalise: persist schema_document and sync next_schema_id counters.
         for diff in ordered:
             cot = cot_map[diff.slug]
-            if diff.is_new or diff.has_changes:
+            if diff.is_new or diff.has_changes or not cot.schema_document:
                 _update_schema_document(cot, type_defs_by_slug[diff.slug])
             _sync_next_schema_id(cot, diff)
 
