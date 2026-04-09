@@ -17,7 +17,7 @@ class Migration(migrations.Migration):
             field=models.CharField(
                 blank=True,
                 max_length=50,
-                validators=[netbox_custom_objects.models._validate_semver],
+                validators=[netbox_custom_objects.models.validate_pep440],
             ),
         ),
         migrations.AlterField(
@@ -26,7 +26,7 @@ class Migration(migrations.Migration):
             field=models.CharField(
                 blank=True,
                 max_length=50,
-                validators=[netbox_custom_objects.models._validate_semver],
+                validators=[netbox_custom_objects.models.validate_pep440],
             ),
         ),
         migrations.AlterField(
@@ -35,12 +35,7 @@ class Migration(migrations.Migration):
             field=models.CharField(
                 blank=True,
                 max_length=50,
-                validators=[netbox_custom_objects.models._validate_semver],
+                validators=[netbox_custom_objects.models.validate_pep440],
             ),
-        ),
-        migrations.AlterField(
-            model_name='customobjecttypefield',
-            name='schema_id',
-            field=models.PositiveSmallIntegerField(blank=True, null=True),
         ),
     ]

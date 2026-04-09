@@ -164,8 +164,8 @@ class CustomObject(
         return reverse(cls._get_viewname(action, rest_api), kwargs=kwargs)
 
 
-def _validate_semver(value):
-    """Validate that *value* is a valid PEP 440 / semver-style version string."""
+def validate_pep440(value):
+    """Validate that *value* is a valid PEP 440 version string."""
     if not value:
         return
     try:
@@ -212,7 +212,7 @@ class CustomObjectType(NetBoxModel):
         verbose_name=_('comments'),
         blank=True
     )
-    version = models.CharField(max_length=50, blank=True, validators=[_validate_semver])
+    version = models.CharField(max_length=50, blank=True, validators=[validate_pep440])
     verbose_name = models.CharField(max_length=100, blank=True)
     verbose_name_plural = models.CharField(max_length=100, blank=True)
     slug = models.SlugField(max_length=100, unique=True, db_index=True, blank=False)
@@ -1012,14 +1012,14 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         blank=True,
         verbose_name=_("deprecated since"),
         help_text=_("Schema version in which this field was marked deprecated (e.g. '2.0.0')."),
-        validators=[_validate_semver],
+        validators=[validate_pep440],
     )
     scheduled_removal = models.CharField(
         max_length=50,
         blank=True,
         verbose_name=_("scheduled removal"),
         help_text=_("Schema version in which this field is planned to be removed (e.g. '3.0.0')."),
-        validators=[_validate_semver],
+        validators=[validate_pep440],
     )
 
     clone_fields = ("custom_object_type",)

@@ -6,6 +6,7 @@ from django.urls import reverse
 
 from utilities.testing import APIViewTestCases, create_test_user
 from rest_framework import status
+from rest_framework.test import APIClient
 
 from netbox_custom_objects.models import CustomObjectType
 from .base import CustomObjectsTestCase
@@ -959,3 +960,92 @@ class ContextFieldApiTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIsNotNone(response.data['_context'])
         self.assertEqual(response.data['_context']['display'], 'Dave')
+
+
+# ---------------------------------------------------------------------------
+# PEP 440 version string validation — API layer (issue #392)
+# ---------------------------------------------------------------------------
+
+class Pep440APIValidationTestCase(CustomObjectsTestCase, TestCase):
+    """
+    Verify that ``validate_pep440`` surfaces as a 400 at the API layer for
+    ``CustomObjectType.version`` and ``CustomObjectTypeField.deprecated_since``
+    / ``scheduled_removal``.
+
+    DRF's ModelSerializer copies model-field validators into the serializer
+    field, so these should be enforced during deserialization without any
+    extra serializer code.
+    """
+
+    def setUp(self):
+        super().setUp()
+        token_key = create_token(self.user)
+        self.client = APIClient()
+        self.client.credentials(HTTP_AUTHORIZATION=f'Token {token_key}')
+
+        # Permission to create/change CustomObjectType records.
+        add_cot_perm = ObjectPermission(name='pep440_add_cot', actions=['add', 'change'])
+        add_cot_perm.save()
+        add_cot_perm.users.add(self.user)
+        add_cot_perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
+
+        # Permission to change CustomObjectTypeField records.
+        from netbox_custom_objects.models import CustomObjectTypeField  # noqa: PLC0415
+        change_field_perm = ObjectPermission(name='pep440_change_field', actions=['add', 'change'])
+        change_field_perm.save()
+        change_field_perm.users.add(self.user)
+        change_field_perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectTypeField))
+
+    # ------------------------------------------------------------------
+    # CustomObjectType.version
+    # ------------------------------------------------------------------
+
+    def test_create_cot_invalid_version_returns_400(self):
+        url = reverse('plugins-api:netbox_custom_objects-api:customobjecttype-list')
+        data = {'name': 'vertest', 'slug': 'ver-test', 'version': 'not-a-version'}
+        response = self.client.post(url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('version', response.data)
+
+    def test_create_cot_valid_version_accepted(self):
+        url = reverse('plugins-api:netbox_custom_objects-api:customobjecttype-list')
+        data = {'name': 'vertest2', 'slug': 'ver-test-2', 'version': '1.2.3'}
+        response = self.client.post(url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+    # ------------------------------------------------------------------
+    # CustomObjectTypeField.deprecated_since / scheduled_removal
+    # ------------------------------------------------------------------
+
+    def test_patch_field_invalid_deprecated_since_returns_400(self):
+        cot = self.create_custom_object_type(name='pep440cot', slug='pep440-cot')
+        field = self.create_custom_object_type_field(cot, name='alpha', type='text')
+        url = reverse(
+            'plugins-api:netbox_custom_objects-api:customobjecttypefield-detail',
+            kwargs={'pk': field.pk},
+        )
+        response = self.client.patch(url, {'deprecated_since': 'latest'}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('deprecated_since', response.data)
+
+    def test_patch_field_invalid_scheduled_removal_returns_400(self):
+        cot = self.create_custom_object_type(name='pep440cot2', slug='pep440-cot-2')
+        field = self.create_custom_object_type_field(cot, name='beta', type='text')
+        url = reverse(
+            'plugins-api:netbox_custom_objects-api:customobjecttypefield-detail',
+            kwargs={'pk': field.pk},
+        )
+        response = self.client.patch(url, {'scheduled_removal': '1.x.0'}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('scheduled_removal', response.data)
+
+    def test_patch_cot_valid_version_accepted(self):
+        # PATCH CustomObjectType.version (no DDL on COT update) verifies the
+        # validator doesn't reject a valid PEP 440 string.
+        cot = self.create_custom_object_type(name='pep440cot3', slug='pep440-cot-3')
+        url = reverse(
+            'plugins-api:netbox_custom_objects-api:customobjecttype-detail',
+            kwargs={'pk': cot.pk},
+        )
+        response = self.client.patch(url, {'version': '2.0.0'}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
