@@ -20,7 +20,6 @@ Covers:
 from django.test import TestCase
 
 from netbox_custom_objects.comparator import (
-    COTDiff,
     FieldOp,
     diff_cot,
     diff_document,
@@ -29,18 +28,6 @@ from netbox_custom_objects.exporter import export_cot, export_cots
 from netbox_custom_objects.models import CustomObjectTypeField
 
 from .base import CustomObjectsTestCase
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _fc(diff: COTDiff, schema_id: int):
-    """Return the FieldChange for the given schema_id, or raise."""
-    for fc in diff.field_changes:
-        if fc.schema_id == schema_id:
-            return fc
-    raise KeyError(f"No FieldChange with schema_id={schema_id}")
 
 
 # ---------------------------------------------------------------------------
