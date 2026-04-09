@@ -350,11 +350,14 @@ def _update_schema_document(cot, type_def: dict) -> None:
 
 def _sync_next_schema_id(cot, diff) -> None:
     """
-    Ensure the COT's ``next_schema_id`` counter is at least as large as the
-    highest schema_id explicitly assigned during this apply cycle.
+    Ensure ``next_schema_id`` reflects the highest schema_id explicitly
+    assigned by this apply cycle.
 
-    This prevents the auto-assign logic in ``CustomObjectTypeField.save()``
-    from later reusing IDs that were assigned explicitly by the executor.
+    ``next_schema_id`` stores the *last assigned* ID (not the next one to
+    use).  The auto-assign logic in ``CustomObjectTypeField.save()`` always
+    produces ``next_schema_id + 1``, so setting it to ``max_assigned`` here
+    means the next auto-assign will yield ``max_assigned + 1`` — preserving
+    the sequence without a gap or collision.
 
     Uses ``QuerySet.update()`` to avoid dispatching ``post_save``.
     """
