@@ -2,8 +2,6 @@ import json
 import logging
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
-
 from django.contrib.contenttypes.models import ContentType
 from django.http import Http404
 from django.utils.translation import gettext_lazy as _
@@ -23,6 +21,8 @@ from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.utilities import is_in_branch
 
 from . import serializers
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Schema document helpers
