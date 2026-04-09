@@ -5,7 +5,8 @@ Covers:
 - _build_dep_order: topological sort and circular-dependency detection
 - apply_document / apply_diffs: new COT creation
 - apply_document / apply_diffs: COT-level attribute updates
-- Field ADD, ALTER, and REMOVE operations
+- Field ADD (including choice_set, object, malformed rot_str), ALTER, and REMOVE operations
+- Field ALTER: choice_set and related_object_type resolution
 - allow_destructive guard (DestructiveChangesError)
 - Cross-COT object-field dependency ordering (two new COTs, A → B)
 - schema_document persisted after apply
@@ -15,24 +16,25 @@ Covers:
 
 from django.test import SimpleTestCase, TransactionTestCase
 
-from netbox_custom_objects.comparator import (
+from netbox_custom_objects.schema.comparator import (
     COTDiff,
     FieldChange,
     FieldOp,
 )
-from netbox_custom_objects.executor import (
+from netbox_custom_objects.schema.executor import (
     CircularDependencyError,
     DestructiveChangesError,
     UnknownChoiceSetError,
+    UnknownFieldTypeError,
     UnknownObjectTypeError,
     _build_dep_order,
     apply_document,
     apply_diffs,
 )
-from netbox_custom_objects.exporter import export_cot
+from netbox_custom_objects.schema.exporter import export_cot
 from netbox_custom_objects.models import CustomObjectType
 
-from .base import CustomObjectsTestCase, TransactionCleanupMixin
+from ..base import CustomObjectsTestCase, TransactionCleanupMixin
 
 
 # ---------------------------------------------------------------------------
@@ -369,6 +371,24 @@ class ExecutorFieldAddTestCase(_ExecutorTestBase):
         with self.assertRaises(UnknownObjectTypeError):
             apply_document({"schema_version": "1", "types": [type_def]})
 
+    def test_unknown_field_type_raises(self):
+        type_def = export_cot(self.cot)
+        next_id = self.cot.next_schema_id + 1
+        type_def["fields"].append({"id": next_id, "name": "bad", "type": "nosuchtype"})
+        with self.assertRaises(UnknownFieldTypeError):
+            apply_document({"schema_version": "1", "types": [type_def]})
+
+    def test_malformed_related_object_type_raises(self):
+        """A rot_str with no '/' raises UnknownObjectTypeError, not ValueError."""
+        type_def = export_cot(self.cot)
+        next_id = self.cot.next_schema_id + 1
+        type_def["fields"].append({
+            "id": next_id, "name": "bad", "type": "object",
+            "related_object_type": "nodslash",
+        })
+        with self.assertRaises(UnknownObjectTypeError):
+            apply_document({"schema_version": "1", "types": [type_def]})
+
     def test_next_schema_id_updated_after_add(self):
         type_def = export_cot(self.cot)
         next_id = self.cot.next_schema_id + 1
@@ -448,6 +468,38 @@ class ExecutorFieldAlterTestCase(_ExecutorTestBase):
         apply_document({"schema_version": "1", "types": [type_def]})
         int_field.refresh_from_db()
         self.assertEqual(int_field.validation_minimum, 10)
+
+    def test_alter_choice_set(self):
+        cs_a = self.create_choice_set(name='Status A')
+        cs_b = self.create_choice_set(name='Status B')
+        sel_cot = self.create_custom_object_type(name='seltest', slug='sel-test')
+        sel_field = self.create_custom_object_type_field(
+            sel_cot, name='status', type='select', choice_set=cs_a,
+        )
+        type_def = export_cot(sel_cot)
+        for f in type_def["fields"]:
+            if f["name"] == "status":
+                f["choice_set"] = "Status B"
+        apply_document({"schema_version": "1", "types": [type_def]})
+        sel_field.refresh_from_db()
+        self.assertEqual(sel_field.choice_set, cs_b)
+
+    def test_alter_related_object_type(self):
+        device_ot = self.get_device_object_type()
+        site_ot = self.get_site_object_type()
+        obj_cot = self.create_custom_object_type(name='objtest', slug='obj-test')
+        obj_field = self.create_custom_object_type_field(
+            obj_cot, name='thing', type='object', related_object_type=device_ot,
+        )
+        type_def = export_cot(obj_cot)
+        for f in type_def["fields"]:
+            if f["name"] == "thing":
+                f["related_object_type"] = "dcim/site"
+        apply_document({"schema_version": "1", "types": [type_def]})
+        obj_field.refresh_from_db()
+        self.assertEqual(
+            obj_field.related_object_type, site_ot,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -669,7 +721,7 @@ class ExecutorApplyDiffsTestCase(_ExecutorTestBase):
 
     def test_apply_diffs_with_type_defs_by_slug(self):
         """apply_diffs works with pre-computed diffs and a type_defs_by_slug map."""
-        from netbox_custom_objects.comparator import diff_document
+        from netbox_custom_objects.schema.comparator import diff_document
 
         cot = self.create_custom_object_type(name='directdiff', slug='direct-diff')
         self.create_custom_object_type_field(cot, name='alpha', type='text')
@@ -687,7 +739,7 @@ class ExecutorApplyDiffsTestCase(_ExecutorTestBase):
         self.assertTrue(cot.fields.filter(name="beta").exists())
 
     def test_apply_diffs_raises_destructive_without_flag(self):
-        from netbox_custom_objects.comparator import diff_document
+        from netbox_custom_objects.schema.comparator import diff_document
 
         cot = self.create_custom_object_type(name='diffdest', slug='diff-dest')
         f = self.create_custom_object_type_field(cot, name='bye', type='text')

@@ -16,7 +16,7 @@ from django.db.models.fields import NOT_PROVIDED
 from django.test import TestCase, TransactionTestCase
 
 from netbox_custom_objects.models import CustomObjectTypeField
-from netbox_custom_objects.schema_format import (
+from netbox_custom_objects.schema.format import (
     CHOICES_TO_SCHEMA_TYPE,
     FIELD_DEFAULTS,
     SCHEMA_FORMAT_VERSION,
@@ -24,7 +24,7 @@ from netbox_custom_objects.schema_format import (
 )
 from extras.choices import CustomFieldTypeChoices
 
-from .base import CustomObjectsTestCase, TransactionCleanupMixin
+from ..base import CustomObjectsTestCase, TransactionCleanupMixin
 
 # ---------------------------------------------------------------------------
 # Optional jsonschema dependency — skip structural-validation tests if absent
@@ -36,7 +36,7 @@ except ImportError:
     HAS_JSONSCHEMA = False
 
 _SCHEMA_PATH = (
-    Path(__file__).resolve().parent.parent / "schemas" / "cot_schema_v1.json"
+    Path(__file__).resolve().parent.parent.parent / "schema" / "cot_schema_v1.json"
 )
 
 

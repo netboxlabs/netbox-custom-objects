@@ -33,8 +33,9 @@ import logging
 from django.db import transaction
 
 from netbox_custom_objects import constants
-from netbox_custom_objects.schema_format import (
+from netbox_custom_objects.schema.format import (
     CUSTOM_OBJECTS_APP_LABEL_SLUG,
+    FIELD_BASE_ATTRS,
     FIELD_DEFAULTS,
     FIELD_TYPE_ATTRS,
     SCHEMA_FORMAT_VERSION,
@@ -70,6 +71,10 @@ class UnknownChoiceSetError(Exception):
 
 class UnknownObjectTypeError(Exception):
     """Raised when a related_object_type referenced in the schema does not exist."""
+
+
+class UnknownFieldTypeError(Exception):
+    """Raised when a field type string in the schema has no matching DB choice."""
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +167,10 @@ def _resolve_related_object_type(rot_str: str):
                 f"ObjectType for COT {slug!r} (model={model_name!r}) not found."
             )
     else:
+        if "/" not in rot_str:
+            raise UnknownObjectTypeError(
+                f"related_object_type {rot_str!r} is not in 'app_label/model' format."
+            )
         app_label, model = rot_str.split("/", 1)
         try:
             return ObjectType.objects.get(app_label=app_label, model=model)
@@ -174,26 +183,6 @@ def _resolve_related_object_type(rot_str: str):
 # ---------------------------------------------------------------------------
 # Schema-field → model-field kwargs conversion
 # ---------------------------------------------------------------------------
-
-_FIELD_BASE_ATTRS = (
-    "label",
-    "description",
-    "group_name",
-    "primary",
-    "required",
-    "unique",
-    "default",
-    "weight",
-    "search_weight",
-    "filter_logic",
-    "ui_visible",
-    "ui_editable",
-    "is_cloneable",
-    "deprecated",
-    "deprecated_since",
-    "scheduled_removal",
-)
-
 
 def _schema_def_to_field_kwargs(schema_def: dict) -> dict:
     """
@@ -209,6 +198,11 @@ def _schema_def_to_field_kwargs(schema_def: dict) -> dict:
     from extras.models import CustomFieldChoiceSet  # noqa: PLC0415
 
     schema_type = schema_def["type"]
+    if schema_type not in SCHEMA_TYPE_TO_CHOICES:
+        raise UnknownFieldTypeError(
+            f"Unknown field type {schema_type!r} in field {schema_def.get('name')!r}. "
+            f"Valid types: {sorted(SCHEMA_TYPE_TO_CHOICES)}"
+        )
     type_choice = SCHEMA_TYPE_TO_CHOICES[schema_type]
 
     kwargs: dict = {
@@ -217,7 +211,7 @@ def _schema_def_to_field_kwargs(schema_def: dict) -> dict:
     }
 
     # Base scalar attributes — use FIELD_DEFAULTS when absent from schema_def.
-    for attr in _FIELD_BASE_ATTRS:
+    for attr in FIELD_BASE_ATTRS:
         kwargs[attr] = schema_def.get(attr, FIELD_DEFAULTS.get(attr))
 
     # Type-specific attributes — only include those valid for this field type.
@@ -365,15 +359,18 @@ def _update_schema_document(cot, type_def: dict) -> None:
 
 def _sync_next_schema_id(cot, diff) -> None:
     """
-    Ensure the COT's ``next_schema_id`` counter is at least as large as the
-    highest schema_id explicitly assigned during this apply cycle.
+    Ensure ``next_schema_id`` reflects the highest schema_id explicitly
+    assigned by this apply cycle.
 
-    This prevents the auto-assign logic in ``CustomObjectTypeField.save()``
-    from later reusing IDs that were assigned explicitly by the executor.
+    ``next_schema_id`` stores the *last assigned* ID (not the next one to
+    use).  The auto-assign logic in ``CustomObjectTypeField.save()`` always
+    produces ``next_schema_id + 1``, so setting it to ``max_assigned`` here
+    means the next auto-assign will yield ``max_assigned + 1`` — preserving
+    the sequence without a gap or collision.
 
     Uses ``QuerySet.update()`` to avoid dispatching ``post_save``.
     """
-    from netbox_custom_objects.comparator import FieldOp  # noqa: PLC0415
+    from netbox_custom_objects.schema.comparator import FieldOp  # noqa: PLC0415
     from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
 
     added_ids = [fc.schema_id for fc in diff.field_changes if fc.op is FieldOp.ADD]
@@ -443,7 +440,7 @@ def _phase2_fields(ordered_diffs, cot_map, *, allow_destructive: bool) -> None:
     All COT tables are guaranteed to exist at this point (created in Phase 1),
     so cross-COT object-field references can be resolved freely.
     """
-    from netbox_custom_objects.comparator import FieldOp  # noqa: PLC0415
+    from netbox_custom_objects.schema.comparator import FieldOp  # noqa: PLC0415
 
     for diff in ordered_diffs:
         cot = cot_map[diff.slug]
@@ -451,10 +448,11 @@ def _phase2_fields(ordered_diffs, cot_map, *, allow_destructive: bool) -> None:
             if fc.op is FieldOp.ADD:
                 _apply_field_add(cot, fc)
             elif fc.op is FieldOp.REMOVE:
-                # allow_destructive=False would have raised before we got here;
-                # the conditional is a defensive belt-and-suspenders check.
-                if allow_destructive:
-                    _apply_field_remove(cot, fc)
+                assert allow_destructive, (
+                    "_phase2_fields called with a REMOVE op but allow_destructive=False; "
+                    "the pre-flight guard in apply_diffs should have prevented this."
+                )
+                _apply_field_remove(cot, fc)
             elif fc.op is FieldOp.ALTER:
                 _apply_field_alter(cot, fc)
 
@@ -470,7 +468,7 @@ def apply_diffs(
     allow_destructive: bool = False,
 ) -> None:
     """
-    Apply a list of :class:`~netbox_custom_objects.comparator.COTDiff` objects
+    Apply a list of :class:`~netbox_custom_objects.schema.comparator.COTDiff` objects
     to the live DB.
 
     *type_defs_by_slug* must be a ``{slug: type_def_dict}`` mapping covering
@@ -502,7 +500,8 @@ def apply_diffs(
         # Finalise: persist schema_document and sync next_schema_id counters.
         for diff in ordered:
             cot = cot_map[diff.slug]
-            _update_schema_document(cot, type_defs_by_slug[diff.slug])
+            if diff.is_new or diff.has_changes:
+                _update_schema_document(cot, type_defs_by_slug[diff.slug])
             _sync_next_schema_id(cot, diff)
 
 
@@ -514,14 +513,14 @@ def apply_document(
     """
     Diff and apply a complete schema document against the live DB.
 
-    Internally calls :func:`~netbox_custom_objects.comparator.diff_document`
+    Internally calls :func:`~netbox_custom_objects.schema.comparator.diff_document`
     to compute the diff, then delegates to :func:`apply_diffs`.
 
-    Returns the list of :class:`~netbox_custom_objects.comparator.COTDiff`
+    Returns the list of :class:`~netbox_custom_objects.schema.comparator.COTDiff`
     objects that were computed and applied (regardless of whether each had
     changes).
     """
-    from netbox_custom_objects.comparator import diff_document  # noqa: PLC0415
+    from netbox_custom_objects.schema.comparator import diff_document  # noqa: PLC0415
 
     diffs = diff_document(schema_doc)
     type_defs_by_slug = {
