@@ -1,13 +1,5 @@
 # Changelog
 
-## 0.4.10
----
-
-### Bug Fixes
-
-- [#456](https://github.com/netboxlabs/netbox-custom-objects/issues/456) - Additional guards against a partially-migrated schema crashing during `manage.py migrate`
-
-
 ## 0.4.9
 ---
 
