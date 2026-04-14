@@ -1167,7 +1167,7 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
     def test_get_model_returns_model_when_not_skipping(self):
         """get_model() successfully returns the dynamic model when migrations are up to date."""
         cot = self.create_custom_object_type(name="MigrateTest2", slug="migrate-test-2")
-        model_name = f"{cot.pk}tablemodel"
+        model_name = f"table{cot.pk}model"
 
         with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
             model = self.config.get_model(model_name)
