@@ -220,9 +220,9 @@ class CustomObjectsPluginConfig(PluginConfig):
             pass
 
         model_name = model_name.lower()
-        # only do database calls if we are sure the app is ready to avoid
-        # Django warnings
-        if "table" not in model_name.lower() or "model" not in model_name.lower():
+
+        cot_id_str = extract_cot_id_from_model_name(model_name)
+        if cot_id_str is None:
             raise LookupError(
                 "App '%s' doesn't have a '%s' model." % (self.label, model_name)
             )
@@ -235,7 +235,7 @@ class CustomObjectsPluginConfig(PluginConfig):
 
         from .models import CustomObjectType
 
-        custom_object_type_id = int(extract_cot_id_from_model_name(model_name))
+        custom_object_type_id = int(cot_id_str)
 
         try:
             obj = CustomObjectType.objects.get(pk=custom_object_type_id)
