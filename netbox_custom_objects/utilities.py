@@ -47,6 +47,14 @@ def install_clear_cache_suppressor():
 
     Must be called once from AppConfig.ready() before any dynamic model is
     registered.  Safe to call multiple times — subsequent calls are no-ops.
+
+    Note: the idempotency check (``apps.clear_cache is _wrapped_clear_cache``)
+    and the two-step assignment that follows are not atomic, so a concurrent
+    second caller could store ``_wrapped_clear_cache`` itself in
+    ``_real_clear_cache``, silently breaking suppression.  This is not a
+    real-world risk because ``AppConfig.ready()`` is called by Django during
+    single-threaded startup before any request threads are spawned.  If this
+    function is ever moved out of ``ready()`` a proper lock will be needed.
     """
     global _real_clear_cache
     if apps.clear_cache is _wrapped_clear_cache:
