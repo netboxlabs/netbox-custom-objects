@@ -1,4 +1,7 @@
+import re
+import threading
 import warnings
+from contextlib import contextmanager
 
 from django.apps import apps
 
@@ -6,10 +9,72 @@ from netbox_custom_objects.constants import APP_LABEL
 
 __all__ = (
     "AppsProxy",
+    "extract_cot_id_from_model_name",
     "generate_model",
     "get_viewname",
+    "install_clear_cache_suppressor",
     "is_in_branch",
 )
+
+# ---------------------------------------------------------------------------
+# Thread-safe apps.clear_cache suppression
+# ---------------------------------------------------------------------------
+# Django's apps.register_model() calls apps.clear_cache(), which triggers our
+# get_models() override → get_model() for every known COT → potential infinite
+# recursion and spurious cache invalidations during dynamic model registration.
+#
+# Rather than monkey-patching the module-level apps.clear_cache attribute on
+# every call (which is not thread-safe), we install *one* wrapper at startup
+# and use a thread-local depth counter to suppress clear_cache per-thread.
+# This means concurrent requests on other threads always see real cache
+# invalidation behaviour — only the thread doing model registration is
+# suppressed, and only for the duration of the critical window.
+# ---------------------------------------------------------------------------
+
+_suppress_tl = threading.local()   # thread-local suppression depth counter
+_real_clear_cache = None           # set by install_clear_cache_suppressor()
+
+
+def _wrapped_clear_cache():
+    """apps.clear_cache replacement — skips if this thread is suppressing."""
+    if getattr(_suppress_tl, "depth", 0) > 0:
+        return
+    _real_clear_cache()
+
+
+def install_clear_cache_suppressor():
+    """Install the thread-aware wrapper on apps.clear_cache (idempotent).
+
+    Must be called once from AppConfig.ready() before any dynamic model is
+    registered.  Safe to call multiple times — subsequent calls are no-ops.
+    """
+    global _real_clear_cache
+    if apps.clear_cache is _wrapped_clear_cache:
+        return  # already installed
+    _real_clear_cache = apps.clear_cache
+    apps.clear_cache = _wrapped_clear_cache
+
+
+@contextmanager
+def _suppress_clear_cache():
+    """Context manager: suppress apps.clear_cache() in the current thread.
+
+    Reentrant — uses a depth counter so nested calls don't prematurely
+    re-enable the real clear_cache before the outermost block exits.
+
+    Private: callers outside this module should use generate_model() or
+    install_clear_cache_suppressor() rather than reaching for this directly.
+    """
+    _suppress_tl.depth = getattr(_suppress_tl, "depth", 0) + 1
+    try:
+        yield
+    finally:
+        _suppress_tl.depth -= 1
+
+
+# Internal model names for custom object types follow the pattern "table<id>model"
+# (e.g. "table3model" for CustomObjectType with pk=3).
+_COT_MODEL_RE = re.compile(r"^table(\d+)model$")
 
 
 class AppsProxy:
@@ -60,6 +125,21 @@ class AppsProxy:
         return getattr(apps, attr)
 
 
+def extract_cot_id_from_model_name(model_name: str) -> str | None:
+    """
+    Extract the CustomObjectType primary key from an internal model name.
+
+    Internal model names follow the pattern ``table<id>model`` (e.g. ``table3model``
+    for CustomObjectType pk=3).  Returns the id as a string, or ``None`` if the name
+    does not match the pattern.
+
+    Use this instead of chained ``.replace("table", "").replace("model", "")`` calls,
+    which corrupt model names that contain "table" or "model" as substrings.
+    """
+    m = _COT_MODEL_RE.match(model_name)
+    return m.group(1) if m else None
+
+
 def get_viewname(model, action=None, rest_api=False):
     """
     Return the view name for the given model and action, if valid.
@@ -93,9 +173,6 @@ def generate_model(*args, **kwargs):
     """
     Create a model.
     """
-    # Monkey patch apps.clear_cache to do nothing
-    apps.clear_cache = lambda: None
-
     # Suppress RuntimeWarning about model already being registered
     # TODO: Remove this once we have a better way to handle model registration
     with warnings.catch_warnings():
@@ -103,10 +180,10 @@ def generate_model(*args, **kwargs):
             "ignore", category=RuntimeWarning, message=".*was already registered.*"
         )
 
-        try:
+        # Suppress apps.clear_cache during model type() creation to avoid
+        # invalidating the app registry cache on every dynamic model build.
+        with _suppress_clear_cache():
             model = type(*args, **kwargs)
-        finally:
-            apps.clear_cache = apps.clear_cache
 
     return model
 
