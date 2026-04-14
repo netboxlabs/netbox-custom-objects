@@ -529,6 +529,9 @@ class CustomObjectEditView(generic.ObjectEditView):
                                 # Custom object type
                                 from netbox_custom_objects.models import CustomObjectType
                                 custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
+                                assert custom_object_type_id is not None, (
+                                    f"Expected table<id>model name for {APP_LABEL} content type, got {content_type.model!r}"
+                                )
                                 custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
                                 model = custom_object_type.get_model(skip_object_fields=True)
                             else:

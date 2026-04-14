@@ -407,6 +407,9 @@ class ObjectFieldType(FieldType):
             from netbox_custom_objects.models import CustomObjectType
 
             custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
+            assert custom_object_type_id is not None, (
+                f"Expected table<id>model name for {APP_LABEL} content type, got {content_type.model!r}"
+            )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
 
             # Check if this is a self-referential field
@@ -464,6 +467,9 @@ class ObjectFieldType(FieldType):
             from netbox_custom_objects.models import CustomObjectType
 
             custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
+            assert custom_object_type_id is not None, (
+                f"Expected table<id>model name for {APP_LABEL} content type, got {content_type.model!r}"
+            )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
 
             model = custom_object_type.get_model()
@@ -504,6 +510,9 @@ class ObjectFieldType(FieldType):
         if content_type.app_label == APP_LABEL:
             from netbox_custom_objects.models import CustomObjectType
             custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
+            assert custom_object_type_id is not None, (
+                f"Expected table<id>model name for {APP_LABEL} content type, got {content_type.model!r}"
+            )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
             model = custom_object_type.get_model()
         else:
@@ -707,6 +716,10 @@ class MultiObjectFieldType(FieldType):
         # Check if this is a self-referential M2M
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
         custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
+        if content_type.app_label == APP_LABEL:
+            assert custom_object_type_id is not None, (
+                f"Expected table<id>model name for {APP_LABEL} content type, got {content_type.model!r}"
+            )
         is_self_referential = (
             content_type.app_label == APP_LABEL
             and field.custom_object_type.id == custom_object_type_id
@@ -739,6 +752,10 @@ class MultiObjectFieldType(FieldType):
         # Check if this is a self-referential M2M
         content_type = ContentType.objects.get(pk=field.related_object_type_id)
         custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
+        if content_type.app_label == APP_LABEL:
+            assert custom_object_type_id is not None, (
+                f"Expected table<id>model name for {APP_LABEL} content type, got {content_type.model!r}"
+            )
 
         # Extract our custom parameters and keep only Django field parameters
         field_kwargs = {k: v for k, v in kwargs.items() if not k.startswith('_')}
@@ -794,6 +811,9 @@ class MultiObjectFieldType(FieldType):
             from netbox_custom_objects.models import CustomObjectType
 
             custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
+            assert custom_object_type_id is not None, (
+                f"Expected table<id>model name for {APP_LABEL} content type, got {content_type.model!r}"
+            )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
 
             model = custom_object_type.get_model(skip_object_fields=True)
@@ -832,6 +852,9 @@ class MultiObjectFieldType(FieldType):
         if content_type.app_label == APP_LABEL:
             from netbox_custom_objects.models import CustomObjectType
             custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
+            assert custom_object_type_id is not None, (
+                f"Expected table<id>model name for {APP_LABEL} content type, got {content_type.model!r}"
+            )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
             model = custom_object_type.get_model()
         else:
@@ -894,6 +917,9 @@ class MultiObjectFieldType(FieldType):
             from netbox_custom_objects.models import CustomObjectType
 
             custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
+            assert custom_object_type_id is not None, (
+                f"Expected table<id>model name for {APP_LABEL} content type, got {content_type.model!r}"
+            )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
 
             # For self-referential fields, we need to resolve them to the current model
@@ -941,6 +967,9 @@ class MultiObjectFieldType(FieldType):
                 from netbox_custom_objects.models import CustomObjectType
 
                 custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
+                assert custom_object_type_id is not None, (
+                    f"Expected table<id>model name for {APP_LABEL} content type, got {content_type.model!r}"
+                )
                 custom_object_type = CustomObjectType.objects.get(
                     pk=custom_object_type_id
                 )

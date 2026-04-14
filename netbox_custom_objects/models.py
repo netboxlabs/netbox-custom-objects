@@ -580,10 +580,13 @@ class CustomObjectType(NetBoxModel):
             TM.post_through_setup = original_post_through_setup
 
         # Register the main model with Django's app registry.
-        # Suppress apps.clear_cache() during registration so that the
-        # clear_cache() triggered internally by register_model() does not fire
-        # until the model is safely stored in _model_cache.  Without
-        # suppression, register_model() → clear_cache() → get_models() →
+        # _suppress_clear_cache() is used directly here (rather than going
+        # through generate_model()) because we are calling apps.register_model()
+        # explicitly, not type().  generate_model() wraps type() and suppresses
+        # clear_cache only for that call; the suppression window needs to extend
+        # through the _model_cache write that follows so the model is safely
+        # cached before any re-entrant get_model() call can observe it.
+        # Without suppression: register_model() → clear_cache() → get_models() →
         # get_model() → generate_model() → register_model() recurses infinitely.
         with _suppress_clear_cache():
             if model_name.lower() in apps.all_models[APP_LABEL]:
