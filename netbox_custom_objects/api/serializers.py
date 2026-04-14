@@ -56,6 +56,7 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
             "description",
             "type",
             "primary",
+            "context",
             "required",
             "unique",
             "default",
@@ -65,6 +66,7 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
             "validation_maximum",
             "related_object_type",
             "related_object_filter",
+            "related_name",
             "app_label",
             "model",
             "group_name",
@@ -255,6 +257,11 @@ def get_serializer_class(model, skip_object_fields=False):
     # Create field list including all necessary fields
     base_fields = ["id", "url", "display", "created", "last_updated", "tags"]
 
+    # Include _context field when the model has designated context fields
+    has_context_fields = bool(getattr(model, '_context_field_ids', []))
+    if has_context_fields:
+        base_fields.insert(base_fields.index("display") + 1, "_context")
+
     # Only include custom field names that will actually be added to the serializer
     custom_field_names = []
     for field in model_fields:
@@ -266,13 +273,15 @@ def get_serializer_class(model, skip_object_fields=False):
 
     all_fields = base_fields + custom_field_names
 
+    brief_fields = ("id", "url", "display", "_context") if has_context_fields else ("id", "url", "display")
+
     meta = type(
         "Meta",
         (),
         {
             "model": model,
             "fields": all_fields,
-            "brief_fields": ("id", "url", "display"),
+            "brief_fields": brief_fields,
         },
     )
 
@@ -294,6 +303,20 @@ def get_serializer_class(model, skip_object_fields=False):
     def get_display(self, obj):
         """Get display representation of the object"""
         return str(obj)
+
+    def get__context(self, obj):
+        """Return context field values as a nested display object for APISelect secondary text."""
+        context_parts = []
+        for context_field_id in obj._context_field_ids:
+            context_field = obj._field_objects.get(context_field_id)
+            if context_field:
+                ctx_field_type = field_types.FIELD_TYPE_CLASS[context_field["field"].type]()
+                context_value = ctx_field_type.get_display_value(obj, context_field["name"])
+                if context_value:
+                    context_parts.append(str(context_value))
+        if context_parts:
+            return {"display": ", ".join(context_parts)}
+        return None
 
     # Stock DRF create() without raise_errors_on_nested_writes guard
     def create(self, validated_data):
@@ -344,6 +367,10 @@ def get_serializer_class(model, skip_object_fields=False):
         "create": create,
         "update": update,
     }
+
+    if has_context_fields:
+        attrs["_context"] = serializers.SerializerMethodField()
+        attrs["get__context"] = get__context
 
     for field in model_fields:
         if skip_object_fields and field.type in [
