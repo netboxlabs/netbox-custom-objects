@@ -1080,3 +1080,127 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
             self.assertIsNone(nco._migrations_checked)
         finally:
             nco._migrations_checked = original_checked
+
+
+class CrossCOTStubSearchIndexRegressionTestCase(CustomObjectsTestCase, TestCase):
+    """Regression tests for the search-index crash on stub models.
+
+    When COT A has an object field pointing to COT B, generating A's model
+    internally calls ``B.get_model(skip_object_fields=True)`` to break the FK
+    recursion.  That stub model is then cached.  Any subsequent call to
+    ``B.get_model()`` returns the stub — which lacks the object/multiobject
+    fields.
+
+    Before the fix, ``register_custom_object_search_index()`` unconditionally
+    included *all* searchable fields in the index, even fields that were absent
+    from the stub.  When a B instance was saved, Django's ``post_save`` search
+    handler tried to read those absent attributes and raised::
+
+        AttributeError: 'TableNModel' object has no attribute '<field>'
+
+    The fix guards each field with ``model._meta.get_field(field.name)`` and
+    skips any field not present on the generated model.
+
+    Reproduces the scenario reported by the user after the Django 6.0 M2M fix
+    made the edit view reachable for the first time.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # --- Target COT: has a text primary field AND a searchable object field ---
+        self.target_cot = self.create_custom_object_type(
+            name="StubTarget",
+            slug="stub-target",
+        )
+        self.create_custom_object_type_field(
+            self.target_cot,
+            name="name",
+            label="Name",
+            type="text",
+            primary=True,
+            required=True,
+            search_weight=500,
+        )
+        # This object field has search_weight=500 (the default).  When the stub
+        # model is generated (skip_object_fields=True), this field is ABSENT.
+        # The old code would register it in the search index anyway → crash.
+        self.create_custom_object_type_field(
+            self.target_cot,
+            name="device",
+            label="Device",
+            type="object",
+            related_object_type=self.get_device_object_type(),
+            search_weight=500,
+        )
+
+        # --- Source COT: has an object field pointing to the target COT ---
+        self.source_cot = self.create_custom_object_type(
+            name="StubSource",
+            slug="stub-source",
+        )
+        self.create_custom_object_type_field(
+            self.source_cot,
+            name="name",
+            label="Name",
+            type="text",
+            primary=True,
+            required=True,
+        )
+        # Creating this field calls source_cot.get_model(), which internally
+        # calls target_cot.get_model(skip_object_fields=True) to resolve the FK.
+        # That caches the stub model for target_cot.
+        self.create_custom_object_type_field(
+            self.source_cot,
+            name="target_ref",
+            label="Target Reference",
+            type="object",
+            related_object_type=self.target_cot.object_type,
+            search_weight=0,  # not searchable; only target_cot's fields matter here
+        )
+
+    def test_save_does_not_crash_when_stub_cached_before_full_model(self):
+        """Saving a CO instance must not raise when its COT's stub was cached first.
+
+        This is the exact scenario from the bug report: a user saves an object
+        of the target COT whose model was cached as a stub (because another COT
+        referenced it as an FK target).  The search ``post_save`` handler must
+        not attempt to read object-type fields that are absent from the stub.
+        """
+        # target_cot.get_model() returns the stub (cached during setUp above).
+        # With the old code the registered search index included 'device', which
+        # is absent from the stub → AttributeError on save.
+        target_model = self.target_cot.get_model()
+
+        # This must not raise.
+        instance = target_model.objects.create(name="Stub Target Instance")
+
+        # Basic sanity: the instance was persisted.
+        self.assertEqual(target_model.objects.filter(pk=instance.pk).count(), 1)
+
+    def test_stub_model_search_index_excludes_absent_fields(self):
+        """The search index registered for a stub model must not reference absent fields.
+
+        When the stub is generated with skip_object_fields=True, object/multiobject
+        fields are excluded from the model class.  The search index must only contain
+        fields that are actually present.
+        """
+        from netbox.search import registry
+
+        target_model = self.target_cot.get_model()
+        label = f"netbox_custom_objects.{self.target_cot.get_table_model_name(self.target_cot.id).lower()}"
+        search_index = registry["search"].get(label)
+
+        self.assertIsNotNone(search_index, "Search index should be registered for the target COT model")
+
+        # fields is a list of (name, weight) tuples
+        indexed_field_names = {f[0] for f in search_index.fields}
+
+        # 'name' (text) is present on the stub → must be indexed.
+        self.assertIn("name", indexed_field_names)
+
+        # 'device' (object) is absent from the stub → must NOT be indexed.
+        self.assertNotIn(
+            "device",
+            indexed_field_names,
+            "Object-type fields absent from the stub must be excluded from the search index",
+        )
