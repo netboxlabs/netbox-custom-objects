@@ -1186,7 +1186,7 @@ class CrossCOTStubSearchIndexRegressionTestCase(CustomObjectsTestCase, TestCase)
         """
         from netbox.search import registry
 
-        target_model = self.target_cot.get_model()
+        self.target_cot.get_model()
         label = f"netbox_custom_objects.{self.target_cot.get_table_model_name(self.target_cot.id).lower()}"
         search_index = registry["search"].get(label)
 
