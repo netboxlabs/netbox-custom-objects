@@ -85,6 +85,18 @@ class CustomObjectViewSet(ModelViewSet):
             raise ValidationError(BRANCH_ACTIVE_ERROR_MESSAGE)
         return super().partial_update(request, *args, **kwargs)
 
+    def perform_update(self, serializer):
+        # Take a pre-change snapshot so prechange_data is populated in the changelog.
+        if hasattr(serializer.instance, 'snapshot'):
+            serializer.instance.snapshot()
+        super().perform_update(serializer)
+
+    def perform_destroy(self, instance):
+        # Take a pre-change snapshot so prechange_data is populated in the changelog.
+        if hasattr(instance, 'snapshot'):
+            instance.snapshot()
+        super().perform_destroy(instance)
+
 
 class CustomObjectTypeFieldViewSet(ModelViewSet):
     queryset = CustomObjectTypeField.objects.all()
