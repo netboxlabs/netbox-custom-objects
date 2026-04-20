@@ -55,7 +55,7 @@ from utilities.validators import validate_regex
 from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
-from netbox_custom_objects.utilities import generate_model
+from netbox_custom_objects.utilities import _suppress_clear_cache, generate_model
 
 
 class UniquenessConstraintTestError(Exception):
@@ -589,21 +589,30 @@ class CustomObjectType(NetBoxModel):
         finally:
             TM.post_through_setup = original_post_through_setup
 
-        # Register the main model with Django's app registry
-        if model_name.lower() in apps.all_models[APP_LABEL]:
-            # Remove the existing model from all_models before registering the new one
-            del apps.all_models[APP_LABEL][model_name.lower()]
+        # Register the main model with Django's app registry.
+        # _suppress_clear_cache() is used directly here (rather than going
+        # through generate_model()) because we are calling apps.register_model()
+        # explicitly, not type().  generate_model() wraps type() and suppresses
+        # clear_cache only for that call; the suppression window needs to extend
+        # through the _model_cache write that follows so the model is safely
+        # cached before any re-entrant get_model() call can observe it.
+        # Without suppression: register_model() → clear_cache() → get_models() →
+        # get_model() → generate_model() → register_model() recurses infinitely.
+        with _suppress_clear_cache():
+            if model_name.lower() in apps.all_models[APP_LABEL]:
+                # Remove the existing model from all_models before registering the new one
+                del apps.all_models[APP_LABEL][model_name.lower()]
 
-        apps.register_model(APP_LABEL, model)
+            apps.register_model(APP_LABEL, model)
 
-        self._after_model_generation(attrs, model)
+            self._after_model_generation(attrs, model)
 
-        # Cache the generated model with its timestamp (protected by lock for thread safety)
-        with self._global_lock:
-            self._model_cache[self.id] = (model, self.cache_timestamp)
+            # Cache the generated model with its timestamp (protected by lock for thread safety)
+            with self._global_lock:
+                self._model_cache[self.id] = (model, self.cache_timestamp)
 
-        # Do the clear cache now that we have it in the cache so there
-        # is no recursion.
+        # Now that the model is in _model_cache, clear_cache() is safe:
+        # re-entrant get_model() calls for this COT hit the cache immediately.
         apps.clear_cache()
         ContentType.objects.clear_cache()
 
