@@ -710,6 +710,42 @@ class CustomObjectType(NetBoxModel):
         get_serializer_class(model)
         self.register_custom_object_search_index(model)
 
+    def has_branch_schema_drift(self, branch) -> bool:
+        """
+        Return True if this custom object type's physical schema in *branch*
+        differs from the current field definitions in main.
+
+        Drift means at least one of:
+        - A field exists in main but not in the branch snapshot (needs add_field)
+        - A field exists in the branch snapshot but not in main (needs remove_field)
+        - A field exists in both but has a different name, type, or constraint
+          that affects the DB column (needs alter_field)
+
+        Returns False when netbox-branching is not installed.
+        """
+        try:
+            from netbox_branching.utilities import activate_branch
+        except ImportError:
+            return False
+
+        main_fields = {f.pk: f for f in self.fields.all()}
+        with activate_branch(branch):
+            branch_fields = {f.pk: f for f in self.fields.all()}
+
+        main_pks = set(main_fields)
+        branch_pks = set(branch_fields)
+
+        if main_pks != branch_pks:
+            return True
+
+        def _schema_key(f):
+            return (f.name, f.type, f.required, f.default, f.unique, f.related_object_type_id)
+
+        return any(
+            _schema_key(branch_fields[pk]) != _schema_key(main_fields[pk])
+            for pk in main_pks
+        )
+
     def save(self, *args, **kwargs):
         needs_db_create = self._state.adding
 

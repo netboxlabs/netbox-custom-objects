@@ -26,6 +26,101 @@ from django.db import connections, models
 logger = logging.getLogger('netbox_custom_objects.branching')
 
 
+def check_pending_branch_migrations():
+    """
+    Scan all READY branches at startup and mark any that have custom object
+    schema drift as PENDING_MIGRATIONS.
+
+    This catches drift that pre-dates the signal handler — for example, after
+    upgrading the plugin on an instance that already has branches, or if field
+    changes were applied while the application was not running.
+
+    Called once from ``CustomObjectsPluginConfig.ready()`` after the DB is
+    confirmed ready.
+    """
+    try:
+        from netbox_branching.choices import BranchStatusChoices
+        from netbox_branching.models import Branch
+        from netbox_custom_objects.models import CustomObjectType
+    except ImportError:
+        return
+
+    ready_branches = list(Branch.objects.filter(status=BranchStatusChoices.READY))
+    if not ready_branches:
+        return
+
+    cots = list(CustomObjectType.objects.all())
+    if not cots:
+        return
+
+    to_update = []
+    for branch in ready_branches:
+        branch_connection = connections[branch.connection_name]
+        with branch_connection.cursor() as cursor:
+            branch_tables = branch_connection.introspection.table_names(cursor)
+
+        for cot in cots:
+            if cot.get_database_table_name() not in branch_tables:
+                continue
+            if cot.has_branch_schema_drift(branch):
+                branch.status = BranchStatusChoices.PENDING_MIGRATIONS
+                to_update.append(branch)
+                break  # One drifted COT is enough — no need to check the rest
+
+    if to_update:
+        Branch.objects.bulk_update(to_update, ['status'])
+        logger.info(
+            'Marked %d branch(es) as PENDING_MIGRATIONS at startup due to custom object schema drift',
+            len(to_update),
+        )
+
+
+def on_custom_object_field_changed(sender, instance, **kwargs):
+    """
+    Mark any READY branches that contain the affected custom object type's table
+    as PENDING_MIGRATIONS when a ``CustomObjectTypeField`` is created, modified,
+    or deleted in the main schema.
+
+    This surfaces the pending state in the branching UI exactly like a normal
+    Django-migration, prompting users to click "Migrate Branch".  That action
+    calls ``Branch.migrate()``, which fires ``on_branch_migrated`` and reconciles
+    the physical column differences.
+
+    Skipped when the change happens inside a branch context — the field edit only
+    affects that branch's schema, not main, so no other branches need updating.
+    """
+    try:
+        from netbox_branching.contextvars import active_branch
+        if active_branch.get() is not None:
+            return
+    except ImportError:
+        return
+
+    from netbox_branching.choices import BranchStatusChoices
+    from netbox_branching.models import Branch
+
+    cot = instance.custom_object_type
+    db_table = cot.get_database_table_name()
+
+    ready_branches = list(Branch.objects.filter(status=BranchStatusChoices.READY))
+    to_update = []
+    for branch in ready_branches:
+        branch_connection = connections[branch.connection_name]
+        with branch_connection.cursor() as cursor:
+            branch_tables = branch_connection.introspection.table_names(cursor)
+        if db_table in branch_tables:
+            branch.status = BranchStatusChoices.PENDING_MIGRATIONS
+            to_update.append(branch)
+
+    if to_update:
+        Branch.objects.bulk_update(to_update, ['status'])
+        logger.info(
+            'Marked %d branch(es) as PENDING_MIGRATIONS due to field changes on %s',
+            len(to_update),
+            cot,
+        )
+
+
 def _fields_schema_differ(branch_f, main_f):
     """
     Return True if the two ``CustomObjectTypeField`` instances differ in any
