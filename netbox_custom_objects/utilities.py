@@ -108,4 +108,3 @@ def generate_model(*args, **kwargs):
             apps.clear_cache = apps.clear_cache
 
     return model
-
