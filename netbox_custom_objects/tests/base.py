@@ -15,6 +15,8 @@ class TransactionCleanupMixin:
     """
 
     def tearDown(self):
+        from netbox_custom_objects.models import CustomObject
+        CustomObject._deferred_field_data.clear()
         for cot in CustomObjectType.objects.all():
             try:
                 cot.delete()

@@ -86,6 +86,59 @@ def _get_schema_connection():
     return connection
 
 
+def _apply_deferred_co_field(field_instance):
+    """
+    Apply any deferred CO field values after a column is added to the DB.
+
+    Called by CustomObjectTypeField.save() after schema_editor.add_field() so that
+    custom object rows inserted before their columns existed (squash merge ordering)
+    receive their correct values via a raw UPDATE.
+
+    ``CustomObject._deferred_field_data`` has the shape::
+
+        {db_table: {co_pk: {'using': alias, 'data': {field_name: value}}}}
+
+    For TYPE_OBJECT fields the postchange_data key is ``{name}`` but the DB column
+    is ``{name}_id`` — this function maps accordingly.
+    For TYPE_MULTIOBJECT fields there is no column on the main table, so they are
+    skipped entirely.
+    """
+    from extras.choices import CustomFieldTypeChoices
+
+    # No deferred data at all — fast path.
+    if not CustomObject._deferred_field_data:
+        return
+
+    cot = field_instance.custom_object_type
+    table_name = cot.get_database_table_name()
+    per_table = CustomObject._deferred_field_data.get(table_name)
+    if not per_table:
+        return
+
+    # M2M has no column on the main table — nothing to UPDATE.
+    if field_instance.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+        return
+
+    # For TYPE_OBJECT the data key is the field name but the DB column ends with _id.
+    data_key = field_instance.name
+    if field_instance.type == CustomFieldTypeChoices.TYPE_OBJECT:
+        col_name = f'{field_instance.name}_id'
+    else:
+        col_name = field_instance.name
+
+    schema_conn = _get_schema_connection()
+
+    with schema_conn.cursor() as cursor:
+        for co_pk, entry in per_table.items():
+            value = entry['data'].get(data_key)
+            if value is None:
+                continue
+            cursor.execute(
+                f'UPDATE "{table_name}" SET "{col_name}" = %s WHERE id = %s',
+                [value, co_pk],
+            )
+
+
 class CustomObject(
     BookmarksMixin,
     ChangeLoggingMixin,
@@ -115,8 +168,74 @@ class CustomObject(
 
     objects = RestrictedQuerySet.as_manager()
 
+    # Pending custom-field values for CO rows created before their columns existed.
+    # Populated by deserialize_object(); consumed by _apply_deferred_co_field().
+    # Format: {db_table: {co_pk: {'using': alias, 'data': {field_name: value}}}}
+    _deferred_field_data: dict = {}
+
     class Meta:
         abstract = True
+
+    @classmethod
+    def deserialize_object(cls, data, pk=None):
+        """
+        Hook called by ObjectChange.apply() for CREATE actions.
+
+        The squash merge strategy may apply a CO's CREATE before its
+        CustomObjectTypeField rows are in main (the dependency graph has no FK
+        from CO to fields).  When that happens, the standard Django
+        deserialization would INSERT the CO with NULL custom-field values
+        because the columns don't exist yet.
+
+        This hook:
+        1. Deserializes the CO using a fresh model (re-queried from DB).
+        2. Does save_base(raw=True) as normal.
+        3. Stores the full postchange_data in _deferred_field_data so that
+           CustomObjectTypeField.save() can UPDATE the row after each column is
+           added (handles the squash ordering case).
+        """
+        from utilities.serialization import deserialize_object as _deserialize
+
+        # Derive the COT primary key from the model class name (e.g. 'Table1Model' → 1)
+        model_name = cls.__name__  # e.g. 'Table1Model'
+        try:
+            cot_id = int(model_name.lower().replace('table', '').replace('model', ''))
+        except ValueError:
+            # Not a generated model name — fall back to standard deserialization.
+            return _deserialize(cls, data, pk=pk)
+
+        # Refresh the model cache so we pick up any fields already applied to main.
+        # (In the squash case the cache may still point to a zero-field model.)
+        from netbox_custom_objects.models import CustomObjectType as _COT  # noqa: F401
+        _COT.clear_model_cache(cot_id)
+        try:
+            cot = _COT.objects.get(pk=cot_id)
+            fresh_model = cot.get_model()
+        except _COT.DoesNotExist:
+            fresh_model = cls
+
+        inner = _deserialize(fresh_model, data, pk=pk)
+        obj = inner.object
+        obj_pk = pk if pk is not None else obj.pk
+        table_name = fresh_model._meta.db_table
+        full_data = dict(data)
+
+        class _Deserialized:
+            object = obj
+
+            def save(self, using=None, **_kwargs):
+                from django.db import DEFAULT_DB_ALIAS
+                _using = using or DEFAULT_DB_ALIAS
+                models.Model.save_base(obj, using=_using, raw=True)
+                # Register full data for deferred column updates (squash ordering fix).
+                if table_name not in cls._deferred_field_data:
+                    cls._deferred_field_data[table_name] = {}
+                cls._deferred_field_data[table_name][obj_pk] = {
+                    'using': _using,
+                    'data': full_data,
+                }
+
+        return _Deserialized()
 
     def __str__(self):
         # Find the field with primary=True and return that field's "name" as the name of the object
@@ -664,7 +783,7 @@ class CustomObjectType(NetBoxModel):
         related_table = related_model._meta.db_table
         column_name = model_field.column
 
-        with connection.cursor() as cursor:
+        with _get_schema_connection().cursor() as cursor:
             # Drop existing FK constraint if it exists
             # Query for existing constraints
             cursor.execute("""
@@ -832,6 +951,13 @@ class CustomObjectType(NetBoxModel):
         super().delete(*args, **kwargs)
 
         if not in_branch:
+            # ChangeDiff has a PROTECT FK to ContentType/ObjectType — delete those
+            # records first so object_type.delete() is not blocked.
+            try:
+                from netbox_branching.models import ChangeDiff
+                ChangeDiff.objects.filter(object_type=object_type).delete()
+            except ImportError:
+                pass
             # Temporarily disconnect the pre_delete handler to skip the ObjectType deletion
             # TODO: Remove this disconnect/reconnect after ObjectType has been exempted from handle_deleted_object
             pre_delete.disconnect(handle_deleted_object)
@@ -1764,6 +1890,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         with schema_conn.schema_editor() as schema_editor:
             if self._state.adding:
                 schema_editor.add_field(model, model_field)
+                _apply_deferred_co_field(self)
                 if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                     field_type.create_m2m_table(self, model, self.name, schema_conn=schema_conn)
             else:
