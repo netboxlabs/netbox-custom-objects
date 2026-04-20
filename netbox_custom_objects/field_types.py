@@ -935,11 +935,12 @@ class MultiObjectFieldType(FieldType):
         target_field.remote_field.model = to_model
         target_field.related_model = to_model
 
-    def create_m2m_table(self, instance, model, field_name):
+    def create_m2m_table(self, instance, model, field_name, schema_conn=None):
         """
         Creates the actual M2M table after models are fully generated
         """
-        from django.db import connection
+        from django.db import connection as default_connection
+        connection = schema_conn if schema_conn is not None else default_connection
 
         # Get the field instance
         field = model._meta.get_field(field_name)

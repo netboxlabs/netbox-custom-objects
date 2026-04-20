@@ -66,6 +66,25 @@ class UniquenessConstraintTestError(Exception):
 USER_TABLE_DATABASE_NAME_PREFIX = "custom_objects_"
 
 
+def _get_schema_connection():
+    """
+    Return the active branch's DB connection when called within a branch context,
+    otherwise return the default (main-schema) connection.
+
+    Used so that schema-editor operations (add/alter/remove column) target the
+    correct PostgreSQL schema without requiring every call-site to be branch-aware.
+    """
+    try:
+        from netbox_branching.contextvars import active_branch
+        branch = active_branch.get()
+        if branch is not None:
+            from django.db import connections
+            return connections[branch.connection_name]
+    except ImportError:
+        pass
+    return connection
+
+
 class CustomObject(
     BookmarksMixin,
     ChangeLoggingMixin,
@@ -681,8 +700,6 @@ class CustomObjectType(NetBoxModel):
 
         # Ensure the ContentType exists and is immediately available
         features = get_model_features(model)
-        if 'branching' in features:
-            features.remove('branching')
         self.object_type.features = features
         self.object_type.public = True
         self.object_type.save()
@@ -1608,16 +1625,21 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
     def save(self, *args, **kwargs):
         is_new = self._state.adding
+
+        # Use the branch connection when operating inside a branch so that schema
+        # editor operations target the branch schema rather than main.
+        schema_conn = _get_schema_connection()
+
         field_type = FIELD_TYPE_CLASS[self.type]()
         model_field = field_type.get_model_field(self)
         model = self.custom_object_type.get_model()
         model_field.contribute_to_class(model, self.name)
 
-        with connection.schema_editor() as schema_editor:
+        with schema_conn.schema_editor() as schema_editor:
             if self._state.adding:
                 schema_editor.add_field(model, model_field)
                 if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                    field_type.create_m2m_table(self, model, self.name)
+                    field_type.create_m2m_table(self, model, self.name, schema_conn=schema_conn)
             else:
                 old_field = field_type.get_model_field(self.original)
                 old_field.contribute_to_class(model, self._original_name)
@@ -1632,8 +1654,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     new_through_table_name = self.through_table_name
 
                     # Check if old through table exists
-                    with connection.cursor() as cursor:
-                        tables = connection.introspection.table_names(cursor)
+                    with schema_conn.cursor() as cursor:
+                        tables = schema_conn.introspection.table_names(cursor)
                         old_table_exists = old_through_table_name in tables
 
                     if old_table_exists:
@@ -1709,7 +1731,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                         )
                     else:
                         # No old table exists, create the new through table
-                        field_type.create_m2m_table(self, model, self.name)
+                        field_type.create_m2m_table(self, model, self.name, schema_conn=schema_conn)
 
                     # Alter the field normally (this updates the field definition)
                     schema_editor.alter_field(model, old_field, model_field)
@@ -1762,12 +1784,15 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             transaction.on_commit(lambda: ReindexCustomObjectTypeJob.enqueue(cot_id=_cot_id))
 
     def delete(self, *args, **kwargs):
+        # Use the branch connection when operating inside a branch.
+        schema_conn = _get_schema_connection()
+
         field_type = FIELD_TYPE_CLASS[self.type]()
         model_field = field_type.get_model_field(self)
         model = self.custom_object_type.get_model()
         model_field.contribute_to_class(model, self.name)
 
-        with connection.schema_editor() as schema_editor:
+        with schema_conn.schema_editor() as schema_editor:
             if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                 apps = model._meta.apps
                 through_model = apps.get_model(APP_LABEL, self.through_model_name)

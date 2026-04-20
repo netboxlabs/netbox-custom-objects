@@ -175,6 +175,15 @@ class CustomObjectsPluginConfig(PluginConfig):
         pre_migrate.connect(_migration_started)
         post_migrate.connect(_migration_finished)
 
+        # Wire into the netbox-branching lifecycle when that plugin is installed.
+        # Import is lazy so the plugin remains functional without branching.
+        try:
+            from netbox_branching.signals import post_migrate as branching_post_migrate
+            from netbox_custom_objects.branching import on_branch_migrated
+            branching_post_migrate.connect(on_branch_migrated)
+        except ImportError:
+            pass
+
         # Patch ObjectSelectorView to support dynamically-generated custom object models
         _patch_object_selector_view()
 
