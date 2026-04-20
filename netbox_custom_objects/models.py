@@ -720,6 +720,48 @@ class CustomObjectType(NetBoxModel):
         get_serializer_class(model)
         self.register_custom_object_search_index(model)
 
+    @classmethod
+    def deserialize_object(cls, data, pk=None):
+        """
+        Custom deserialization hook for netbox-branching's merge/revert engine.
+
+        ``ObjectChange.apply()`` normally uses ``DeserializedObject.save()``, which
+        calls ``Model.save_base(raw=True)`` — bypassing our ``save()`` override and
+        all ``post_save`` signals.  That means ``create_model()`` never runs and the
+        physical table is never created in the destination schema.
+
+        By implementing this classmethod the apply engine calls our version instead,
+        returning a wrapper whose ``save()`` invokes the full ``CustomObjectType.save()``
+        lifecycle (signals included) so that the table is created as a side effect of
+        replaying the ObjectChange.
+
+        ``object_type`` is cleared before saving so the ``custom_object_type_post_save_handler``
+        can re-create and link it correctly in the destination schema, avoiding any FK
+        mismatch between the branch and main ``ObjectType`` pks.
+        """
+        from utilities.serialization import deserialize_object as _deserialize
+
+        inner = _deserialize(cls, data, pk=pk)
+
+        class _SchemaAwareDeserialized:
+            def __init__(self, deserialized):
+                self._inner = deserialized
+                self.object = deserialized.object
+
+            def save(self, using=None, **kwargs):
+                # Clear the ObjectType FK — it may not exist in main yet.
+                # custom_object_type_post_save_handler re-sets it after INSERT.
+                self.object.object_type = None
+                self.object.object_type_id = None
+                self.object.save()
+                # Re-apply any M2M data (tags, etc.) that was stripped during deserialization.
+                if self._inner.m2m_data:
+                    for accessor_name, object_list in self._inner.m2m_data.items():
+                        getattr(self.object, accessor_name).set(object_list)
+                    self._inner.m2m_data = None
+
+        return _SchemaAwareDeserialized(inner)
+
     def has_branch_schema_drift(self, branch) -> bool:
         """
         Return True if this custom object type's physical schema in *branch*
@@ -1676,6 +1718,36 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     @property
     def through_model_name(self):
         return f"Through_{self.through_table_name}"
+
+    @classmethod
+    def deserialize_object(cls, data, pk=None):
+        """
+        Custom deserialization hook for netbox-branching's merge/revert engine.
+
+        Same problem as ``CustomObjectType.deserialize_object``: the default
+        ``DeserializedObject.save(raw=True)`` bypasses ``CustomObjectTypeField.save()``,
+        so the physical column is never added to the custom object table.
+
+        This wrapper calls the real ``save()`` so that ``add_field`` runs as a side
+        effect of replaying the CREATE ObjectChange during a merge.
+        """
+        from utilities.serialization import deserialize_object as _deserialize
+
+        inner = _deserialize(cls, data, pk=pk)
+
+        class _SchemaAwareDeserialized:
+            def __init__(self, deserialized):
+                self._inner = deserialized
+                self.object = deserialized.object
+
+            def save(self, using=None, **kwargs):
+                self.object.save()
+                if self._inner.m2m_data:
+                    for accessor_name, object_list in self._inner.m2m_data.items():
+                        getattr(self.object, accessor_name).set(object_list)
+                    self._inner.m2m_data = None
+
+        return _SchemaAwareDeserialized(inner)
 
     def save(self, *args, **kwargs):
         is_new = self._state.adding
