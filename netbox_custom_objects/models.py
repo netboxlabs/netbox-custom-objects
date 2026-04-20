@@ -11,6 +11,7 @@ from django.conf import settings
 
 # from django.contrib.contenttypes.management import create_contenttypes
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import FieldDoesNotExist
 from django.core.validators import RegexValidator, ValidationError
 from django.db import connection, IntegrityError, models, transaction
 from django.db.models import Q
@@ -470,6 +471,15 @@ class CustomObjectType(NetBoxModel):
         # model must be an instance of this CustomObjectType's get_model() generated class
         fields = []
         for field in self.fields.filter(search_weight__gt=0):
+            # Only index fields that are actually present on the generated model.
+            # When the model was built with skip_object_fields=True (a lightweight
+            # stub used to break cross-COT FK recursion), object-type fields are
+            # intentionally absent.  Including them in the index causes
+            # FieldDoesNotExist / AttributeError in the post_save search handler.
+            try:
+                model._meta.get_field(field.name)
+            except FieldDoesNotExist:
+                continue
             fields.append((field.name, field.search_weight))
 
         attrs = {
