@@ -11,12 +11,7 @@ from rest_framework.exceptions import ValidationError
 
 from netbox_custom_objects.filtersets import get_filterset_class
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
-from netbox_custom_objects.utilities import is_in_branch
-
 from . import serializers
-
-# Constants
-BRANCH_ACTIVE_ERROR_MESSAGE = _("Please switch to the main branch to perform this operation.")
 
 
 class RootView(APIRootView):
@@ -71,13 +66,9 @@ class CustomObjectViewSet(ModelViewSet):
         return super().list(request, *args, **kwargs)
 
     def create(self, request, *args, **kwargs):
-        if is_in_branch():
-            raise ValidationError(BRANCH_ACTIVE_ERROR_MESSAGE)
         return super().create(request, *args, **kwargs)
 
     def update(self, request, *args, **kwargs):
-        if is_in_branch():
-            raise ValidationError(BRANCH_ACTIVE_ERROR_MESSAGE)
         # Replicate DRF's UpdateModelMixin.update() so we can snapshot the instance
         # before the serializer is constructed.  Calling super().update() would invoke
         # get_object() a second time and return a fresh, un-snapshotted instance.

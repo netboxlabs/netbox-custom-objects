@@ -29,7 +29,6 @@ from .models import CustomObject, CustomObjectType, CustomObjectTypeField
 from extras.choices import CustomFieldTypeChoices
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.dynamic_forms import build_filterset_form_class
-from netbox_custom_objects.utilities import is_in_branch
 
 logger = logging.getLogger("netbox_custom_objects.views")
 
@@ -588,7 +587,6 @@ class CustomObjectEditView(generic.ObjectEditView):
 
     def get_extra_context(self, request, obj):
         return {
-            'branch_warning': is_in_branch(),
         }
 
 
@@ -702,7 +700,6 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
 
     def get_extra_context(self, request):
         return {
-            'branch_warning': is_in_branch(),
         }
 
 
@@ -793,7 +790,6 @@ class CustomObjectBulkImportView(generic.BulkImportView):
 
     def get_extra_context(self, request):
         return {
-            'branch_warning': is_in_branch(),
         }
 
 

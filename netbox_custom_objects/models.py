@@ -714,7 +714,7 @@ class CustomObjectType(NetBoxModel):
         self.object_type.public = True
         self.object_type.save()
 
-        with connection.schema_editor() as schema_editor:
+        with _get_schema_connection().schema_editor() as schema_editor:
             schema_editor.create_model(model)
 
         get_serializer_class(model)
@@ -772,20 +772,31 @@ class CustomObjectType(NetBoxModel):
         self.clear_model_cache(self.id)
 
         model = self.get_model()
+        schema_conn = _get_schema_connection()
+        in_branch = schema_conn is not connection
 
         # Delete all CustomObjectTypeFields that reference this CustomObjectType
         for field in CustomObjectTypeField.objects.filter(related_object_type=self.object_type):
             field.delete()
 
         object_type = ObjectType.objects.get_for_model(model)
-        ObjectChange.objects.filter(changed_object_type=object_type).delete()
+
+        # ObjectChange and ObjectType records live in the main schema. Only clean
+        # them up when operating outside a branch; inside a branch they belong to
+        # main and must not be touched until the deletion is merged.
+        if not in_branch:
+            ObjectChange.objects.filter(changed_object_type=object_type).delete()
+
         super().delete(*args, **kwargs)
 
-        # Temporarily disconnect the pre_delete handler to skip the ObjectType deletion
-        # TODO: Remove this disconnect/reconnect after ObjectType has been exempted from handle_deleted_object
-        pre_delete.disconnect(handle_deleted_object)
-        object_type.delete()
-        with connection.schema_editor() as schema_editor:
+        if not in_branch:
+            # Temporarily disconnect the pre_delete handler to skip the ObjectType deletion
+            # TODO: Remove this disconnect/reconnect after ObjectType has been exempted from handle_deleted_object
+            pre_delete.disconnect(handle_deleted_object)
+            object_type.delete()
+            pre_delete.connect(handle_deleted_object)
+
+        with schema_conn.schema_editor() as schema_editor:
             schema_editor.delete_model(model)
 
         # Unregister the model and its through-models from Django's app registry so
@@ -810,9 +821,6 @@ class CustomObjectType(NetBoxModel):
 
         # Re-clear the model cache to remove re-cached model from get_model.
         self.clear_model_cache(self.id)
-
-        # Reconnect the pre_delete handler after all cleanup is done.
-        pre_delete.connect(handle_deleted_object)
 
 
 @receiver(post_save, sender=CustomObjectType)

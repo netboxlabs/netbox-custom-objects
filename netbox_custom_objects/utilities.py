@@ -8,7 +8,6 @@ __all__ = (
     "AppsProxy",
     "generate_model",
     "get_viewname",
-    "is_in_branch",
 )
 
 
@@ -110,17 +109,3 @@ def generate_model(*args, **kwargs):
 
     return model
 
-
-def is_in_branch():
-    """
-    Check if currently operating within a branch.
-
-    Returns:
-        bool: True if currently in a branch, False otherwise.
-    """
-    try:
-        from netbox_branching.contextvars import active_branch
-        return active_branch.get() is not None
-    except ImportError:
-        # Branching plugin not installed
-        return False
