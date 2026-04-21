@@ -15,13 +15,21 @@ class TransactionCleanupMixin:
     """
 
     def tearDown(self):
+        from core.models import ObjectChange
         from netbox_custom_objects.models import CustomObject
+        # Flush deferred CO field data so it doesn't bleed into the next test.
         CustomObject._deferred_field_data.clear()
+        # Delete COTs and their backing tables before the DB flush.
         for cot in CustomObjectType.objects.all():
             try:
                 cot.delete()
             except Exception as exc:
                 print(f"WARNING: tearDown could not delete COT {cot.pk}: {exc}")
+        # Remove any ObjectChange records created during the test (merge/revert creates
+        # them in main with the test user's ID).  If left in place, the serialized_rollback
+        # snapshot accumulates them and restoring it after the next flush produces FK
+        # violations (user referenced by ObjectChange no longer exists).
+        ObjectChange.objects.all().delete()
         super().tearDown()
 
 

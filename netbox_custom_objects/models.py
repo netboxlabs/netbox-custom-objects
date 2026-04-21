@@ -376,6 +376,9 @@ class CustomObjectType(NetBoxModel):
         return self.display_name
 
     def clean(self):
+        # Guard against None (can arrive via update_object during branch revert)
+        if self.custom_field_data is None:
+            self.custom_field_data = {}
         super().clean()
 
         if not self.slug:
@@ -807,7 +810,9 @@ class CustomObjectType(NetBoxModel):
                 constraint_name = row[0]
                 cursor.execute(f'ALTER TABLE "{table_name}" DROP CONSTRAINT IF EXISTS "{constraint_name}"')
 
-            # Create new FK constraint with ON DELETE CASCADE
+            # Create new FK constraint with ON DELETE CASCADE.
+            # Not DEFERRABLE: a deferred constraint leaves pending trigger events that block
+            # subsequent ALTER TABLE calls (e.g. during branch revert remove_field).
             constraint_name = f"{table_name}_{column_name}_fk_cascade"
             cursor.execute(f"""
                 ALTER TABLE "{table_name}"
@@ -815,7 +820,6 @@ class CustomObjectType(NetBoxModel):
                 FOREIGN KEY ("{column_name}")
                 REFERENCES "{related_table}" ("id")
                 ON DELETE CASCADE
-                DEFERRABLE INITIALLY DEFERRED
             """)
 
     def _ensure_all_fk_constraints(self, model):
@@ -1012,6 +1016,9 @@ def custom_object_type_post_save_handler(sender, instance, created, **kwargs):
             app_label=APP_LABEL,
             model=content_type_name
         )
+        # Snapshot before modifying so change logging records a correct pre-state.
+        # Without this, diff()['pre'] would set all fields to None during branch revert.
+        instance.snapshot()
         instance.object_type = ct
         instance.save()
 
@@ -2024,7 +2031,10 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         # Clear and refresh the model cache for this CustomObjectType when a field is modified
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)
 
-        # Update parent's cache_timestamp to invalidate cache across all workers
+        # Update parent's cache_timestamp to invalidate cache across all workers.
+        # snapshot() must be called first so that change logging has a correct pre-state;
+        # without it, diff()['pre'] would set ALL fields to None during branch revert.
+        self.custom_object_type.snapshot()
         self.custom_object_type.save(update_fields=['cache_timestamp'])
 
         super().save(*args, **kwargs)
@@ -2062,18 +2072,30 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 apps = model._meta.apps
                 through_model = apps.get_model(APP_LABEL, self.through_model_name)
                 schema_editor.delete_model(through_model)
+            # Flush any pending DEFERRABLE FK trigger events before ALTER TABLE;
+            # otherwise PostgreSQL raises "pending trigger events" when removing a FK field.
+            schema_editor.execute('SET CONSTRAINTS ALL IMMEDIATE')
             schema_editor.remove_field(model, model_field)
 
         # Clear the model cache for this CustomObjectType when a field is deleted
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)
 
-        # Update parent's cache_timestamp to invalidate cache across all workers
+        # Update parent's cache_timestamp to invalidate cache across all workers.
+        # snapshot() must be called first so that change logging has a correct pre-state.
+        self.custom_object_type.snapshot()
         self.custom_object_type.save(update_fields=['cache_timestamp'])
 
         super().delete(*args, **kwargs)
 
+        # Regenerate and re-register the model so the app registry no longer includes
+        # the removed field.  During squash revert the squash strategy may try to query
+        # CO rows (model.objects.get(pk=...)) after undoing this field but before undoing
+        # the CO itself.  If the stale model class is still in the app registry it will
+        # include the now-absent column in its SELECT, causing ProgrammingError.
+        updated_model = self.custom_object_type.get_model()
+
         # Reregister SearchIndex with new set of searchable fields
-        self.custom_object_type.register_custom_object_search_index(model)
+        self.custom_object_type.register_custom_object_search_index(updated_model)
 
         # Reindex all objects of this type since a searchable field was removed
         if self.search_weight > 0:
