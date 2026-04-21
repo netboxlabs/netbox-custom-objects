@@ -10,6 +10,7 @@ from django.db.utils import OperationalError, ProgrammingError
 from netbox.plugins import PluginConfig
 
 from .constants import APP_LABEL as APP_LABEL
+from .utilities import extract_cot_id_from_model_name, install_clear_cache_suppressor
 
 # Context variable to track if we're currently running migrations
 _is_migrating = contextvars.ContextVar('is_migrating', default=False)
@@ -168,6 +169,10 @@ class CustomObjectsPluginConfig(PluginConfig):
             _checking_migrations = False
 
     def ready(self):
+        # Install the thread-safe apps.clear_cache wrapper before any dynamic
+        # model is registered (must happen exactly once, before get_model() runs).
+        install_clear_cache_suppressor()
+
         from .models import CustomObjectType
         from netbox_custom_objects.api.serializers import get_serializer_class
 
@@ -236,9 +241,9 @@ class CustomObjectsPluginConfig(PluginConfig):
             pass
 
         model_name = model_name.lower()
-        # only do database calls if we are sure the app is ready to avoid
-        # Django warnings
-        if "table" not in model_name.lower() or "model" not in model_name.lower():
+
+        cot_id_str = extract_cot_id_from_model_name(model_name)
+        if cot_id_str is None:
             raise LookupError(
                 "App '%s' doesn't have a '%s' model." % (self.label, model_name)
             )
@@ -251,9 +256,7 @@ class CustomObjectsPluginConfig(PluginConfig):
 
         from .models import CustomObjectType
 
-        custom_object_type_id = int(
-            model_name.replace("table", "").replace("model", "")
-        )
+        custom_object_type_id = int(cot_id_str)
 
         try:
             obj = CustomObjectType.objects.get(pk=custom_object_type_id)
