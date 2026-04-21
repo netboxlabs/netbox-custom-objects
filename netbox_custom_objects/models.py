@@ -175,16 +175,11 @@ class CustomObjectType(NetBoxModel):
         unique=True,
         validators=(
             RegexValidator(
-                regex=r"^[a-z0-9_]+$",
-                message=_("Only lowercase alphanumeric characters and underscores are allowed."),
-            ),
-            RegexValidator(
-                regex=r"__",
+                regex=r"^[a-z0-9]+(_[a-z0-9]+)*$",
                 message=_(
-                    "Double underscores are not permitted in custom object object type names."
+                    "Only lowercase alphanumeric characters and underscores are allowed. "
+                    "Names may not start or end with an underscore, and double underscores are not permitted."
                 ),
-                flags=re.IGNORECASE,
-                inverse_match=True,
             ),
         ),
     )
@@ -819,16 +814,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         help_text=_("Internal field name, e.g. \"vendor_label\""),
         validators=(
             RegexValidator(
-                regex=r"^[a-z0-9_]+$",
-                message=_("Only lowercase alphanumeric characters and underscores are allowed."),
-            ),
-            RegexValidator(
-                regex=r"__",
+                regex=r"^[a-z0-9]+(_[a-z0-9]+)*$",
                 message=_(
-                    "Double underscores are not permitted in custom object field names."
+                    "Only lowercase alphanumeric characters and underscores are allowed. "
+                    "Names may not start or end with an underscore, and double underscores are not permitted."
                 ),
-                flags=re.IGNORECASE,
-                inverse_match=True,
             ),
         ),
     )
