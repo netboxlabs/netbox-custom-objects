@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.4.10
+---
+
+### Bug Fixes
+
+- [#456](https://github.com/netboxlabs/netbox-custom-objects/issues/456) - Additional guards against a partially-migrated schema crashing during `manage.py migrate`
+
+
+## 0.4.9
+---
+
+### Bug Fixes
+
+- [#456](https://github.com/netboxlabs/netbox-custom-objects/issues/456) - Error executing migration due to missing `group_name` column when upgrading from v0.4.6
+
+
+## 0.4.8
+---
+
+**Note:** See also v0.4.7 for recent bug fixes and enhancements, as this release is a fast-follow.
+
+### Bug Fixes
+
+- [#441](https://github.com/netboxlabs/netbox-custom-objects/issues/441) - ObjectSelectorView does not support targeting custom objects from core custom fields
+
+
+## 0.4.7
+---
+
+### Enhancements
+
+- [#25](https://github.com/netboxlabs/netbox-custom-objects/issues/25) - Linked custom objects should show up in the API response for related objects
+- [#193](https://github.com/netboxlabs/netbox-custom-objects/issues/193) - Grouping custom object types in nav menu
+- [#292](https://github.com/netboxlabs/netbox-custom-objects/issues/292) - Move COTF to their own standard ViewTab in the COT detail view
+- [#308](https://github.com/netboxlabs/netbox-custom-objects/issues/308) - Limit rows qty in "Custom Objects linking to this object" panels
+
+### Bug Fixes
+
+- [#382](https://github.com/netboxlabs/netbox-custom-objects/issues/382) - Primary name field breaks related custom objects and NetBox objects
+- [#383](https://github.com/netboxlabs/netbox-custom-objects/issues/383) - Related objects and count on NetBox Objects are rendered twice
+- [#394](https://github.com/netboxlabs/netbox-custom-objects/issues/394) - Reindex CachedValues when COT fields are changed
+- [#407](https://github.com/netboxlabs/netbox-custom-objects/issues/407) - Custom object types visible in menu without permissions
+- [#409](https://github.com/netboxlabs/netbox-custom-objects/issues/409) - Required Fields also required when bulk editing
+- [#417](https://github.com/netboxlabs/netbox-custom-objects/issues/417) - Filtering objects by multiple-object field does not work
+- [#423](https://github.com/netboxlabs/netbox-custom-objects/issues/423) - Can't use custom object as field type in POST /api/plugins/custom-objects/custom-object-type-fields/
+- [#429](https://github.com/netboxlabs/netbox-custom-objects/issues/429) - Deleting Custom Object and Custom Object Type Together Causes Missing Relation Error
+- [#440](https://github.com/netboxlabs/netbox-custom-objects/issues/440) - Typeahead search returns no results for non-text primary fields
+
+
 ## 0.4.6
 ---
 

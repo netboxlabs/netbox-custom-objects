@@ -2,6 +2,7 @@
 Tests for the concrete and dynamically generated models that are managed by this plugin.
 """
 from unittest import skip
+from unittest.mock import patch
 from decimal import Decimal
 
 from django.core.exceptions import ValidationError
@@ -10,9 +11,49 @@ from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
 
+
+from django.contrib.contenttypes.models import ContentType
+from extras.models import CachedValue
+from netbox.search.backends import get_backend
+from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
 from netbox_custom_objects.models import CustomObjectTypeField
 from core.models import ObjectType
+from netbox_custom_objects.utilities import extract_cot_id_from_model_name
 from .base import CustomObjectsTestCase
+
+
+class ExtractCotIdFromModelNameTestCase(TestCase):
+    """Unit tests for extract_cot_id_from_model_name()."""
+
+    def test_valid_names_return_id_string(self):
+        self.assertEqual(extract_cot_id_from_model_name("table1model"), "1")
+        self.assertEqual(extract_cot_id_from_model_name("table42model"), "42")
+        self.assertEqual(extract_cot_id_from_model_name("table999model"), "999")
+
+    def test_returns_none_for_missing_prefix(self):
+        # No leading "table"
+        self.assertIsNone(extract_cot_id_from_model_name("42model"))
+
+    def test_returns_none_for_missing_suffix(self):
+        # No trailing "model"
+        self.assertIsNone(extract_cot_id_from_model_name("table42"))
+
+    def test_returns_none_for_non_digit_id(self):
+        self.assertIsNone(extract_cot_id_from_model_name("tableabcmodel"))
+
+    def test_returns_none_for_substring_match(self):
+        # "table" and "model" present as substrings but wrong structure
+        self.assertIsNone(extract_cot_id_from_model_name("sometablemodel"))
+        self.assertIsNone(extract_cot_id_from_model_name("table_model"))
+        self.assertIsNone(extract_cot_id_from_model_name("table42modelextra"))
+
+    def test_returns_none_for_empty_string(self):
+        self.assertIsNone(extract_cot_id_from_model_name(""))
+
+    def test_case_sensitive(self):
+        # The regex is anchored and lowercase-only; uppercase should not match
+        self.assertIsNone(extract_cot_id_from_model_name("Table42Model"))
+        self.assertIsNone(extract_cot_id_from_model_name("TABLE42MODEL"))
 
 
 class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
@@ -755,3 +796,686 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
 
         # Verify it's gone
         self.assertEqual(self.model.objects.count(), 0)
+
+
+class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
+    """Tests for the related_name field on Object and MultiObject fields."""
+
+    def setUp(self):
+        super().setUp()
+        # "SLB" is the target (reverse side); "Certificate" holds the forward relation.
+        self.slb_cot = self.create_custom_object_type(name="SLB", slug="slb")
+        self.create_custom_object_type_field(
+            self.slb_cot, name="name", label="Name", type="text", primary=True
+        )
+        self.slb_object_type = ObjectType.objects.get(
+            app_label="netbox_custom_objects",
+            model=self.slb_cot.get_table_model_name(self.slb_cot.id).lower(),
+        )
+
+        self.cert_cot = self.create_custom_object_type(name="Certificate", slug="certificate")
+        self.create_custom_object_type_field(
+            self.cert_cot, name="name", label="Name", type="text", primary=True
+        )
+
+    # ------------------------------------------------------------------ #
+    # Validation                                                           #
+    # ------------------------------------------------------------------ #
+
+    def test_related_name_rejected_on_non_object_field(self):
+        """related_name cannot be set on non-object field types."""
+        for field_type in ("text", "integer", "boolean", "date"):
+            with self.subTest(field_type=field_type):
+                field = CustomObjectTypeField(
+                    custom_object_type=self.cert_cot,
+                    name="some_field",
+                    type=field_type,
+                    related_name="my_reverse",
+                )
+                with self.assertRaises(ValidationError) as cm:
+                    field.full_clean()
+                self.assertIn("related_name", cm.exception.message_dict)
+
+    def test_related_name_invalid_characters_rejected(self):
+        """related_name must contain only lowercase alphanumeric characters and underscores."""
+        for bad_value in ("My-Name", "has space", "UPPER", "has--double", "has__double"):
+            with self.subTest(value=bad_value):
+                field = CustomObjectTypeField(
+                    custom_object_type=self.cert_cot,
+                    name="slb",
+                    type="object",
+                    related_object_type=self.slb_object_type,
+                    related_name=bad_value,
+                )
+                with self.assertRaises(ValidationError):
+                    field.full_clean()
+
+    def test_duplicate_related_name_same_target_rejected(self):
+        """Two fields with the same related_name pointing at the same related_object_type raise ValidationError."""
+        self.create_custom_object_type_field(
+            self.cert_cot,
+            name="slb",
+            type="object",
+            related_object_type=self.slb_object_type,
+            related_name="certificates",
+        )
+        field = CustomObjectTypeField(
+            custom_object_type=self.cert_cot,
+            name="slb2",
+            type="object",
+            related_object_type=self.slb_object_type,
+            related_name="certificates",
+        )
+        with self.assertRaises(ValidationError) as cm:
+            field.full_clean()
+        self.assertIn("related_name", cm.exception.message_dict)
+
+    def test_same_related_name_different_targets_allowed(self):
+        """The same related_name is allowed when the related_object_type differs."""
+        site_ct = self.get_site_object_type()
+        self.create_custom_object_type_field(
+            self.cert_cot,
+            name="slb",
+            type="object",
+            related_object_type=self.slb_object_type,
+            related_name="certificates",
+        )
+        # Same related_name but targeting a different model — should not raise.
+        field = CustomObjectTypeField(
+            custom_object_type=self.cert_cot,
+            name="site",
+            type="object",
+            related_object_type=site_ct,
+            related_name="certificates",
+        )
+        field.full_clean()  # Should not raise.
+
+    def test_blank_related_name_allows_multiple_fields_same_target(self):
+        """Multiple fields with no related_name targeting the same object type are allowed."""
+        self.create_custom_object_type_field(
+            self.cert_cot,
+            name="slb",
+            type="object",
+            related_object_type=self.slb_object_type,
+        )
+        field = CustomObjectTypeField(
+            custom_object_type=self.cert_cot,
+            name="slb2",
+            type="object",
+            related_object_type=self.slb_object_type,
+        )
+        field.full_clean()  # blank related_name is excluded from the uniqueness constraint.
+
+    # ------------------------------------------------------------------ #
+    # Object (FK) reverse accessor                                        #
+    # ------------------------------------------------------------------ #
+
+    def test_object_field_with_related_name_creates_reverse_accessor(self):
+        """A named reverse accessor is available on the related model after an Object field is saved."""
+        self.create_custom_object_type_field(
+            self.cert_cot,
+            name="slb",
+            type="object",
+            related_object_type=self.slb_object_type,
+            related_name="certificates",
+        )
+        # Generate Certificate's model so it contributes the FK (and its reverse) to SLB's class.
+        self.cert_cot.get_model()
+        slb_model = self.slb_cot.get_model()
+        self.assertTrue(
+            hasattr(slb_model, "certificates"),
+            "Expected reverse accessor 'certificates' on SLB model.",
+        )
+
+    def test_object_field_reverse_accessor_returns_correct_objects(self):
+        """The reverse FK manager returns only the Certificate instances that reference a given SLB."""
+        self.create_custom_object_type_field(
+            self.cert_cot,
+            name="slb",
+            type="object",
+            related_object_type=self.slb_object_type,
+            related_name="certificates",
+        )
+        cert_model = self.cert_cot.get_model()
+        slb_model = self.slb_cot.get_model()
+
+        slb_a = slb_model.objects.create(name="SLB-A")
+        slb_b = slb_model.objects.create(name="SLB-B")
+        cert_1 = cert_model.objects.create(name="Cert-1", slb=slb_a)
+        cert_2 = cert_model.objects.create(name="Cert-2", slb=slb_a)
+        cert_model.objects.create(name="Cert-3", slb=slb_b)
+
+        result = list(slb_a.certificates.all())
+        self.assertIn(cert_1, result)
+        self.assertIn(cert_2, result)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(slb_b.certificates.count(), 1)
+
+    def test_object_field_without_related_name_uses_auto_generated_name(self):
+        """Without related_name, the auto-generated accessor follows the {table}_{field}_set convention."""
+        self.create_custom_object_type_field(
+            self.cert_cot,
+            name="slb",
+            type="object",
+            related_object_type=self.slb_object_type,
+        )
+        self.cert_cot.get_model()
+        slb_model = self.slb_cot.get_model()
+
+        table_model_name = self.cert_cot.get_table_model_name(self.cert_cot.id).lower()
+        expected_accessor = f"{table_model_name}_slb_set"
+        self.assertTrue(
+            hasattr(slb_model, expected_accessor),
+            f"Expected auto-generated reverse accessor '{expected_accessor}' on SLB model.",
+        )
+
+    # ------------------------------------------------------------------ #
+    # MultiObject (M2M) reverse accessor                                  #
+    # ------------------------------------------------------------------ #
+
+    def test_multiobject_field_with_related_name_creates_reverse_manager(self):
+        """A named reverse manager is available on the related model after a MultiObject field is saved."""
+        self.create_custom_object_type_field(
+            self.cert_cot,
+            name="slbs",
+            type="multiobject",
+            related_object_type=self.slb_object_type,
+            related_name="certificates",
+        )
+        self.cert_cot.get_model()
+        slb_model = self.slb_cot.get_model()
+        self.assertTrue(
+            hasattr(slb_model, "certificates"),
+            "Expected reverse manager 'certificates' on SLB model.",
+        )
+
+    def test_multiobject_field_reverse_manager_returns_correct_objects(self):
+        """The reverse M2M manager returns only the Certificate instances linked to a given SLB."""
+        self.create_custom_object_type_field(
+            self.cert_cot,
+            name="slbs",
+            type="multiobject",
+            related_object_type=self.slb_object_type,
+            related_name="certificates",
+        )
+        cert_model = self.cert_cot.get_model()
+        slb_model = self.slb_cot.get_model()
+
+        slb_a = slb_model.objects.create(name="SLB-A")
+        slb_b = slb_model.objects.create(name="SLB-B")
+        cert_1 = cert_model.objects.create(name="Cert-1")
+        cert_2 = cert_model.objects.create(name="Cert-2")
+        cert_1.slbs.add(slb_a)
+        cert_2.slbs.add(slb_a, slb_b)
+
+        result = list(slb_a.certificates.all())
+        self.assertIn(cert_1, result)
+        self.assertIn(cert_2, result)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(slb_b.certificates.count(), 1)
+        self.assertIn(cert_2, slb_b.certificates.all())
+
+    def test_multiobject_field_without_related_name_has_no_reverse_accessor(self):
+        """Without related_name, a MultiObject field has no reverse accessor on the related model."""
+        self.create_custom_object_type_field(
+            self.cert_cot,
+            name="slbs",
+            type="multiobject",
+            related_object_type=self.slb_object_type,
+        )
+        self.cert_cot.get_model()
+        slb_model = self.slb_cot.get_model()
+
+        # No user-defined or auto-generated reverse accessor should exist.
+        table_model_name = self.cert_cot.get_table_model_name(self.cert_cot.id).lower()
+        self.assertFalse(
+            hasattr(slb_model, "slbs"),
+            "MultiObject field without related_name should not create a reverse accessor.",
+        )
+        self.assertFalse(
+            hasattr(slb_model, f"{table_model_name}_slbs_set"),
+            "MultiObject field without related_name should not create an auto-generated reverse accessor.",
+        )
+
+
+class SearchReindexTestCase(CustomObjectsTestCase, TestCase):
+    """Test that ReindexCustomObjectTypeJob is triggered when field search weights change."""
+
+    def setUp(self):
+        super().setUp()
+        self.cot = self.create_custom_object_type(
+            name="ReindexTest",
+            slug="reindex-test",
+        )
+        self.field = self.create_custom_object_type_field(
+            self.cot,
+            name="title",
+            label="Title",
+            type="text",
+            search_weight=500,
+        )
+        self.model = self.cot.get_model()
+        self.instance = self.model.objects.create(title="Hello World")
+
+    def test_job_enqueued_on_field_weight_change(self):
+        """Changing search_weight on a field enqueues a reindex job after the transaction commits."""
+        field = CustomObjectTypeField.objects.get(pk=self.field.pk)
+        field.search_weight = 100
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
+            with self.captureOnCommitCallbacks(execute=True):
+                field.save()
+        mock_enqueue.assert_called_once_with(cot_id=self.cot.pk)
+
+    def test_job_enqueued_on_field_weight_zeroed(self):
+        """Changing search_weight to 0 enqueues a reindex job after the transaction commits."""
+        field = CustomObjectTypeField.objects.get(pk=self.field.pk)
+        field.search_weight = 0
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
+            with self.captureOnCommitCallbacks(execute=True):
+                field.save()
+        mock_enqueue.assert_called_once_with(cot_id=self.cot.pk)
+
+    def test_job_not_enqueued_when_weight_unchanged(self):
+        """Saving a field without changing search_weight does not enqueue a reindex job."""
+        field = CustomObjectTypeField.objects.get(pk=self.field.pk)
+        field.label = "Modified Title"
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
+            with self.captureOnCommitCallbacks(execute=True):
+                field.save()
+        mock_enqueue.assert_not_called()
+
+    def test_job_enqueued_on_searchable_field_creation(self):
+        """Adding a new field with search_weight > 0 enqueues a reindex job after the transaction commits."""
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
+            with self.captureOnCommitCallbacks(execute=True):
+                new_field = self.create_custom_object_type_field(
+                    self.cot,
+                    name="subtitle",
+                    label="Subtitle",
+                    type="text",
+                    search_weight=300,
+                )
+        self.addCleanup(new_field.delete)
+        mock_enqueue.assert_called_once_with(cot_id=self.cot.pk)
+
+    def test_job_not_enqueued_on_non_searchable_field_creation(self):
+        """Adding a field with search_weight=0 does not enqueue a reindex job."""
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
+            with self.captureOnCommitCallbacks(execute=True):
+                non_search_field = self.create_custom_object_type_field(
+                    self.cot,
+                    name="notes",
+                    label="Notes",
+                    type="text",
+                    search_weight=0,
+                )
+        self.addCleanup(non_search_field.delete)
+        mock_enqueue.assert_not_called()
+
+    def test_job_enqueued_on_searchable_field_deletion(self):
+        """Deleting a field with search_weight > 0 enqueues a reindex job after the transaction commits."""
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
+            with self.captureOnCommitCallbacks(execute=True):
+                self.field.delete()
+        mock_enqueue.assert_called_once_with(cot_id=self.cot.pk)
+
+    def test_job_run_updates_cached_values(self):
+        """The job's run() method re-caches all objects using the updated SearchIndex."""
+        # Prime the cache with the initial weight
+        get_backend().cache(self.model.objects.all())
+        ct = ContentType.objects.get_for_model(self.model)
+        self.assertEqual(
+            CachedValue.objects.filter(object_type=ct, object_id=self.instance.pk, field="title", weight=500).count(),
+            1,
+        )
+
+        # Save the field with a new weight (suppress automatic enqueue)
+        field = CustomObjectTypeField.objects.get(pk=self.field.pk)
+        field.search_weight = 100
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue'):
+            with self.captureOnCommitCallbacks(execute=True):
+                field.save()
+
+        # Run the job synchronously via immediate=True
+        ReindexCustomObjectTypeJob.enqueue(cot_id=self.cot.pk, immediate=True)
+
+        self.assertEqual(
+            CachedValue.objects.filter(object_type=ct, object_id=self.instance.pk, field="title", weight=100).count(),
+            1,
+        )
+        self.assertEqual(
+            CachedValue.objects.filter(object_type=ct, object_id=self.instance.pk, field="title", weight=500).count(),
+            0,
+        )
+
+    def test_job_name_includes_cot_name(self):
+        """Enqueued job name includes the COT name for observability."""
+        job = ReindexCustomObjectTypeJob.enqueue(cot_id=self.cot.pk, immediate=True)
+        self.assertEqual(job.name, f'Reindex Custom Object Type: {self.cot.name}')
+
+    def test_job_data_contains_cot_id(self):
+        """Job.data is populated with cot_id and job_class for UI visibility and deduplication."""
+        job = ReindexCustomObjectTypeJob.enqueue(cot_id=self.cot.pk, immediate=True)
+        self.assertEqual(job.data['cot_id'], self.cot.pk)
+        self.assertEqual(job.data['job_class'], 'ReindexCustomObjectTypeJob')
+
+    def test_duplicate_job_not_enqueued(self):
+        """A second enqueue for the same COT returns the existing pending job without creating a new one."""
+        from core.choices import JobStatusChoices
+
+        with patch('django_rq.get_queue'):
+            first_job = ReindexCustomObjectTypeJob.enqueue(cot_id=self.cot.pk)
+        # Simulate the first job still pending
+        first_job.status = JobStatusChoices.STATUS_PENDING
+        first_job.save(update_fields=['status'])
+
+        with patch('django_rq.get_queue'):
+            second_job = ReindexCustomObjectTypeJob.enqueue(cot_id=self.cot.pk)
+
+        self.assertEqual(first_job.pk, second_job.pk)
+
+
+class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
+    """
+    Regression tests for CustomObjectsPluginConfig.get_model().
+
+    Covers the bug where get_model() queried the DB unconditionally, causing
+    "column does not exist" errors during `manage.py migrate` when a new
+    migration added a column to CustomObjectType but hadn't run yet.
+    See: https://github.com/netboxlabs/netbox-custom-objects/issues/456
+    """
+
+    def setUp(self):
+        super().setUp()
+        from django.apps import apps
+        self.config = apps.get_app_config('netbox_custom_objects')
+
+    def test_get_model_raises_lookup_error_when_skipping(self):
+        """get_model() raises LookupError instead of querying DB when should_skip returns True."""
+        cot = self.create_custom_object_type(name="MigrateTest", slug="migrate-test")
+        model_name = f"{cot.pk}tablemodel"
+
+        with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=True):
+            with self.assertRaises(LookupError):
+                self.config.get_model(model_name)
+
+    def test_get_model_returns_model_when_not_skipping(self):
+        """get_model() successfully returns the dynamic model when migrations are up to date."""
+        cot = self.create_custom_object_type(name="MigrateTest2", slug="migrate-test-2")
+        model_name = f"table{cot.pk}model"
+
+        with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
+            model = self.config.get_model(model_name)
+        self.assertIsNotNone(model)
+
+    def test_get_model_skips_db_with_migrate_in_argv(self):
+        """get_model() raises LookupError when 'migrate' is in sys.argv (pre-migration state)."""
+        import sys
+        cot = self.create_custom_object_type(name="MigrateTest3", slug="migrate-test-3")
+        model_name = f"{cot.pk}tablemodel"
+
+        original_argv = sys.argv[:]
+        try:
+            sys.argv = ['manage.py', 'migrate']
+            # Reset cached migration check so argv is re-evaluated
+            import netbox_custom_objects as nco
+            nco._migrations_checked = None
+            with self.assertRaises(LookupError):
+                self.config.get_model(model_name)
+        finally:
+            sys.argv = original_argv
+            nco._migrations_checked = None
+
+    def test_get_model_converts_programming_error_to_lookup_error(self):
+        """
+        Regression: get_model() must not let ProgrammingError escape when the DB
+        schema is incomplete (e.g. a new column was added by a migration that
+        hasn't run yet).  Reproduces the failure reported in issue #456 where
+        upgrading from v0.4.6 to v0.4.7 aborted `manage.py migrate` with
+        "column netbox_custom_objects_customobjecttype.group_name does not exist".
+
+        Use a model_name with a non-existent COT ID so the dynamic model is not
+        already in the app registry; this ensures we reach the objects.get() call
+        that needs to be guarded.
+        """
+        from django.db.utils import ProgrammingError
+        from netbox_custom_objects.models import CustomObjectType
+
+        model_name = "table99998model"  # no such COT — not in the app registry
+
+        with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
+            with patch.object(CustomObjectType.objects, 'get',
+                              side_effect=ProgrammingError("column does not exist")):
+                with self.assertRaises(LookupError):
+                    self.config.get_model(model_name)
+
+    def test_get_model_converts_operational_error_to_lookup_error(self):
+        """
+        get_model() must convert OperationalError (e.g. table missing entirely)
+        to LookupError for the same reason as ProgrammingError above.
+        """
+        from django.db.utils import OperationalError
+        from netbox_custom_objects.models import CustomObjectType
+
+        model_name = "table99999model"  # no such COT — not in the app registry
+
+        with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
+            with patch.object(CustomObjectType.objects, 'get',
+                              side_effect=OperationalError("no such table")):
+                with self.assertRaises(LookupError):
+                    self.config.get_model(model_name)
+
+    def test_ready_survives_programming_error(self):
+        """
+        ready() must not propagate ProgrammingError from an incomplete DB schema.
+        Calling ready() a second time is safe — signals are re-connected idempotently
+        and the dynamic model loop is the only part that can raise here.
+        """
+        from django.db.utils import ProgrammingError
+        from netbox_custom_objects.models import CustomObjectType
+
+        with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
+            with patch.object(CustomObjectType.objects, 'all',
+                              side_effect=ProgrammingError("column does not exist")):
+                # Must not raise — bad schema should be silently skipped.
+                self.config.ready()
+
+    def test_ready_survives_operational_error(self):
+        """ready() must not propagate OperationalError from a missing table."""
+        from django.db.utils import OperationalError
+        from netbox_custom_objects.models import CustomObjectType
+
+        with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
+            with patch.object(CustomObjectType.objects, 'all',
+                              side_effect=OperationalError("no such table")):
+                self.config.ready()
+
+    def test_get_models_survives_programming_error(self):
+        """
+        get_models() must not propagate ProgrammingError when the DB schema is
+        incomplete.  The DB-driven portion yields nothing; static models already
+        in the app registry are still returned via super().get_models().
+        """
+        from django.db.utils import ProgrammingError
+        from netbox_custom_objects.models import CustomObjectType
+
+        with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
+            with patch.object(CustomObjectType.objects, 'all',
+                              side_effect=ProgrammingError("column does not exist")):
+                # Consuming the generator must not raise.
+                list(self.config.get_models())
+
+    def test_get_models_survives_operational_error(self):
+        """get_models() must not propagate OperationalError from a missing table."""
+        from django.db.utils import OperationalError
+        from netbox_custom_objects.models import CustomObjectType
+
+        with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
+            with patch.object(CustomObjectType.objects, 'all',
+                              side_effect=OperationalError("no such table")):
+                list(self.config.get_models())
+
+    def test_should_skip_returns_true_on_programming_error(self):
+        """
+        should_skip_dynamic_model_creation() must return True (skip) when the
+        migration infrastructure raises ProgrammingError, e.g. on a fresh install
+        before the django_migrations table exists.  An uncaught exception here
+        would bypass all the guards in ready(), get_model(), and get_models().
+        """
+        import netbox_custom_objects as nco
+        from django.db.utils import ProgrammingError
+
+        original_checked = nco._migrations_checked
+        nco._migrations_checked = None  # force the migration-loader path
+        try:
+            with patch('netbox_custom_objects.MigrationLoader',
+                       side_effect=ProgrammingError("relation does not exist")):
+                result = self.config.should_skip_dynamic_model_creation()
+            self.assertTrue(result)
+            # Must not be cached so the next call retries once the DB is ready.
+            self.assertIsNone(nco._migrations_checked)
+        finally:
+            nco._migrations_checked = original_checked
+
+    def test_should_skip_returns_true_on_operational_error(self):
+        """
+        should_skip_dynamic_model_creation() must return True when the migration
+        infrastructure raises OperationalError (e.g. django_migrations missing).
+        """
+        import netbox_custom_objects as nco
+        from django.db.utils import OperationalError
+
+        original_checked = nco._migrations_checked
+        nco._migrations_checked = None
+        try:
+            with patch('netbox_custom_objects.MigrationLoader',
+                       side_effect=OperationalError("no such table: django_migrations")):
+                result = self.config.should_skip_dynamic_model_creation()
+            self.assertTrue(result)
+            self.assertIsNone(nco._migrations_checked)
+        finally:
+            nco._migrations_checked = original_checked
+
+
+class CrossCOTStubSearchIndexRegressionTestCase(CustomObjectsTestCase, TestCase):
+    """Regression tests for the search-index crash on stub models.
+
+    When COT A has an object field pointing to COT B, generating A's model
+    internally calls ``B.get_model(skip_object_fields=True)`` to break the FK
+    recursion.  That stub model is then cached.  Any subsequent call to
+    ``B.get_model()`` returns the stub — which lacks the object/multiobject
+    fields.
+
+    Before the fix, ``register_custom_object_search_index()`` unconditionally
+    included *all* searchable fields in the index, even fields that were absent
+    from the stub.  When a B instance was saved, Django's ``post_save`` search
+    handler tried to read those absent attributes and raised::
+
+        AttributeError: 'TableNModel' object has no attribute '<field>'
+
+    The fix guards each field with ``model._meta.get_field(field.name)`` and
+    skips any field not present on the generated model.
+
+    Reproduces the scenario reported by the user after the Django 6.0 M2M fix
+    made the edit view reachable for the first time.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # --- Target COT: has a text primary field AND a searchable object field ---
+        self.target_cot = self.create_custom_object_type(
+            name="StubTarget",
+            slug="stub-target",
+        )
+        self.create_custom_object_type_field(
+            self.target_cot,
+            name="name",
+            label="Name",
+            type="text",
+            primary=True,
+            required=True,
+            search_weight=500,
+        )
+        # This object field has search_weight=500 (the default).  When the stub
+        # model is generated (skip_object_fields=True), this field is ABSENT.
+        # The old code would register it in the search index anyway → crash.
+        self.create_custom_object_type_field(
+            self.target_cot,
+            name="device",
+            label="Device",
+            type="object",
+            related_object_type=self.get_device_object_type(),
+            search_weight=500,
+        )
+
+        # --- Source COT: has an object field pointing to the target COT ---
+        self.source_cot = self.create_custom_object_type(
+            name="StubSource",
+            slug="stub-source",
+        )
+        self.create_custom_object_type_field(
+            self.source_cot,
+            name="name",
+            label="Name",
+            type="text",
+            primary=True,
+            required=True,
+        )
+        # Creating this field calls source_cot.get_model(), which internally
+        # calls target_cot.get_model(skip_object_fields=True) to resolve the FK.
+        # That caches the stub model for target_cot.
+        self.create_custom_object_type_field(
+            self.source_cot,
+            name="target_ref",
+            label="Target Reference",
+            type="object",
+            related_object_type=self.target_cot.object_type,
+            search_weight=0,  # not searchable; only target_cot's fields matter here
+        )
+
+    def test_save_does_not_crash_when_stub_cached_before_full_model(self):
+        """Saving a CO instance must not raise when its COT's stub was cached first.
+
+        This is the exact scenario from the bug report: a user saves an object
+        of the target COT whose model was cached as a stub (because another COT
+        referenced it as an FK target).  The search ``post_save`` handler must
+        not attempt to read object-type fields that are absent from the stub.
+        """
+        # target_cot.get_model() returns the stub (cached during setUp above).
+        # With the old code the registered search index included 'device', which
+        # is absent from the stub → AttributeError on save.
+        target_model = self.target_cot.get_model()
+
+        # This must not raise.
+        instance = target_model.objects.create(name="Stub Target Instance")
+
+        # Basic sanity: the instance was persisted.
+        self.assertEqual(target_model.objects.filter(pk=instance.pk).count(), 1)
+
+    def test_stub_model_search_index_excludes_absent_fields(self):
+        """The search index registered for a stub model must not reference absent fields.
+
+        When the stub is generated with skip_object_fields=True, object/multiobject
+        fields are excluded from the model class.  The search index must only contain
+        fields that are actually present.
+        """
+        from netbox.search import registry
+
+        self.target_cot.get_model()
+        label = f"netbox_custom_objects.{self.target_cot.get_table_model_name(self.target_cot.id).lower()}"
+        search_index = registry["search"].get(label)
+
+        self.assertIsNotNone(search_index, "Search index should be registered for the target COT model")
+
+        # fields is a list of (name, weight) tuples
+        indexed_field_names = {f[0] for f in search_index.fields}
+
+        # 'name' (text) is present on the stub → must be indexed.
+        self.assertIn("name", indexed_field_names)
+
+        # 'device' (object) is absent from the stub → must NOT be indexed.
+        self.assertNotIn(
+            "device",
+            indexed_field_names,
+            "Object-type fields absent from the stub must be excluded from the search index",
+        )

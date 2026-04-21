@@ -48,6 +48,14 @@ def install_clear_cache_suppressor():
 
     Must be called once from AppConfig.ready() before any dynamic model is
     registered.  Safe to call multiple times — subsequent calls are no-ops.
+
+    Note: the idempotency check (``apps.clear_cache is _wrapped_clear_cache``)
+    and the two-step assignment that follows are not atomic, so a concurrent
+    second caller could store ``_wrapped_clear_cache`` itself in
+    ``_real_clear_cache``, silently breaking suppression.  This is not a
+    real-world risk because ``AppConfig.ready()`` is called by Django during
+    single-threaded startup before any request threads are spawned.  If this
+    function is ever moved out of ``ready()`` a proper lock will be needed.
     """
     global _real_clear_cache
     if apps.clear_cache is _wrapped_clear_cache:
@@ -57,11 +65,14 @@ def install_clear_cache_suppressor():
 
 
 @contextmanager
-def suppress_clear_cache():
+def _suppress_clear_cache():
     """Context manager: suppress apps.clear_cache() in the current thread.
 
     Reentrant — uses a depth counter so nested calls don't prematurely
     re-enable the real clear_cache before the outermost block exits.
+
+    Private: callers outside this module should use generate_model() or
+    install_clear_cache_suppressor() rather than reaching for this directly.
     """
     _suppress_tl.depth = getattr(_suppress_tl, "depth", 0) + 1
     try:
@@ -180,7 +191,7 @@ def generate_model(*args, **kwargs):
 
         # Suppress apps.clear_cache during model type() creation to avoid
         # invalidating the app registry cache on every dynamic model build.
-        with suppress_clear_cache():
+        with _suppress_clear_cache():
             model = type(*args, **kwargs)
 
     return model

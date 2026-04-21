@@ -78,12 +78,29 @@ class CustomObjectViewSet(ModelViewSet):
     def update(self, request, *args, **kwargs):
         if is_in_branch():
             raise ValidationError(BRANCH_ACTIVE_ERROR_MESSAGE)
-        return super().update(request, *args, **kwargs)
+        # Replicate DRF's UpdateModelMixin.update() so we can snapshot the instance
+        # before the serializer is constructed.  Calling super().update() would invoke
+        # get_object() a second time and return a fresh, un-snapshotted instance.
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        if hasattr(instance, 'snapshot'):
+            instance.snapshot()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+        if getattr(instance, '_prefetched_objects_cache', None):
+            instance._prefetched_objects_cache = {}
+        return Response(serializer.data)
 
     def partial_update(self, request, *args, **kwargs):
-        if is_in_branch():
-            raise ValidationError(BRANCH_ACTIVE_ERROR_MESSAGE)
-        return super().partial_update(request, *args, **kwargs)
+        kwargs['partial'] = True
+        return self.update(request, *args, **kwargs)
+
+    def perform_destroy(self, instance):
+        # Take a pre-change snapshot so prechange_data is populated in the changelog.
+        if hasattr(instance, 'snapshot'):
+            instance.snapshot()
+        super().perform_destroy(instance)
 
 
 class CustomObjectTypeFieldViewSet(ModelViewSet):

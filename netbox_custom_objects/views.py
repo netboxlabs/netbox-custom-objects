@@ -14,7 +14,6 @@ from extras.models import JournalEntry
 from extras.tables import JournalEntryTable
 from netbox.forms import (
     NetBoxModelBulkEditForm,
-    NetBoxModelFilterSetForm,
     NetBoxModelImportForm,
 )
 from netbox.views import generic
@@ -31,6 +30,7 @@ from . import field_types, filtersets, forms, tables
 from .models import CustomObject, CustomObjectType, CustomObjectTypeField
 from extras.choices import CustomFieldTypeChoices
 from netbox_custom_objects.constants import APP_LABEL
+from netbox_custom_objects.dynamic_forms import build_filterset_form_class
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name, is_in_branch
 
 logger = logging.getLogger("netbox_custom_objects.views")
@@ -450,26 +450,7 @@ class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
         return get_filterset_class(self.queryset.model)
 
     def get_filterset_form(self):
-        model = self.queryset.model
-
-        attrs = {
-            "model": model,
-            "__module__": "database.filterset_forms",
-            "tag": TagFilterField(model),
-        }
-
-        for field in self.custom_object_type.fields.all():
-            field_type = field_types.FIELD_TYPE_CLASS[field.type]()
-            try:
-                attrs[field.name] = field_type.get_filterform_field(field)
-            except NotImplementedError:
-                logger.debug("list view: {} field is not supported".format(field.name))
-
-        return type(
-            f"{model._meta.object_name}FilterForm",
-            (NetBoxModelFilterSetForm,),
-            attrs,
-        )
+        return build_filterset_form_class(self.queryset.model)
 
     def get(self, request, custom_object_type):
         # Necessary because get() in ObjectListView only takes request and no **kwargs
@@ -658,6 +639,11 @@ class CustomObjectEditView(generic.ObjectEditView):
                             if content_type.app_label == APP_LABEL:
                                 from netbox_custom_objects.models import CustomObjectType
                                 custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
+                                if custom_object_type_id is None:
+                                    raise ValueError(
+                                        f"Expected table<id>model name for {APP_LABEL} content type, "
+                                        f"got {content_type.model!r}"
+                                    )
                                 custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
                                 related_model = custom_object_type.get_model(skip_object_fields=True)
                             else:

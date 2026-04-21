@@ -55,7 +55,8 @@ from utilities.validators import validate_regex
 
 from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
-from netbox_custom_objects.utilities import extract_cot_id_from_model_name, generate_model, suppress_clear_cache
+from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
+from netbox_custom_objects.utilities import _suppress_clear_cache, extract_cot_id_from_model_name, generate_model
 
 logger = logging.getLogger(__name__)
 
@@ -364,6 +365,7 @@ class CustomObjectType(NetBoxModel):
     ):
         field_attrs = {
             "_primary_field_id": -1,
+            "_context_field_ids": [],
             # An object containing the table fields, field types and the chosen
             # names with the table field id as key.
             "_field_objects": {},
@@ -402,6 +404,8 @@ class CustomObjectType(NetBoxModel):
             # TODO: Add "primary" support
             if field.primary:
                 field_attrs["_primary_field_id"] = field.id
+            if field.context:
+                field_attrs["_context_field_ids"].append(field.id)
 
         return field_attrs
 
@@ -508,6 +512,15 @@ class CustomObjectType(NetBoxModel):
         # model must be an instance of this CustomObjectType's get_model() generated class
         fields = []
         for field in self.fields.filter(search_weight__gt=0):
+            # Only index fields that are actually present on the generated model.
+            # When the model was built with skip_object_fields=True (a lightweight
+            # stub used to break cross-COT FK recursion), object-type fields are
+            # intentionally absent.  Including them in the index causes
+            # FieldDoesNotExist / AttributeError in the post_save search handler.
+            try:
+                model._meta.get_field(field.name)
+            except FieldDoesNotExist:
+                continue
             fields.append((field.name, field.search_weight))
 
         attrs = {
@@ -615,19 +628,15 @@ class CustomObjectType(NetBoxModel):
             TM.post_through_setup = original_post_through_setup
 
         # Register the main model with Django's app registry.
-        #
-        # apps.register_model() unconditionally calls apps.clear_cache(), which
-        # in turn calls our overridden get_models() (see __init__.py), which calls
-        # get_model() for every known COT.  If the current COT is not yet in
-        # _model_cache that re-entrant get_model() call would itself call
-        # register_model() → clear_cache() → get_models() → ... → infinite recursion.
-        #
-        # suppress_clear_cache() (thread-local, installed once in AppConfig.ready())
-        # blocks the wrapper for this thread only for the window from register_model()
-        # through the cache write.  Once the context exits, the single explicit
-        # apps.clear_cache() call below is safe: this COT is now in _model_cache so
-        # re-entrant get_model() calls return from cache without recursing.
-        with suppress_clear_cache():
+        # _suppress_clear_cache() is used directly here (rather than going
+        # through generate_model()) because we are calling apps.register_model()
+        # explicitly, not type().  generate_model() wraps type() and suppresses
+        # clear_cache only for that call; the suppression window needs to extend
+        # through the _model_cache write that follows so the model is safely
+        # cached before any re-entrant get_model() call can observe it.
+        # Without suppression: register_model() → clear_cache() → get_models() →
+        # get_model() → generate_model() → register_model() recurses infinitely.
+        with _suppress_clear_cache():
             if model_name.lower() in apps.all_models[APP_LABEL]:
                 # Remove the existing model from all_models before registering the new one
                 del apps.all_models[APP_LABEL][model_name.lower()]
@@ -640,9 +649,8 @@ class CustomObjectType(NetBoxModel):
             with self._global_lock:
                 self._model_cache[self.id] = (model, self.cache_timestamp)
 
-        # Now that the model is in _model_cache, clear_cache() is safe: re-entrant
-        # get_model() calls for this COT will hit the cache and return immediately
-        # without calling register_model() again.
+        # Now that the model is in _model_cache, clear_cache() is safe:
+        # re-entrant get_model() calls for this COT hit the cache immediately.
         apps.clear_cache()
         ContentType.objects.clear_cache()
 
@@ -851,6 +859,13 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             "Indicates that this field's value will be used as the object's displayed name"
         ),
     )
+    context = models.BooleanField(
+        verbose_name=_("context field"),
+        default=False,
+        help_text=_(
+            "Indicates that this field's value will be shown as context when this object is referenced by other objects"
+        ),
+    )
     related_object_type = models.ForeignKey(
         to="core.ObjectType",
         on_delete=models.PROTECT,
@@ -880,8 +895,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         validators=(
             RegexValidator(
                 regex=r"^[a-z0-9_]+$",
-                message=_("Only alphanumeric characters and underscores are allowed."),
-                flags=re.IGNORECASE,
+                message=_("Only lowercase alphanumeric characters and underscores are allowed."),
             ),
             RegexValidator(
                 regex=r"__",
@@ -953,6 +967,32 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         help_text=_(
             "Filter the object selection choices using a query_params dict (must be a JSON value)."
             'Encapsulate strings with double quotes (e.g. "Foo").'
+        ),
+    )
+    related_name = models.CharField(
+        verbose_name=_("reverse relation name"),
+        max_length=100,
+        blank=True,
+        validators=(
+            RegexValidator(
+                regex=r"^[a-z0-9_]+$",
+                message=_("Only lowercase alphanumeric characters and underscores are allowed."),
+            ),
+            RegexValidator(
+                regex=r"__",
+                message=_(
+                    "Double underscores are not permitted in the reverse relation name."
+                ),
+                flags=re.IGNORECASE,
+                inverse_match=True,
+            ),
+        ),
+        help_text=_(
+            "Name for the reverse relation accessor on the related object (for Object and MultiObject fields only). "
+            'For example, setting this to "ssl_profiles" on a Certificate\u2192SLB field allows '
+            "<code>slb.ssl_profiles.all()</code> in export templates. "
+            "If left blank, a unique auto-generated name is used for Object fields and reverse access is "
+            "disabled for MultiObject fields."
         ),
     )
     weight = models.PositiveSmallIntegerField(
@@ -1028,6 +1068,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             models.UniqueConstraint(
                 fields=("name", "custom_object_type"),
                 name="%(app_label)s_%(class)s_unique_name",
+            ),
+            models.UniqueConstraint(
+                fields=("related_object_type", "related_name"),
+                condition=Q(related_name__gt=""),
+                name="%(app_label)s_%(class)s_unique_related_name",
             ),
         )
 
@@ -1105,6 +1150,12 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
     def clean(self):
         super().clean()
+
+        # A field cannot serve as both the primary display name and a context field
+        if self.primary and self.context:
+            raise ValidationError(
+                _("A field cannot be both the primary display field and a context field.")
+            )
 
         # Check if the field name is reserved
         if self.name in RESERVED_FIELD_NAMES:
@@ -1324,6 +1375,39 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             raise ValidationError(
                 {"name": _("Cannot rename a polymorphic field after creation.")}
             )
+
+        # related_name can only be set for object-type fields
+        if self.related_name and self.type not in (
+            CustomFieldTypeChoices.TYPE_OBJECT,
+            CustomFieldTypeChoices.TYPE_MULTIOBJECT,
+        ):
+            raise ValidationError(
+                {
+                    "related_name": _(
+                        "A reverse relation name can only be set for Object and MultiObject fields."
+                    )
+                }
+            )
+
+        # related_name must be unique per related_object_type (when set)
+        if self.related_name and self.related_object_type_id:
+            conflict = CustomObjectTypeField.objects.filter(
+                related_object_type_id=self.related_object_type_id,
+                related_name=self.related_name,
+            ).exclude(pk=self.pk).first()
+            if conflict:
+                raise ValidationError(
+                    {
+                        "related_name": _(
+                            'Reverse relation name "{name}" is already used by field '
+                            '"{field}" on "{object_type}".'
+                        ).format(
+                            name=self.related_name,
+                            field=conflict.name,
+                            object_type=conflict.custom_object_type,
+                        )
+                    }
+                )
 
         # Check for recursion in object and multiobject fields (non-polymorphic only).
         # Polymorphic fields' allowed types are a M2M set after save(), so their recursion
@@ -1772,6 +1856,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         return f"Through_{self.through_table_name}"
 
     def save(self, *args, **kwargs):
+        is_new = self._state.adding
         field_type = FIELD_TYPE_CLASS[self.type]()
         model = self.custom_object_type.get_model()
 
@@ -1936,6 +2021,15 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         # Reregister SearchIndex with new set of searchable fields
         self.custom_object_type.register_custom_object_search_index(model)
 
+        # Reindex all objects of this type if search indexing was affected
+        if is_new:
+            needs_reindex = self.search_weight > 0
+        else:
+            needs_reindex = self.search_weight != self.original.search_weight
+        if needs_reindex:
+            _cot_id = self.custom_object_type_id
+            transaction.on_commit(lambda: ReindexCustomObjectTypeJob.enqueue(cot_id=_cot_id))
+
     def delete(self, *args, **kwargs):
         field_type = FIELD_TYPE_CLASS[self.type]()
         model = self.custom_object_type.get_model()
@@ -1966,6 +2060,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
         # Reregister SearchIndex with new set of searchable fields
         self.custom_object_type.register_custom_object_search_index(model)
+
+        # Reindex all objects of this type since a searchable field was removed
+        if self.search_weight > 0:
+            _cot_id = self.custom_object_type_id
+            transaction.on_commit(lambda: ReindexCustomObjectTypeJob.enqueue(cot_id=_cot_id))
 
 
 class CustomObjectObjectTypeManager(ObjectTypeManager):

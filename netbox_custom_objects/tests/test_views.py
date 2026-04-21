@@ -1,9 +1,11 @@
 """
 Tests for all UI views.
 """
+from django.contrib.contenttypes.models import ContentType
+from django.test import TestCase
 from django.urls import reverse
 from extras.models import CustomFieldChoiceSet
-from utilities.testing import ViewTestCases
+from utilities.testing import ViewTestCases, create_test_user
 
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from .base import CustomObjectsTestCase
@@ -721,3 +723,63 @@ class ObjectFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObject
 
     def test_bulk_delete_objects_with_constrained_permission(self):
         ...
+
+
+class ObjectSelectorViewTestCase(TestCase):
+    """
+    Regression tests for issue #441: the HTMX object-selector endpoint must not
+    return a 500 when the requested model is a dynamically-generated custom object
+    type model.
+
+    Core's ObjectSelectorView._get_form_class() and _get_filterset_class() use
+    import_string() to find classes by convention, which fails for dynamic models.
+    The plugin patches those methods in ready(); these tests verify the patch works.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.custom_object_type = CustomObjectType.objects.create(
+            name="SelectorTestObject",
+            description="Custom object type for selector tests",
+            verbose_name_plural="Selector Test Objects",
+            slug="selector-test-objects",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.custom_object_type,
+            name="name",
+            label="Name",
+            type="text",
+            primary=True,
+            required=True,
+        )
+        cls.model = cls.custom_object_type.get_model()
+        cls.model.objects.create(name="Alpha")
+        cls.model.objects.create(name="Beta")
+
+    def setUp(self):
+        self.user = create_test_user('selector_testuser')
+        self.client.force_login(self.user)
+
+    def tearDown(self):
+        CustomObjectType.clear_model_cache()
+
+    def _model_label(self):
+        ct = ContentType.objects.get_for_model(self.model)
+        return f'{ct.app_label}.{ct.model}'
+
+    def test_object_selector_form_load(self):
+        """GET /htmx/object-selector/ returns 200 for a custom object model (not 500)."""
+        url = reverse('htmx_object_selector')
+        response = self.client.get(url, {'_model': self._model_label(), 'target': 'id_field'})
+        self.assertEqual(response.status_code, 200)
+
+    def test_object_selector_search(self):
+        """GET /htmx/object-selector/?_search returns 200 and renders results."""
+        url = reverse('htmx_object_selector')
+        response = self.client.get(url, {
+            '_model': self._model_label(),
+            'target': 'id_field',
+            '_search': '1',
+            'q': 'Alpha',
+        })
+        self.assertEqual(response.status_code, 200)

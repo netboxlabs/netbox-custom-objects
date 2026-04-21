@@ -12,6 +12,7 @@ from utilities.forms.utils import get_field_value
 from utilities.object_types import object_type_name
 
 from netbox_custom_objects.choices import SearchWeightChoices
+from netbox_custom_objects.utilities import extract_cot_id_from_model_name
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name
 from netbox_custom_objects.models import (CustomObjectObjectType,
@@ -184,6 +185,7 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
             "name",
             "label",
             "primary",
+            "context",
             "group_name",
             "description",
             "type",
@@ -286,6 +288,19 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
         # Multi-object fields may not be set unique
         if field_type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
             self.fields["unique"].disabled = True
+
+        # Add related_name to the Related Object fieldset for object/multiobject fields.
+        # The parent CustomFieldForm.__init__ removes related_object_type from self.fields
+        # for non-object types, so we use its presence as a signal.
+        if "related_object_type" in self.fields:
+            self.fieldsets = tuple(
+                FieldSet(*fs.items, "related_name", name=fs.name)
+                if "related_object_type" in fs.items
+                else fs
+                for fs in self.fieldsets
+            )
+        else:
+            del self.fields["related_name"]
 
     def clean(self):
         cleaned_data = super().clean()

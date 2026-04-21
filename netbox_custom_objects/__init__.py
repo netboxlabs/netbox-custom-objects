@@ -6,6 +6,7 @@ from django.db import connection, transaction
 from django.db.migrations.loader import MigrationLoader
 from django.db.migrations.recorder import MigrationRecorder
 from django.db.models.signals import pre_migrate, post_migrate
+from django.db.utils import OperationalError, ProgrammingError
 from netbox.plugins import PluginConfig
 
 from .constants import APP_LABEL as APP_LABEL
@@ -31,12 +32,47 @@ def _migration_finished(sender, **kwargs):
     _migrations_checked = None
 
 
+def _patch_object_selector_view():
+    """
+    Patch ObjectSelectorView to support dynamically-generated custom object models.
+
+    Core NetBox's ObjectSelectorView._get_form_class() and _get_filterset_class()
+    use import_string() to find classes by convention (e.g.
+    ``netbox_custom_objects.forms.Table1ModelFilterForm``).  Dynamically generated
+    custom object models have no such importable classes, so the import raises an
+    ImportError and the HTMX request returns a 500 error.
+
+    This patch intercepts the lookup for models whose app_label is APP_LABEL and
+    builds the form/filterset dynamically using the same logic as
+    CustomObjectListView.
+    """
+    from netbox.views.htmx import ObjectSelectorView
+
+    _original_get_form_class = ObjectSelectorView._get_form_class
+    _original_get_filterset_class = ObjectSelectorView._get_filterset_class
+
+    def _patched_get_form_class(self, model):
+        if model._meta.app_label == APP_LABEL:
+            from netbox_custom_objects.dynamic_forms import build_filterset_form_class
+            return build_filterset_form_class(model)
+        return _original_get_form_class(self, model)
+
+    def _patched_get_filterset_class(self, model):
+        if model._meta.app_label == APP_LABEL:
+            from netbox_custom_objects.filtersets import get_filterset_class
+            return get_filterset_class(model)
+        return _original_get_filterset_class(self, model)
+
+    ObjectSelectorView._get_form_class = _patched_get_form_class
+    ObjectSelectorView._get_filterset_class = _patched_get_filterset_class
+
+
 # Plugin Configuration
 class CustomObjectsPluginConfig(PluginConfig):
     name = "netbox_custom_objects"
     verbose_name = "Custom Objects"
     description = "A plugin to manage custom objects in NetBox"
-    version = "0.4.6"
+    version = "0.4.10"
     author = 'Netbox Labs'
     author_email = 'support@netboxlabs.com'
     base_url = "custom-objects"
@@ -122,6 +158,12 @@ class CustomObjectsPluginConfig(PluginConfig):
             _migrations_checked = result
             return result
 
+        except (ProgrammingError, OperationalError):
+            # The migration infrastructure itself is unavailable (e.g. the
+            # django_migrations table doesn't exist on a brand-new install).
+            # Treat this as "not ready" — don't cache so the next call retries.
+            return True
+
         finally:
             # Always clear the recursion flag
             _checking_migrations = False
@@ -138,6 +180,9 @@ class CustomObjectsPluginConfig(PluginConfig):
         pre_migrate.connect(_migration_started)
         post_migrate.connect(_migration_finished)
 
+        # Patch ObjectSelectorView to support dynamically-generated custom object models
+        _patch_object_selector_view()
+
         # Suppress warnings about database calls during app initialization
         with warnings.catch_warnings():
             warnings.filterwarnings(
@@ -152,11 +197,17 @@ class CustomObjectsPluginConfig(PluginConfig):
                 super().ready()
                 return
 
-            with transaction.atomic():
-                qs = CustomObjectType.objects.all()
-                for obj in qs:
-                    model = obj.get_model()
-                    get_serializer_class(model)
+            try:
+                with transaction.atomic():
+                    qs = CustomObjectType.objects.all()
+                    for obj in qs:
+                        model = obj.get_model()
+                        get_serializer_class(model)
+            except (ProgrammingError, OperationalError):
+                # DB schema is incomplete (unapplied migrations). Skip dynamic
+                # model registration — it will happen after migrations finish.
+                super().ready()
+                return
 
         super().ready()
 
@@ -169,25 +220,36 @@ class CustomObjectsPluginConfig(PluginConfig):
             pass
 
         model_name = model_name.lower()
-        # only do database calls if we are sure the app is ready to avoid
-        # Django warnings
-        if "table" not in model_name.lower() or "model" not in model_name.lower():
+
+        cot_id_str = extract_cot_id_from_model_name(model_name)
+        if cot_id_str is None:
+            raise LookupError(
+                "App '%s' doesn't have a '%s' model." % (self.label, model_name)
+            )
+
+        # Guard against querying the DB when migrations haven't run yet
+        if self.should_skip_dynamic_model_creation():
             raise LookupError(
                 "App '%s' doesn't have a '%s' model." % (self.label, model_name)
             )
 
         from .models import CustomObjectType
 
-        custom_object_type_id = int(extract_cot_id_from_model_name(model_name))
+        custom_object_type_id = int(cot_id_str)
 
         try:
             obj = CustomObjectType.objects.get(pk=custom_object_type_id)
-        except CustomObjectType.DoesNotExist:
+            return obj.get_model()
+        except (CustomObjectType.DoesNotExist, ProgrammingError, OperationalError):
+            # ProgrammingError/OperationalError covers an incomplete DB schema
+            # (e.g. unapplied migrations). Treat all three as "model not found"
+            # so callers get a predictable LookupError rather than a raw DB
+            # error that would abort manage.py migrate.  obj.get_model() is
+            # inside the block because it also queries CustomObjectTypeField,
+            # which could be missing or have an absent column.
             raise LookupError(
                 "App '%s' doesn't have a '%s' model." % (self.label, model_name)
             )
-
-        return obj.get_model()
 
     def get_models(self, include_auto_created=False, include_swapped=False):
         """Return all models for this plugin, including custom object type models."""
@@ -211,17 +273,22 @@ class CustomObjectsPluginConfig(PluginConfig):
             # Add custom object type models
             from .models import CustomObjectType
 
-            with transaction.atomic():
-                custom_object_types = CustomObjectType.objects.all()
-                for custom_type in custom_object_types:
-                    model = custom_type.get_model()
-                    if model:
-                        yield model
+            try:
+                with transaction.atomic():
+                    custom_object_types = CustomObjectType.objects.all()
+                    for custom_type in custom_object_types:
+                        model = custom_type.get_model()
+                        if model:
+                            yield model
 
-                        # If include_auto_created is True, also yield through models
-                        if include_auto_created and hasattr(model, '_through_models'):
-                            for through_model in model._through_models:
-                                yield through_model
+                            # If include_auto_created is True, also yield through models
+                            if include_auto_created and hasattr(model, '_through_models'):
+                                for through_model in model._through_models:
+                                    yield through_model
+            except (ProgrammingError, OperationalError):
+                # DB schema is incomplete (unapplied migrations). Yield nothing —
+                # dynamic models will be available once migrations have run.
+                return
 
 
 config = CustomObjectsPluginConfig
