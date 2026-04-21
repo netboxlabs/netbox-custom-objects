@@ -1,3 +1,4 @@
+import contextvars
 import decimal
 import re
 import threading
@@ -66,6 +67,14 @@ class UniquenessConstraintTestError(Exception):
 
 USER_TABLE_DATABASE_NAME_PREFIX = "custom_objects_"
 
+# Per-context storage for CO field values deferred during squash merge.
+# Using ContextVar instead of a class-level dict so that concurrent merges
+# (different threads or coroutines) each get an isolated copy.
+# Shape: {db_table: {co_pk: {'using': alias, 'data': {field_name: value}}}}
+_deferred_co_field_data: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
+    '_deferred_co_field_data', default=None
+)
+
 
 def _get_schema_connection():
     """
@@ -94,7 +103,7 @@ def _apply_deferred_co_field(field_instance):
     custom object rows inserted before their columns existed (squash merge ordering)
     receive their correct values via a raw UPDATE.
 
-    ``CustomObject._deferred_field_data`` has the shape::
+    ``_deferred_co_field_data`` (ContextVar) has the shape::
 
         {db_table: {co_pk: {'using': alias, 'data': {field_name: value}}}}
 
@@ -106,12 +115,13 @@ def _apply_deferred_co_field(field_instance):
     from extras.choices import CustomFieldTypeChoices
 
     # No deferred data at all — fast path.
-    if not CustomObject._deferred_field_data:
+    deferred = _deferred_co_field_data.get()
+    if not deferred:
         return
 
     cot = field_instance.custom_object_type
     table_name = cot.get_database_table_name()
-    per_table = CustomObject._deferred_field_data.get(table_name)
+    per_table = deferred.get(table_name)
     if not per_table:
         return
 
@@ -285,11 +295,6 @@ class CustomObject(
 
     objects = RestrictedQuerySet.as_manager()
 
-    # Pending custom-field values for CO rows created before their columns existed.
-    # Populated by deserialize_object(); consumed by _apply_deferred_co_field().
-    # Format: {db_table: {co_pk: {'using': alias, 'data': {field_name: value}}}}
-    _deferred_field_data: dict = {}
-
     class Meta:
         abstract = True
 
@@ -307,9 +312,9 @@ class CustomObject(
         This hook:
         1. Deserializes the CO using a fresh model (re-queried from DB).
         2. Does save_base(raw=True) as normal.
-        3. Stores the full postchange_data in _deferred_field_data so that
-           CustomObjectTypeField.save() can UPDATE the row after each column is
-           added (handles the squash ordering case).
+        3. Stores the full postchange_data in _deferred_co_field_data (ContextVar)
+           so that CustomObjectTypeField.save() can UPDATE the row after each
+           column is added (handles the squash ordering case).
         """
         from utilities.serialization import deserialize_object as _deserialize
         from netbox_custom_objects.utilities import extract_cot_id_from_model_name
@@ -347,9 +352,13 @@ class CustomObject(
                 # (If pk was None before save_base, obj.pk is now the DB-assigned id.)
                 obj_pk = obj.pk
                 # Register full data for deferred column updates (squash ordering fix).
-                if table_name not in cls._deferred_field_data:
-                    cls._deferred_field_data[table_name] = {}
-                cls._deferred_field_data[table_name][obj_pk] = {
+                deferred = _deferred_co_field_data.get()
+                if deferred is None:
+                    deferred = {}
+                    _deferred_co_field_data.set(deferred)
+                if table_name not in deferred:
+                    deferred[table_name] = {}
+                deferred[table_name][obj_pk] = {
                     'using': _using,
                     'data': full_data,
                 }

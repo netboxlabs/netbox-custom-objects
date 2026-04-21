@@ -67,9 +67,9 @@ class TransactionCleanupMixin:
 
     def tearDown(self):
         from core.models import ObjectChange
-        from netbox_custom_objects.models import CustomObject
-        # Flush deferred CO field data so it doesn't bleed into the next test.
-        CustomObject._deferred_field_data.clear()
+        from netbox_custom_objects.models import _deferred_co_field_data
+        # Reset deferred CO field data so it doesn't bleed into the next test.
+        _deferred_co_field_data.set(None)
         # Delete COTs and their backing tables before the DB flush.
         for cot in CustomObjectType.objects.all():
             try:
