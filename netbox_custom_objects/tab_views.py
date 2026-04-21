@@ -303,14 +303,20 @@ def _count_for_type(cot, field_infos):
     return _badge
 
 
-def _make_typed_tab_view(model_class, cot, field_infos, weight):
+def _make_typed_tab_view(model_class, cot, field_infos, weight, permission=None):
     """Factory: returns a View subclass for a per-COT typed tab."""
     badge_fn = _count_for_type(cot, field_infos)
     cot_pk = cot.pk
     cot_label = str(cot)
 
     class TypedTabView(View):
-        tab = ViewTab(label=cot_label, badge=badge_fn, weight=weight, hide_if_empty=True)
+        tab = ViewTab(
+            label=cot_label,
+            badge=badge_fn,
+            weight=weight,
+            permission=permission,
+            hide_if_empty=True,
+        )
 
         def get(self, request, pk, **kwargs):
             qs = model_class.objects
@@ -405,8 +411,14 @@ def _register_typed_tabs(model_classes, weight=2100):
         existing = registry['views'].get(mc._meta.app_label, {}).get(mc._meta.model_name, [])
         if any(e['name'] == f'custom_objects_{slug}' for e in existing):
             continue
+        co_model = model_ct_map.get(cot.object_type_id)
+        permission = (
+            f'{co_model._meta.app_label}.view_{co_model._meta.model_name}'
+            if co_model is not None
+            else None
+        )
         register_model_view(mc, name=f'custom_objects_{slug}', path=f'custom-objects-{slug}')(
-            _make_typed_tab_view(mc, cot, field_infos, weight)
+            _make_typed_tab_view(mc, cot, field_infos, weight, permission=permission)
         )
         logger.info('registered typed tab "%s" for %s.%s', slug, mc._meta.app_label, mc._meta.model_name)
 
