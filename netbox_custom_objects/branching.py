@@ -126,12 +126,16 @@ def _fields_schema_differ(branch_f, main_f):
     Return True if the two ``CustomObjectTypeField`` instances differ in any
     attribute that affects the physical DB column, meaning an ALTER TABLE is
     needed to bring the branch schema up to date.
+
+    Excluded (application-level only, no DB impact):
+    - required: enforced by forms/serializers; all field types use null=True
+      regardless, so required never maps to a NOT NULL column constraint.
+    - default: Python-level default applied by the ORM, not a DB DEFAULT
+      clause; changing it on an existing column needs no ALTER TABLE.
     """
     return (
         branch_f.name != main_f.name
         or branch_f.type != main_f.type
-        or branch_f.required != main_f.required
-        or branch_f.default != main_f.default
         or branch_f.unique != main_f.unique
         or branch_f.related_object_type_id != main_f.related_object_type_id
     )

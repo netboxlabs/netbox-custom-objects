@@ -1036,7 +1036,12 @@ class CustomObjectType(NetBoxModel):
             return True
 
         def _schema_key(f):
-            return (f.name, f.type, f.required, f.default, f.unique, f.related_object_type_id)
+            # Only attributes that affect the physical DB column are included.
+            # - required: enforced at form/serializer level only; all field types
+            #   use null=True regardless, so required never maps to NOT NULL.
+            # - default: Python-level default, not a DB DEFAULT clause; changing
+            #   it on an existing column requires no ALTER TABLE.
+            return (f.name, f.type, f.unique, f.related_object_type_id)
 
         return any(
             _schema_key(branch_fields[pk]) != _schema_key(main_fields[pk])
