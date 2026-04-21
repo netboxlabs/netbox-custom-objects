@@ -1508,12 +1508,14 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 {"unique": _("Uniqueness cannot be enforced for boolean or multiobject fields")}
             )
 
-        # Check if uniqueness constraint can be applied when changing from non-unique to unique
+        # Check if uniqueness constraint can be applied when changing from non-unique to unique.
+        # Skip when _original is absent (e.g. during deserialization in branch merge/revert).
         if (
             self.pk
             and self.unique
-            and not self.original.unique
             and not self._state.adding
+            and hasattr(self, '_original')
+            and not self.original.unique
         ):
             field_type = FIELD_TYPE_CLASS[self.type]()
             model_field = field_type.get_model_field(self)

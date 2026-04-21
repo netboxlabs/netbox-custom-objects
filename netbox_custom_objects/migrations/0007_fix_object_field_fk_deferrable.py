@@ -42,7 +42,7 @@ def fix_deferrable_fk_constraints(apps, schema_editor):
                 AND tc.table_schema = rc.constraint_schema
             WHERE tc.constraint_type = 'FOREIGN KEY'
                 AND tc.table_name LIKE 'custom_objects\\_%%'
-                AND rc.is_deferrable = 'YES'
+                AND tc.is_deferrable = 'YES'
         """)
         rows = cursor.fetchall()
 
