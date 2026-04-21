@@ -640,7 +640,9 @@ class CustomManyToManyDescriptor(ManyToManyDescriptor):
         return instance._prefetched_objects_cache[self.cache_name]
 
     def set_cached_value(self, instance, value):
-        setattr(instance, self.cache_name, value)
+        if not hasattr(instance, '_prefetched_objects_cache'):
+            instance._prefetched_objects_cache = {}
+        instance._prefetched_objects_cache[self.cache_name] = value
 
 
 class CustomManyToManyField(models.ManyToManyField):
