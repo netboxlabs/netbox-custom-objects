@@ -19,7 +19,7 @@ from netbox.forms import (
 from netbox.views import generic
 from netbox.views.generic.mixins import TableMixin
 from utilities.forms import ConfirmationForm
-from utilities.forms.fields import DynamicModelChoiceField, DynamicModelMultipleChoiceField, TagFilterField
+from utilities.forms.fields import DynamicModelChoiceField, DynamicModelMultipleChoiceField
 from utilities.htmx import htmx_partial
 from utilities.object_types import object_type_name
 from utilities.views import ConditionalLoginRequiredMixin, ViewTab, get_viewname, register_model_view
