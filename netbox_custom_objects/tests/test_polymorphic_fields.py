@@ -504,7 +504,10 @@ class PolymorphicFieldAPITest(TransactionCleanupMixin, CustomObjectsTestCase, Tr
         self.assertFalse(self.model.objects.filter(pk=pk).exists())
 
     def test_delete_custom_object_with_m2m_values(self):
-        """DELETE a custom object with populated M2M polymorphic values returns 204, removes the object, and cleans up through-table rows."""
+        """
+        DELETE a custom object with populated M2M polymorphic values returns 204, removes the object,
+        and cleans up through-table rows.
+        """
         from django.apps import apps as django_apps
         _grant_perm(self.user, "delete", self.model, "co-delete")
         obj = self.model.objects.create(name="m2m-delete-obj")

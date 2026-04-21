@@ -216,7 +216,9 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
                     )
                     if incoming != existing:
                         raise ValidationError(
-                            {"related_object_types_input": _("Cannot change allowed object types after field creation.")}
+                            {"related_object_types_input": _(
+                                "Cannot change allowed object types after field creation."
+                            )}
                         )
             if attrs.get("app_label") or attrs.get("model"):
                 raise ValidationError(
