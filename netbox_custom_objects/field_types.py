@@ -637,7 +637,7 @@ class CustomManyToManyDescriptor(ManyToManyDescriptor):
         return hasattr(instance, self.cache_name)
 
     def get_cached_value(self, instance):
-        return getattr(instance, self.cache_name)
+        return instance._prefetched_objects_cache[self.cache_name]
 
     def set_cached_value(self, instance, value):
         setattr(instance, self.cache_name, value)
