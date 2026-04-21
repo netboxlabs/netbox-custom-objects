@@ -121,24 +121,31 @@ def on_custom_object_field_changed(sender, instance, **kwargs):
         )
 
 
+def _field_schema_key(f):
+    """
+    Return the subset of ``CustomObjectTypeField`` attributes that affect the
+    physical DB column schema.
+
+    Excluded (application-level only, no physical DB impact):
+    - required: all field types use null=True regardless; required never maps
+      to a NOT NULL column constraint.
+    - default: Python-level default applied by the ORM, not a SQL DEFAULT
+      clause; changing it on an existing column needs no ALTER TABLE.
+
+    Used by both ``_fields_schema_differ()`` and
+    ``CustomObjectType.has_branch_schema_drift()`` to ensure the two callers
+    always agree on what constitutes a schema-affecting change.
+    """
+    return (f.name, f.type, f.unique, f.related_object_type_id)
+
+
 def _fields_schema_differ(branch_f, main_f):
     """
     Return True if the two ``CustomObjectTypeField`` instances differ in any
     attribute that affects the physical DB column, meaning an ALTER TABLE is
     needed to bring the branch schema up to date.
-
-    Excluded (application-level only, no DB impact):
-    - required: enforced by forms/serializers; all field types use null=True
-      regardless, so required never maps to a NOT NULL column constraint.
-    - default: Python-level default applied by the ORM, not a DB DEFAULT
-      clause; changing it on an existing column needs no ALTER TABLE.
     """
-    return (
-        branch_f.name != main_f.name
-        or branch_f.type != main_f.type
-        or branch_f.unique != main_f.unique
-        or branch_f.related_object_type_id != main_f.related_object_type_id
-    )
+    return _field_schema_key(branch_f) != _field_schema_key(main_f)
 
 
 def on_branch_migrated(sender, branch, user, **kwargs):

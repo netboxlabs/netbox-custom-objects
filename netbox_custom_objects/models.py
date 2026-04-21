@@ -133,6 +133,10 @@ def _apply_deferred_co_field(field_instance):
             value = entry['data'].get(data_key)
             if value is None:
                 continue
+            # table_name comes from get_database_table_name() (controlled by our
+            # code) and col_name from field.name, which is validated by the
+            # ^[a-z0-9_]+$ regex — no double-quote characters are possible, so
+            # the f-string interpolation is safe against SQL injection here.
             cursor.execute(
                 f'UPDATE "{table_name}" SET "{col_name}" = %s WHERE id = %s',
                 [value, co_pk],
@@ -329,7 +333,6 @@ class CustomObject(
 
         inner = _deserialize(fresh_model, data, pk=pk)
         obj = inner.object
-        obj_pk = pk if pk is not None else obj.pk
         table_name = fresh_model._meta.db_table
         full_data = dict(data)
 
@@ -340,6 +343,9 @@ class CustomObject(
                 from django.db import DEFAULT_DB_ALIAS
                 _using = using or DEFAULT_DB_ALIAS
                 models.Model.save_base(obj, using=_using, raw=True)
+                # Read pk after save_base so that auto-assigned PKs are captured.
+                # (If pk was None before save_base, obj.pk is now the DB-assigned id.)
+                obj_pk = obj.pk
                 # Register full data for deferred column updates (squash ordering fix).
                 if table_name not in cls._deferred_field_data:
                     cls._deferred_field_data[table_name] = {}
@@ -1025,6 +1031,8 @@ class CustomObjectType(NetBoxModel):
         except ImportError:
             return False
 
+        from netbox_custom_objects.branching import _field_schema_key
+
         main_fields = {f.pk: f for f in self.fields.all()}
         with activate_branch(branch):
             branch_fields = {f.pk: f for f in self.fields.all()}
@@ -1035,16 +1043,8 @@ class CustomObjectType(NetBoxModel):
         if main_pks != branch_pks:
             return True
 
-        def _schema_key(f):
-            # Only attributes that affect the physical DB column are included.
-            # - required: enforced at form/serializer level only; all field types
-            #   use null=True regardless, so required never maps to NOT NULL.
-            # - default: Python-level default, not a DB DEFAULT clause; changing
-            #   it on an existing column requires no ALTER TABLE.
-            return (f.name, f.type, f.unique, f.related_object_type_id)
-
         return any(
-            _schema_key(branch_fields[pk]) != _schema_key(main_fields[pk])
+            _field_schema_key(branch_fields[pk]) != _field_schema_key(main_fields[pk])
             for pk in main_pks
         )
 

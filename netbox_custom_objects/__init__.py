@@ -1,4 +1,5 @@
 import contextvars
+import logging
 import sys
 import warnings
 
@@ -228,7 +229,10 @@ class CustomObjectsPluginConfig(PluginConfig):
                 from netbox_custom_objects.branching import check_pending_branch_migrations
                 check_pending_branch_migrations()
             except Exception:
-                pass
+                logging.getLogger('netbox_custom_objects').exception(
+                    'check_pending_branch_migrations() failed at startup; '
+                    'some branches may not be marked as PENDING_MIGRATIONS'
+                )
 
         super().ready()
 
