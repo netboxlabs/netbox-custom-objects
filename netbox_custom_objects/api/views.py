@@ -78,6 +78,7 @@ class CustomObjectViewSet(ModelViewSet):
     def update(self, request, *args, **kwargs):
         if is_in_branch():
             raise ValidationError(BRANCH_ACTIVE_ERROR_MESSAGE)
+
         # Replicate DRF's UpdateModelMixin.update() so we can snapshot the instance
         # before the serializer is constructed.  Calling super().update() would invoke
         # get_object() a second time and return a fresh, un-snapshotted instance.
@@ -85,12 +86,20 @@ class CustomObjectViewSet(ModelViewSet):
         instance = self.get_object()
         if hasattr(instance, 'snapshot'):
             instance.snapshot()
+        if hasattr(self, '_validate_etag'):
+            # NetBox 4.6+: enforce If-Match precondition (RFC 9110 §13.1.1)
+            self._validate_etag(request, instance)
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
         self.perform_update(serializer)
         if getattr(instance, '_prefetched_objects_cache', None):
             instance._prefetched_objects_cache = {}
-        return Response(serializer.data)
+        response = Response(serializer.data)
+        if hasattr(self, '_get_etag'):
+            updated = self.get_queryset().filter(pk=instance.pk).first()
+            if etag := self._get_etag(updated):
+                response['ETag'] = etag
+        return response
 
     def partial_update(self, request, *args, **kwargs):
         kwargs['partial'] = True
