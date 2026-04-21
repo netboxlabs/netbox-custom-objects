@@ -5,6 +5,7 @@ import sys
 from core.models import ObjectType
 from django.contrib.contenttypes.models import ContentType
 from django.urls import NoReverseMatch
+from django.utils.translation import gettext_lazy as _
 from extras.choices import CustomFieldTypeChoices
 from netbox.api.serializers import NetBoxModelSerializer
 from rest_framework import serializers
@@ -72,7 +73,7 @@ class PolymorphicObjectSerializerField(serializers.Field):
 
     def to_internal_value(self, data):
         if not isinstance(data, dict):
-            raise serializers.ValidationError("Expected a dict with object reference.")
+            raise serializers.ValidationError(_("Expected a dict with object reference."))
 
         # Resolve ContentType
         try:
@@ -82,22 +83,23 @@ class PolymorphicObjectSerializerField(serializers.Field):
                 ct = ContentType.objects.get(app_label=data["app_label"], model=data["model"])
             else:
                 raise serializers.ValidationError(
-                    "Must provide content_type_id or (app_label + model)."
+                    _("Must provide content_type_id or (app_label + model).")
                 )
         except ContentType.DoesNotExist:
-            raise serializers.ValidationError("Invalid content type.") from None
+            raise serializers.ValidationError(_("Invalid content type.")) from None
 
         if (
             self.allowed_content_type_ids is not None
             and ct.id not in self.allowed_content_type_ids
         ):
             raise serializers.ValidationError(
-                f"Object type '{ct.app_label}.{ct.model}' is not allowed for this field."
+                _("Object type '%(app_label)s.%(model)s' is not allowed for this field.")
+                % {"app_label": ct.app_label, "model": ct.model}
             )
 
         model_class = ct.model_class()
         if model_class is None:
-            raise serializers.ValidationError("Cannot resolve the specified object type.")
+            raise serializers.ValidationError(_("Cannot resolve the specified object type."))
 
         obj_id = data.get("object_id") if "object_id" in data else data.get("id")
         if obj_id is None:
