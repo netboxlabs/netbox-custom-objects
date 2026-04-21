@@ -836,8 +836,8 @@ class MultiSelectFieldFilterFormFieldTestCase(CustomObjectsTestCase, TestCase):
         )
         cls.field = cls.create_custom_object_type_field(
             cls.cot,
-            name="tags",
-            label="Tags",
+            name="labels",
+            label="Labels",
             type="multiselect",
             choice_set=cls.choice_set,
         )
@@ -869,31 +869,31 @@ class MultiSelectFieldFiltersetTestCase(CustomObjectsTestCase, TestCase):
         )
         cls.create_custom_object_type_field(
             cls.cot,
-            name="tags",
-            label="Tags",
+            name="labels",
+            label="Labels",
             type="multiselect",
             choice_set=cls.choice_set,
         )
         model = cls.cot.get_model()
-        cls.obj_c1 = model.objects.create(name="Obj MC1", tags=["choice1"])
-        cls.obj_c2 = model.objects.create(name="Obj MC2", tags=["choice2"])
-        cls.obj_multi = model.objects.create(name="Obj Multi", tags=["choice1", "choice3"])
-        cls.obj_empty = model.objects.create(name="Obj Empty", tags=[])
+        cls.obj_c1 = model.objects.create(name="Obj MC1", labels=["choice1"])
+        cls.obj_c2 = model.objects.create(name="Obj MC2", labels=["choice2"])
+        cls.obj_multi = model.objects.create(name="Obj Multi", labels=["choice1", "choice3"])
+        cls.obj_empty = model.objects.create(name="Obj Empty", labels=[])
 
     def _filterset(self, params):
         model = self.cot.get_model()
         return get_filterset_class(model)(params, model.objects.all())
 
     def test_filter_single_value_returns_objects_containing_value(self):
-        pks = list(self._filterset({"tags": ["choice1"]}).qs.values_list("pk", flat=True))
+        pks = list(self._filterset({"labels": ["choice1"]}).qs.values_list("pk", flat=True))
         self.assertIn(self.obj_c1.pk, pks)
         self.assertIn(self.obj_multi.pk, pks)
         self.assertNotIn(self.obj_c2.pk, pks)
         self.assertNotIn(self.obj_empty.pk, pks)
 
     def test_filter_multiple_values_returns_union(self):
-        # Objects whose tags array contains choice1 OR choice2
-        pks = list(self._filterset({"tags": ["choice1", "choice2"]}).qs.values_list("pk", flat=True))
+        # Objects whose labels array contains choice1 OR choice2
+        pks = list(self._filterset({"labels": ["choice1", "choice2"]}).qs.values_list("pk", flat=True))
         self.assertIn(self.obj_c1.pk, pks)
         self.assertIn(self.obj_c2.pk, pks)
         self.assertIn(self.obj_multi.pk, pks)
@@ -901,7 +901,7 @@ class MultiSelectFieldFiltersetTestCase(CustomObjectsTestCase, TestCase):
 
     def test_filter_multiple_values_no_duplicates(self):
         # obj_multi contains both choice1 and choice3; it should appear exactly once
-        qs = self._filterset({"tags": ["choice1", "choice3"]}).qs
+        qs = self._filterset({"labels": ["choice1", "choice3"]}).qs
         self.assertEqual(qs.filter(pk=self.obj_multi.pk).count(), 1)
 
     def test_no_filter_returns_all(self):
