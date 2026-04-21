@@ -3,7 +3,8 @@ Related-object tab views for netbox-custom-objects.
 
 Two tab types:
 1. Combined "Custom Objects" tab — shows all linked custom objects in a simple table.
-2. Per-COT typed tabs — opt-in via show_tab=True, with type-specific columns, filters, bulk actions.
+2. Per-COT typed tabs — opt-in via the ``typed_tab_slugs`` list in ``PLUGINS_CONFIG``,
+   with type-specific columns, filters, and bulk actions.
 
 CRITICAL: During registration, never call get_model() or apps.get_model() for dynamic CO models.
 Read from app_config.get_models() instead, as each get_model() cache miss re-registers
@@ -24,10 +25,8 @@ from django.shortcuts import get_object_or_404, render
 from django.utils.translation import gettext_lazy as _
 from django.views.generic import View
 from extras.choices import CustomFieldTypeChoices, CustomFieldUIVisibleChoices
-from netbox.forms import NetBoxModelFilterSetForm
 from netbox.registry import registry
 from netbox.tables import BaseTable
-from utilities.forms.fields import TagFilterField
 from utilities.paginator import EnhancedPaginator, get_paginate_count
 from utilities.views import ViewTab, register_model_view
 
@@ -35,6 +34,7 @@ import django_tables2 as tables2
 
 from netbox_custom_objects import field_types
 from netbox_custom_objects.constants import APP_LABEL
+from netbox_custom_objects.dynamic_forms import build_filterset_form_class
 from netbox_custom_objects.filtersets import get_filterset_class
 from netbox_custom_objects.models import CustomObjectTypeField
 from netbox_custom_objects.tables import CustomObjectTable
@@ -128,7 +128,7 @@ def _count_linked(instance):
     for _field, model, fk in _iter_linked_fields(instance):
         try:
             total += model.objects.filter(**fk).count()
-        except Exception:
+        except (OperationalError, ProgrammingError):
             pass
     return total or None
 
@@ -138,9 +138,9 @@ def _get_linked_objects(instance):
     results = []
     for field, model, fk in _iter_linked_fields(instance):
         try:
-            for obj in model.objects.filter(**fk):
+            for obj in model.objects.filter(**fk).prefetch_related('tags'):
                 results.append(LinkedCustomObject(custom_object=obj, field=field))
-        except Exception:
+        except (OperationalError, ProgrammingError):
             pass
     return results
 
@@ -164,10 +164,10 @@ def _make_combined_tab_view(model_class):
                 cot = get_object_or_404(CustomObjectType, slug=co_slug)
                 actual_model = cot.get_model()
 
-            try:
-                instance = get_object_or_404(actual_model.objects.restrict(request.user, 'view'), pk=pk)
-            except AttributeError:
-                instance = get_object_or_404(actual_model, pk=pk)
+            qs = actual_model.objects
+            if hasattr(qs, 'restrict'):
+                qs = qs.restrict(request.user, 'view')
+            instance = get_object_or_404(qs, pk=pk)
 
             linked_all = _get_linked_objects(instance)
 
@@ -272,42 +272,26 @@ def _build_typed_table_class(cot, dynamic_model):
     return type(f'{dynamic_model._meta.object_name}Table', (CustomObjectTable,), attrs)
 
 
-def _build_filterset_form(cot, dynamic_model):
-    """Build a filterset form class for a COT."""
-    attrs = {
-        'model': dynamic_model,
-        '__module__': 'database.filterset_forms',
-        'tag': TagFilterField(dynamic_model),
-    }
-    for field in cot.fields.all():
-        ft = field_types.FIELD_TYPE_CLASS[field.type]()
-        try:
-            attrs[field.name] = ft.get_filterform_field(field)
-        except NotImplementedError:
-            pass
-    return type(f'{dynamic_model._meta.object_name}FilterForm', (NetBoxModelFilterSetForm,), attrs)
+def _build_link_q(field_infos, instance_pk):
+    """Build the OR'd Q filter selecting CO rows that link to *instance_pk* via any of *field_infos*."""
+    q = Q()
+    for field_name, field_type in field_infos:
+        if field_type == CustomFieldTypeChoices.TYPE_OBJECT:
+            q |= Q(**{f'{field_name}_id': instance_pk})
+        elif field_type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+            q |= Q(**{field_name: instance_pk})
+    return q
 
 
 def _count_for_type(cot, field_infos):
     """Badge callable for one COT. Returns None when 0. Uses OR + distinct to avoid double-counting."""
-    cot_pk = cot.pk
 
     def _badge(instance):
-        from netbox_custom_objects.models import CustomObjectType
         try:
-            c = CustomObjectType.objects.get(pk=cot_pk)
-            model = c.get_model()
+            model = cot.get_model()
         except Exception:
             return None
-        q = Q()
-        for field_name, field_type in field_infos:
-            try:
-                if field_type == CustomFieldTypeChoices.TYPE_OBJECT:
-                    q |= Q(**{f'{field_name}_id': instance.pk})
-                elif field_type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                    q |= Q(**{field_name: instance.pk})
-            except Exception:
-                pass
+        q = _build_link_q(field_infos, instance.pk)
         if not q:
             return None
         total = model.objects.filter(q).distinct().count()
@@ -326,10 +310,10 @@ def _make_typed_tab_view(model_class, cot, field_infos, weight):
         tab = ViewTab(label=cot_label, badge=badge_fn, weight=weight, hide_if_empty=True)
 
         def get(self, request, pk, **kwargs):
-            try:
-                instance = get_object_or_404(model_class.objects.restrict(request.user, 'view'), pk=pk)
-            except AttributeError:
-                instance = get_object_or_404(model_class, pk=pk)
+            qs = model_class.objects
+            if hasattr(qs, 'restrict'):
+                qs = qs.restrict(request.user, 'view')
+            instance = get_object_or_404(qs, pk=pk)
 
             from netbox_custom_objects.models import CustomObjectType as COTModel
             error_ctx = {
@@ -343,16 +327,10 @@ def _make_typed_tab_view(model_class, cot, field_infos, weight):
             except Exception:
                 return render(request, 'netbox_custom_objects/tabs/typed_tab.html', error_ctx)
 
-            q = Q()
-            for fn, ft in field_infos:
-                if ft == CustomFieldTypeChoices.TYPE_OBJECT:
-                    q |= Q(**{f'{fn}_id': instance.pk})
-                elif ft == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                    q |= Q(**{fn: instance.pk})
-
+            q = _build_link_q(field_infos, instance.pk)
             base_qs = dynamic_model.objects.filter(q).distinct()
             filterset = get_filterset_class(dynamic_model)(request.GET, queryset=base_qs)
-            filter_form = _build_filterset_form(c, dynamic_model)(request.GET)
+            filter_form = build_filterset_form_class(dynamic_model)(request.GET)
 
             table = _build_typed_table_class(c, dynamic_model)(filterset.qs)
             table.columns.show('pk')
