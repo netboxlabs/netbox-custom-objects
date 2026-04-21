@@ -9,6 +9,8 @@ These tests use TransactionTestCase (not TestCase) because branch schemas live
 in separate PostgreSQL schemas backed by distinct database connections that
 cannot be rolled back inside a single SAVEPOINT-based transaction.
 """
+import datetime
+import decimal
 import time
 import unittest
 import uuid
@@ -186,11 +188,13 @@ class BaseBranchingTests(TransactionCleanupMixin):
 
         Field types
         -----------
-        text       — plain VARCHAR column
-        integer    — INTEGER column
-        boolean    — BOOLEAN column
-        select     — VARCHAR column with a ChoiceSet
-        object     — ForeignKey column (to dcim.Site)
+        text        — plain VARCHAR column
+        integer     — INTEGER column
+        decimal     — DECIMAL column (exercises numeric precision handling)
+        boolean     — BOOLEAN column
+        datetime    — TIMESTAMPTZ column (exercises timezone-aware handling)
+        select      — VARCHAR column with a ChoiceSet
+        object      — ForeignKey column (to dcim.Site)
         multiobject — M2M through-table (to dcim.Site)
 
         This exercises every distinct schema-editor operation
@@ -216,6 +220,9 @@ class BaseBranchingTests(TransactionCleanupMixin):
         field_pks = {}
         co_pk = None
 
+        test_dt = datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=datetime.timezone.utc)
+        test_decimal = decimal.Decimal('3.14')
+
         # ── create inside branch ──────────────────────────────────────────
         with activate_branch(branch), event_tracking(request):
             choice_set = CustomFieldChoiceSet.objects.create(
@@ -228,7 +235,9 @@ class BaseBranchingTests(TransactionCleanupMixin):
             field_specs = [
                 ('text_field', {'type': 'text'}),
                 ('int_field', {'type': 'integer'}),
+                ('dec_field', {'type': 'decimal'}),
                 ('bool_field', {'type': 'boolean'}),
+                ('dt_field', {'type': 'datetime'}),
                 ('select_field', {'type': 'select', 'choice_set': choice_set}),
                 ('obj_field', {'type': 'object', 'related_object_type': site_ot}),
                 ('multi_field', {'type': 'multiobject', 'related_object_type': site_ot}),
@@ -246,7 +255,9 @@ class BaseBranchingTests(TransactionCleanupMixin):
             co = Model.objects.create(
                 text_field='hello',
                 int_field=42,
+                dec_field=test_decimal,
                 bool_field=True,
+                dt_field=test_dt,
                 select_field='active',
                 obj_field_id=site.pk,
                 # multi_field left empty — through-table creation is still exercised
@@ -284,7 +295,9 @@ class BaseBranchingTests(TransactionCleanupMixin):
         co_main = cot_main.get_model().objects.get(pk=co_pk)
         self.assertEqual(co_main.text_field, 'hello')
         self.assertEqual(co_main.int_field, 42)
+        self.assertEqual(co_main.dec_field, test_decimal)
         self.assertTrue(co_main.bool_field)
+        self.assertEqual(co_main.dt_field, test_dt)
         self.assertEqual(co_main.select_field, 'active')
         self.assertEqual(co_main.obj_field_id, site.pk)
 

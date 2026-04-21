@@ -77,14 +77,19 @@ def check_pending_branch_migrations():
 
 def on_custom_object_field_changed(sender, instance, **kwargs):
     """
-    Mark any READY branches that contain the affected custom object type's table
-    as PENDING_MIGRATIONS when a ``CustomObjectTypeField`` is created, modified,
-    or deleted in the main schema.
+    Mark all READY branches as PENDING_MIGRATIONS when a ``CustomObjectTypeField``
+    is created, modified, or deleted in the main schema.
 
     This surfaces the pending state in the branching UI exactly like a normal
     Django-migration, prompting users to click "Migrate Branch".  That action
     calls ``Branch.migrate()``, which fires ``on_branch_migrated`` and reconciles
     the physical column differences.
+
+    Branches provisioned before this COT's table existed will be over-marked as
+    PENDING_MIGRATIONS but ``on_branch_migrated`` will skip them (no table in
+    branch) so the extra marking is harmless.  The alternative — opening a
+    connection per branch to check whether the table exists — adds O(branches)
+    latency to every field save, which is worse at scale.
 
     Skipped when the change happens inside a branch context — the field edit only
     affects that branch's schema, not main, so no other branches need updating.
@@ -99,25 +104,14 @@ def on_custom_object_field_changed(sender, instance, **kwargs):
     from netbox_branching.choices import BranchStatusChoices
     from netbox_branching.models import Branch
 
-    cot = instance.custom_object_type
-    db_table = cot.get_database_table_name()
-
-    ready_branches = list(Branch.objects.filter(status=BranchStatusChoices.READY))
-    to_update = []
-    for branch in ready_branches:
-        branch_connection = connections[branch.connection_name]
-        with branch_connection.cursor() as cursor:
-            branch_tables = branch_connection.introspection.table_names(cursor)
-        if db_table in branch_tables:
-            branch.status = BranchStatusChoices.PENDING_MIGRATIONS
-            to_update.append(branch)
-
-    if to_update:
-        Branch.objects.bulk_update(to_update, ['status'])
+    updated = Branch.objects.filter(status=BranchStatusChoices.READY).update(
+        status=BranchStatusChoices.PENDING_MIGRATIONS,
+    )
+    if updated:
         logger.info(
             'Marked %d branch(es) as PENDING_MIGRATIONS due to field changes on %s',
-            len(to_update),
-            cot,
+            updated,
+            instance.custom_object_type,
         )
 
 

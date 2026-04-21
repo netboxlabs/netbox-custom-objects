@@ -591,10 +591,6 @@ class CustomObjectEditView(generic.ObjectEditView):
 
         return form_class
 
-    def get_extra_context(self, request, obj):
-        return {
-        }
-
 
 @register_model_view(CustomObject, "delete")
 class CustomObjectDeleteView(generic.ObjectDeleteView):
@@ -704,10 +700,6 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
 
         return form
 
-    def get_extra_context(self, request):
-        return {
-        }
-
 
 @register_model_view(CustomObject, "bulk_delete", path="delete", detail=False)
 class CustomObjectBulkDeleteView(CustomObjectTableMixin, generic.BulkDeleteView):
@@ -793,10 +785,6 @@ class CustomObjectBulkImportView(generic.BulkImportView):
         )
 
         return form
-
-    def get_extra_context(self, request):
-        return {
-        }
 
 
 class CustomObjectJournalView(ConditionalLoginRequiredMixin, View):
