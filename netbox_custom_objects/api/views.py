@@ -96,8 +96,9 @@ class CustomObjectViewSet(ModelViewSet):
             instance._prefetched_objects_cache = {}
         response = Response(serializer.data)
         if hasattr(self, '_get_etag'):
-            updated = self.get_queryset().filter(pk=instance.pk).first()
-            if etag := self._get_etag(updated):
+            # last_updated is auto_now=True and is updated in-place by save(),
+            # so instance already carries the new timestamp after perform_update.
+            if etag := self._get_etag(instance):
                 response['ETag'] = etag
         return response
 
