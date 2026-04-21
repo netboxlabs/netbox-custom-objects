@@ -4,17 +4,25 @@ Tests for filtersets used by the plugin's UI and API views.
 import datetime
 from decimal import Decimal
 
+from django import forms
 from django.test import TestCase
 
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
 from extras.models import CustomFieldChoiceSet
 
-from netbox_custom_objects.field_types import MultiObjectFieldType, ObjectFieldType
+from netbox_custom_objects.field_types import (
+    BooleanFieldType,
+    MultiObjectFieldType,
+    MultiSelectFieldType,
+    ObjectFieldType,
+    SelectFieldType,
+)
 from netbox_custom_objects.filtersets import get_filterset_class
 from netbox_custom_objects.models import CustomObjectTypeField
 from utilities.forms.fields import (
     DynamicModelChoiceField,
     DynamicModelMultipleChoiceField,
+    DynamicMultipleChoiceField,
 )
 
 from .base import CustomObjectsTestCase
@@ -646,3 +654,255 @@ class MultiSelectPrimaryFieldSearchTestCase(CustomObjectsTestCase, TestCase):
         pks = list(self._search("blue").values_list("pk", flat=True))
         self.assertIn(self.obj_multi.pk, pks)
         self.assertNotIn(self.obj_red.pk, pks)
+
+
+# ---------------------------------------------------------------------------
+# BooleanFieldType.get_filterform_field — form field shape (issue #366)
+# ---------------------------------------------------------------------------
+
+
+class BooleanFieldFilterFormFieldTestCase(CustomObjectsTestCase, TestCase):
+    """get_filterform_field() for a boolean field returns a NullBooleanField with yes/no choices."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(name="BoolFFTest", slug="bool-ff-test")
+        cls.create_custom_object_type_field(
+            cls.cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        cls.field = cls.create_custom_object_type_field(
+            cls.cot, name="active", label="Active", type="boolean"
+        )
+
+    def test_returns_null_boolean_field(self):
+        form_field = BooleanFieldType().get_filterform_field(self.field)
+        self.assertIsInstance(form_field, forms.NullBooleanField)
+
+    def test_form_field_not_required(self):
+        form_field = BooleanFieldType().get_filterform_field(self.field)
+        self.assertFalse(form_field.required)
+
+    def test_form_field_widget_is_select(self):
+        form_field = BooleanFieldType().get_filterform_field(self.field)
+        self.assertIsInstance(form_field.widget, forms.Select)
+
+    def test_form_field_choices_include_yes_no(self):
+        form_field = BooleanFieldType().get_filterform_field(self.field)
+        choice_values = [c[0] for c in form_field.widget.choices]
+        self.assertIn('true', choice_values)
+        self.assertIn('false', choice_values)
+
+
+# ---------------------------------------------------------------------------
+# BooleanFieldType — filterset queryset filtering (issue #366)
+# ---------------------------------------------------------------------------
+
+
+class BooleanFieldFiltersetTestCase(CustomObjectsTestCase, TestCase):
+    """Filtering by ?<field>=true/false correctly narrows results for boolean fields."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(name="BoolFSTest", slug="bool-fs-test")
+        cls.create_custom_object_type_field(
+            cls.cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        cls.create_custom_object_type_field(
+            cls.cot, name="active", label="Active", type="boolean"
+        )
+        model = cls.cot.get_model()
+        cls.obj_true = model.objects.create(name="Obj True", active=True)
+        cls.obj_false = model.objects.create(name="Obj False", active=False)
+        cls.obj_null = model.objects.create(name="Obj Null", active=None)
+
+    def _filterset(self, params):
+        model = self.cot.get_model()
+        return get_filterset_class(model)(params, model.objects.all())
+
+    def test_filter_true_returns_only_true_objects(self):
+        pks = list(self._filterset({"active": "true"}).qs.values_list("pk", flat=True))
+        self.assertIn(self.obj_true.pk, pks)
+        self.assertNotIn(self.obj_false.pk, pks)
+        self.assertNotIn(self.obj_null.pk, pks)
+
+    def test_filter_false_returns_only_false_objects(self):
+        pks = list(self._filterset({"active": "false"}).qs.values_list("pk", flat=True))
+        self.assertIn(self.obj_false.pk, pks)
+        self.assertNotIn(self.obj_true.pk, pks)
+        self.assertNotIn(self.obj_null.pk, pks)
+
+    def test_no_filter_returns_all(self):
+        self.assertEqual(self._filterset({}).qs.count(), 3)
+
+
+# ---------------------------------------------------------------------------
+# SelectFieldType.get_filterform_field — form field shape (issue #366)
+# ---------------------------------------------------------------------------
+
+
+class SelectFieldFilterFormFieldTestCase(CustomObjectsTestCase, TestCase):
+    """get_filterform_field() for a select field returns a DynamicMultipleChoiceField."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.choice_set = cls.create_choice_set(name="SelectFFChoices366")
+        cls.cot = cls.create_custom_object_type(name="SelFFTest", slug="sel-ff-test")
+        cls.create_custom_object_type_field(
+            cls.cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        cls.field = cls.create_custom_object_type_field(
+            cls.cot,
+            name="status",
+            label="Status",
+            type="select",
+            choice_set=cls.choice_set,
+        )
+
+    def test_returns_dynamic_multiple_choice_field(self):
+        form_field = SelectFieldType().get_filterform_field(self.field)
+        self.assertIsInstance(form_field, DynamicMultipleChoiceField)
+
+    def test_form_field_not_required(self):
+        form_field = SelectFieldType().get_filterform_field(self.field)
+        self.assertFalse(form_field.required)
+
+
+# ---------------------------------------------------------------------------
+# SelectFieldType — filterset queryset filtering (issue #366)
+# ---------------------------------------------------------------------------
+
+
+class SelectFieldFiltersetTestCase(CustomObjectsTestCase, TestCase):
+    """Filtering by ?<field>=value uses OR semantics for select fields (MultipleChoiceFilter)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.choice_set = cls.create_choice_set(name="SelectFSChoices366")
+        cls.cot = cls.create_custom_object_type(name="SelFSTest", slug="sel-fs-test")
+        cls.create_custom_object_type_field(
+            cls.cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        cls.create_custom_object_type_field(
+            cls.cot,
+            name="status",
+            label="Status",
+            type="select",
+            choice_set=cls.choice_set,
+        )
+        model = cls.cot.get_model()
+        cls.obj_c1 = model.objects.create(name="Obj C1", status="choice1")
+        cls.obj_c2 = model.objects.create(name="Obj C2", status="choice2")
+        cls.obj_c3 = model.objects.create(name="Obj C3", status="choice3")
+
+    def _filterset(self, params):
+        model = self.cot.get_model()
+        return get_filterset_class(model)(params, model.objects.all())
+
+    def test_filter_single_value_returns_matching_object(self):
+        pks = list(self._filterset({"status": ["choice1"]}).qs.values_list("pk", flat=True))
+        self.assertIn(self.obj_c1.pk, pks)
+        self.assertNotIn(self.obj_c2.pk, pks)
+        self.assertNotIn(self.obj_c3.pk, pks)
+
+    def test_filter_multiple_values_returns_union(self):
+        pks = list(self._filterset({"status": ["choice1", "choice2"]}).qs.values_list("pk", flat=True))
+        self.assertIn(self.obj_c1.pk, pks)
+        self.assertIn(self.obj_c2.pk, pks)
+        self.assertNotIn(self.obj_c3.pk, pks)
+
+    def test_no_filter_returns_all(self):
+        self.assertEqual(self._filterset({}).qs.count(), 3)
+
+
+# ---------------------------------------------------------------------------
+# MultiSelectFieldType.get_filterform_field — form field shape (issue #366)
+# ---------------------------------------------------------------------------
+
+
+class MultiSelectFieldFilterFormFieldTestCase(CustomObjectsTestCase, TestCase):
+    """get_filterform_field() for a multiselect field returns a DynamicMultipleChoiceField."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.choice_set = cls.create_choice_set(name="MSelFFChoices366")
+        cls.cot = cls.create_custom_object_type(name="MSelFFTest", slug="msel-ff-test")
+        cls.create_custom_object_type_field(
+            cls.cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        cls.field = cls.create_custom_object_type_field(
+            cls.cot,
+            name="tags",
+            label="Tags",
+            type="multiselect",
+            choice_set=cls.choice_set,
+        )
+
+    def test_returns_dynamic_multiple_choice_field(self):
+        form_field = MultiSelectFieldType().get_filterform_field(self.field)
+        self.assertIsInstance(form_field, DynamicMultipleChoiceField)
+
+    def test_form_field_not_required(self):
+        form_field = MultiSelectFieldType().get_filterform_field(self.field)
+        self.assertFalse(form_field.required)
+
+
+# ---------------------------------------------------------------------------
+# MultiSelectFieldType — filterset queryset filtering (issue #366)
+# ---------------------------------------------------------------------------
+
+
+class MultiSelectFieldFiltersetTestCase(CustomObjectsTestCase, TestCase):
+    """Filtering by ?<field>=value uses array containment with OR semantics for multiselect fields."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.choice_set = cls.create_choice_set(name="MSelFSChoices366")
+        cls.cot = cls.create_custom_object_type(name="MSelFSTest", slug="msel-fs-test")
+        cls.create_custom_object_type_field(
+            cls.cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        cls.create_custom_object_type_field(
+            cls.cot,
+            name="tags",
+            label="Tags",
+            type="multiselect",
+            choice_set=cls.choice_set,
+        )
+        model = cls.cot.get_model()
+        cls.obj_c1 = model.objects.create(name="Obj MC1", tags=["choice1"])
+        cls.obj_c2 = model.objects.create(name="Obj MC2", tags=["choice2"])
+        cls.obj_multi = model.objects.create(name="Obj Multi", tags=["choice1", "choice3"])
+        cls.obj_empty = model.objects.create(name="Obj Empty", tags=[])
+
+    def _filterset(self, params):
+        model = self.cot.get_model()
+        return get_filterset_class(model)(params, model.objects.all())
+
+    def test_filter_single_value_returns_objects_containing_value(self):
+        pks = list(self._filterset({"tags": ["choice1"]}).qs.values_list("pk", flat=True))
+        self.assertIn(self.obj_c1.pk, pks)
+        self.assertIn(self.obj_multi.pk, pks)
+        self.assertNotIn(self.obj_c2.pk, pks)
+        self.assertNotIn(self.obj_empty.pk, pks)
+
+    def test_filter_multiple_values_returns_union(self):
+        # Objects whose tags array contains choice1 OR choice2
+        pks = list(self._filterset({"tags": ["choice1", "choice2"]}).qs.values_list("pk", flat=True))
+        self.assertIn(self.obj_c1.pk, pks)
+        self.assertIn(self.obj_c2.pk, pks)
+        self.assertIn(self.obj_multi.pk, pks)
+        self.assertNotIn(self.obj_empty.pk, pks)
+
+    def test_filter_multiple_values_no_duplicates(self):
+        # obj_multi contains both choice1 and choice3; it should appear exactly once
+        qs = self._filterset({"tags": ["choice1", "choice3"]}).qs
+        self.assertEqual(qs.filter(pk=self.obj_multi.pk).count(), 1)
+
+    def test_no_filter_returns_all(self):
+        self.assertEqual(self._filterset({}).qs.count(), 4)
