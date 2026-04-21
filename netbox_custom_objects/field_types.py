@@ -608,9 +608,28 @@ class CustomManyToManyManager(Manager):
         self.through.objects.filter(source_id=self.instance.pk).delete()
 
     def set(self, objs, clear=False):
+        objs = tuple(objs)  # force evaluation before any mutation
         if clear:
             self.clear()
-        self.add(*objs)
+            self.add(*objs)
+        else:
+            new_pks = {obj.pk for obj in objs}
+            old_pks = set(
+                self.through.objects.filter(source_id=self.instance.pk)
+                .values_list('target_id', flat=True)
+            )
+            # Remove relationships no longer in the target set
+            to_remove = old_pks - new_pks
+            if to_remove:
+                self.through.objects.filter(
+                    source_id=self.instance.pk,
+                    target_id__in=to_remove,
+                ).delete()
+            # Add only genuinely new relationships
+            for pk in new_pks - old_pks:
+                self.through.objects.get_or_create(
+                    source_id=self.instance.pk, target_id=pk
+                )
 
 
 class CustomManyToManyDescriptor(ManyToManyDescriptor):
