@@ -14,7 +14,6 @@ __all__ = (
     "get_viewname",
     "install_clear_cache_suppressor",
     "is_in_branch",
-    "suppress_clear_cache",
 )
 
 # ---------------------------------------------------------------------------
