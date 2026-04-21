@@ -17,6 +17,7 @@ from ipam.models import Prefix, IPAddress
 from ipam.choices import PrefixStatusChoices
 from users.models import ObjectPermission, Token
 
+from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.tests.base import CustomObjectsTestCase, TransactionCleanupMixin
 
@@ -482,6 +483,54 @@ class PolymorphicFieldAPITest(TransactionCleanupMixin, CustomObjectsTestCase, Tr
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.content)
         self.assertIn(b"not allowed", response.content.lower())
+
+    # --- DELETE ---
+
+    def test_delete_custom_object_with_gfk_value(self):
+        """DELETE a custom object with a populated GFK polymorphic field returns 204 and removes the object."""
+        _grant_perm(self.user, "delete", self.model, "co-delete")
+        from django.contrib.contenttypes.models import ContentType
+        site_ct = ContentType.objects.get_for_model(Site)
+        obj = self.model.objects.create(
+            name="gfk-delete-obj",
+            poly_obj_content_type=site_ct,
+            poly_obj_object_id=self.site.pk,
+        )
+        pk = obj.pk
+
+        response = self.client.delete(self._obj_detail_url(pk), **self.header)
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT, response.content)
+        self.assertFalse(self.model.objects.filter(pk=pk).exists())
+
+    def test_delete_custom_object_with_m2m_values(self):
+        """DELETE a custom object with populated M2M polymorphic values returns 204, removes the object, and cleans up through-table rows."""
+        from django.apps import apps as django_apps
+        _grant_perm(self.user, "delete", self.model, "co-delete")
+        obj = self.model.objects.create(name="m2m-delete-obj")
+        obj.poly_multi.add(self.site, self.prefix)
+        pk = obj.pk
+
+        # Resolve the through model before the delete so we can verify cascade cleanup.
+        through_model = django_apps.get_model(APP_LABEL, self.m2m_field.through_model_name)
+
+        response = self.client.delete(self._obj_detail_url(pk), **self.header)
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT, response.content)
+        self.assertFalse(self.model.objects.filter(pk=pk).exists())
+        # Through-table rows for this object should be gone.
+        self.assertFalse(through_model.objects.filter(source_id=pk).exists())
+
+    def test_delete_custom_object_with_empty_polymorphic_fields(self):
+        """DELETE a custom object with no polymorphic values set returns 204."""
+        _grant_perm(self.user, "delete", self.model, "co-delete")
+        obj = self.model.objects.create(name="empty-poly-delete-obj")
+        pk = obj.pk
+
+        response = self.client.delete(self._obj_detail_url(pk), **self.header)
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT, response.content)
+        self.assertFalse(self.model.objects.filter(pk=pk).exists())
 
 
 # ---------------------------------------------------------------------------
