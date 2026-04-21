@@ -133,12 +133,15 @@ def _count_linked(instance):
     return total or None
 
 
-def _get_linked_objects(instance):
-    """Return list of LinkedCustomObject for all COs referencing *instance*."""
+def _get_linked_objects(instance, user):
+    """Return list of LinkedCustomObject for all COs referencing *instance*, filtered by *user* permissions."""
     results = []
     for field, model, fk in _iter_linked_fields(instance):
+        qs = model.objects
+        if hasattr(qs, 'restrict'):
+            qs = qs.restrict(user, 'view')
         try:
-            for obj in model.objects.filter(**fk).prefetch_related('tags'):
+            for obj in qs.filter(**fk).prefetch_related('tags'):
                 results.append(LinkedCustomObject(custom_object=obj, field=field))
         except (OperationalError, ProgrammingError):
             pass
@@ -169,7 +172,7 @@ def _make_combined_tab_view(model_class):
                 qs = qs.restrict(request.user, 'view')
             instance = get_object_or_404(qs, pk=pk)
 
-            linked_all = _get_linked_objects(instance)
+            linked_all = _get_linked_objects(instance, request.user)
 
             # Quick search filter
             q = request.GET.get('q', '').strip()
@@ -328,7 +331,10 @@ def _make_typed_tab_view(model_class, cot, field_infos, weight):
                 return render(request, 'netbox_custom_objects/tabs/typed_tab.html', error_ctx)
 
             q = _build_link_q(field_infos, instance.pk)
-            base_qs = dynamic_model.objects.filter(q).distinct()
+            base_qs = dynamic_model.objects
+            if hasattr(base_qs, 'restrict'):
+                base_qs = base_qs.restrict(request.user, 'view')
+            base_qs = base_qs.filter(q).distinct()
             filterset = get_filterset_class(dynamic_model)(request.GET, queryset=base_qs)
             filter_form = build_filterset_form_class(dynamic_model)(request.GET)
 
