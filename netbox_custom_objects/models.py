@@ -139,6 +139,119 @@ def _apply_deferred_co_field(field_instance):
             )
 
 
+def _schema_add_field(fi, model, schema_editor, schema_conn):
+    """
+    Issue ``add_field`` against the physical schema for *fi*.
+
+    Handles through-table creation for MULTIOBJECT fields.  Does NOT apply
+    deferred CO field data — callers that need that (squash merge context) must
+    call ``_apply_deferred_co_field(fi)`` separately after this returns.
+    """
+    ft = FIELD_TYPE_CLASS[fi.type]()
+    mf = ft.get_model_field(fi)
+    mf.contribute_to_class(model, fi.name)
+    schema_editor.add_field(model, mf)
+    if fi.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+        ft.create_m2m_table(fi, model, fi.name, schema_conn=schema_conn)
+
+
+def _schema_remove_field(fi, model, schema_editor, existing_tables=None):
+    """
+    Issue ``remove_field`` against the physical schema for *fi*.
+
+    For MULTIOBJECT fields the through table is dropped first.  When
+    *existing_tables* is a pre-fetched list only tables present in it are
+    dropped; when it is ``None`` (main-schema context) the drop is always
+    attempted.
+
+    Always issues ``SET CONSTRAINTS ALL IMMEDIATE`` before ``remove_field`` to
+    flush any DEFERRABLE FK trigger events that would otherwise cause PostgreSQL
+    to reject the subsequent ALTER TABLE.
+    """
+    ft = FIELD_TYPE_CLASS[fi.type]()
+    mf = ft.get_model_field(fi)
+    mf.contribute_to_class(model, fi.name)
+
+    if fi.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+        through_table = fi.through_table_name
+        if existing_tables is None or through_table in existing_tables:
+            through_meta = type(
+                'Meta', (),
+                {'db_table': through_table, 'app_label': APP_LABEL, 'managed': True},
+            )
+            through_model = type(
+                f'_TempThrough_{through_table}',
+                (models.Model,),
+                {'Meta': through_meta, '__module__': 'netbox_custom_objects.models'},
+            )
+            schema_editor.delete_model(through_model)
+
+    # Flush any pending DEFERRABLE FK trigger events before ALTER TABLE;
+    # otherwise PostgreSQL raises "pending trigger events" when removing a FK field.
+    schema_editor.execute('SET CONSTRAINTS ALL IMMEDIATE')
+    schema_editor.remove_field(model, mf)
+
+
+def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, existing_tables=None):
+    """
+    Issue ``alter_field`` against the physical schema, updating *old_fi* to *new_fi*.
+
+    For MULTIOBJECT fields whose name changes the through table is renamed before
+    ``alter_field`` is called.  When the old through table is absent (e.g. the
+    branch has never seen this field) the new through table is created from scratch
+    instead.
+
+    *existing_tables* — optional pre-fetched table name list from the target
+    connection.  When given, through-table operations are guarded by membership
+    checks.  When ``None`` (main-schema context) the schema_conn is introspected
+    once on demand.
+    """
+    old_mf = FIELD_TYPE_CLASS[old_fi.type]().get_model_field(old_fi)
+    new_mf = FIELD_TYPE_CLASS[new_fi.type]().get_model_field(new_fi)
+    old_mf.contribute_to_class(model, old_fi.name)
+    new_mf.contribute_to_class(model, new_fi.name)
+
+    if (
+        new_fi.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
+        and old_fi.name != new_fi.name
+    ):
+        old_through = old_fi.through_table_name
+        new_through = new_fi.through_table_name
+
+        tables = existing_tables
+        if tables is None:
+            with schema_conn.cursor() as cursor:
+                tables = schema_conn.introspection.table_names(cursor)
+
+        if old_through in tables:
+            old_through_meta = type(
+                'Meta', (),
+                {'db_table': old_through, 'app_label': APP_LABEL, 'managed': True},
+            )
+            old_through_model = generate_model(
+                f'_TempOldThrough_{old_through}',
+                (models.Model,),
+                {
+                    '__module__': 'netbox_custom_objects.models',
+                    'Meta': old_through_meta,
+                    'id': models.AutoField(primary_key=True),
+                    'source': models.ForeignKey(
+                        model, on_delete=models.CASCADE, db_column='source_id', related_name='+',
+                    ),
+                    'target': models.ForeignKey(
+                        model, on_delete=models.CASCADE, db_column='target_id', related_name='+',
+                    ),
+                },
+            )
+            schema_editor.alter_db_table(old_through_model, old_through, new_through)
+        else:
+            # Old through table absent — create the new one from scratch
+            ft = FIELD_TYPE_CLASS[new_fi.type]()
+            ft.create_m2m_table(new_fi, model, new_fi.name, schema_conn=schema_conn)
+
+    schema_editor.alter_field(model, old_mf, new_mf)
+
+
 class CustomObject(
     BookmarksMixin,
     ChangeLoggingMixin,
@@ -1901,115 +2014,14 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         # editor operations target the branch schema rather than main.
         schema_conn = _get_schema_connection()
 
-        field_type = FIELD_TYPE_CLASS[self.type]()
-        model_field = field_type.get_model_field(self)
         model = self.custom_object_type.get_model()
-        model_field.contribute_to_class(model, self.name)
 
         with schema_conn.schema_editor() as schema_editor:
             if self._state.adding:
-                schema_editor.add_field(model, model_field)
+                _schema_add_field(self, model, schema_editor, schema_conn)
                 _apply_deferred_co_field(self)
-                if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                    field_type.create_m2m_table(self, model, self.name, schema_conn=schema_conn)
             else:
-                old_field = field_type.get_model_field(self.original)
-                old_field.contribute_to_class(model, self._original_name)
-
-                # Special handling for MultiObject fields when the name changes
-                if (
-                    self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
-                    and self.name != self._original_name
-                ):
-                    # For renamed MultiObject fields, we just need to rename the through table
-                    old_through_table_name = self.original.through_table_name
-                    new_through_table_name = self.through_table_name
-
-                    # Check if old through table exists
-                    with schema_conn.cursor() as cursor:
-                        tables = schema_conn.introspection.table_names(cursor)
-                        old_table_exists = old_through_table_name in tables
-
-                    if old_table_exists:
-                        # Create temporary models to represent the old and new through table states
-                        old_through_meta = type(
-                            "Meta",
-                            (),
-                            {
-                                "db_table": old_through_table_name,
-                                "app_label": APP_LABEL,
-                                "managed": True,
-                            },
-                        )
-                        old_through_model = generate_model(
-                            f"TempOld{self.original.through_model_name}",
-                            (models.Model,),
-                            {
-                                "__module__": "netbox_custom_objects.models",
-                                "Meta": old_through_meta,
-                                "id": models.AutoField(primary_key=True),
-                                "source": models.ForeignKey(
-                                    model,
-                                    on_delete=models.CASCADE,
-                                    db_column="source_id",
-                                    related_name="+",
-                                ),
-                                "target": models.ForeignKey(
-                                    model,
-                                    on_delete=models.CASCADE,
-                                    db_column="target_id",
-                                    related_name="+",
-                                ),
-                            },
-                        )
-
-                        new_through_meta = type(
-                            "Meta",
-                            (),
-                            {
-                                "db_table": new_through_table_name,
-                                "app_label": APP_LABEL,
-                                "managed": True,
-                            },
-                        )
-                        new_through_model = generate_model(
-                            f"TempNew{self.through_model_name}",
-                            (models.Model,),
-                            {
-                                "__module__": "netbox_custom_objects.models",
-                                "Meta": new_through_meta,
-                                "id": models.AutoField(primary_key=True),
-                                "source": models.ForeignKey(
-                                    model,
-                                    on_delete=models.CASCADE,
-                                    db_column="source_id",
-                                    related_name="+",
-                                ),
-                                "target": models.ForeignKey(
-                                    model,
-                                    on_delete=models.CASCADE,
-                                    db_column="target_id",
-                                    related_name="+",
-                                ),
-                            },
-                        )
-                        new_through_model  # To silence ruff error
-
-                        # Rename the table using Django's schema editor
-                        schema_editor.alter_db_table(
-                            old_through_model,
-                            old_through_table_name,
-                            new_through_table_name,
-                        )
-                    else:
-                        # No old table exists, create the new through table
-                        field_type.create_m2m_table(self, model, self.name, schema_conn=schema_conn)
-
-                    # Alter the field normally (this updates the field definition)
-                    schema_editor.alter_field(model, old_field, model_field)
-                else:
-                    # Normal field alteration
-                    schema_editor.alter_field(model, old_field, model_field)
+                _schema_alter_field(self.original, self, model, schema_editor, schema_conn)
 
         # Ensure FK constraints are properly created for OBJECT fields with CASCADE behavior
         should_ensure_fk = False
@@ -2062,20 +2074,10 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         # Use the branch connection when operating inside a branch.
         schema_conn = _get_schema_connection()
 
-        field_type = FIELD_TYPE_CLASS[self.type]()
-        model_field = field_type.get_model_field(self)
         model = self.custom_object_type.get_model()
-        model_field.contribute_to_class(model, self.name)
 
         with schema_conn.schema_editor() as schema_editor:
-            if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                apps = model._meta.apps
-                through_model = apps.get_model(APP_LABEL, self.through_model_name)
-                schema_editor.delete_model(through_model)
-            # Flush any pending DEFERRABLE FK trigger events before ALTER TABLE;
-            # otherwise PostgreSQL raises "pending trigger events" when removing a FK field.
-            schema_editor.execute('SET CONSTRAINTS ALL IMMEDIATE')
-            schema_editor.remove_field(model, model_field)
+            _schema_remove_field(self, model, schema_editor)
 
         # Clear the model cache for this CustomObjectType when a field is deleted
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)

@@ -21,7 +21,7 @@ used for all other branchable models.
 
 import logging
 
-from django.db import connections, models
+from django.db import connections
 
 logger = logging.getLogger('netbox_custom_objects.branching')
 
@@ -151,12 +151,13 @@ def on_branch_migrated(sender, branch, user, **kwargs):
     exists in both, with different ``name`` values) rather than being treated
     as an unrelated delete + add.
     """
-    from extras.choices import CustomFieldTypeChoices
     from netbox_branching.utilities import activate_branch
-    from netbox_custom_objects.constants import APP_LABEL
-    from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
-    from netbox_custom_objects.models import CustomObjectType
-    from netbox_custom_objects.utilities import generate_model
+    from netbox_custom_objects.models import (
+        CustomObjectType,
+        _schema_add_field,
+        _schema_alter_field,
+        _schema_remove_field,
+    )
 
     branch_connection = connections[branch.connection_name]
 
@@ -209,78 +210,17 @@ def on_branch_migrated(sender, branch, user, **kwargs):
 
         with branch_connection.schema_editor() as schema_editor:
 
-            # ── add_field ────────────────────────────────────────────────────
             for fi in to_add:
                 logger.debug('add_field %r on %s', fi.name, cot)
-                ft = FIELD_TYPE_CLASS[fi.type]()
-                mf = ft.get_model_field(fi)
-                mf.contribute_to_class(model, fi.name)
-                schema_editor.add_field(model, mf)
-                if fi.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                    ft.create_m2m_table(fi, model, fi.name, schema_conn=branch_connection)
+                _schema_add_field(fi, model, schema_editor, branch_connection)
 
-            # ── remove_field ─────────────────────────────────────────────────
             for fi in to_remove:
                 logger.debug('remove_field %r on %s', fi.name, cot)
-                ft = FIELD_TYPE_CLASS[fi.type]()
-                mf = ft.get_model_field(fi)
-                mf.contribute_to_class(model, fi.name)
-                if fi.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                    through_table = f'custom_objects_{cot.pk}_{fi.name}'
-                    if through_table in branch_tables:
-                        ThroughMeta = type(
-                            'Meta', (),
-                            {'db_table': through_table, 'app_label': APP_LABEL, 'managed': True},
-                        )
-                        through_model = type(
-                            f'_TempThrough_{through_table}',
-                            (models.Model,),
-                            {'Meta': ThroughMeta, '__module__': 'netbox_custom_objects.models'},
-                        )
-                        schema_editor.delete_model(through_model)
-                schema_editor.remove_field(model, mf)
+                _schema_remove_field(fi, model, schema_editor, existing_tables=branch_tables)
 
-            # ── alter_field ──────────────────────────────────────────────────
             for old_fi, new_fi in to_alter:
-                logger.debug(
-                    'alter_field %r → %r on %s',
-                    old_fi.name, new_fi.name, cot,
+                logger.debug('alter_field %r → %r on %s', old_fi.name, new_fi.name, cot)
+                _schema_alter_field(
+                    old_fi, new_fi, model, schema_editor, branch_connection,
+                    existing_tables=branch_tables,
                 )
-                old_mf = FIELD_TYPE_CLASS[old_fi.type]().get_model_field(old_fi)
-                new_mf = FIELD_TYPE_CLASS[new_fi.type]().get_model_field(new_fi)
-                old_mf.contribute_to_class(model, old_fi.name)
-                new_mf.contribute_to_class(model, new_fi.name)
-
-                # When a MULTIOBJECT field is renamed, the through table must
-                # be renamed first (same logic as CustomObjectTypeField.save()).
-                if (
-                    new_fi.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
-                    and old_fi.name != new_fi.name
-                ):
-                    old_through = f'custom_objects_{cot.pk}_{old_fi.name}'
-                    new_through = f'custom_objects_{cot.pk}_{new_fi.name}'
-                    if old_through in branch_tables:
-                        OldThroughMeta = type(
-                            'Meta', (),
-                            {'db_table': old_through, 'app_label': APP_LABEL, 'managed': True},
-                        )
-                        old_through_model = generate_model(
-                            f'_TempOldThrough_{old_through}',
-                            (models.Model,),
-                            {
-                                '__module__': 'netbox_custom_objects.models',
-                                'Meta': OldThroughMeta,
-                                'id': models.AutoField(primary_key=True),
-                                'source': models.ForeignKey(
-                                    model, on_delete=models.CASCADE,
-                                    db_column='source_id', related_name='+',
-                                ),
-                                'target': models.ForeignKey(
-                                    model, on_delete=models.CASCADE,
-                                    db_column='target_id', related_name='+',
-                                ),
-                            },
-                        )
-                        schema_editor.alter_db_table(old_through_model, old_through, new_through)
-
-                schema_editor.alter_field(model, old_mf, new_mf)
