@@ -6,8 +6,8 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('core', '0023_datasource_sync_permission'),
-        ('extras', '0137_default_ordering_indexes'),
+        ('core', '0021_job_queue_name'),
+        ('extras', '0134_owner'),
         ('netbox_custom_objects', '0004_customobjecttype_group_name'),
     ]
 
