@@ -103,12 +103,12 @@ class PolymorphicObjectSerializerField(serializers.Field):
 
         obj_id = data.get("object_id") if "object_id" in data else data.get("id")
         if obj_id is None:
-            raise serializers.ValidationError("Must provide object_id.")
+            raise serializers.ValidationError(_("Must provide object_id."))
 
         try:
             return model_class.objects.get(pk=obj_id)
         except (model_class.DoesNotExist, ValueError, TypeError, OverflowError):
-            raise serializers.ValidationError("No matching object found.") from None
+            raise serializers.ValidationError(_("No matching object found.")) from None
 
 
 class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
@@ -174,12 +174,12 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
                 cot = CustomObjectType.objects.get(slug=model)
                 model = CustomObjectType.get_table_model_name(cot.id).lower()
             except CustomObjectType.DoesNotExist:
-                raise ValidationError("Invalid custom object type slug.")
+                raise ValidationError(_("Invalid custom object type slug."))
         try:
             return ObjectType.objects.get(app_label=app_label, model=model)
         except ObjectType.DoesNotExist:
             raise ValidationError(
-                "Must provide a valid app_label and model for the object field type."
+                _("Must provide a valid app_label and model for the object field type.")
             )
 
     def validate(self, attrs):
@@ -187,7 +187,7 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
         if self.instance and self.instance.pk:
             if "is_polymorphic" in attrs and bool(attrs["is_polymorphic"]) != bool(self.instance.is_polymorphic):
                 raise ValidationError(
-                    {"is_polymorphic": "Cannot change the polymorphic flag after field creation."}
+                    {"is_polymorphic": _("Cannot change the polymorphic flag after field creation.")}
                 )
             if attrs.get("related_object_types_input") is not None:
                 # Resolve aliases (public app_label, COT slug as model name) before
@@ -216,11 +216,11 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
                     )
                     if incoming != existing:
                         raise ValidationError(
-                            {"related_object_types_input": "Cannot change allowed object types after field creation."}
+                            {"related_object_types_input": _("Cannot change allowed object types after field creation.")}
                         )
             if attrs.get("app_label") or attrs.get("model"):
                 raise ValidationError(
-                    "Cannot change the related object type after field creation."
+                    _("Cannot change the related object type after field creation.")
                 )
 
         app_label = attrs.pop("app_label", None)
@@ -245,7 +245,7 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
                     attrs["related_object_types"] = resolved
                 elif not attrs.get("related_object_types"):
                     raise ValidationError(
-                        "Polymorphic object fields require related_object_types_input or related_object_types."
+                        _("Polymorphic object fields require related_object_types_input or related_object_types.")
                     )
             else:
                 # Non-polymorphic: resolve single type from app_label+model or related_object_type
@@ -255,7 +255,7 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
                     )
                 elif not attrs.get("related_object_type"):
                     raise ValidationError(
-                        "Must provide app_label and model (or related_object_type) for object field type."
+                        _("Must provide app_label and model (or related_object_type) for object field type.")
                     )
 
         if field_type in [
@@ -264,7 +264,7 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
         ]:
             if not attrs.get("choice_set", None):
                 raise ValidationError(
-                    "Must provide choice_set with valid PK for select field type."
+                    _("Must provide choice_set with valid PK for select field type.")
                 )
         return super().validate(attrs)
 
