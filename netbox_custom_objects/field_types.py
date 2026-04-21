@@ -245,6 +245,18 @@ class BooleanFieldType(FieldType):
             widget=forms.Select(choices=choices),
         )
 
+    def get_filterform_field(self, field, **kwargs):
+        choices = (
+            ('', '---------'),
+            ('true', _("Yes")),
+            ('false', _("No")),
+        )
+        return forms.NullBooleanField(
+            required=False,
+            label=field,
+            widget=forms.Select(choices=choices),
+        )
+
     def get_table_column_field(self, field, **kwargs):
         return BooleanColumn()
 
@@ -339,6 +351,16 @@ class SelectFieldType(FieldType):
                 ),
             )
 
+    def get_filterform_field(self, field, **kwargs):
+        return DynamicMultipleChoiceField(
+            choices=field.choice_set.choices,
+            required=False,
+            label=field,
+            widget=APISelectMultiple(
+                api_url=f"/api/extras/custom-field-choice-sets/{field.choice_set.pk}/choices/"
+            ),
+        )
+
 
 class MultiSelectFieldType(FieldType):
     def get_display_value(self, instance, field_name):
@@ -383,11 +405,15 @@ class MultiSelectFieldType(FieldType):
                 ),
             )
 
-    # TODO: Implement this
-    # def get_form_field(self, field, required, label, **kwargs):
-    #     return forms.MultipleChoiceField(
-    #         choices=field.choices, required=required, label=label, **kwargs
-    #     )
+    def get_filterform_field(self, field, **kwargs):
+        return DynamicMultipleChoiceField(
+            choices=field.choice_set.choices,
+            required=False,
+            label=field,
+            widget=APISelectMultiple(
+                api_url=f"/api/extras/custom-field-choice-sets/{field.choice_set.pk}/choices/"
+            ),
+        )
 
     def render_table_column(self, value):
         return ", ".join(value)

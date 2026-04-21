@@ -100,6 +100,42 @@ def get_filterset_class(model):
         "search": search,
     }
 
+    # Add explicit filters for select, multiselect, and boolean fields.
+    # The auto-generated CharFilter for select fields doesn't support multi-value
+    # queries; MultipleChoiceFilter produces field__in=[...] semantics.
+    # Multiselect (ArrayField) needs a custom method that ORs __contains queries.
+    for co_field in model.custom_object_type.fields.all():
+        if co_field.type in (
+            CustomFieldTypeChoices.TYPE_SELECT,
+            CustomFieldTypeChoices.TYPE_MULTISELECT,
+        ):
+            choices = list(co_field.choice_set.choices)
+            if co_field.type == CustomFieldTypeChoices.TYPE_SELECT:
+                attrs[co_field.name] = django_filters.MultipleChoiceFilter(
+                    choices=choices,
+                    field_name=co_field.name,
+                )
+            else:
+                # Multiselect is an ArrayField; use OR of __contains queries so
+                # that a row matches if its array contains *any* selected value.
+                def make_multiselect_filter(fname):
+                    def filter_multiselect(self, queryset, name, value):
+                        if not value:
+                            return queryset
+                        q = Q()
+                        for v in value:
+                            q |= Q(**{f"{fname}__contains": [v]})
+                        return queryset.filter(q)
+                    filter_multiselect.__name__ = f"filter_{fname}"
+                    return filter_multiselect
+
+                method_name = f"filter_{co_field.name}"
+                attrs[method_name] = make_multiselect_filter(co_field.name)
+                attrs[co_field.name] = django_filters.MultipleChoiceFilter(
+                    choices=choices,
+                    method=method_name,
+                )
+
     # Add filters for M2M (multiobject) fields, which are not in model._meta.fields.
     # By the time get_filterset_class() is called (at request time), after_model_generation()
     # will have already resolved m2m_field.remote_field.model and .through to actual model
