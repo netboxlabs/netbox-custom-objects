@@ -1,10 +1,53 @@
 # Test utilities for netbox_custom_objects plugin
+from django.apps import apps as django_apps
+from django.contrib.contenttypes.management import create_contenttypes
 from django.test import Client
 from core.models import ObjectType
 from extras.models import CustomFieldChoiceSet
 from utilities.testing import create_test_user
 
+from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+
+
+def _recreate_contenttypes():
+    """Recreate ContentType rows for all installed apps using get_or_create.
+
+    Called after a TransactionTestCase flush so that subsequent test classes —
+    whether TransactionTestCase or regular TestCase — can look up ContentTypes.
+    Using create_contenttypes (get_or_create) avoids the duplicate-key
+    violations that serialized_rollback causes in the parallel test runner.
+    """
+    for app_config in django_apps.get_app_configs():
+        create_contenttypes(app_config, verbosity=0)
+
+
+def _purge_stale_generated_models():
+    """Remove dynamically generated CustomObject models from the app registry.
+
+    Regular TestCase subclasses wrap each test in a transaction that is rolled
+    back at the end.  Rolling back the transaction drops any tables created by
+    DDL inside the test (e.g. CREATE TABLE custom_objects_1), but Django's
+    in-memory model registry is NOT rolled back.  The stale model entry then
+    causes problems for subsequent TransactionTestCase tests:
+
+    - netbox-branching's get_tables_to_replicate() iterates over registered
+      models to build the list of tables to clone into the branch schema.
+      A stale model entry makes it try to COPY a table that no longer exists.
+    - Django's cascade-delete collector queries non-existent tables.
+
+    Calling this in setUp() of every TransactionTestCase prevents both failure
+    modes.
+    """
+    stale = [
+        name
+        for name, model in list(django_apps.all_models.get(APP_LABEL, {}).items())
+        if getattr(model, '_generated_table_model', False)
+    ]
+    for name in stale:
+        django_apps.all_models[APP_LABEL].pop(name, None)
+    if stale:
+        django_apps.clear_cache()
 
 
 class TransactionCleanupMixin:
@@ -13,6 +56,14 @@ class TransactionCleanupMixin:
     Deletes all COTs in tearDown so their backing tables are dropped before the
     database flush that TransactionTestCase performs between tests.
     """
+
+    def setUp(self):
+        # Purge stale in-memory model registrations left by earlier TestCase
+        # classes whose rolled-back transactions dropped the backing tables.
+        # Must run before any code that iterates the model registry (e.g.
+        # netbox-branching's get_tables_to_replicate() during provisioning).
+        _purge_stale_generated_models()
+        super().setUp()
 
     def tearDown(self):
         from core.models import ObjectChange
@@ -31,6 +82,19 @@ class TransactionCleanupMixin:
         # violations (user referenced by ObjectChange no longer exists).
         ObjectChange.objects.all().delete()
         super().tearDown()
+
+    def _fixture_teardown(self):
+        """Flush tables and restore ContentTypes for the next test class.
+
+        TransactionTestCase._fixture_teardown() TRUNCATEs all tables after each
+        test.  Any TestCase class that follows on the same worker then finds no
+        ContentTypes and fails trying to look up ObjectType rows.  Recreating
+        them here (idempotently, via get_or_create) avoids that without the
+        duplicate-key violations that serialized_rollback=True causes when the
+        parallel runner tries to INSERT rows that already exist.
+        """
+        super()._fixture_teardown()
+        _recreate_contenttypes()
 
 
 class CustomObjectsTestCase:

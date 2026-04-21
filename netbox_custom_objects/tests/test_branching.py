@@ -28,7 +28,7 @@ except ImportError:
     HAS_BRANCHING = False
 
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
-from netbox_custom_objects.tests.base import TransactionCleanupMixin
+from netbox_custom_objects.tests.base import TransactionCleanupMixin, _recreate_contenttypes
 
 User = get_user_model()
 
@@ -83,9 +83,10 @@ class BaseBranchingTests(TransactionCleanupMixin):
     """
 
     MERGE_STRATEGY = None
-    serialized_rollback = True
 
     def setUp(self):
+        super().setUp()  # → TransactionCleanupMixin.setUp() → _purge_stale_generated_models()
+        _recreate_contenttypes()
         self.user = User.objects.create_user(username='testuser')
         self.request = _make_request(self.user)
 
@@ -327,9 +328,9 @@ class BranchSyncTestCase(TransactionCleanupMixin, TransactionTestCase):
     available in the branch after sync.
     """
 
-    serialized_rollback = True
-
     def setUp(self):
+        super().setUp()  # → TransactionCleanupMixin.setUp() → _purge_stale_generated_models()
+        _recreate_contenttypes()
         self.user = User.objects.create_user(username='testuser')
         self.request = _make_request(self.user)
 
