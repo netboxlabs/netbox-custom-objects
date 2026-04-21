@@ -29,7 +29,7 @@ from .models import CustomObject, CustomObjectType, CustomObjectTypeField
 from extras.choices import CustomFieldTypeChoices
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.dynamic_forms import build_filterset_form_class
-from netbox_custom_objects.utilities import extract_cot_id_from_model_name, is_in_branch
+from netbox_custom_objects.utilities import extract_cot_id_from_model_name
 
 logger = logging.getLogger("netbox_custom_objects.views")
 
