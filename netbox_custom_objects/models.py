@@ -1389,6 +1389,18 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 }
             )
 
+        # related_name is not supported on polymorphic fields: GenericForeignKey ignores it
+        # and PolymorphicM2MDescriptor never consumes it, so any value set here would be silently
+        # dropped with no working reverse accessor.
+        if self.related_name and self.is_polymorphic:
+            raise ValidationError(
+                {
+                    "related_name": _(
+                        "Reverse relation names are not supported for polymorphic fields."
+                    )
+                }
+            )
+
         # related_name must be unique per related_object_type (when set)
         if self.related_name and self.related_object_type_id:
             conflict = CustomObjectTypeField.objects.filter(
