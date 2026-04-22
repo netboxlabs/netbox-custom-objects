@@ -443,6 +443,15 @@ class CustomObjectType(NetBoxModel):
                         _apps = model._meta.apps
                         try:
                             through_model = _apps.get_model(APP_LABEL, field_instance.through_model_name)
+                            # Always update source FK to point to the current model class.
+                            # get_model() may be called multiple times (e.g. cache invalidation
+                            # after a field save changes cache_timestamp).  Without this update
+                            # the through model's source FK would keep pointing at the old class,
+                            # causing Django's Collector to raise ValueError during cascade delete:
+                            # "Cannot query 'X': Must be 'TableYModel' instance."
+                            source_field = through_model._meta.get_field("source")
+                            source_field.remote_field.model = model
+                            source_field.related_model = model
                         except LookupError:
                             field_type_obj = FIELD_TYPE_CLASS[CustomFieldTypeChoices.TYPE_MULTIOBJECT]()
                             source_model_str = f"{APP_LABEL}.{model.__name__}"
