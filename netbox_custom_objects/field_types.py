@@ -539,43 +539,52 @@ class CustomManyToManyManager(Manager):
         self.core_filters = {"source_id": instance.pk}
         self.prefetch_cache_name = self.field_name
 
-    def get_prefetch_queryset(self, instances, queryset=None):
-        if queryset is None:
-            queryset = self.get_queryset()
+    def get_prefetch_querysets(self, instances, querysets=None):
+        """Django 4.2+ / 6.0+ prefetch API (plural form, replaces get_prefetch_queryset)."""
+        if querysets and len(querysets) != 1:
+            raise ValueError(
+                "querysets argument of get_prefetch_querysets() should have a length of 1."
+            )
+        instance_pks = [obj.pk for obj in instances]
+        if not instance_pks:
+            return (
+                (querysets[0] if querysets else self.model.objects.all()).none(),
+                lambda obj: None,
+                lambda obj: None,
+                False,
+                self.prefetch_cache_name,
+                False,
+            )
 
-        # Get all the target IDs for these instances in a single query
-        through_queryset = self.through.objects.filter(
-            source_id__in=[obj.pk for obj in instances]
-        ).values_list("source_id", "target_id")
+        queryset = querysets[0] if querysets else self.model.objects.all()
+        through_table = self.through._meta.db_table
+        target_table = self.model._meta.db_table
+        target_pk_col = self.model._meta.pk.column
 
-        # Build a mapping of instance PKs to their related objects
-        rel_obj_cache = {source_id: [] for source_id in [obj.pk for obj in instances]}
-        target_ids = set()
-        for source_id, target_id in through_queryset:
-            rel_obj_cache[source_id].append(target_id)
-            target_ids.add(target_id)
-
-        # Get all the related objects in a single query
-        target_queryset = self.model.objects.filter(pk__in=target_ids)
-        target_objects = {obj.pk: obj for obj in target_queryset}
-
-        # Build the final cache mapping
-        for source_id, target_ids in rel_obj_cache.items():
-            rel_obj_cache[source_id] = [
-                target_objects[target_id]
-                for target_id in target_ids
-                if target_id in target_objects
-            ]
+        # QuerySet.extra() is used intentionally here.  M2M prefetch requires
+        # one result row per *relationship*, not per target object — a target
+        # linked to N sources must appear N times, each annotated with its
+        # source_id so Django's prefetch machinery can group them correctly.
+        # annotate()+Subquery can only return one row per target, so an ORM-
+        # only solution is not possible.  Django's own ManyToManyDescriptor
+        # uses the identical extra()-based JOIN pattern for the same reason
+        # (see django/db/models/fields/related_descriptors.py, line ~1160).
+        queryset = queryset.extra(  # noqa: S610
+            select={"_prefetch_source_id": f'"{through_table}"."source_id"'},
+            tables=[through_table],
+            where=[
+                f'"{through_table}"."target_id" = "{target_table}"."{target_pk_col}"',
+                f'"{through_table}"."source_id" IN ({",".join(str(pk) for pk in instance_pks)})',
+            ],
+        )
 
         return (
-            target_queryset,  # queryset containing all the related objects
-            lambda obj: obj.pk,  # function to get the related object ID
-            lambda obj: rel_obj_cache[
-                obj.pk
-            ],  # function to get the list of related objects
-            False,  # single related object (False for M2M)
-            self.prefetch_cache_name,  # cache name
-            False,  # is a descriptor (False for M2M)
+            queryset,
+            lambda rel_obj: rel_obj._prefetch_source_id,  # group key from related obj
+            lambda inst: inst.pk,  # matching key from source instance
+            False,
+            self.prefetch_cache_name,
+            False,
         )
 
     def get_queryset(self):
@@ -608,9 +617,28 @@ class CustomManyToManyManager(Manager):
         self.through.objects.filter(source_id=self.instance.pk).delete()
 
     def set(self, objs, clear=False):
+        objs = tuple(objs)  # force evaluation before any mutation
         if clear:
             self.clear()
-        self.add(*objs)
+            self.add(*objs)
+        else:
+            new_pks = {obj.pk for obj in objs}
+            old_pks = set(
+                self.through.objects.filter(source_id=self.instance.pk)
+                .values_list('target_id', flat=True)
+            )
+            # Remove relationships no longer in the target set
+            to_remove = old_pks - new_pks
+            if to_remove:
+                self.through.objects.filter(
+                    source_id=self.instance.pk,
+                    target_id__in=to_remove,
+                ).delete()
+            # Add only genuinely new relationships
+            for pk in new_pks - old_pks:
+                self.through.objects.get_or_create(
+                    source_id=self.instance.pk, target_id=pk
+                )
 
 
 class CustomManyToManyDescriptor(ManyToManyDescriptor):
@@ -637,10 +665,12 @@ class CustomManyToManyDescriptor(ManyToManyDescriptor):
         return hasattr(instance, self.cache_name)
 
     def get_cached_value(self, instance):
-        return getattr(instance, self.cache_name)
+        return instance._prefetched_objects_cache[self.cache_name]
 
     def set_cached_value(self, instance, value):
-        setattr(instance, self.cache_name, value)
+        if not hasattr(instance, '_prefetched_objects_cache'):
+            instance._prefetched_objects_cache = {}
+        instance._prefetched_objects_cache[self.cache_name] = value
 
 
 class CustomManyToManyField(models.ManyToManyField):
