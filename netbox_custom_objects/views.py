@@ -29,7 +29,7 @@ from .models import CustomObject, CustomObjectType, CustomObjectTypeField
 from extras.choices import CustomFieldTypeChoices
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.dynamic_forms import build_filterset_form_class
-from netbox_custom_objects.utilities import extract_cot_id_from_model_name, is_in_branch
+from netbox_custom_objects.utilities import is_in_branch
 
 logger = logging.getLogger("netbox_custom_objects.views")
 
@@ -528,8 +528,8 @@ class CustomObjectEditView(generic.ObjectEditView):
                             if content_type.app_label == APP_LABEL:
                                 # Custom object type
                                 from netbox_custom_objects.models import CustomObjectType
-                                custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
-                                if custom_object_type_id is None:
+                                custom_object_type_id = content_type.model.replace("table", "").replace("model", "")
+                                if not custom_object_type_id:
                                     raise ValueError(
                                         f"Expected table<id>model name for {APP_LABEL} content type, "
                                         f"got {content_type.model!r}"
