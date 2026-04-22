@@ -8,7 +8,7 @@ class Migration(migrations.Migration):
     dependencies = [
         ('core', '0021_job_queue_name'),
         ('extras', '0134_owner'),
-        ('netbox_custom_objects', '0005_customobjecttypefield_context'),
+        ('netbox_custom_objects', '0006_customobjecttypefield_related_name_and_more'),
     ]
 
     operations = [
@@ -32,26 +32,7 @@ class Migration(migrations.Migration):
             name='deprecated_since',
             field=models.CharField(blank=True, max_length=50),
         ),
-        migrations.AddField(
-            model_name='customobjecttypefield',
-            name='related_name',
-            field=models.CharField(
-                blank=True,
-                max_length=100,
-                validators=[
-                    django.core.validators.RegexValidator(
-                        message='Only lowercase alphanumeric characters and underscores are allowed.',
-                        regex='^[a-z0-9_]+$',
-                    ),
-                    django.core.validators.RegexValidator(
-                        flags=re.RegexFlag['IGNORECASE'],
-                        inverse_match=True,
-                        message='Double underscores are not permitted in the reverse relation name.',
-                        regex='__',
-                    ),
-                ]
-            ),
-        ),
+        # related_name field already added by 0006_customobjecttypefield_related_name_and_more
         migrations.AddField(
             model_name='customobjecttypefield',
             name='scheduled_removal',
@@ -62,6 +43,7 @@ class Migration(migrations.Migration):
             name='schema_id',
             field=models.PositiveIntegerField(blank=True, null=True),
         ),
+        # Switch COT.name to single-regex validator (replaces the two-validator pattern on feature)
         migrations.AlterField(
             model_name='customobjecttype',
             name='name',
@@ -84,6 +66,7 @@ class Migration(migrations.Migration):
             name='version',
             field=models.CharField(blank=True, max_length=50),
         ),
+        # Switch COTF.name to single-regex validator (overrides the two-validator pattern from 0006)
         migrations.AlterField(
             model_name='customobjecttypefield',
             name='name',
@@ -100,14 +83,7 @@ class Migration(migrations.Migration):
                 ]
             ),
         ),
-        migrations.AddConstraint(
-            model_name='customobjecttypefield',
-            constraint=models.UniqueConstraint(
-                condition=models.Q(('related_name__gt', '')),
-                fields=('related_object_type', 'related_name'),
-                name='netbox_custom_objects_customobjecttypefield_unique_related_name',
-            ),
-        ),
+        # unique_related_name constraint already added by 0006_customobjecttypefield_related_name_and_more
         migrations.AddConstraint(
             model_name='customobjecttypefield',
             constraint=models.UniqueConstraint(

@@ -36,8 +36,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     strategy:
+      fail-fast: false
       matrix:
-        python-version: [ "3.12" ]
+        netbox-ref: [ "main", "feature" ]
     services:
       redis:
         image: redis
@@ -60,16 +61,16 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: netbox-custom-objects
-      - name: Setup Python ${{ matrix.python-version }}
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
-      - name: Checkout netbox
+          python-version: "3.12"
+      - name: Checkout netbox (${{ matrix.netbox-ref }})
         uses: actions/checkout@v4
         with:
           repository: "netbox-community/netbox"
           path: netbox
-          ref: main
+          ref: ${{ matrix.netbox-ref }}
       - name: Install netbox-custom-objects
         working-directory: netbox-custom-objects
         run: |
@@ -82,7 +83,7 @@ jobs:
         working-directory: netbox
         run: |
           ln -s $(pwd)/../netbox-custom-objects/testing/configuration.py netbox/netbox/configuration.py
-          
+
           python -m pip install --upgrade pip
           pip install -r requirements.txt -U
       - name: Run tests
