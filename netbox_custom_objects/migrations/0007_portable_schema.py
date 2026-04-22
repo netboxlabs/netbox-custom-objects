@@ -1,5 +1,4 @@
 import django.core.validators
-import re
 from django.db import migrations, models
 
 
