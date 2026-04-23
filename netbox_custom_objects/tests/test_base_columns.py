@@ -327,7 +327,7 @@ class BackfillBaseColumnsTestCase(
             )
 
     def test_backfill_each_entry_has_required_keys(self):
-        """Every entry in the backfilled base_columns must have name and null."""
+        """Every entry in the backfilled base_columns must have name, field_class, and null."""
         cot = self.create_custom_object_type(name="bf_keys", slug="bf-keys")
         self._clear_base_columns(cot)
 
@@ -336,4 +336,5 @@ class BackfillBaseColumnsTestCase(
         cot.refresh_from_db()
         for entry in cot.schema_document["base_columns"]:
             self.assertIn("name", entry, f"Entry missing 'name': {entry}")
+            self.assertIn("field_class", entry, f"Entry missing 'field_class': {entry}")
             self.assertIn("null", entry, f"Entry missing 'null': {entry}")
