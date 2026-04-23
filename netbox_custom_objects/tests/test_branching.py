@@ -63,8 +63,10 @@ def _provision_branch(name, merge_strategy, user):
 def _close_branch_connections():
     """Close any open branch database connections."""
     for branch in Branch.objects.all():
-        if hasattr(connections, branch.connection_name):
+        try:
             connections[branch.connection_name].close()
+        except Exception:
+            pass
 
 
 # ── Shared merge/revert tests (strategy-agnostic) ────────────────────────────
@@ -699,8 +701,8 @@ class BranchMigrateTestCase(TransactionCleanupMixin, TransactionTestCase):
     1. A COT and field(s) are created in main and a branch is provisioned
        (branch has a full schema copy at provision time).
     2. A field is then modified in main (added, removed, renamed, or
-       unique-toggled).  on_custom_object_field_changed fires and marks the
-       branch PENDING_MIGRATIONS.
+       unique-toggled).  netbox-branching detects the change to the non-exempt
+       CustomObjectTypeField model and marks the branch PENDING_MIGRATIONS.
     3. branch.migrate(user) runs the normal Django migration pass and then
        emits post_migrate, which fires on_branch_migrated.  That handler
        reconciles the branch's physical schema against main's current field
@@ -763,7 +765,7 @@ class BranchMigrateTestCase(TransactionCleanupMixin, TransactionTestCase):
         self.assertEqual(branch.status, BranchStatusChoices.READY)
         self.assertIn('existing_field', self._get_branch_columns(branch, table_name))
 
-        # Add a new field to main — on_custom_object_field_changed marks branch PENDING.
+        # Add a new field to main — netbox-branching detects the change and marks branch PENDING.
         CustomObjectTypeField.objects.create(
             custom_object_type=cot,
             name='new_field',

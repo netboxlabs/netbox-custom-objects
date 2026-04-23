@@ -156,6 +156,21 @@ def _apply_deferred_co_field(field_instance):
                 [value, co_pk],
             )
 
+    # Remove the consumed key from each entry so that processed field data does
+    # not persist in the ContextVar beyond its useful lifetime (e.g. on a retry
+    # after a partial failure, stale data from a previous attempt is avoided).
+    for entry in per_table.values():
+        entry['data'].pop(data_key, None)
+
+    # Prune entries whose data dict is now exhausted.
+    exhausted = [pk for pk, entry in per_table.items() if not entry['data']]
+    for pk in exhausted:
+        del per_table[pk]
+    if not per_table:
+        del deferred[table_name]
+    if not deferred:
+        _deferred_co_field_data.set(None)
+
 
 def _schema_add_field(fi, model, schema_editor, schema_conn):
     """
@@ -241,6 +256,22 @@ def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, exist
     new column already exists (e.g. when ``on_branch_migrated`` pre-applied the
     rename and sync later replays the ObjectChange).
     """
+    old_is_m2m = old_fi.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
+    new_is_m2m = new_fi.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
+
+    # A type change between MULTIOBJECT and a scalar type (or vice versa) is not
+    # a simple column rename/alter — the storage representation is fundamentally
+    # different (through-table vs column).  Attempting alter_field in this case
+    # would fail at the DB level.  Log and skip; the caller is expected to handle
+    # such changes as remove + add rather than alter.
+    if old_is_m2m != new_is_m2m:
+        logger.warning(
+            '_schema_alter_field: skipping unsupported type change %r→%r on %s '
+            '(MULTIOBJECT ↔ scalar changes require remove+add, not alter)',
+            old_fi.type, new_fi.type, model._meta.db_table,
+        )
+        return
+
     old_mf = FIELD_TYPE_CLASS[old_fi.type]().get_model_field(old_fi)
     new_mf = FIELD_TYPE_CLASS[new_fi.type]().get_model_field(new_fi)
     old_mf.contribute_to_class(model, old_fi.name)
@@ -259,7 +290,7 @@ def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, exist
         return
 
     if (
-        new_fi.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
+        new_is_m2m
         and old_fi.name != new_fi.name
     ):
         old_through = old_fi.through_table_name
@@ -1042,6 +1073,9 @@ class CustomObjectType(NetBoxModel):
                 self.object = deserialized.object
 
             def save(self, using=None, **kwargs):
+                # Snapshot before modifying so that diff()['pre'] records the
+                # current state rather than showing all fields as None on revert.
+                self.object.snapshot()
                 # Clear the ObjectType FK — it may not exist in main yet.
                 # custom_object_type_post_save_handler re-sets it after INSERT.
                 self.object.object_type = None
@@ -1218,6 +1252,7 @@ def _rename_objectchange_field_key(fi, old_name, new_name):
     logger.debug('_rename_objectchange_field_key: %r → %r for %s', old_name, new_name, ct)
 
     try:
+        from netbox_branching.models import ChangeDiff  # noqa: F401 — presence check only
         cd_sql = (
             'UPDATE netbox_branching_changediff '
             'SET {col} = ({col} - %s) || jsonb_build_object(%s, {col}->%s) '
@@ -1226,8 +1261,13 @@ def _rename_objectchange_field_key(fi, old_name, new_name):
         with connections[conn.alias].cursor() as cursor:
             for json_col in ('original', 'modified', 'current'):
                 cursor.execute(cd_sql.format(col=json_col), [old_name, new_name, old_name, ct.id, old_name])
+    except ImportError:
+        pass  # netbox-branching not installed
     except Exception:
-        pass  # netbox-branching not installed or table absent
+        logger.debug(
+            '_rename_objectchange_field_key: ChangeDiff rename failed for %r → %r',
+            old_name, new_name, exc_info=True,
+        )
 
 
 class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
