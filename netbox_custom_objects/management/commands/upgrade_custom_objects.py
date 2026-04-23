@@ -20,7 +20,7 @@ Usage examples
 
 from django.core.management.base import BaseCommand, CommandError
 
-from netbox_custom_objects.mixin_migration import heal_all_cots, heal_cot
+from netbox_custom_objects.mixin_migration import heal_cot
 
 
 class Command(BaseCommand):
@@ -65,8 +65,20 @@ class Command(BaseCommand):
             result = heal_cot(cot, verbosity=verbosity, dry_run=dry_run)
             self._print_cot_result(cot.name, result, dry_run)
         else:
-            summary = heal_all_cots(verbosity=verbosity, dry_run=dry_run)
-            self._print_summary(summary, dry_run)
+            from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
+            cots = list(CustomObjectType.objects.all())
+            total = len(cots)
+            healed = warnings = 0
+            for cot in cots:
+                result = heal_cot(cot, verbosity=verbosity, dry_run=dry_run)
+                self._print_cot_result(cot.name, result, dry_run)
+                if result["added"]:
+                    healed += 1
+                warnings += len(result["warned"])
+            self._print_summary(
+                {"total": total, "healed": healed, "warnings": warnings},
+                dry_run,
+            )
 
     # ------------------------------------------------------------------
     # Output helpers

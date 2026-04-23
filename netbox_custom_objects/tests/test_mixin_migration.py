@@ -234,6 +234,29 @@ class HealCotTestCase(
         with connection.schema_editor() as editor:
             editor.remove_field(cot.get_model(), ghost_field)
 
+    def test_type_change_detected_as_warning(self):
+        """A column present in DB and model but with a changed field class must warn."""
+        cot = self.create_custom_object_type(name="hc_type", slug="hc-type")
+
+        # Seed schema_document to claim 'created' was originally an IntegerField
+        # (in reality it's a DateTimeField).  heal_cot should detect the mismatch.
+        doc = cot.schema_document or {}
+        cols = {c["name"]: c for c in doc.get("base_columns", [])}
+        if "created" in cols:
+            cols["created"] = {"name": "created", "field_class": "IntegerField", "null": False}
+        else:
+            cols["created"] = {"name": "created", "field_class": "IntegerField", "null": False}
+        doc["base_columns"] = list(cols.values())
+        CustomObjectType.objects.filter(pk=cot.pk).update(schema_document=doc)
+        cot.refresh_from_db()
+
+        result = heal_cot(cot, verbosity=0)
+
+        warned_types = [w["type"] for w in result["warned"]]
+        self.assertIn("type_changed", warned_types)
+        changed = next(w for w in result["warned"] if w["type"] == "type_changed")
+        self.assertEqual(changed["field"], "created")
+
     # ------------------------------------------------------------------
     # dry_run mode
     # ------------------------------------------------------------------
