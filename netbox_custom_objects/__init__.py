@@ -32,6 +32,51 @@ def _migration_finished(sender, **kwargs):
     _migrations_checked = None
 
 
+def _patch_check_object_accessible_in_branch():
+    """
+    Patch check_object_accessible_in_branch to use an existence check instead of
+    a full SELECT for custom object models.
+
+    The original implementation does model.objects.get(pk=object_id) which issues
+    SELECT * including every custom field column.  If a field was renamed in the
+    branch but the stable db_column is not yet reflected in the model (e.g. due to
+    a stale cache), this can raise ProgrammingError.  For custom objects we only
+    need to know whether the row exists, so filter(pk=...).exists() is sufficient
+    and avoids referencing any column other than the primary key.
+    """
+    try:
+        import netbox_branching.signal_receivers as _sr
+        from netbox_branching.utilities import deactivate_branch
+        from netbox_branching.models import ChangeDiff
+        from core.choices import ObjectChangeActionChoices
+        from django.contrib.contenttypes.models import ContentType
+
+        _original = _sr.check_object_accessible_in_branch
+
+        def _patched(branch, model, object_id):
+            if model._meta.app_label != APP_LABEL:
+                return _original(branch, model, object_id)
+
+            # Check existence in main using only the pk — avoids SELECT on
+            # renamed columns that may not yet exist in main.
+            with deactivate_branch():
+                if model.objects.filter(pk=object_id).exists():
+                    return True
+
+            # Not in main — was it created in this branch?
+            content_type = ContentType.objects.get_for_model(model)
+            return ChangeDiff.objects.filter(
+                branch=branch,
+                object_type=content_type,
+                object_id=object_id,
+                action=ObjectChangeActionChoices.ACTION_CREATE,
+            ).exists()
+
+        _sr.check_object_accessible_in_branch = _patched
+    except (ImportError, AttributeError):
+        pass
+
+
 def _patch_object_selector_view():
     """
     Patch ObjectSelectorView to support dynamically-generated custom object models.
@@ -182,6 +227,10 @@ class CustomObjectsPluginConfig(PluginConfig):
 
         # Patch ObjectSelectorView to support dynamically-generated custom object models
         _patch_object_selector_view()
+
+        # Patch check_object_accessible_in_branch to use pk-only existence check,
+        # avoiding SELECT * which references renamed columns that may not exist in main.
+        _patch_check_object_accessible_in_branch()
 
         # Suppress warnings about database calls during app initialization
         with warnings.catch_warnings():

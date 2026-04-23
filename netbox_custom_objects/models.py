@@ -1660,11 +1660,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             and not self.original.unique
         ):
             field_type = FIELD_TYPE_CLASS[self.type]()
-            model_field = field_type.get_model_field(self)
+            model_field = field_type.get_model_field(self, db_column=self.effective_db_column)
             model = self.custom_object_type.get_model()
             model_field.contribute_to_class(model, self.name)
 
-            old_field = field_type.get_model_field(self.original)
+            old_field = field_type.get_model_field(self.original, db_column=self.original.effective_db_column)
             old_field.contribute_to_class(model, self._original_name)
 
             try:
