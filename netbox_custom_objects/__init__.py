@@ -32,6 +32,42 @@ def _migration_finished(sender, **kwargs):
     _migrations_checked = None
 
 
+# Module-level flag so the heal runs at most once per process invocation even
+# though post_migrate fires once per installed app.
+_heal_ran = False
+
+
+def _heal_mixin_columns(sender, **kwargs):
+    """
+    post_migrate signal handler: detect and apply mixin column drift.
+
+    Fires after every 'manage.py migrate' run (once per installed app).  The
+    module-level _heal_ran flag ensures the actual work happens only once per
+    process so the cost is negligible on normal server starts where no
+    migrations run.
+
+    Skipped during makemigrations and collectstatic (DB may be unavailable or
+    in an inconsistent state for our purposes).
+    """
+    global _heal_ran
+    if _heal_ran:
+        return
+
+    if any(cmd in sys.argv for cmd in ("makemigrations", "collectstatic")):
+        return
+
+    _heal_ran = True
+
+    try:
+        from netbox_custom_objects.mixin_migration import heal_all_cots  # noqa: PLC0415
+        heal_all_cots(verbosity=kwargs.get("verbosity", 1))
+    except Exception:
+        import logging  # noqa: PLC0415
+        logging.getLogger(__name__).exception(
+            "upgrade_custom_objects: unexpected error during mixin drift check"
+        )
+
+
 def _patch_object_selector_view():
     """
     Patch ObjectSelectorView to support dynamically-generated custom object models.
@@ -179,6 +215,9 @@ class CustomObjectsPluginConfig(PluginConfig):
         # Connect migration signals to track migration state
         pre_migrate.connect(_migration_started)
         post_migrate.connect(_migration_finished)
+
+        # Heal mixin column drift after every migrate run (issue #391 Phase 2)
+        post_migrate.connect(_heal_mixin_columns)
 
         # Patch ObjectSelectorView to support dynamically-generated custom object models
         _patch_object_selector_view()
