@@ -1,5 +1,6 @@
 import contextvars
 import decimal
+import logging
 import re
 import threading
 from datetime import date, datetime
@@ -57,6 +58,9 @@ from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
 from netbox_custom_objects.utilities import _suppress_clear_cache, generate_model
+
+
+logger = logging.getLogger('netbox_custom_objects.models')
 
 
 class UniquenessConstraintTestError(Exception):
@@ -160,10 +164,23 @@ def _schema_add_field(fi, model, schema_editor, schema_conn):
     Handles through-table creation for MULTIOBJECT fields.  Does NOT apply
     deferred CO field data — callers that need that (squash merge context) must
     call ``_apply_deferred_co_field(fi)`` separately after this returns.
+
+    Idempotent: skips the ALTER TABLE if the column already exists (e.g. when
+    ``on_branch_migrated`` pre-added it and sync later replays the ObjectChange).
     """
     ft = FIELD_TYPE_CLASS[fi.type]()
     mf = ft.get_model_field(fi)
     mf.contribute_to_class(model, fi.name)
+
+    with schema_conn.cursor() as cursor:
+        existing_cols = {
+            col.name
+            for col in schema_conn.introspection.get_table_description(cursor, model._meta.db_table)
+        }
+    if mf.column in existing_cols:
+        logger.debug('_schema_add_field: %r already exists on %s, skipping', mf.column, model._meta.db_table)
+        return
+
     schema_editor.add_field(model, mf)
     if fi.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
         ft.create_m2m_table(fi, model, fi.name, schema_conn=schema_conn)
@@ -219,11 +236,27 @@ def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, exist
     connection.  When given, through-table operations are guarded by membership
     checks.  When ``None`` (main-schema context) the schema_conn is introspected
     once on demand.
+
+    Idempotent: skips the ALTER TABLE if the old column is already gone and the
+    new column already exists (e.g. when ``on_branch_migrated`` pre-applied the
+    rename and sync later replays the ObjectChange).
     """
     old_mf = FIELD_TYPE_CLASS[old_fi.type]().get_model_field(old_fi)
     new_mf = FIELD_TYPE_CLASS[new_fi.type]().get_model_field(new_fi)
     old_mf.contribute_to_class(model, old_fi.name)
     new_mf.contribute_to_class(model, new_fi.name)
+
+    with schema_conn.cursor() as cursor:
+        existing_cols = {
+            col.name
+            for col in schema_conn.introspection.get_table_description(cursor, model._meta.db_table)
+        }
+    if old_mf.column not in existing_cols and new_mf.column in existing_cols:
+        logger.debug(
+            '_schema_alter_field: %r already renamed to %r on %s, skipping',
+            old_mf.column, new_mf.column, model._meta.db_table,
+        )
+        return
 
     if (
         new_fi.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
@@ -1150,6 +1183,53 @@ def custom_object_type_post_save_handler(sender, instance, created, **kwargs):
         instance.save()
 
 
+def _rename_objectchange_field_key(fi, old_name, new_name):
+    """
+    Rename a JSON key in all ObjectChange records for CustomObject instances of
+    this field's type, reflecting a field rename from *old_name* to *new_name*.
+
+    Updates both ``prechange_data`` and ``postchange_data`` in the ObjectChange
+    table, and ``original``/``modified``/``current`` in netbox-branching's
+    ChangeDiff table when that plugin is installed.
+
+    Field names are validated with ``^[a-z0-9_]+$`` so string formatting of the
+    column names here is safe against SQL injection.
+
+    This runs inside the same ``transaction.atomic()`` block as
+    ``CustomObjectTypeField.save()``, so it rolls back cleanly if the enclosing
+    transaction is aborted.
+    """
+    from django.db import connections
+
+    cot = fi.custom_object_type
+    model = cot.get_model()
+    ct = ContentType.objects.get_for_model(model)
+    conn = _get_schema_connection()
+
+    oc_sql = (
+        'UPDATE core_objectchange '
+        'SET {col} = ({col} - %s) || jsonb_build_object(%s, {col}->%s) '
+        'WHERE changed_object_type_id = %s AND {col} ? %s'
+    )
+    with connections[conn.alias].cursor() as cursor:
+        for json_col in ('prechange_data', 'postchange_data'):
+            cursor.execute(oc_sql.format(col=json_col), [old_name, new_name, old_name, ct.id, old_name])
+
+    logger.debug('_rename_objectchange_field_key: %r → %r for %s', old_name, new_name, ct)
+
+    try:
+        cd_sql = (
+            'UPDATE netbox_branching_changediff '
+            'SET {col} = ({col} - %s) || jsonb_build_object(%s, {col}->%s) '
+            'WHERE object_type_id = %s AND {col} IS NOT NULL AND {col} ? %s'
+        )
+        with connections[conn.alias].cursor() as cursor:
+            for json_col in ('original', 'modified', 'current'):
+                cursor.execute(cd_sql.format(col=json_col), [old_name, new_name, old_name, ct.id, old_name])
+    except Exception:
+        pass  # netbox-branching not installed or table absent
+
+
 class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
     custom_object_type = models.ForeignKey(
         CustomObjectType, on_delete=models.CASCADE, related_name="fields"
@@ -2038,6 +2118,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 _apply_deferred_co_field(self)
             else:
                 _schema_alter_field(self.original, self, model, schema_editor, schema_conn)
+
+        # When the field is renamed, update ObjectChange / ChangeDiff JSON keys so
+        # historical audit records and branch diffs stay consistent with the new name.
+        if not self._state.adding and self._original_name != self.name:
+            _rename_objectchange_field_key(self, self._original_name, self.name)
 
         # Ensure FK constraints are properly created for OBJECT fields with CASCADE behavior
         should_ensure_fk = False

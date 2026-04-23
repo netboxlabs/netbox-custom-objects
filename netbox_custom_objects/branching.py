@@ -8,15 +8,24 @@ to Django's migration framework.
 
 To close that gap, ``on_branch_migrated`` fires after the migration pass and
 reconciles each custom object type's physical schema in the branch against the
-current field definitions in main.  The reconciliation mirrors what
-``CustomObjectTypeField.save()`` already does when detecting old-vs-new field
-state: it compares the branch's ``CustomObjectTypeField`` rows (snapshot from
-provision time) with main's current rows, matched by primary key, and calls
-``add_field`` / ``alter_field`` / ``remove_field`` for any differences.
+current field definitions in main.  It compares the branch's
+``CustomObjectTypeField`` rows (snapshot from provision time) with main's
+current rows, matched by primary key, and calls ``add_field`` / ``alter_field``
+/ ``remove_field`` for any differences.
+
+Schema ordering during sync and merge is handled naturally by the chronological
+ObjectChange replay in ``Branch.sync()`` / ``Branch.merge()``:
+``CustomObjectTypeField`` changes always precede ``CustomObject`` data changes
+in the log.  The schema helpers (``_schema_add_field``, ``_schema_alter_field``)
+are idempotent, so replaying an ObjectChange after ``on_branch_migrated`` has
+already applied the same schema change is safe.
 
 ``CustomObjectTypeField`` has ``ChangeLoggingMixin``, so its rows are replicated
 into the branch schema at provision time — the same source-of-truth mechanism
-used for all other branchable models.
+used for all other branchable models.  Field-rename conflicts (same field PK
+renamed differently in main and branch) surface as ``ChangeDiff`` conflicts and
+require user acknowledgment before merge/sync proceeds; the existing branching
+conflict mechanism handles this without any special casing.
 """
 
 import logging
@@ -72,46 +81,6 @@ def check_pending_branch_migrations():
         logger.info(
             'Marked %d branch(es) as PENDING_MIGRATIONS at startup due to custom object schema drift',
             len(to_update),
-        )
-
-
-def on_custom_object_field_changed(sender, instance, **kwargs):
-    """
-    Mark all READY branches as PENDING_MIGRATIONS when a ``CustomObjectTypeField``
-    is created, modified, or deleted in the main schema.
-
-    This surfaces the pending state in the branching UI exactly like a normal
-    Django-migration, prompting users to click "Migrate Branch".  That action
-    calls ``Branch.migrate()``, which fires ``on_branch_migrated`` and reconciles
-    the physical column differences.
-
-    Branches provisioned before this COT's table existed will be over-marked as
-    PENDING_MIGRATIONS but ``on_branch_migrated`` will skip them (no table in
-    branch) so the extra marking is harmless.  The alternative — opening a
-    connection per branch to check whether the table exists — adds O(branches)
-    latency to every field save, which is worse at scale.
-
-    Skipped when the change happens inside a branch context — the field edit only
-    affects that branch's schema, not main, so no other branches need updating.
-    """
-    try:
-        from netbox_branching.contextvars import active_branch
-        if active_branch.get() is not None:
-            return
-    except ImportError:
-        return
-
-    from netbox_branching.choices import BranchStatusChoices
-    from netbox_branching.models import Branch
-
-    updated = Branch.objects.filter(status=BranchStatusChoices.READY).update(
-        status=BranchStatusChoices.PENDING_MIGRATIONS,
-    )
-    if updated:
-        logger.info(
-            'Marked %d branch(es) as PENDING_MIGRATIONS due to field changes on %s',
-            updated,
-            instance.custom_object_type,
         )
 
 

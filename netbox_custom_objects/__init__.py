@@ -184,13 +184,9 @@ class CustomObjectsPluginConfig(PluginConfig):
         # Wire into the netbox-branching lifecycle when that plugin is installed.
         # Import is lazy so the plugin remains functional without branching.
         try:
-            from django.db.models.signals import post_delete, post_save
             from netbox_branching.signals import post_migrate as branching_post_migrate
-            from netbox_custom_objects.branching import on_branch_migrated, on_custom_object_field_changed
-            from netbox_custom_objects.models import CustomObjectTypeField
+            from netbox_custom_objects.branching import on_branch_migrated
             branching_post_migrate.connect(on_branch_migrated)
-            post_save.connect(on_custom_object_field_changed, sender=CustomObjectTypeField)
-            post_delete.connect(on_custom_object_field_changed, sender=CustomObjectTypeField)
         except ImportError:
             pass
 
