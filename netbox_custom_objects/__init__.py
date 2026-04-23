@@ -79,7 +79,7 @@ class CustomObjectsPluginConfig(PluginConfig):
     base_url = "custom-objects"
     # Remember to update COMPATIBILITY.md when modifying the minimum/maximum supported NetBox versions.
     min_version = "4.4.0"
-    max_version = "4.5.99"
+    max_version = "4.6.99"
     default_settings = {
         # The maximum number of Custom Object Types that may be created
         'max_custom_object_types': 50,

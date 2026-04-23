@@ -3,6 +3,12 @@ from django.http import Http404
 from django.utils.translation import gettext_lazy as _
 from drf_spectacular.utils import extend_schema_view, extend_schema
 from extras.choices import CustomFieldTypeChoices
+try:
+    from netbox.api.viewsets import ETagMixin  # NetBox 4.6+
+except ImportError:
+    class ETagMixin:  # pragma: no cover – NetBox < 4.6 shim
+        """No-op shim for NetBox versions that don't provide ETagMixin."""
+        pass
 from rest_framework.response import Response
 from rest_framework.routers import APIRootView
 from rest_framework.views import APIView
@@ -36,7 +42,7 @@ class CustomObjectTypeViewSet(ModelViewSet):
     partial_update=extend_schema(exclude=True),
     destroy=extend_schema(exclude=True)
 )
-class CustomObjectViewSet(ModelViewSet):
+class CustomObjectViewSet(ETagMixin, ModelViewSet):
     serializer_class = serializers.CustomObjectSerializer
     model = None
 
@@ -76,12 +82,21 @@ class CustomObjectViewSet(ModelViewSet):
         instance = self.get_object()
         if hasattr(instance, 'snapshot'):
             instance.snapshot()
+        if hasattr(self, '_validate_etag'):
+            # NetBox 4.6+: enforce If-Match precondition (RFC 9110 §13.1.1)
+            self._validate_etag(request, instance)
         serializer = self.get_serializer(instance, data=request.data, partial=partial)
         serializer.is_valid(raise_exception=True)
         self.perform_update(serializer)
         if getattr(instance, '_prefetched_objects_cache', None):
             instance._prefetched_objects_cache = {}
-        return Response(serializer.data)
+        response = Response(serializer.data)
+        if hasattr(self, '_get_etag'):
+            # last_updated is auto_now=True and is updated in-place by save(),
+            # so instance already carries the new timestamp after perform_update.
+            if etag := self._get_etag(instance):
+                response['ETag'] = etag
+        return response
 
     def partial_update(self, request, *args, **kwargs):
         kwargs['partial'] = True
