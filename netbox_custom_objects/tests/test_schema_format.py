@@ -363,9 +363,17 @@ class SchemaIdBackfillTestCase(
 class SchemaDocumentFieldTestCase(CustomObjectsTestCase, TestCase):
     """schema_document and version fields on CustomObjectType."""
 
-    def test_schema_document_defaults_to_null(self):
+    def test_schema_document_populated_with_base_columns_on_creation(self):
+        # schema_document is no longer NULL after creation: create_model() writes
+        # the base_columns snapshot immediately.  Verify the expected structure.
         cot = self.create_custom_object_type(name='schemadoc', slug='schema-doc')
-        self.assertIsNone(cot.schema_document)
+        cot.refresh_from_db()
+        self.assertIsNotNone(cot.schema_document)
+        self.assertIn('base_columns', cot.schema_document)
+        names = {c['name'] for c in cot.schema_document['base_columns']}
+        self.assertIn('id', names)
+        self.assertIn('created', names)
+        self.assertIn('last_updated', names)
 
     def test_schema_document_can_store_json(self):
         cot = self.create_custom_object_type(name='schemadoc2', slug='schema-doc-2')
