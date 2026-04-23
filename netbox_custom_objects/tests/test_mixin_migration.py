@@ -200,8 +200,22 @@ class HealCotTestCase(
     def test_removed_column_produces_warning_not_drop(self):
         """A column in schema_document['base_columns'] but removed from model must only warn."""
         cot = self.create_custom_object_type(name="hc_drop", slug="hc-drop")
-        # Plant a stale entry in base_columns referencing a column that doesn't
-        # exist in the current model but would be claimed as previously base.
+
+        # Add ghost_col to the actual DB table so the heal checker sees it.
+        # This simulates a column that was once part of a mixin but has since
+        # been removed from the CustomObject base class.
+        from django.db import models as dj_models
+        ghost_field = dj_models.CharField(max_length=50, null=True, blank=True)
+        ghost_field.name = "ghost_col"
+        ghost_field.column = "ghost_col"
+        ghost_field.set_attributes_from_name("ghost_col")
+        ghost_field.model = cot.get_model()
+        with connection.schema_editor() as editor:
+            editor.add_field(cot.get_model(), ghost_field)
+
+        # Record ghost_col in schema_document["base_columns"] as if it was
+        # always a base column, but do NOT add it to _expected_base_fields
+        # (it is absent from the patched expected set below).
         doc = cot.schema_document or {}
         doc["base_columns"] = list(doc.get("base_columns", [])) + [
             {"name": "ghost_col", "field_class": "CharField", "null": True}
@@ -215,6 +229,10 @@ class HealCotTestCase(
         self.assertIn("removed_from_model", warned_types)
         # Must not have tried to drop anything
         self.assertEqual(result["added"], [])
+
+        # Clean up
+        with connection.schema_editor() as editor:
+            editor.remove_field(cot.get_model(), ghost_field)
 
     # ------------------------------------------------------------------
     # dry_run mode

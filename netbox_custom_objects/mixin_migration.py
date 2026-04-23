@@ -178,8 +178,22 @@ def heal_cot(cot, verbosity=1, dry_run=False):
 
     # ── Refresh snapshot after successful additions ──────────────────────────
     if added and not dry_run:
-        model = cot.get_model()
-        cot._store_base_column_snapshot(model)
+        # We cannot use _store_base_column_snapshot(model) here because the
+        # generated model's _meta is built from the CustomObject class definition
+        # and does not include columns added directly to the DB by this heal pass.
+        # Instead, merge the newly-added field info into the existing snapshot.
+        doc = cot.schema_document or {}
+        current_cols = {c["name"]: c for c in doc.get("base_columns", [])}
+        for field_name in added:
+            field = expected[field_name]
+            current_cols[field_name] = {
+                "name": field_name,
+                "field_class": field.__class__.__name__,
+                "null": field.null,
+            }
+        doc["base_columns"] = list(current_cols.values())
+        cot.__class__.objects.filter(pk=cot.pk).update(schema_document=doc)
+        cot.schema_document = doc
 
     return {"added": added, "warned": warned}
 
