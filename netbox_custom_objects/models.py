@@ -452,6 +452,47 @@ class CustomObjectType(NetBoxModel):
         # Store through models on the model for yielding in get_models()
         model._through_models = through_models
 
+    @staticmethod
+    def _collect_base_columns(model, user_field_names):
+        """
+        Return a list of dicts describing the concrete DB columns contributed by the
+        CustomObject base class (mixins), excluding any user-defined field names.
+
+        Each dict has keys:
+          "name"        – column/field name
+          "field_class" – Django field class name (e.g. "AutoField", "DateTimeField")
+          "null"        – whether the column is nullable (bool)
+
+        This snapshot is stored in schema_document["base_columns"] so that the
+        post_migrate auto-heal handler (issue #391, Phase 2) can detect drift when
+        NetBox upgrades add new columns to the mixin hierarchy.
+        """
+        return [
+            {
+                "name": f.name,
+                "field_class": f.__class__.__name__,
+                "null": f.null,
+            }
+            for f in model._meta.concrete_fields
+            if f.name not in user_field_names
+        ]
+
+    def _store_base_column_snapshot(self, model):
+        """
+        Snapshot the current base columns into schema_document["base_columns"].
+
+        Called immediately after the DB table is created by create_model() so that
+        the snapshot reflects exactly what columns are present at birth.  Only the
+        "base_columns" key is written; any existing keys in schema_document
+        (e.g. "fields" written by the schema exporter) are preserved.
+        """
+        user_field_names = set(self.fields.values_list("name", flat=True))
+        base_columns = self._collect_base_columns(model, user_field_names)
+        doc = self.schema_document or {}
+        doc["base_columns"] = base_columns
+        CustomObjectType.objects.filter(pk=self.pk).update(schema_document=doc)
+        self.schema_document = doc
+
     def get_collision_safe_order_id_idx_name(self):
         return f"tbl_order_id_{self.id}_idx"
 
@@ -719,6 +760,8 @@ class CustomObjectType(NetBoxModel):
 
         with connection.schema_editor() as schema_editor:
             schema_editor.create_model(model)
+
+        self._store_base_column_snapshot(model)
 
         get_serializer_class(model)
         self.register_custom_object_search_index(model)
