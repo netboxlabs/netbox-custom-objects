@@ -181,7 +181,7 @@ def _schema_add_field(fi, model, schema_editor, schema_conn):
     call ``_apply_deferred_co_field(fi)`` separately after this returns.
 
     Idempotent: skips the ALTER TABLE if the column already exists (e.g. when
-    ``on_branch_migrated`` pre-added it and sync later replays the ObjectChange).
+    sync/merge replays an ObjectChange that was already applied).
     """
     ft = FIELD_TYPE_CLASS[fi.type]()
     mf = ft.get_model_field(fi)
@@ -253,8 +253,14 @@ def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, exist
     once on demand.
 
     Idempotent: skips the ALTER TABLE if the old column is already gone and the
-    new column already exists (e.g. when ``on_branch_migrated`` pre-applied the
-    rename and sync later replays the ObjectChange).
+    new column already exists (e.g. when sync/merge replays an ObjectChange that
+    was already applied).
+
+    Conflict resolution: when neither the old nor the new column exists (the field
+    was independently renamed in the target schema — e.g. branch renamed A→X while
+    main renamed A→Y), the live field record is looked up from the target schema to
+    find the actual current column name, which is then renamed to the new target.
+    A warning is logged to flag the conflict.
     """
     old_is_m2m = old_fi.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
     new_is_m2m = new_fi.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
@@ -282,11 +288,43 @@ def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, exist
             col.name
             for col in schema_conn.introspection.get_table_description(cursor, model._meta.db_table)
         }
-    if old_mf.column not in existing_cols and new_mf.column in existing_cols:
-        logger.debug(
-            '_schema_alter_field: %r already renamed to %r on %s, skipping',
-            old_mf.column, new_mf.column, model._meta.db_table,
+    if old_mf.column not in existing_cols:
+        if new_mf.column in existing_cols:
+            logger.debug(
+                '_schema_alter_field: %r already renamed to %r on %s, skipping',
+                old_mf.column, new_mf.column, model._meta.db_table,
+            )
+            return
+        if old_is_m2m:
+            # M2M fields have no physical column; the old through table is absent.
+            return
+        # Scalar field: neither the old nor the new column exists.  The field was
+        # independently renamed in this schema (e.g. branch renamed A→X while main
+        # renamed A→Y; now applying main's rename to the branch).  Look up the live
+        # field record in the target schema to find the actual column and rename it.
+        logger.warning(
+            '_schema_alter_field: rename conflict on %s — source column %r and '
+            'target column %r are both absent; field pk=%d was independently renamed '
+            'in this schema; resolving by looking up live column',
+            model._meta.db_table, old_mf.column, new_mf.column, new_fi.pk,
         )
+        try:
+            live_fi = CustomObjectTypeField.objects.using(schema_conn.alias).get(pk=new_fi.pk)
+        except CustomObjectTypeField.DoesNotExist:
+            logger.debug(
+                '_schema_alter_field: field pk=%d not found in %s; skipping',
+                new_fi.pk, schema_conn.alias,
+            )
+            return
+        live_mf = FIELD_TYPE_CLASS[live_fi.type]().get_model_field(live_fi)
+        live_mf.contribute_to_class(model, live_fi.name)
+        if live_mf.column not in existing_cols:
+            logger.debug(
+                '_schema_alter_field: live column %r also absent on %s; skipping',
+                live_mf.column, model._meta.db_table,
+            )
+            return
+        schema_editor.alter_field(model, live_mf, new_mf)
         return
 
     if (
@@ -1088,41 +1126,6 @@ class CustomObjectType(NetBoxModel):
                     self._inner.m2m_data = None
 
         return _SchemaAwareDeserialized(inner)
-
-    def has_branch_schema_drift(self, branch) -> bool:
-        """
-        Return True if this custom object type's physical schema in *branch*
-        differs from the current field definitions in main.
-
-        Drift means at least one of:
-        - A field exists in main but not in the branch snapshot (needs add_field)
-        - A field exists in the branch snapshot but not in main (needs remove_field)
-        - A field exists in both but has a different name, type, or constraint
-          that affects the DB column (needs alter_field)
-
-        Returns False when netbox-branching is not installed.
-        """
-        try:
-            from netbox_branching.utilities import activate_branch
-        except ImportError:
-            return False
-
-        from netbox_custom_objects.branching import _field_schema_key
-
-        main_fields = {f.pk: f for f in self.fields.all()}
-        with activate_branch(branch):
-            branch_fields = {f.pk: f for f in self.fields.all()}
-
-        main_pks = set(main_fields)
-        branch_pks = set(branch_fields)
-
-        if main_pks != branch_pks:
-            return True
-
-        return any(
-            _field_schema_key(branch_fields[pk]) != _field_schema_key(main_fields[pk])
-            for pk in main_pks
-        )
 
     def save(self, *args, **kwargs):
         needs_db_create = self._state.adding

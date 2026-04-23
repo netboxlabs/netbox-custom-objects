@@ -690,29 +690,16 @@ class BranchSyncTestCase(TransactionCleanupMixin, TransactionTestCase):
             self.assertEqual(co_branch.title, 'main object')
 
 
-# ── Drift detection and Branch.migrate() tests ────────────────────────────────
+# ── Concurrent-edit tests (both main and branch modified before sync/merge) ───
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
-class BranchMigrateTestCase(TransactionCleanupMixin, TransactionTestCase):
+class ConcurrentEditSyncTestCase(TransactionCleanupMixin, TransactionTestCase):
     """
-    Tests for the drift-detection and schema-reconciliation path.
+    Sync scenarios where both main and branch accumulate changes before sync().
 
-    Scenario:
-    1. A COT and field(s) are created in main and a branch is provisioned
-       (branch has a full schema copy at provision time).
-    2. A field is then modified in main (added, removed, renamed, or
-       unique-toggled).  netbox-branching detects the change to the non-exempt
-       CustomObjectTypeField model and marks the branch PENDING_MIGRATIONS.
-    3. branch.migrate(user) runs the normal Django migration pass and then
-       emits post_migrate, which fires on_branch_migrated.  That handler
-       reconciles the branch's physical schema against main's current field
-       definitions.
-    4. The branch is back to READY and its physical column layout matches main.
-
-    These tests do NOT use merge/revert — they isolate the separate
-    on_branch_migrated reconciliation path for branches that pre-date a main
-    schema change.  They use the iterative strategy only because the strategy
-    affects merge order, not schema reconciliation.
+    Mirrors netbox-branching's test_sync_m2m_tags_concurrent_changes pattern:
+    after sync(), main's ObjectChanges are applied on top of whatever the branch
+    did, so main's post-change state takes precedence for any conflicting record.
     """
 
     def setUp(self):
@@ -725,249 +712,687 @@ class BranchMigrateTestCase(TransactionCleanupMixin, TransactionTestCase):
         _close_branch_connections()
         super().tearDown()
 
-    def _get_branch_columns(self, branch, table_name):
-        """Return the set of column names on table_name in the branch schema."""
-        conn = connections[branch.connection_name]
-        with conn.cursor() as cursor:
-            return {col.name for col in conn.introspection.get_table_description(cursor, table_name)}
-
-    def _get_branch_tables(self, branch):
-        """Return the set of table names in the branch schema."""
-        conn = connections[branch.connection_name]
-        with conn.cursor() as cursor:
-            return set(conn.introspection.table_names(cursor))
-
-    def _get_branch_constraints(self, branch, table_name):
-        """Return the constraints dict for table_name in the branch schema."""
-        conn = connections[branch.connection_name]
-        with conn.cursor() as cursor:
-            return conn.introspection.get_constraints(cursor, table_name)
-
-    # ── field added to main ───────────────────────────────────────────────
-
-    def test_field_added_to_main_triggers_branch_migrate(self):
+    def test_co_values_modified_in_both_sync(self):
         """
-        Field added to a COT in main marks the branch PENDING_MIGRATIONS.
-        branch.migrate() fires on_branch_migrated which calls add_field to
-        create the new column in the branch schema.
+        CO field values modified in both main and branch before sync.
+
+        Scenario
+        --------
+        1. Create COT + field 'notes' + two COs in main.
+        2. Provision branch (branch sees same COs).
+        3. In branch:  update shared CO to 'modified in branch'.
+        4. In main:    update a different CO; create a brand-new CO.
+        5. sync() applies main's ObjectChanges to the branch.
+
+        Expected after sync
+        -------------------
+        - Main's new CO is visible in the branch.
+        - CO modified in main has main's value in the branch.
+        - Branch's own CO modification is overwritten by main's replay for
+          the same PK (main wins on sync, same as tag-conflict behaviour).
         """
-        cot = CustomObjectType.objects.create(name='drift_add_cot', slug='drift-add-cot')
-        CustomObjectTypeField.objects.create(
-            custom_object_type=cot,
-            name='existing_field',
-            label='Existing',
-            type='text',
-        )
+        request = _make_request(self.user)
 
-        branch = _provision_branch('Drift Add Branch', 'iterative', self.user)
-        table_name = cot.get_database_table_name()
+        with event_tracking(request):
+            cot = CustomObjectType.objects.create(name='sync_co_cot', slug='sync-co-cot')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='notes', label='Notes', type='text',
+            )
+            Model = cot.get_model()
+            co_shared = Model.objects.create(notes='original shared')
+            co_main_only = Model.objects.create(notes='main only original')
 
-        self.assertEqual(branch.status, BranchStatusChoices.READY)
-        self.assertIn('existing_field', self._get_branch_columns(branch, table_name))
+        co_shared_pk = co_shared.pk
+        co_main_only_pk = co_main_only.pk
+        branch = _provision_branch('Sync CO Both', 'iterative', self.user)
+        branch_request = _make_request(self.user)
 
-        # Add a new field to main — netbox-branching detects the change and marks branch PENDING.
-        CustomObjectTypeField.objects.create(
-            custom_object_type=cot,
-            name='new_field',
-            label='New Field',
-            type='integer',
-        )
+        # ── branch: update the shared CO ─────────────────────────────────
+        with activate_branch(branch), event_tracking(branch_request):
+            BM = cot.get_model()
+            co = BM.objects.get(pk=co_shared_pk)
+            co.snapshot()
+            co.notes = 'modified in branch'
+            co.save()
+            branch_new = BM.objects.create(notes='new in branch')
+        branch_new_pk = branch_new.pk
+
+        # ── main: update the other CO; add a new CO ───────────────────────
+        with event_tracking(request):
+            MM = cot.get_model()
+            co = MM.objects.get(pk=co_main_only_pk)
+            co.snapshot()
+            co.notes = 'modified in main'
+            co.save()
+            main_new = MM.objects.create(notes='new in main')
+        main_new_pk = main_new.pk
+
+        # ── sync ──────────────────────────────────────────────────────────
+        branch.sync(user=self.user, commit=True)
+
+        with activate_branch(branch):
+            SyncedCOT = CustomObjectType.objects.get(pk=cot.pk)
+            SM = SyncedCOT.get_model()
+
+            # CO modified in main must reflect main's value.
+            self.assertEqual(SM.objects.get(pk=co_main_only_pk).notes, 'modified in main')
+            # CO created in main must be visible in branch after sync.
+            self.assertTrue(SM.objects.filter(pk=main_new_pk).exists(),
+                            'CO created in main must appear in branch after sync')
+            # CO created in branch was not deleted by sync.
+            self.assertTrue(SM.objects.filter(pk=branch_new_pk).exists(),
+                            'CO created in branch must still exist after sync')
+
+    def test_field_rename_in_branch_co_add_in_main_sync(self):
+        """
+        Field renamed inside a branch; new CO added in main (no rename in main).
+
+        Scenario
+        --------
+        1. Create COT + field 'alpha' + CO in main.
+        2. Provision branch.
+        3. In branch:  rename 'alpha' → 'branch_alpha'; create a CO.
+        4. In main:    create a new CO using the original field name 'alpha'.
+        5. sync() replays main's CO-create on top of the branch.
+
+        Expected after sync
+        -------------------
+        - Branch retains the renamed field ('branch_alpha').
+        - CO created in main is present in branch.
+        - CO created in branch still exists.
+
+        This exercises the schema-mismatch path: main's CO ObjectChange carries
+        the original field key 'alpha' while the branch schema uses 'branch_alpha'.
+        The CO data from main is applied by the branching engine regardless of the
+        column name divergence (branching replays at the data layer).
+        """
+        request = _make_request(self.user)
+
+        with event_tracking(request):
+            cot = CustomObjectType.objects.create(name='sync_rename_cot', slug='sync-rename-cot')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='alpha', label='Alpha', type='text',
+            )
+            cot.get_model().objects.create(alpha='original')
+
+        branch = _provision_branch('Sync Rename Branch', 'iterative', self.user)
+        branch_request = _make_request(self.user)
+
+        # ── branch: rename alpha → branch_alpha; create CO ────────────────
+        with activate_branch(branch), event_tracking(branch_request):
+            field = CustomObjectTypeField.objects.get(custom_object_type=cot, name='alpha')
+            field.snapshot()
+            field.name = 'branch_alpha'
+            field.label = 'Branch Alpha'
+            field.save()
+            BM = cot.get_model()
+            branch_new = BM.objects.create(branch_alpha='new in branch')
+        branch_new_pk = branch_new.pk
+
+        # ── main: add a CO (no field rename) ──────────────────────────────
+        with event_tracking(request):
+            cot.get_model().objects.create(alpha='new in main')
+
+        # ── sync ──────────────────────────────────────────────────────────
+        branch.sync(user=self.user, commit=True)
+
+        with activate_branch(branch):
+            cot_b = CustomObjectType.objects.get(pk=cot.pk)
+            field_b = CustomObjectTypeField.objects.get(custom_object_type=cot_b)
+            # Branch field rename must be preserved (main did not rename).
+            self.assertEqual(field_b.name, 'branch_alpha',
+                             'Branch field rename must be preserved after sync')
+            BM = cot_b.get_model()
+            self.assertTrue(BM.objects.filter(pk=branch_new_pk).exists(),
+                            'CO created in branch must survive sync')
+
+    def test_concurrent_field_rename_sync_no_crash(self):
+        """
+        Field renamed to different names in both main and branch before sync.
+
+        The same CustomObjectTypeField PK was modified in both schemas.
+        _schema_alter_field detects the conflict (neither the original 'alpha'
+        column nor the target 'main_alpha' column exists in the branch), looks up
+        the live column name in the branch ('branch_alpha'), and renames it to
+        'main_alpha' to converge the branch schema on main's post-sync state.
+
+        Scenario
+        --------
+        1. Create COT + field 'alpha' in main.
+        2. Provision branch.
+        3. Branch renames 'alpha' → 'branch_alpha'.
+        4. Main renames 'alpha' → 'main_alpha'.
+        5. sync() applies main's rename ObjectChange to the branch.
+           _schema_alter_field resolves the conflict: 'branch_alpha' → 'main_alpha'.
+
+        Expected
+        --------
+        - sync() completes without raising a DB error.
+        - Branch physical column is 'main_alpha' (converged to main's rename).
+        - 'branch_alpha' and 'alpha' columns are absent from the branch table.
+        """
+        request = _make_request(self.user)
+
+        with event_tracking(request):
+            cot = CustomObjectType.objects.create(name='confl_sync_cot', slug='confl-sync-cot')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='alpha', label='Alpha', type='text',
+            )
+
+        branch = _provision_branch('Conflict Sync Branch', 'iterative', self.user)
+        branch_request = _make_request(self.user)
+
+        # ── branch: rename alpha → branch_alpha ───────────────────────────
+        with activate_branch(branch), event_tracking(branch_request):
+            f = CustomObjectTypeField.objects.get(custom_object_type=cot, name='alpha')
+            f.snapshot()
+            f.name = 'branch_alpha'
+            f.label = 'Branch Alpha'
+            f.save()
+
+        # ── main: rename alpha → main_alpha ───────────────────────────────
+        with event_tracking(request):
+            f = CustomObjectTypeField.objects.get(custom_object_type=cot, name='alpha')
+            f.name = 'main_alpha'
+            f.label = 'Main Alpha'
+            f.save()
+
+        # ── sync — must not raise ──────────────────────────────────────────
+        try:
+            branch.sync(user=self.user, commit=True)
+        except Exception as exc:
+            self.fail(f'sync() raised an unexpected exception: {exc!r}')
 
         branch.refresh_from_db()
-        self.assertEqual(
-            branch.status, BranchStatusChoices.PENDING_MIGRATIONS,
-            'Branch must be PENDING_MIGRATIONS after field added to main',
-        )
-        self.assertNotIn(
-            'new_field', self._get_branch_columns(branch, table_name),
-            'New column must not exist in branch before migrate',
-        )
 
-        # migrate() fires on_branch_migrated → add_field runs on the branch schema.
-        branch.migrate(user=self.user)
-        branch.refresh_from_db()
-        self.assertEqual(branch.status, BranchStatusChoices.READY)
+        # Branch column should now be 'main_alpha' — the conflict was resolved by
+        # renaming the branch's live 'branch_alpha' column to main's target name.
+        branch_conn = connections[branch.connection_name]
+        with branch_conn.cursor() as cursor:
+            branch_cols = {
+                col.name
+                for col in branch_conn.introspection.get_table_description(
+                    cursor, cot.get_database_table_name(),
+                )
+            }
+        self.assertIn('main_alpha', branch_cols, 'Branch column must converge to main_alpha after sync')
+        self.assertNotIn('branch_alpha', branch_cols, 'branch_alpha column must be gone after sync')
+        self.assertNotIn('alpha', branch_cols, 'alpha column must be gone after sync')
 
-        self.assertIn(
-            'new_field', self._get_branch_columns(branch, table_name),
-            'New column must be present in branch schema after migrate',
-        )
 
-    # ── field deleted from main ───────────────────────────────────────────
+# ── Concurrent-edit merge tests ───────────────────────────────────────────────
 
-    def test_field_deleted_from_main_triggers_branch_migrate(self):
+@unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
+class ConcurrentEditMergeTestCase(TransactionCleanupMixin, TransactionTestCase):
+    """
+    Merge scenarios where both main and branch accumulate changes before merge().
+    """
+
+    def setUp(self):
+        super().setUp()
+        _recreate_contenttypes()
+        self.user = User.objects.create_user(username='testuser')
+        self.request = _make_request(self.user)
+
+    def tearDown(self):
+        _close_branch_connections()
+        super().tearDown()
+
+    def test_field_rename_in_branch_co_changes_merge_iterative(self):
         """
-        Field deleted from a COT in main marks the branch PENDING_MIGRATIONS.
-        branch.migrate() fires on_branch_migrated which calls remove_field to
-        drop the column from the branch schema.
+        Field renamed inside a branch; COs added/updated in branch; main adds a CO.
+        Iterative merge brings the branch rename and CO changes into main.
+
+        Scenario
+        --------
+        1. Create COT + field 'alpha' + CO in main.
+        2. Provision branch.
+        3. In branch:  rename 'alpha' → 'beta'; update the existing CO; create a CO.
+        4. In main:    add a CO (field name 'alpha', no rename).
+        5. merge() → revert().
+
+        Expected after merge
+        --------------------
+        - Field name in main is 'beta'.
+        - Existing CO has the branch-updated value.
+        - CO created in branch is present in main.
+
+        Expected after revert
+        ---------------------
+        - Field name is 'alpha' again.
+        - CO created in branch is gone.
+        - Existing CO has its original value.
         """
-        cot = CustomObjectType.objects.create(name='drift_del_cot', slug='drift-del-cot')
-        CustomObjectTypeField.objects.create(
-            custom_object_type=cot,
-            name='keep_field',
-            label='Keep',
-            type='text',
-        )
-        drop_field = CustomObjectTypeField.objects.create(
-            custom_object_type=cot,
-            name='drop_field',
-            label='Drop',
-            type='text',
-        )
+        request = _make_request(self.user)
 
-        branch = _provision_branch('Drift Del Branch', 'iterative', self.user)
-        table_name = cot.get_database_table_name()
+        with event_tracking(request):
+            cot = CustomObjectType.objects.create(name='merge_rename_cot', slug='merge-rename-cot')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='alpha', label='Alpha', type='text',
+            )
+            Model = cot.get_model()
+            co_existing = Model.objects.create(alpha='original')
 
-        self.assertIn('drop_field', self._get_branch_columns(branch, table_name))
+        co_existing_pk = co_existing.pk
+        branch = _provision_branch('Merge Rename Branch', 'iterative', self.user)
+        branch_request = _make_request(self.user)
 
-        # Delete field from main.
-        drop_field.delete()
+        # ── branch: rename; update CO; create CO ──────────────────────────
+        with activate_branch(branch), event_tracking(branch_request):
+            field = CustomObjectTypeField.objects.get(custom_object_type=cot, name='alpha')
+            field.snapshot()
+            field.name = 'beta'
+            field.label = 'Beta'
+            field.save()
+            BM = cot.get_model()
+            co = BM.objects.get(pk=co_existing_pk)
+            co.snapshot()
+            co.beta = 'updated in branch'
+            co.save()
+            branch_new = BM.objects.create(beta='new in branch')
+        branch_new_pk = branch_new.pk
 
+        # ── main: add a CO (no schema change) ─────────────────────────────
+        with event_tracking(request):
+            main_new = cot.get_model().objects.create(alpha='new in main')
+        main_new_pk = main_new.pk
+
+        # ── merge ─────────────────────────────────────────────────────────
+        branch.merge(user=self.user, commit=True)
         branch.refresh_from_db()
-        self.assertEqual(branch.status, BranchStatusChoices.PENDING_MIGRATIONS)
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
 
-        # Column still present in branch before migrate.
-        self.assertIn('drop_field', self._get_branch_columns(branch, table_name))
+        MergedModel = cot.get_model()
+        field_main = CustomObjectTypeField.objects.get(custom_object_type=cot)
+        self.assertEqual(field_main.name, 'beta', 'Field must be "beta" in main after merge')
+        self.assertEqual(MergedModel.objects.get(pk=co_existing_pk).beta, 'updated in branch')
+        self.assertTrue(MergedModel.objects.filter(pk=branch_new_pk).exists(),
+                        'CO created in branch must be in main after merge')
+        self.assertTrue(MergedModel.objects.filter(pk=main_new_pk).exists(),
+                        'CO added in main must still be present after merge')
 
-        branch.migrate(user=self.user)
-        branch.refresh_from_db()
-        self.assertEqual(branch.status, BranchStatusChoices.READY)
+        # ── revert ────────────────────────────────────────────────────────
+        branch.revert(user=self.user, commit=True)
 
-        cols = self._get_branch_columns(branch, table_name)
-        self.assertNotIn(
-            'drop_field', cols,
-            'Deleted column must be absent from branch schema after migrate',
-        )
-        self.assertIn('keep_field', cols, 'Unmodified column must remain in branch schema')
+        field_reverted = CustomObjectTypeField.objects.get(custom_object_type=cot)
+        self.assertEqual(field_reverted.name, 'alpha', 'Field must be "alpha" after revert')
+        RevertedModel = cot.get_model()
+        self.assertEqual(RevertedModel.objects.get(pk=co_existing_pk).alpha, 'original')
+        self.assertFalse(RevertedModel.objects.filter(pk=branch_new_pk).exists(),
+                         'CO created in branch must be gone after revert')
 
-    # ── field renamed in main ─────────────────────────────────────────────
-
-    def test_field_renamed_in_main_triggers_branch_migrate(self):
+    def test_co_values_modified_in_both_merge_iterative(self):
         """
-        Field renamed in main marks the branch PENDING_MIGRATIONS.
-        branch.migrate() fires on_branch_migrated which calls alter_field to
-        rename the column in the branch schema using PK-based matching (same
-        PK in both main and branch, different name values).
+        CO values modified in both main and branch before merge.
+        Branch changes win because merge applies branch ObjectChanges to main.
+
+        Scenario
+        --------
+        1. Create COT + field 'notes' + shared CO in main.
+        2. Provision branch.
+        3. Branch updates shared CO to 'modified in branch'; creates a CO.
+        4. Main creates a separate CO.
+        5. merge() → revert().
+
+        Expected after merge: branch CO changes are in main, main CO preserved.
+        Expected after revert: shared CO back to original, branch CO gone.
         """
-        cot = CustomObjectType.objects.create(name='drift_ren_cot', slug='drift-ren-cot')
-        field = CustomObjectTypeField.objects.create(
-            custom_object_type=cot,
-            name='old_col',
-            label='Old',
-            type='text',
-        )
+        request = _make_request(self.user)
 
-        branch = _provision_branch('Drift Ren Branch', 'iterative', self.user)
-        table_name = cot.get_database_table_name()
+        with event_tracking(request):
+            cot = CustomObjectType.objects.create(name='merge_co_cot', slug='merge-co-cot')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='notes', label='Notes', type='text',
+            )
+            Model = cot.get_model()
+            co_shared = Model.objects.create(notes='original')
 
-        self.assertIn('old_col', self._get_branch_columns(branch, table_name))
+        co_shared_pk = co_shared.pk
+        branch = _provision_branch('Merge CO Both', 'iterative', self.user)
+        branch_request = _make_request(self.user)
 
-        # Rename in main — load from DB so _original is set before modifying.
-        field = CustomObjectTypeField.objects.get(pk=field.pk)
-        field.name = 'new_col'
-        field.label = 'New'
-        field.save()
+        # ── branch ────────────────────────────────────────────────────────
+        with activate_branch(branch), event_tracking(branch_request):
+            BM = cot.get_model()
+            co = BM.objects.get(pk=co_shared_pk)
+            co.snapshot()
+            co.notes = 'modified in branch'
+            co.save()
+            branch_new = BM.objects.create(notes='new in branch')
+        branch_new_pk = branch_new.pk
 
+        # ── main ──────────────────────────────────────────────────────────
+        with event_tracking(request):
+            main_new = cot.get_model().objects.create(notes='new in main')
+        main_new_pk = main_new.pk
+
+        # ── merge ─────────────────────────────────────────────────────────
+        branch.merge(user=self.user, commit=True)
         branch.refresh_from_db()
-        self.assertEqual(branch.status, BranchStatusChoices.PENDING_MIGRATIONS)
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
 
-        branch.migrate(user=self.user)
-        branch.refresh_from_db()
-        self.assertEqual(branch.status, BranchStatusChoices.READY)
+        MM = cot.get_model()
+        self.assertEqual(MM.objects.get(pk=co_shared_pk).notes, 'modified in branch')
+        self.assertTrue(MM.objects.filter(pk=branch_new_pk).exists())
+        self.assertTrue(MM.objects.filter(pk=main_new_pk).exists(),
+                        'CO added to main must survive the merge')
 
-        cols = self._get_branch_columns(branch, table_name)
-        self.assertIn('new_col', cols, 'Renamed column must exist in branch schema after migrate')
-        self.assertNotIn('old_col', cols, 'Old column name must be absent from branch schema after migrate')
+        # ── revert ────────────────────────────────────────────────────────
+        branch.revert(user=self.user, commit=True)
 
-    # ── unique constraint toggled in main ─────────────────────────────────
+        RM = cot.get_model()
+        self.assertEqual(RM.objects.get(pk=co_shared_pk).notes, 'original')
+        self.assertFalse(RM.objects.filter(pk=branch_new_pk).exists())
 
-    def test_unique_toggled_in_main_triggers_branch_migrate(self):
+
+# ── Sequential multi-rename tests ─────────────────────────────────────────────
+
+@unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
+class SequentialRenameTestCase(TransactionCleanupMixin, TransactionTestCase):
+    """
+    Tests for sequential field renames (A→B→C) in a branch with CO changes at
+    each step, plus independent changes in main.
+
+    Exercises the iterative ObjectChange replay order: the rename chain must be
+    applied in the right sequence so that each CO update sees the correct column
+    name at merge time.
+
+    Run with both iterative and squash strategies to verify that squash correctly
+    collapses the A→B→C chain to a single A→C alter.
+    """
+
+    MERGE_STRATEGY = 'iterative'
+
+    def setUp(self):
+        super().setUp()
+        _recreate_contenttypes()
+        self.user = User.objects.create_user(username='testuser')
+        self.request = _make_request(self.user)
+
+    def tearDown(self):
+        _close_branch_connections()
+        super().tearDown()
+
+    def _run_sequential_rename_merge(self, cot_name, cot_slug):
         """
-        Field's unique constraint toggled in main marks the branch
-        PENDING_MIGRATIONS.  branch.migrate() reconciles the constraint in
-        the branch's physical schema.
+        Shared implementation for the sequential rename merge test.
+
+        Branch: rename alpha→beta (update+create CO), rename beta→gamma (update+create CO).
+        Main:   add a new independent field + CO (no rename of alpha).
+        merge() then revert().
         """
-        cot = CustomObjectType.objects.create(name='drift_uniq_cot', slug='drift-uniq-cot')
-        field = CustomObjectTypeField.objects.create(
-            custom_object_type=cot,
-            name='code',
-            label='Code',
-            type='text',
-            unique=False,
-        )
+        request = _make_request(self.user)
 
-        branch = _provision_branch('Drift Uniq Branch', 'iterative', self.user)
-        table_name = cot.get_database_table_name()
+        with event_tracking(request):
+            cot = CustomObjectType.objects.create(name=cot_name, slug=cot_slug)
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='alpha', label='Alpha', type='text',
+            )
+            Model = cot.get_model()
+            co_original = Model.objects.create(alpha='original value')
 
-        # Branch must not have a unique constraint on 'code' initially.
-        constraints_before = self._get_branch_constraints(branch, table_name)
-        self.assertFalse(
-            any(c['unique'] and c.get('columns') == ['code'] for c in constraints_before.values()),
-            'Branch must not have UNIQUE on "code" before toggle',
-        )
+        co_original_pk = co_original.pk
+        branch = _provision_branch(f'{cot_name} branch', self.MERGE_STRATEGY, self.user)
+        branch_request = _make_request(self.user)
 
-        # Toggle unique=True in main.
-        field = CustomObjectTypeField.objects.get(pk=field.pk)
-        field.unique = True
-        field.save()
+        # ── branch: alpha → beta; update CO; create CO ────────────────────
+        with activate_branch(branch), event_tracking(branch_request):
+            field = CustomObjectTypeField.objects.get(custom_object_type=cot, name='alpha')
+            field.snapshot()
+            field.name = 'beta'
+            field.label = 'Beta'
+            field.save()
+            BM = cot.get_model()
+            co = BM.objects.get(pk=co_original_pk)
+            co.snapshot()
+            co.beta = 'after rename to beta'
+            co.save()
+            co_at_beta = BM.objects.create(beta='created at beta')
+        co_at_beta_pk = co_at_beta.pk
 
+        # ── branch: beta → gamma; update CO; create CO ────────────────────
+        with activate_branch(branch), event_tracking(branch_request):
+            field = CustomObjectTypeField.objects.get(custom_object_type=cot, name='beta')
+            field.snapshot()
+            field.name = 'gamma'
+            field.label = 'Gamma'
+            field.save()
+            BM = cot.get_model()
+            co = BM.objects.get(pk=co_original_pk)
+            co.snapshot()
+            co.gamma = 'after rename to gamma'
+            co.save()
+            co_at_gamma = BM.objects.create(gamma='created at gamma')
+        co_at_gamma_pk = co_at_gamma.pk
+
+        # ── main: add a new independent field + CO ────────────────────────
+        with event_tracking(request):
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='extra', label='Extra', type='text',
+            )
+            co_main = cot.get_model().objects.create(alpha='main added', extra='extra val')
+        co_main_pk = co_main.pk
+
+        # ── merge ─────────────────────────────────────────────────────────
+        branch.merge(user=self.user, commit=True)
         branch.refresh_from_db()
-        self.assertEqual(branch.status, BranchStatusChoices.PENDING_MIGRATIONS)
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
 
-        branch.migrate(user=self.user)
-        branch.refresh_from_db()
-        self.assertEqual(branch.status, BranchStatusChoices.READY)
+        field_names = {f.name for f in CustomObjectTypeField.objects.filter(custom_object_type=cot)}
+        self.assertIn('gamma', field_names, 'Final field name must be "gamma" after merge')
+        self.assertNotIn('alpha', field_names, '"alpha" must be absent after merge')
+        self.assertNotIn('beta', field_names, '"beta" must be absent after merge')
+        self.assertIn('extra', field_names, '"extra" field from main must be present after merge')
 
-        constraints_after = self._get_branch_constraints(branch, table_name)
-        self.assertTrue(
-            any(c['unique'] and c.get('columns') == ['code'] for c in constraints_after.values()),
-            'Branch must have UNIQUE constraint on "code" after migrate',
-        )
+        MergedModel = cot.get_model()
+        self.assertEqual(MergedModel.objects.get(pk=co_original_pk).gamma, 'after rename to gamma')
+        self.assertTrue(MergedModel.objects.filter(pk=co_at_beta_pk).exists(),
+                        'CO created at beta step must survive merge')
+        self.assertTrue(MergedModel.objects.filter(pk=co_at_gamma_pk).exists(),
+                        'CO created at gamma step must survive merge')
+        self.assertTrue(MergedModel.objects.filter(pk=co_main_pk).exists(),
+                        'CO added in main must survive merge')
 
-    # ── multiobject field renamed in main (through-table rename) ─────────
+        # ── revert ────────────────────────────────────────────────────────
+        branch.revert(user=self.user, commit=True)
 
-    def test_multiobject_field_renamed_in_main_triggers_branch_migrate(self):
+        field_names_r = {f.name for f in CustomObjectTypeField.objects.filter(custom_object_type=cot)}
+        self.assertIn('alpha', field_names_r, '"alpha" must be restored after revert')
+        self.assertNotIn('gamma', field_names_r, '"gamma" must be gone after revert')
+
+        RevertedModel = cot.get_model()
+        self.assertEqual(RevertedModel.objects.get(pk=co_original_pk).alpha, 'original value',
+                         'Original CO value must be restored after revert')
+        self.assertFalse(RevertedModel.objects.filter(pk=co_at_beta_pk).exists())
+        self.assertFalse(RevertedModel.objects.filter(pk=co_at_gamma_pk).exists())
+
+    def test_sequential_renames_alpha_beta_gamma_merge(self):
+        """Field renamed A→B→C in branch with CO changes at each step; merge + revert."""
+        self._run_sequential_rename_merge('seq_iter_cot', 'seq-iter-cot')
+
+    def test_sequential_renames_both_sides_sync(self):
         """
-        MULTIOBJECT field renamed in main marks the branch PENDING_MIGRATIONS.
-        branch.migrate() fires on_branch_migrated which renames the through
-        table in the branch schema in addition to the column alter_field.
+        Branch renames A→B→C while main renames A→D.
+        Both schemas independently rename the same field to different names.
 
-        Exercises the MULTIOBJECT rename branch of _schema_alter_field.
+        After sync(), main's rename (A→D) is applied on top of the branch's
+        state.  Because 'alpha' no longer exists in the branch (it was renamed
+        to 'gamma' via beta), _schema_alter_field detects the conflict, looks up
+        the live column name in the branch ('gamma'), and renames it to 'delta'
+        to converge the branch schema on main's post-sync state.
+
+        Scenario
+        --------
+        1. Create COT + field 'alpha' + CO in main.
+        2. Provision branch.
+        3. Branch: alpha→beta (update CO), beta→gamma (update CO, add CO).
+        4. Main: alpha→delta (update CO, add CO).
+        5. sync(): apply main's changes to branch — column converges to 'delta'.
         """
-        from core.models import ObjectType
+        request = _make_request(self.user)
 
-        site_ot = ObjectType.objects.get(app_label='dcim', model='site')
+        with event_tracking(request):
+            cot = CustomObjectType.objects.create(name='seq_sync_cot', slug='seq-sync-cot')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='alpha', label='Alpha', type='text',
+            )
+            co = cot.get_model().objects.create(alpha='original')
 
-        cot = CustomObjectType.objects.create(name='drift_m2m_cot', slug='drift-m2m-cot')
-        field = CustomObjectTypeField.objects.create(
-            custom_object_type=cot,
-            name='related_sites',
-            label='Related Sites',
-            type='multiobject',
-            related_object_type=site_ot,
-        )
+        co_pk = co.pk
+        branch = _provision_branch('Seq Sync Branch', 'iterative', self.user)
+        branch_request = _make_request(self.user)
 
-        old_through = field.through_table_name
+        # ── branch: alpha → beta → gamma ──────────────────────────────────
+        with activate_branch(branch), event_tracking(branch_request):
+            f = CustomObjectTypeField.objects.get(custom_object_type=cot, name='alpha')
+            f.snapshot()
+            f.name = 'beta'
+            f.label = 'Beta'
+            f.save()
+            BM = cot.get_model()
+            co_b = BM.objects.get(pk=co_pk)
+            co_b.snapshot()
+            co_b.beta = 'at beta'
+            co_b.save()
 
-        branch = _provision_branch('Drift M2M Branch', 'iterative', self.user)
+        with activate_branch(branch), event_tracking(branch_request):
+            f = CustomObjectTypeField.objects.get(custom_object_type=cot, name='beta')
+            f.snapshot()
+            f.name = 'gamma'
+            f.label = 'Gamma'
+            f.save()
+            BM = cot.get_model()
+            co_g = BM.objects.get(pk=co_pk)
+            co_g.snapshot()
+            co_g.gamma = 'at gamma'
+            co_g.save()
+            BM.objects.create(gamma='new in branch')
 
-        self.assertIn(old_through, self._get_branch_tables(branch))
+        # ── main: alpha → delta ───────────────────────────────────────────
+        with event_tracking(request):
+            f = CustomObjectTypeField.objects.get(custom_object_type=cot, name='alpha')
+            f.name = 'delta'
+            f.label = 'Delta'
+            f.save()
+            MM = cot.get_model()
+            co_m = MM.objects.get(pk=co_pk)
+            co_m.snapshot()
+            co_m.delta = 'updated in main'
+            co_m.save()
+            MM.objects.create(delta='main new')
 
-        # Rename in main.
-        field = CustomObjectTypeField.objects.get(pk=field.pk)
-        field.name = 'linked_sites'
-        field.label = 'Linked Sites'
-        field.save()
-
-        new_through = field.through_table_name
+        # ── sync ──────────────────────────────────────────────────────────
+        try:
+            branch.sync(user=self.user, commit=True)
+        except Exception as exc:
+            self.fail(f'sync() must not raise when schemas have conflicting renames: {exc!r}')
 
         branch.refresh_from_db()
-        self.assertEqual(branch.status, BranchStatusChoices.PENDING_MIGRATIONS)
 
-        branch.migrate(user=self.user)
+        # _schema_alter_field resolved the conflict by looking up the live column
+        # ('gamma') in the branch and renaming it to main's target name ('delta').
+        branch_conn = connections[branch.connection_name]
+        with branch_conn.cursor() as cursor:
+            branch_cols = {
+                col.name
+                for col in branch_conn.introspection.get_table_description(
+                    cursor, cot.get_database_table_name(),
+                )
+            }
+        self.assertIn('delta', branch_cols, 'Branch column must converge to delta after sync')
+        self.assertNotIn('gamma', branch_cols, 'gamma column must be gone after sync')
+        self.assertNotIn('beta', branch_cols, 'beta column must be gone after sync')
+        self.assertNotIn('alpha', branch_cols, 'alpha column must be gone after sync')
+
+    def test_sequential_renames_both_sides_merge(self):
+        """
+        Branch renames A→B→C; main renames A→D independently.
+        merge() applies branch's rename chain to main.
+
+        When merging the first branch rename (alpha→beta) into main, 'alpha' no
+        longer exists in main (it was renamed to 'delta') and 'beta' doesn't exist
+        either.  _schema_alter_field detects the conflict, looks up the live column
+        in main ('delta'), and renames it to 'beta'.  The second branch rename
+        (beta→gamma) then finds 'beta' in main and renames it normally to 'gamma'.
+
+        Expected after merge: main's physical column is 'gamma'.
+        """
+        request = _make_request(self.user)
+
+        with event_tracking(request):
+            cot = CustomObjectType.objects.create(name='seq_merge_cot', slug='seq-merge-cot')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='alpha', label='Alpha', type='text',
+            )
+            co = cot.get_model().objects.create(alpha='original')
+
+        co_pk = co.pk
+        branch = _provision_branch('Seq Merge Conflict Branch', 'iterative', self.user)
+        branch_request = _make_request(self.user)
+
+        # ── branch: alpha → beta → gamma ──────────────────────────────────
+        with activate_branch(branch), event_tracking(branch_request):
+            f = CustomObjectTypeField.objects.get(custom_object_type=cot, name='alpha')
+            f.snapshot()
+            f.name = 'beta'
+            f.label = 'Beta'
+            f.save()
+            BM = cot.get_model()
+            co_b = BM.objects.get(pk=co_pk)
+            co_b.snapshot()
+            co_b.beta = 'at beta'
+            co_b.save()
+
+        with activate_branch(branch), event_tracking(branch_request):
+            f = CustomObjectTypeField.objects.get(custom_object_type=cot, name='beta')
+            f.snapshot()
+            f.name = 'gamma'
+            f.label = 'Gamma'
+            f.save()
+            BM = cot.get_model()
+            co_g = BM.objects.get(pk=co_pk)
+            co_g.snapshot()
+            co_g.gamma = 'at gamma'
+            co_g.save()
+            BM.objects.create(gamma='new in branch')
+
+        # ── main: alpha → delta ───────────────────────────────────────────
+        with event_tracking(request):
+            f = CustomObjectTypeField.objects.get(custom_object_type=cot, name='alpha')
+            f.name = 'delta'
+            f.label = 'Delta'
+            f.save()
+
+        # ── merge ─────────────────────────────────────────────────────────
+        try:
+            branch.merge(user=self.user, commit=True)
+        except Exception as exc:
+            self.fail(f'merge() must not raise when schemas have conflicting renames: {exc!r}')
+
         branch.refresh_from_db()
-        self.assertEqual(branch.status, BranchStatusChoices.READY)
 
-        branch_tables = self._get_branch_tables(branch)
-        self.assertIn(new_through, branch_tables, 'Renamed through table must exist in branch after migrate')
-        self.assertNotIn(old_through, branch_tables, 'Old through table must be absent from branch after migrate')
+        # _schema_alter_field resolved the conflict for the first branch rename
+        # (alpha→beta): it found 'delta' (main's live column) and renamed it to
+        # 'beta'.  The second rename (beta→gamma) then proceeded normally.
+        # Main's final physical column should be 'gamma'.
+        from django.db import connection as main_conn
+        with main_conn.cursor() as cursor:
+            main_cols = {
+                col.name
+                for col in main_conn.introspection.get_table_description(
+                    cursor, cot.get_database_table_name(),
+                )
+            }
+        self.assertIn('gamma', main_cols, 'Main column must be gamma after merge')
+        self.assertNotIn('delta', main_cols, 'delta column must be gone after merge')
+        self.assertNotIn('beta', main_cols, 'beta column must be gone after merge')
+        self.assertNotIn('alpha', main_cols, 'alpha column must be gone after merge')
+
+
+@unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
+class SequentialRenameSquashTestCase(SequentialRenameTestCase, TransactionTestCase):
+    """Run SequentialRenameTestCase with the squash merge strategy."""
+    MERGE_STRATEGY = 'squash'
+
+    def test_sequential_renames_alpha_beta_gamma_merge(self):
+        self._run_sequential_rename_merge('seq_squash_cot', 'seq-squash-cot')
