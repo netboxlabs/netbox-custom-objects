@@ -184,7 +184,7 @@ def _schema_add_field(fi, model, schema_editor, schema_conn):
     sync/merge replays an ObjectChange that was already applied).
     """
     ft = FIELD_TYPE_CLASS[fi.type]()
-    mf = ft.get_model_field(fi)
+    mf = ft.get_model_field(fi, db_column=fi.effective_db_column)
     mf.contribute_to_class(model, fi.name)
 
     with schema_conn.cursor() as cursor:
@@ -215,7 +215,7 @@ def _schema_remove_field(fi, model, schema_editor, existing_tables=None):
     to reject the subsequent ALTER TABLE.
     """
     ft = FIELD_TYPE_CLASS[fi.type]()
-    mf = ft.get_model_field(fi)
+    mf = ft.get_model_field(fi, db_column=fi.effective_db_column)
     mf.contribute_to_class(model, fi.name)
 
     if fi.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
@@ -278,8 +278,8 @@ def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, exist
         )
         return
 
-    old_mf = FIELD_TYPE_CLASS[old_fi.type]().get_model_field(old_fi)
-    new_mf = FIELD_TYPE_CLASS[new_fi.type]().get_model_field(new_fi)
+    old_mf = FIELD_TYPE_CLASS[old_fi.type]().get_model_field(old_fi, db_column=old_fi.effective_db_column)
+    new_mf = FIELD_TYPE_CLASS[new_fi.type]().get_model_field(new_fi, db_column=new_fi.effective_db_column)
     old_mf.contribute_to_class(model, old_fi.name)
     new_mf.contribute_to_class(model, new_fi.name)
 
@@ -316,7 +316,7 @@ def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, exist
                 new_fi.pk, schema_conn.alias,
             )
             return
-        live_mf = FIELD_TYPE_CLASS[live_fi.type]().get_model_field(live_fi)
+        live_mf = FIELD_TYPE_CLASS[live_fi.type]().get_model_field(live_fi, db_column=live_fi.effective_db_column)
         live_mf.contribute_to_class(model, live_fi.name)
         if live_mf.column not in existing_cols:
             logger.debug(
@@ -750,7 +750,7 @@ class CustomObjectType(NetBoxModel):
             field_name = field.name
 
             field_attrs[field.name] = field_type.get_model_field(
-                field,
+                field, db_column=field.effective_db_column,
             )
 
             # Add to field objects only if the field was successfully generated
@@ -1324,6 +1324,15 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             ),
         ),
     )
+    db_column = models.CharField(
+        verbose_name=_("database column"),
+        max_length=50,
+        blank=True,
+        help_text=_(
+            "Physical database column name. Set once at creation and never changed, "
+            "so renames are pure metadata changes that do not require DDL."
+        ),
+    )
     label = models.CharField(
         verbose_name=_("label"),
         max_length=50,
@@ -1516,6 +1525,16 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     @property
     def many(self):
         return self.type in ["multiobject"]
+
+    @property
+    def effective_db_column(self):
+        """
+        Return the physical database column name for this field.
+
+        ``db_column`` is frozen at creation time so that renames are pure
+        metadata operations — the physical column name never changes.
+        """
+        return self.db_column
 
     def get_child_relations(self, instance):
         return instance.get_field_value(self)
@@ -2148,6 +2167,12 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
     def save(self, *args, **kwargs):
         is_new = self._state.adding
+
+        # Freeze the physical column name at creation.  db_column is set once
+        # here and never updated, so subsequent renames only update the ORM
+        # field name — no DDL is required for renames.
+        if self._state.adding and not self.db_column:
+            self.db_column = self.name
 
         # Use the branch connection when operating inside a branch so that schema
         # editor operations target the branch schema rather than main.
