@@ -176,16 +176,11 @@ class CustomObjectType(NetBoxModel):
         unique=True,
         validators=(
             RegexValidator(
-                regex=r"^[a-z0-9_]+$",
-                message=_("Only lowercase alphanumeric characters and underscores are allowed."),
-            ),
-            RegexValidator(
-                regex=r"__",
+                regex=r"^[a-z0-9]+(_[a-z0-9]+)*$",
                 message=_(
-                    "Double underscores are not permitted in custom object object type names."
+                    "Only lowercase alphanumeric characters and underscores are allowed. "
+                    "Names may not start or end with an underscore, and double underscores are not permitted."
                 ),
-                flags=re.IGNORECASE,
-                inverse_match=True,
             ),
         ),
     )
@@ -198,7 +193,7 @@ class CustomObjectType(NetBoxModel):
         verbose_name=_('comments'),
         blank=True
     )
-    version = models.CharField(max_length=10, blank=True)
+    version = models.CharField(max_length=50, blank=True)
     verbose_name = models.CharField(max_length=100, blank=True)
     verbose_name_plural = models.CharField(max_length=100, blank=True)
     slug = models.SlugField(max_length=100, unique=True, db_index=True, blank=False)
@@ -207,6 +202,22 @@ class CustomObjectType(NetBoxModel):
         db_index=True,
         blank=True,
         help_text=_("Used to group similar custom object types in the navigation menu")
+    )
+    schema_document = models.JSONField(
+        blank=True,
+        null=True,
+        help_text=_(
+            "The last applied or exported schema document for this Custom Object Type. "
+            "Serves as the source of truth for schema history, including tombstoned fields."
+        ),
+    )
+    next_schema_id = models.PositiveIntegerField(
+        default=0,
+        editable=False,
+        help_text=_(
+            "Monotonically increasing counter tracking the highest schema_id ever assigned "
+            "to a field on this Custom Object Type. Never decreases, even after field deletion."
+        ),
     )
     cache_timestamp = models.DateTimeField(
         auto_now=True,
@@ -822,16 +833,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         help_text=_("Internal field name, e.g. \"vendor_label\""),
         validators=(
             RegexValidator(
-                regex=r"^[a-z0-9_]+$",
-                message=_("Only lowercase alphanumeric characters and underscores are allowed."),
-            ),
-            RegexValidator(
-                regex=r"__",
+                regex=r"^[a-z0-9]+(_[a-z0-9]+)*$",
                 message=_(
-                    "Double underscores are not permitted in custom object field names."
+                    "Only lowercase alphanumeric characters and underscores are allowed. "
+                    "Names may not start or end with an underscore, and double underscores are not permitted."
                 ),
-                flags=re.IGNORECASE,
-                inverse_match=True,
             ),
         ),
     )
@@ -978,6 +984,35 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         help_text=_("Replicate this value when cloning objects"),
     )
     comments = models.TextField(verbose_name=_("comments"), blank=True)
+    schema_id = models.PositiveIntegerField(
+        blank=True,
+        null=True,
+        verbose_name=_("schema ID"),
+        help_text=_(
+            "Stable numeric identifier for this field used during schema diffing. "
+            "Auto-assigned on creation; never changes and never reused within this Custom Object Type."
+        ),
+    )
+    deprecated = models.BooleanField(
+        default=False,
+        verbose_name=_("deprecated"),
+        help_text=_(
+            "Mark this field as deprecated. Deprecated fields remain in the database but "
+            "are read-only in the UI and should not be used in new objects."
+        ),
+    )
+    deprecated_since = models.CharField(
+        max_length=50,
+        blank=True,
+        verbose_name=_("deprecated since"),
+        help_text=_("Schema version in which this field was marked deprecated (e.g. '2.0.0')."),
+    )
+    scheduled_removal = models.CharField(
+        max_length=50,
+        blank=True,
+        verbose_name=_("scheduled removal"),
+        help_text=_("Schema version in which this field is planned to be removed (e.g. '3.0.0')."),
+    )
 
     clone_fields = ("custom_object_type",)
 
@@ -1001,6 +1036,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 fields=("related_object_type", "related_name"),
                 condition=Q(related_name__gt=""),
                 name="%(app_label)s_%(class)s_unique_related_name",
+            ),
+            models.UniqueConstraint(
+                fields=("schema_id", "custom_object_type"),
+                name="%(app_label)s_%(class)s_unique_schema_id",
+                condition=models.Q(schema_id__isnull=False),
             ),
         )
 
@@ -1627,6 +1667,30 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
     def save(self, *args, **kwargs):
         is_new = self._state.adding
+
+        # Auto-assign schema_id for new fields that don't have one yet.
+        # Increments the monotonic counter on the parent CustomObjectType so that IDs are
+        # never reused, even after a field is deleted.  The UniqueConstraint on
+        # (schema_id, custom_object_type) is the safety net against races; a concurrent
+        # writer would get an IntegrityError and must retry.
+        # Note: bulk_create() bypasses save() entirely, so auto-assignment will NOT fire for
+        # fields created via CustomObjectTypeField.objects.bulk_create(...). Always set
+        # schema_id explicitly when using bulk_create.
+        if self._state.adding and self.schema_id is None:
+            with transaction.atomic():
+                cot = CustomObjectType.objects.select_for_update().get(
+                    pk=self.custom_object_type_id
+                )
+                new_schema_id = cot.next_schema_id + 1
+                # Use update() rather than save() to avoid dispatching post_save on
+                # CustomObjectType, which would clear the model cache prematurely.
+                # The model cache must remain valid until this field's own save() calls
+                # get_model() below (to contribute the new field and alter the DB table).
+                CustomObjectType.objects.filter(pk=self.custom_object_type_id).update(
+                    next_schema_id=new_schema_id
+                )
+                self.schema_id = new_schema_id
+
         field_type = FIELD_TYPE_CLASS[self.type]()
         model_field = field_type.get_model_field(self)
         model = self.custom_object_type.get_model()
