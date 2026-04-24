@@ -2234,8 +2234,18 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
             transaction.on_commit(ensure_constraint)
 
+        # Regenerate the model from DB now that the field change is persisted.
+        # _schema_alter_field adds both old and new field names to the model
+        # class via contribute_to_class, and something between clear_model_cache
+        # and super().save() (e.g. a post_save signal on the COT) can call
+        # get_model() while the DB still has the old name, caching a stale model
+        # without the new name.  Forcing a no_cache regeneration here (after
+        # super().save() committed the new name) ensures apps.all_models holds a
+        # clean model with exactly the current DB field list.
+        updated_model = self.custom_object_type.get_model(no_cache=True)
+
         # Reregister SearchIndex with new set of searchable fields
-        self.custom_object_type.register_custom_object_search_index(model)
+        self.custom_object_type.register_custom_object_search_index(updated_model)
 
         # Reindex all objects of this type if search indexing was affected
         if is_new:

@@ -44,7 +44,6 @@ def _patch_get_serializer_for_model():
     delegates to get_serializer_class(), which generates the serializer on the fly.
     """
     import utilities.api as _api_utils
-    from netbox.api.exceptions import SerializerNotFound
 
     _original = _api_utils.get_serializer_for_model
 

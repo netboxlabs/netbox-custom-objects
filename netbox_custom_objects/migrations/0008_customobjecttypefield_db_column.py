@@ -33,7 +33,10 @@ class Migration(migrations.Migration):
             field=models.CharField(
                 blank=True,
                 default='',
-                help_text='Physical database column name. Set once at creation and never changed, so renames are pure metadata changes that do not require DDL.',
+                help_text=(
+                    'Physical database column name. Set once at creation and never changed, '
+                    'so renames are pure metadata changes that do not require DDL.'
+                ),
                 max_length=50,
                 verbose_name='database column',
             ),
