@@ -83,6 +83,7 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
             "deprecated_since",
             "scheduled_removal",
         )
+        read_only_fields = ("schema_id",)
 
     def validate(self, attrs):
         app_label = attrs.pop("app_label", None)

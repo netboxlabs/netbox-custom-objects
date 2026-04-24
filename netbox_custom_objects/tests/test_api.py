@@ -7,7 +7,7 @@ from django.urls import reverse
 from utilities.testing import APIViewTestCases, create_test_user
 from rest_framework import status
 
-from netbox_custom_objects.models import CustomObjectType
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from .base import CustomObjectsTestCase
 from core.models import ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Rack, Site
@@ -959,3 +959,76 @@ class ContextFieldApiTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIsNotNone(response.data['_context'])
         self.assertEqual(response.data['_context']['display'], 'Dave')
+
+
+class SchemaIdReadOnlyTest(CustomObjectsTestCase, TestCase):
+    """
+    schema_id on CustomObjectTypeField is read-only via the API.
+    POSTing a value for it must be silently ignored; PATCHing an existing
+    field with a new schema_id must also leave the stored value unchanged.
+    """
+
+    def setUp(self):
+        self.user = create_test_user('schemauser')
+        token_key = create_token(self.user)
+        self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
+
+        # Add add + change + view permissions on CustomObjectTypeField
+        perm = ObjectPermission(name='Schema perm', actions=['add', 'change', 'view'])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectTypeField))
+        # Also need add on CustomObjectType (for creating the parent)
+        cot_perm = ObjectPermission(name='COT perm', actions=['add', 'view'])
+        cot_perm.save()
+        cot_perm.users.add(self.user)
+        cot_perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
+
+        self.cot = self.create_custom_object_type(name='ro_schema', slug='ro-schema')
+
+    def _field_list_url(self):
+        return reverse('plugins-api:netbox_custom_objects-api:customobjecttypefield-list')
+
+    def _field_detail_url(self, pk):
+        return reverse(
+            'plugins-api:netbox_custom_objects-api:customobjecttypefield-detail',
+            kwargs={'pk': pk},
+        )
+
+    def test_schema_id_in_response(self):
+        """schema_id must be present and non-null in the API response."""
+        field = self.create_custom_object_type_field(self.cot, name='alpha', type='text')
+        response = self.client.get(self._field_detail_url(field.pk), **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('schema_id', response.data)
+        self.assertIsNotNone(response.data['schema_id'])
+
+    def test_schema_id_ignored_on_create(self):
+        """Supplying schema_id on POST must be silently ignored; auto-assignment wins."""
+        data = {
+            'custom_object_type': self.cot.pk,
+            'name': 'beta',
+            'type': 'text',
+            'schema_id': 999,
+        }
+        response = self.client.post(
+            self._field_list_url(), data, format='json', **self.header
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertNotEqual(response.data['schema_id'], 999)
+
+    def test_schema_id_ignored_on_patch(self):
+        """PATCHing schema_id must not change the stored value."""
+        field = self.create_custom_object_type_field(self.cot, name='gamma', type='text')
+        original_id = field.schema_id
+
+        response = self.client.patch(
+            self._field_detail_url(field.pk),
+            {'schema_id': original_id + 100},
+            format='json',
+            **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        field.refresh_from_db()
+        self.assertEqual(field.schema_id, original_id)
