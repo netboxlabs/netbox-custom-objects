@@ -1019,13 +1019,14 @@ class SchemaIdReadOnlyTest(CustomObjectsTestCase, TestCase):
 
     def test_schema_id_ignored_on_patch(self):
         """PATCHing schema_id must not change the stored value."""
+        import json
         field = self.create_custom_object_type_field(self.cot, name='gamma', type='text')
         original_id = field.schema_id
 
         response = self.client.patch(
             self._field_detail_url(field.pk),
-            {'schema_id': original_id + 100},
-            format='json',
+            json.dumps({'schema_id': original_id + 100}),
+            content_type='application/json',
             **self.header,
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
