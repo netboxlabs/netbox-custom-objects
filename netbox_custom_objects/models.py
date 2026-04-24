@@ -708,6 +708,13 @@ class CustomObjectType(NetBoxModel):
         """
         return cls._through_model_cache.get(custom_object_type_id, {})
 
+    def serialize_object(self, exclude=None):
+        # cache_timestamp is an internal cache-invalidation field; exclude it
+        # from ObjectChange records so it doesn't appear as a tracked change.
+        extra = ['cache_timestamp']
+        combined = list(exclude or []) + extra
+        return super().serialize_object(exclude=combined)
+
     def get_absolute_url(self):
         return reverse("plugins:netbox_custom_objects:customobjecttype", args=[self.pk])
 

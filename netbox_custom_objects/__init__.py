@@ -32,6 +32,45 @@ def _migration_finished(sender, **kwargs):
     _migrations_checked = None
 
 
+def _patch_get_serializer_for_model():
+    """
+    Patch utilities.api.get_serializer_for_model to handle dynamically-generated
+    custom object models.
+
+    The default implementation resolves serializers by import path convention
+    (e.g. netbox_custom_objects.api.serializers.Table1ModelSerializer).  Dynamic
+    models have no importable serializer at that path, so the call raises
+    SerializerNotFound.  This patch intercepts the lookup for APP_LABEL models and
+    delegates to get_serializer_class(), which generates the serializer on the fly.
+    """
+    import utilities.api as _api_utils
+    from netbox.api.exceptions import SerializerNotFound
+
+    _original = _api_utils.get_serializer_for_model
+
+    def _patched(model, prefix=''):
+        # Only intercept dynamically-generated custom object models (Table1Model,
+        # Table2Model, …) identified by their Table{n}Model name pattern.
+        # CustomObjectType and CustomObjectTypeField live in the same app but
+        # have importable serializers and must go through the normal path.
+        if getattr(model, '_meta', None) and model._meta.app_label == APP_LABEL \
+                and extract_cot_id_from_model_name(model.__name__.lower()) is not None:
+            from netbox_custom_objects.api.serializers import get_serializer_class
+            return get_serializer_class(model)
+        return _original(model, prefix=prefix)
+
+    _api_utils.get_serializer_for_model = _patched
+
+    # Also patch the reference already imported into extras.events (and anywhere
+    # else that did `from utilities.api import get_serializer_for_model` before
+    # our patch ran).
+    try:
+        import extras.events as _extras_events
+        _extras_events.get_serializer_for_model = _patched
+    except (ImportError, AttributeError):
+        pass
+
+
 def _patch_check_object_accessible_in_branch():
     """
     Patch check_object_accessible_in_branch to use an existence check instead of
@@ -227,6 +266,10 @@ class CustomObjectsPluginConfig(PluginConfig):
 
         # Patch ObjectSelectorView to support dynamically-generated custom object models
         _patch_object_selector_view()
+
+        # Patch get_serializer_for_model so event rules, job serializers, etc. can
+        # resolve serializers for dynamically-generated custom object models.
+        _patch_get_serializer_for_model()
 
         # Patch check_object_accessible_in_branch to use pk-only existence check,
         # avoiding SELECT * which references renamed columns that may not exist in main.
