@@ -621,15 +621,18 @@ class PolymorphicFieldUITest(TransactionCleanupMixin, CustomObjectsTestCase, Tra
 
     # --- Edit form structure ---
 
-    def test_edit_form_has_per_type_subfields_not_raw_gfk_columns(self):
-        """The edit form exposes per-type sub-fields, not the raw _content_type/_object_id."""
+    def test_edit_form_has_scope_style_fields_not_raw_gfk_columns(self):
+        """The edit form exposes a scope-style type+object selector pair, not raw GFK columns."""
         obj = self.model.objects.create(name="form-test-obj")
         response = self.client.get(self._edit_url(obj.pk))
         self.assertEqual(response.status_code, 200)
         form = response.context["form"]
-        # Per-type sub-fields must be present
-        self.assertIn("poly_obj__dcim__site", form.fields)
-        self.assertIn("poly_obj__ipam__prefix", form.fields)
+        # Scope-style sub-fields must be present
+        self.assertIn("poly_obj__ct", form.fields)
+        self.assertIn("poly_obj__obj", form.fields)
+        # Old per-type sub-fields must NOT be present
+        self.assertNotIn("poly_obj__dcim__site", form.fields)
+        self.assertNotIn("poly_obj__ipam__prefix", form.fields)
         # Raw GFK columns must be excluded
         self.assertNotIn("poly_obj_content_type", form.fields)
         self.assertNotIn("poly_obj_object_id", form.fields)
@@ -643,40 +646,113 @@ class PolymorphicFieldUITest(TransactionCleanupMixin, CustomObjectsTestCase, Tra
         self.assertIn("poly_multi__dcim__site", form.fields)
         self.assertIn("poly_multi__ipam__prefix", form.fields)
 
-    def test_edit_form_subfield_labels_are_human_readable(self):
-        """Sub-field labels use the field's label and the human-readable type name."""
+    def test_form_poly_obj_grouping_metadata(self):
+        """
+        The form's poly_obj_ct_names and poly_obj_pairs attrs are populated so the
+        template can render the ct+obj pair under a shared heading.  obj_sub must be
+        in rendered_names (prevents fallback double-render) but NOT as a standalone
+        entry in field_groups (the template renders it via the pair).
+        """
+        obj = self.model.objects.create(name="grouping-meta-obj")
+        response = self.client.get(self._edit_url(obj.pk))
+        form = response.context["form"]
+
+        ct_sub = "poly_obj__ct"
+        obj_sub = "poly_obj__obj"
+
+        # ct_sub is flagged as the start of a poly object pair
+        self.assertIn(ct_sub, form.custom_object_type_poly_obj_ct_names)
+
+        # pairs dict maps ct_sub → (obj_sub, label)
+        pair = form.custom_object_type_poly_obj_pairs.get(ct_sub)
+        self.assertIsNotNone(pair, "poly_obj_pairs missing entry for poly_obj__ct")
+        self.assertEqual(pair[0], obj_sub)
+        self.assertIn("Poly Obj", pair[1])
+
+        # obj_sub is in rendered_names so the fallback field loop skips it
+        self.assertIn(obj_sub, form.custom_object_type_rendered_names)
+
+        # obj_sub must NOT appear as a standalone entry in any field group
+        all_grouped = [
+            name
+            for names in form.custom_object_type_field_groups.values()
+            for name in names
+        ]
+        self.assertNotIn(obj_sub, all_grouped)
+
+    def test_form_poly_m2m_grouping_metadata(self):
+        """
+        The form's poly_m2m_groups attr maps the first M2M sub-field name to
+        (all_sub_names, label).  Only the first sub-name appears in field_groups;
+        the rest are in rendered_names so they won't double-render.
+        """
+        obj = self.model.objects.create(name="m2m-grouping-meta-obj")
+        response = self.client.get(self._edit_url(obj.pk))
+        form = response.context["form"]
+
+        all_grouped = [
+            name
+            for names in form.custom_object_type_field_groups.values()
+            for name in names
+        ]
+
+        # Exactly one of the two M2M sub-fields should be in field_groups
+        dcim_sub = "poly_multi__dcim__site"
+        ipam_sub = "poly_multi__ipam__prefix"
+        grouped_m2m = [n for n in all_grouped if n.startswith("poly_multi__")]
+        self.assertEqual(len(grouped_m2m), 1, "Expected exactly one M2M sub-name in field_groups")
+        first_sub = grouped_m2m[0]
+
+        # poly_m2m_groups maps that first sub-name to (all_subs, label)
+        group_info = form.custom_object_type_poly_m2m_groups.get(first_sub)
+        self.assertIsNotNone(group_info, "poly_m2m_groups missing entry for first M2M sub-field")
+        all_subs, label = group_info
+        self.assertIn(dcim_sub, all_subs)
+        self.assertIn(ipam_sub, all_subs)
+        self.assertIn("Poly Multi", label)
+
+        # All sub-names are in rendered_names so the fallback loop skips them
+        self.assertIn(dcim_sub, form.custom_object_type_rendered_names)
+        self.assertIn(ipam_sub, form.custom_object_type_rendered_names)
+
+        # Only the first sub-name is in field_groups; the rest are not
+        non_first_subs = [s for s in all_subs if s != first_sub]
+        for sub in non_first_subs:
+            self.assertNotIn(sub, all_grouped)
+
+    def test_edit_form_type_selector_label_is_human_readable(self):
+        """The type-selector field has a user-friendly label."""
         obj = self.model.objects.create(name="label-test-obj")
         response = self.client.get(self._edit_url(obj.pk))
         form = response.context["form"]
-        # Should be "Poly Obj (DCIM > Site)" not "poly_obj (dcim.site)"
-        label = form.fields["poly_obj__dcim__site"].label
-        self.assertIn("Poly Obj", label)
-        self.assertNotIn("dcim.site", label)
+        ct_label = form.fields["poly_obj__ct"].label
+        self.assertIn("Poly Obj", ct_label)
+        self.assertNotIn("__ct", ct_label)
 
     def test_edit_form_preselects_existing_gfk_value(self):
-        """For an existing object, the correct sub-field is pre-populated."""
+        """For an existing object, the ct and obj sub-fields are pre-populated."""
+        from django.contrib.contenttypes.models import ContentType
+        site_ct = ContentType.objects.get_for_model(Site)
         obj = self.model.objects.create(name="prefill-test")
         obj.poly_obj = self.site1
         obj.save()
 
         response = self.client.get(self._edit_url(obj.pk))
         form = response.context["form"]
-        # Initial values are stored in form.initial (not on the field itself, since
-        # DynamicModelChoiceField sets initial via the form constructor's initial= kwarg)
-        site_initial = form.initial.get("poly_obj__dcim__site")
-        self.assertEqual(site_initial, self.site1.pk)
-        # Prefix sub-field initial should be empty
-        prefix_initial = form.initial.get("poly_obj__ipam__prefix")
-        self.assertFalse(prefix_initial)
+        self.assertEqual(form.initial.get("poly_obj__ct"), site_ct.pk)
+        self.assertEqual(form.initial.get("poly_obj__obj"), self.site1.pk)
 
     # --- Edit form submission ---
 
     def test_submit_edit_form_sets_gfk_to_site(self):
-        """POST the edit form with a Site sub-field saves the GFK to that Site."""
+        """POST the edit form with a type+object selection saves the GFK to that Site."""
+        from django.contrib.contenttypes.models import ContentType
+        site_ct = ContentType.objects.get_for_model(Site)
         obj = self.model.objects.create(name="submit-gfk-obj")
         data = {
             "name": "submit-gfk-obj",
-            "poly_obj__dcim__site": self.site1.pk,
+            "poly_obj__ct": site_ct.pk,
+            "poly_obj__obj": self.site1.pk,
             "csrfmiddlewaretoken": "fake",
         }
         response = self.client.post(self._edit_url(obj.pk), data, follow=True)
@@ -684,30 +760,8 @@ class PolymorphicFieldUITest(TransactionCleanupMixin, CustomObjectsTestCase, Tra
         obj.refresh_from_db()
         self.assertEqual(obj.poly_obj, self.site1)
 
-    def test_submit_edit_form_rejects_multiple_gfk_subfields(self):
-        """POST with more than one GFK sub-field filled returns a form error."""
-        obj = self.model.objects.create(name="multi-gfk-obj")
-        data = {
-            "name": "multi-gfk-obj",
-            # Both sub-fields filled — should be rejected
-            "poly_obj__dcim__site": self.site1.pk,
-            "poly_obj__ipam__prefix": self.prefix1.pk,
-            "csrfmiddlewaretoken": "fake",
-        }
-        # Don't follow redirects: success redirects (302), validation error re-renders (200)
-        response = self.client.post(self._edit_url(obj.pk), data)
-        self.assertEqual(response.status_code, 200, "Expected form to be re-rendered with errors")
-        form = response.context["form"]
-        self.assertTrue(form.errors, "Expected form errors but found none")
-        # Both conflicting sub-fields should carry an error
-        self.assertIn("poly_obj__dcim__site", form.errors)
-        self.assertIn("poly_obj__ipam__prefix", form.errors)
-        # Object must not have been modified
-        obj.refresh_from_db()
-        self.assertIsNone(obj.poly_obj)
-
-    def test_submit_edit_form_clears_gfk_when_no_subfield_selected(self):
-        """POST with no sub-field selected clears an existing GFK value."""
+    def test_submit_edit_form_clears_gfk_when_no_type_selected(self):
+        """POST with no type selection clears an existing GFK value."""
         obj = self.model.objects.create(name="clear-gfk-obj")
         obj.poly_obj = self.site1
         obj.save()
@@ -748,8 +802,8 @@ class PolymorphicFieldUITest(TransactionCleanupMixin, CustomObjectsTestCase, Tra
 
     # --- Bulk edit form ---
 
-    def test_bulk_edit_form_has_polymorphic_subfields(self):
-        """The bulk edit form also exposes per-type sub-fields for polymorphic fields."""
+    def test_bulk_edit_form_has_scope_style_and_m2m_subfields(self):
+        """The bulk edit form exposes scope-style fields for GFK and per-type fields for M2M."""
         obj1 = self.model.objects.create(name="bulk-1")
         obj2 = self.model.objects.create(name="bulk-2")
         # POST without _apply renders the form
@@ -759,18 +813,25 @@ class PolymorphicFieldUITest(TransactionCleanupMixin, CustomObjectsTestCase, Tra
         )
         self.assertEqual(response.status_code, 200)
         form = response.context["form"]
-        self.assertIn("poly_obj__dcim__site", form.fields)
+        # Scope-style fields for single-object GFK
+        self.assertIn("poly_obj__ct", form.fields)
+        self.assertIn("poly_obj__obj", form.fields)
+        # Per-type sub-fields for M2M (unchanged)
         self.assertIn("poly_multi__dcim__site", form.fields)
+        # Raw GFK columns excluded
         self.assertNotIn("poly_obj_content_type", form.fields)
 
     def test_bulk_edit_applies_gfk_to_all_selected_objects(self):
         """Bulk edit sets the GFK field on all selected objects."""
+        from django.contrib.contenttypes.models import ContentType
+        site_ct = ContentType.objects.get_for_model(Site)
         obj1 = self.model.objects.create(name="bulk-gfk-1")
         obj2 = self.model.objects.create(name="bulk-gfk-2")
         data = {
             "pk": [obj1.pk, obj2.pk],
             "_apply": "1",
-            "poly_obj__dcim__site": self.site1.pk,
+            "poly_obj__ct": site_ct.pk,
+            "poly_obj__obj": self.site1.pk,
             "csrfmiddlewaretoken": "fake",
         }
         response = self.client.post(self._bulk_edit_url(), data, follow=True)

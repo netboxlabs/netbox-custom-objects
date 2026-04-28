@@ -47,3 +47,9 @@ def get_field_is_ui_visible(obj, field: CustomObjectTypeField) -> bool:
 @register.filter(name="get_child_relations")
 def get_child_relations(obj, field: CustomObjectTypeField):
     return getattr(obj, field.name)
+
+
+@register.filter(name="dict_get")
+def dict_get(d, key):
+    """Look up a key in a dict from a template (e.g. ``mydict|dict_get:name``)."""
+    return d.get(key)

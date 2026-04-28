@@ -4,7 +4,7 @@ from core.models import ObjectChange
 from core.tables import ObjectChangeTable
 from django.contrib.contenttypes.models import ContentType
 from django.db.models import Q
-from django.shortcuts import get_object_or_404, render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 from django.views.generic import View
@@ -18,10 +18,14 @@ from netbox.forms import (
 )
 from netbox.views import generic
 from netbox.views.generic.mixins import TableMixin
-from utilities.forms import ConfirmationForm
-from utilities.forms.fields import DynamicModelChoiceField, DynamicModelMultipleChoiceField
+from utilities.forms import ConfirmationForm, restrict_form_fields
+from utilities.querydict import normalize_querydict
+from utilities.forms.fields import ContentTypeChoiceField, DynamicModelChoiceField, DynamicModelMultipleChoiceField
+from utilities.forms.utils import get_field_value as _get_field_value
+from utilities.forms.widgets import HTMXSelect
 from utilities.htmx import htmx_partial
 from utilities.object_types import object_type_name
+from utilities.templatetags.builtins.filters import bettertitle
 from utilities.views import ConditionalLoginRequiredMixin, ViewTab, get_viewname, register_model_view
 
 from netbox_custom_objects.filtersets import get_filterset_class
@@ -87,6 +91,66 @@ def _build_poly_subfields(field, set_initial: bool = False):
         if set_initial:
             sub_field.initial = None
         yield sub_name, sub_field
+
+
+def _build_poly_scope_fields(field):
+    """
+    Build the scope-style type-selector + object-picker pair for a single-object
+    polymorphic field.
+
+    Yields two ``(sub_name, sub_field)`` pairs in order:
+      ``{field.name}__ct``  — ContentTypeChoiceField with HTMXSelect (triggers
+                              form reload so the object picker updates to match)
+      ``{field.name}__obj`` — DynamicModelChoiceField, disabled until a type is
+                              selected; queryset updated in the form's __init__
+
+    Args:
+        field: A ``CustomObjectTypeField`` with ``is_polymorphic=True`` and
+               ``type == TYPE_OBJECT``.
+    """
+    field_label = field.label or field.name.replace("_", " ").title()
+    ct_sub = f"{field.name}__ct"
+    obj_sub = f"{field.name}__obj"
+
+    allowed_ots = list(field.related_object_types.all())
+    ct_queryset = ContentType.objects.filter(
+        pk__in=[ot.pk for ot in allowed_ots]
+    ).order_by('app_label', 'model')
+
+    ct_field = ContentTypeChoiceField(
+        queryset=ct_queryset,
+        required=field.required,
+        label=_("%(label)s type") % {'label': field_label},
+        widget=HTMXSelect(),
+        empty_label=_("— Select type —"),
+    )
+
+    # Placeholder queryset: use the first resolvable allowed type so that
+    # DynamicModelChoiceField can derive an API URL without falling back to
+    # ContentType (whose API namespace doesn't exist in NetBox).  Note: use
+    # `is not None` rather than truthiness — `.none()` querysets are falsy.
+    # The object picker starts disabled; its queryset is replaced in the
+    # form's __init__ once the user (or HTMX reload) supplies a type selection.
+    placeholder_model = None
+    for ot in allowed_ots:
+        m = ot.model_class()
+        if m is not None:
+            placeholder_model = m
+            break
+
+    if placeholder_model is None:
+        # No resolvable allowed type — field cannot be rendered; skip it.
+        return
+
+    obj_field = DynamicModelChoiceField(
+        queryset=placeholder_model.objects.none(),
+        required=field.required,
+        label=field_label,
+        disabled=True,
+    )
+
+    yield ct_sub, ct_field
+    yield obj_sub, obj_field
 
 
 class CustomJournalEntryForm(JournalEntryForm):
@@ -562,10 +626,19 @@ class CustomObjectEditView(generic.ObjectEditView):
             "_errors": None,
             "custom_object_type_fields": {},
             "custom_object_type_field_groups": {},
+            # All field names rendered via custom_object_type_field_groups (used by
+            # the template to avoid double-rendering in the generic field loop).
+            "custom_object_type_rendered_names": set(),
             # Maps polymorphic M2M field name → list of sub-field names (one per allowed type)
             "custom_object_type_poly_m2m_fields": {},
-            # Maps polymorphic Object field name → list of sub-field names (one per allowed type)
+            # Maps first sub-field name → (all_sub_names, field_label) for M2M poly grouping
+            "custom_object_type_poly_m2m_groups": {},
+            # Maps polymorphic Object field name → (ct_sub, obj_sub)
             "custom_object_type_poly_obj_fields": {},
+            # Set of ct_sub names that start a polymorphic single-object pair
+            "custom_object_type_poly_obj_ct_names": set(),
+            # Maps ct_sub → (obj_sub, field_label) for poly object pair rendering in the template
+            "custom_object_type_poly_obj_pairs": {},
         }
 
         # Process custom object type fields (with grouping)
@@ -575,25 +648,41 @@ class CustomObjectEditView(generic.ObjectEditView):
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
             group_name = field.group_name or None
 
-            # Polymorphic object/multiobject: one form sub-field per allowed type
-            if field.is_polymorphic and field.type in (
-                CustomFieldTypeChoices.TYPE_OBJECT,
-                CustomFieldTypeChoices.TYPE_MULTIOBJECT,
-            ):
+            # Polymorphic single-object: type-selector + object-picker pair
+            if field.is_polymorphic and field.type == CustomFieldTypeChoices.TYPE_OBJECT:
+                ct_sub = f"{field.name}__ct"
+                obj_sub = f"{field.name}__obj"
+                field_label = field.label or field.name.replace("_", " ").title()
+                for sub_name, sub_field in _build_poly_scope_fields(field):
+                    attrs[sub_name] = sub_field
+                    attrs["custom_object_type_rendered_names"].add(sub_name)
+                # Only proceed if the generator yielded the pair (ct_sub in attrs).
+                # The template renders obj_sub as part of the grouped poly object pair.
+                if ct_sub in attrs:
+                    if group_name not in attrs["custom_object_type_field_groups"]:
+                        attrs["custom_object_type_field_groups"][group_name] = []
+                    attrs["custom_object_type_field_groups"][group_name].append(ct_sub)
+                    attrs["custom_object_type_poly_obj_fields"][field.name] = (ct_sub, obj_sub)
+                    attrs["custom_object_type_poly_obj_ct_names"].add(ct_sub)
+                    attrs["custom_object_type_poly_obj_pairs"][ct_sub] = (obj_sub, field_label)
+                continue
+
+            # Polymorphic multiobject: one form sub-field per allowed type
+            if field.is_polymorphic and field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                 sub_names = []
+                field_label = field.label or field.name.replace("_", " ").title()
                 for sub_name, sub_field in _build_poly_subfields(field):
                     attrs[sub_name] = sub_field
                     sub_names.append(sub_name)
+                    attrs["custom_object_type_rendered_names"].add(sub_name)
+                if sub_names:
+                    # Only add the first sub_name to field_groups; the template renders
+                    # all sub_names as part of the grouped poly M2M block.
                     if group_name not in attrs["custom_object_type_field_groups"]:
                         attrs["custom_object_type_field_groups"][group_name] = []
-                    attrs["custom_object_type_field_groups"][group_name].append(sub_name)
-
-                dest_key = (
-                    "custom_object_type_poly_obj_fields"
-                    if field.type == CustomFieldTypeChoices.TYPE_OBJECT
-                    else "custom_object_type_poly_m2m_fields"
-                )
-                attrs[dest_key][field.name] = sub_names
+                    attrs["custom_object_type_field_groups"][group_name].append(sub_names[0])
+                    attrs["custom_object_type_poly_m2m_groups"][sub_names[0]] = (sub_names, field_label)
+                attrs["custom_object_type_poly_m2m_fields"][field.name] = sub_names
                 continue
 
             try:
@@ -607,6 +696,7 @@ class CustomObjectEditView(generic.ObjectEditView):
                 if group_name not in attrs["custom_object_type_field_groups"]:
                     attrs["custom_object_type_field_groups"][group_name] = []
                 attrs["custom_object_type_field_groups"][group_name].append(field_name)
+                attrs["custom_object_type_rendered_names"].add(field_name)
 
             except NotImplementedError:
                 logger.debug("get_form: {} field is not supported".format(field.name))
@@ -622,8 +712,12 @@ class CustomObjectEditView(generic.ObjectEditView):
             # Set the grouping info as instance attributes from the outer scope
             self.custom_object_type_fields = attrs["custom_object_type_fields"]
             self.custom_object_type_field_groups = attrs["custom_object_type_field_groups"]
+            self.custom_object_type_rendered_names = attrs["custom_object_type_rendered_names"]
             self.custom_object_type_poly_m2m_fields = attrs["custom_object_type_poly_m2m_fields"]
+            self.custom_object_type_poly_m2m_groups = attrs["custom_object_type_poly_m2m_groups"]
             self.custom_object_type_poly_obj_fields = attrs["custom_object_type_poly_obj_fields"]
+            self.custom_object_type_poly_obj_ct_names = attrs["custom_object_type_poly_obj_ct_names"]
+            self.custom_object_type_poly_obj_pairs = attrs["custom_object_type_poly_obj_pairs"]
 
             instance = kwargs.get('instance', None)
 
@@ -690,17 +784,20 @@ class CustomObjectEditView(generic.ObjectEditView):
                             field_name, exc_info=True,
                         )
 
-                # GFK: pre-populate the matching type's sub-field
-                for field_name, sub_names in self.custom_object_type_poly_obj_fields.items():
+                # GFK (scope-style): pre-populate ct selector + object picker.
+                # Only set initial from the instance if the caller hasn't already
+                # supplied a value (e.g. from HTMX GET params, which NetBox's
+                # ObjectEditView.get() injects into form initial from request.GET).
+                # This prevents overwriting the user's in-progress type change.
+                for field_name, (ct_sub, obj_sub) in self.custom_object_type_poly_obj_fields.items():
                     try:
                         gfk_value = getattr(instance, field_name, None)
                         if gfk_value is not None:
                             ct = CT.objects.get_for_model(gfk_value)
-                            for sub_name in sub_names:
-                                app_label, model_name = _parse_poly_sub_name(field_name, sub_name)
-                                if ct.app_label == app_label and ct.model == model_name:
-                                    kwargs['initial'][sub_name] = gfk_value.pk
-                                    break
+                            if ct_sub not in kwargs['initial']:
+                                kwargs['initial'][ct_sub] = ct.pk
+                            if obj_sub not in kwargs['initial']:
+                                kwargs['initial'][obj_sub] = gfk_value.pk
                     except Exception:
                         logger.debug(
                             "Failed to load polymorphic GFK initial value for field %r",
@@ -709,6 +806,39 @@ class CustomObjectEditView(generic.ObjectEditView):
 
             # Now call the parent __init__ with the modified kwargs
             forms.NetBoxModelForm.__init__(self, *args, **kwargs)
+
+            # After parent __init__, wire the object picker to the selected type.
+            # This mirrors ScopedForm._set_scoped_values() in NetBox core.
+            # get_field_value() reads from form.data (bound) or form.initial (unbound).
+            from django.contrib.contenttypes.models import ContentType as CT2
+            for field_name, (ct_sub, obj_sub) in self.custom_object_type_poly_obj_fields.items():
+                ct_id = _get_field_value(self, ct_sub)
+                if ct_id:
+                    try:
+                        ct = CT2.objects.get(pk=ct_id)
+                        model_class = ct.model_class()
+                        if model_class is not None:
+                            self.fields[obj_sub].queryset = model_class.objects.all()
+                            self.fields[obj_sub].disabled = False
+                            self.fields[obj_sub].label = _(bettertitle(model_class._meta.verbose_name))
+                            if ct.app_label != APP_LABEL:
+                                self.fields[obj_sub].widget.attrs['selector'] = model_class._meta.label_lower
+                            # If the type changed from the instance's value, clear the
+                            # object picker so the stale object from the old type is gone.
+                            if instance and instance.pk:
+                                gfk_val = getattr(instance, field_name, None)
+                                if gfk_val is not None:
+                                    try:
+                                        old_ct = CT2.objects.get_for_model(gfk_val)
+                                        if old_ct.pk != int(ct_id):
+                                            self.initial[obj_sub] = None
+                                    except Exception:
+                                        pass
+                    except Exception:
+                        logger.debug(
+                            "Failed to configure object picker for polymorphic field %r",
+                            field_name, exc_info=True,
+                        )
 
         # Create a custom save method to properly handle M2M fields
         def custom_save(self, commit=True):
@@ -728,15 +858,9 @@ class CustomObjectEditView(generic.ObjectEditView):
                             if current_value:
                                 instance_field.set(current_value)
 
-                # Handle polymorphic single-object sub-fields: use the first non-empty selection
-                for field_name, sub_names in self.custom_object_type_poly_obj_fields.items():
-                    chosen = None
-                    for sub_name in sub_names:
-                        val = self.cleaned_data.get(sub_name)
-                        if val is not None:
-                            chosen = val
-                            break
-                    setattr(instance, field_name, chosen)
+                # Handle polymorphic single-object scope fields: read the obj sub-field
+                for field_name, (ct_sub, obj_sub) in self.custom_object_type_poly_obj_fields.items():
+                    setattr(instance, field_name, self.cleaned_data.get(obj_sub))
                 if self.custom_object_type_poly_obj_fields:
                     instance.save()
 
@@ -758,17 +882,15 @@ class CustomObjectEditView(generic.ObjectEditView):
             # CheckLastUpdatedMixin.clean() does not propagate its return value,
             # so the chain returns None; read self.cleaned_data directly instead.
             forms.NetBoxModelForm.clean(self)
-            # Enforce that at most one sub-field is filled for each polymorphic
-            # single-object field.  Multiple non-None values are ambiguous and
-            # would otherwise be silently resolved by "first non-empty wins".
-            for field_name, sub_names in self.custom_object_type_poly_obj_fields.items():
-                filled = [sn for sn in sub_names if self.cleaned_data.get(sn) is not None]
-                if len(filled) > 1:
-                    for sub_name in filled:
-                        self.add_error(
-                            sub_name,
-                            _("Only one type may be selected for this field — clear all but one."),
-                        )
+            # Scope-style single-object: require an object when a type is selected.
+            for field_name, (ct_sub, obj_sub) in self.custom_object_type_poly_obj_fields.items():
+                ct_val = self.cleaned_data.get(ct_sub)
+                obj_val = self.cleaned_data.get(obj_sub)
+                if ct_val and not obj_val:
+                    self.add_error(
+                        obj_sub,
+                        _("Please select an object of the chosen type."),
+                    )
             return self.cleaned_data
 
         form_class.__init__ = custom_init
@@ -865,32 +987,60 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
             },
         )
 
+        # Pre-build ct_pk → model_class lookup for each poly obj field so the
+        # bulk edit __init__ can wire up the obj picker without a DB query.
+        poly_obj_allowed = {}
+        for f in self.custom_object_type.fields.filter(
+            type=CustomFieldTypeChoices.TYPE_OBJECT, is_polymorphic=True
+        ).prefetch_related('related_object_types'):
+            poly_obj_allowed[f.name] = {
+                ot.pk: ot.model_class()
+                for ot in f.related_object_types.all()
+                if ot.model_class() is not None
+            }
+
         attrs = {
             "Meta": meta,
             "__module__": "database.forms",
-            "_poly_obj_field_map": {},   # field_name → [sub_names]
+            "_poly_obj_field_map": {},   # field_name → (ct_sub, obj_sub)
             "_poly_m2m_field_map": {},   # field_name → [sub_names]
+            # Grouping metadata (mirrors single-edit form attrs for template reuse)
+            "custom_object_type_poly_obj_ct_names": set(),
+            "custom_object_type_poly_obj_pairs": {},
+            "custom_object_type_poly_m2m_groups": {},
+            "custom_object_type_rendered_names": set(),
         }
 
         for field in self.custom_object_type.fields.prefetch_related('related_object_types').all():
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
 
-            # Polymorphic object/multiobject: one form sub-field per allowed type
-            if field.is_polymorphic and field.type in (
-                CustomFieldTypeChoices.TYPE_OBJECT,
-                CustomFieldTypeChoices.TYPE_MULTIOBJECT,
-            ):
+            # Polymorphic single-object: scope-style type-selector + object-picker pair
+            if field.is_polymorphic and field.type == CustomFieldTypeChoices.TYPE_OBJECT:
+                ct_sub = f"{field.name}__ct"
+                obj_sub = f"{field.name}__obj"
+                field_label = field.label or field.name.replace("_", " ").title()
+                for sub_name, sub_field in _build_poly_scope_fields(field):
+                    sub_field.required = False
+                    sub_field.initial = None
+                    attrs[sub_name] = sub_field
+                    attrs["custom_object_type_rendered_names"].add(sub_name)
+                if ct_sub in attrs:
+                    attrs["_poly_obj_field_map"][field.name] = (ct_sub, obj_sub)
+                    attrs["custom_object_type_poly_obj_ct_names"].add(ct_sub)
+                    attrs["custom_object_type_poly_obj_pairs"][ct_sub] = (obj_sub, field_label)
+                continue
+
+            # Polymorphic multiobject: one form sub-field per allowed type
+            if field.is_polymorphic and field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                 sub_names = []
+                field_label = field.label or field.name.replace("_", " ").title()
                 for sub_name, sub_field in _build_poly_subfields(field, set_initial=True):
                     attrs[sub_name] = sub_field
                     sub_names.append(sub_name)
-
-                dest_key = (
-                    "_poly_obj_field_map"
-                    if field.type == CustomFieldTypeChoices.TYPE_OBJECT
-                    else "_poly_m2m_field_map"
-                )
-                attrs[dest_key][field.name] = sub_names
+                    attrs["custom_object_type_rendered_names"].add(sub_name)
+                if sub_names:
+                    attrs["_poly_m2m_field_map"][field.name] = sub_names
+                    attrs["custom_object_type_poly_m2m_groups"][sub_names[0]] = (sub_names, field_label)
                 continue
 
             try:
@@ -905,6 +1055,38 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
                     "bulk edit form: {} field is not supported".format(field.name)
                 )
 
+        poly_obj_field_map_ref = attrs["_poly_obj_field_map"]
+
+        poly_grouping_refs = {
+            "custom_object_type_poly_obj_ct_names": attrs["custom_object_type_poly_obj_ct_names"],
+            "custom_object_type_poly_obj_pairs": attrs["custom_object_type_poly_obj_pairs"],
+            "custom_object_type_poly_m2m_groups": attrs["custom_object_type_poly_m2m_groups"],
+            "custom_object_type_rendered_names": attrs["custom_object_type_rendered_names"],
+        }
+
+        def bulk_poly_init(self, *args, **kwargs):
+            NetBoxModelBulkEditForm.__init__(self, *args, **kwargs)
+            # Expose grouping metadata as instance attrs for the template.
+            for attr_name, value in poly_grouping_refs.items():
+                setattr(self, attr_name, value)
+            # Wire up the obj picker for each poly obj pair: if a ct value was
+            # submitted (POST data) or pre-selected (HTMX GET initial), enable the
+            # field and set the correct queryset so Django accepts the value.
+            for field_name, (ct_sub, obj_sub) in poly_obj_field_map_ref.items():
+                ct_pk_raw = _get_field_value(self, ct_sub)
+                model_class = None
+                if ct_pk_raw:
+                    try:
+                        model_class = poly_obj_allowed.get(field_name, {}).get(int(ct_pk_raw))
+                    except (TypeError, ValueError):
+                        pass
+                if model_class is not None:
+                    self.fields[obj_sub].disabled = False
+                    self.fields[obj_sub].required = False
+                    self.fields[obj_sub].queryset = model_class.objects.all()
+
+        attrs["__init__"] = bulk_poly_init
+
         form = type(
             f"{queryset.model._meta.object_name}BulkEditForm",
             (NetBoxModelBulkEditForm,),
@@ -916,15 +1098,13 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
     def post_save_operations(self, form, obj):
         super().post_save_operations(form, obj)
 
-        # Apply polymorphic single-object sub-fields (first non-empty selection wins)
+        # Apply polymorphic single-object scope fields: read the obj sub-field
         needs_save = False
-        for field_name, sub_names in form._poly_obj_field_map.items():
-            for sub_name in sub_names:
-                val = form.cleaned_data.get(sub_name)
-                if val is not None:
-                    setattr(obj, field_name, val)
-                    needs_save = True
-                    break
+        for field_name, (ct_sub, obj_sub) in form._poly_obj_field_map.items():
+            val = form.cleaned_data.get(obj_sub)
+            if val is not None:
+                setattr(obj, field_name, val)
+                needs_save = True
         if needs_save:
             obj.save()
 
@@ -942,6 +1122,22 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
                     combined.extend(vals)
             if has_any:
                 getattr(obj, field_name).set(combined)
+
+    def get(self, request, **kwargs):
+        # BulkEditView.get() has no **kwargs and just redirects. Override to also
+        # handle HTMX partial reloads triggered by HTMXSelect on the poly type
+        # selector: re-render the form with GET params as initial so bulk_poly_init
+        # can wire up the object picker for the selected type.
+        if htmx_partial(request):
+            initial_data = normalize_querydict(request.GET)
+            form = self.form(initial=initial_data)
+            restrict_form_fields(form, request.user)
+            return render(request, 'netbox_custom_objects/htmx/bulk_edit_fields.html', {
+                'form': form,
+                'return_url': self.get_return_url(request),
+                'branch_warning': is_in_branch(),
+            })
+        return redirect(self.get_return_url(request))
 
     def get_extra_context(self, request):
         return {

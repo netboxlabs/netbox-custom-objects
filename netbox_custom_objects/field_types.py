@@ -1411,11 +1411,13 @@ class PolymorphicManyToManyManager:
             for obj in model_class.objects.filter(pk__in=obj_ids):
                 obj_map[(ct_id, obj.pk)] = obj
 
-        # Yield in original insertion order, skipping stale references.
+        # Collect objects and yield in consistent string-sorted order.
+        objects = []
         for ct_id, obj_id in rows:
             obj = obj_map.get((ct_id, obj_id))
             if obj is not None:
-                yield obj
+                objects.append(obj)
+        yield from sorted(objects, key=str)
 
     def all(self):
         return PolymorphicResultList(self._get_objects)
