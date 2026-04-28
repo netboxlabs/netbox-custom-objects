@@ -134,6 +134,7 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
         model = CustomObjectTypeField
         fields = (
             "id",
+            "url",
             "name",
             "label",
             "custom_object_type",
@@ -164,7 +165,12 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
             "weight",
             "is_cloneable",
             "comments",
+            "schema_id",
+            "deprecated",
+            "deprecated_since",
+            "scheduled_removal",
         )
+        read_only_fields = ("schema_id",)
 
     def _resolve_object_type(self, app_label, model):
         """Resolve a single app_label+model pair to an ObjectType, handling aliases."""
@@ -315,15 +321,18 @@ class CustomObjectTypeSerializer(NetBoxModelSerializer):
             "verbose_name",
             "verbose_name_plural",
             "slug",
+            "version",
             "group_name",
             "description",
             "tags",
             "created",
             "last_updated",
             "fields",
+            "schema_document",
             "table_model_name",
             "object_type_name",
         ]
+        read_only_fields = ("schema_document",)
         brief_fields = ("id", "url", "name", "slug", "description")
 
     def get_table_model_name(self, obj):

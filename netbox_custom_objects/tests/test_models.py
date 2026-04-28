@@ -74,6 +74,20 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(custom_object_type.slug, "test-objects")
         self.assertEqual(str(custom_object_type), "TestObject")
 
+    def test_custom_object_type_name_validation(self):
+        """COT name must match the schema identifier pattern (no leading/trailing/double underscores)."""
+        from netbox_custom_objects.models import CustomObjectType
+        invalid_names = [
+            "test-type",    # hyphen not allowed
+            "test__type",   # double underscore not allowed
+            "_test_type",   # leading underscore not allowed
+            "test_type_",   # trailing underscore not allowed
+        ]
+        for invalid_name in invalid_names:
+            with self.assertRaises(ValidationError, msg=f"Expected ValidationError for name={invalid_name!r}"):
+                cot = CustomObjectType(name=invalid_name, slug=f"slug-{invalid_name}")
+                cot.full_clean()
+
     def test_custom_object_type_unique_name_constraint(self):
         """Test that custom object type names must be unique (case-insensitive)."""
         self.create_custom_object_type(name="TestObject")
@@ -338,23 +352,20 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
 
     def test_custom_object_type_field_name_validation(self):
         """Test field name validation."""
-        # Test invalid characters
-        with self.assertRaises(ValidationError):
-            field = CustomObjectTypeField(
-                custom_object_type=self.custom_object_type,
-                name="test-field",  # Invalid: contains hyphen
-                type="text"
-            )
-            field.full_clean()
-
-        # Test double underscores
-        with self.assertRaises(ValidationError):
-            field = CustomObjectTypeField(
-                custom_object_type=self.custom_object_type,
-                name="test__field",  # Invalid: contains double underscore
-                type="text"
-            )
-            field.full_clean()
+        invalid_names = [
+            "test-field",   # hyphen not allowed
+            "test__field",  # double underscore not allowed
+            "_test_field",  # leading underscore not allowed
+            "test_field_",  # trailing underscore not allowed
+        ]
+        for invalid_name in invalid_names:
+            with self.assertRaises(ValidationError, msg=f"Expected ValidationError for name={invalid_name!r}"):
+                field = CustomObjectTypeField(
+                    custom_object_type=self.custom_object_type,
+                    name=invalid_name,
+                    type="text",
+                )
+                field.full_clean()
 
     def test_custom_object_type_field_unique_name_per_type(self):
         """Test that field names must be unique within a custom object type."""
