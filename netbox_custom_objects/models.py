@@ -54,7 +54,7 @@ from utilities.string import title
 from utilities.validators import validate_regex
 
 from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
-from netbox_custom_objects.field_types import FIELD_TYPE_CLASS, _safe_table_name
+from netbox_custom_objects.field_types import FIELD_TYPE_CLASS, safe_table_name
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
 from netbox_custom_objects.utilities import _suppress_clear_cache, extract_cot_id_from_model_name, generate_model
 
@@ -1908,7 +1908,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         # affected table with ALTER TABLE … RENAME TO before deploying the new
         # code, and update through_model_name to match.
         raw = f"custom_objects_{self.custom_object_type_id}_{self.name}"
-        return _safe_table_name(raw)
+        return safe_table_name(raw)
 
     @property
     def through_model_name(self):

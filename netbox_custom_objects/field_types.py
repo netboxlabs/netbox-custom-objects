@@ -64,8 +64,14 @@ def _safe_index_name(full_name: str) -> str:
     return _safe_pg_identifier(full_name)
 
 
-def _safe_table_name(full_name: str) -> str:
-    """Alias of _safe_pg_identifier for table names."""
+def safe_table_name(full_name: str) -> str:
+    """
+    Return a DB-safe table name that fits within PostgreSQL's 63-char identifier limit.
+
+    If the full name fits, it is returned unchanged.  If it is too long, the name is
+    truncated and an 8-character MD5 digest of the *full* name is appended so that
+    different long names with a shared prefix do not collide.
+    """
     return _safe_pg_identifier(full_name)
 
 

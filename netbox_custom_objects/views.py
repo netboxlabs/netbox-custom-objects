@@ -2,6 +2,7 @@ import logging
 
 from core.models import ObjectChange
 from core.tables import ObjectChangeTable
+from django.apps import apps as django_apps
 from django.contrib.contenttypes.models import ContentType
 from django.db.models import Q
 from django.shortcuts import get_object_or_404, redirect, render
@@ -756,9 +757,6 @@ class CustomObjectEditView(generic.ObjectEditView):
 
             # Set initial values for polymorphic sub-fields from the existing instance
             if instance and instance.pk:
-                from django.contrib.contenttypes.models import ContentType as CT
-                from django.apps import apps as django_apps
-
                 # M2M: read through-table rows and group by content type
                 for field_name, sub_names in self.custom_object_type_poly_m2m_fields.items():
                     try:
@@ -774,11 +772,11 @@ class CustomObjectEditView(generic.ObjectEditView):
                         for sub_name in sub_names:
                             app_label, model_name = _parse_poly_sub_name(field_name, sub_name)
                             try:
-                                ct = CT.objects.get(app_label=app_label, model=model_name)
+                                ct = ContentType.objects.get(app_label=app_label, model=model_name)
                                 kwargs['initial'][sub_name] = by_ct.get(ct.pk, [])
-                            except CT.DoesNotExist:
+                            except ContentType.DoesNotExist:
                                 pass
-                    except Exception:
+                    except (LookupError, AttributeError, ValueError):
                         logger.debug(
                             "Failed to load polymorphic M2M initial values for field %r",
                             field_name, exc_info=True,
@@ -793,12 +791,12 @@ class CustomObjectEditView(generic.ObjectEditView):
                     try:
                         gfk_value = getattr(instance, field_name, None)
                         if gfk_value is not None:
-                            ct = CT.objects.get_for_model(gfk_value)
+                            ct = ContentType.objects.get_for_model(gfk_value)
                             if ct_sub not in kwargs['initial']:
                                 kwargs['initial'][ct_sub] = ct.pk
                             if obj_sub not in kwargs['initial']:
                                 kwargs['initial'][obj_sub] = gfk_value.pk
-                    except Exception:
+                    except (ContentType.DoesNotExist, AttributeError, ValueError):
                         logger.debug(
                             "Failed to load polymorphic GFK initial value for field %r",
                             field_name, exc_info=True,
@@ -810,12 +808,11 @@ class CustomObjectEditView(generic.ObjectEditView):
             # After parent __init__, wire the object picker to the selected type.
             # This mirrors ScopedForm._set_scoped_values() in NetBox core.
             # get_field_value() reads from form.data (bound) or form.initial (unbound).
-            from django.contrib.contenttypes.models import ContentType as CT2
             for field_name, (ct_sub, obj_sub) in self.custom_object_type_poly_obj_fields.items():
                 ct_id = _get_field_value(self, ct_sub)
                 if ct_id:
                     try:
-                        ct = CT2.objects.get(pk=ct_id)
+                        ct = ContentType.objects.get(pk=ct_id)
                         model_class = ct.model_class()
                         if model_class is not None:
                             self.fields[obj_sub].queryset = model_class.objects.all()
@@ -829,12 +826,12 @@ class CustomObjectEditView(generic.ObjectEditView):
                                 gfk_val = getattr(instance, field_name, None)
                                 if gfk_val is not None:
                                     try:
-                                        old_ct = CT2.objects.get_for_model(gfk_val)
+                                        old_ct = ContentType.objects.get_for_model(gfk_val)
                                         if old_ct.pk != int(ct_id):
                                             self.initial[obj_sub] = None
-                                    except Exception:
+                                    except (ContentType.DoesNotExist, ValueError, TypeError):
                                         pass
-                    except Exception:
+                    except ContentType.DoesNotExist:
                         logger.debug(
                             "Failed to configure object picker for polymorphic field %r",
                             field_name, exc_info=True,
