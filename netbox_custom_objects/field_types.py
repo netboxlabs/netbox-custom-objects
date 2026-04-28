@@ -43,9 +43,9 @@ logger = logging.getLogger(__name__)
 _PG_MAX_IDENTIFIER_LEN = 63
 
 
-def _safe_index_name(full_name: str) -> str:
+def _safe_pg_identifier(full_name: str) -> str:
     """
-    Return a DB-safe index name that fits within PostgreSQL's 63-char identifier limit.
+    Return a DB-safe identifier that fits within PostgreSQL's 63-char limit.
 
     If the full name fits, it is returned unchanged.  If it is too long, the name is
     truncated and an 8-character MD5 digest of the *full* name is appended so that
@@ -57,6 +57,16 @@ def _safe_index_name(full_name: str) -> str:
     # Reserve 9 chars for "_" + 8-char digest; strip trailing underscores from the prefix.
     prefix = full_name[:_PG_MAX_IDENTIFIER_LEN - 9].rstrip("_")
     return f"{prefix}_{digest}"
+
+
+def _safe_index_name(full_name: str) -> str:
+    """Alias of _safe_pg_identifier for index names."""
+    return _safe_pg_identifier(full_name)
+
+
+def _safe_table_name(full_name: str) -> str:
+    """Alias of _safe_pg_identifier for table names."""
+    return _safe_pg_identifier(full_name)
 
 
 class LazyForeignKey(ForeignKey):

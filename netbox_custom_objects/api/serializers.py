@@ -4,6 +4,7 @@ import sys
 
 from core.models import ObjectType
 from django.contrib.contenttypes.models import ContentType
+from django.db import transaction
 from django.urls import NoReverseMatch
 from django.utils.translation import gettext_lazy as _
 from extras.choices import CustomFieldTypeChoices
@@ -284,6 +285,13 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
             dict(id=ot.id, app_label=ot.app_label, model=ot.model)
             for ot in obj.related_object_types.all()
         ]
+
+    def create(self, validated_data):
+        # Wrap save() + related_object_types.set() in an atomic block so that if
+        # check_polymorphic_recursion raises after the schema has been created, the
+        # DDL and the field row are both rolled back (PostgreSQL DDL is transactional).
+        with transaction.atomic():
+            return super().create(validated_data)
 
 
 class CustomObjectTypeSerializer(NetBoxModelSerializer):
