@@ -13,7 +13,7 @@
 
     "identifier": {
       "type": "string",
-      "description": "Lowercase alphanumeric characters and single underscores only. Note: this pattern is intentionally more restrictive than the model validator (^[a-z0-9_]+$) — it disallows leading/trailing underscores and double underscores. A valid DB field name that violates this pattern will fail schema export.",
+      "description": "Lowercase alphanumeric characters and single underscores only. No leading/trailing underscores and no double underscores. This pattern matches the model validator for CustomObjectType.name and CustomObjectTypeField.name.",
       "pattern": "^[a-z0-9]+(_[a-z0-9]+)*$"
     },
 
