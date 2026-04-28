@@ -83,11 +83,13 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
             "deprecated_since",
             "scheduled_removal",
         )
+        read_only_fields = ("schema_id",)
 
     def validate(self, attrs):
         app_label = attrs.pop("app_label", None)
         model = attrs.pop("model", None)
-        if attrs["type"] in [
+        field_type = attrs.get("type")
+        if field_type in [
             CustomFieldTypeChoices.TYPE_OBJECT,
             CustomFieldTypeChoices.TYPE_MULTIOBJECT,
         ]:
@@ -113,7 +115,7 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
                 raise ValidationError(
                     "Must provide valid app_label and model for object field type."
                 )
-        if attrs["type"] in [
+        if field_type in [
             CustomFieldTypeChoices.TYPE_SELECT,
             CustomFieldTypeChoices.TYPE_MULTISELECT,
         ]:
