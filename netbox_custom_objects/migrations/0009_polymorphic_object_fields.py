@@ -5,7 +5,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ("core", "0018_concrete_objecttype"),
-        ("netbox_custom_objects", "0006_customobjecttypefield_related_name_and_more"),
+        ("netbox_custom_objects", "0008_backfill_schema_ids"),
     ]
 
     operations = [
