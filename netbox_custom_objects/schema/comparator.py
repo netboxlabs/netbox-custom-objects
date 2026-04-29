@@ -42,7 +42,6 @@ Notes
   round-trip compatible with the schema format.
 """
 
-import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING
@@ -58,9 +57,6 @@ from netbox_custom_objects.schema.format import (
     FIELD_TYPE_ATTRS,
     SCHEMA_TYPE_TO_CHOICES,
 )
-
-# Matches Table<id>Model (generated model names for custom object types).
-_TABLE_MODEL_RE = re.compile(r'^table(\d+)model$')
 
 
 # COT-level attributes that may change between schema versions.
@@ -163,7 +159,7 @@ def _encode_related_object_type(rot: "ContentType", cot_slug_cache: dict, warnin
     diff can still proceed.
     """
     if rot.app_label == constants.APP_LABEL:
-        m = _TABLE_MODEL_RE.match(rot.model)
+        m = constants.TABLE_MODEL_RE.match(rot.model)
         if m:
             cot_id = int(m.group(1))
             slug = cot_slug_cache.get(cot_id)
@@ -341,7 +337,7 @@ def diff_cot(type_def: dict) -> COTDiff:
     cot_ids: set[int] = set()
     for f in db_fields.values():
         if f.related_object_type_id and f.related_object_type.app_label == constants.APP_LABEL:
-            m = _TABLE_MODEL_RE.match(f.related_object_type.model)
+            m = constants.TABLE_MODEL_RE.match(f.related_object_type.model)
             if m:
                 cot_ids.add(int(m.group(1)))
     cot_slug_cache: dict[int, str] = (
