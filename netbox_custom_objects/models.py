@@ -430,6 +430,16 @@ class CustomObjectType(NetBoxModel):
         # Get the set of fields that were skipped due to recursion
         skipped_fields = attrs.get("_skipped_fields", set())
 
+        # Build a lookup from field name → Django field object using plain lists that
+        # don't trigger _relation_tree.  _meta.get_field() for a name that isn't in
+        # _forward_fields_map (e.g. tombstoned fields in _trashed_field_objects) falls
+        # through to fields_map → _relation_tree → apps.get_models() → our get_models()
+        # override → get_model() for every COT → infinite recursion.
+        present_fields = {
+            f.name: f
+            for f in list(model._meta.local_fields) + list(model._meta.local_many_to_many)
+        }
+
         # Collect through models during after_model_generation
         through_models = []
 
@@ -440,28 +450,24 @@ class CustomObjectType(NetBoxModel):
             if field_name in skipped_fields:
                 continue
 
-            # Only process fields that actually exist on the model
-            # Fields might be skipped due to recursion prevention
-            if hasattr(model._meta, 'get_field'):
-                try:
-                    field = model._meta.get_field(field_name)
-                    # Field exists, process it
-                    field_object["type"].after_model_generation(
-                        field_object["field"], model, field_name
-                    )
+            # Only process fields that actually exist on the model.
+            # Tombstoned fields (in _trashed_field_objects) won't be in present_fields.
+            field = present_fields.get(field_name)
+            if field is None:
+                continue
 
-                    # Collect through models from M2M fields
-                    if hasattr(field, 'remote_field') and hasattr(field.remote_field, 'through'):
-                        through_model = field.remote_field.through
-                        # Only collect custom through models, not auto-created Django ones
-                        if (through_model and through_model not in through_models and
-                            hasattr(through_model._meta, 'app_label') and
-                            through_model._meta.app_label == APP_LABEL):
-                            through_models.append(through_model)
+            field_object["type"].after_model_generation(
+                field_object["field"], model, field_name
+            )
 
-                except Exception:
-                    # Field doesn't exist (likely skipped due to recursion), skip processing
-                    continue
+            # Collect through models from M2M fields
+            if hasattr(field, 'remote_field') and hasattr(field.remote_field, 'through'):
+                through_model = field.remote_field.through
+                # Only collect custom through models, not auto-created Django ones
+                if (through_model and through_model not in through_models and
+                    hasattr(through_model._meta, 'app_label') and
+                    through_model._meta.app_label == APP_LABEL):
+                    through_models.append(through_model)
 
         # Store through models on the model for yielding in get_models()
         model._through_models = through_models
