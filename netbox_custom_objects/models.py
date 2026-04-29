@@ -403,9 +403,20 @@ class CustomObjectType(NetBoxModel):
             field_type = FIELD_TYPE_CLASS[field.type]()
             field_name = field.name
 
-            field_attrs[field.name] = field_type.get_model_field(
-                field,
-            )
+            try:
+                field_attrs[field.name] = field_type.get_model_field(
+                    field,
+                )
+            except ContentType.DoesNotExist:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Skipping field %r (pk=%s) on COT %r: related_object_type_id=%s "
+                    "references a ContentType that no longer exists. The field will be "
+                    "absent from the generated model until the data inconsistency is "
+                    "resolved.",
+                    field.name, field.pk, self.slug, field.related_object_type_id,
+                )
+                continue
 
             # Add to field objects only if the field was successfully generated
             field_attrs["_field_objects"][field.id] = {
