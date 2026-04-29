@@ -448,10 +448,11 @@ def _phase2_fields(ordered_diffs, cot_map, *, allow_destructive: bool) -> None:
             if fc.op is FieldOp.ADD:
                 _apply_field_add(cot, fc)
             elif fc.op is FieldOp.REMOVE:
-                assert allow_destructive, (
-                    "_phase2_fields called with a REMOVE op but allow_destructive=False; "
-                    "the pre-flight guard in apply_diffs should have prevented this."
-                )
+                if not allow_destructive:
+                    raise RuntimeError(
+                        "_phase2_fields called with a REMOVE op but allow_destructive=False; "
+                        "the pre-flight guard in apply_diffs should have prevented this."
+                    )
                 _apply_field_remove(cot, fc)
             elif fc.op is FieldOp.ALTER:
                 _apply_field_alter(cot, fc)
