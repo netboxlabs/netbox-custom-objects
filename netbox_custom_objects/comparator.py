@@ -42,6 +42,7 @@ Notes
   round-trip compatible with the schema format.
 """
 
+import re
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING
@@ -50,14 +51,36 @@ from netbox_custom_objects import constants
 
 if TYPE_CHECKING:
     from django.contrib.contenttypes.models import ContentType
-from netbox_custom_objects.schema.format import (
+from netbox_custom_objects.schema_format import (
     CUSTOM_OBJECTS_APP_LABEL_SLUG,
-    FIELD_BASE_ATTRS,
     FIELD_DEFAULTS,
     FIELD_TYPE_ATTRS,
     SCHEMA_TYPE_TO_CHOICES,
 )
 
+# Matches Table<id>Model (generated model names for custom object types).
+_TABLE_MODEL_RE = re.compile(r'^table(\d+)model$')
+
+# Ordered base attributes compared between DB and schema for each field.
+# Does NOT include 'name' or 'type' — those are handled separately.
+_FIELD_BASE_ATTRS = (
+    "label",
+    "description",
+    "group_name",
+    "primary",
+    "required",
+    "unique",
+    "default",
+    "weight",
+    "search_weight",
+    "filter_logic",
+    "ui_visible",
+    "ui_editable",
+    "is_cloneable",
+    "deprecated",
+    "deprecated_since",
+    "scheduled_removal",
+)
 
 # COT-level attributes that may change between schema versions.
 # Each maps to its schema-absent default (empty string).
@@ -159,7 +182,7 @@ def _encode_related_object_type(rot: "ContentType", cot_slug_cache: dict, warnin
     diff can still proceed.
     """
     if rot.app_label == constants.APP_LABEL:
-        m = constants.TABLE_MODEL_RE.match(rot.model)
+        m = _TABLE_MODEL_RE.match(rot.model)
         if m:
             cot_id = int(m.group(1))
             slug = cot_slug_cache.get(cot_id)
@@ -194,7 +217,7 @@ def _compare_field_attrs(db_field, schema_field: dict, cot_slug_cache: dict, war
         changes["type"] = (db_field.type, expected_choice)
 
     # ── base scalar attributes ───────────────────────────────────────────────
-    for attr in FIELD_BASE_ATTRS:
+    for attr in _FIELD_BASE_ATTRS:
         db_val = getattr(db_field, attr)
         schema_val = schema_field.get(attr, FIELD_DEFAULTS.get(attr))
         if db_val != schema_val:
@@ -337,7 +360,7 @@ def diff_cot(type_def: dict) -> COTDiff:
     cot_ids: set[int] = set()
     for f in db_fields.values():
         if f.related_object_type_id and f.related_object_type.app_label == constants.APP_LABEL:
-            m = constants.TABLE_MODEL_RE.match(f.related_object_type.model)
+            m = _TABLE_MODEL_RE.match(f.related_object_type.model)
             if m:
                 cot_ids.add(int(m.group(1)))
     cot_slug_cache: dict[int, str] = (
