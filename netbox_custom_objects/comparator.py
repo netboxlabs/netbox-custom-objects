@@ -51,7 +51,7 @@ from netbox_custom_objects import constants
 
 if TYPE_CHECKING:
     from django.contrib.contenttypes.models import ContentType
-from netbox_custom_objects.schema_format import (
+from netbox_custom_objects.schema.format import (
     CUSTOM_OBJECTS_APP_LABEL_SLUG,
     FIELD_DEFAULTS,
     FIELD_TYPE_ATTRS,
