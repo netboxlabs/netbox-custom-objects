@@ -171,6 +171,12 @@ class TextFieldType(FieldType):
 
 
 class LongTextFieldType(FieldType):
+    def get_filterform_field(self, field, **kwargs):
+        return forms.CharField(
+            label=field,
+            required=False,
+        )
+
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
@@ -241,7 +247,17 @@ class DecimalFieldType(FieldType):
             required=field.required,
             initial=field.default,
             max_digits=12,
-            decimal_places=4,
+            decimal_places=2,
+            min_value=field.validation_minimum,
+            max_value=field.validation_maximum,
+        )
+
+    def get_filterform_field(self, field, **kwargs):
+        return forms.DecimalField(
+            label=field,
+            required=False,
+            max_digits=12,
+            decimal_places=2,
             min_value=field.validation_minimum,
             max_value=field.validation_maximum,
         )
@@ -265,6 +281,18 @@ class BooleanFieldType(FieldType):
             widget=forms.Select(choices=choices),
         )
 
+    def get_filterform_field(self, field, **kwargs):
+        choices = (
+            ('', '---------'),
+            ('true', _("Yes")),
+            ('false', _("No")),
+        )
+        return forms.NullBooleanField(
+            label=field,
+            required=False,
+            widget=forms.Select(choices=choices),
+        )
+
     def get_table_column_field(self, field, **kwargs):
         return BooleanColumn()
 
@@ -280,6 +308,13 @@ class DateFieldType(FieldType):
             required=field.required, initial=field.default, widget=DatePicker()
         )
 
+    def get_filterform_field(self, field, **kwargs):
+        return forms.DateField(
+            label=field,
+            required=False,
+            widget=DatePicker(),
+        )
+
 
 class DateTimeFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
@@ -292,6 +327,13 @@ class DateTimeFieldType(FieldType):
             required=field.required, initial=field.default, widget=DateTimePicker()
         )
 
+    def get_filterform_field(self, field, **kwargs):
+        return forms.DateTimeField(
+            label=field,
+            required=False,
+            widget=DateTimePicker(),
+        )
+
 
 class URLFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
@@ -302,6 +344,12 @@ class URLFieldType(FieldType):
     def get_form_field(self, field, **kwargs):
         return LaxURLField(
             assume_scheme="https", required=field.required, initial=field.default
+        )
+
+    def get_filterform_field(self, field, **kwargs):
+        return forms.CharField(
+            label=field,
+            required=False,
         )
 
 
@@ -319,6 +367,16 @@ class JSONFieldType(FieldType):
 
 
 class SelectFieldType(FieldType):
+    def get_filterform_field(self, field, **kwargs):
+        return DynamicMultipleChoiceField(
+            choices=field.choice_set.choices,
+            label=field,
+            required=False,
+            widget=APISelectMultiple(
+                api_url=f'/api/extras/custom-field-choice-sets/{field.choice_set.pk}/choices/'
+            ),
+        )
+
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
@@ -361,6 +419,17 @@ class SelectFieldType(FieldType):
 
 
 class MultiSelectFieldType(FieldType):
+    def get_filterform_field(self, field, **kwargs):
+        choices = add_blank_choice(field.choice_set.choices)
+        return DynamicMultipleChoiceField(
+            choices=choices,
+            label=field,
+            required=False,
+            widget=APISelectMultiple(
+                api_url=f'/api/extras/custom-field-choice-sets/{field.choice_set.pk}/choices/'
+            ),
+        )
+
     def get_display_value(self, instance, field_name):
         return ", ".join(getattr(instance, field_name) or [])
 
@@ -545,6 +614,11 @@ class ObjectFieldType(FieldType):
             required=False,
             label=field,
             selector=model._meta.app_label != APP_LABEL,
+            query_params=(
+                field.related_object_filter
+                if hasattr(field, "related_object_filter")
+                else None
+            ),
         )
 
     def render_table_column(self, value):
@@ -922,6 +996,11 @@ class MultiObjectFieldType(FieldType):
             required=False,
             label=field,
             selector=model._meta.app_label != APP_LABEL,
+            query_params=(
+                field.related_object_filter
+                if hasattr(field, "related_object_filter")
+                else None
+            ),
         )
 
     def get_display_value(self, instance, field_name):
