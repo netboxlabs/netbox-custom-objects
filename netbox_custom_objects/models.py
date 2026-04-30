@@ -409,13 +409,20 @@ class CustomObjectType(NetBoxModel):
                 )
             except ContentType.DoesNotExist:
                 import logging
-                logging.getLogger(__name__).warning(
-                    "Skipping field %r (pk=%s) on COT %r: related_object_type_id=%s "
-                    "references a ContentType that no longer exists. The field will be "
-                    "absent from the generated model until the data inconsistency is "
-                    "resolved.",
-                    field.name, field.pk, self.slug, field.related_object_type_id,
-                )
+                if field.related_object_type_id is None:
+                    msg = (
+                        "Skipping field %r (pk=%s) on COT %r: "
+                        "related_object_type_id is NULL (field has no related type set). "
+                        "The field will be absent from the generated model."
+                    )
+                    logging.getLogger(__name__).warning(msg, field.name, field.pk, self.slug)
+                else:
+                    logging.getLogger(__name__).warning(
+                        "Skipping field %r (pk=%s) on COT %r: related_object_type_id=%s "
+                        "references a ContentType that no longer exists. The field will be "
+                        "absent from the generated model until the data inconsistency is resolved.",
+                        field.name, field.pk, self.slug, field.related_object_type_id,
+                    )
                 continue
 
             # Add to field objects only if the field was successfully generated
