@@ -203,6 +203,36 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
             expected_table = f"custom_objects_{custom_object_type.id}"
             self.assertIn(expected_table, tables)
 
+    def test_register_search_index_skips_object_field_absent_from_stub_model(self):
+        """register_custom_object_search_index() must use local_fields/local_many_to_many
+        rather than _meta.get_field() to check field presence.  _meta.get_field() for a
+        name not in _forward_fields_map triggers Django's lazy _relation_tree computation,
+        which calls apps.get_models() → our override → get_model() for every COT →
+        infinite recursion when called during model registration.
+
+        Regression for PR #474: the stub model generated with skip_object_fields=True
+        does not have the OBJECT field, but self.fields.filter(search_weight__gt=0)
+        still returns it from the database.
+        """
+        cot = self.create_custom_object_type(name="StubSearchTest", slug="stub-search-test")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, search_weight=1000,
+        )
+        self.create_custom_object_type_field(
+            cot, name="ref_site", label="Site", type="object",
+            related_object_type=self.get_site_object_type(),
+            search_weight=500,
+        )
+        stub_model = cot.get_model(skip_object_fields=True)
+        model_field_names = (
+            {f.name for f in stub_model._meta.local_fields}
+            | {f.name for f in stub_model._meta.local_many_to_many}
+        )
+        self.assertNotIn("ref_site", model_field_names,
+                         "OBJECT field must be absent from stub model")
+        # Must not raise FieldDoesNotExist, RecursionError, or any other exception.
+        cot.register_custom_object_search_index(stub_model)
+
     @skip("Fails in suite but not individually")
     def test_custom_object_type_delete_removes_table(self):
         """Test that deleting a custom object type removes the database table."""
@@ -1163,36 +1193,6 @@ class SearchReindexTestCase(CustomObjectsTestCase, TestCase):
         """Enqueued job name includes the COT name for observability."""
         job = ReindexCustomObjectTypeJob.enqueue(cot_id=self.cot.pk, immediate=True)
         self.assertEqual(job.name, f'Reindex Custom Object Type: {self.cot.name}')
-
-    def test_register_search_index_skips_object_field_absent_from_stub_model(self):
-        """register_custom_object_search_index() must use local_fields/local_many_to_many
-        rather than _meta.get_field() to check field presence.  _meta.get_field() for a
-        name not in _forward_fields_map triggers Django's lazy _relation_tree computation,
-        which calls apps.get_models() → our override → get_model() for every COT →
-        infinite recursion when called during model registration.
-
-        Regression for PR #474: the stub model generated with skip_object_fields=True
-        does not have the OBJECT field, but self.fields.filter(search_weight__gt=0)
-        still returns it from the database.
-        """
-        cot = self.create_custom_object_type(name="StubSearchTest", slug="stub-search-test")
-        self.create_custom_object_type_field(
-            cot, name="name", label="Name", type="text", primary=True, search_weight=1000,
-        )
-        self.create_custom_object_type_field(
-            cot, name="ref_site", label="Site", type="object",
-            related_object_type=self.get_site_object_type(),
-            search_weight=500,
-        )
-        stub_model = cot.get_model(skip_object_fields=True)
-        model_field_names = (
-            {f.name for f in stub_model._meta.local_fields}
-            | {f.name for f in stub_model._meta.local_many_to_many}
-        )
-        self.assertNotIn("ref_site", model_field_names,
-                         "OBJECT field must be absent from stub model")
-        # Must not raise FieldDoesNotExist, RecursionError, or any other exception.
-        cot.register_custom_object_search_index(stub_model)
 
     def test_job_data_contains_cot_id(self):
         """Job.data is populated with cot_id and job_class for UI visibility and deduplication."""
