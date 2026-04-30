@@ -3,15 +3,17 @@ Tests for filtersets used by the plugin's UI and API views.
 """
 import datetime
 from decimal import Decimal
+from unittest.mock import MagicMock
 
 from django.test import TestCase
 from django.utils import timezone
 
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
+from extras.choices import CustomFieldTypeChoices
 from extras.models import CustomFieldChoiceSet
 
 from netbox_custom_objects.field_types import MultiObjectFieldType, ObjectFieldType
-from netbox_custom_objects.filtersets import ArrayContainsFilter, get_filterset_class
+from netbox_custom_objects.filtersets import ArrayContainsFilter, build_filter_for_field, get_filterset_class
 from netbox_custom_objects.models import CustomObjectTypeField
 from utilities.forms.fields import (
     DynamicModelChoiceField,
@@ -405,6 +407,47 @@ class CustomObjectTargetMultiObjectFieldTestCase(CustomObjectsTestCase, TestCase
             {"related_items": [self.target1.pk, self.target2.pk]}, source_model.objects.all()
         ).qs
         self.assertEqual(qs.filter(pk=self.source_both.pk).count(), 1)
+
+
+# ---------------------------------------------------------------------------
+# build_filter_for_field defensive guards
+# ---------------------------------------------------------------------------
+
+
+class BuildFilterForFieldGuardsTestCase(TestCase):
+    """build_filter_for_field returns None rather than raising when a field's
+    related_object_type is missing or its ContentType is stale."""
+
+    def _field(self, field_type, related_object_type):
+        field = MagicMock()
+        field.type = field_type
+        field.related_object_type = related_object_type
+        return field
+
+    def test_object_field_missing_related_object_type_returns_none(self):
+        self.assertIsNone(
+            build_filter_for_field(self._field(CustomFieldTypeChoices.TYPE_OBJECT, None))
+        )
+
+    def test_multiobject_field_missing_related_object_type_returns_none(self):
+        self.assertIsNone(
+            build_filter_for_field(self._field(CustomFieldTypeChoices.TYPE_MULTIOBJECT, None))
+        )
+
+    def test_object_field_stale_content_type_returns_none(self):
+        # ContentType row exists but the app/model is no longer installed
+        related_ot = MagicMock()
+        related_ot.model_class.return_value = None
+        self.assertIsNone(
+            build_filter_for_field(self._field(CustomFieldTypeChoices.TYPE_OBJECT, related_ot))
+        )
+
+    def test_multiobject_field_stale_content_type_returns_none(self):
+        related_ot = MagicMock()
+        related_ot.model_class.return_value = None
+        self.assertIsNone(
+            build_filter_for_field(self._field(CustomFieldTypeChoices.TYPE_MULTIOBJECT, related_ot))
+        )
 
 
 # ---------------------------------------------------------------------------
