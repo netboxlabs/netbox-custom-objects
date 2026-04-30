@@ -108,7 +108,7 @@ def backfill_base_columns(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("netbox_custom_objects", "0008_backfill_schema_ids"),
+        ("netbox_custom_objects", "0009_alter_customobjecttype_version"),
     ]
 
     operations = [
