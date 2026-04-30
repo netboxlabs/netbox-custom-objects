@@ -1,3 +1,9 @@
+import re
+
+# Matches the generated model name produced by CustomObjectType.get_table_model_name().
+# Capturing group 1 is the numeric COT id.
+TABLE_MODEL_RE = re.compile(r'^table(\d+)model$', re.IGNORECASE)
+
 # Models which do not support change logging, but whose database tables
 # must be replicated for each branch to ensure proper functionality
 INCLUDE_MODELS = (

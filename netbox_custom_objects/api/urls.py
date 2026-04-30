@@ -90,6 +90,8 @@ router.register("custom-object-type-fields", views.CustomObjectTypeFieldViewSet)
 urlpatterns = [
     path("", include(router.urls)),
     path("linked-objects/", views.LinkedObjectsView.as_view(), name="linked-objects"),
+    path("schema/preview/", views.SchemaPreviewView.as_view(), name="schema-preview"),
+    path("schema/apply/", views.SchemaApplyView.as_view(), name="schema-apply"),
     path("<str:custom_object_type>/", custom_object_list, name="customobject-list"),
     path(
         "<str:custom_object_type>/<int:pk>/",

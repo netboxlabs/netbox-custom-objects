@@ -527,7 +527,6 @@ class CustomObjectEditView(generic.ObjectEditView):
                             content_type = field_obj.related_object_type
                             if content_type.app_label == APP_LABEL:
                                 # Custom object type
-                                from netbox_custom_objects.models import CustomObjectType
                                 custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
                                 if custom_object_type_id is None:
                                     raise ValueError(
