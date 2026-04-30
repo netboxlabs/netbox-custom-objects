@@ -45,13 +45,16 @@ def backfill_base_columns(apps, schema_editor):
     CustomObjectType = apps.get_model("netbox_custom_objects", "CustomObjectType")
     CustomObjectTypeField = apps.get_model("netbox_custom_objects", "CustomObjectTypeField")
 
-    # Build a name → {field_class, null} map from CustomObject's abstract hierarchy.
+    # Build a column_name → {field_class, null} map from CustomObject's abstract hierarchy.
+    # Keyed by f.column (the actual DB column name) so that the lookup below, which
+    # compares against col.name from DB introspection, is consistent for FK fields
+    # (where f.name='site' but f.column='site_id').
     # _meta.get_fields() on an abstract model returns fields declared on it and its
     # abstract bases.  We filter to concrete fields (those with a "column" attribute).
     base_field_info = {}
     for f in CustomObject._meta.get_fields():
         if hasattr(f, "column") and f.column:
-            base_field_info[f.name] = {
+            base_field_info[f.column] = {
                 "field_class": f.__class__.__name__,
                 "null": getattr(f, "null", False),
             }
@@ -72,10 +75,15 @@ def backfill_base_columns(apps, schema_editor):
 
         table_name = f"{USER_TABLE_DATABASE_NAME_PREFIX}{cot.id}"
 
+        # Build the set of DB column names belonging to user-defined fields so they
+        # can be excluded from the base-column snapshot.  For non-FK fields the
+        # column name equals the field name; for Object-type (FK) fields the DB
+        # column has an '_id' suffix.  Include both forms to be safe.
         user_field_names = set(
             CustomObjectTypeField.objects.filter(custom_object_type=cot)
             .values_list("name", flat=True)
         )
+        user_column_names = user_field_names | {f"{n}_id" for n in user_field_names}
 
         try:
             with connection.cursor() as cursor:
@@ -88,10 +96,10 @@ def backfill_base_columns(apps, schema_editor):
             continue
 
         # col_rows is a list of FieldInfo namedtuples; .name and .null_ok are stable
-        # across supported Django/PostgreSQL versions.
+        # across supported Django/PostgreSQL versions.  col.name is the DB column name.
         base_columns = []
         for col in sorted(col_rows, key=lambda c: c.name):
-            if col.name in user_field_names:
+            if col.name in user_column_names:
                 continue
             entry = {
                 "name": col.name,
