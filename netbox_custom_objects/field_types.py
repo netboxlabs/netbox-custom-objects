@@ -3,7 +3,6 @@ import json
 import django_tables2 as tables
 from django import forms
 from django.apps import apps
-from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
 from django.core.validators import RegexValidator
 from django.db import models

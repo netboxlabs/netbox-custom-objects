@@ -1648,7 +1648,6 @@ class NullRelatedObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         Regression for the Meta.fields/attrs mismatch that caused DRF to raise a
         validation error at serializer initialization time."""
         from netbox_custom_objects.api.serializers import get_serializer_class
-        from netbox_custom_objects.models import CustomObjectType
 
         cot = self._make_cot_with_null_object_field(
             "NullRelSerializer", "null-rel-serializer"
