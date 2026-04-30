@@ -522,7 +522,7 @@ class ObjectFieldType(FieldType):
                     model_name,
                     null=True,
                     blank=True,
-                    on_delete=models.CASCADE,
+                    on_delete=models.SET_NULL,
                     related_name=related_name,
                     **field_kwargs
                 )
@@ -542,7 +542,7 @@ class ObjectFieldType(FieldType):
             table_model_name = field.custom_object_type.get_table_model_name(field.custom_object_type.id).lower()
             related_name = f"{table_model_name}_{field.name}_set"
         f = models.ForeignKey(
-            model, null=True, blank=True, on_delete=models.CASCADE, related_name=related_name, **field_kwargs
+            model, null=True, blank=True, on_delete=models.SET_NULL, related_name=related_name, **field_kwargs
         )
 
         return f

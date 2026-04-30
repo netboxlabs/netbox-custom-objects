@@ -3,7 +3,7 @@ Tests for deletion scenarios with cascading effects.
 
 Uses TransactionTestCase so that DDL statements (CREATE/DROP TABLE) issued during
 setup and teardown are not wrapped in Django's per-test rollback transaction.  That
-lets us verify table-level changes and FK CASCADE behaviour that cannot be observed
+lets us verify table-level changes and FK SET NULL behaviour that cannot be observed
 inside a rolled-back savepoint.
 """
 from django.apps import apps as django_apps
@@ -78,11 +78,12 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         )
 
     def test_delete_co_referenced_by_another_co(self):
-        """#283 – Deleting a CO that is the target of an object field should CASCADE."""
+        """#283/#471 – Deleting a CO that is the target of an object field must SET NULL
+        the referencing field on the source CO, not delete the source CO."""
         cot_a = self.create_simple_custom_object_type(name='typea', slug='type-a')
         cot_b = self.create_simple_custom_object_type(name='typeb', slug='type-b')
 
-        # cot_b.ref_a → cot_a (FK CASCADE via _ensure_field_fk_constraint)
+        # cot_b.ref_a → cot_a (FK SET NULL via _ensure_field_fk_constraint)
         self.create_custom_object_type_field(
             cot_b,
             name='ref_a',
@@ -98,12 +99,17 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         obj_b = model_b.objects.create(name='Object B', ref_a=obj_a)
         self.assertEqual(obj_b.ref_a_id, obj_a.pk)
 
-        # Deleting obj_a should cascade and remove obj_b
+        # Deleting obj_a must set obj_b.ref_a to NULL and leave obj_b intact.
         obj_a.delete()
 
-        self.assertFalse(
+        self.assertTrue(
             model_b.objects.filter(pk=obj_b.pk).exists(),
-            "Custom Object B should have been deleted by FK CASCADE when Object A was deleted.",
+            "Custom Object B must survive when Object A is deleted (SET NULL, not CASCADE).",
+        )
+        obj_b.refresh_from_db()
+        self.assertIsNone(
+            obj_b.ref_a_id,
+            "The ref_a field on Object B must be NULL after Object A is deleted.",
         )
 
     def test_delete_cot_referenced_by_another_cot(self):
@@ -160,13 +166,12 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         self.assertEqual(fresh_model.objects.count(), 2)
 
     def test_delete_referenced_core_object(self):
-        """Deleting a core NetBox object must CASCADE to COs that reference it via an object field.
+        """#471 – Deleting a core NetBox object must SET NULL on COs that reference it via
+        an object field, not delete the CO.
 
-        The cascade is enforced at the database level via the ON DELETE CASCADE FK constraint
-        added by _ensure_field_fk_constraint().  We use a raw-SQL DELETE to bypass Django's
-        Python-level cascade collector, which can fail when stale dynamic models from other
-        test classes remain in the app registry but their backing tables have been dropped.
-        This approach also proves the database constraint is actually in effect.
+        The SET NULL behaviour is enforced at the database level via the ON DELETE SET NULL
+        FK constraint added by _ensure_field_fk_constraint().  We use a raw-SQL DELETE to
+        bypass Django's Python-level cascade collector and prove the DB constraint is in effect.
         """
         site = Site.objects.create(name='Del Test Site', slug='del-test-site')
         manufacturer = Manufacturer.objects.create(name='Del Test Mfr', slug='del-test-mfr')
@@ -193,9 +198,8 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         co = model.objects.create(name='CO with Device', device=device)
         self.assertEqual(co.device_id, device.pk)
 
-        # Delete the device via raw SQL to exercise the database-level FK CASCADE
-        # constraint directly, bypassing Django's Python cascade collector (which can
-        # be confused by stale dynamic models left in the app registry by other tests).
+        # Delete the device via raw SQL to exercise the database-level FK SET NULL
+        # constraint directly, bypassing Django's Python cascade collector.
         device_pk = device.pk
         with connection.cursor() as cursor:
             cursor.execute('DELETE FROM dcim_device WHERE id = %s', [device_pk])
@@ -205,8 +209,13 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
             Device.objects.filter(pk=device_pk).exists(),
             "Device should have been deleted by the raw SQL DELETE.",
         )
-        # The custom object must have been removed by the DB-level FK CASCADE.
-        self.assertFalse(
+        # The custom object must survive with device_id nulled out.
+        self.assertTrue(
             model.objects.filter(pk=co.pk).exists(),
-            "Custom Object should have been deleted by the DB-level FK CASCADE when Device was deleted.",
+            "Custom Object must survive when Device is deleted (SET NULL, not CASCADE).",
+        )
+        co.refresh_from_db()
+        self.assertIsNone(
+            co.device_id,
+            "The device field must be NULL after the Device is deleted.",
         )

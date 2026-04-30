@@ -681,9 +681,8 @@ class CustomObjectType(NetBoxModel):
     def _ensure_field_fk_constraint(self, model, field_name):
         """
         Ensure that a foreign key constraint is properly created at the database level
-        for a specific OBJECT type field with ON DELETE CASCADE. This is necessary because
-        models are created with managed=False, which may not properly create FK constraints
-        with CASCADE behavior.
+        for a specific OBJECT type field with ON DELETE SET NULL. This is necessary because
+        models are created with managed=False, which may not properly create FK constraints.
 
         :param model: The model containing the field
         :param field_name: The name of the field to ensure FK constraint for
@@ -719,21 +718,22 @@ class CustomObjectType(NetBoxModel):
                 constraint_name = row[0]
                 cursor.execute(f'ALTER TABLE "{table_name}" DROP CONSTRAINT IF EXISTS "{constraint_name}"')
 
-            # Create new FK constraint with ON DELETE CASCADE
-            constraint_name = f"{table_name}_{column_name}_fk_cascade"
+            # Create FK constraint with ON DELETE SET NULL so that deleting the
+            # referenced object nulls the field rather than deleting the Custom Object row.
+            constraint_name = f"{table_name}_{column_name}_fk"
             cursor.execute(f"""
                 ALTER TABLE "{table_name}"
                 ADD CONSTRAINT "{constraint_name}"
                 FOREIGN KEY ("{column_name}")
                 REFERENCES "{related_table}" ("id")
-                ON DELETE CASCADE
+                ON DELETE SET NULL
                 DEFERRABLE INITIALLY DEFERRED
             """)
 
     def _ensure_all_fk_constraints(self, model):
         """
         Ensure that foreign key constraints are properly created at the database level
-        for ALL OBJECT type fields with ON DELETE CASCADE.
+        for ALL OBJECT type fields with ON DELETE SET NULL.
 
         :param model: The model to ensure FK constraints for
         """
@@ -1841,7 +1841,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     # Normal field alteration
                     schema_editor.alter_field(model, old_field, model_field)
 
-        # Ensure FK constraints are properly created for OBJECT fields with CASCADE behavior
+        # Ensure FK constraints are properly created for OBJECT fields with SET NULL behavior
         should_ensure_fk = False
         if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
             if self._state.adding:
