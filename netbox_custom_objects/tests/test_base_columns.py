@@ -214,7 +214,7 @@ class CreateModelSnapshotTestCase(
 
 
 # ---------------------------------------------------------------------------
-# 0009 backfill migration
+# 0010 backfill migration
 # ---------------------------------------------------------------------------
 
 class BackfillBaseColumnsTestCase(
