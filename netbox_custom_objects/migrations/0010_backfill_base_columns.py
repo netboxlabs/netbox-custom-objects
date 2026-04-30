@@ -29,6 +29,7 @@ stable across plugin versions, this is safe.
 
 import logging
 
+from django.conf import settings
 from django.db import migrations
 
 logger = logging.getLogger(__name__)
@@ -56,13 +57,12 @@ def backfill_base_columns(apps, schema_editor):
             }
     # "id" comes from models.Model, which is a concrete base not tracked by
     # CustomObject's abstract _meta; add it explicitly.  Derive the class name
-    # from the live pk field so it matches BigAutoField if DEFAULT_AUTO_FIELD is
-    # configured that way, rather than hardcoding "AutoField".
-    pk_class = (
-        CustomObject._meta.pk.__class__.__name__
-        if CustomObject._meta.pk is not None
-        else "AutoField"
-    )
+    # from DEFAULT_AUTO_FIELD so it matches whatever BigAutoField (or subclass)
+    # concrete models use — CustomObject._meta.pk is always None for abstract
+    # models, so we cannot read it from there.
+    pk_class = getattr(
+        settings, "DEFAULT_AUTO_FIELD", "django.db.models.BigAutoField"
+    ).rsplit(".", 1)[-1]
     base_field_info.setdefault("id", {"field_class": pk_class, "null": False})
 
     for cot in CustomObjectType.objects.all():
