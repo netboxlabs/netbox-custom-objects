@@ -552,6 +552,7 @@ class ObjectFieldType(FieldType):
         return linkify(value)
 
     def get_serializer_field(self, field, **kwargs):
+        self._get_related_content_type(field)  # validates FK; raises NotImplementedError if null/missing
         related_model_class = field.related_object_type.model_class()
         if related_model_class._meta.app_label == APP_LABEL:
             from netbox_custom_objects.api.serializers import get_serializer_class
@@ -932,6 +933,7 @@ class MultiObjectFieldType(FieldType):
         return tables.ManyToManyColumn(linkify_item=True, orderable=False)
 
     def get_serializer_field(self, field, **kwargs):
+        self._get_related_content_type(field)  # validates FK; raises NotImplementedError if null/missing
         related_model_class = field.related_object_type.model_class()
         if related_model_class._meta.app_label == APP_LABEL:
             from netbox_custom_objects.api.serializers import get_serializer_class
