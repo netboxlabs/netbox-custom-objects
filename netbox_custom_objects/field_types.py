@@ -3,7 +3,6 @@ import json
 import django_tables2 as tables
 from django import forms
 from django.apps import apps
-from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
 from django.core.validators import RegexValidator
 from django.db import models
@@ -31,7 +30,7 @@ from utilities.templatetags.builtins.filters import linkify, render_markdown
 from netbox.tables.columns import BooleanColumn
 
 from netbox_custom_objects.constants import APP_LABEL
-from netbox_custom_objects.utilities import generate_model
+from netbox_custom_objects.utilities import extract_cot_id_from_model_name, generate_model
 
 
 class LazyForeignKey(ForeignKey):
@@ -112,6 +111,27 @@ class FieldType:
 
     def render_table_column_linkified(self, record):
         return linkify(record)
+
+    def _get_related_content_type(self, field):
+        """
+        Return the ContentType for field.related_object_type_id.
+
+        Raises NotImplementedError (rather than ContentType.DoesNotExist) so that
+        all callers — which already guard against NotImplementedError — skip the
+        field gracefully when the FK is null or its ContentType row is missing.
+        """
+        from django.contrib.contenttypes.models import ContentType as CT
+        if not field.related_object_type_id:
+            raise NotImplementedError(
+                f"Field {field.name!r} has no related_object_type set"
+            )
+        try:
+            return CT.objects.get(pk=field.related_object_type_id)
+        except CT.DoesNotExist:
+            raise NotImplementedError(
+                f"Field {field.name!r}: related_object_type_id="
+                f"{field.related_object_type_id} references a missing ContentType"
+            )
 
     def after_model_generation(self, instance, model, field_name): ...
 
@@ -395,7 +415,7 @@ class MultiSelectFieldType(FieldType):
 
 class ObjectFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        content_type = ContentType.objects.get(pk=field.related_object_type_id)
+        content_type = self._get_related_content_type(field)
         to_model = content_type.model
 
         # Extract our custom parameters and keep only Django field parameters
@@ -406,9 +426,11 @@ class ObjectFieldType(FieldType):
         if content_type.app_label == APP_LABEL:
             from netbox_custom_objects.models import CustomObjectType
 
-            custom_object_type_id = content_type.model.replace("table", "").replace(
-                "model", ""
-            )
+            custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
+            if custom_object_type_id is None:
+                raise ValueError(
+                    f"Expected table<id>model name for {APP_LABEL} content type, got {content_type.model!r}"
+                )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
 
             # Check if this is a self-referential field
@@ -458,16 +480,18 @@ class ObjectFieldType(FieldType):
         For custom objects, uses CustomObjectDynamicModelChoiceField.
         For regular NetBox objects, uses DynamicModelChoiceField.
         """
-        content_type = ContentType.objects.get(pk=field.related_object_type_id)
+        content_type = self._get_related_content_type(field)
 
         has_context = False
         if content_type.app_label == APP_LABEL:
             # This is a custom object type
             from netbox_custom_objects.models import CustomObjectType
 
-            custom_object_type_id = content_type.model.replace("table", "").replace(
-                "model", ""
-            )
+            custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
+            if custom_object_type_id is None:
+                raise ValueError(
+                    f"Expected table<id>model name for {APP_LABEL} content type, got {content_type.model!r}"
+                )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
 
             model = custom_object_type.get_model()
@@ -504,10 +528,14 @@ class ObjectFieldType(FieldType):
             return form_field
 
     def get_filterform_field(self, field, **kwargs):
-        content_type = ContentType.objects.get(pk=field.related_object_type_id)
+        content_type = self._get_related_content_type(field)
         if content_type.app_label == APP_LABEL:
             from netbox_custom_objects.models import CustomObjectType
-            custom_object_type_id = content_type.model.replace("table", "").replace("model", "")
+            custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
+            if custom_object_type_id is None:
+                raise ValueError(
+                    f"Expected table<id>model name for {APP_LABEL} content type, got {content_type.model!r}"
+                )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
             model = custom_object_type.get_model()
         else:
@@ -523,6 +551,7 @@ class ObjectFieldType(FieldType):
         return linkify(value)
 
     def get_serializer_field(self, field, **kwargs):
+        self._get_related_content_type(field)  # validates FK; raises NotImplementedError if null/missing
         related_model_class = field.related_object_type.model_class()
         if related_model_class._meta.app_label == APP_LABEL:
             from netbox_custom_objects.api.serializers import get_serializer_class
@@ -552,43 +581,52 @@ class CustomManyToManyManager(Manager):
         self.core_filters = {"source_id": instance.pk}
         self.prefetch_cache_name = self.field_name
 
-    def get_prefetch_queryset(self, instances, queryset=None):
-        if queryset is None:
-            queryset = self.get_queryset()
+    def get_prefetch_querysets(self, instances, querysets=None):
+        """Django 4.2+ / 6.0+ prefetch API (plural form, replaces get_prefetch_queryset)."""
+        if querysets and len(querysets) != 1:
+            raise ValueError(
+                "querysets argument of get_prefetch_querysets() should have a length of 1."
+            )
+        instance_pks = [obj.pk for obj in instances]
+        if not instance_pks:
+            return (
+                (querysets[0] if querysets else self.model.objects.all()).none(),
+                lambda obj: None,
+                lambda obj: None,
+                False,
+                self.prefetch_cache_name,
+                False,
+            )
 
-        # Get all the target IDs for these instances in a single query
-        through_queryset = self.through.objects.filter(
-            source_id__in=[obj.pk for obj in instances]
-        ).values_list("source_id", "target_id")
+        queryset = querysets[0] if querysets else self.model.objects.all()
+        through_table = self.through._meta.db_table
+        target_table = self.model._meta.db_table
+        target_pk_col = self.model._meta.pk.column
 
-        # Build a mapping of instance PKs to their related objects
-        rel_obj_cache = {source_id: [] for source_id in [obj.pk for obj in instances]}
-        target_ids = set()
-        for source_id, target_id in through_queryset:
-            rel_obj_cache[source_id].append(target_id)
-            target_ids.add(target_id)
-
-        # Get all the related objects in a single query
-        target_queryset = self.model.objects.filter(pk__in=target_ids)
-        target_objects = {obj.pk: obj for obj in target_queryset}
-
-        # Build the final cache mapping
-        for source_id, target_ids in rel_obj_cache.items():
-            rel_obj_cache[source_id] = [
-                target_objects[target_id]
-                for target_id in target_ids
-                if target_id in target_objects
-            ]
+        # QuerySet.extra() is used intentionally here.  M2M prefetch requires
+        # one result row per *relationship*, not per target object — a target
+        # linked to N sources must appear N times, each annotated with its
+        # source_id so Django's prefetch machinery can group them correctly.
+        # annotate()+Subquery can only return one row per target, so an ORM-
+        # only solution is not possible.  Django's own ManyToManyDescriptor
+        # uses the identical extra()-based JOIN pattern for the same reason
+        # (see django/db/models/fields/related_descriptors.py, line ~1160).
+        queryset = queryset.extra(  # noqa: S610
+            select={"_prefetch_source_id": f'"{through_table}"."source_id"'},
+            tables=[through_table],
+            where=[
+                f'"{through_table}"."target_id" = "{target_table}"."{target_pk_col}"',
+                f'"{through_table}"."source_id" IN ({",".join(str(pk) for pk in instance_pks)})',
+            ],
+        )
 
         return (
-            target_queryset,  # queryset containing all the related objects
-            lambda obj: obj.pk,  # function to get the related object ID
-            lambda obj: rel_obj_cache[
-                obj.pk
-            ],  # function to get the list of related objects
-            False,  # single related object (False for M2M)
-            self.prefetch_cache_name,  # cache name
-            False,  # is a descriptor (False for M2M)
+            queryset,
+            lambda rel_obj: rel_obj._prefetch_source_id,  # group key from related obj
+            lambda inst: inst.pk,  # matching key from source instance
+            False,
+            self.prefetch_cache_name,
+            False,
         )
 
     def get_queryset(self):
@@ -621,9 +659,28 @@ class CustomManyToManyManager(Manager):
         self.through.objects.filter(source_id=self.instance.pk).delete()
 
     def set(self, objs, clear=False):
+        objs = tuple(objs)  # force evaluation before any mutation
         if clear:
             self.clear()
-        self.add(*objs)
+            self.add(*objs)
+        else:
+            new_pks = {obj.pk for obj in objs}
+            old_pks = set(
+                self.through.objects.filter(source_id=self.instance.pk)
+                .values_list('target_id', flat=True)
+            )
+            # Remove relationships no longer in the target set
+            to_remove = old_pks - new_pks
+            if to_remove:
+                self.through.objects.filter(
+                    source_id=self.instance.pk,
+                    target_id__in=to_remove,
+                ).delete()
+            # Add only genuinely new relationships
+            for pk in new_pks - old_pks:
+                self.through.objects.get_or_create(
+                    source_id=self.instance.pk, target_id=pk
+                )
 
 
 class CustomManyToManyDescriptor(ManyToManyDescriptor):
@@ -650,10 +707,12 @@ class CustomManyToManyDescriptor(ManyToManyDescriptor):
         return hasattr(instance, self.cache_name)
 
     def get_cached_value(self, instance):
-        return getattr(instance, self.cache_name)
+        return instance._prefetched_objects_cache[self.cache_name]
 
     def set_cached_value(self, instance, value):
-        setattr(instance, self.cache_name, value)
+        if not hasattr(instance, '_prefetched_objects_cache'):
+            instance._prefetched_objects_cache = {}
+        instance._prefetched_objects_cache[self.cache_name] = value
 
 
 class CustomManyToManyField(models.ManyToManyField):
@@ -709,10 +768,13 @@ class MultiObjectFieldType(FieldType):
         )
 
         # Check if this is a self-referential M2M
-        content_type = ContentType.objects.get(pk=field.related_object_type_id)
-        custom_object_type_id = content_type.model.replace("table", "").replace(
-            "model", ""
-        )
+        content_type = self._get_related_content_type(field)
+        custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
+        if content_type.app_label == APP_LABEL:
+            if custom_object_type_id is None:
+                raise ValueError(
+                    f"Expected table<id>model name for {APP_LABEL} content type, got {content_type.model!r}"
+                )
         is_self_referential = (
             content_type.app_label == APP_LABEL
             and field.custom_object_type.id == custom_object_type_id
@@ -743,10 +805,13 @@ class MultiObjectFieldType(FieldType):
         Creates the M2M field with appropriate model references
         """
         # Check if this is a self-referential M2M
-        content_type = ContentType.objects.get(pk=field.related_object_type_id)
-        custom_object_type_id = content_type.model.replace("table", "").replace(
-            "model", ""
-        )
+        content_type = self._get_related_content_type(field)
+        custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
+        if content_type.app_label == APP_LABEL:
+            if custom_object_type_id is None:
+                raise ValueError(
+                    f"Expected table<id>model name for {APP_LABEL} content type, got {content_type.model!r}"
+                )
 
         # Extract our custom parameters and keep only Django field parameters
         field_kwargs = {k: v for k, v in kwargs.items() if not k.startswith('_')}
@@ -794,16 +859,18 @@ class MultiObjectFieldType(FieldType):
         Returns a form field for multi-object relationships.
         Uses DynamicModelMultipleChoiceField for both custom objects and regular NetBox objects.
         """
-        content_type = ContentType.objects.get(pk=field.related_object_type_id)
+        content_type = self._get_related_content_type(field)
 
         has_context = False
         if content_type.app_label == APP_LABEL:
             # This is a custom object type
             from netbox_custom_objects.models import CustomObjectType
 
-            custom_object_type_id = content_type.model.replace("table", "").replace(
-                "model", ""
-            )
+            custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
+            if custom_object_type_id is None:
+                raise ValueError(
+                    f"Expected table<id>model name for {APP_LABEL} content type, got {content_type.model!r}"
+                )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
 
             model = custom_object_type.get_model(skip_object_fields=True)
@@ -838,10 +905,14 @@ class MultiObjectFieldType(FieldType):
             return form_field
 
     def get_filterform_field(self, field, **kwargs):
-        content_type = ContentType.objects.get(pk=field.related_object_type_id)
+        content_type = self._get_related_content_type(field)
         if content_type.app_label == APP_LABEL:
             from netbox_custom_objects.models import CustomObjectType
-            custom_object_type_id = content_type.model.replace("table", "").replace("model", "")
+            custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
+            if custom_object_type_id is None:
+                raise ValueError(
+                    f"Expected table<id>model name for {APP_LABEL} content type, got {content_type.model!r}"
+                )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
             model = custom_object_type.get_model()
         else:
@@ -861,6 +932,7 @@ class MultiObjectFieldType(FieldType):
         return tables.ManyToManyColumn(linkify_item=True, orderable=False)
 
     def get_serializer_field(self, field, **kwargs):
+        self._get_related_content_type(field)  # validates FK; raises NotImplementedError if null/missing
         related_model_class = field.related_object_type.model_class()
         if related_model_class._meta.app_label == APP_LABEL:
             from netbox_custom_objects.api.serializers import get_serializer_class
@@ -897,15 +969,17 @@ class MultiObjectFieldType(FieldType):
 
         # For non-self-referential fields, we need to resolve the target model
         # Use the instance parameter which contains the field definition
-        content_type = ContentType.objects.get(pk=instance.related_object_type_id)
+        content_type = self._get_related_content_type(instance)
 
         # Now we can safely resolve the target model
         if content_type.app_label == APP_LABEL:
             from netbox_custom_objects.models import CustomObjectType
 
-            custom_object_type_id = content_type.model.replace("table", "").replace(
-                "model", ""
-            )
+            custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
+            if custom_object_type_id is None:
+                raise ValueError(
+                    f"Expected table<id>model name for {APP_LABEL} content type, got {content_type.model!r}"
+                )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
 
             # For self-referential fields, we need to resolve them to the current model
@@ -948,13 +1022,15 @@ class MultiObjectFieldType(FieldType):
         if getattr(field, "_is_self_referential", False):
             to_model = model
         else:
-            content_type = ContentType.objects.get(pk=instance.related_object_type_id)
+            content_type = self._get_related_content_type(instance)
             if content_type.app_label == APP_LABEL:
                 from netbox_custom_objects.models import CustomObjectType
 
-                custom_object_type_id = content_type.model.replace("table", "").replace(
-                    "model", ""
-                )
+                custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
+                if custom_object_type_id is None:
+                    raise ValueError(
+                        f"Expected table<id>model name for {APP_LABEL} content type, got {content_type.model!r}"
+                    )
                 custom_object_type = CustomObjectType.objects.get(
                     pk=custom_object_type_id
                 )

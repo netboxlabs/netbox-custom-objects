@@ -18,7 +18,42 @@ from netbox.search.backends import get_backend
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
 from netbox_custom_objects.models import CustomObjectTypeField
 from core.models import ObjectType
+from netbox_custom_objects.utilities import extract_cot_id_from_model_name
 from .base import CustomObjectsTestCase
+
+
+class ExtractCotIdFromModelNameTestCase(TestCase):
+    """Unit tests for extract_cot_id_from_model_name()."""
+
+    def test_valid_names_return_id_string(self):
+        self.assertEqual(extract_cot_id_from_model_name("table1model"), "1")
+        self.assertEqual(extract_cot_id_from_model_name("table42model"), "42")
+        self.assertEqual(extract_cot_id_from_model_name("table999model"), "999")
+
+    def test_returns_none_for_missing_prefix(self):
+        # No leading "table"
+        self.assertIsNone(extract_cot_id_from_model_name("42model"))
+
+    def test_returns_none_for_missing_suffix(self):
+        # No trailing "model"
+        self.assertIsNone(extract_cot_id_from_model_name("table42"))
+
+    def test_returns_none_for_non_digit_id(self):
+        self.assertIsNone(extract_cot_id_from_model_name("tableabcmodel"))
+
+    def test_returns_none_for_substring_match(self):
+        # "table" and "model" present as substrings but wrong structure
+        self.assertIsNone(extract_cot_id_from_model_name("sometablemodel"))
+        self.assertIsNone(extract_cot_id_from_model_name("table_model"))
+        self.assertIsNone(extract_cot_id_from_model_name("table42modelextra"))
+
+    def test_returns_none_for_empty_string(self):
+        self.assertIsNone(extract_cot_id_from_model_name(""))
+
+    def test_case_sensitive(self):
+        # The regex is anchored and lowercase-only; uppercase should not match
+        self.assertIsNone(extract_cot_id_from_model_name("Table42Model"))
+        self.assertIsNone(extract_cot_id_from_model_name("TABLE42MODEL"))
 
 
 class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
@@ -38,6 +73,20 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(custom_object_type.verbose_name_plural, "Test Objects")
         self.assertEqual(custom_object_type.slug, "test-objects")
         self.assertEqual(str(custom_object_type), "TestObject")
+
+    def test_custom_object_type_name_validation(self):
+        """COT name must match the schema identifier pattern (no leading/trailing/double underscores)."""
+        from netbox_custom_objects.models import CustomObjectType
+        invalid_names = [
+            "test-type",    # hyphen not allowed
+            "test__type",   # double underscore not allowed
+            "_test_type",   # leading underscore not allowed
+            "test_type_",   # trailing underscore not allowed
+        ]
+        for invalid_name in invalid_names:
+            with self.assertRaises(ValidationError, msg=f"Expected ValidationError for name={invalid_name!r}"):
+                cot = CustomObjectType(name=invalid_name, slug=f"slug-{invalid_name}")
+                cot.full_clean()
 
     def test_custom_object_type_unique_name_constraint(self):
         """Test that custom object type names must be unique (case-insensitive)."""
@@ -153,6 +202,36 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
             tables = connection.introspection.table_names(cursor)
             expected_table = f"custom_objects_{custom_object_type.id}"
             self.assertIn(expected_table, tables)
+
+    def test_register_search_index_skips_object_field_absent_from_stub_model(self):
+        """register_custom_object_search_index() must use local_fields/local_many_to_many
+        rather than _meta.get_field() to check field presence.  _meta.get_field() for a
+        name not in _forward_fields_map triggers Django's lazy _relation_tree computation,
+        which calls apps.get_models() → our override → get_model() for every COT →
+        infinite recursion when called during model registration.
+
+        Regression for PR #474: the stub model generated with skip_object_fields=True
+        does not have the OBJECT field, but self.fields.filter(search_weight__gt=0)
+        still returns it from the database.
+        """
+        cot = self.create_custom_object_type(name="StubSearchTest", slug="stub-search-test")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, search_weight=1000,
+        )
+        self.create_custom_object_type_field(
+            cot, name="ref_site", label="Site", type="object",
+            related_object_type=self.get_site_object_type(),
+            search_weight=500,
+        )
+        stub_model = cot.get_model(skip_object_fields=True)
+        model_field_names = (
+            {f.name for f in stub_model._meta.local_fields}
+            | {f.name for f in stub_model._meta.local_many_to_many}
+        )
+        self.assertNotIn("ref_site", model_field_names,
+                         "OBJECT field must be absent from stub model")
+        # Must not raise FieldDoesNotExist, RecursionError, or any other exception.
+        cot.register_custom_object_search_index(stub_model)
 
     @skip("Fails in suite but not individually")
     def test_custom_object_type_delete_removes_table(self):
@@ -303,23 +382,20 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
 
     def test_custom_object_type_field_name_validation(self):
         """Test field name validation."""
-        # Test invalid characters
-        with self.assertRaises(ValidationError):
-            field = CustomObjectTypeField(
-                custom_object_type=self.custom_object_type,
-                name="test-field",  # Invalid: contains hyphen
-                type="text"
-            )
-            field.full_clean()
-
-        # Test double underscores
-        with self.assertRaises(ValidationError):
-            field = CustomObjectTypeField(
-                custom_object_type=self.custom_object_type,
-                name="test__field",  # Invalid: contains double underscore
-                type="text"
-            )
-            field.full_clean()
+        invalid_names = [
+            "test-field",   # hyphen not allowed
+            "test__field",  # double underscore not allowed
+            "_test_field",  # leading underscore not allowed
+            "test_field_",  # trailing underscore not allowed
+        ]
+        for invalid_name in invalid_names:
+            with self.assertRaises(ValidationError, msg=f"Expected ValidationError for name={invalid_name!r}"):
+                field = CustomObjectTypeField(
+                    custom_object_type=self.custom_object_type,
+                    name=invalid_name,
+                    type="text",
+                )
+                field.full_clean()
 
     def test_custom_object_type_field_unique_name_per_type(self):
         """Test that field names must be unique within a custom object type."""
@@ -1167,7 +1243,7 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
     def test_get_model_returns_model_when_not_skipping(self):
         """get_model() successfully returns the dynamic model when migrations are up to date."""
         cot = self.create_custom_object_type(name="MigrateTest2", slug="migrate-test-2")
-        model_name = f"{cot.pk}tablemodel"
+        model_name = f"table{cot.pk}model"
 
         with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
             model = self.config.get_model(model_name)
@@ -1190,3 +1266,396 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
         finally:
             sys.argv = original_argv
             nco._migrations_checked = None
+
+    def test_get_model_converts_programming_error_to_lookup_error(self):
+        """
+        Regression: get_model() must not let ProgrammingError escape when the DB
+        schema is incomplete (e.g. a new column was added by a migration that
+        hasn't run yet).  Reproduces the failure reported in issue #456 where
+        upgrading from v0.4.6 to v0.4.7 aborted `manage.py migrate` with
+        "column netbox_custom_objects_customobjecttype.group_name does not exist".
+
+        Use a model_name with a non-existent COT ID so the dynamic model is not
+        already in the app registry; this ensures we reach the objects.get() call
+        that needs to be guarded.
+        """
+        from django.db.utils import ProgrammingError
+        from netbox_custom_objects.models import CustomObjectType
+
+        model_name = "table99998model"  # no such COT — not in the app registry
+
+        with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
+            with patch.object(CustomObjectType.objects, 'get',
+                              side_effect=ProgrammingError("column does not exist")):
+                with self.assertRaises(LookupError):
+                    self.config.get_model(model_name)
+
+    def test_get_model_converts_operational_error_to_lookup_error(self):
+        """
+        get_model() must convert OperationalError (e.g. table missing entirely)
+        to LookupError for the same reason as ProgrammingError above.
+        """
+        from django.db.utils import OperationalError
+        from netbox_custom_objects.models import CustomObjectType
+
+        model_name = "table99999model"  # no such COT — not in the app registry
+
+        with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
+            with patch.object(CustomObjectType.objects, 'get',
+                              side_effect=OperationalError("no such table")):
+                with self.assertRaises(LookupError):
+                    self.config.get_model(model_name)
+
+    def test_ready_survives_programming_error(self):
+        """
+        ready() must not propagate ProgrammingError from an incomplete DB schema.
+        Calling ready() a second time is safe — signals are re-connected idempotently
+        and the dynamic model loop is the only part that can raise here.
+        """
+        from django.db.utils import ProgrammingError
+        from netbox_custom_objects.models import CustomObjectType
+
+        with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
+            with patch.object(CustomObjectType.objects, 'all',
+                              side_effect=ProgrammingError("column does not exist")):
+                # Must not raise — bad schema should be silently skipped.
+                self.config.ready()
+
+    def test_ready_survives_operational_error(self):
+        """ready() must not propagate OperationalError from a missing table."""
+        from django.db.utils import OperationalError
+        from netbox_custom_objects.models import CustomObjectType
+
+        with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
+            with patch.object(CustomObjectType.objects, 'all',
+                              side_effect=OperationalError("no such table")):
+                self.config.ready()
+
+    def test_get_models_survives_programming_error(self):
+        """
+        get_models() must not propagate ProgrammingError when the DB schema is
+        incomplete.  The DB-driven portion yields nothing; static models already
+        in the app registry are still returned via super().get_models().
+        """
+        from django.db.utils import ProgrammingError
+        from netbox_custom_objects.models import CustomObjectType
+
+        with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
+            with patch.object(CustomObjectType.objects, 'all',
+                              side_effect=ProgrammingError("column does not exist")):
+                # Consuming the generator must not raise.
+                list(self.config.get_models())
+
+    def test_get_models_survives_operational_error(self):
+        """get_models() must not propagate OperationalError from a missing table."""
+        from django.db.utils import OperationalError
+        from netbox_custom_objects.models import CustomObjectType
+
+        with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
+            with patch.object(CustomObjectType.objects, 'all',
+                              side_effect=OperationalError("no such table")):
+                list(self.config.get_models())
+
+    def test_should_skip_returns_true_on_programming_error(self):
+        """
+        should_skip_dynamic_model_creation() must return True (skip) when the
+        migration infrastructure raises ProgrammingError, e.g. on a fresh install
+        before the django_migrations table exists.  An uncaught exception here
+        would bypass all the guards in ready(), get_model(), and get_models().
+        """
+        import netbox_custom_objects as nco
+        from django.db.utils import ProgrammingError
+
+        original_checked = nco._migrations_checked
+        nco._migrations_checked = None  # force the migration-loader path
+        try:
+            with patch('netbox_custom_objects.MigrationLoader',
+                       side_effect=ProgrammingError("relation does not exist")):
+                result = self.config.should_skip_dynamic_model_creation()
+            self.assertTrue(result)
+            # Must not be cached so the next call retries once the DB is ready.
+            self.assertIsNone(nco._migrations_checked)
+        finally:
+            nco._migrations_checked = original_checked
+
+    def test_should_skip_returns_true_on_operational_error(self):
+        """
+        should_skip_dynamic_model_creation() must return True when the migration
+        infrastructure raises OperationalError (e.g. django_migrations missing).
+        """
+        import netbox_custom_objects as nco
+        from django.db.utils import OperationalError
+
+        original_checked = nco._migrations_checked
+        nco._migrations_checked = None
+        try:
+            with patch('netbox_custom_objects.MigrationLoader',
+                       side_effect=OperationalError("no such table: django_migrations")):
+                result = self.config.should_skip_dynamic_model_creation()
+            self.assertTrue(result)
+            self.assertIsNone(nco._migrations_checked)
+        finally:
+            nco._migrations_checked = original_checked
+
+
+class CrossCOTStubSearchIndexRegressionTestCase(CustomObjectsTestCase, TestCase):
+    """Regression tests for the search-index crash on stub models.
+
+    When COT A has an object field pointing to COT B, generating A's model
+    internally calls ``B.get_model(skip_object_fields=True)`` to break the FK
+    recursion.  That stub model is then cached.  Any subsequent call to
+    ``B.get_model()`` returns the stub — which lacks the object/multiobject
+    fields.
+
+    Before the fix, ``register_custom_object_search_index()`` unconditionally
+    included *all* searchable fields in the index, even fields that were absent
+    from the stub.  When a B instance was saved, Django's ``post_save`` search
+    handler tried to read those absent attributes and raised::
+
+        AttributeError: 'TableNModel' object has no attribute '<field>'
+
+    The fix guards each field with ``model._meta.get_field(field.name)`` and
+    skips any field not present on the generated model.
+
+    Reproduces the scenario reported by the user after the Django 6.0 M2M fix
+    made the edit view reachable for the first time.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # --- Target COT: has a text primary field AND a searchable object field ---
+        self.target_cot = self.create_custom_object_type(
+            name="StubTarget",
+            slug="stub-target",
+        )
+        self.create_custom_object_type_field(
+            self.target_cot,
+            name="name",
+            label="Name",
+            type="text",
+            primary=True,
+            required=True,
+            search_weight=500,
+        )
+        # This object field has search_weight=500 (the default).  When the stub
+        # model is generated (skip_object_fields=True), this field is ABSENT.
+        # The old code would register it in the search index anyway → crash.
+        self.create_custom_object_type_field(
+            self.target_cot,
+            name="device",
+            label="Device",
+            type="object",
+            related_object_type=self.get_device_object_type(),
+            search_weight=500,
+        )
+
+        # --- Source COT: has an object field pointing to the target COT ---
+        self.source_cot = self.create_custom_object_type(
+            name="StubSource",
+            slug="stub-source",
+        )
+        self.create_custom_object_type_field(
+            self.source_cot,
+            name="name",
+            label="Name",
+            type="text",
+            primary=True,
+            required=True,
+        )
+        # Creating this field calls source_cot.get_model(), which internally
+        # calls target_cot.get_model(skip_object_fields=True) to resolve the FK.
+        # That caches the stub model for target_cot.
+        self.create_custom_object_type_field(
+            self.source_cot,
+            name="target_ref",
+            label="Target Reference",
+            type="object",
+            related_object_type=self.target_cot.object_type,
+            search_weight=0,  # not searchable; only target_cot's fields matter here
+        )
+
+    def test_save_does_not_crash_when_stub_cached_before_full_model(self):
+        """Saving a CO instance must not raise when its COT's stub was cached first.
+
+        This is the exact scenario from the bug report: a user saves an object
+        of the target COT whose model was cached as a stub (because another COT
+        referenced it as an FK target).  The search ``post_save`` handler must
+        not attempt to read object-type fields that are absent from the stub.
+        """
+        # target_cot.get_model() returns the stub (cached during setUp above).
+        # With the old code the registered search index included 'device', which
+        # is absent from the stub → AttributeError on save.
+        target_model = self.target_cot.get_model()
+
+        # This must not raise.
+        instance = target_model.objects.create(name="Stub Target Instance")
+
+        # Basic sanity: the instance was persisted.
+        self.assertEqual(target_model.objects.filter(pk=instance.pk).count(), 1)
+
+    def test_stub_model_search_index_excludes_absent_fields(self):
+        """The search index registered for a stub model must not reference absent fields.
+
+        When the stub is generated with skip_object_fields=True, object/multiobject
+        fields are excluded from the model class.  The search index must only contain
+        fields that are actually present.
+        """
+        from netbox.search import registry
+
+        self.target_cot.get_model()
+        label = f"netbox_custom_objects.{self.target_cot.get_table_model_name(self.target_cot.id).lower()}"
+        search_index = registry["search"].get(label)
+
+        self.assertIsNotNone(search_index, "Search index should be registered for the target COT model")
+
+        # fields is a list of (name, weight) tuples
+        indexed_field_names = {f[0] for f in search_index.fields}
+
+        # 'name' (text) is present on the stub → must be indexed.
+        self.assertIn("name", indexed_field_names)
+
+        # 'device' (object) is absent from the stub → must NOT be indexed.
+        self.assertNotIn(
+            "device",
+            indexed_field_names,
+            "Object-type fields absent from the stub must be excluded from the search index",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Semver / version string validation (issue #392)
+# ---------------------------------------------------------------------------
+
+class SemverValidationTestCase(CustomObjectsTestCase, TestCase):
+    """Validate that version-string fields reject non-PEP-440 values."""
+
+    # ------------------------------------------------------------------
+    # CustomObjectType.version
+    # ------------------------------------------------------------------
+
+    def test_cot_version_blank_is_valid(self):
+        cot = self.create_custom_object_type(name='semver_cot', slug='semver-cot')
+        cot.version = ''
+        cot.full_clean()  # must not raise
+
+    def test_cot_version_valid_semver(self):
+        cot = self.create_custom_object_type(name='semver_cot2', slug='semver-cot-2')
+        for v in ('1.0.0', '2.3.4', '0.0.1', '1.0.0.post1', '1.0.0a1'):
+            cot.version = v
+            cot.full_clean()  # must not raise
+
+    def test_cot_version_invalid_raises_validation_error(self):
+        cot = self.create_custom_object_type(name='semver_cot3', slug='semver-cot-3')
+        for bad in ('not-a-version', '1.x.0', 'latest', '!!invalid!!'):
+            cot.version = bad
+            with self.assertRaises(ValidationError, msg=f"Expected ValidationError for version={bad!r}"):
+                cot.full_clean()
+
+    # ------------------------------------------------------------------
+    # CustomObjectTypeField.deprecated_since
+    # ------------------------------------------------------------------
+
+    def test_field_deprecated_since_blank_is_valid(self):
+        cot = self.create_custom_object_type(name='semver_f1', slug='semver-f1')
+        field = self.create_custom_object_type_field(cot, name='alpha', type='text')
+        field.deprecated_since = ''
+        field.full_clean()
+
+    def test_field_deprecated_since_valid_semver(self):
+        cot = self.create_custom_object_type(name='semver_f2', slug='semver-f2')
+        field = self.create_custom_object_type_field(cot, name='beta', type='text')
+        field.deprecated_since = '2.0.0'
+        field.full_clean()
+
+    def test_field_deprecated_since_invalid_raises(self):
+        cot = self.create_custom_object_type(name='semver_f3', slug='semver-f3')
+        field = self.create_custom_object_type_field(cot, name='gamma', type='text')
+        for bad in ('not-a-version', '1.x.0', 'latest', '!!invalid!!'):
+            field.deprecated_since = bad
+            with self.assertRaises(ValidationError, msg=f"Expected ValidationError for deprecated_since={bad!r}"):
+                field.full_clean()
+
+    # ------------------------------------------------------------------
+    # CustomObjectTypeField.scheduled_removal
+    # ------------------------------------------------------------------
+
+    def test_field_scheduled_removal_blank_is_valid(self):
+        cot = self.create_custom_object_type(name='semver_f4', slug='semver-f4')
+        field = self.create_custom_object_type_field(cot, name='delta', type='text')
+        field.scheduled_removal = ''
+        field.full_clean()
+
+    def test_field_scheduled_removal_valid_semver(self):
+        cot = self.create_custom_object_type(name='semver_f5', slug='semver-f5')
+        field = self.create_custom_object_type_field(cot, name='epsilon', type='text')
+        field.scheduled_removal = '3.0.0'
+        field.full_clean()
+
+    def test_field_scheduled_removal_invalid_raises(self):
+        cot = self.create_custom_object_type(name='semver_f6', slug='semver-f6')
+        field = self.create_custom_object_type_field(cot, name='zeta', type='text')
+        for bad in ('v-bad', '1.x.0', 'latest', '!!invalid!!'):
+            field.scheduled_removal = bad
+            with self.assertRaises(ValidationError, msg=f"Expected ValidationError for scheduled_removal={bad!r}"):
+                field.full_clean()
+
+
+class NullRelatedObjectTypeTestCase(CustomObjectsTestCase, TestCase):
+    """Regression tests for graceful handling of OBJECT/MULTIOBJECT fields whose
+    related_object_type_id is NULL or points to a deleted ContentType.
+
+    A NULL FK can occur when a COT field is created via direct DB manipulation or
+    when the referenced ContentType is deleted.  All code paths that build the
+    dynamic model or serializer must skip such fields rather than crashing.
+
+    Covers the fixes in _fetch_and_generate_field_attrs (ContentType.DoesNotExist →
+    NotImplementedError) and get_serializer_class (Meta.fields/attrs mismatch guard).
+    """
+
+    def _make_cot_with_null_object_field(self, name, slug, field_name="broken_ref"):
+        from netbox_custom_objects.models import CustomObjectType
+        cot = self.create_custom_object_type(name=name, slug=slug)
+        self.create_custom_object_type_field(
+            cot, name="title", label="Title", type="text", primary=True, required=True,
+        )
+        field = self.create_custom_object_type_field(
+            cot, name=field_name, label="Broken Ref", type="object",
+            related_object_type=self.get_site_object_type(),
+        )
+        # Force the FK to NULL to simulate stale/corrupt data (e.g. ContentType deleted)
+        CustomObjectTypeField.objects.filter(pk=field.pk).update(related_object_type=None)
+        CustomObjectType.clear_model_cache()
+        return cot
+
+    def test_get_model_skips_object_field_with_null_related_object_type(self):
+        """get_model() must succeed and silently skip an OBJECT field whose
+        related_object_type_id is NULL rather than raising ContentType.DoesNotExist."""
+        cot = self._make_cot_with_null_object_field("NullRelObj", "null-rel-obj")
+        model = cot.get_model()
+        self.assertIsNotNone(model)
+        model_field_names = (
+            {f.name for f in model._meta.local_fields}
+            | {f.name for f in model._meta.local_many_to_many}
+        )
+        self.assertNotIn("broken_ref", model_field_names,
+                         "Field with null FK must be absent from the generated model")
+        self.assertIn("title", model_field_names,
+                      "Normal fields must still be present")
+
+    def test_get_serializer_class_handles_null_related_object_type(self):
+        """get_serializer_class() must not raise AttributeError when an OBJECT field
+        was skipped during model generation due to a NULL related_object_type_id.
+        Regression for the Meta.fields/attrs mismatch that caused DRF to raise a
+        validation error at serializer initialization time."""
+        from netbox_custom_objects.api.serializers import get_serializer_class
+
+        cot = self._make_cot_with_null_object_field(
+            "NullRelSerializer", "null-rel-serializer"
+        )
+        model = cot.get_model()
+        serializer_cls = get_serializer_class(model)
+        self.assertIsNotNone(serializer_cls)
+        self.assertNotIn("broken_ref", serializer_cls.Meta.fields,
+                         "Null-FK field must not appear in serializer Meta.fields")
+        self.assertIn("title", serializer_cls.Meta.fields,
+                      "Normal fields must still be present in serializer")

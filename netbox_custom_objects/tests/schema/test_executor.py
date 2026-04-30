@@ -501,6 +501,16 @@ class ExecutorFieldAlterTestCase(_ExecutorTestBase):
             obj_field.related_object_type, site_ot,
         )
 
+    def test_alter_field_type(self):
+        type_def = export_cot(self.cot)
+        for f in type_def["fields"]:
+            if f["name"] == "target":
+                f["type"] = "longtext"
+        apply_document({"schema_version": "1", "types": [type_def]})
+        self.field.refresh_from_db()
+        self.assertEqual(self.field.type, "longtext")
+
+
 
 # ---------------------------------------------------------------------------
 # Field REMOVE
