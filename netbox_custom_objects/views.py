@@ -732,7 +732,7 @@ class CustomObjectEditView(generic.ObjectEditView):
                         if field_obj.default and isinstance(field_obj.default, list):
                             content_type = field_obj.related_object_type
                             if content_type.app_label == APP_LABEL:
-                                from netbox_custom_objects.models import CustomObjectType
+                                # Custom object type
                                 custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
                                 if custom_object_type_id is None:
                                     raise ValueError(
@@ -839,13 +839,17 @@ class CustomObjectEditView(generic.ObjectEditView):
 
         # Create a custom save method to properly handle M2M fields
         def custom_save(self, commit=True):
-            # First save the instance to get the primary key
             instance = forms.NetBoxModelForm.save(self, commit=False)
 
             if commit:
+                # Set polymorphic GFK attributes before the first save so the row
+                # is written complete and only one ObjectChange is created.
+                for field_name, (ct_sub, obj_sub) in self.custom_object_type_poly_obj_fields.items():
+                    setattr(instance, field_name, self.cleaned_data.get(obj_sub))
+
                 instance.save()
 
-                # Handle non-polymorphic M2M fields
+                # Handle non-polymorphic M2M fields (require PK, so after save)
                 for field_name, field_obj in self.custom_object_type_fields.items():
                     if field_obj.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                         current_value = self.cleaned_data.get(field_name, [])
@@ -854,12 +858,6 @@ class CustomObjectEditView(generic.ObjectEditView):
                             instance_field.clear()
                             if current_value:
                                 instance_field.set(current_value)
-
-                # Handle polymorphic single-object scope fields: read the obj sub-field
-                for field_name, (ct_sub, obj_sub) in self.custom_object_type_poly_obj_fields.items():
-                    setattr(instance, field_name, self.cleaned_data.get(obj_sub))
-                if self.custom_object_type_poly_obj_fields:
-                    instance.save()
 
                 # Handle polymorphic M2M sub-fields: aggregate per-type selections
                 for field_name, sub_names in self.custom_object_type_poly_m2m_fields.items():

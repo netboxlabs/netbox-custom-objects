@@ -4,6 +4,8 @@ import re
 import threading
 from datetime import date, datetime
 
+from packaging.version import Version, InvalidVersion
+
 import django_filters
 from core.models import ObjectType, ObjectChange
 from core.models.object_types import ObjectTypeManager
@@ -12,7 +14,6 @@ from django.conf import settings
 
 # from django.contrib.contenttypes.management import create_contenttypes
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import FieldDoesNotExist
 from django.core.validators import RegexValidator, ValidationError
 from django.db import connection, IntegrityError, models, transaction
 from django.db.models import Q
@@ -57,6 +58,8 @@ from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS, safe_table_name
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
 from netbox_custom_objects.utilities import _suppress_clear_cache, extract_cot_id_from_model_name, generate_model
+
+logger = logging.getLogger(__name__)
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +174,19 @@ class CustomObject(
         return reverse(cls._get_viewname(action, rest_api), kwargs=kwargs)
 
 
+def validate_pep440(value):
+    """Validate that *value* is a valid PEP 440 version string."""
+    if not value:
+        return
+    try:
+        Version(value)
+    except InvalidVersion:
+        raise ValidationError(
+            _("'%(value)s' is not a valid version string (expected e.g. '1.0.0')."),
+            params={"value": value},
+        )
+
+
 class CustomObjectType(NetBoxModel):
     # Class-level cache for generated models
     _model_cache = {}
@@ -201,7 +217,7 @@ class CustomObjectType(NetBoxModel):
         verbose_name=_('comments'),
         blank=True
     )
-    version = models.CharField(max_length=50, blank=True)
+    version = models.CharField(max_length=50, blank=True, validators=[validate_pep440])
     verbose_name = models.CharField(max_length=100, blank=True)
     verbose_name_plural = models.CharField(max_length=100, blank=True)
     slug = models.SlugField(max_length=100, unique=True, db_index=True, blank=False)
@@ -397,7 +413,22 @@ class CustomObjectType(NetBoxModel):
             field_type = FIELD_TYPE_CLASS[field.type]()
             field_name = field.name
 
-            model_field = field_type.get_model_field(field)
+            try:
+                model_field = field_type.get_model_field(field)
+            except NotImplementedError:
+                if field.related_object_type_id is None:
+                    logger.debug(
+                        "Skipping field %r (pk=%s) on COT %r: "
+                        "related_object_type_id is NULL — field has no related type set.",
+                        field.name, field.pk, self.slug,
+                    )
+                else:
+                    logger.debug(
+                        "Skipping field %r (pk=%s) on COT %r: related_object_type_id=%s "
+                        "references a ContentType that no longer exists.",
+                        field.name, field.pk, self.slug, field.related_object_type_id,
+                    )
+                continue
 
             if isinstance(model_field, dict):
                 # Polymorphic Object field: dict of {attr_name: field_or_descriptor}
@@ -428,6 +459,16 @@ class CustomObjectType(NetBoxModel):
         # Get the set of fields that were skipped due to recursion
         skipped_fields = attrs.get("_skipped_fields", set())
 
+        # Build a lookup from field name → Django field object using plain lists that
+        # don't trigger _relation_tree.  _meta.get_field() for a name that isn't in
+        # _forward_fields_map (e.g. tombstoned fields in _trashed_field_objects) falls
+        # through to fields_map → _relation_tree → apps.get_models() → our get_models()
+        # override → get_model() for every COT → infinite recursion.
+        present_fields = {
+            f.name: f
+            for f in list(model._meta.local_fields) + list(model._meta.local_many_to_many)
+        }
+
         # Collect through models during after_model_generation
         through_models = []
 
@@ -439,62 +480,57 @@ class CustomObjectType(NetBoxModel):
             if field_name in skipped_fields:
                 continue
 
-            # Only process fields that actually exist on the model
-            # Fields might be skipped due to recursion prevention
-            if hasattr(model._meta, 'get_field'):
-                # For polymorphic Object fields, check the content_type sub-field instead
-                if field_instance.is_polymorphic:
-                    if field_instance.type == CustomFieldTypeChoices.TYPE_OBJECT:
-                        # Collect through models is not applicable; GFK has no through
-                        # The GFK itself needs no resolution
-                        pass
-                    elif field_instance.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                        # Ensure the polymorphic through model is in the app registry.
-                        # On server restart the registry is cleared; re-register if needed.
-                        _apps = model._meta.apps
-                        try:
-                            through_model = _apps.get_model(APP_LABEL, field_instance.through_model_name)
-                            # Always update source FK to point to the current model class.
-                            # get_model() may be called multiple times (e.g. cache invalidation
-                            # after a field save changes cache_timestamp).  Without this update
-                            # the through model's source FK would keep pointing at the old class,
-                            # causing Django's Collector to raise ValueError during cascade delete:
-                            # "Cannot query 'X': Must be 'TableYModel' instance."
-                            source_field = through_model._meta.get_field("source")
-                            source_field.remote_field.model = model
-                            source_field.related_model = model
-                        except LookupError:
-                            field_type_obj = FIELD_TYPE_CLASS[CustomFieldTypeChoices.TYPE_MULTIOBJECT]()
-                            source_model_str = f"{APP_LABEL}.{model.__name__}"
-                            through_model = field_type_obj.get_polymorphic_through_model(
-                                field_instance, source_model_str
-                            )
-                            source_field = through_model._meta.get_field("source")
-                            source_field.remote_field.model = model
-                            source_field.related_model = model
-                            _apps.register_model(APP_LABEL, through_model)
-                        if through_model and through_model not in through_models:
-                            through_models.append(through_model)
-                    continue
-
-                try:
-                    field = model._meta.get_field(field_name)
-                except FieldDoesNotExist:
-                    # Field skipped during generation (e.g. due to recursion guard).
-                    continue
-
-                field_object["type"].after_model_generation(
-                    field_object["field"], model, field_name
-                )
-
-                # Collect through models from M2M fields
-                if hasattr(field, 'remote_field') and hasattr(field.remote_field, 'through'):
-                    through_model = field.remote_field.through
-                    # Only collect custom through models, not auto-created Django ones
-                    if (through_model and through_model not in through_models and
-                        hasattr(through_model._meta, 'app_label') and
-                        through_model._meta.app_label == APP_LABEL):
+            if field_instance.is_polymorphic:
+                if field_instance.type == CustomFieldTypeChoices.TYPE_OBJECT:
+                    # Polymorphic GFK: no through model, no after_model_generation needed.
+                    pass
+                elif field_instance.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+                    # Ensure the polymorphic through model is in the app registry.
+                    # On server restart the registry is cleared; re-register if needed.
+                    _apps = model._meta.apps
+                    try:
+                        through_model = _apps.get_model(APP_LABEL, field_instance.through_model_name)
+                        # Always update source FK to point to the current model class.
+                        # get_model() may be called multiple times (e.g. cache invalidation
+                        # after a field save changes cache_timestamp).  Without this update
+                        # the through model's source FK would keep pointing at the old class,
+                        # causing Django's Collector to raise ValueError during cascade delete:
+                        # "Cannot query 'X': Must be 'TableYModel' instance."
+                        source_field = through_model._meta.get_field("source")
+                        source_field.remote_field.model = model
+                        source_field.related_model = model
+                    except LookupError:
+                        field_type_obj = FIELD_TYPE_CLASS[CustomFieldTypeChoices.TYPE_MULTIOBJECT]()
+                        source_model_str = f"{APP_LABEL}.{model.__name__}"
+                        through_model = field_type_obj.get_polymorphic_through_model(
+                            field_instance, source_model_str
+                        )
+                        source_field = through_model._meta.get_field("source")
+                        source_field.remote_field.model = model
+                        source_field.related_model = model
+                        _apps.register_model(APP_LABEL, through_model)
+                    if through_model and through_model not in through_models:
                         through_models.append(through_model)
+                continue
+
+            # Non-polymorphic: use safe present_fields lookup (avoids _relation_tree recursion).
+            # Tombstoned fields (in _trashed_field_objects) won't be in present_fields.
+            field = present_fields.get(field_name)
+            if field is None:
+                continue
+
+            field_object["type"].after_model_generation(
+                field_object["field"], model, field_name
+            )
+
+            # Collect through models from M2M fields
+            if hasattr(field, 'remote_field') and hasattr(field.remote_field, 'through'):
+                through_model = field.remote_field.through
+                # Only collect custom through models, not auto-created Django ones
+                if (through_model and through_model not in through_models and
+                    hasattr(through_model._meta, 'app_label') and
+                    through_model._meta.app_label == APP_LABEL):
+                    through_models.append(through_model)
 
         # Store through models on the model for yielding in get_models()
         model._through_models = through_models
@@ -530,16 +566,17 @@ class CustomObjectType(NetBoxModel):
 
     def register_custom_object_search_index(self, model):
         # model must be an instance of this CustomObjectType's get_model() generated class
+        # Use local_fields / local_many_to_many — plain lists populated at class-creation
+        # time — instead of _meta.get_field(), which triggers Django's lazy _relation_tree
+        # computation.  _relation_tree calls apps.get_models(), which re-enters our
+        # get_models() override, which calls get_model() for every COT → infinite recursion.
+        present = (
+            {f.name for f in model._meta.local_fields}
+            | {f.name for f in model._meta.local_many_to_many}
+        )
         fields = []
         for field in self.fields.filter(search_weight__gt=0):
-            # Only index fields that are actually present on the generated model.
-            # When the model was built with skip_object_fields=True (a lightweight
-            # stub used to break cross-COT FK recursion), object-type fields are
-            # intentionally absent.  Including them in the index causes
-            # FieldDoesNotExist / AttributeError in the post_save search handler.
-            try:
-                model._meta.get_field(field.name)
-            except FieldDoesNotExist:
+            if field.name not in present:
                 continue
             fields.append((field.name, field.search_weight))
 
@@ -1087,12 +1124,14 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         blank=True,
         verbose_name=_("deprecated since"),
         help_text=_("Schema version in which this field was marked deprecated (e.g. '2.0.0')."),
+        validators=[validate_pep440],
     )
     scheduled_removal = models.CharField(
         max_length=50,
         blank=True,
         verbose_name=_("scheduled removal"),
         help_text=_("Schema version in which this field is planned to be removed (e.g. '3.0.0')."),
+        validators=[validate_pep440],
     )
 
     clone_fields = ("custom_object_type",)
@@ -1131,7 +1170,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         self._original_name = self.name
         self._original_type = self.type
         self._original_related_object_type_id = self.related_object_type_id
-        self._original_is_polymorphic = self.__dict__.get("is_polymorphic", False)
+        self._original_is_polymorphic = self.is_polymorphic
 
     def __str__(self):
         return self.label or self.name.replace("_", " ").capitalize()
@@ -1954,7 +1993,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
                         field_type.add_polymorphic_object_columns(self, model, schema_editor)
                     elif self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                        field_type.create_polymorphic_m2m_table(self, model)
+                        field_type.create_polymorphic_m2m_table(self, model, schema_editor)
                 else:
                     model_field = field_type.get_model_field(self)
                     model_field.contribute_to_class(model, self.name)

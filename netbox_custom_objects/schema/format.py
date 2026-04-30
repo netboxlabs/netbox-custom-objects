@@ -108,3 +108,26 @@ FIELD_TYPE_ATTRS = {
     FIELD_TYPE_OBJECT: {"related_object_type", "related_object_filter"},
     FIELD_TYPE_MULTIOBJECT: {"related_object_type", "related_object_filter"},
 }
+
+# ── Field base attributes ─────────────────────────────────────────────────────
+# Scalar attributes shared by all field types; compared by the comparator and
+# applied by the executor.  Does NOT include 'name' or 'type' — those are
+# handled separately by both modules.
+FIELD_BASE_ATTRS = (
+    "label",
+    "description",
+    "group_name",
+    "primary",
+    "required",
+    "unique",
+    "default",
+    "weight",
+    "search_weight",
+    "filter_logic",
+    "ui_visible",
+    "ui_editable",
+    "is_cloneable",
+    "deprecated",
+    "deprecated_since",
+    "scheduled_removal",
+)

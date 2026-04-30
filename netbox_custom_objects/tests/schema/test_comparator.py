@@ -20,7 +20,7 @@ Covers:
 
 from django.test import TestCase
 
-from netbox_custom_objects.comparator import (
+from netbox_custom_objects.schema.comparator import (
     FieldOp,
     _encode_related_object_type,
     diff_cot,
@@ -29,7 +29,7 @@ from netbox_custom_objects.comparator import (
 from netbox_custom_objects.schema.exporter import export_cot, export_cots
 from netbox_custom_objects.models import CustomObjectTypeField
 
-from .base import CustomObjectsTestCase
+from ..base import CustomObjectsTestCase
 
 
 # ---------------------------------------------------------------------------

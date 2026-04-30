@@ -203,6 +203,36 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
             expected_table = f"custom_objects_{custom_object_type.id}"
             self.assertIn(expected_table, tables)
 
+    def test_register_search_index_skips_object_field_absent_from_stub_model(self):
+        """register_custom_object_search_index() must use local_fields/local_many_to_many
+        rather than _meta.get_field() to check field presence.  _meta.get_field() for a
+        name not in _forward_fields_map triggers Django's lazy _relation_tree computation,
+        which calls apps.get_models() → our override → get_model() for every COT →
+        infinite recursion when called during model registration.
+
+        Regression for PR #474: the stub model generated with skip_object_fields=True
+        does not have the OBJECT field, but self.fields.filter(search_weight__gt=0)
+        still returns it from the database.
+        """
+        cot = self.create_custom_object_type(name="StubSearchTest", slug="stub-search-test")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, search_weight=1000,
+        )
+        self.create_custom_object_type_field(
+            cot, name="ref_site", label="Site", type="object",
+            related_object_type=self.get_site_object_type(),
+            search_weight=500,
+        )
+        stub_model = cot.get_model(skip_object_fields=True)
+        model_field_names = (
+            {f.name for f in stub_model._meta.local_fields}
+            | {f.name for f in stub_model._meta.local_many_to_many}
+        )
+        self.assertNotIn("ref_site", model_field_names,
+                         "OBJECT field must be absent from stub model")
+        # Must not raise FieldDoesNotExist, RecursionError, or any other exception.
+        cot.register_custom_object_search_index(stub_model)
+
     @skip("Fails in suite but not individually")
     def test_custom_object_type_delete_removes_table(self):
         """Test that deleting a custom object type removes the database table."""
@@ -1490,3 +1520,142 @@ class CrossCOTStubSearchIndexRegressionTestCase(CustomObjectsTestCase, TestCase)
             indexed_field_names,
             "Object-type fields absent from the stub must be excluded from the search index",
         )
+
+
+# ---------------------------------------------------------------------------
+# Semver / version string validation (issue #392)
+# ---------------------------------------------------------------------------
+
+class SemverValidationTestCase(CustomObjectsTestCase, TestCase):
+    """Validate that version-string fields reject non-PEP-440 values."""
+
+    # ------------------------------------------------------------------
+    # CustomObjectType.version
+    # ------------------------------------------------------------------
+
+    def test_cot_version_blank_is_valid(self):
+        cot = self.create_custom_object_type(name='semver_cot', slug='semver-cot')
+        cot.version = ''
+        cot.full_clean()  # must not raise
+
+    def test_cot_version_valid_semver(self):
+        cot = self.create_custom_object_type(name='semver_cot2', slug='semver-cot-2')
+        for v in ('1.0.0', '2.3.4', '0.0.1', '1.0.0.post1', '1.0.0a1'):
+            cot.version = v
+            cot.full_clean()  # must not raise
+
+    def test_cot_version_invalid_raises_validation_error(self):
+        cot = self.create_custom_object_type(name='semver_cot3', slug='semver-cot-3')
+        for bad in ('not-a-version', '1.x.0', 'latest', '!!invalid!!'):
+            cot.version = bad
+            with self.assertRaises(ValidationError, msg=f"Expected ValidationError for version={bad!r}"):
+                cot.full_clean()
+
+    # ------------------------------------------------------------------
+    # CustomObjectTypeField.deprecated_since
+    # ------------------------------------------------------------------
+
+    def test_field_deprecated_since_blank_is_valid(self):
+        cot = self.create_custom_object_type(name='semver_f1', slug='semver-f1')
+        field = self.create_custom_object_type_field(cot, name='alpha', type='text')
+        field.deprecated_since = ''
+        field.full_clean()
+
+    def test_field_deprecated_since_valid_semver(self):
+        cot = self.create_custom_object_type(name='semver_f2', slug='semver-f2')
+        field = self.create_custom_object_type_field(cot, name='beta', type='text')
+        field.deprecated_since = '2.0.0'
+        field.full_clean()
+
+    def test_field_deprecated_since_invalid_raises(self):
+        cot = self.create_custom_object_type(name='semver_f3', slug='semver-f3')
+        field = self.create_custom_object_type_field(cot, name='gamma', type='text')
+        for bad in ('not-a-version', '1.x.0', 'latest', '!!invalid!!'):
+            field.deprecated_since = bad
+            with self.assertRaises(ValidationError, msg=f"Expected ValidationError for deprecated_since={bad!r}"):
+                field.full_clean()
+
+    # ------------------------------------------------------------------
+    # CustomObjectTypeField.scheduled_removal
+    # ------------------------------------------------------------------
+
+    def test_field_scheduled_removal_blank_is_valid(self):
+        cot = self.create_custom_object_type(name='semver_f4', slug='semver-f4')
+        field = self.create_custom_object_type_field(cot, name='delta', type='text')
+        field.scheduled_removal = ''
+        field.full_clean()
+
+    def test_field_scheduled_removal_valid_semver(self):
+        cot = self.create_custom_object_type(name='semver_f5', slug='semver-f5')
+        field = self.create_custom_object_type_field(cot, name='epsilon', type='text')
+        field.scheduled_removal = '3.0.0'
+        field.full_clean()
+
+    def test_field_scheduled_removal_invalid_raises(self):
+        cot = self.create_custom_object_type(name='semver_f6', slug='semver-f6')
+        field = self.create_custom_object_type_field(cot, name='zeta', type='text')
+        for bad in ('v-bad', '1.x.0', 'latest', '!!invalid!!'):
+            field.scheduled_removal = bad
+            with self.assertRaises(ValidationError, msg=f"Expected ValidationError for scheduled_removal={bad!r}"):
+                field.full_clean()
+
+
+class NullRelatedObjectTypeTestCase(CustomObjectsTestCase, TestCase):
+    """Regression tests for graceful handling of OBJECT/MULTIOBJECT fields whose
+    related_object_type_id is NULL or points to a deleted ContentType.
+
+    A NULL FK can occur when a COT field is created via direct DB manipulation or
+    when the referenced ContentType is deleted.  All code paths that build the
+    dynamic model or serializer must skip such fields rather than crashing.
+
+    Covers the fixes in _fetch_and_generate_field_attrs (ContentType.DoesNotExist →
+    NotImplementedError) and get_serializer_class (Meta.fields/attrs mismatch guard).
+    """
+
+    def _make_cot_with_null_object_field(self, name, slug, field_name="broken_ref"):
+        from netbox_custom_objects.models import CustomObjectType
+        cot = self.create_custom_object_type(name=name, slug=slug)
+        self.create_custom_object_type_field(
+            cot, name="title", label="Title", type="text", primary=True, required=True,
+        )
+        field = self.create_custom_object_type_field(
+            cot, name=field_name, label="Broken Ref", type="object",
+            related_object_type=self.get_site_object_type(),
+        )
+        # Force the FK to NULL to simulate stale/corrupt data (e.g. ContentType deleted)
+        CustomObjectTypeField.objects.filter(pk=field.pk).update(related_object_type=None)
+        CustomObjectType.clear_model_cache()
+        return cot
+
+    def test_get_model_skips_object_field_with_null_related_object_type(self):
+        """get_model() must succeed and silently skip an OBJECT field whose
+        related_object_type_id is NULL rather than raising ContentType.DoesNotExist."""
+        cot = self._make_cot_with_null_object_field("NullRelObj", "null-rel-obj")
+        model = cot.get_model()
+        self.assertIsNotNone(model)
+        model_field_names = (
+            {f.name for f in model._meta.local_fields}
+            | {f.name for f in model._meta.local_many_to_many}
+        )
+        self.assertNotIn("broken_ref", model_field_names,
+                         "Field with null FK must be absent from the generated model")
+        self.assertIn("title", model_field_names,
+                      "Normal fields must still be present")
+
+    def test_get_serializer_class_handles_null_related_object_type(self):
+        """get_serializer_class() must not raise AttributeError when an OBJECT field
+        was skipped during model generation due to a NULL related_object_type_id.
+        Regression for the Meta.fields/attrs mismatch that caused DRF to raise a
+        validation error at serializer initialization time."""
+        from netbox_custom_objects.api.serializers import get_serializer_class
+
+        cot = self._make_cot_with_null_object_field(
+            "NullRelSerializer", "null-rel-serializer"
+        )
+        model = cot.get_model()
+        serializer_cls = get_serializer_class(model)
+        self.assertIsNotNone(serializer_cls)
+        self.assertNotIn("broken_ref", serializer_cls.Meta.fields,
+                         "Null-FK field must not appear in serializer Meta.fields")
+        self.assertIn("title", serializer_cls.Meta.fields,
+                      "Normal fields must still be present in serializer")

@@ -154,6 +154,27 @@ class FieldType:
     def render_table_column_linkified(self, record):
         return linkify(record)
 
+    def _get_related_content_type(self, field):
+        """
+        Return the ContentType for field.related_object_type_id.
+
+        Raises NotImplementedError (rather than ContentType.DoesNotExist) so that
+        all callers — which already guard against NotImplementedError — skip the
+        field gracefully when the FK is null or its ContentType row is missing.
+        """
+        from django.contrib.contenttypes.models import ContentType as CT
+        if not field.related_object_type_id:
+            raise NotImplementedError(
+                f"Field {field.name!r} has no related_object_type set"
+            )
+        try:
+            return CT.objects.get(pk=field.related_object_type_id)
+        except CT.DoesNotExist:
+            raise NotImplementedError(
+                f"Field {field.name!r}: related_object_type_id="
+                f"{field.related_object_type_id} references a missing ContentType"
+            )
+
     def after_model_generation(self, instance, model, field_name): ...
 
     def create_m2m_table(self, instance, model, field_name): ...
@@ -453,7 +474,7 @@ class ObjectFieldType(FieldType):
                 field.name: GenericForeignKey(ct_field_name, oid_field_name),
             }
 
-        content_type = ContentType.objects.get(pk=field.related_object_type_id)
+        content_type = self._get_related_content_type(field)
         to_model = content_type.model
 
         # Extract our custom parameters and keep only Django field parameters
@@ -524,7 +545,7 @@ class ObjectFieldType(FieldType):
                 "Polymorphic object form fields are rendered by the view layer, not via this method."
             )
 
-        content_type = ContentType.objects.get(pk=field.related_object_type_id)
+        content_type = self._get_related_content_type(field)
 
         has_context = False
         if content_type.app_label == APP_LABEL:
@@ -574,7 +595,7 @@ class ObjectFieldType(FieldType):
     def get_filterform_field(self, field, **kwargs):
         if field.is_polymorphic:
             return None  # Filtering polymorphic fields not supported yet
-        content_type = ContentType.objects.get(pk=field.related_object_type_id)
+        content_type = self._get_related_content_type(field)
         if content_type.app_label == APP_LABEL:
             from netbox_custom_objects.models import CustomObjectType
             custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
@@ -605,6 +626,7 @@ class ObjectFieldType(FieldType):
                 required=field.required,
                 allow_null=not field.required,
             )
+        self._get_related_content_type(field)  # validates FK; raises NotImplementedError if null/missing
         related_model_class = field.related_object_type.model_class()
         if related_model_class._meta.app_label == APP_LABEL:
             from netbox_custom_objects.api.serializers import get_serializer_class
@@ -919,7 +941,7 @@ class MultiObjectFieldType(FieldType):
         )
 
         # Check if this is a self-referential M2M
-        content_type = ContentType.objects.get(pk=field.related_object_type_id)
+        content_type = self._get_related_content_type(field)
         custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
         if content_type.app_label == APP_LABEL:
             if custom_object_type_id is None:
@@ -961,7 +983,7 @@ class MultiObjectFieldType(FieldType):
             return PolymorphicM2MDescriptor(through_model_name=field.through_model_name)
 
         # Check if this is a self-referential M2M
-        content_type = ContentType.objects.get(pk=field.related_object_type_id)
+        content_type = self._get_related_content_type(field)
         custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
         if content_type.app_label == APP_LABEL:
             if custom_object_type_id is None:
@@ -1018,7 +1040,7 @@ class MultiObjectFieldType(FieldType):
         if field.is_polymorphic:
             raise NotImplementedError("Polymorphic multi-object fields are managed via the API")
 
-        content_type = ContentType.objects.get(pk=field.related_object_type_id)
+        content_type = self._get_related_content_type(field)
 
         has_context = False
         if content_type.app_label == APP_LABEL:
@@ -1078,6 +1100,7 @@ class MultiObjectFieldType(FieldType):
             return drf_serializers.ListField(
                 child=PolymorphicObjectSerializerField(allowed_content_type_ids=allowed_ids),
                 required=field.required,
+                allow_null=not field.required,
                 allow_empty=True,
             )
         related_model_class = field.related_object_type.model_class()
@@ -1091,7 +1114,7 @@ class MultiObjectFieldType(FieldType):
     def get_filterform_field(self, field, **kwargs):
         if field.is_polymorphic:
             return None  # Filtering polymorphic fields not supported yet
-        content_type = ContentType.objects.get(pk=field.related_object_type_id)
+        content_type = self._get_related_content_type(field)
         if content_type.app_label == APP_LABEL:
             from netbox_custom_objects.models import CustomObjectType
             custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
@@ -1141,7 +1164,7 @@ class MultiObjectFieldType(FieldType):
 
         # For non-self-referential fields, we need to resolve the target model
         # Use the instance parameter which contains the field definition
-        content_type = ContentType.objects.get(pk=instance.related_object_type_id)
+        content_type = self._get_related_content_type(instance)
 
         # Now we can safely resolve the target model
         if content_type.app_label == APP_LABEL:
@@ -1194,7 +1217,7 @@ class MultiObjectFieldType(FieldType):
         if getattr(field, "_is_self_referential", False):
             to_model = model
         else:
-            content_type = ContentType.objects.get(pk=instance.related_object_type_id)
+            content_type = self._get_related_content_type(instance)
             if content_type.app_label == APP_LABEL:
                 from netbox_custom_objects.models import CustomObjectType
 
@@ -1298,9 +1321,15 @@ class MultiObjectFieldType(FieldType):
 
         return generate_model(field_instance.through_model_name, (models.Model,), attrs)
 
-    def create_polymorphic_m2m_table(self, field_instance, model):
+    def create_polymorphic_m2m_table(self, field_instance, model, schema_editor):
         """
         Creates the DB table for a polymorphic MultiObject through model.
+
+        ``schema_editor`` must be supplied by the caller for the same reason as
+        ``remove_polymorphic_object_columns``: all DDL in a single operation
+        should share one schema editor context.  Opening a nested
+        ``with connection.schema_editor()`` here would flush deferred SQL
+        prematurely on PostgreSQL.
         """
         source_model_string = f"{APP_LABEL}.{model.__name__}"
         through = self.get_polymorphic_through_model(field_instance, source_model_string)
@@ -1318,12 +1347,11 @@ class MultiObjectFieldType(FieldType):
             _apps.register_model(APP_LABEL, through)
             through_model = through
 
-        with connection.schema_editor() as schema_editor:
-            table_name = through_model._meta.db_table
-            with connection.cursor() as cursor:
-                existing_tables = connection.introspection.table_names(cursor)
-                if table_name not in existing_tables:
-                    schema_editor.create_model(through_model)
+        table_name = through_model._meta.db_table
+        with connection.cursor() as cursor:
+            existing_tables = connection.introspection.table_names(cursor)
+            if table_name not in existing_tables:
+                schema_editor.create_model(through_model)
 
     def drop_polymorphic_m2m_table(self, field_instance, model, schema_editor):
         """

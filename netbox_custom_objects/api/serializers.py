@@ -86,7 +86,7 @@ class PolymorphicObjectSerializerField(serializers.Field):
                 raise serializers.ValidationError(
                     _("Must provide content_type_id or (app_label + model).")
                 )
-        except ContentType.DoesNotExist:
+        except (ContentType.DoesNotExist, ValueError, TypeError):
             raise serializers.ValidationError(_("Invalid content type.")) from None
 
         if (
@@ -426,6 +426,14 @@ def get_serializer_class(model, skip_object_fields=False):
     # the current set of polymorphic fields without a separate invalidation path.
     model_fields = model.custom_object_type.fields.all()
 
+    # Fields skipped during model generation (e.g. broken/null related_object_type_id)
+    # won't be present on the model.  Build a name set from safe list attributes so
+    # we can skip absent fields consistently in both loops below.
+    model_field_names = {
+        f.name
+        for f in list(model._meta.local_fields) + list(model._meta.local_many_to_many)
+    }
+
     # Create field list including all necessary fields
     base_fields = ["id", "url", "display", "created", "last_updated", "tags"]
 
@@ -437,6 +445,8 @@ def get_serializer_class(model, skip_object_fields=False):
     # Only include custom field names that will actually be added to the serializer
     custom_field_names = []
     for field in model_fields:
+        if field.name not in model_field_names:
+            continue  # excluded during model generation (e.g. broken FK)
         if skip_object_fields and field.type in [
             CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT
         ]:
@@ -480,16 +490,15 @@ def get_serializer_class(model, skip_object_fields=False):
         """Get display representation of the object"""
         return str(obj)
 
-    # Collect polymorphic field names for special handling in create/update
+    # Collect polymorphic field names for special handling in create/update.
+    # Derived from the already-evaluated model_fields queryset to avoid extra DB queries.
     _poly_obj_fields = {
-        f.name for f in model.custom_object_type.fields.filter(
-            type=CustomFieldTypeChoices.TYPE_OBJECT, is_polymorphic=True
-        )
+        f.name for f in model_fields
+        if f.type == CustomFieldTypeChoices.TYPE_OBJECT and f.is_polymorphic
     }
     _poly_m2m_fields = {
-        f.name for f in model.custom_object_type.fields.filter(
-            type=CustomFieldTypeChoices.TYPE_MULTIOBJECT, is_polymorphic=True
-        )
+        f.name for f in model_fields
+        if f.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT and f.is_polymorphic
     }
 
     def get__context(self, obj):
@@ -618,6 +627,8 @@ def get_serializer_class(model, skip_object_fields=False):
         attrs["get__context"] = get__context
 
     for field in model_fields:
+        if field.name not in model_field_names:
+            continue  # excluded during model generation (e.g. broken FK)
         if skip_object_fields and field.type in [
             CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT
         ]:

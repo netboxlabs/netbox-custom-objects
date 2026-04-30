@@ -3,6 +3,7 @@ from django.db import connection
 from django.test import Client
 from core.models import ObjectType
 from extras.models import CustomFieldChoiceSet
+from users.models import Token
 from utilities.testing import create_test_user
 
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
@@ -76,6 +77,17 @@ def _drop_dynamic_tables():
     # Site._meta.related_objects (etc.) is rebuilt without phantom FK pointers.
     if stale_names:
         django_apps.clear_cache()
+
+
+def create_api_token(user):
+    """Create an API token for *user*, handling the NetBox ≥ 4.5 version field."""
+    try:
+        from users.choices import TokenVersionChoices  # noqa: PLC0415
+        token = Token(version=TokenVersionChoices.V1, user=user)
+    except ImportError:
+        token = Token(user=user)
+    token.save()
+    return token
 
 
 class TransactionCleanupMixin:

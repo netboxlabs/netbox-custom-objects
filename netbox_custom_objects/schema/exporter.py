@@ -22,10 +22,9 @@ Notes
 """
 
 import logging
-import re
 
 from netbox_custom_objects import constants
-from netbox_custom_objects.schema_format import (
+from netbox_custom_objects.schema.format import (
     CHOICES_TO_SCHEMA_TYPE,
     CUSTOM_OBJECTS_APP_LABEL_SLUG,
     FIELD_DEFAULTS,
@@ -34,10 +33,6 @@ from netbox_custom_objects.schema_format import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Matches the generated model name produced by CustomObjectType.get_table_model_name().
-# Capturing group 1 is the numeric COT id.
-_TABLE_MODEL_RE = re.compile(r'^table(\d+)model$', re.IGNORECASE)
 
 # Ordered list of field_base attributes to check for non-default values.
 # Type-specific attributes (validation_*, choice_set, related_*) are handled
@@ -74,7 +69,7 @@ def _encode_related_object_type(rot) -> str:
     Custom Object Types     → ``"custom-objects/<slug>"``
     """
     if rot.app_label == constants.APP_LABEL:
-        m = _TABLE_MODEL_RE.match(rot.model)
+        m = constants.TABLE_MODEL_RE.match(rot.model)
         if m:
             # Avoid a circular import — import here so the module can be loaded
             # independently of the full Django app stack in unit tests.
@@ -146,11 +141,8 @@ def _removed_fields_from_document(cot) -> list:
     """
     if not cot.schema_document:
         return []
-    # NOTE: matches by COT name. If the COT is renamed after tombstones
-    # are persisted, they will not be found. This will be addressed when
-    # #390 (apply) is implemented and tombstones are managed more explicitly.
     for type_def in cot.schema_document.get("types", []):
-        if type_def.get("name") == cot.name:
+        if type_def.get("slug") == cot.slug:
             return list(type_def.get("removed_fields", []))
     return []
 
