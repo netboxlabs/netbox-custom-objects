@@ -4,7 +4,7 @@ Tests for API code paths.
 from django.test import TestCase
 from django.urls import reverse
 
-from utilities.testing import APIViewTestCases, create_test_user
+from utilities.testing import create_test_user
 from rest_framework import status
 from rest_framework.test import APIClient
 
@@ -30,9 +30,89 @@ def create_token(user):
         return token.key
 
 
-class CustomObjectTest(CustomObjectsTestCase, APIViewTestCases.APIViewTestCase):
+class CustomObjectAPITestCaseMixin:
+    """
+    Base test class for custom object API endpoints.
+
+    Subclasses must provide:
+      - setUp() — sets self.user, self.header, self.client
+      - _get_detail_url(instance)
+      - _get_list_url()
+      - _get_queryset()
+      - _add_permission(action, name=None)
+      - create_data — list of dicts (at least one element)
+      - bulk_update_data — dict of fields to PATCH
+    """
+
+    @property
+    def update_data(self):
+        return getattr(self, '_update_data', self.bulk_update_data)
+
+    def assertHttpStatus(self, response, expected_status):
+        self.assertEqual(
+            response.status_code,
+            expected_status,
+            f'Expected HTTP {expected_status}; received {response.status_code}: '
+            f'{getattr(response, "data", response.content)}',
+        )
+
+    def test_get_object_without_permission(self):
+        """GET a single object without permission returns 403."""
+        instance = self._get_queryset().first()
+        response = self.client.get(self._get_detail_url(instance), **self.header)
+        self.assertHttpStatus(response, 403)
+
+    def test_get_object(self):
+        """GET a single object with permission returns 200 and the correct record."""
+        self._add_permission('view', 'Get object perm')
+        instance = self._get_queryset().first()
+        response = self.client.get(self._get_detail_url(instance), **self.header)
+        self.assertHttpStatus(response, 200)
+        self.assertEqual(response.data['id'], instance.pk)
+
+    def test_list_objects_without_permission(self):
+        """GET the list endpoint without permission returns 403."""
+        response = self.client.get(self._get_list_url(), **self.header)
+        self.assertHttpStatus(response, 403)
+
+    def test_create_object_without_permission(self):
+        """POST to the list endpoint without permission returns 403."""
+        response = self.client.post(
+            self._get_list_url(), self.create_data[0], format='json', **self.header
+        )
+        self.assertHttpStatus(response, 403)
+
+    def test_update_object_without_permission(self):
+        """PATCH a single object without permission returns 403."""
+        instance = self._get_queryset().first()
+        response = self.client.patch(
+            self._get_detail_url(instance), self.update_data, format='json', **self.header
+        )
+        self.assertHttpStatus(response, 403)
+
+    def test_update_object(self):
+        """PATCH a single object returns 200 and persists the changes."""
+        self._add_permission('change', 'Update object perm')
+        instance = self._get_queryset().first()
+        response = self.client.patch(
+            self._get_detail_url(instance), self.update_data, format='json', **self.header
+        )
+        self.assertHttpStatus(response, 200)
+        instance.refresh_from_db()
+        for field, value in self.update_data.items():
+            # Note: getattr comparison only works for scalar fields. FK/M2M fields
+            # require separate assertions (e.g. comparing PKs or querysets).
+            self.assertEqual(getattr(instance, field), value)
+
+    def test_delete_object_without_permission(self):
+        """DELETE a single object without permission returns 403."""
+        instance = self._get_queryset().first()
+        response = self.client.delete(self._get_detail_url(instance), **self.header)
+        self.assertHttpStatus(response, 403)
+
+
+class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, TestCase):
     model = None  # Will be set in setUpTestData
-    brief_fields = ['created', 'display', 'id', 'last_updated', 'tags', 'test_field', 'url']
     bulk_update_data = {
         'test_field': 'Updated test field',
     }
@@ -41,6 +121,10 @@ class CustomObjectTest(CustomObjectsTestCase, APIViewTestCases.APIViewTestCase):
         """Set up test data."""
         # Create a user
         self.user = create_test_user('testuser')
+
+        # Use DRF's APIClient so that format='json' is honoured on all HTTP methods
+        # (Django's plain Client defaults PATCH/PUT to application/octet-stream).
+        self.client = APIClient()
 
         # Create token for API access
         token_key = create_token(self.user)
@@ -326,13 +410,6 @@ class CustomObjectTest(CustomObjectsTestCase, APIViewTestCases.APIViewTestCase):
             set(instance.devices.values_list('id', flat=True)),
             set(data['devices']),
         )
-
-    # TODO: GraphQL
-    def test_graphql_list_objects(self):
-        ...
-
-    def test_graphql_get_object(self):
-        ...
 
 
 class LinkedObjectsAPITest(CustomObjectsTestCase, TestCase):
