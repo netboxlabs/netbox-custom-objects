@@ -505,15 +505,18 @@ class CustomObjectType(NetBoxModel):
         post_migrate auto-heal handler (issue #391, Phase 2) can detect drift when
         NetBox upgrades add new columns to the mixin hierarchy.
         """
-        return [
-            {
-                "name": f.name,
-                "field_class": f.__class__.__name__,
-                "null": f.null,
-            }
-            for f in model._meta.concrete_fields
-            if f.name not in user_field_names
-        ]
+        return sorted(
+            [
+                {
+                    "name": f.name,
+                    "field_class": f.__class__.__name__,
+                    "null": f.null,
+                }
+                for f in model._meta.concrete_fields
+                if f.name not in user_field_names
+            ],
+            key=lambda e: e["name"],
+        )
 
     def _store_base_column_snapshot(self, model):
         """

@@ -39,7 +39,7 @@ def backfill_base_columns(apps, schema_editor):
 
     # Import the live abstract base to get field metadata.
     # See module docstring for rationale.
-    from netbox_custom_objects.models import CustomObject  # noqa: PLC0415
+    from netbox_custom_objects.models import CustomObject, USER_TABLE_DATABASE_NAME_PREFIX  # noqa: PLC0415
 
     CustomObjectType = apps.get_model("netbox_custom_objects", "CustomObjectType")
     CustomObjectTypeField = apps.get_model("netbox_custom_objects", "CustomObjectTypeField")
@@ -55,15 +55,22 @@ def backfill_base_columns(apps, schema_editor):
                 "null": getattr(f, "null", False),
             }
     # "id" comes from models.Model, which is a concrete base not tracked by
-    # CustomObject's abstract _meta; add it explicitly.
-    base_field_info.setdefault("id", {"field_class": "AutoField", "null": False})
+    # CustomObject's abstract _meta; add it explicitly.  Derive the class name
+    # from the live pk field so it matches BigAutoField if DEFAULT_AUTO_FIELD is
+    # configured that way, rather than hardcoding "AutoField".
+    pk_class = (
+        CustomObject._meta.pk.__class__.__name__
+        if CustomObject._meta.pk is not None
+        else "AutoField"
+    )
+    base_field_info.setdefault("id", {"field_class": pk_class, "null": False})
 
     for cot in CustomObjectType.objects.all():
         # Skip rows that already have the snapshot.
         if cot.schema_document and "base_columns" in cot.schema_document:
             continue
 
-        table_name = f"custom_objects_{cot.id}"
+        table_name = f"{USER_TABLE_DATABASE_NAME_PREFIX}{cot.id}"
 
         user_field_names = set(
             CustomObjectTypeField.objects.filter(custom_object_type=cot)
@@ -88,10 +95,9 @@ def backfill_base_columns(apps, schema_editor):
                 continue
             entry = {
                 "name": col.name,
+                "field_class": base_field_info.get(col.name, {}).get("field_class", "UnknownField"),
                 "null": bool(col.null_ok),
             }
-            if col.name in base_field_info:
-                entry["field_class"] = base_field_info[col.name]["field_class"]
             base_columns.append(entry)
 
         doc = cot.schema_document or {}
@@ -102,7 +108,7 @@ def backfill_base_columns(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("netbox_custom_objects", "0008_backfill_schema_ids"),
+        ("netbox_custom_objects", "0009_alter_customobjecttype_version"),
     ]
 
     operations = [
