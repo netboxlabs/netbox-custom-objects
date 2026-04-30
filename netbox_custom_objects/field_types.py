@@ -970,7 +970,7 @@ class MultiObjectFieldType(FieldType):
 
         # For non-self-referential fields, we need to resolve the target model
         # Use the instance parameter which contains the field definition
-        content_type = ContentType.objects.get(pk=instance.related_object_type_id)
+        content_type = self._get_related_content_type(instance)
 
         # Now we can safely resolve the target model
         if content_type.app_label == APP_LABEL:
@@ -1023,7 +1023,7 @@ class MultiObjectFieldType(FieldType):
         if getattr(field, "_is_self_referential", False):
             to_model = model
         else:
-            content_type = ContentType.objects.get(pk=instance.related_object_type_id)
+            content_type = self._get_related_content_type(instance)
             if content_type.app_label == APP_LABEL:
                 from netbox_custom_objects.models import CustomObjectType
 
