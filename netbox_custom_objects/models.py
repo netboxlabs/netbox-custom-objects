@@ -497,9 +497,13 @@ class CustomObjectType(NetBoxModel):
         CustomObject base class (mixins), excluding any user-defined field names.
 
         Each dict has keys:
-          "name"        – column/field name
+          "name"        – DB column name (f.column, e.g. "site_id" for a FK field)
           "field_class" – Django field class name (e.g. "AutoField", "DateTimeField")
           "null"        – whether the column is nullable (bool)
+
+        Using f.column (not f.name) so that the snapshot key matches the actual DB
+        column name returned by DB introspection.  For non-FK fields f.name == f.column;
+        for FK fields they differ (e.g. f.name='site', f.column='site_id').
 
         This snapshot is stored in schema_document["base_columns"] so that the
         post_migrate auto-heal handler (issue #391, Phase 2) can detect drift when
@@ -508,7 +512,7 @@ class CustomObjectType(NetBoxModel):
         return sorted(
             [
                 {
-                    "name": f.name,
+                    "name": f.column,
                     "field_class": f.__class__.__name__,
                     "null": f.null,
                 }
