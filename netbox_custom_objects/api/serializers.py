@@ -551,7 +551,7 @@ def get_serializer_class(model, skip_object_fields=False):
 
         for field_name, value in poly_m2m.items():
             mgr = getattr(instance, field_name)
-            mgr.set(value)
+            mgr.set(value if value is not None else [])
 
         return instance
 
@@ -589,7 +589,7 @@ def get_serializer_class(model, skip_object_fields=False):
 
         for field_name, value in poly_m2m.items():
             mgr = getattr(instance, field_name)
-            mgr.set(value, clear=True)
+            mgr.set(value if value is not None else [], clear=True)
 
         return instance
 

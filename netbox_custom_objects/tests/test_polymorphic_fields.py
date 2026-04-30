@@ -386,6 +386,28 @@ class PolymorphicFieldAPITest(TransactionCleanupMixin, CustomObjectsTestCase, Tr
         self.assertIn("dcim.site", content_types)
         self.assertIn("ipam.prefix", content_types)
 
+    def test_patch_null_on_non_required_polymorphic_m2m_clears_values(self):
+        """
+        PATCH with poly_multi=null on a non-required polymorphic M2M field must
+        return 200 and clear the relation.  Before the fix, the ListField wrapper
+        had allow_null=False (the default), so null was rejected with a 400 before
+        reaching the DB.
+        """
+        _grant_perm(self.user, "change", self.model, "co-change-null")
+        obj = self.model.objects.create(name="m2m-null-patch-obj")
+        obj.poly_multi.add(self.site, self.prefix)
+        self.assertEqual(obj.poly_multi.count(), 2)
+
+        response = self.client.patch(
+            self._obj_detail_url(obj.pk),
+            json.dumps({"poly_multi": None}),
+            content_type="application/json",
+            **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.content)
+        obj.refresh_from_db()
+        self.assertEqual(obj.poly_multi.count(), 0)
+
     def test_update_custom_object_replaces_m2m(self):
         """PATCH with a new poly_multi list replaces the existing values."""
         _grant_perm(self.user, "change", self.model, "co-change")
@@ -787,6 +809,39 @@ class PolymorphicFieldUITest(TransactionCleanupMixin, CustomObjectsTestCase, Tra
         self.assertIn(self.site1, members)
         self.assertIn(self.site2, members)
         self.assertIn(self.prefix1, members)
+
+    def test_form_create_with_gfk_produces_single_object_change(self):
+        """
+        Submitting the add form with a polymorphic GFK value must create exactly
+        one ObjectChange entry.  Before the fix, custom_save() called instance.save()
+        twice — once to get a PK and again to write the GFK attrs — producing a
+        spurious UPDATE record immediately after the CREATE.
+        """
+        from django.contrib.contenttypes.models import ContentType
+        from core.models import ObjectChange
+
+        site_ct = ContentType.objects.get_for_model(Site)
+        data = {
+            "name": "single-change-obj",
+            "poly_obj__ct": site_ct.pk,
+            "poly_obj__obj": self.site1.pk,
+            "csrfmiddlewaretoken": "fake",
+        }
+        response = self.client.post(self._add_url(), data, follow=True)
+        self.assertNotIn(response.status_code, [400, 403, 500])
+        obj = self.model.objects.get(name="single-change-obj")
+
+        obj_ct = ContentType.objects.get_for_model(obj)
+        changes = ObjectChange.objects.filter(
+            changed_object_type=obj_ct,
+            changed_object_id=obj.pk,
+        )
+        self.assertEqual(
+            changes.count(), 1,
+            f"Expected exactly 1 ObjectChange after form create, got {changes.count()}. "
+            "A double-save produces a CREATE + spurious UPDATE.",
+        )
+        self.assertEqual(changes.first().action, "create")
 
     def test_submit_add_form_creates_object_with_polymorphic_m2m(self):
         """POST the add form creates a new custom object with polymorphic M2M values."""
