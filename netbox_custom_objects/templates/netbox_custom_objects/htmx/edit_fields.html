@@ -1,0 +1,10 @@
+{% load form_helpers %}
+
+{# HTMX partial: replaces #form_fields on polymorphic type-selector change. #}
+{# Must mirror the contents of #form_fields in customobject_edit.html. #}
+
+{% for field in form.hidden_fields %}
+  {{ field }}
+{% endfor %}
+
+{% include 'netbox_custom_objects/inc/edit_fields.html' %}
