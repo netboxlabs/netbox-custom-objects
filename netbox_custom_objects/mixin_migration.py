@@ -124,9 +124,8 @@ def heal_cot(cot, verbosity=1, dry_run=False):
     expected = _expected_base_fields(cot, model)
 
     # Build a lookup of what was stored in the last snapshot for type comparison.
-    # Note: schema_document["base_columns"] stores column names as f.name (from
-    # Phase 1's _collect_base_columns).  For all current base fields f.name ==
-    # f.column, so this lookup is consistent with expected's f.column keys.
+    # schema_document["base_columns"] stores column names as f.column (DB column
+    # name), consistent with expected's f.column keys.
     stored_col_info = {
         c["name"]: c
         for c in (cot.schema_document or {}).get("base_columns", [])
