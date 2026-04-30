@@ -1,8 +1,13 @@
+import json
+import logging
+from pathlib import Path
+
 from django.contrib.contenttypes.models import ContentType
 from django.http import Http404
 from django.utils.translation import gettext_lazy as _
 from drf_spectacular.utils import extend_schema_view, extend_schema
 from extras.choices import CustomFieldTypeChoices
+from rest_framework import status
 try:
     from netbox.api.viewsets import ETagMixin  # NetBox 4.6+
 except ImportError:
@@ -13,13 +18,82 @@ from rest_framework.response import Response
 from rest_framework.routers import APIRootView
 from rest_framework.views import APIView
 from rest_framework.viewsets import ModelViewSet
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
+
+from netbox.api.authentication import IsAuthenticatedOrLoginNotRequired, TokenWritePermission
 
 from netbox_custom_objects.filtersets import get_filterset_class
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.utilities import is_in_branch
 
 from . import serializers
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Schema document helpers
+# ---------------------------------------------------------------------------
+
+_SCHEMA_FILE = Path(__file__).parent.parent / "schema" / "cot_schema_v1.json"
+
+try:
+    import jsonschema as _jsonschema
+    with open(_SCHEMA_FILE) as _f:
+        _COT_SCHEMA = json.load(_f)
+    _VALIDATOR = _jsonschema.Draft202012Validator(_COT_SCHEMA)
+    _HAS_JSONSCHEMA = True
+except (ImportError, OSError, json.JSONDecodeError) as exc:
+    logger.warning("COT schema validation unavailable: %s", exc)
+    _HAS_JSONSCHEMA = False
+    _VALIDATOR = None
+
+
+def _validate_schema_doc(schema_doc: dict) -> None:
+    """
+    Validate *schema_doc* against the COT schema v1 JSON Schema.
+
+    Raises ``ValidationError`` (DRF 400) if validation fails or if
+    ``jsonschema`` is not installed.
+    """
+    if not _HAS_JSONSCHEMA:
+        # Can't validate without jsonschema; allow the request through and
+        # let the comparator / executor surface any structural problems.
+        return
+    errors = sorted(_VALIDATOR.iter_errors(schema_doc), key=lambda e: list(e.path))
+    if errors:
+        raise ValidationError({
+            "schema_errors": [
+                {"path": list(e.path), "message": e.message}
+                for e in errors[:10]  # cap at 10 to avoid overwhelming responses
+            ]
+        })
+
+
+def _serialize_field_change(fc) -> dict:
+    result = {
+        "op": fc.op.value,
+        "schema_id": fc.schema_id,
+        "db_name": fc.db_name,
+        "schema_def": fc.schema_def,
+    }
+    if fc.changed_attrs:
+        # Tuples are not JSON-serialisable; convert to lists.
+        result["changed_attrs"] = {k: list(v) for k, v in fc.changed_attrs.items()}
+    return result
+
+
+def _serialize_diff(diff) -> dict:
+    return {
+        "slug": diff.slug,
+        "name": diff.name,
+        "is_new": diff.is_new,
+        "has_changes": diff.has_changes,
+        "has_destructive_changes": diff.has_destructive_changes,
+        "cot_changes": {k: list(v) for k, v in diff.cot_changes.items()},
+        "field_changes": [_serialize_field_change(fc) for fc in diff.field_changes],
+        "warnings": diff.warnings,
+    }
+
 
 # Constants
 BRANCH_ACTIVE_ERROR_MESSAGE = _("Please switch to the main branch to perform this operation.")
@@ -190,7 +264,7 @@ class LinkedObjectsView(APIView):
 
         results = []
         for field in fields:
-            custom_object_model = field.custom_object_type.get_model(no_cache=True)
+            custom_object_model = field.custom_object_type.get_model()
 
             if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                 m2m_field = custom_object_model._meta.get_field(field.name)
@@ -213,3 +287,170 @@ class LinkedObjectsView(APIView):
                 })
 
         return Response({'count': len(results), 'results': results})
+
+
+class SchemaPreviewView(APIView):
+    """
+    Preview the diff that would result from applying a COT schema document.
+
+    Accepts a ``POST`` request whose body is a schema document conforming to
+    ``cot_schema_v1.json``.  Returns a structured diff for every COT in the
+    document without making any DB changes.
+
+    ## Request body
+
+        {
+            "schema_version": "1",
+            "types": [ ... ]
+        }
+
+    ## Response (200)
+
+        {
+            "diffs": [
+                {
+                    "slug":                   "my-cot",
+                    "name":                   "my_cot",
+                    "is_new":                 false,
+                    "has_changes":            true,
+                    "has_destructive_changes": false,
+                    "cot_changes":            {"description": ["old", "new"]},
+                    "field_changes": [
+                        {
+                            "op":         "add",
+                            "schema_id":  5,
+                            "db_name":    null,
+                            "schema_def": { ... }
+                        }
+                    ],
+                    "warnings": []
+                }
+            ]
+        }
+    """
+
+    permission_classes = [IsAuthenticatedOrLoginNotRequired]
+
+    def post(self, request, *args, **kwargs):
+        # Deferred import: the schema package imports Django models at module level, which
+        # triggers app-registry access before it is ready if imported at the top of views.py.
+        from netbox_custom_objects.schema.comparator import diff_document  # noqa: PLC0415
+
+        schema_doc = request.data
+        _validate_schema_doc(schema_doc)
+        diffs = diff_document(schema_doc)
+        return Response({"diffs": [_serialize_diff(d) for d in diffs]})
+
+
+class SchemaApplyView(APIView):
+    """
+    Apply a COT schema document to the live DB.
+
+    Accepts a ``POST`` request whose body wraps a schema document with an
+    optional ``allow_destructive`` flag.  The document is diffed against the
+    current DB state and all changes are applied atomically.  The applied
+    diffs are returned in the response.
+
+    ## Request body
+
+        {
+            "allow_destructive": false,
+            "schema": {
+                "schema_version": "1",
+                "types": [ ... ]
+            }
+        }
+
+    ``allow_destructive`` defaults to ``false``.  Set it to ``true`` to
+    permit ``REMOVE`` field operations (which drop DB columns).
+
+    ## Response (200)
+
+        {
+            "applied": true,
+            "diffs": [ ... ]
+        }
+
+    ## Error responses
+
+    **409 Conflict** — the document contains ``REMOVE`` operations and
+    ``allow_destructive`` was not set:
+
+        {
+            "error":             "destructive_changes",
+            "detail":            "Schema contains destructive ...",
+            "destructive_slugs": ["my-cot"]
+        }
+
+    **400 Bad Request** — circular COT dependency, unresolvable FK target,
+    or invalid schema document structure.
+
+    Unexpected DB errors (e.g. ``IntegrityError`` from a constraint violation
+    unrelated to the COT schema logic) are not caught and will surface as
+    **500 Internal Server Error**.  The entire apply is wrapped in
+    ``transaction.atomic()``, so any such failure leaves the DB unchanged.
+    """
+
+    permission_classes = [IsAuthenticatedOrLoginNotRequired, TokenWritePermission]
+
+    def post(self, request, *args, **kwargs):
+        # TODO: Schema apply is blocked while in a branch context because the executor
+        # performs direct DDL (ALTER/DROP TABLE) that is not branch-aware.  When branching
+        # is extended to support schema operations, remove this guard and wire up the
+        # appropriate branch-scoped apply path.
+        if is_in_branch():
+            raise ValidationError(BRANCH_ACTIVE_ERROR_MESSAGE)
+
+        if not (
+            request.user.has_perm('netbox_custom_objects.add_customobjecttype') and
+            request.user.has_perm('netbox_custom_objects.change_customobjecttype')
+        ):
+            raise PermissionDenied(
+                "You do not have permission to apply a schema document. "
+                "Both add and change permissions on CustomObjectType are required."
+            )
+
+        # Deferred import: same app-registry concern as the comparator import above.
+        from netbox_custom_objects.schema.executor import (  # noqa: PLC0415
+            apply_document,
+            CircularDependencyError,
+            DestructiveChangesError,
+            UnknownChoiceSetError,
+            UnknownFieldTypeError,
+            UnknownObjectTypeError,
+        )
+
+        allow_destructive = request.data.get("allow_destructive", False)
+        if not isinstance(allow_destructive, bool):
+            raise ValidationError({"allow_destructive": _("'allow_destructive' must be a boolean.")})
+        schema_doc = request.data.get("schema")
+        if not isinstance(schema_doc, dict):
+            raise ValidationError(
+                {"schema": _("A 'schema' object containing the COT schema document is required.")}
+            )
+
+        _validate_schema_doc(schema_doc)
+
+        try:
+            diffs = apply_document(schema_doc, allow_destructive=allow_destructive)
+        except DestructiveChangesError as exc:
+            return Response(
+                {
+                    "error": "destructive_changes",
+                    "detail": str(exc),
+                    "destructive_slugs": [d.slug for d in exc.diffs],
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        except CircularDependencyError as exc:
+            return Response(
+                {"error": "circular_dependency", "detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except (UnknownChoiceSetError, UnknownFieldTypeError, UnknownObjectTypeError) as exc:
+            return Response(
+                {"error": "unresolvable_reference", "detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        return Response({"applied": True, "diffs": [_serialize_diff(d) for d in diffs]})

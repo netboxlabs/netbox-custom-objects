@@ -612,6 +612,23 @@ class ObjectFieldTypeTestCase(FieldTypeTestCase):
         self.assertEqual(field.type, "object")
         self.assertEqual(field.related_object_type, self.device_object_type)
 
+    def test_get_model_field_raises_not_implemented_error_for_null_related_object_type(self):
+        """get_model_field() must raise NotImplementedError (not ContentType.DoesNotExist)
+        when related_object_type_id is NULL.  All callers catch NotImplementedError to
+        skip broken fields; an unexpected ContentType.DoesNotExist would propagate up
+        and crash model generation or the serializer."""
+        field = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="broken_obj",
+            label="Broken",
+            type="object",
+            related_object_type=self.device_object_type,
+        )
+        CustomObjectTypeField.objects.filter(pk=field.pk).update(related_object_type=None)
+        field.refresh_from_db()
+        with self.assertRaises(NotImplementedError):
+            ObjectFieldType().get_model_field(field)
+
     def test_object_field_model_generation(self):
         """Test object field model generation."""
         self.create_custom_object_type_field(
@@ -665,6 +682,21 @@ class MultiObjectFieldTypeTestCase(FieldTypeTestCase):
 
         self.assertEqual(field.type, "multiobject")
         self.assertEqual(field.related_object_type, self.device_object_type)
+
+    def test_get_model_field_raises_not_implemented_error_for_null_related_object_type(self):
+        """get_model_field() must raise NotImplementedError (not ContentType.DoesNotExist)
+        when related_object_type_id is NULL so callers handle it consistently."""
+        field = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="broken_multi",
+            label="Broken Multi",
+            type="multiobject",
+            related_object_type=self.device_object_type,
+        )
+        CustomObjectTypeField.objects.filter(pk=field.pk).update(related_object_type=None)
+        field.refresh_from_db()
+        with self.assertRaises(NotImplementedError):
+            MultiObjectFieldType().get_model_field(field)
 
     def test_multiobject_field_model_generation(self):
         """Test multiobject field model generation."""
