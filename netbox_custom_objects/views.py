@@ -573,6 +573,7 @@ class CustomObjectView(generic.ObjectView):
 @register_model_view(CustomObject, "edit")
 class CustomObjectEditView(generic.ObjectEditView):
     template_name = "netbox_custom_objects/customobject_edit.html"
+    htmx_template_name = "netbox_custom_objects/htmx/edit_fields.html"
     form = None
     queryset = None
     object = None

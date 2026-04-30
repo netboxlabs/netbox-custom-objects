@@ -429,10 +429,25 @@ def get_serializer_class(model, skip_object_fields=False):
     # Fields skipped during model generation (e.g. broken/null related_object_type_id)
     # won't be present on the model.  Build a name set from safe list attributes so
     # we can skip absent fields consistently in both loops below.
+    #
+    # Three locations to check:
+    #   local_fields         — concrete column-backed fields
+    #   local_many_to_many   — standard ManyToManyField
+    #   private_fields       — GenericForeignKey (polymorphic Object); NOT in local_fields
     model_field_names = {
         f.name
-        for f in list(model._meta.local_fields) + list(model._meta.local_many_to_many)
+        for f in (
+            list(model._meta.local_fields)
+            + list(model._meta.local_many_to_many)
+            + list(model._meta.private_fields)
+        )
     }
+    # PolymorphicM2MDescriptor is attached via setattr(), not via _meta, so it does
+    # not appear in any _meta.*fields list.  Add descriptor names explicitly.
+    model_field_names.update(
+        name for name, attr in model.__dict__.items()
+        if isinstance(attr, field_types.PolymorphicM2MDescriptor)
+    )
 
     # Create field list including all necessary fields
     base_fields = ["id", "url", "display", "created", "last_updated", "tags"]

@@ -23,50 +23,7 @@
     {{ field }}
   {% endfor %}
 
-  {# Render all fields grouped by group_name #}
-  <div class="field-group mb-5">
-    {% for group, fields in form.custom_object_type_field_groups.items %}
-      {% if group %}
-      <div class="row">
-        <h2 class="col-9 offset-3">{{ group }}</h2>
-      </div>
-      {% endif %}
-      {% for name in fields %}
-        {% if name in form.custom_object_type_poly_obj_ct_names %}
-          {# Polymorphic single-object pair: heading + type selector + object picker #}
-          {% with pair=form.custom_object_type_poly_obj_pairs|dict_get:name %}
-            <div class="row">
-              <h3 class="col-9 offset-3 mb-3 h4">{{ pair.1 }}</h3>
-            </div>
-            {% render_field form|getfield:name %}
-            {% render_field form|getfield:pair.0 %}
-          {% endwith %}
-        {% elif name in form.custom_object_type_poly_m2m_groups %}
-          {# Polymorphic multi-object group: heading + one sub-field per allowed type #}
-          {% with group_info=form.custom_object_type_poly_m2m_groups|dict_get:name %}
-            <div class="row">
-              <h3 class="col-9 offset-3 mb-3 h4">{{ group_info.1 }}</h3>
-            </div>
-            {% for sub_name in group_info.0 %}
-              {% render_field form|getfield:sub_name %}
-            {% endfor %}
-          {% endwith %}
-        {% else %}
-          {% render_field form|getfield:name %}
-        {% endif %}
-      {% endfor %}
-    {% endfor %}
-
-    {# Render regular model fields (non-custom fields) that are not in any group #}
-    {% for field in form %}
-      {% if field.name not in form.custom_object_type_rendered_names %}
-        {# Only render fields that are meant for user input #}
-        {% if not field.field.widget.is_hidden and not field.field.disabled and field.field.widget.input_type != 'hidden' %}
-          {% render_field field %}
-        {% endif %}
-      {% endif %}
-    {% endfor %}
-  </div>
+  {% include 'netbox_custom_objects/inc/edit_fields.html' %}
 {% endblock form %}
 
 {% block buttons %}
