@@ -1164,6 +1164,36 @@ class SearchReindexTestCase(CustomObjectsTestCase, TestCase):
         job = ReindexCustomObjectTypeJob.enqueue(cot_id=self.cot.pk, immediate=True)
         self.assertEqual(job.name, f'Reindex Custom Object Type: {self.cot.name}')
 
+    def test_register_search_index_skips_object_field_absent_from_stub_model(self):
+        """register_custom_object_search_index() must use local_fields/local_many_to_many
+        rather than _meta.get_field() to check field presence.  _meta.get_field() for a
+        name not in _forward_fields_map triggers Django's lazy _relation_tree computation,
+        which calls apps.get_models() → our override → get_model() for every COT →
+        infinite recursion when called during model registration.
+
+        Regression for PR #474: the stub model generated with skip_object_fields=True
+        does not have the OBJECT field, but self.fields.filter(search_weight__gt=0)
+        still returns it from the database.
+        """
+        cot = self.create_custom_object_type(name="StubSearchTest", slug="stub-search-test")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, search_weight=1000,
+        )
+        self.create_custom_object_type_field(
+            cot, name="ref_site", label="Site", type="object",
+            related_object_type=self.get_site_object_type(),
+            search_weight=500,
+        )
+        stub_model = cot.get_model(skip_object_fields=True)
+        model_field_names = (
+            {f.name for f in stub_model._meta.local_fields}
+            | {f.name for f in stub_model._meta.local_many_to_many}
+        )
+        self.assertNotIn("ref_site", model_field_names,
+                         "OBJECT field must be absent from stub model")
+        # Must not raise FieldDoesNotExist, RecursionError, or any other exception.
+        cot.register_custom_object_search_index(stub_model)
+
     def test_job_data_contains_cot_id(self):
         """Job.data is populated with cot_id and job_class for UI visibility and deduplication."""
         job = ReindexCustomObjectTypeJob.enqueue(cot_id=self.cot.pk, immediate=True)
@@ -1568,3 +1598,65 @@ class SemverValidationTestCase(CustomObjectsTestCase, TestCase):
             field.scheduled_removal = bad
             with self.assertRaises(ValidationError, msg=f"Expected ValidationError for scheduled_removal={bad!r}"):
                 field.full_clean()
+
+
+class NullRelatedObjectTypeTestCase(CustomObjectsTestCase, TestCase):
+    """Regression tests for graceful handling of OBJECT/MULTIOBJECT fields whose
+    related_object_type_id is NULL or points to a deleted ContentType.
+
+    A NULL FK can occur when a COT field is created via direct DB manipulation or
+    when the referenced ContentType is deleted.  All code paths that build the
+    dynamic model or serializer must skip such fields rather than crashing.
+
+    Covers the fixes in _fetch_and_generate_field_attrs (ContentType.DoesNotExist →
+    NotImplementedError) and get_serializer_class (Meta.fields/attrs mismatch guard).
+    """
+
+    def _make_cot_with_null_object_field(self, name, slug, field_name="broken_ref"):
+        from netbox_custom_objects.models import CustomObjectType
+        cot = self.create_custom_object_type(name=name, slug=slug)
+        self.create_custom_object_type_field(
+            cot, name="title", label="Title", type="text", primary=True, required=True,
+        )
+        field = self.create_custom_object_type_field(
+            cot, name=field_name, label="Broken Ref", type="object",
+            related_object_type=self.get_site_object_type(),
+        )
+        # Force the FK to NULL to simulate stale/corrupt data (e.g. ContentType deleted)
+        CustomObjectTypeField.objects.filter(pk=field.pk).update(related_object_type=None)
+        CustomObjectType.clear_model_cache()
+        return cot
+
+    def test_get_model_skips_object_field_with_null_related_object_type(self):
+        """get_model() must succeed and silently skip an OBJECT field whose
+        related_object_type_id is NULL rather than raising ContentType.DoesNotExist."""
+        cot = self._make_cot_with_null_object_field("NullRelObj", "null-rel-obj")
+        model = cot.get_model()
+        self.assertIsNotNone(model)
+        model_field_names = (
+            {f.name for f in model._meta.local_fields}
+            | {f.name for f in model._meta.local_many_to_many}
+        )
+        self.assertNotIn("broken_ref", model_field_names,
+                         "Field with null FK must be absent from the generated model")
+        self.assertIn("title", model_field_names,
+                      "Normal fields must still be present")
+
+    def test_get_serializer_class_handles_null_related_object_type(self):
+        """get_serializer_class() must not raise AttributeError when an OBJECT field
+        was skipped during model generation due to a NULL related_object_type_id.
+        Regression for the Meta.fields/attrs mismatch that caused DRF to raise a
+        validation error at serializer initialization time."""
+        from netbox_custom_objects.api.serializers import get_serializer_class
+        from netbox_custom_objects.models import CustomObjectType
+
+        cot = self._make_cot_with_null_object_field(
+            "NullRelSerializer", "null-rel-serializer"
+        )
+        model = cot.get_model()
+        serializer_cls = get_serializer_class(model)
+        self.assertIsNotNone(serializer_cls)
+        self.assertNotIn("broken_ref", serializer_cls.Meta.fields,
+                         "Null-FK field must not appear in serializer Meta.fields")
+        self.assertIn("title", serializer_cls.Meta.fields,
+                      "Normal fields must still be present in serializer")
