@@ -26,7 +26,7 @@ from netbox_custom_objects.comparator import (
     diff_cot,
     diff_document,
 )
-from netbox_custom_objects.exporter import export_cot, export_cots
+from netbox_custom_objects.schema.exporter import export_cot, export_cots
 from netbox_custom_objects.models import CustomObjectTypeField
 
 from .base import CustomObjectsTestCase
