@@ -511,7 +511,6 @@ class ExecutorFieldAlterTestCase(_ExecutorTestBase):
         self.assertEqual(self.field.type, "longtext")
 
 
-
 # ---------------------------------------------------------------------------
 # Field REMOVE
 # ---------------------------------------------------------------------------

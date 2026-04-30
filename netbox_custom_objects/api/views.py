@@ -1,6 +1,9 @@
+import functools
 import json
 import logging
 from pathlib import Path
+
+import jsonschema
 
 from django.contrib.contenttypes.models import ContentType
 from django.http import Http404
@@ -22,7 +25,6 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from netbox.api.authentication import IsAuthenticatedOrLoginNotRequired, TokenWritePermission
 
-from netbox.api.authentication import IsAuthenticatedOrLoginNotRequired, TokenWritePermission
 
 from netbox_custom_objects.filtersets import get_filterset_class
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
@@ -38,30 +40,22 @@ logger = logging.getLogger(__name__)
 
 _SCHEMA_FILE = Path(__file__).parent.parent / "schema" / "cot_schema_v1.json"
 
-try:
-    import jsonschema as _jsonschema
-    with open(_SCHEMA_FILE) as _f:
-        _COT_SCHEMA = json.load(_f)
-    _VALIDATOR = _jsonschema.Draft202012Validator(_COT_SCHEMA)
-    _HAS_JSONSCHEMA = True
-except (ImportError, OSError, json.JSONDecodeError) as exc:
-    logger.warning("COT schema validation unavailable: %s", exc)
-    _HAS_JSONSCHEMA = False
-    _VALIDATOR = None
+
+@functools.lru_cache(maxsize=1)
+def _get_validator():
+    """Load the COT JSON Schema file and return a validator. Cached after first call."""
+    with open(_SCHEMA_FILE) as f:
+        schema = json.load(f)
+    return jsonschema.Draft202012Validator(schema)
 
 
 def _validate_schema_doc(schema_doc: dict) -> None:
     """
     Validate *schema_doc* against the COT schema v1 JSON Schema.
-
-    Raises ``ValidationError`` (DRF 400) if validation fails or if
-    ``jsonschema`` is not installed.
+    Raises ``ValidationError`` (DRF 400) if validation fails.
     """
-    if not _HAS_JSONSCHEMA:
-        # Can't validate without jsonschema; allow the request through and
-        # let the comparator / executor surface any structural problems.
-        return
-    errors = sorted(_VALIDATOR.iter_errors(schema_doc), key=lambda e: list(e.path))
+    validator = _get_validator()
+    errors = sorted(validator.iter_errors(schema_doc), key=lambda e: list(e.path))
     if errors:
         raise ValidationError({
             "schema_errors": [
