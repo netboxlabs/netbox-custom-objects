@@ -22,6 +22,8 @@ from rest_framework.test import APIClient
 
 from netbox_custom_objects.api.views import _HAS_JSONSCHEMA
 
+from core.models import ObjectType
+from users.models import ObjectPermission
 from utilities.testing import create_test_user
 
 from netbox_custom_objects.schema.exporter import export_cot
@@ -204,6 +206,13 @@ class SchemaPreviewTestCase(_SchemaAPIBase):
 
 class SchemaApplyTestCase(_SchemaAPIBase):
     """POST /schema/apply/ applies the schema document atomically."""
+
+    def setUp(self):
+        super().setUp()
+        perm = ObjectPermission(name='schema_apply_cot_perm', actions=['add', 'change'])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
 
     def test_apply_new_cot_returns_200(self):
         schema_doc = {
