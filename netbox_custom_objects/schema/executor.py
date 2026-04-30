@@ -501,7 +501,11 @@ def apply_diffs(
         # Finalise: persist schema_document and sync next_schema_id counters.
         for diff in ordered:
             cot = cot_map[diff.slug]
-            if diff.is_new or diff.has_changes or not cot.schema_document:
+            # Also update when schema_document exists but was set only by the
+            # base-column snapshot (lacks schema_version), so that the first
+            # apply always writes a proper executor-managed document.
+            has_executor_doc = "schema_version" in (cot.schema_document or {})
+            if diff.is_new or diff.has_changes or not has_executor_doc:
                 _update_schema_document(cot, type_defs_by_slug[diff.slug])
             _sync_next_schema_id(cot, diff)
 

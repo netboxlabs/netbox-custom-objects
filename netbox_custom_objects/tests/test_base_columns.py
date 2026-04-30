@@ -24,9 +24,9 @@ from .base import CustomObjectsTestCase, TransactionCleanupMixin
 # ---------------------------------------------------------------------------
 
 def _run_backfill():
-    """Execute the 0009 backfill function directly against the live DB."""
+    """Execute the 0010 backfill function directly against the live DB."""
     mod = importlib.import_module(
-        "netbox_custom_objects.migrations.0009_backfill_base_columns"
+        "netbox_custom_objects.migrations.0010_backfill_base_columns"
     )
 
     class _AppsShim:
@@ -221,7 +221,7 @@ class BackfillBaseColumnsTestCase(
     TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
 ):
     """
-    Tests for the 0009_backfill_base_columns migration function.
+    Tests for the 0010_backfill_base_columns migration function.
 
     The migration function is called directly (bypassing the migration runner)
     so we can verify its behaviour against real DB state.
