@@ -407,7 +407,7 @@ class CustomObjectType(NetBoxModel):
                 field_attrs[field.name] = field_type.get_model_field(
                     field,
                 )
-            except ContentType.DoesNotExist:
+            except (ContentType.DoesNotExist, NotImplementedError):
                 import logging
                 if field.related_object_type_id is None:
                     msg = (
