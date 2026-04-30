@@ -23,7 +23,6 @@ def fix_object_fk_constraints(apps, schema_editor):
 
     from extras.choices import CustomFieldTypeChoices
 
-    CustomObjectType = apps.get_model("netbox_custom_objects", "CustomObjectType")
     CustomObjectTypeField = apps.get_model("netbox_custom_objects", "CustomObjectTypeField")
 
     object_fields = CustomObjectTypeField.objects.filter(
