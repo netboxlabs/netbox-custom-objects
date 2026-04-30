@@ -83,11 +83,13 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
             "deprecated_since",
             "scheduled_removal",
         )
+        read_only_fields = ("schema_id",)
 
     def validate(self, attrs):
         app_label = attrs.pop("app_label", None)
         model = attrs.pop("model", None)
-        if attrs["type"] in [
+        field_type = attrs.get("type")
+        if field_type in [
             CustomFieldTypeChoices.TYPE_OBJECT,
             CustomFieldTypeChoices.TYPE_MULTIOBJECT,
         ]:
@@ -113,7 +115,7 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
                 raise ValidationError(
                     "Must provide valid app_label and model for object field type."
                 )
-        if attrs["type"] in [
+        if field_type in [
             CustomFieldTypeChoices.TYPE_SELECT,
             CustomFieldTypeChoices.TYPE_MULTISELECT,
         ]:
@@ -262,6 +264,14 @@ class CustomObjectSerializer(NetBoxModelSerializer):
 def get_serializer_class(model, skip_object_fields=False):
     model_fields = model.custom_object_type.fields.all()
 
+    # Fields skipped during model generation (e.g. broken/null related_object_type_id)
+    # won't be present on the model.  Build a name set from safe list attributes so
+    # we can skip absent fields consistently in both loops below.
+    model_field_names = {
+        f.name
+        for f in list(model._meta.local_fields) + list(model._meta.local_many_to_many)
+    }
+
     # Create field list including all necessary fields
     base_fields = ["id", "url", "display", "created", "last_updated", "tags"]
 
@@ -273,6 +283,8 @@ def get_serializer_class(model, skip_object_fields=False):
     # Only include custom field names that will actually be added to the serializer
     custom_field_names = []
     for field in model_fields:
+        if field.name not in model_field_names:
+            continue  # excluded during model generation (e.g. broken FK)
         if skip_object_fields and field.type in [
             CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT
         ]:
@@ -381,6 +393,8 @@ def get_serializer_class(model, skip_object_fields=False):
         attrs["get__context"] = get__context
 
     for field in model_fields:
+        if field.name not in model_field_names:
+            continue  # excluded during model generation (e.g. broken FK)
         if skip_object_fields and field.type in [
             CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT
         ]:

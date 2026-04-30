@@ -6,8 +6,9 @@ from django.urls import reverse
 
 from utilities.testing import APIViewTestCases, create_test_user
 from rest_framework import status
+from rest_framework.test import APIClient
 
-from netbox_custom_objects.models import CustomObjectType
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from .base import CustomObjectsTestCase
 from core.models import ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Rack, Site
@@ -791,7 +792,8 @@ class ContextFieldApiTestCase(CustomObjectsTestCase, TestCase):
     def setUp(self):
         self.user = create_test_user('ctxapiuser')
         token_key = create_token(self.user)
-        self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
+        self.client = APIClient()
+        self.client.credentials(HTTP_AUTHORIZATION=f'Token {token_key}')
 
         # --- COT A: primary field + context field ---
         self.cot_with_primary = CustomObjectsTestCase.create_custom_object_type(
@@ -889,7 +891,7 @@ class ContextFieldApiTestCase(CustomObjectsTestCase, TestCase):
         """display must be the primary field value, not the fallback."""
         instance = self.model_with_primary.objects.create(name='Route-A', owner='Alice')
         response = self.client.get(
-            self._detail_url(self.cot_with_primary, instance), **self.header
+            self._detail_url(self.cot_with_primary, instance)
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['display'], 'Route-A')
@@ -898,7 +900,7 @@ class ContextFieldApiTestCase(CustomObjectsTestCase, TestCase):
         """_context.display must equal the context field value when primary is set."""
         instance = self.model_with_primary.objects.create(name='Route-A', owner='Alice')
         response = self.client.get(
-            self._detail_url(self.cot_with_primary, instance), **self.header
+            self._detail_url(self.cot_with_primary, instance)
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIsNotNone(response.data['_context'])
@@ -908,7 +910,7 @@ class ContextFieldApiTestCase(CustomObjectsTestCase, TestCase):
         """_context must be null when the context field carries no value."""
         instance = self.model_with_primary.objects.create(name='Route-B')
         response = self.client.get(
-            self._detail_url(self.cot_with_primary, instance), **self.header
+            self._detail_url(self.cot_with_primary, instance)
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIsNone(response.data['_context'])
@@ -920,7 +922,7 @@ class ContextFieldApiTestCase(CustomObjectsTestCase, TestCase):
         instance = self.model_no_primary.objects.create(owner='Bob')
         expected = f"{self.cot_no_primary.display_name} {instance.id}"
         response = self.client.get(
-            self._detail_url(self.cot_no_primary, instance), **self.header
+            self._detail_url(self.cot_no_primary, instance)
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['display'], expected)
@@ -929,7 +931,7 @@ class ContextFieldApiTestCase(CustomObjectsTestCase, TestCase):
         """_context.display must work correctly even when display uses the fallback name."""
         instance = self.model_no_primary.objects.create(owner='Bob')
         response = self.client.get(
-            self._detail_url(self.cot_no_primary, instance), **self.header
+            self._detail_url(self.cot_no_primary, instance)
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIsNotNone(response.data['_context'])
@@ -943,7 +945,7 @@ class ContextFieldApiTestCase(CustomObjectsTestCase, TestCase):
             name='Route-C', owner='Carol', region='EU'
         )
         response = self.client.get(
-            self._detail_url(self.cot_multi_ctx, instance), **self.header
+            self._detail_url(self.cot_multi_ctx, instance)
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIsNotNone(response.data['_context'])
@@ -954,8 +956,171 @@ class ContextFieldApiTestCase(CustomObjectsTestCase, TestCase):
         instance = self.model_multi_ctx.objects.create(name='Route-D', owner='Dave')
         # region (second context field) is not set
         response = self.client.get(
-            self._detail_url(self.cot_multi_ctx, instance), **self.header
+            self._detail_url(self.cot_multi_ctx, instance)
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIsNotNone(response.data['_context'])
         self.assertEqual(response.data['_context']['display'], 'Dave')
+
+
+# ---------------------------------------------------------------------------
+# PEP 440 version string validation — API layer (issue #392)
+# ---------------------------------------------------------------------------
+
+class Pep440APIValidationTestCase(CustomObjectsTestCase, TestCase):
+    """
+    Verify that ``validate_pep440`` surfaces as a 400 at the API layer for
+    ``CustomObjectType.version`` and ``CustomObjectTypeField.deprecated_since``
+    / ``scheduled_removal``.
+
+    DRF's ModelSerializer copies model-field validators into the serializer
+    field, so these should be enforced during deserialization without any
+    extra serializer code.
+    """
+
+    def setUp(self):
+        super().setUp()
+        token_key = create_token(self.user)
+        self.client = APIClient()
+        self.client.credentials(HTTP_AUTHORIZATION=f'Token {token_key}')
+
+        # Permission to create/change CustomObjectType records.
+        add_cot_perm = ObjectPermission(name='pep440_add_cot', actions=['add', 'change'])
+        add_cot_perm.save()
+        add_cot_perm.users.add(self.user)
+        add_cot_perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
+
+        # Permission to change CustomObjectTypeField records.
+        from netbox_custom_objects.models import CustomObjectTypeField  # noqa: PLC0415
+        change_field_perm = ObjectPermission(name='pep440_change_field', actions=['add', 'change'])
+        change_field_perm.save()
+        change_field_perm.users.add(self.user)
+        change_field_perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectTypeField))
+
+    # ------------------------------------------------------------------
+    # CustomObjectType.version
+    # ------------------------------------------------------------------
+
+    def test_create_cot_invalid_version_returns_400(self):
+        url = reverse('plugins-api:netbox_custom_objects-api:customobjecttype-list')
+        data = {'name': 'vertest', 'slug': 'ver-test', 'version': 'not-a-version'}
+        response = self.client.post(url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('version', response.data)
+
+    def test_create_cot_valid_version_accepted(self):
+        url = reverse('plugins-api:netbox_custom_objects-api:customobjecttype-list')
+        data = {'name': 'vertest2', 'slug': 'ver-test-2', 'version': '1.2.3'}
+        response = self.client.post(url, data, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+    # ------------------------------------------------------------------
+    # CustomObjectTypeField.deprecated_since / scheduled_removal
+    # ------------------------------------------------------------------
+
+    def test_patch_field_invalid_deprecated_since_returns_400(self):
+        cot = self.create_custom_object_type(name='pep440cot', slug='pep440-cot')
+        field = self.create_custom_object_type_field(cot, name='alpha', type='text')
+        url = reverse(
+            'plugins-api:netbox_custom_objects-api:customobjecttypefield-detail',
+            kwargs={'pk': field.pk},
+        )
+        response = self.client.patch(url, {'deprecated_since': 'latest'}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('deprecated_since', response.data)
+
+    def test_patch_field_invalid_scheduled_removal_returns_400(self):
+        cot = self.create_custom_object_type(name='pep440cot2', slug='pep440-cot-2')
+        field = self.create_custom_object_type_field(cot, name='beta', type='text')
+        url = reverse(
+            'plugins-api:netbox_custom_objects-api:customobjecttypefield-detail',
+            kwargs={'pk': field.pk},
+        )
+        response = self.client.patch(url, {'scheduled_removal': '1.x.0'}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('scheduled_removal', response.data)
+
+    def test_patch_cot_valid_version_accepted(self):
+        # PATCH CustomObjectType.version (no DDL on COT update) verifies the
+        # validator doesn't reject a valid PEP 440 string.
+        cot = self.create_custom_object_type(name='pep440cot3', slug='pep440-cot-3')
+        url = reverse(
+            'plugins-api:netbox_custom_objects-api:customobjecttype-detail',
+            kwargs={'pk': cot.pk},
+        )
+        response = self.client.patch(url, {'version': '2.0.0'}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+
+class SchemaIdReadOnlyTest(CustomObjectsTestCase, TestCase):
+    """
+    schema_id on CustomObjectTypeField is read-only via the API.
+    POSTing a value for it must be silently ignored; PATCHing an existing
+    field with a new schema_id must also leave the stored value unchanged.
+    """
+
+    def setUp(self):
+        self.user = create_test_user('schemauser')
+        token_key = create_token(self.user)
+        self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
+
+        # Add add + change + view permissions on CustomObjectTypeField
+        perm = ObjectPermission(name='Schema perm', actions=['add', 'change', 'view'])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectTypeField))
+        # Also need add on CustomObjectType (for creating the parent)
+        cot_perm = ObjectPermission(name='COT perm', actions=['add', 'view'])
+        cot_perm.save()
+        cot_perm.users.add(self.user)
+        cot_perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
+
+        self.cot = self.create_custom_object_type(name='ro_schema', slug='ro-schema')
+
+    def _field_list_url(self):
+        return reverse('plugins-api:netbox_custom_objects-api:customobjecttypefield-list')
+
+    def _field_detail_url(self, pk):
+        return reverse(
+            'plugins-api:netbox_custom_objects-api:customobjecttypefield-detail',
+            kwargs={'pk': pk},
+        )
+
+    def test_schema_id_in_response(self):
+        """schema_id must be present and non-null in the API response."""
+        field = self.create_custom_object_type_field(self.cot, name='alpha', type='text')
+        response = self.client.get(self._field_detail_url(field.pk), **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('schema_id', response.data)
+        self.assertIsNotNone(response.data['schema_id'])
+
+    def test_schema_id_ignored_on_create(self):
+        """Supplying schema_id on POST must be silently ignored; auto-assignment wins."""
+        data = {
+            'custom_object_type': self.cot.pk,
+            'name': 'beta',
+            'type': 'text',
+            'schema_id': 999,
+        }
+        response = self.client.post(
+            self._field_list_url(), data, format='json', **self.header
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertNotEqual(response.data['schema_id'], 999)
+
+    def test_schema_id_ignored_on_patch(self):
+        """PATCHing schema_id must not change the stored value."""
+        import json
+        field = self.create_custom_object_type_field(self.cot, name='gamma', type='text')
+        original_id = field.schema_id
+
+        response = self.client.patch(
+            self._field_detail_url(field.pk),
+            json.dumps({'schema_id': original_id + 100}),
+            content_type='application/json',
+            **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        field.refresh_from_db()
+        self.assertEqual(field.schema_id, original_id)

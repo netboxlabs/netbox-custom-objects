@@ -19,6 +19,14 @@ _is_migrating = contextvars.ContextVar('is_migrating', default=False)
 _migrations_checked = None
 _checking_migrations = False
 
+# Set to True once ready() has completed and _model_cache is fully populated.
+# get_models() checks this flag and skips dynamic model generation until it's True,
+# preventing ContentType lookups from firing during other apps' ready() calls (e.g.
+# dcim.ready() triggers Device._meta._relation_tree → apps.get_models()).  After
+# ready() sets this flag it calls apps.clear_cache(), so the next _relation_tree
+# access recomputes with the full set of COT models.
+_app_ready = False
+
 
 def _migration_started(sender, **kwargs):
     """Signal handler for pre_migrate - sets the migration flag."""
@@ -248,6 +256,17 @@ class CustomObjectsPluginConfig(PluginConfig):
                 super().ready()
                 return
 
+        # Signal that ready() has fully completed.  get_models() checks this flag
+        # before attempting dynamic model generation so that early calls triggered
+        # by other apps' ready() (e.g. dcim.ready() → Device._meta._relation_tree
+        # → apps.get_models()) return only static models rather than crashing on
+        # ContentType lookups.  We call apps.clear_cache() so the next
+        # _relation_tree access recomputes with the full COT model set.
+        global _app_ready
+        _app_ready = True
+        from django.apps import apps as django_apps
+        django_apps.clear_cache()
+
         super().ready()
 
     def get_model(self, model_name, require_ready=True):
@@ -304,6 +323,16 @@ class CustomObjectsPluginConfig(PluginConfig):
             warnings.filterwarnings(
                 "ignore", category=UserWarning, message=".*database.*"
             )
+
+            # Skip dynamic model generation until ready() has completed.
+            # Other apps' ready() calls (e.g. dcim) trigger _relation_tree →
+            # apps.get_models() before our ready() runs.  At that point _model_cache
+            # is empty, so get_model() would regenerate every COT from scratch —
+            # including ContentType DB lookups that may fail.  After our ready()
+            # finishes, _app_ready is True and get_model() returns cached models
+            # without any ContentType lookups.
+            if not _app_ready:
+                return
 
             # Skip custom object type model loading if dynamic models can't be created yet
             if self.should_skip_dynamic_model_creation():
