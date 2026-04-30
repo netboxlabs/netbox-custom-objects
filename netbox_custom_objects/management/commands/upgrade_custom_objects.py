@@ -49,11 +49,12 @@ class Command(BaseCommand):
         cot_filter = options.get("cot")
         verbosity = options["verbosity"]
 
+        from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
+
         if dry_run:
             self.stdout.write(self.style.WARNING("DRY RUN — no changes will be made.\n"))
 
         if cot_filter:
-            from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
             try:
                 if cot_filter.isdigit():
                     cot = CustomObjectType.objects.get(pk=int(cot_filter))
@@ -63,15 +64,14 @@ class Command(BaseCommand):
                 raise CommandError(f"No Custom Object Type found: {cot_filter!r}")
 
             result = heal_cot(cot, verbosity=verbosity, dry_run=dry_run)
-            self._print_cot_result(cot.name, result, dry_run)
+            self._print_cot_result(cot.name, result, dry_run, verbosity)
         else:
-            from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
             cots = list(CustomObjectType.objects.all())
             total = len(cots)
             healed = warnings = 0
             for cot in cots:
                 result = heal_cot(cot, verbosity=verbosity, dry_run=dry_run)
-                self._print_cot_result(cot.name, result, dry_run)
+                self._print_cot_result(cot.name, result, dry_run, verbosity)
                 if result["added"]:
                     healed += 1
                 warnings += len(result["warned"])
@@ -84,14 +84,15 @@ class Command(BaseCommand):
     # Output helpers
     # ------------------------------------------------------------------
 
-    def _print_cot_result(self, cot_name, result, dry_run):
+    def _print_cot_result(self, cot_name, result, dry_run, verbosity=1):
         added = result["added"]
         warned = result["warned"]
 
         if not added and not warned:
-            self.stdout.write(
-                self.style.SUCCESS(f"COT {cot_name!r}: no drift detected.")
-            )
+            if verbosity >= 2:
+                self.stdout.write(
+                    self.style.SUCCESS(f"COT {cot_name!r}: no drift detected.")
+                )
             return
 
         tag = " [DRY RUN]" if dry_run else ""

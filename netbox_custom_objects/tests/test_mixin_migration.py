@@ -5,7 +5,8 @@ Covers:
 - _expected_base_fields(): returns the correct base fields, excludes user fields
 - _can_auto_add(): correct classification of nullable / defaulted fields
 - heal_cot(): detects missing columns, adds safe ones, warns on unsafe ones,
-              never drops, updates schema_document snapshot after healing,
+              records add_failed on schema_editor error, never drops,
+              updates schema_document snapshot after healing,
               dry_run mode reports without modifying
 - heal_all_cots(): iterates all COTs and returns correct summary counts
 - upgrade_custom_objects management command: --dry-run and --cot flags
@@ -169,6 +170,34 @@ class HealCotTestCase(
         self.assertEqual(result["warned"][0]["type"], "new_non_nullable")
         self.assertEqual(result["warned"][0]["field"], "required_int")
 
+    def test_add_field_failure_recorded_as_warning(self):
+        """If schema_editor.add_field raises, the failure must appear in warned, not added."""
+        cot = self.create_custom_object_type(name="hc_fail", slug="hc-fail")
+
+        from django.db import models as dj_models
+        bad_field = dj_models.CharField(max_length=10, null=True, blank=True)
+        bad_field.name = "fail_col"
+        bad_field.column = "fail_col"
+        bad_field.set_attributes_from_name("fail_col")
+        bad_field.model = cot.get_model()
+
+        base_fields = _expected_base_fields(cot)
+        base_fields["fail_col"] = bad_field
+
+        with patch(
+            "netbox_custom_objects.mixin_migration._expected_base_fields",
+            return_value=base_fields,
+        ), patch(
+            "django.db.backends.base.schema.BaseDatabaseSchemaEditor.add_field",
+            side_effect=Exception("simulated DB error"),
+        ):
+            result = heal_cot(cot, verbosity=0)
+
+        self.assertNotIn("fail_col", result["added"])
+        self.assertEqual(len(result["warned"]), 1)
+        self.assertEqual(result["warned"][0]["type"], "add_failed")
+        self.assertEqual(result["warned"][0]["field"], "fail_col")
+
     def test_snapshot_updated_after_addition(self):
         """schema_document['base_columns'] must be refreshed after columns are added."""
         cot = self.create_custom_object_type(name="hc_snap", slug="hc-snap")
@@ -242,10 +271,7 @@ class HealCotTestCase(
         # (in reality it's a DateTimeField).  heal_cot should detect the mismatch.
         doc = cot.schema_document or {}
         cols = {c["name"]: c for c in doc.get("base_columns", [])}
-        if "created" in cols:
-            cols["created"] = {"name": "created", "field_class": "IntegerField", "null": False}
-        else:
-            cols["created"] = {"name": "created", "field_class": "IntegerField", "null": False}
+        cols["created"] = {"name": "created", "field_class": "IntegerField", "null": False}
         doc["base_columns"] = list(cols.values())
         CustomObjectType.objects.filter(pk=cot.pk).update(schema_document=doc)
         cot.refresh_from_db()
@@ -377,13 +403,13 @@ class UpgradeCustomObjectsCommandTestCase(
 
     def test_cot_flag_by_name(self):
         cot = self.create_custom_object_type(name="cmd_cot", slug="cmd-cot")
-        stdout, _ = self._call_command("--cot", cot.name, verbosity=1)
-        # Should succeed with no-drift message
+        stdout, _ = self._call_command("--cot", cot.name, verbosity=2)
+        # "no drift detected" is only printed at verbosity >= 2
         self.assertIn("no drift detected", stdout)
 
     def test_cot_flag_by_id(self):
         cot = self.create_custom_object_type(name="cmd_cotid", slug="cmd-cotid")
-        stdout, _ = self._call_command("--cot", str(cot.pk), verbosity=1)
+        stdout, _ = self._call_command("--cot", str(cot.pk), verbosity=2)
         self.assertIn("no drift detected", stdout)
 
     def test_unknown_cot_raises_error(self):

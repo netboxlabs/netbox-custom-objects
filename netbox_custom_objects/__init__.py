@@ -64,6 +64,10 @@ def _heal_mixin_columns(sender, **kwargs):
     if any(cmd in sys.argv for cmd in ("makemigrations", "collectstatic")):
         return
 
+    # Set the flag *before* running so that subsequent post_migrate firings
+    # (one per installed app) are no-ops even if the first attempt raises.
+    # A failure here will not be retried in the same process; operators can
+    # run 'manage.py upgrade_custom_objects' manually if needed.
     _heal_ran = True
 
     try:
