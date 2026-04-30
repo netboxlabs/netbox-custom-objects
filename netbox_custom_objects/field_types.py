@@ -247,7 +247,7 @@ class DecimalFieldType(FieldType):
             required=field.required,
             initial=field.default,
             max_digits=12,
-            decimal_places=2,
+            decimal_places=4,
             min_value=field.validation_minimum,
             max_value=field.validation_maximum,
         )
@@ -420,7 +420,7 @@ class SelectFieldType(FieldType):
 
 class MultiSelectFieldType(FieldType):
     def get_filterform_field(self, field, **kwargs):
-        choices = add_blank_choice(field.choice_set.choices)
+        choices = field.choice_set.choices
         return DynamicMultipleChoiceField(
             choices=choices,
             label=field,

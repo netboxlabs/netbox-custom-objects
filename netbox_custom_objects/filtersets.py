@@ -91,6 +91,11 @@ FIELD_TYPE_FILTERS = {
         extra_kwargs={"choices": lambda f: f.choices}
     ),
     CustomFieldTypeChoices.TYPE_OBJECT: FilterSpec(django_filters.ModelChoiceFilter),
+    # CustomManyToManyField inherits ManyToManyField, so Django's ORM translates
+    # `field__in=values` to a JOIN through the through table at the SQL level.
+    # The custom descriptor/manager only affects instance-level access (e.g.
+    # `instance.field.all()`), not queryset filtering, so ModelMultipleChoiceFilter
+    # is correct here without needing explicit through-table queries.
     CustomFieldTypeChoices.TYPE_MULTIOBJECT: FilterSpec(django_filters.ModelMultipleChoiceFilter),
 }
 
@@ -132,7 +137,7 @@ def build_filter_for_field(field) -> Optional[django_filters.Filter]:
 
     return spec.build(
         field_name=field.name,
-        label=field.label,
+        label=field.label or field.name,
         queryset=queryset,
         **extra_kwargs,
     )

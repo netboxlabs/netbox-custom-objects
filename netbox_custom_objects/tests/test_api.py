@@ -100,6 +100,8 @@ class CustomObjectAPITestCaseMixin:
         self.assertHttpStatus(response, 200)
         instance.refresh_from_db()
         for field, value in self.update_data.items():
+            # Note: getattr comparison only works for scalar fields. FK/M2M fields
+            # require separate assertions (e.g. comparing PKs or querysets).
             self.assertEqual(getattr(instance, field), value)
 
     def test_delete_object_without_permission(self):
