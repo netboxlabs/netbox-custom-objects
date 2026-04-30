@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Optional, Type
 
-from django.db.models import JSONField, QuerySet, Q
+from django.db.models import QuerySet, Q
 from django.utils.dateparse import parse_date, parse_datetime
 
 from extras.choices import CustomFieldTypeChoices
@@ -147,23 +147,14 @@ def get_filterset_class(model):
     """
     Create and return a filterset class for the given custom object model.
     """
-    # Get standard fields from the model
-    fields = [field.name for field in model._meta.fields]
-
+    # fields=[] disables auto-generation; all filters are added explicitly below
+    # via build_filter_for_field so there are no shadowed duplicates.
     meta = type(
         "Meta",
         (),
         {
             "model": model,
-            "fields": fields,
-            "filter_overrides": {
-                JSONField: {
-                    "filter_class": django_filters.CharFilter,
-                    "extra": lambda f: {
-                        "lookup_expr": "icontains",
-                    },
-                },
-            },
+            "fields": [],
         },
     )
 

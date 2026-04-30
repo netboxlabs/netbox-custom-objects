@@ -256,8 +256,6 @@ class DecimalFieldType(FieldType):
         return forms.DecimalField(
             label=field,
             required=False,
-            max_digits=12,
-            decimal_places=2,
             min_value=field.validation_minimum,
             max_value=field.validation_maximum,
         )
@@ -363,6 +361,12 @@ class JSONFieldType(FieldType):
         return JSONField(
             required=field.required,
             initial=json.dumps(field.default) if field.default else None,
+        )
+
+    def get_filterform_field(self, field, **kwargs):
+        return forms.CharField(
+            label=field,
+            required=False,
         )
 
 
