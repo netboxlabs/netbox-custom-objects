@@ -18,7 +18,7 @@ from rest_framework.response import Response
 from rest_framework.routers import APIRootView
 from rest_framework.views import APIView
 from rest_framework.viewsets import ModelViewSet
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from netbox.api.authentication import IsAuthenticatedOrLoginNotRequired, TokenWritePermission
 
@@ -264,7 +264,7 @@ class LinkedObjectsView(APIView):
 
         results = []
         for field in fields:
-            custom_object_model = field.custom_object_type.get_model(no_cache=True)
+            custom_object_model = field.custom_object_type.get_model()
 
             if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                 m2m_field = custom_object_model._meta.get_field(field.name)
@@ -400,6 +400,15 @@ class SchemaApplyView(APIView):
         # appropriate branch-scoped apply path.
         if is_in_branch():
             raise ValidationError(BRANCH_ACTIVE_ERROR_MESSAGE)
+
+        if not (
+            request.user.has_perm('netbox_custom_objects.add_customobjecttype') and
+            request.user.has_perm('netbox_custom_objects.change_customobjecttype')
+        ):
+            raise PermissionDenied(
+                "You do not have permission to apply a schema document. "
+                "Both add and change permissions on CustomObjectType are required."
+            )
 
         # Deferred import: same app-registry concern as the comparator import above.
         from netbox_custom_objects.schema.executor import (  # noqa: PLC0415

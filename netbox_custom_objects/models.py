@@ -1,4 +1,5 @@
 import decimal
+import logging
 import re
 import threading
 from datetime import date, datetime
@@ -57,6 +58,8 @@ from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
 from netbox_custom_objects.utilities import _suppress_clear_cache, generate_model
+
+logger = logging.getLogger(__name__)
 
 
 class UniquenessConstraintTestError(Exception):
@@ -408,16 +411,14 @@ class CustomObjectType(NetBoxModel):
                     field,
                 )
             except NotImplementedError:
-                import logging
-                _log = logging.getLogger(__name__)
                 if field.related_object_type_id is None:
-                    _log.debug(
+                    logger.debug(
                         "Skipping field %r (pk=%s) on COT %r: "
                         "related_object_type_id is NULL — field has no related type set.",
                         field.name, field.pk, self.slug,
                     )
                 else:
-                    _log.debug(
+                    logger.debug(
                         "Skipping field %r (pk=%s) on COT %r: related_object_type_id=%s "
                         "references a ContentType that no longer exists.",
                         field.name, field.pk, self.slug, field.related_object_type_id,
