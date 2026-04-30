@@ -13,14 +13,10 @@ Covers:
 """
 
 
-import unittest
-
 from django.urls import reverse
 from django.test import TransactionTestCase
 from rest_framework import status
 from rest_framework.test import APIClient
-
-from netbox_custom_objects.api.views import _HAS_JSONSCHEMA
 
 from core.models import ObjectType
 from users.models import ObjectPermission
@@ -173,7 +169,6 @@ class SchemaPreviewTestCase(_SchemaAPIBase):
         )
         self.assertIn(resp.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
 
-    @unittest.skipUnless(_HAS_JSONSCHEMA, "jsonschema not installed")
     def test_preview_invalid_schema_doc_returns_400(self):
         # schema_version must be "1" (const in cot_schema_v1.json)
         resp = self.client.post(
