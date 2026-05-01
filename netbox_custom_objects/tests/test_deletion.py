@@ -419,6 +419,86 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
             "Changing on_delete_behavior must re-bump the related COT's cache_timestamp.",
         )
 
+    def test_change_on_delete_behavior_protect_to_set_null(self):
+        """Changing on_delete_behavior from PROTECT to SET_NULL on an existing field must update
+        the DB-level FK constraint so that deleting the referenced object now sets the field to
+        NULL instead of being blocked."""
+        device = self._make_device(suffix='-chg-sn')
+
+        cot = self.create_simple_custom_object_type(name='chgsn', slug='chg-sn')
+        field = self.create_custom_object_type_field(
+            cot,
+            name='device',
+            label='Device',
+            type='object',
+            related_object_type=self.get_device_object_type(),
+            on_delete_behavior=ObjectFieldOnDeleteChoices.PROTECT,
+        )
+        model = cot.get_model()
+        co = model.objects.create(name='CO Chg SN', device=device)
+        device_pk = device.pk
+
+        # Confirm PROTECT is in effect: raw DELETE must be blocked.
+        with self.assertRaises(IntegrityError, msg="RESTRICT should block deletion before the change"):
+            with connection.cursor() as cursor:
+                cursor.execute('DELETE FROM dcim_device WHERE id = %s', [device_pk])
+
+        # Change the field to SET_NULL.
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.on_delete_behavior = ObjectFieldOnDeleteChoices.SET_NULL
+        field.save()
+
+        # Now deletion must succeed and set the FK to NULL.
+        with connection.cursor() as cursor:
+            cursor.execute('DELETE FROM dcim_device WHERE id = %s', [device_pk])
+
+        self.assertFalse(Device.objects.filter(pk=device_pk).exists())
+        self.assertTrue(
+            model.objects.filter(pk=co.pk).exists(),
+            "CO must survive after switching to SET_NULL and deleting the Device.",
+        )
+        co.refresh_from_db()
+        self.assertIsNone(co.device_id, "device field must be NULL after Device is deleted.")
+
+    def test_change_on_delete_behavior_protect_to_cascade(self):
+        """Changing on_delete_behavior from PROTECT to CASCADE on an existing field must update
+        the DB-level FK constraint so that deleting the referenced object now deletes the CO."""
+        device = self._make_device(suffix='-chg-casc')
+
+        cot = self.create_simple_custom_object_type(name='chgcasc', slug='chg-casc')
+        field = self.create_custom_object_type_field(
+            cot,
+            name='device',
+            label='Device',
+            type='object',
+            related_object_type=self.get_device_object_type(),
+            on_delete_behavior=ObjectFieldOnDeleteChoices.PROTECT,
+        )
+        model = cot.get_model()
+        co = model.objects.create(name='CO Chg Casc', device=device)
+        co_pk = co.pk
+        device_pk = device.pk
+
+        # Confirm PROTECT is in effect.
+        with self.assertRaises(IntegrityError, msg="RESTRICT should block deletion before the change"):
+            with connection.cursor() as cursor:
+                cursor.execute('DELETE FROM dcim_device WHERE id = %s', [device_pk])
+
+        # Change the field to CASCADE.
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.on_delete_behavior = ObjectFieldOnDeleteChoices.CASCADE
+        field.save()
+
+        # Now deletion must cascade and remove the CO.
+        with connection.cursor() as cursor:
+            cursor.execute('DELETE FROM dcim_device WHERE id = %s', [device_pk])
+
+        self.assertFalse(Device.objects.filter(pk=device_pk).exists())
+        self.assertFalse(
+            model.objects.filter(pk=co_pk).exists(),
+            "CO must be deleted after switching to CASCADE and deleting the Device.",
+        )
+
     def test_protect_co_to_co_enforced_at_db_level(self):
         """The DB-level ON DELETE RESTRICT constraint blocks a raw-SQL DELETE that
         bypasses Django's collector for a CO-to-CO PROTECT field.
