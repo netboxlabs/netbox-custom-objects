@@ -723,29 +723,31 @@ class CustomObjectType(NetBoxModel):
         related_table = related_model._meta.db_table
         column_name = model_field.column
 
+        q = connection.ops.quote_name
         with connection.cursor() as cursor:
             # Drop existing FK constraint if it exists
             cursor.execute("""
                 SELECT constraint_name
                 FROM information_schema.table_constraints
                 WHERE table_name = %s
+                AND table_schema = current_schema()
                 AND constraint_type = 'FOREIGN KEY'
                 AND constraint_name LIKE %s
             """, [table_name, f"%{column_name}%"])
 
             for row in cursor.fetchall():
                 constraint_name = row[0]
-                cursor.execute(f'ALTER TABLE "{table_name}" DROP CONSTRAINT IF EXISTS "{constraint_name}"')
+                cursor.execute(f'ALTER TABLE {q(table_name)} DROP CONSTRAINT IF EXISTS {q(constraint_name)}')
 
             # PROTECT maps to RESTRICT in SQL (raises an error on delete attempt).
             # SET NULL and CASCADE map directly.
             # For SET NULL the column must be nullable, which it always is for Object fields.
             constraint_name = f"{table_name}_{column_name}_fk"
             cursor.execute(f"""
-                ALTER TABLE "{table_name}"
-                ADD CONSTRAINT "{constraint_name}"
-                FOREIGN KEY ("{column_name}")
-                REFERENCES "{related_table}" ("id")
+                ALTER TABLE {q(table_name)}
+                ADD CONSTRAINT {q(constraint_name)}
+                FOREIGN KEY ({q(column_name)})
+                REFERENCES {q(related_table)} ("id")
                 ON DELETE {on_delete_sql}
                 DEFERRABLE INITIALLY DEFERRED
             """)
@@ -1385,19 +1387,9 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     }
                 )
 
-        # on_delete_behavior is only meaningful for Object-type fields
-        if (
-            self.on_delete_behavior
-            and self.on_delete_behavior != ObjectFieldOnDeleteChoices.SET_NULL
-            and self.type != CustomFieldTypeChoices.TYPE_OBJECT
-        ):
-            raise ValidationError(
-                {
-                    "on_delete_behavior": _(
-                        "On-delete behavior can only be set for Object-type fields."
-                    )
-                }
-            )
+        # on_delete_behavior is only meaningful for Object-type fields; reset it on others.
+        if self.type != CustomFieldTypeChoices.TYPE_OBJECT:
+            self.on_delete_behavior = ObjectFieldOnDeleteChoices.SET_NULL
 
         # Check for recursion in object and multiobject fields
         if (self.type in (
