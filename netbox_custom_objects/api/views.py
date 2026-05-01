@@ -94,6 +94,7 @@ def _serialize_diff(diff) -> dict:
 # Constants
 BRANCH_ACTIVE_ERROR_MESSAGE = _("Please switch to the main branch to perform this operation.")
 
+
 class RootView(APIRootView):
     def get_view_name(self):
         return "CustomObjects"
