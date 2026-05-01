@@ -109,8 +109,12 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
             on_delete_behavior=ObjectFieldOnDeleteChoices.SET_NULL,
         )
 
-        model_a = cot_a.get_model()
+        # Generate source (model_b) first so it interns the target model; then
+        # refresh cot_a so its Python-side cache_timestamp is current and
+        # get_model() returns the same class that model_b's FK points to.
         model_b = cot_b.get_model()
+        cot_a.refresh_from_db()
+        model_a = cot_a.get_model()
 
         obj_a = model_a.objects.create(name='Object A')
         obj_b = model_b.objects.create(name='Object B', ref_a=obj_a)
@@ -280,3 +284,249 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
     def test_delete_referenced_core_object(self):
         """Alias for test_delete_referenced_core_object_set_null (default behavior)."""
         self.test_delete_referenced_core_object_set_null()
+
+    def test_delete_co_referenced_by_another_co_cascade(self):
+        """CO-to-CO object field with CASCADE: deleting the target CO cascades to the source CO."""
+        cot_target = self.create_simple_custom_object_type(name='casctarget', slug='casc-target')
+        cot_source = self.create_simple_custom_object_type(name='cascsource', slug='casc-source')
+
+        self.create_custom_object_type_field(
+            cot_source,
+            name='ref_target',
+            label='Reference Target',
+            type='object',
+            related_object_type=cot_target.object_type,
+            on_delete_behavior=ObjectFieldOnDeleteChoices.CASCADE,
+        )
+
+        # Generate source first so it interns the target model internally; then
+        # refresh cot_target so its Python-side cache_timestamp is up-to-date and
+        # get_model() returns the same class that model_source's FK points to.
+        model_source = cot_source.get_model()
+        cot_target.refresh_from_db()
+        model_target = cot_target.get_model()
+
+        obj_target = model_target.objects.create(name='Target Object')
+        obj_source = model_source.objects.create(name='Source Object', ref_target=obj_target)
+        obj_source_pk = obj_source.pk
+
+        # Django ORM delete: collector walks _meta.related_objects and cascades.
+        obj_target.delete()
+
+        self.assertFalse(
+            model_source.objects.filter(pk=obj_source_pk).exists(),
+            "Source CO must be deleted when its CASCADE target CO is deleted.",
+        )
+
+    def test_delete_co_referenced_by_another_co_protect(self):
+        """CO-to-CO object field with PROTECT: deleting the target CO raises ProtectedError."""
+        from django.db.models import ProtectedError
+
+        cot_target = self.create_simple_custom_object_type(name='prottarget', slug='prot-target')
+        cot_source = self.create_simple_custom_object_type(name='protsource', slug='prot-source')
+
+        self.create_custom_object_type_field(
+            cot_source,
+            name='ref_target',
+            label='Reference Target',
+            type='object',
+            related_object_type=cot_target.object_type,
+            on_delete_behavior=ObjectFieldOnDeleteChoices.PROTECT,
+        )
+
+        model_source = cot_source.get_model()
+        cot_target.refresh_from_db()
+        model_target = cot_target.get_model()
+
+        obj_target = model_target.objects.create(name='Target Object')
+        model_source.objects.create(name='Source Object', ref_target=obj_target)
+
+        with self.assertRaises(ProtectedError):
+            obj_target.delete()
+
+        # Both objects must remain intact.
+        self.assertTrue(
+            model_target.objects.filter(pk=obj_target.pk).exists(),
+            "Target CO must survive when deletion is blocked by PROTECT.",
+        )
+
+    def test_object_field_save_bumps_related_cot_cache_timestamp(self):
+        """Creating a TYPE_OBJECT field must bump the related COT's cache_timestamp for cross-worker invalidation."""
+        cot_target = self.create_simple_custom_object_type(name='cttarget', slug='ct-target')
+        cot_source = self.create_simple_custom_object_type(name='ctsource', slug='ct-source')
+
+        cot_target.refresh_from_db()
+        initial_ts = cot_target.cache_timestamp
+
+        self.create_custom_object_type_field(
+            cot_source,
+            name='ref_target',
+            label='Reference Target',
+            type='object',
+            related_object_type=cot_target.object_type,
+        )
+
+        cot_target.refresh_from_db()
+        self.assertGreater(
+            cot_target.cache_timestamp,
+            initial_ts,
+            "Creating a TYPE_OBJECT field must bump the related COT's cache_timestamp.",
+        )
+
+    def test_object_field_save_clears_related_cot_model_cache(self):
+        """Creating a TYPE_OBJECT field must evict the related COT's model from the in-process cache."""
+        cot_target = self.create_simple_custom_object_type(name='mctarget', slug='mc-target')
+        cot_source = self.create_simple_custom_object_type(name='mcsource', slug='mc-source')
+
+        # Warm up the cache for the target COT.
+        cot_target.get_model()
+        self.assertTrue(CustomObjectType.is_model_cached(cot_target.id))
+
+        self.create_custom_object_type_field(
+            cot_source,
+            name='ref_target',
+            label='Reference Target',
+            type='object',
+            related_object_type=cot_target.object_type,
+        )
+
+        self.assertFalse(
+            CustomObjectType.is_model_cached(cot_target.id),
+            "Saving a TYPE_OBJECT field must evict the related COT's model from cache.",
+        )
+
+    def test_on_delete_behavior_change_bumps_related_cot_cache_timestamp(self):
+        """Changing on_delete_behavior on an existing TYPE_OBJECT field must re-bump the related COT's timestamp."""
+        cot_target = self.create_simple_custom_object_type(name='odtarget', slug='od-target')
+        cot_source = self.create_simple_custom_object_type(name='odsource', slug='od-source')
+
+        field = self.create_custom_object_type_field(
+            cot_source,
+            name='ref_target',
+            label='Reference Target',
+            type='object',
+            related_object_type=cot_target.object_type,
+            on_delete_behavior=ObjectFieldOnDeleteChoices.SET_NULL,
+        )
+
+        cot_target.refresh_from_db()
+        ts_after_create = cot_target.cache_timestamp
+
+        # Reload from DB so that from_db() populates _original (required by save()).
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.on_delete_behavior = ObjectFieldOnDeleteChoices.PROTECT
+        field.save()
+
+        cot_target.refresh_from_db()
+        self.assertGreater(
+            cot_target.cache_timestamp,
+            ts_after_create,
+            "Changing on_delete_behavior must re-bump the related COT's cache_timestamp.",
+        )
+
+    def test_protect_co_to_co_enforced_at_db_level(self):
+        """The DB-level ON DELETE RESTRICT constraint blocks a raw-SQL DELETE that
+        bypasses Django's collector for a CO-to-CO PROTECT field.
+
+        Django's deletion collector raises ProtectedError before issuing any SQL, so it
+        never exercises the DB constraint directly. This test verifies that the constraint
+        itself is wired correctly by using a raw DELETE, mirroring the pattern used by
+        test_delete_referenced_core_object_protect for core-model FKs.
+        """
+        cot_target = self.create_simple_custom_object_type(name='dbtarget', slug='db-target')
+        cot_source = self.create_simple_custom_object_type(name='dbsource', slug='db-source')
+
+        self.create_custom_object_type_field(
+            cot_source,
+            name='ref_target',
+            label='Reference Target',
+            type='object',
+            related_object_type=cot_target.object_type,
+            on_delete_behavior=ObjectFieldOnDeleteChoices.PROTECT,
+        )
+
+        model_source = cot_source.get_model()
+        cot_target.refresh_from_db()
+        model_target = cot_target.get_model()
+
+        obj_target = model_target.objects.create(name='Target Object')
+        model_source.objects.create(name='Source Object', ref_target=obj_target)
+
+        target_table = cot_target.get_database_table_name()
+        with self.assertRaises(IntegrityError,
+                               msg="DB-level ON DELETE RESTRICT must block raw-SQL deletion of the target"):
+            with connection.cursor() as cursor:
+                cursor.execute(f'DELETE FROM {target_table} WHERE id = %s', [obj_target.pk])
+
+        self.assertTrue(
+            model_target.objects.filter(pk=obj_target.pk).exists(),
+            "Target object must survive the failed deletion.",
+        )
+
+    def test_non_object_field_save_does_not_bump_unrelated_cot_cache_timestamp(self):
+        """Saving a non-object field must not affect an unrelated COT's cache_timestamp."""
+        cot_target = self.create_simple_custom_object_type(name='notarget', slug='no-target')
+        cot_other = self.create_simple_custom_object_type(name='noother', slug='no-other')
+
+        cot_target.refresh_from_db()
+        initial_ts = cot_target.cache_timestamp
+
+        self.create_custom_object_type_field(
+            cot_other,
+            name='extra',
+            label='Extra',
+            type='text',
+        )
+
+        cot_target.refresh_from_db()
+        self.assertEqual(
+            cot_target.cache_timestamp,
+            initial_ts,
+            "Saving a text field on an unrelated COT must not bump the target COT's cache_timestamp.",
+        )
+
+    def test_production_path_get_model_field_uses_fresh_db_fetch(self):
+        """get_model_field() fetches the target COT fresh from DB, so source_cot.get_model()
+        works correctly even when the caller's Python target COT object is stale.
+
+        After saving a TYPE_OBJECT field the signal bumps the target COT's cache_timestamp
+        in the DB and clears its in-process model cache.  The Python object held by test
+        code (or by any code that loaded the target COT before the save) then has a stale
+        cache_timestamp.
+
+        The production code in get_model_field() (field_types.py) always issues a fresh
+        CustomObjectType.objects.get() for the target COT before calling get_model(), so
+        the model it generates is cached under the current (post-bump) timestamp.
+
+        This test verifies that invariant by calling source_cot.get_model() with NO
+        refresh_from_db() on cot_target, then using only the model class that the FK
+        field itself resolved to (remote_field.model) — which is what the production
+        path set — to create and relate objects.  If get_model_field() ever stopped
+        fetching the target COT fresh from DB, the FK would resolve to a different model
+        class than the one cached under the current timestamp, and the create() call
+        would raise ValueError.
+        """
+        cot_target = self.create_simple_custom_object_type(name='ppttarget', slug='ppt-target')
+        cot_source = self.create_simple_custom_object_type(name='pptsource', slug='ppt-source')
+
+        self.create_custom_object_type_field(
+            cot_source,
+            name='ref_target',
+            label='Reference Target',
+            type='object',
+            related_object_type=cot_target.object_type,
+        )
+
+        # No refresh_from_db() on cot_target — its Python object is stale.
+        # get_model_field() inside source_cot.get_model() must handle this itself.
+        source_model = cot_source.get_model()
+
+        # Retrieve the target model class as the production path resolved it: via the
+        # FK's remote_field, not via the stale cot_target Python object.
+        target_model = source_model._meta.get_field('ref_target').remote_field.model
+
+        # Create and relate objects using only the production-path model class.
+        # A class-identity mismatch (stale vs. current model) would raise ValueError here.
+        obj_target = target_model.objects.create(name='Target Object')
+        obj_source = source_model.objects.create(name='Source Object', ref_target=obj_target)
+        self.assertEqual(obj_source.ref_target, obj_target)

@@ -2017,6 +2017,20 @@ def clear_cache_on_field_save(sender, instance, **kwargs):
     ):
         CustomObjectType.clear_model_cache(pointing_field.custom_object_type_id)
 
+    # When a TYPE_OBJECT field is saved, the FK's on_delete behavior is contributed as
+    # a reverse relation to the related model's _meta.related_objects. If the related
+    # model is a custom object type, bump its cache_timestamp so that all workers
+    # regenerate its model and pick up the correct on_delete behavior. Without this,
+    # a worker with a stale cached related model will still see the old on_delete value
+    # and may bypass a PROTECT or RESTRICT constraint via Django's pre-delete SET NULL.
+    if instance.type == CustomFieldTypeChoices.TYPE_OBJECT and instance.related_object_type_id:
+        try:
+            related_cot = CustomObjectType.objects.get(object_type_id=instance.related_object_type_id)
+            CustomObjectType.clear_model_cache(related_cot.id)
+            related_cot.save(update_fields=['cache_timestamp'])
+        except CustomObjectType.DoesNotExist:
+            pass
+
 
 @receiver(pre_delete, sender=CustomObjectTypeField)
 def clear_cache_on_field_delete(sender, instance, **kwargs):
