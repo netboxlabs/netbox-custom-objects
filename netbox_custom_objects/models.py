@@ -1269,8 +1269,10 @@ class CustomObjectType(NetBoxModel):
             # Temporarily disconnect the pre_delete handler to skip the ObjectType deletion
             # TODO: Remove this disconnect/reconnect after ObjectType has been exempted from handle_deleted_object
             pre_delete.disconnect(handle_deleted_object)
-            object_type.delete()
-            pre_delete.connect(handle_deleted_object)
+            try:
+                object_type.delete()
+            finally:
+                pre_delete.connect(handle_deleted_object)
 
         with schema_conn.schema_editor() as schema_editor:
             # Drop through tables before the main table (they have FKs pointing to it).

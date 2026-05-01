@@ -93,6 +93,37 @@ def _patch_get_serializer_for_model():
                 pass
 
 
+def _connect_deferred_data_reset_signals():
+    """
+    Reset the ``_deferred_co_field_data`` ContextVar at every merge/sync/revert
+    boundary so leftover entries from a previous failure cannot leak into the
+    next operation.
+
+    netbox-branching's ``post_merge``/``post_sync``/``post_revert`` only fire on
+    success — if a merge raises mid-way, the ContextVar may still hold deferred
+    CO field updates that were never applied.  Connecting both pre- and post-
+    handlers guarantees the reset runs whether the prior operation succeeded or
+    not (pre catches the failure case; post is for tidiness).
+    """
+    try:
+        from netbox_branching.signals import (
+            pre_merge, post_merge,
+            pre_sync, post_sync,
+            pre_revert, post_revert,
+        )
+    except ImportError:
+        return
+
+    def _reset(sender, **kwargs):
+        from netbox_custom_objects.models import _deferred_co_field_data
+        _deferred_co_field_data.set(None)
+
+    for sig in (pre_merge, post_merge, pre_sync, post_sync, pre_revert, post_revert):
+        # weak=False so the receiver isn't garbage-collected when the closure
+        # goes out of scope at the end of ready().
+        sig.connect(_reset, weak=False)
+
+
 def _patch_check_object_accessible_in_branch():
     """
     Patch check_object_accessible_in_branch to use an existence check instead of
@@ -339,6 +370,10 @@ class CustomObjectsPluginConfig(PluginConfig):
         # Patch check_object_accessible_in_branch to use pk-only existence check,
         # avoiding SELECT * which references renamed columns that may not exist in main.
         _patch_check_object_accessible_in_branch()
+
+        # Clear deferred CO field data on every merge/sync/revert boundary so
+        # leftover entries from a failed prior operation don't leak forward.
+        _connect_deferred_data_reset_signals()
 
         # Suppress warnings about database calls during app initialization
         with warnings.catch_warnings():

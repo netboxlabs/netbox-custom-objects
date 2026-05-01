@@ -175,7 +175,6 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
 
     class Meta:
         model = CustomObjectTypeField
-        fields = "__all__"
         exclude = ('db_column',)
 
     def __init__(self, *args, **kwargs):
