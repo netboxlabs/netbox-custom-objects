@@ -19,6 +19,14 @@ _is_migrating = contextvars.ContextVar('is_migrating', default=False)
 _migrations_checked = None
 _checking_migrations = False
 
+# Set to True once ready() has completed and _model_cache is fully populated.
+# get_models() checks this flag and skips dynamic model generation until it's True,
+# preventing ContentType lookups from firing during other apps' ready() calls (e.g.
+# dcim.ready() triggers Device._meta._relation_tree → apps.get_models()).  After
+# ready() sets this flag it calls apps.clear_cache(), so the next _relation_tree
+# access recomputes with the full set of COT models.
+_app_ready = False
+
 
 def _migration_started(sender, **kwargs):
     """Signal handler for pre_migrate - sets the migration flag."""
@@ -113,6 +121,46 @@ def _patch_check_object_accessible_in_branch():
         _sr.check_object_accessible_in_branch = _patched
     except (ImportError, AttributeError):
         pass
+
+
+# Module-level flag so the heal runs at most once per process invocation even
+# though post_migrate fires once per installed app.
+_heal_ran = False
+
+
+def _heal_mixin_columns(sender, **kwargs):
+    """
+    post_migrate signal handler: detect and apply mixin column drift.
+
+    Fires after every 'manage.py migrate' run (once per installed app).  The
+    module-level _heal_ran flag ensures the actual work happens only once per
+    process so the cost is negligible on normal server starts where no
+    migrations run.
+
+    Skipped during makemigrations and collectstatic (DB may be unavailable or
+    in an inconsistent state for our purposes).
+    """
+    global _heal_ran
+    if _heal_ran:
+        return
+
+    if any(cmd in sys.argv for cmd in ("makemigrations", "collectstatic")):
+        return
+
+    # Set the flag *before* running so that subsequent post_migrate firings
+    # (one per installed app) are no-ops even if the first attempt raises.
+    # A failure here will not be retried in the same process; operators can
+    # run 'manage.py upgrade_custom_objects' manually if needed.
+    _heal_ran = True
+
+    try:
+        from netbox_custom_objects.mixin_migration import heal_all_cots  # noqa: PLC0415
+        heal_all_cots(verbosity=kwargs.get("verbosity", 1))
+    except Exception:
+        import logging  # noqa: PLC0415
+        logging.getLogger(__name__).exception(
+            "upgrade_custom_objects: unexpected error during mixin drift check"
+        )
 
 
 def _patch_object_selector_view():
@@ -263,6 +311,9 @@ class CustomObjectsPluginConfig(PluginConfig):
         pre_migrate.connect(_migration_started)
         post_migrate.connect(_migration_finished)
 
+        # Heal mixin column drift after every migrate run (issue #391 Phase 2)
+        post_migrate.connect(_heal_mixin_columns)
+
         # Patch ObjectSelectorView to support dynamically-generated custom object models
         _patch_object_selector_view()
 
@@ -299,6 +350,17 @@ class CustomObjectsPluginConfig(PluginConfig):
                 # model registration — it will happen after migrations finish.
                 super().ready()
                 return
+
+        # Signal that ready() has fully completed.  get_models() checks this flag
+        # before attempting dynamic model generation so that early calls triggered
+        # by other apps' ready() (e.g. dcim.ready() → Device._meta._relation_tree
+        # → apps.get_models()) return only static models rather than crashing on
+        # ContentType lookups.  We call apps.clear_cache() so the next
+        # _relation_tree access recomputes with the full COT model set.
+        global _app_ready
+        _app_ready = True
+        from django.apps import apps as django_apps
+        django_apps.clear_cache()
 
         super().ready()
 
@@ -356,6 +418,16 @@ class CustomObjectsPluginConfig(PluginConfig):
             warnings.filterwarnings(
                 "ignore", category=UserWarning, message=".*database.*"
             )
+
+            # Skip dynamic model generation until ready() has completed.
+            # Other apps' ready() calls (e.g. dcim) trigger _relation_tree →
+            # apps.get_models() before our ready() runs.  At that point _model_cache
+            # is empty, so get_model() would regenerate every COT from scratch —
+            # including ContentType DB lookups that may fail.  After our ready()
+            # finishes, _app_ready is True and get_model() returns cached models
+            # without any ContentType lookups.
+            if not _app_ready:
+                return
 
             # Skip custom object type model loading if dynamic models can't be created yet
             if self.should_skip_dynamic_model_creation():

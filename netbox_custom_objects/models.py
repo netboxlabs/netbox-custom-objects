@@ -5,6 +5,8 @@ import re
 import threading
 from datetime import date, datetime
 
+from packaging.version import Version, InvalidVersion
+
 import django_filters
 from core.models import ObjectType, ObjectChange
 from core.models.object_types import ObjectTypeManager
@@ -13,7 +15,6 @@ from django.conf import settings
 
 # from django.contrib.contenttypes.management import create_contenttypes
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import FieldDoesNotExist
 from django.core.validators import RegexValidator, ValidationError
 from django.db import connection, IntegrityError, models, transaction
 from django.db.models import Q
@@ -58,6 +59,8 @@ from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
 from netbox_custom_objects.utilities import _suppress_clear_cache, generate_model
+
+logger = logging.getLogger(__name__)
 
 
 logger = logging.getLogger('netbox_custom_objects.models')
@@ -531,6 +534,19 @@ class CustomObject(
         return reverse(cls._get_viewname(action, rest_api), kwargs=kwargs)
 
 
+def validate_pep440(value):
+    """Validate that *value* is a valid PEP 440 version string."""
+    if not value:
+        return
+    try:
+        Version(value)
+    except InvalidVersion:
+        raise ValidationError(
+            _("'%(value)s' is not a valid version string (expected e.g. '1.0.0')."),
+            params={"value": value},
+        )
+
+
 class CustomObjectType(NetBoxModel):
     # Class-level cache for generated models
     _model_cache = {}
@@ -544,16 +560,11 @@ class CustomObjectType(NetBoxModel):
         unique=True,
         validators=(
             RegexValidator(
-                regex=r"^[a-z0-9_]+$",
-                message=_("Only lowercase alphanumeric characters and underscores are allowed."),
-            ),
-            RegexValidator(
-                regex=r"__",
+                regex=r"^[a-z0-9]+(_[a-z0-9]+)*$",
                 message=_(
-                    "Double underscores are not permitted in custom object object type names."
+                    "Only lowercase alphanumeric characters and underscores are allowed. "
+                    "Names may not start or end with an underscore, and double underscores are not permitted."
                 ),
-                flags=re.IGNORECASE,
-                inverse_match=True,
             ),
         ),
     )
@@ -566,7 +577,7 @@ class CustomObjectType(NetBoxModel):
         verbose_name=_('comments'),
         blank=True
     )
-    version = models.CharField(max_length=10, blank=True)
+    version = models.CharField(max_length=50, blank=True, validators=[validate_pep440])
     verbose_name = models.CharField(max_length=100, blank=True)
     verbose_name_plural = models.CharField(max_length=100, blank=True)
     slug = models.SlugField(max_length=100, unique=True, db_index=True, blank=False)
@@ -575,6 +586,22 @@ class CustomObjectType(NetBoxModel):
         db_index=True,
         blank=True,
         help_text=_("Used to group similar custom object types in the navigation menu")
+    )
+    schema_document = models.JSONField(
+        blank=True,
+        null=True,
+        help_text=_(
+            "The last applied or exported schema document for this Custom Object Type. "
+            "Serves as the source of truth for schema history, including tombstoned fields."
+        ),
+    )
+    next_schema_id = models.PositiveIntegerField(
+        default=0,
+        editable=False,
+        help_text=_(
+            "Monotonically increasing counter tracking the highest schema_id ever assigned "
+            "to a field on this Custom Object Type. Never decreases, even after field deletion."
+        ),
     )
     cache_timestamp = models.DateTimeField(
         auto_now=True,
@@ -756,9 +783,24 @@ class CustomObjectType(NetBoxModel):
             field_type = FIELD_TYPE_CLASS[field.type]()
             field_name = field.name
 
-            field_attrs[field.name] = field_type.get_model_field(
-                field, db_column=field.effective_db_column,
-            )
+            try:
+                field_attrs[field.name] = field_type.get_model_field(
+                    field, db_column=field.effective_db_column,
+                )
+            except NotImplementedError:
+                if field.related_object_type_id is None:
+                    logger.debug(
+                        "Skipping field %r (pk=%s) on COT %r: "
+                        "related_object_type_id is NULL — field has no related type set.",
+                        field.name, field.pk, self.slug,
+                    )
+                else:
+                    logger.debug(
+                        "Skipping field %r (pk=%s) on COT %r: related_object_type_id=%s "
+                        "references a ContentType that no longer exists.",
+                        field.name, field.pk, self.slug, field.related_object_type_id,
+                    )
+                continue
 
             # Add to field objects only if the field was successfully generated
             field_attrs["_field_objects"][field.id] = {
@@ -783,6 +825,16 @@ class CustomObjectType(NetBoxModel):
         # Get the set of fields that were skipped due to recursion
         skipped_fields = attrs.get("_skipped_fields", set())
 
+        # Build a lookup from field name → Django field object using plain lists that
+        # don't trigger _relation_tree.  _meta.get_field() for a name that isn't in
+        # _forward_fields_map (e.g. tombstoned fields in _trashed_field_objects) falls
+        # through to fields_map → _relation_tree → apps.get_models() → our get_models()
+        # override → get_model() for every COT → infinite recursion.
+        present_fields = {
+            f.name: f
+            for f in list(model._meta.local_fields) + list(model._meta.local_many_to_many)
+        }
+
         # Collect through models during after_model_generation
         through_models = []
 
@@ -793,31 +845,75 @@ class CustomObjectType(NetBoxModel):
             if field_name in skipped_fields:
                 continue
 
-            # Only process fields that actually exist on the model
-            # Fields might be skipped due to recursion prevention
-            if hasattr(model._meta, 'get_field'):
-                try:
-                    field = model._meta.get_field(field_name)
-                    # Field exists, process it
-                    field_object["type"].after_model_generation(
-                        field_object["field"], model, field_name
-                    )
+            # Only process fields that actually exist on the model.
+            # Tombstoned fields (in _trashed_field_objects) won't be in present_fields.
+            field = present_fields.get(field_name)
+            if field is None:
+                continue
 
-                    # Collect through models from M2M fields
-                    if hasattr(field, 'remote_field') and hasattr(field.remote_field, 'through'):
-                        through_model = field.remote_field.through
-                        # Only collect custom through models, not auto-created Django ones
-                        if (through_model and through_model not in through_models and
-                            hasattr(through_model._meta, 'app_label') and
-                            through_model._meta.app_label == APP_LABEL):
-                            through_models.append(through_model)
+            field_object["type"].after_model_generation(
+                field_object["field"], model, field_name
+            )
 
-                except Exception:
-                    # Field doesn't exist (likely skipped due to recursion), skip processing
-                    continue
+            # Collect through models from M2M fields
+            if hasattr(field, 'remote_field') and hasattr(field.remote_field, 'through'):
+                through_model = field.remote_field.through
+                # Only collect custom through models, not auto-created Django ones
+                if (through_model and through_model not in through_models and
+                    hasattr(through_model._meta, 'app_label') and
+                    through_model._meta.app_label == APP_LABEL):
+                    through_models.append(through_model)
 
         # Store through models on the model for yielding in get_models()
         model._through_models = through_models
+
+    @staticmethod
+    def _collect_base_columns(model, user_field_names):
+        """
+        Return a list of dicts describing the concrete DB columns contributed by the
+        CustomObject base class (mixins), excluding any user-defined field names.
+
+        Each dict has keys:
+          "name"        – DB column name (f.column, e.g. "site_id" for a FK field)
+          "field_class" – Django field class name (e.g. "AutoField", "DateTimeField")
+          "null"        – whether the column is nullable (bool)
+
+        Using f.column (not f.name) so that the snapshot key matches the actual DB
+        column name returned by DB introspection.  For non-FK fields f.name == f.column;
+        for FK fields they differ (e.g. f.name='site', f.column='site_id').
+
+        This snapshot is stored in schema_document["base_columns"] so that the
+        post_migrate auto-heal handler (issue #391, Phase 2) can detect drift when
+        NetBox upgrades add new columns to the mixin hierarchy.
+        """
+        return sorted(
+            [
+                {
+                    "name": f.column,
+                    "field_class": f.__class__.__name__,
+                    "null": f.null,
+                }
+                for f in model._meta.concrete_fields
+                if f.name not in user_field_names
+            ],
+            key=lambda e: e["name"],
+        )
+
+    def _store_base_column_snapshot(self, model):
+        """
+        Snapshot the current base columns into schema_document["base_columns"].
+
+        Called immediately after the DB table is created by create_model() so that
+        the snapshot reflects exactly what columns are present at birth.  Only the
+        "base_columns" key is written; any existing keys in schema_document
+        (e.g. "fields" written by the schema exporter) are preserved.
+        """
+        user_field_names = set(self.fields.values_list("name", flat=True))
+        base_columns = self._collect_base_columns(model, user_field_names)
+        doc = self.schema_document or {}
+        doc["base_columns"] = base_columns
+        CustomObjectType.objects.filter(pk=self.pk).update(schema_document=doc)
+        self.schema_document = doc
 
     def get_collision_safe_order_id_idx_name(self):
         return f"tbl_order_id_{self.id}_idx"
@@ -850,16 +946,17 @@ class CustomObjectType(NetBoxModel):
 
     def register_custom_object_search_index(self, model):
         # model must be an instance of this CustomObjectType's get_model() generated class
+        # Use local_fields / local_many_to_many — plain lists populated at class-creation
+        # time — instead of _meta.get_field(), which triggers Django's lazy _relation_tree
+        # computation.  _relation_tree calls apps.get_models(), which re-enters our
+        # get_models() override, which calls get_model() for every COT → infinite recursion.
+        present = (
+            {f.name for f in model._meta.local_fields}
+            | {f.name for f in model._meta.local_many_to_many}
+        )
         fields = []
         for field in self.fields.filter(search_weight__gt=0):
-            # Only index fields that are actually present on the generated model.
-            # When the model was built with skip_object_fields=True (a lightweight
-            # stub used to break cross-COT FK recursion), object-type fields are
-            # intentionally absent.  Including them in the index causes
-            # FieldDoesNotExist / AttributeError in the post_save search handler.
-            try:
-                model._meta.get_field(field.name)
-            except FieldDoesNotExist:
+            if field.name not in present:
                 continue
             fields.append((field.name, field.search_weight))
 
@@ -1085,6 +1182,8 @@ class CustomObjectType(NetBoxModel):
 
         with _get_schema_connection().schema_editor() as schema_editor:
             schema_editor.create_model(model)
+
+        self._store_base_column_snapshot(model)
 
         get_serializer_class(model)
         self.register_custom_object_search_index(model)
@@ -1318,16 +1417,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         help_text=_("Internal field name, e.g. \"vendor_label\""),
         validators=(
             RegexValidator(
-                regex=r"^[a-z0-9_]+$",
-                message=_("Only lowercase alphanumeric characters and underscores are allowed."),
-            ),
-            RegexValidator(
-                regex=r"__",
+                regex=r"^[a-z0-9]+(_[a-z0-9]+)*$",
                 message=_(
-                    "Double underscores are not permitted in custom object field names."
+                    "Only lowercase alphanumeric characters and underscores are allowed. "
+                    "Names may not start or end with an underscore, and double underscores are not permitted."
                 ),
-                flags=re.IGNORECASE,
-                inverse_match=True,
             ),
         ),
     )
@@ -1483,6 +1577,37 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         help_text=_("Replicate this value when cloning objects"),
     )
     comments = models.TextField(verbose_name=_("comments"), blank=True)
+    schema_id = models.PositiveIntegerField(
+        blank=True,
+        null=True,
+        verbose_name=_("schema ID"),
+        help_text=_(
+            "Stable numeric identifier for this field used during schema diffing. "
+            "Auto-assigned on creation; never changes and never reused within this Custom Object Type."
+        ),
+    )
+    deprecated = models.BooleanField(
+        default=False,
+        verbose_name=_("deprecated"),
+        help_text=_(
+            "Mark this field as deprecated. Deprecated fields remain in the database but "
+            "are read-only in the UI and should not be used in new objects."
+        ),
+    )
+    deprecated_since = models.CharField(
+        max_length=50,
+        blank=True,
+        verbose_name=_("deprecated since"),
+        help_text=_("Schema version in which this field was marked deprecated (e.g. '2.0.0')."),
+        validators=[validate_pep440],
+    )
+    scheduled_removal = models.CharField(
+        max_length=50,
+        blank=True,
+        verbose_name=_("scheduled removal"),
+        help_text=_("Schema version in which this field is planned to be removed (e.g. '3.0.0')."),
+        validators=[validate_pep440],
+    )
 
     clone_fields = ("custom_object_type",)
 
@@ -1506,6 +1631,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 fields=("related_object_type", "related_name"),
                 condition=Q(related_name__gt=""),
                 name="%(app_label)s_%(class)s_unique_related_name",
+            ),
+            models.UniqueConstraint(
+                fields=("schema_id", "custom_object_type"),
+                name="%(app_label)s_%(class)s_unique_schema_id",
+                condition=models.Q(schema_id__isnull=False),
             ),
         )
 
@@ -2175,6 +2305,29 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     def save(self, *args, **kwargs):
         is_new = self._state.adding
 
+        # Auto-assign schema_id for new fields that don't have one yet.
+        # Increments the monotonic counter on the parent CustomObjectType so that IDs are
+        # never reused, even after a field is deleted.  The UniqueConstraint on
+        # (schema_id, custom_object_type) is the safety net against races; a concurrent
+        # writer would get an IntegrityError and must retry.
+        # Note: bulk_create() bypasses save() entirely, so auto-assignment will NOT fire for
+        # fields created via CustomObjectTypeField.objects.bulk_create(...). Always set
+        # schema_id explicitly when using bulk_create.
+        if self._state.adding and self.schema_id is None:
+            with transaction.atomic():
+                cot = CustomObjectType.objects.select_for_update().get(
+                    pk=self.custom_object_type_id
+                )
+                new_schema_id = cot.next_schema_id + 1
+                # Use update() rather than save() to avoid dispatching post_save on
+                # CustomObjectType, which would clear the model cache prematurely.
+                # The model cache must remain valid until this field's own save() calls
+                # get_model() below (to contribute the new field and alter the DB table).
+                CustomObjectType.objects.filter(pk=self.custom_object_type_id).update(
+                    next_schema_id=new_schema_id
+                )
+                self.schema_id = new_schema_id
+
         # Freeze the physical column name at creation.  db_column is set once
         # here and never updated, so subsequent renames only update the ORM
         # field name — no DDL is required for renames.
@@ -2184,7 +2337,6 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         # Use the branch connection when operating inside a branch so that schema
         # editor operations target the branch schema rather than main.
         schema_conn = _get_schema_connection()
-
         model = self.custom_object_type.get_model()
 
         with schema_conn.schema_editor() as schema_editor:

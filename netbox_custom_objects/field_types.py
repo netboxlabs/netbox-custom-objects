@@ -3,7 +3,6 @@ import json
 import django_tables2 as tables
 from django import forms
 from django.apps import apps
-from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
 from django.core.validators import RegexValidator
 from django.db import models
@@ -113,6 +112,27 @@ class FieldType:
     def render_table_column_linkified(self, record):
         return linkify(record)
 
+    def _get_related_content_type(self, field):
+        """
+        Return the ContentType for field.related_object_type_id.
+
+        Raises NotImplementedError (rather than ContentType.DoesNotExist) so that
+        all callers — which already guard against NotImplementedError — skip the
+        field gracefully when the FK is null or its ContentType row is missing.
+        """
+        from django.contrib.contenttypes.models import ContentType as CT
+        if not field.related_object_type_id:
+            raise NotImplementedError(
+                f"Field {field.name!r} has no related_object_type set"
+            )
+        try:
+            return CT.objects.get(pk=field.related_object_type_id)
+        except CT.DoesNotExist:
+            raise NotImplementedError(
+                f"Field {field.name!r}: related_object_type_id="
+                f"{field.related_object_type_id} references a missing ContentType"
+            )
+
     def after_model_generation(self, instance, model, field_name): ...
 
     def create_m2m_table(self, instance, model, field_name): ...
@@ -151,6 +171,12 @@ class TextFieldType(FieldType):
 
 
 class LongTextFieldType(FieldType):
+    def get_filterform_field(self, field, **kwargs):
+        return forms.CharField(
+            label=field,
+            required=False,
+        )
+
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
@@ -226,6 +252,14 @@ class DecimalFieldType(FieldType):
             max_value=field.validation_maximum,
         )
 
+    def get_filterform_field(self, field, **kwargs):
+        return forms.DecimalField(
+            label=field,
+            required=False,
+            min_value=field.validation_minimum,
+            max_value=field.validation_maximum,
+        )
+
 
 class BooleanFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
@@ -245,6 +279,18 @@ class BooleanFieldType(FieldType):
             widget=forms.Select(choices=choices),
         )
 
+    def get_filterform_field(self, field, **kwargs):
+        choices = (
+            ('', '---------'),
+            ('true', _("Yes")),
+            ('false', _("No")),
+        )
+        return forms.NullBooleanField(
+            label=field,
+            required=False,
+            widget=forms.Select(choices=choices),
+        )
+
     def get_table_column_field(self, field, **kwargs):
         return BooleanColumn()
 
@@ -260,6 +306,13 @@ class DateFieldType(FieldType):
             required=field.required, initial=field.default, widget=DatePicker()
         )
 
+    def get_filterform_field(self, field, **kwargs):
+        return forms.DateField(
+            label=field,
+            required=False,
+            widget=DatePicker(),
+        )
+
 
 class DateTimeFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
@@ -272,6 +325,13 @@ class DateTimeFieldType(FieldType):
             required=field.required, initial=field.default, widget=DateTimePicker()
         )
 
+    def get_filterform_field(self, field, **kwargs):
+        return forms.DateTimeField(
+            label=field,
+            required=False,
+            widget=DateTimePicker(),
+        )
+
 
 class URLFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
@@ -282,6 +342,12 @@ class URLFieldType(FieldType):
     def get_form_field(self, field, **kwargs):
         return LaxURLField(
             assume_scheme="https", required=field.required, initial=field.default
+        )
+
+    def get_filterform_field(self, field, **kwargs):
+        return forms.CharField(
+            label=field,
+            required=False,
         )
 
 
@@ -297,8 +363,24 @@ class JSONFieldType(FieldType):
             initial=json.dumps(field.default) if field.default else None,
         )
 
+    def get_filterform_field(self, field, **kwargs):
+        return forms.CharField(
+            label=field,
+            required=False,
+        )
+
 
 class SelectFieldType(FieldType):
+    def get_filterform_field(self, field, **kwargs):
+        return DynamicMultipleChoiceField(
+            choices=field.choice_set.choices,
+            label=field,
+            required=False,
+            widget=APISelectMultiple(
+                api_url=f'/api/extras/custom-field-choice-sets/{field.choice_set.pk}/choices/'
+            ),
+        )
+
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
@@ -341,6 +423,17 @@ class SelectFieldType(FieldType):
 
 
 class MultiSelectFieldType(FieldType):
+    def get_filterform_field(self, field, **kwargs):
+        choices = field.choice_set.choices
+        return DynamicMultipleChoiceField(
+            choices=choices,
+            label=field,
+            required=False,
+            widget=APISelectMultiple(
+                api_url=f'/api/extras/custom-field-choice-sets/{field.choice_set.pk}/choices/'
+            ),
+        )
+
     def get_display_value(self, instance, field_name):
         return ", ".join(getattr(instance, field_name) or [])
 
@@ -395,7 +488,7 @@ class MultiSelectFieldType(FieldType):
 
 class ObjectFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
-        content_type = ContentType.objects.get(pk=field.related_object_type_id)
+        content_type = self._get_related_content_type(field)
         to_model = content_type.model
 
         # Extract our custom parameters and keep only Django field parameters
@@ -460,7 +553,7 @@ class ObjectFieldType(FieldType):
         For custom objects, uses CustomObjectDynamicModelChoiceField.
         For regular NetBox objects, uses DynamicModelChoiceField.
         """
-        content_type = ContentType.objects.get(pk=field.related_object_type_id)
+        content_type = self._get_related_content_type(field)
 
         has_context = False
         if content_type.app_label == APP_LABEL:
@@ -508,7 +601,7 @@ class ObjectFieldType(FieldType):
             return form_field
 
     def get_filterform_field(self, field, **kwargs):
-        content_type = ContentType.objects.get(pk=field.related_object_type_id)
+        content_type = self._get_related_content_type(field)
         if content_type.app_label == APP_LABEL:
             from netbox_custom_objects.models import CustomObjectType
             custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
@@ -525,12 +618,18 @@ class ObjectFieldType(FieldType):
             required=False,
             label=field,
             selector=model._meta.app_label != APP_LABEL,
+            query_params=(
+                field.related_object_filter
+                if hasattr(field, "related_object_filter")
+                else None
+            ),
         )
 
     def render_table_column(self, value):
         return linkify(value)
 
     def get_serializer_field(self, field, **kwargs):
+        self._get_related_content_type(field)  # validates FK; raises NotImplementedError if null/missing
         related_model_class = field.related_object_type.model_class()
         if related_model_class._meta.app_label == APP_LABEL:
             from netbox_custom_objects.api.serializers import get_serializer_class
@@ -747,7 +846,7 @@ class MultiObjectFieldType(FieldType):
         )
 
         # Check if this is a self-referential M2M
-        content_type = ContentType.objects.get(pk=field.related_object_type_id)
+        content_type = self._get_related_content_type(field)
         custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
         if content_type.app_label == APP_LABEL:
             if custom_object_type_id is None:
@@ -784,7 +883,7 @@ class MultiObjectFieldType(FieldType):
         Creates the M2M field with appropriate model references
         """
         # Check if this is a self-referential M2M
-        content_type = ContentType.objects.get(pk=field.related_object_type_id)
+        content_type = self._get_related_content_type(field)
         custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
         if content_type.app_label == APP_LABEL:
             if custom_object_type_id is None:
@@ -838,7 +937,7 @@ class MultiObjectFieldType(FieldType):
         Returns a form field for multi-object relationships.
         Uses DynamicModelMultipleChoiceField for both custom objects and regular NetBox objects.
         """
-        content_type = ContentType.objects.get(pk=field.related_object_type_id)
+        content_type = self._get_related_content_type(field)
 
         has_context = False
         if content_type.app_label == APP_LABEL:
@@ -884,7 +983,7 @@ class MultiObjectFieldType(FieldType):
             return form_field
 
     def get_filterform_field(self, field, **kwargs):
-        content_type = ContentType.objects.get(pk=field.related_object_type_id)
+        content_type = self._get_related_content_type(field)
         if content_type.app_label == APP_LABEL:
             from netbox_custom_objects.models import CustomObjectType
             custom_object_type_id = extract_cot_id_from_model_name(content_type.model)
@@ -901,6 +1000,11 @@ class MultiObjectFieldType(FieldType):
             required=False,
             label=field,
             selector=model._meta.app_label != APP_LABEL,
+            query_params=(
+                field.related_object_filter
+                if hasattr(field, "related_object_filter")
+                else None
+            ),
         )
 
     def get_display_value(self, instance, field_name):
@@ -911,6 +1015,7 @@ class MultiObjectFieldType(FieldType):
         return tables.ManyToManyColumn(linkify_item=True, orderable=False)
 
     def get_serializer_field(self, field, **kwargs):
+        self._get_related_content_type(field)  # validates FK; raises NotImplementedError if null/missing
         related_model_class = field.related_object_type.model_class()
         if related_model_class._meta.app_label == APP_LABEL:
             from netbox_custom_objects.api.serializers import get_serializer_class
@@ -947,7 +1052,7 @@ class MultiObjectFieldType(FieldType):
 
         # For non-self-referential fields, we need to resolve the target model
         # Use the instance parameter which contains the field definition
-        content_type = ContentType.objects.get(pk=instance.related_object_type_id)
+        content_type = self._get_related_content_type(instance)
 
         # Now we can safely resolve the target model
         if content_type.app_label == APP_LABEL:
@@ -1001,7 +1106,7 @@ class MultiObjectFieldType(FieldType):
         if getattr(field, "_is_self_referential", False):
             to_model = model
         else:
-            content_type = ContentType.objects.get(pk=instance.related_object_type_id)
+            content_type = self._get_related_content_type(instance)
             if content_type.app_label == APP_LABEL:
                 from netbox_custom_objects.models import CustomObjectType
 

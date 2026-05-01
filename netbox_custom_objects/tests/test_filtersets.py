@@ -3,14 +3,17 @@ Tests for filtersets used by the plugin's UI and API views.
 """
 import datetime
 from decimal import Decimal
+from unittest.mock import MagicMock
 
 from django.test import TestCase
+from django.utils import timezone
 
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
+from extras.choices import CustomFieldTypeChoices
 from extras.models import CustomFieldChoiceSet
 
 from netbox_custom_objects.field_types import MultiObjectFieldType, ObjectFieldType
-from netbox_custom_objects.filtersets import get_filterset_class
+from netbox_custom_objects.filtersets import ArrayContainsFilter, build_filter_for_field, get_filterset_class
 from netbox_custom_objects.models import CustomObjectTypeField
 from utilities.forms.fields import (
     DynamicModelChoiceField,
@@ -407,6 +410,47 @@ class CustomObjectTargetMultiObjectFieldTestCase(CustomObjectsTestCase, TestCase
 
 
 # ---------------------------------------------------------------------------
+# build_filter_for_field defensive guards
+# ---------------------------------------------------------------------------
+
+
+class BuildFilterForFieldGuardsTestCase(TestCase):
+    """build_filter_for_field returns None rather than raising when a field's
+    related_object_type is missing or its ContentType is stale."""
+
+    def _field(self, field_type, related_object_type):
+        field = MagicMock()
+        field.type = field_type
+        field.related_object_type = related_object_type
+        return field
+
+    def test_object_field_missing_related_object_type_returns_none(self):
+        self.assertIsNone(
+            build_filter_for_field(self._field(CustomFieldTypeChoices.TYPE_OBJECT, None))
+        )
+
+    def test_multiobject_field_missing_related_object_type_returns_none(self):
+        self.assertIsNone(
+            build_filter_for_field(self._field(CustomFieldTypeChoices.TYPE_MULTIOBJECT, None))
+        )
+
+    def test_object_field_stale_content_type_returns_none(self):
+        # ContentType row exists but the app/model is no longer installed
+        related_ot = MagicMock()
+        related_ot.model_class.return_value = None
+        self.assertIsNone(
+            build_filter_for_field(self._field(CustomFieldTypeChoices.TYPE_OBJECT, related_ot))
+        )
+
+    def test_multiobject_field_stale_content_type_returns_none(self):
+        related_ot = MagicMock()
+        related_ot.model_class.return_value = None
+        self.assertIsNone(
+            build_filter_for_field(self._field(CustomFieldTypeChoices.TYPE_MULTIOBJECT, related_ot))
+        )
+
+
+# ---------------------------------------------------------------------------
 # Typeahead search for non-text primary fields (issue #440)
 # ---------------------------------------------------------------------------
 
@@ -647,3 +691,347 @@ class MultiSelectPrimaryFieldSearchTestCase(CustomObjectsTestCase, TestCase):
         pks = list(self._search("blue").values_list("pk", flat=True))
         self.assertIn(self.obj_multi.pk, pks)
         self.assertNotIn(self.obj_red.pk, pks)
+
+
+# ---------------------------------------------------------------------------
+# Scalar field type filterset tests (build_filter_for_field / FIELD_TYPE_FILTERS)
+# ---------------------------------------------------------------------------
+
+
+class ScalarFieldFiltersetTestCase(CustomObjectsTestCase):
+    """
+    Base for filterset tests covering scalar custom field types.
+
+    Subclasses must:
+      - set ``match_params`` (class attr): filter params that should return obj_match
+      - set ``obj_match`` / ``obj_no_match`` in ``setUpTestData``
+      - set ``total_count`` (class attr, default 2) when the fixture has more rows
+    """
+    match_params: dict = {}
+    total_count: int = 2
+
+    def _filterset(self, params):
+        model = self.cot.get_model()
+        return get_filterset_class(model)(params, model.objects.all())
+
+    def test_filter_returns_match_not_other(self):
+        pks = list(self._filterset(self.match_params).qs.values_list('pk', flat=True))
+        self.assertIn(self.obj_match.pk, pks)
+        self.assertNotIn(self.obj_no_match.pk, pks)
+
+    def test_no_filter_returns_all(self):
+        self.assertEqual(self._filterset({}).qs.count(), self.total_count)
+
+
+class TextFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
+    """CharFilter with icontains is generated for TYPE_TEXT fields."""
+
+    match_params = {'note': 'foo'}
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(name='TextFS', slug='text-fs')
+        cls.create_custom_object_type_field(
+            cls.cot, name='name', label='Name', type='text', primary=True, required=True
+        )
+        cls.create_custom_object_type_field(cls.cot, name='note', label='Note', type='text')
+
+        model = cls.cot.get_model()
+        cls.obj_match = model.objects.create(name='alpha', note='foo bar')
+        cls.obj_no_match = model.objects.create(name='beta', note='baz qux')
+
+    def test_icontains_case_insensitive(self):
+        pks = list(self._filterset({'note': 'FOO'}).qs.values_list('pk', flat=True))
+        self.assertIn(self.obj_match.pk, pks)
+        self.assertNotIn(self.obj_no_match.pk, pks)
+
+
+class LongTextFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
+    """CharFilter with icontains is generated for TYPE_LONGTEXT fields."""
+
+    match_params = {'body': 'match'}
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(name='LongTextFS', slug='longtext-fs')
+        cls.create_custom_object_type_field(
+            cls.cot, name='name', label='Name', type='text', primary=True, required=True
+        )
+        cls.create_custom_object_type_field(cls.cot, name='body', label='Body', type='longtext')
+
+        model = cls.cot.get_model()
+        cls.obj_match = model.objects.create(name='alpha', body='match content')
+        cls.obj_no_match = model.objects.create(name='beta', body='other content')
+
+    def test_icontains_case_insensitive(self):
+        pks = list(self._filterset({'body': 'MATCH'}).qs.values_list('pk', flat=True))
+        self.assertIn(self.obj_match.pk, pks)
+        self.assertNotIn(self.obj_no_match.pk, pks)
+
+
+class IntegerFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
+    """NumberFilter with exact lookup is generated for TYPE_INTEGER fields."""
+
+    match_params = {'count': 10}
+    total_count = 3
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(name='IntFS', slug='int-fs')
+        cls.create_custom_object_type_field(
+            cls.cot, name='name', label='Name', type='text', primary=True, required=True
+        )
+        cls.create_custom_object_type_field(cls.cot, name='count', label='Count', type='integer')
+
+        model = cls.cot.get_model()
+        cls.obj_match = model.objects.create(name='ten', count=10)
+        cls.obj_no_match = model.objects.create(name='twenty', count=20)
+        cls.obj_null = model.objects.create(name='none')
+
+    def test_null_excluded_by_exact_filter(self):
+        pks = list(self._filterset(self.match_params).qs.values_list('pk', flat=True))
+        self.assertNotIn(self.obj_null.pk, pks)
+
+
+class DecimalFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
+    """NumberFilter with exact lookup is generated for TYPE_DECIMAL fields."""
+
+    match_params = {'price': '1.5'}
+    total_count = 3
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(name='DecFS', slug='dec-fs')
+        cls.create_custom_object_type_field(
+            cls.cot, name='name', label='Name', type='text', primary=True, required=True
+        )
+        cls.create_custom_object_type_field(cls.cot, name='price', label='Price', type='decimal')
+
+        model = cls.cot.get_model()
+        cls.obj_match = model.objects.create(name='cheap', price=Decimal('1.5'))
+        cls.obj_no_match = model.objects.create(name='expensive', price=Decimal('9.9'))
+        cls.obj_null = model.objects.create(name='free')
+
+    def test_null_excluded_by_exact_filter(self):
+        pks = list(self._filterset(self.match_params).qs.values_list('pk', flat=True))
+        self.assertNotIn(self.obj_null.pk, pks)
+
+
+class BooleanFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
+    """BooleanFilter is generated for TYPE_BOOLEAN fields."""
+
+    match_params = {'active': True}
+    total_count = 3
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(name='BoolFS', slug='bool-fs')
+        cls.create_custom_object_type_field(
+            cls.cot, name='name', label='Name', type='text', primary=True, required=True
+        )
+        cls.create_custom_object_type_field(
+            cls.cot, name='active', label='Active', type='boolean'
+        )
+
+        model = cls.cot.get_model()
+        cls.obj_true = model.objects.create(name='on', active=True)
+        cls.obj_false = model.objects.create(name='off', active=False)
+        cls.obj_null = model.objects.create(name='unknown')
+        cls.obj_match = cls.obj_true
+        cls.obj_no_match = cls.obj_false
+
+    def test_filter_false(self):
+        pks = list(self._filterset({'active': False}).qs.values_list('pk', flat=True))
+        self.assertIn(self.obj_false.pk, pks)
+        self.assertNotIn(self.obj_true.pk, pks)
+
+
+class DateFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
+    """DateFilter with exact lookup is generated for TYPE_DATE fields."""
+
+    match_params = {'start': '2025-01-15'}
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(name='DateFS', slug='date-fs')
+        cls.create_custom_object_type_field(
+            cls.cot, name='name', label='Name', type='text', primary=True, required=True
+        )
+        cls.create_custom_object_type_field(cls.cot, name='start', label='Start', type='date')
+
+        model = cls.cot.get_model()
+        cls.obj_match = model.objects.create(name='jan', start=datetime.date(2025, 1, 15))
+        cls.obj_no_match = model.objects.create(name='feb', start=datetime.date(2025, 2, 20))
+
+
+class DateTimeFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
+    """DateTimeFilter with exact lookup is generated for TYPE_DATETIME fields."""
+
+    match_params = {'ts': '2025-06-01 09:00:00'}
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(name='DtFS', slug='dt-fs')
+        cls.create_custom_object_type_field(
+            cls.cot, name='name', label='Name', type='text', primary=True, required=True
+        )
+        cls.create_custom_object_type_field(cls.cot, name='ts', label='Timestamp', type='datetime')
+
+        model = cls.cot.get_model()
+        cls.obj_match = model.objects.create(
+            name='am', ts=timezone.make_aware(datetime.datetime(2025, 6, 1, 9, 0, 0))
+        )
+        cls.obj_no_match = model.objects.create(
+            name='pm', ts=timezone.make_aware(datetime.datetime(2025, 6, 1, 18, 0, 0))
+        )
+
+
+class URLFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
+    """CharFilter with icontains is generated for TYPE_URL fields."""
+
+    match_params = {'link': 'github'}
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(name='URLFS', slug='url-fs')
+        cls.create_custom_object_type_field(
+            cls.cot, name='name', label='Name', type='text', primary=True, required=True
+        )
+        cls.create_custom_object_type_field(cls.cot, name='link', label='Link', type='url')
+
+        model = cls.cot.get_model()
+        cls.obj_match = model.objects.create(name='gh', link='https://github.com/example')
+        cls.obj_no_match = model.objects.create(name='gl', link='https://gitlab.com/example')
+
+
+class JSONFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
+    """CharFilter with icontains is generated for TYPE_JSON fields."""
+
+    match_params = {'meta': 'prod'}
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(name='JSONFS', slug='json-fs')
+        cls.create_custom_object_type_field(
+            cls.cot, name='name', label='Name', type='text', primary=True, required=True
+        )
+        cls.create_custom_object_type_field(cls.cot, name='meta', label='Meta', type='json')
+
+        model = cls.cot.get_model()
+        cls.obj_match = model.objects.create(name='a', meta={'env': 'prod'})
+        cls.obj_no_match = model.objects.create(name='b', meta={'env': 'staging'})
+
+
+class SelectFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
+    """MultipleChoiceFilter with OR semantics is generated for TYPE_SELECT fields."""
+
+    match_params = {'status': ['active']}
+    total_count = 3
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.choice_set = CustomFieldChoiceSet.objects.create(
+            name='StatusChoicesFS',
+            extra_choices=[['active', 'Active'], ['inactive', 'Inactive'], ['retired', 'Retired']],
+        )
+        cls.cot = cls.create_custom_object_type(name='SelectFS', slug='select-fs')
+        cls.create_custom_object_type_field(
+            cls.cot, name='name', label='Name', type='text', primary=True, required=True
+        )
+        cls.create_custom_object_type_field(
+            cls.cot, name='status', label='Status', type='select', choice_set=cls.choice_set
+        )
+
+        model = cls.cot.get_model()
+        cls.obj_active = model.objects.create(name='a', status='active')
+        cls.obj_inactive = model.objects.create(name='b', status='inactive')
+        cls.obj_no_status = model.objects.create(name='c')
+        cls.obj_match = cls.obj_active
+        cls.obj_no_match = cls.obj_inactive
+
+    def test_different_choice(self):
+        pks = list(self._filterset({'status': ['inactive']}).qs.values_list('pk', flat=True))
+        self.assertIn(self.obj_inactive.pk, pks)
+        self.assertNotIn(self.obj_active.pk, pks)
+
+    def test_null_excluded(self):
+        pks = list(self._filterset(self.match_params).qs.values_list('pk', flat=True))
+        self.assertNotIn(self.obj_no_status.pk, pks)
+
+    def test_multi_value_or_semantics(self):
+        pks = list(self._filterset({'status': ['active', 'inactive']}).qs.values_list('pk', flat=True))
+        self.assertIn(self.obj_active.pk, pks)
+        self.assertIn(self.obj_inactive.pk, pks)
+        self.assertNotIn(self.obj_no_status.pk, pks)
+
+
+class MultiSelectFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
+    """ArrayContainsFilter is generated for TYPE_MULTISELECT: containment semantics, not exact match."""
+
+    match_params = {'colors': ['red']}
+    total_count = 4
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.choice_set = CustomFieldChoiceSet.objects.create(
+            name='ColorChoicesFS',
+            extra_choices=[['red', 'Red'], ['green', 'Green'], ['blue', 'Blue']],
+        )
+        cls.cot = cls.create_custom_object_type(name='MultiSelFS', slug='multisel-fs')
+        cls.create_custom_object_type_field(
+            cls.cot, name='name', label='Name', type='text', primary=True, required=True
+        )
+        cls.create_custom_object_type_field(
+            cls.cot, name='colors', label='Colors', type='multiselect', choice_set=cls.choice_set
+        )
+
+        model = cls.cot.get_model()
+        cls.obj_red = model.objects.create(name='r', colors=['red'])
+        cls.obj_multi = model.objects.create(name='rm', colors=['red', 'blue'])
+        cls.obj_green = model.objects.create(name='g', colors=['green'])
+        cls.obj_none = model.objects.create(name='n')
+        cls.obj_match = cls.obj_red
+        cls.obj_no_match = cls.obj_green
+
+    def test_filter_returns_match_not_other(self):
+        # Extends the base test: obj_multi (["red","blue"]) must also match on "red"
+        pks = list(self._filterset(self.match_params).qs.values_list('pk', flat=True))
+        self.assertIn(self.obj_red.pk, pks)
+        self.assertIn(self.obj_multi.pk, pks)
+        self.assertNotIn(self.obj_green.pk, pks)
+        self.assertNotIn(self.obj_none.pk, pks)
+
+    def test_filter_partial_array_match(self):
+        # obj_multi has ["red", "blue"]; filtering by "blue" should still match it
+        pks = list(self._filterset({'colors': ['blue']}).qs.values_list('pk', flat=True))
+        self.assertIn(self.obj_multi.pk, pks)
+        self.assertNotIn(self.obj_red.pk, pks)
+        self.assertNotIn(self.obj_green.pk, pks)
+
+    def test_filter_multiple_values_returns_union(self):
+        pks = list(self._filterset({'colors': ['red', 'green']}).qs.values_list('pk', flat=True))
+        self.assertIn(self.obj_red.pk, pks)
+        self.assertIn(self.obj_multi.pk, pks)
+        self.assertIn(self.obj_green.pk, pks)
+        self.assertNotIn(self.obj_none.pk, pks)
+
+    def test_no_duplicates_when_object_matches_multiple_filter_values(self):
+        # obj_multi has both "red" and "blue"; must appear only once in results
+        qs = self._filterset({'colors': ['red', 'blue']}).qs
+        self.assertEqual(qs.filter(pk=self.obj_multi.pk).count(), 1)
+
+    def test_uses_array_contains_filter_class(self):
+        model = self.cot.get_model()
+        fs_class = get_filterset_class(model)
+        self.assertIsInstance(fs_class.base_filters.get('colors'), ArrayContainsFilter)

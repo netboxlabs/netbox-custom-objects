@@ -25,6 +25,8 @@ classifiers = [
 
 dependencies = [
     "Django",
+    "jsonschema",
+    "packaging",
 ]
 
 [project.optional-dependencies]

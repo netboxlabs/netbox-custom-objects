@@ -4,6 +4,7 @@ from django.contrib.contenttypes.management import create_contenttypes
 from django.test import Client
 from core.models import ObjectType
 from extras.models import CustomFieldChoiceSet
+from users.models import Token
 from utilities.testing import create_test_user
 
 from netbox_custom_objects.constants import APP_LABEL
@@ -48,6 +49,17 @@ def _purge_stale_generated_models():
         django_apps.all_models[APP_LABEL].pop(name, None)
     if stale:
         django_apps.clear_cache()
+
+
+def create_api_token(user):
+    """Create an API token for *user*, handling the NetBox ≥ 4.5 version field."""
+    try:
+        from users.choices import TokenVersionChoices  # noqa: PLC0415
+        token = Token(version=TokenVersionChoices.V1, user=user)
+    except ImportError:
+        token = Token(user=user)
+    token.save()
+    return token
 
 
 class TransactionCleanupMixin:
