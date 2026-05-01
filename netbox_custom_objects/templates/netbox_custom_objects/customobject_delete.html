@@ -1,0 +1,17 @@
+{% extends 'generic/object_delete.html' %}
+{% load i18n %}
+
+{% block content %}
+  {% if branch_warning %}
+    {% include 'netbox_custom_objects/inc/branch_warning.html' %}
+  {% endif %}
+  {{ block.super }}
+  {% if branch_warning %}
+    <script>
+      document.addEventListener('DOMContentLoaded', function () {
+        var btn = document.querySelector('.modal-footer [type=submit]');
+        if (btn) btn.disabled = true;
+      });
+    </script>
+  {% endif %}
+{% endblock content %}
