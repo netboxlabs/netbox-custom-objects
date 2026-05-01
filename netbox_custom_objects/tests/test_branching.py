@@ -923,10 +923,16 @@ class ConcurrentEditSyncTestCase(TransactionCleanupMixin, TransactionTestCase):
 # ── Concurrent-edit merge tests ───────────────────────────────────────────────
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
-class ConcurrentEditMergeTestCase(TransactionCleanupMixin, TransactionTestCase):
+class BaseConcurrentEditMergeTests(TransactionCleanupMixin):
     """
     Merge scenarios where both main and branch accumulate changes before merge().
+
+    Subclasses must:
+    - set ``MERGE_STRATEGY`` to an iterative or squash strategy string
+    - also inherit from ``TransactionTestCase``
     """
+
+    MERGE_STRATEGY = None
 
     def setUp(self):
         super().setUp()
@@ -938,10 +944,10 @@ class ConcurrentEditMergeTestCase(TransactionCleanupMixin, TransactionTestCase):
         _close_branch_connections()
         super().tearDown()
 
-    def test_field_rename_in_branch_co_changes_merge_iterative(self):
+    def test_field_rename_in_branch_co_changes_merge(self):
         """
         Field renamed inside a branch; COs added/updated in branch; main adds a CO.
-        Iterative merge brings the branch rename and CO changes into main.
+        Merge brings the branch rename and CO changes into main.
 
         Scenario
         --------
@@ -974,7 +980,7 @@ class ConcurrentEditMergeTestCase(TransactionCleanupMixin, TransactionTestCase):
             co_existing = Model.objects.create(alpha='original')
 
         co_existing_pk = co_existing.pk
-        branch = _provision_branch('Merge Rename Branch', 'iterative', self.user)
+        branch = _provision_branch('Merge Rename Branch', self.MERGE_STRATEGY, self.user)
         branch_request = _make_request(self.user)
 
         # ── branch: rename; update CO; create CO ──────────────────────────
@@ -1021,7 +1027,7 @@ class ConcurrentEditMergeTestCase(TransactionCleanupMixin, TransactionTestCase):
         self.assertFalse(RevertedModel.objects.filter(pk=branch_new_pk).exists(),
                          'CO created in branch must be gone after revert')
 
-    def test_co_values_modified_in_both_merge_iterative(self):
+    def test_co_values_modified_in_both_merge(self):
         """
         CO values modified in both main and branch before merge.
         Branch changes win because merge applies branch ObjectChanges to main.
@@ -1048,7 +1054,7 @@ class ConcurrentEditMergeTestCase(TransactionCleanupMixin, TransactionTestCase):
             co_shared = Model.objects.create(notes='original')
 
         co_shared_pk = co_shared.pk
-        branch = _provision_branch('Merge CO Both', 'iterative', self.user)
+        branch = _provision_branch('Merge CO Both', self.MERGE_STRATEGY, self.user)
         branch_request = _make_request(self.user)
 
         # ── branch ────────────────────────────────────────────────────────
@@ -1083,6 +1089,18 @@ class ConcurrentEditMergeTestCase(TransactionCleanupMixin, TransactionTestCase):
         RM = cot.get_model()
         self.assertEqual(RM.objects.get(pk=co_shared_pk).notes, 'original')
         self.assertFalse(RM.objects.filter(pk=branch_new_pk).exists())
+
+
+@unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
+class IterativeConcurrentEditMergeTestCase(BaseConcurrentEditMergeTests, TransactionTestCase):
+    """Run BaseConcurrentEditMergeTests with the iterative merge strategy."""
+    MERGE_STRATEGY = 'iterative'
+
+
+@unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
+class SquashConcurrentEditMergeTestCase(BaseConcurrentEditMergeTests, TransactionTestCase):
+    """Run BaseConcurrentEditMergeTests with the squash merge strategy."""
+    MERGE_STRATEGY = 'squash'
 
 
 # ── Sequential multi-rename tests ─────────────────────────────────────────────
