@@ -10,7 +10,7 @@ from utilities.forms.rendering import FieldSet
 from utilities.forms.utils import get_field_value
 from utilities.object_types import object_type_name
 
-from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices, SearchWeightChoices
+from netbox_custom_objects.choices import SearchWeightChoices
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.models import (CustomObjectObjectType,
