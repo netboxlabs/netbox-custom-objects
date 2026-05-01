@@ -1,4 +1,5 @@
 import contextvars
+import logging
 import sys
 import warnings
 
@@ -11,6 +12,8 @@ from netbox.plugins import PluginConfig
 
 from .constants import APP_LABEL as APP_LABEL
 from .utilities import extract_cot_id_from_model_name, install_clear_cache_suppressor
+
+logger = logging.getLogger(__name__)
 
 # Context variable to track if we're currently running migrations
 _is_migrating = contextvars.ContextVar('is_migrating', default=False)
@@ -82,15 +85,24 @@ def _patch_get_serializer_for_model():
     _api_utils.get_serializer_for_model = _patched
 
     # Rebind every module that imported the original symbol by name.
+    rebound = []
     for _mod in list(sys.modules.values()):
         if _mod is None or _mod is _api_utils:
             continue
         if getattr(_mod, 'get_serializer_for_model', None) is _original:
             try:
                 _mod.get_serializer_for_model = _patched
+                rebound.append(getattr(_mod, '__name__', repr(_mod)))
             except (AttributeError, TypeError):
                 # Some module objects (e.g. namespace packages) may reject attribute writes.
                 pass
+
+    # Surface the sweep result so the next person debugging a SerializerNotFound
+    # can tell whether the patch ran and which modules it touched.
+    logger.info(
+        '_patch_get_serializer_for_model: rebound %d module(s): %s',
+        len(rebound), ', '.join(sorted(rebound)) or '<none>',
+    )
 
 
 def _connect_deferred_data_reset_signals():
@@ -135,38 +147,100 @@ def _patch_check_object_accessible_in_branch():
     a stale cache), this can raise ProgrammingError.  For custom objects we only
     need to know whether the row exists, so filter(pk=...).exists() is sufficient
     and avoids referencing any column other than the primary key.
+
+    This patches a private function in netbox_branching.signal_receivers, so the
+    function's existence and signature are verified before patching.  On any
+    mismatch the patch is skipped with a WARNING log naming the netbox-branching
+    version — silent fallback would let a future netbox-branching upgrade
+    re-introduce the ProgrammingError without any signal that the patch stopped
+    applying.
+
+    The long-term fix is upstream: changing the netbox-branching implementation
+    to use filter(pk=...).exists() benefits every model and lets us drop this
+    patch entirely.  Track that work separately.
     """
+    import inspect
+
+    try:
+        import netbox_branching
+    except ImportError:
+        # netbox-branching not installed — nothing to patch.
+        return
+
+    nb_version = getattr(getattr(netbox_branching, 'AppConfig', None), 'version', '<unknown>')
+
     try:
         import netbox_branching.signal_receivers as _sr
-        from netbox_branching.utilities import deactivate_branch
-        from netbox_branching.models import ChangeDiff
-        from core.choices import ObjectChangeActionChoices
-        from django.contrib.contenttypes.models import ContentType
+    except ImportError as exc:
+        logger.warning(
+            '_patch_check_object_accessible_in_branch: netbox-branching %s present but '
+            'signal_receivers module not importable (%s); skipping patch — custom-object '
+            'operations in branches may raise ProgrammingError on renamed columns.',
+            nb_version, exc,
+        )
+        return
 
-        _original = _sr.check_object_accessible_in_branch
+    fn = getattr(_sr, 'check_object_accessible_in_branch', None)
+    if fn is None:
+        logger.warning(
+            '_patch_check_object_accessible_in_branch: netbox-branching %s does not expose '
+            'check_object_accessible_in_branch; skipping patch — custom-object operations '
+            'in branches may raise ProgrammingError on renamed columns.',
+            nb_version,
+        )
+        return
 
-        def _patched(branch, model, object_id):
-            if model._meta.app_label != APP_LABEL:
-                return _original(branch, model, object_id)
+    expected = ('branch', 'model', 'object_id')
+    try:
+        actual = tuple(inspect.signature(fn).parameters)
+    except (TypeError, ValueError) as exc:
+        logger.warning(
+            '_patch_check_object_accessible_in_branch: netbox-branching %s — could not '
+            'introspect check_object_accessible_in_branch signature (%s); skipping patch.',
+            nb_version, exc,
+        )
+        return
 
-            # Check existence in main using only the pk — avoids SELECT on
-            # renamed columns that may not yet exist in main.
-            with deactivate_branch():
-                if model.objects.filter(pk=object_id).exists():
-                    return True
+    if actual != expected:
+        logger.warning(
+            '_patch_check_object_accessible_in_branch: netbox-branching %s signature drift '
+            'on check_object_accessible_in_branch — expected %r, got %r; skipping patch — '
+            'custom-object operations in branches may raise ProgrammingError on renamed columns.',
+            nb_version, expected, actual,
+        )
+        return
 
-            # Not in main — was it created in this branch?
-            content_type = ContentType.objects.get_for_model(model)
-            return ChangeDiff.objects.filter(
-                branch=branch,
-                object_type=content_type,
-                object_id=object_id,
-                action=ObjectChangeActionChoices.ACTION_CREATE,
-            ).exists()
+    from netbox_branching.utilities import deactivate_branch
+    from netbox_branching.models import ChangeDiff
+    from core.choices import ObjectChangeActionChoices
+    from django.contrib.contenttypes.models import ContentType
 
-        _sr.check_object_accessible_in_branch = _patched
-    except (ImportError, AttributeError):
-        pass
+    _original = fn
+
+    def _patched(branch, model, object_id):
+        if model._meta.app_label != APP_LABEL:
+            return _original(branch, model, object_id)
+
+        # Check existence in main using only the pk — avoids SELECT on
+        # renamed columns that may not yet exist in main.
+        with deactivate_branch():
+            if model.objects.filter(pk=object_id).exists():
+                return True
+
+        # Not in main — was it created in this branch?
+        content_type = ContentType.objects.get_for_model(model)
+        return ChangeDiff.objects.filter(
+            branch=branch,
+            object_type=content_type,
+            object_id=object_id,
+            action=ObjectChangeActionChoices.ACTION_CREATE,
+        ).exists()
+
+    _sr.check_object_accessible_in_branch = _patched
+    logger.info(
+        '_patch_check_object_accessible_in_branch: applied to netbox-branching %s.',
+        nb_version,
+    )
 
 
 # Module-level flag so the heal runs at most once per process invocation even
