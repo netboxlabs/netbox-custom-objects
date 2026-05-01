@@ -186,7 +186,7 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         # Existing rows must still be accessible
         self.assertEqual(fresh_model.objects.count(), 2)
 
-    def test_delete_referenced_core_object_set_null(self):
+    def test_delete_referenced_core_object(self):
         """#471 – on_delete_behavior=set_null: deleting the referenced core object must SET NULL
         on the CO field, not delete the CO.
 
@@ -279,11 +279,6 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         # Both objects must remain intact.
         self.assertTrue(Device.objects.filter(pk=device_pk).exists())
         self.assertTrue(model.objects.filter(pk=co.pk).exists())
-
-    # Keep the original test name as an alias so existing test runs don't lose coverage.
-    def test_delete_referenced_core_object(self):
-        """Alias for test_delete_referenced_core_object_set_null (default behavior)."""
-        self.test_delete_referenced_core_object_set_null()
 
     def test_delete_co_referenced_by_another_co_cascade(self):
         """CO-to-CO object field with CASCADE: deleting the target CO cascades to the source CO."""

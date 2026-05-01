@@ -1385,6 +1385,20 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     }
                 )
 
+        # on_delete_behavior is only meaningful for Object-type fields
+        if (
+            self.on_delete_behavior
+            and self.on_delete_behavior != ObjectFieldOnDeleteChoices.SET_NULL
+            and self.type != CustomFieldTypeChoices.TYPE_OBJECT
+        ):
+            raise ValidationError(
+                {
+                    "on_delete_behavior": _(
+                        "On-delete behavior can only be set for Object-type fields."
+                    )
+                }
+            )
+
         # Check for recursion in object and multiobject fields
         if (self.type in (
             CustomFieldTypeChoices.TYPE_OBJECT,

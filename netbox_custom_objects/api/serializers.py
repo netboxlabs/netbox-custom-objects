@@ -126,6 +126,12 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
                 )
         return super().validate(attrs)
 
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if instance.type != CustomFieldTypeChoices.TYPE_OBJECT:
+            data['on_delete_behavior'] = None
+        return data
+
     def create(self, validated_data):
         """
         Record the user who created the Custom Object as its owner.
