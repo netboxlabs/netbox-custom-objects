@@ -3,7 +3,7 @@ import logging
 from core.models import ObjectChange
 from core.tables import ObjectChangeTable
 from django.contrib.contenttypes.models import ContentType
-from django.db.models import Q
+from django.db.models import ProtectedError, Q, RestrictedError
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
@@ -18,7 +18,7 @@ from netbox.forms import (
 )
 from netbox.views import generic
 from netbox.views.generic.mixins import TableMixin
-from utilities.forms import ConfirmationForm
+from utilities.forms import ConfirmationForm, DeleteForm
 from utilities.htmx import htmx_partial
 from utilities.views import ConditionalLoginRequiredMixin, ViewTab, get_viewname, register_model_view
 
@@ -663,6 +663,32 @@ class CustomObjectDeleteView(generic.ObjectDeleteView):
             "plugins:netbox_custom_objects:customobject_list",
             kwargs={"custom_object_type": custom_object_type},
         )
+
+    def get(self, request, *args, **kwargs):
+        obj = self.get_object(**kwargs)
+        form = DeleteForm(instance=obj, initial=request.GET)
+
+        try:
+            dependent_objects = self._get_dependent_objects(obj)
+        except ProtectedError as e:
+            return self._handle_protected_objects(obj, e.protected_objects, request, e)
+        except RestrictedError as e:
+            return self._handle_protected_objects(obj, e.restricted_objects, request, e)
+
+        context = {
+            'object': obj,
+            'object_type': obj._meta.verbose_name,
+            'form': form,
+            'dependent_objects': dependent_objects,
+            **self.get_extra_context(request, obj),
+        }
+
+        if htmx_partial(request):
+            context['form_url'] = request.path
+            return render(request, 'netbox_custom_objects/htmx/co_delete_form.html', context)
+
+        context['return_url'] = self.get_return_url(request, obj)
+        return render(request, self.template_name, context)
 
     def get_extra_context(self, request, instance):
         return {'branch_warning': is_in_branch()}

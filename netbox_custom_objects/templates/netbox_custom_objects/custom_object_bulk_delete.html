@@ -1,4 +1,9 @@
 {% extends 'generic/bulk_delete.html' %}
+{% comment %}
+Derived from generic/bulk_delete.html. The Delete button carries a conditional
+`disabled` attribute that cannot be injected via block.super, so the content
+block is duplicated here. Keep in sync with the upstream template manually.
+{% endcomment %}
 {% load form_helpers %}
 {% load helpers %}
 {% load i18n %}
