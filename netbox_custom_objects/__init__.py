@@ -8,7 +8,6 @@ from django.db.migrations.recorder import MigrationRecorder
 from django.db.models.signals import pre_migrate, post_migrate
 from django.db.utils import OperationalError, ProgrammingError
 from netbox.plugins import PluginConfig
-import utilities.api as _api_utils
 
 from .constants import APP_LABEL as APP_LABEL
 from .utilities import extract_cot_id_from_model_name, install_clear_cache_suppressor
@@ -62,6 +61,11 @@ def _patch_get_serializer_for_model():
     NetBox adds new ones), we sweep ``sys.modules`` and rebind every module-level
     attribute that points at the original function.
     """
+    # utilities.api is imported lazily because importing it at module top would
+    # trigger ContentType model definition before the app registry is ready
+    # (plugin __init__.py runs during app discovery).
+    import utilities.api as _api_utils
+
     _original = _api_utils.get_serializer_for_model
 
     def _patched(model, prefix=''):
