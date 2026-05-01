@@ -2,13 +2,13 @@
 from django.apps import apps as django_apps
 from django.contrib.contenttypes.management import create_contenttypes
 from django.test import Client
-from core.models import ObjectType
+from core.models import ObjectChange, ObjectType
 from extras.models import CustomFieldChoiceSet
 from users.models import Token
 from utilities.testing import create_test_user
 
 from netbox_custom_objects.constants import APP_LABEL
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField, _deferred_co_field_data
 
 
 def _recreate_contenttypes():
@@ -78,8 +78,6 @@ class TransactionCleanupMixin:
         super().setUp()
 
     def tearDown(self):
-        from core.models import ObjectChange
-        from netbox_custom_objects.models import _deferred_co_field_data
         # Reset deferred CO field data so it doesn't bleed into the next test.
         _deferred_co_field_data.set(None)
         # Delete COTs and their backing tables before the DB flush.

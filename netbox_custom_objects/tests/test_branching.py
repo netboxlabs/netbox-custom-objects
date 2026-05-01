@@ -15,10 +15,13 @@ import time
 import unittest
 import uuid
 
+from core.models import ObjectType
+from dcim.models import Site
 from django.contrib.auth import get_user_model
-from django.db import connections
+from django.db import connection as main_conn, connections
 from django.test import RequestFactory, TransactionTestCase
 from django.urls import reverse
+from extras.models import CustomFieldChoiceSet
 
 try:
     from netbox.context_managers import event_tracking
@@ -205,10 +208,6 @@ class BaseBranchingTests(TransactionCleanupMixin):
 
         Assertions mirror test_simple_merge_and_revert but for every field type.
         """
-        from core.models import ObjectType
-        from dcim.models import Site
-        from extras.models import CustomFieldChoiceSet
-
         # The Site is created in main before provisioning so it exists in both
         # main and the branch schema and is valid as an FK target during merge.
         with event_tracking(self.request):
@@ -487,8 +486,6 @@ class BaseBranchingTests(TransactionCleanupMixin):
 
         Exercises alter_field for constraint-only changes via the merge path.
         """
-        from django.db import connection as main_conn
-
         branch = _provision_branch('Unique Branch', self.MERGE_STRATEGY, self.user)
         request = _make_request(self.user)
 
@@ -1393,7 +1390,6 @@ class SequentialRenameTestCase(TransactionCleanupMixin, TransactionTestCase):
         # (alpha→beta): it found 'delta' (main's live column) and renamed it to
         # 'beta'.  The second rename (beta→gamma) then proceeded normally.
         # Main's final physical column should be 'gamma'.
-        from django.db import connection as main_conn
         with main_conn.cursor() as cursor:
             main_cols = {
                 col.name

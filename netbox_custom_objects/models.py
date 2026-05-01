@@ -16,7 +16,7 @@ from django.conf import settings
 # from django.contrib.contenttypes.management import create_contenttypes
 from django.contrib.contenttypes.models import ContentType
 from django.core.validators import RegexValidator, ValidationError
-from django.db import connection, IntegrityError, models, transaction
+from django.db import DEFAULT_DB_ALIAS, connection, connections, IntegrityError, models, transaction
 from django.db.models import Q
 from django.db.models.functions import Lower
 from django.db.models.signals import pre_delete, post_save
@@ -52,13 +52,18 @@ from utilities import filters
 from utilities.datetime import datetime_from_timestamp
 from utilities.object_types import object_type_name
 from utilities.querysets import RestrictedQuerySet
+from utilities.serialization import deserialize_object as _deserialize_object
 from utilities.string import title
 from utilities.validators import validate_regex
 
 from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
-from netbox_custom_objects.utilities import _suppress_clear_cache, generate_model
+from netbox_custom_objects.utilities import (
+    _suppress_clear_cache,
+    extract_cot_id_from_model_name,
+    generate_model,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +97,6 @@ def _get_schema_connection():
         from netbox_branching.contextvars import active_branch
         branch = active_branch.get()
         if branch is not None:
-            from django.db import connections
             return connections[branch.connection_name]
     except ImportError:
         pass
@@ -116,8 +120,6 @@ def _apply_deferred_co_field(field_instance):
     For TYPE_MULTIOBJECT fields there is no column on the main table, so they are
     skipped entirely.
     """
-    from extras.choices import CustomFieldTypeChoices
-
     # No deferred data at all — fast path.
     deferred = _deferred_co_field_data.get()
     if not deferred:
@@ -418,27 +420,23 @@ class CustomObject(
            so that CustomObjectTypeField.save() can UPDATE the row after each
            column is added (handles the squash ordering case).
         """
-        from utilities.serialization import deserialize_object as _deserialize
-        from netbox_custom_objects.utilities import extract_cot_id_from_model_name
-
         # Derive the COT primary key from the model class name (e.g. 'Table1Model' → 1)
         cot_id_str = extract_cot_id_from_model_name(cls.__name__.lower())
         if cot_id_str is None:
             # Not a generated model name — fall back to standard deserialization.
-            return _deserialize(cls, data, pk=pk)
+            return _deserialize_object(cls, data, pk=pk)
         cot_id = int(cot_id_str)  # regex guarantees digits-only
 
         # Refresh the model cache so we pick up any fields already applied to main.
         # (In the squash case the cache may still point to a zero-field model.)
-        from netbox_custom_objects.models import CustomObjectType as _COT  # noqa: F401
-        _COT.clear_model_cache(cot_id)
+        CustomObjectType.clear_model_cache(cot_id)
         try:
-            cot = _COT.objects.get(pk=cot_id)
+            cot = CustomObjectType.objects.get(pk=cot_id)
             fresh_model = cot.get_model()
-        except _COT.DoesNotExist:
+        except CustomObjectType.DoesNotExist:
             fresh_model = cls
 
-        inner = _deserialize(fresh_model, data, pk=pk)
+        inner = _deserialize_object(fresh_model, data, pk=pk)
         obj = inner.object
         table_name = fresh_model._meta.db_table
         full_data = dict(data)
@@ -447,7 +445,6 @@ class CustomObject(
             object = obj
 
             def save(self, using=None, **_kwargs):
-                from django.db import DEFAULT_DB_ALIAS
                 _using = using or DEFAULT_DB_ALIAS
                 models.Model.save_base(obj, using=_using, raw=True)
                 # Read pk after save_base so that auto-assigned PKs are captured.
@@ -987,15 +984,21 @@ class CustomObjectType(NetBoxModel):
         :rtype: Model
         """
 
-        with self._global_lock:
-            if self.is_model_cached(self.id) and not no_cache:
-                cached_timestamp = self.get_cached_timestamp(self.id)
-                # Only use cache if the timestamps are available and match
-                if cached_timestamp and self.cache_timestamp and cached_timestamp == self.cache_timestamp:
-                    model = self.get_cached_model(self.id)
-                    return model
-                else:
-                    self.clear_model_cache(self.id)
+        # Stub models (skip_object_fields=True) bypass the cache entirely.  The cache
+        # is keyed by COT id only, so a cache hit would return a full model with the
+        # OBJECT/MULTIOBJECT fields the caller explicitly asked us to omit.  Likewise,
+        # we don't write the stub to the cache below — that would pollute subsequent
+        # full-model lookups.
+        if not skip_object_fields:
+            with self._global_lock:
+                if self.is_model_cached(self.id) and not no_cache:
+                    cached_timestamp = self.get_cached_timestamp(self.id)
+                    # Only use cache if the timestamps are available and match
+                    if cached_timestamp and self.cache_timestamp and cached_timestamp == self.cache_timestamp:
+                        model = self.get_cached_model(self.id)
+                        return model
+                    else:
+                        self.clear_model_cache(self.id)
 
         # Generate the model outside the lock to avoid holding it during expensive operations
         model_name = self.get_table_model_name(self.pk)
@@ -1060,6 +1063,15 @@ class CustomObjectType(NetBoxModel):
             )
         finally:
             TM.post_through_setup = original_post_through_setup
+
+        # Stub models are not registered with the app registry or cached: they're
+        # short-lived helpers (used by migration / drift-check paths) and replacing
+        # the registered full model with a stub would silently corrupt later
+        # apps.get_model() lookups.  Run after_model_generation directly so the
+        # caller still gets a usable model object.
+        if skip_object_fields:
+            self._after_model_generation(attrs, model)
+            return model
 
         # Register the main model with Django's app registry.
         # _suppress_clear_cache() is used directly here (rather than going
@@ -1204,9 +1216,7 @@ class CustomObjectType(NetBoxModel):
         can re-create and link it correctly in the destination schema, avoiding any FK
         mismatch between the branch and main ``ObjectType`` pks.
         """
-        from utilities.serialization import deserialize_object as _deserialize
-
-        inner = _deserialize(cls, data, pk=pk)
+        inner = _deserialize_object(cls, data, pk=pk)
 
         class _SchemaAwareDeserialized:
             def __init__(self, deserialized):
@@ -1339,8 +1349,6 @@ def _rename_objectchange_field_key(fi, old_name, new_name):
     ``CustomObjectTypeField.save()``, so it rolls back cleanly if the enclosing
     transaction is aborted.
     """
-    from django.db import connections
-
     cot = fi.custom_object_type
     model = cot.get_model()
     ct = ContentType.objects.get_for_model(model)
@@ -2281,9 +2289,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         This wrapper calls the real ``save()`` so that ``add_field`` runs as a side
         effect of replaying the CREATE ObjectChange during a merge.
         """
-        from utilities.serialization import deserialize_object as _deserialize
-
-        inner = _deserialize(cls, data, pk=pk)
+        inner = _deserialize_object(cls, data, pk=pk)
 
         class _SchemaAwareDeserialized:
             def __init__(self, deserialized):
