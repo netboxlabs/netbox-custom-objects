@@ -3,14 +3,16 @@ Tests for deletion scenarios with cascading effects.
 
 Uses TransactionTestCase so that DDL statements (CREATE/DROP TABLE) issued during
 setup and teardown are not wrapped in Django's per-test rollback transaction.  That
-lets us verify table-level changes and FK SET NULL behaviour that cannot be observed
-inside a rolled-back savepoint.
+lets us verify table-level changes and FK SET NULL/CASCADE/PROTECT behaviour that
+cannot be observed inside a rolled-back savepoint.
 """
 from django.apps import apps as django_apps
 from django.db import connection
+from django.db.utils import IntegrityError
 from django.test import TransactionTestCase
 
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
+from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 
@@ -47,6 +49,20 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
 
     def _field_exists_on_model(self, model, field_name):
         return field_name in {f.name for f in model._meta.get_fields()}
+
+    def _make_device(self, suffix=""):
+        """Create a minimal Device and return it."""
+        site = Site.objects.create(name=f'Del Test Site{suffix}', slug=f'del-test-site{suffix}')
+        manufacturer = Manufacturer.objects.create(name=f'Del Test Mfr{suffix}', slug=f'del-test-mfr{suffix}')
+        device_type = DeviceType.objects.create(
+            manufacturer=manufacturer, model=f'Del Test Type{suffix}', slug=f'del-test-type{suffix}'
+        )
+        role = DeviceRole.objects.create(
+            name=f'Del Test Role{suffix}', slug=f'del-test-role{suffix}', color='aaaaaa'
+        )
+        return Device.objects.create(
+            name=f'Del Test Device{suffix}', site=site, device_type=device_type, role=role
+        )
 
     # ------------------------------------------------------------------
     # Tests
@@ -90,6 +106,7 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
             label='Reference A',
             type='object',
             related_object_type=cot_a.object_type,
+            on_delete_behavior=ObjectFieldOnDeleteChoices.SET_NULL,
         )
 
         model_a = cot_a.get_model()
@@ -165,57 +182,101 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         # Existing rows must still be accessible
         self.assertEqual(fresh_model.objects.count(), 2)
 
-    def test_delete_referenced_core_object(self):
-        """#471 – Deleting a core NetBox object must SET NULL on COs that reference it via
-        an object field, not delete the CO.
+    def test_delete_referenced_core_object_set_null(self):
+        """#471 – on_delete_behavior=set_null: deleting the referenced core object must SET NULL
+        on the CO field, not delete the CO.
 
         The SET NULL behaviour is enforced at the database level via the ON DELETE SET NULL
         FK constraint added by _ensure_field_fk_constraint().  We use a raw-SQL DELETE to
         bypass Django's Python-level cascade collector and prove the DB constraint is in effect.
         """
-        site = Site.objects.create(name='Del Test Site', slug='del-test-site')
-        manufacturer = Manufacturer.objects.create(name='Del Test Mfr', slug='del-test-mfr')
-        device_type = DeviceType.objects.create(
-            manufacturer=manufacturer, model='Del Test Type', slug='del-test-type'
-        )
-        role = DeviceRole.objects.create(
-            name='Del Test Role', slug='del-test-role', color='aaaaaa'
-        )
-        device = Device.objects.create(
-            name='Del Test Device', site=site, device_type=device_type, role=role
-        )
+        device = self._make_device()
 
-        cot = self.create_simple_custom_object_type(name='devref', slug='dev-ref')
+        cot = self.create_simple_custom_object_type(name='devref-sn', slug='dev-ref-sn')
         self.create_custom_object_type_field(
             cot,
             name='device',
             label='Device',
             type='object',
             related_object_type=self.get_device_object_type(),
+            on_delete_behavior=ObjectFieldOnDeleteChoices.SET_NULL,
         )
         model = cot.get_model()
 
         co = model.objects.create(name='CO with Device', device=device)
         self.assertEqual(co.device_id, device.pk)
 
-        # Delete the device via raw SQL to exercise the database-level FK SET NULL
-        # constraint directly, bypassing Django's Python cascade collector.
         device_pk = device.pk
         with connection.cursor() as cursor:
             cursor.execute('DELETE FROM dcim_device WHERE id = %s', [device_pk])
 
-        # Verify the device row is actually gone.
-        self.assertFalse(
-            Device.objects.filter(pk=device_pk).exists(),
-            "Device should have been deleted by the raw SQL DELETE.",
-        )
-        # The custom object must survive with device_id nulled out.
+        self.assertFalse(Device.objects.filter(pk=device_pk).exists())
         self.assertTrue(
             model.objects.filter(pk=co.pk).exists(),
-            "Custom Object must survive when Device is deleted (SET NULL, not CASCADE).",
+            "Custom Object must survive when Device is deleted (SET NULL).",
         )
         co.refresh_from_db()
-        self.assertIsNone(
-            co.device_id,
-            "The device field must be NULL after the Device is deleted.",
+        self.assertIsNone(co.device_id, "device field must be NULL after Device is deleted.")
+
+    def test_delete_referenced_core_object_cascade(self):
+        """on_delete_behavior=cascade: deleting the referenced core object must also delete the CO."""
+        device = self._make_device(suffix='-casc')
+
+        cot = self.create_simple_custom_object_type(name='devref-casc', slug='dev-ref-casc')
+        self.create_custom_object_type_field(
+            cot,
+            name='device',
+            label='Device',
+            type='object',
+            related_object_type=self.get_device_object_type(),
+            on_delete_behavior=ObjectFieldOnDeleteChoices.CASCADE,
         )
+        model = cot.get_model()
+
+        co = model.objects.create(name='CO with Device Cascade', device=device)
+        co_pk = co.pk
+        device_pk = device.pk
+
+        # Delete via raw SQL to exercise the DB-level CASCADE constraint directly.
+        with connection.cursor() as cursor:
+            cursor.execute('DELETE FROM dcim_device WHERE id = %s', [device_pk])
+
+        self.assertFalse(Device.objects.filter(pk=device_pk).exists())
+        self.assertFalse(
+            model.objects.filter(pk=co_pk).exists(),
+            "Custom Object must be deleted when Device is deleted (CASCADE).",
+        )
+
+    def test_delete_referenced_core_object_protect(self):
+        """on_delete_behavior=protect: deleting the referenced core object must raise an error
+        at the database level (RESTRICT), leaving both objects intact."""
+        device = self._make_device(suffix='-prot')
+
+        cot = self.create_simple_custom_object_type(name='devref-prot', slug='dev-ref-prot')
+        self.create_custom_object_type_field(
+            cot,
+            name='device',
+            label='Device',
+            type='object',
+            related_object_type=self.get_device_object_type(),
+            on_delete_behavior=ObjectFieldOnDeleteChoices.PROTECT,
+        )
+        model = cot.get_model()
+
+        co = model.objects.create(name='CO with Device Protect', device=device)
+        device_pk = device.pk
+
+        # The DB-level RESTRICT constraint should prevent deletion.
+        # PostgreSQL raises an IntegrityError wrapping a ForeignKeyViolation.
+        with self.assertRaises(IntegrityError, msg="RESTRICT should prevent deletion of the referenced Device"):
+            with connection.cursor() as cursor:
+                cursor.execute('DELETE FROM dcim_device WHERE id = %s', [device_pk])
+
+        # Both objects must remain intact.
+        self.assertTrue(Device.objects.filter(pk=device_pk).exists())
+        self.assertTrue(model.objects.filter(pk=co.pk).exists())
+
+    # Keep the original test name as an alias so existing test runs don't lose coverage.
+    def test_delete_referenced_core_object(self):
+        """Alias for test_delete_referenced_core_object_set_null (default behavior)."""
+        self.test_delete_referenced_core_object_set_null()

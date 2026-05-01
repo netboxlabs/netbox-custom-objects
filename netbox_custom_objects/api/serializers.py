@@ -68,6 +68,7 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
             "related_object_type",
             "related_object_filter",
             "related_name",
+            "on_delete_behavior",
             "app_label",
             "model",
             "group_name",
