@@ -63,9 +63,6 @@ from netbox_custom_objects.utilities import _suppress_clear_cache, generate_mode
 logger = logging.getLogger(__name__)
 
 
-logger = logging.getLogger('netbox_custom_objects.models')
-
-
 class UniquenessConstraintTestError(Exception):
     """Custom exception used to signal successful uniqueness constraint test."""
 

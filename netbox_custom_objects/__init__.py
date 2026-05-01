@@ -50,7 +50,18 @@ def _patch_get_serializer_for_model():
     models have no importable serializer at that path, so the call raises
     SerializerNotFound.  This patch intercepts the lookup for APP_LABEL models and
     delegates to get_serializer_class(), which generates the serializer on the fly.
+
+    Patching the source module (utilities.api) is not enough: any module that
+    did ``from utilities.api import get_serializer_for_model`` before ``ready()``
+    ran holds its own bound reference and would call the unpatched version.
+    Known callers in NetBox core include ``extras.events``, ``extras.api.customfields``,
+    ``extras.api.serializers_.tags``, ``core.api.serializers_.jobs``,
+    ``netbox.api.gfk_fields``, ``netbox.api.serializers.generic``, ``ipam.api.views``
+    and several ``dcim.api`` modules.  Rather than enumerate them (and break when
+    NetBox adds new ones), we sweep ``sys.modules`` and rebind every module-level
+    attribute that points at the original function.
     """
+    import sys
     import utilities.api as _api_utils
 
     _original = _api_utils.get_serializer_for_model
@@ -68,14 +79,16 @@ def _patch_get_serializer_for_model():
 
     _api_utils.get_serializer_for_model = _patched
 
-    # Also patch the reference already imported into extras.events (and anywhere
-    # else that did `from utilities.api import get_serializer_for_model` before
-    # our patch ran).
-    try:
-        import extras.events as _extras_events
-        _extras_events.get_serializer_for_model = _patched
-    except (ImportError, AttributeError):
-        pass
+    # Rebind every module that imported the original symbol by name.
+    for _mod in list(sys.modules.values()):
+        if _mod is None or _mod is _api_utils:
+            continue
+        if getattr(_mod, 'get_serializer_for_model', None) is _original:
+            try:
+                _mod.get_serializer_for_model = _patched
+            except (AttributeError, TypeError):
+                # Some module objects (e.g. namespace packages) may reject attribute writes.
+                pass
 
 
 def _patch_check_object_accessible_in_branch():
