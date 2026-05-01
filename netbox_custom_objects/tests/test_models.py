@@ -223,6 +223,10 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
             related_object_type=self.get_site_object_type(),
             search_weight=500,
         )
+        # CustomObjectTypeField.save() now caches a full model after each field
+        # save (to defend against a rename/post_save race), so the cache holds a
+        # full model here.  Clear it to force generation of a fresh stub.
+        cot.clear_model_cache(cot.id)
         stub_model = cot.get_model(skip_object_fields=True)
         model_field_names = (
             {f.name for f in stub_model._meta.local_fields}
@@ -1502,7 +1506,16 @@ class CrossCOTStubSearchIndexRegressionTestCase(CustomObjectsTestCase, TestCase)
         """
         from netbox.search import registry
 
-        self.target_cot.get_model()
+        # Force stub semantics: clear any cached full model and re-register the
+        # search index against a fresh stub.  This mirrors the cross-COT scenario
+        # the regression covers — B's stub gets cached before any caller asks for
+        # the full model, so register_custom_object_search_index sees only the
+        # stub fields.  Without this, CustomObjectTypeField.save() would have
+        # already cached a full model with the OBJECT field.
+        self.target_cot.clear_model_cache(self.target_cot.id)
+        stub_model = self.target_cot.get_model(skip_object_fields=True)
+        self.target_cot.register_custom_object_search_index(stub_model)
+
         label = f"netbox_custom_objects.{self.target_cot.get_table_model_name(self.target_cot.id).lower()}"
         search_index = registry["search"].get(label)
 

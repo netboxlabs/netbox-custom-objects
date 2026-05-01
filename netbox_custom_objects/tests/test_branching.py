@@ -590,6 +590,155 @@ class BaseBranchingTests(TransactionCleanupMixin):
         self.assertFalse(CustomObjectType.objects.filter(pk=cot_pk).exists())
         self.assertFalse(CustomObjectTypeField.objects.filter(pk=field_pk).exists())
 
+    # ── existing main COT extended with new fields inside a branch ────────
+
+    def test_extend_main_cot_with_new_fields_merge_and_revert(self):
+        """
+        COT exists in main with text + object + multiobject fields and a CO with all
+        three filled.  A branch then *adds* new fields of each type to the same COT
+        and inserts a new CO that uses both the original and the new fields.  Merge
+        brings the new fields and CO into main; revert removes them and leaves the
+        original CO intact.
+
+        Exercises ``_schema_add_field`` (including FK and M2M through-table creation)
+        running against a target schema that already has live data and existing
+        through-tables — distinct from ``test_comprehensive_merge_and_revert`` which
+        creates everything greenfield inside the branch.
+        """
+        # Two Sites in main so they exist in both schemas as valid FK targets.
+        with event_tracking(self.request):
+            site_a = Site.objects.create(name='Site A', slug='site-a')
+            site_b = Site.objects.create(name='Site B', slug='site-b')
+
+        site_ot = ObjectType.objects.get(app_label='dcim', model='site')
+
+        # ── main: COT with text + object + multiobject; one CO ────────────
+        with event_tracking(self.request):
+            cot = CustomObjectType.objects.create(name='extend_cot', slug='extend-cot')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='main_text', label='Main Text', type='text',
+            )
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='main_obj', label='Main Obj',
+                type='object', related_object_type=site_ot,
+            )
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='main_multi', label='Main Multi',
+                type='multiobject', related_object_type=site_ot,
+            )
+            MainModel = cot.get_model()
+            co_main = MainModel.objects.create(
+                main_text='main co text',
+                main_obj_id=site_a.pk,
+            )
+            co_main.main_multi.set([site_a, site_b])
+
+        cot_pk = cot.pk
+        co_main_pk = co_main.pk
+
+        branch = _provision_branch('Extend Branch', self.MERGE_STRATEGY, self.user)
+        branch_request = _make_request(self.user)
+
+        # ── branch: add new fields of each type, then create a CO with all ─
+        with activate_branch(branch), event_tracking(branch_request):
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='branch_text', label='Branch Text', type='text',
+            )
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='branch_obj', label='Branch Obj',
+                type='object', related_object_type=site_ot,
+            )
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='branch_multi', label='Branch Multi',
+                type='multiobject', related_object_type=site_ot,
+            )
+            BranchModel = cot.get_model()
+            co_branch = BranchModel.objects.create(
+                main_text='branch co original text',
+                main_obj_id=site_b.pk,
+                branch_text='branch co new text',
+                branch_obj_id=site_a.pk,
+            )
+            co_branch.main_multi.set([site_b])
+            co_branch.branch_multi.set([site_a, site_b])
+
+        co_branch_pk = co_branch.pk
+
+        # ── before merge: branch fields and branch CO not visible in main ─
+        for fname in ('branch_text', 'branch_obj', 'branch_multi'):
+            self.assertFalse(
+                CustomObjectTypeField.objects.filter(custom_object_type=cot, name=fname).exists(),
+                f'{fname!r} must not be in main before merge',
+            )
+        MainModelPre = cot.get_model()
+        self.assertFalse(
+            MainModelPre.objects.filter(pk=co_branch_pk).exists(),
+            'Branch CO must not be in main before merge',
+        )
+
+        # ── merge ─────────────────────────────────────────────────────────
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        # ── after merge: all six fields present, both COs intact ──────────
+        cot_main = CustomObjectType.objects.get(pk=cot_pk)
+        names = set(cot_main.fields(manager='objects').values_list('name', flat=True))
+        self.assertEqual(
+            names,
+            {'main_text', 'main_obj', 'main_multi', 'branch_text', 'branch_obj', 'branch_multi'},
+        )
+
+        MergedModel = cot_main.get_model()
+
+        # Original main CO untouched.
+        co_main_after = MergedModel.objects.get(pk=co_main_pk)
+        self.assertEqual(co_main_after.main_text, 'main co text')
+        self.assertEqual(co_main_after.main_obj_id, site_a.pk)
+        self.assertEqual(
+            set(co_main_after.main_multi.values_list('pk', flat=True)),
+            {site_a.pk, site_b.pk},
+        )
+
+        # CO created in branch is in main with all field values.
+        co_branch_after = MergedModel.objects.get(pk=co_branch_pk)
+        self.assertEqual(co_branch_after.main_text, 'branch co original text')
+        self.assertEqual(co_branch_after.main_obj_id, site_b.pk)
+        self.assertEqual(co_branch_after.branch_text, 'branch co new text')
+        self.assertEqual(co_branch_after.branch_obj_id, site_a.pk)
+        self.assertEqual(
+            set(co_branch_after.main_multi.values_list('pk', flat=True)),
+            {site_b.pk},
+        )
+        self.assertEqual(
+            set(co_branch_after.branch_multi.values_list('pk', flat=True)),
+            {site_a.pk, site_b.pk},
+        )
+
+        # ── revert ────────────────────────────────────────────────────────
+        branch.revert(user=self.user, commit=True)
+
+        # Branch fields gone; main fields still present.
+        names_after_revert = set(
+            cot_main.fields(manager='objects').values_list('name', flat=True)
+        )
+        self.assertEqual(names_after_revert, {'main_text', 'main_obj', 'main_multi'})
+
+        RevertedModel = cot_main.get_model()
+        # Original main CO survived.
+        co_main_reverted = RevertedModel.objects.get(pk=co_main_pk)
+        self.assertEqual(co_main_reverted.main_text, 'main co text')
+        self.assertEqual(co_main_reverted.main_obj_id, site_a.pk)
+        self.assertEqual(
+            set(co_main_reverted.main_multi.values_list('pk', flat=True)),
+            {site_a.pk, site_b.pk},
+        )
+        # Branch CO removed.
+        self.assertFalse(
+            RevertedModel.objects.filter(pk=co_branch_pk).exists(),
+            'CO created in branch must be gone after revert',
+        )
+
 
 # ── Concrete test classes (one per merge strategy) ────────────────────────────
 

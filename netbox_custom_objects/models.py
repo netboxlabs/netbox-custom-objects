@@ -984,21 +984,15 @@ class CustomObjectType(NetBoxModel):
         :rtype: Model
         """
 
-        # Stub models (skip_object_fields=True) bypass the cache entirely.  The cache
-        # is keyed by COT id only, so a cache hit would return a full model with the
-        # OBJECT/MULTIOBJECT fields the caller explicitly asked us to omit.  Likewise,
-        # we don't write the stub to the cache below — that would pollute subsequent
-        # full-model lookups.
-        if not skip_object_fields:
-            with self._global_lock:
-                if self.is_model_cached(self.id) and not no_cache:
-                    cached_timestamp = self.get_cached_timestamp(self.id)
-                    # Only use cache if the timestamps are available and match
-                    if cached_timestamp and self.cache_timestamp and cached_timestamp == self.cache_timestamp:
-                        model = self.get_cached_model(self.id)
-                        return model
-                    else:
-                        self.clear_model_cache(self.id)
+        with self._global_lock:
+            if self.is_model_cached(self.id) and not no_cache:
+                cached_timestamp = self.get_cached_timestamp(self.id)
+                # Only use cache if the timestamps are available and match
+                if cached_timestamp and self.cache_timestamp and cached_timestamp == self.cache_timestamp:
+                    model = self.get_cached_model(self.id)
+                    return model
+                else:
+                    self.clear_model_cache(self.id)
 
         # Generate the model outside the lock to avoid holding it during expensive operations
         model_name = self.get_table_model_name(self.pk)
@@ -1063,15 +1057,6 @@ class CustomObjectType(NetBoxModel):
             )
         finally:
             TM.post_through_setup = original_post_through_setup
-
-        # Stub models are not registered with the app registry or cached: they're
-        # short-lived helpers (used by migration / drift-check paths) and replacing
-        # the registered full model with a stub would silently corrupt later
-        # apps.get_model() lookups.  Run after_model_generation directly so the
-        # caller still gets a usable model object.
-        if skip_object_fields:
-            self._after_model_generation(attrs, model)
-            return model
 
         # Register the main model with Django's app registry.
         # _suppress_clear_cache() is used directly here (rather than going
