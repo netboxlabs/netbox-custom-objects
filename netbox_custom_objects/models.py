@@ -701,7 +701,8 @@ class CustomObjectType(NetBoxModel):
         # Get the model field
         try:
             model_field = model._meta.get_field(field_name)
-        except Exception:
+        except Exception as e:
+            logger.error("_ensure_field_fk_constraint: field %r not found on model %r: %s", field_name, model, e)
             return
 
         if not (hasattr(model_field, 'remote_field') and model_field.remote_field):
@@ -1905,9 +1906,18 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         # Ensure FK constraints AFTER the transaction commits to avoid "pending trigger events" errors
         if should_ensure_fk:
             _on_delete = self.on_delete_behavior
+            _field_name = self.name
 
             def ensure_constraint():
-                self.custom_object_type._ensure_field_fk_constraint(model, self.name, on_delete_behavior=_on_delete)
+                try:
+                    self.custom_object_type._ensure_field_fk_constraint(
+                        model, _field_name, on_delete_behavior=_on_delete
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Failed to ensure FK constraint for field %r on COT %r: %s",
+                        _field_name, self.custom_object_type_id, e,
+                    )
 
             transaction.on_commit(ensure_constraint)
 

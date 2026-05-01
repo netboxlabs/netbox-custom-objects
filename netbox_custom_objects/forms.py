@@ -7,6 +7,7 @@ from netbox.forms import (NetBoxModelBulkEditForm, NetBoxModelFilterSetForm,
 from utilities.forms.fields import (CommentField, ContentTypeChoiceField,
                                     DynamicModelChoiceField, SlugField, TagFilterField)
 from utilities.forms.rendering import FieldSet
+from utilities.forms.utils import get_field_value
 from utilities.object_types import object_type_name
 
 from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices, SearchWeightChoices
@@ -187,7 +188,7 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
                 self.fields["related_object_type"].disabled = True
 
         # Multi-object fields may not be set unique
-        if self.initial["type"] == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+        if get_field_value(self, 'type') == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
             self.fields["unique"].disabled = True
 
         # Add related_name (and on_delete_behavior for single-object fields) to the
@@ -195,7 +196,7 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
         # related_object_type from self.fields for non-object types, so we use its
         # presence as a signal.
         if "related_object_type" in self.fields:
-            field_type = self.initial.get("type") or (self.instance.type if self.instance.pk else None)
+            field_type = get_field_value(self, 'type')
             is_single_object = field_type == CustomFieldTypeChoices.TYPE_OBJECT
             extra = ("related_name", "on_delete_behavior") if is_single_object else ("related_name",)
             self.fieldsets = tuple(
