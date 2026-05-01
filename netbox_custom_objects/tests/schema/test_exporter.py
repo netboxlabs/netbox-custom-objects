@@ -279,15 +279,47 @@ class ExporterFieldTypesTestCase(CustomObjectsTestCase, TestCase):
         f = _field_by_name(export_cot(self.cot), "unfiltered")
         self.assertNotIn("related_object_filter", f)
 
+    def test_on_delete_behavior_default_omitted(self):
+        """SET_NULL (the default) must not appear in the exported schema."""
+        from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
+        self.create_custom_object_type_field(
+            self.cot, name='setnull', type='object',
+            related_object_type=self.device_ot,
+            on_delete_behavior=ObjectFieldOnDeleteChoices.SET_NULL,
+        )
+        f = _field_by_name(export_cot(self.cot), "setnull")
+        self.assertNotIn("on_delete_behavior", f)
+
+    def test_on_delete_behavior_cascade_included(self):
+        from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
+        self.create_custom_object_type_field(
+            self.cot, name='casc', type='object',
+            related_object_type=self.device_ot,
+            on_delete_behavior=ObjectFieldOnDeleteChoices.CASCADE,
+        )
+        f = _field_by_name(export_cot(self.cot), "casc")
+        self.assertEqual(f["on_delete_behavior"], "cascade")
+
+    def test_on_delete_behavior_protect_included(self):
+        from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
+        self.create_custom_object_type_field(
+            self.cot, name='prot', type='object',
+            related_object_type=self.device_ot,
+            on_delete_behavior=ObjectFieldOnDeleteChoices.PROTECT,
+        )
+        f = _field_by_name(export_cot(self.cot), "prot")
+        self.assertEqual(f["on_delete_behavior"], "protect")
+
     def test_type_specific_attrs_not_leaked_across_types(self):
-        """A boolean field must not carry validation_regex or choice_set."""
+        """A boolean field must not carry validation_regex, choice_set, or on_delete_behavior."""
         self.create_custom_object_type_field(
             self.cot, name='flag', type='boolean'
         )
         f = _field_by_name(export_cot(self.cot), "flag")
         for spurious in ("validation_regex", "validation_minimum",
                          "validation_maximum", "choice_set",
-                         "related_object_type", "related_object_filter"):
+                         "related_object_type", "related_object_filter",
+                         "on_delete_behavior"):
             self.assertNotIn(spurious, f)
 
 

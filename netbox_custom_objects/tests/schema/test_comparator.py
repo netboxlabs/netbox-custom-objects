@@ -358,6 +358,28 @@ class ComparatorFieldAlterTestCase(CustomObjectsTestCase, TestCase):
         fc = next(fc for fc in result.alters if fc.db_name == "filtered")
         self.assertIn("related_object_filter", fc.changed_attrs)
 
+    def test_on_delete_behavior_change_detected(self):
+        self.create_custom_object_type_field(
+            self.cot, name='odchange', type='object',
+            related_object_type=self.device_ot,
+        )
+        result = self._alter_field("odchange", on_delete_behavior="cascade")
+        fc = next(fc for fc in result.alters if fc.db_name == "odchange")
+        self.assertIn("on_delete_behavior", fc.changed_attrs)
+        self.assertEqual(fc.changed_attrs["on_delete_behavior"], ("set_null", "cascade"))
+
+    def test_on_delete_behavior_default_no_diff(self):
+        """SET_NULL not present in schema dict → same as default → no diff."""
+        self.create_custom_object_type_field(
+            self.cot, name='oddefault', type='object',
+            related_object_type=self.device_ot,
+        )
+        # Export omits on_delete_behavior when it's the default; re-diffing must produce no ALTER.
+        type_def = export_cot(self.cot)
+        result = diff_cot(type_def)
+        oddefault_alters = [fc for fc in result.alters if fc.db_name == "oddefault"]
+        self.assertEqual(oddefault_alters, [])
+
     def test_no_alter_when_nothing_changed(self):
         self.create_custom_object_type_field(
             self.cot, name='unchanged', type='text'
