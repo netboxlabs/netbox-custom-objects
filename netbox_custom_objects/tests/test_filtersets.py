@@ -269,6 +269,9 @@ class CustomObjectTargetObjectFieldTestCase(CustomObjectsTestCase, TestCase):
             related_object_type=cls.target_cot.object_type,
         )
 
+        # Refresh so in-memory cache_timestamp matches the DB value bumped by the signal
+        # when the TYPE_OBJECT 'related' field was saved above.
+        cls.target_cot.refresh_from_db()
         target_model = cls.target_cot.get_model()
         cls.target1 = target_model.objects.create(name="Target 1")
         cls.target2 = target_model.objects.create(name="Target 2")

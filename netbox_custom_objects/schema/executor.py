@@ -254,6 +254,11 @@ def _schema_def_to_field_kwargs(schema_def: dict) -> dict:
             "related_object_filter", FIELD_DEFAULTS.get("related_object_filter")
         )
 
+    if "on_delete_behavior" in type_specific:
+        kwargs["on_delete_behavior"] = schema_def.get(
+            "on_delete_behavior", FIELD_DEFAULTS.get("on_delete_behavior")
+        )
+
     return kwargs
 
 

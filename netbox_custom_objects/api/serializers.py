@@ -68,6 +68,7 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
             "related_object_type",
             "related_object_filter",
             "related_name",
+            "on_delete_behavior",
             "app_label",
             "model",
             "group_name",
@@ -123,7 +124,18 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
                 raise ValidationError(
                     "Must provide choice_set with valid PK for select field type."
                 )
+        on_delete = attrs.get("on_delete_behavior")
+        if on_delete and field_type and field_type != CustomFieldTypeChoices.TYPE_OBJECT:
+            raise ValidationError(
+                {"on_delete_behavior": "on_delete_behavior can only be set for Object-type fields."}
+            )
         return super().validate(attrs)
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        if instance.type != CustomFieldTypeChoices.TYPE_OBJECT:
+            data['on_delete_behavior'] = None
+        return data
 
     def create(self, validated_data):
         """
