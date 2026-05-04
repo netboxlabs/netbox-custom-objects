@@ -493,6 +493,7 @@ class ObjectFieldType(FieldType):
         ObjectFieldOnDeleteChoices.SET_NULL: models.SET_NULL,
         ObjectFieldOnDeleteChoices.PROTECT: models.PROTECT,
     }
+
     def get_model_field(self, field, **kwargs):
         content_type = self._get_related_content_type(field)
         to_model = content_type.model
