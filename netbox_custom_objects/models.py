@@ -54,6 +54,7 @@ from utilities.querysets import RestrictedQuerySet
 from utilities.string import title
 from utilities.validators import validate_regex
 
+from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
 from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS, safe_table_name
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
@@ -195,6 +196,11 @@ class CustomObjectType(NetBoxModel):
     )  # Now stores {custom_object_type_id: {through_model_name: through_model}}
     _model_cache_locks = {}  # Per-model locks to prevent race conditions
     _global_lock = threading.RLock()  # Global lock for managing per-model locks
+    _ON_DELETE_SQL = {
+        ObjectFieldOnDeleteChoices.CASCADE: "CASCADE",
+        ObjectFieldOnDeleteChoices.SET_NULL: "SET NULL",
+        ObjectFieldOnDeleteChoices.PROTECT: "RESTRICT",
+    }
     name = models.CharField(
         max_length=100,
         unique=True,
@@ -771,75 +777,83 @@ class CustomObjectType(NetBoxModel):
         self.register_custom_object_search_index(model)
         return model
 
-    def _ensure_field_fk_constraint(self, model, field_name):
+    def _ensure_field_fk_constraint(self, model, field_name, on_delete_behavior=None):
         """
         Ensure that a foreign key constraint is properly created at the database level
-        for a specific OBJECT type field with ON DELETE CASCADE. This is necessary because
-        models are created with managed=False, which may not properly create FK constraints
-        with CASCADE behavior.
+        for a specific OBJECT type field. This is necessary because models are created
+        with managed=False, which may not properly create FK constraints.
 
         :param model: The model containing the field
         :param field_name: The name of the field to ensure FK constraint for
+        :param on_delete_behavior: Override the ON DELETE behavior (ObjectFieldOnDeleteChoices value).
+            If None, the value is read from the corresponding CustomObjectTypeField record.
         """
         table_name = self.get_database_table_name()
 
         # Get the model field
         try:
             model_field = model._meta.get_field(field_name)
-        except Exception:
-            logger.warning(
-                "_ensure_field_fk_constraint: could not get field %r on model %r; "
-                "FK constraint will not be created.",
-                field_name, model.__name__,
-                exc_info=True,
-            )
+        except Exception as e:
+            logger.error("_ensure_field_fk_constraint: field %r not found on model %r: %s", field_name, model, e)
             return
 
         if not (hasattr(model_field, 'remote_field') and model_field.remote_field):
             return
+
+        # Resolve on_delete_behavior from the CustomObjectTypeField if not provided
+        if on_delete_behavior is None:
+            try:
+                cotf = self.fields.get(name=field_name)
+                on_delete_behavior = cotf.on_delete_behavior or ObjectFieldOnDeleteChoices.SET_NULL
+            except Exception:
+                on_delete_behavior = ObjectFieldOnDeleteChoices.SET_NULL
+
+        on_delete_sql = self._ON_DELETE_SQL.get(on_delete_behavior, "SET NULL")
 
         # Get the referenced table
         related_model = model_field.remote_field.model
         related_table = related_model._meta.db_table
         column_name = model_field.column
 
+        q = connection.ops.quote_name
         with connection.cursor() as cursor:
             # Drop existing FK constraint if it exists
-            # Query for existing constraints
             cursor.execute("""
                 SELECT constraint_name
                 FROM information_schema.table_constraints
                 WHERE table_name = %s
+                AND table_schema = current_schema()
                 AND constraint_type = 'FOREIGN KEY'
                 AND constraint_name LIKE %s
             """, [table_name, f"%{column_name}%"])
 
             for row in cursor.fetchall():
                 constraint_name = row[0]
-                cursor.execute(f'ALTER TABLE "{table_name}" DROP CONSTRAINT IF EXISTS "{constraint_name}"')
+                cursor.execute(f'ALTER TABLE {q(table_name)} DROP CONSTRAINT IF EXISTS {q(constraint_name)}')
 
-            # Create new FK constraint with ON DELETE CASCADE.
-            constraint_name = f"{table_name}_{column_name}_fk_cascade"
+            # PROTECT maps to RESTRICT in SQL (raises an error on delete attempt).
+            # SET NULL and CASCADE map directly.
+            # For SET NULL the column must be nullable, which it always is for Object fields.
+            constraint_name = f"{table_name}_{column_name}_fk"
             cursor.execute(f"""
-                ALTER TABLE "{table_name}"
-                ADD CONSTRAINT "{constraint_name}"
-                FOREIGN KEY ("{column_name}")
-                REFERENCES "{related_table}" ("id")
-                ON DELETE CASCADE
+                ALTER TABLE {q(table_name)}
+                ADD CONSTRAINT {q(constraint_name)}
+                FOREIGN KEY ({q(column_name)})
+                REFERENCES {q(related_table)} ("id")
+                ON DELETE {on_delete_sql}
             """)
 
     def _ensure_all_fk_constraints(self, model):
         """
         Ensure that foreign key constraints are properly created at the database level
-        for ALL OBJECT type fields with ON DELETE CASCADE.
+        for ALL OBJECT type fields, respecting each field's on_delete_behavior.
 
         :param model: The model to ensure FK constraints for
         """
-        # Query all OBJECT type fields for this CustomObjectType
         object_fields = self.fields.filter(type=CustomFieldTypeChoices.TYPE_OBJECT)
 
         for field in object_fields:
-            self._ensure_field_fk_constraint(model, field.name)
+            self._ensure_field_fk_constraint(model, field.name, on_delete_behavior=field.on_delete_behavior)
 
     def create_model(self):
         from netbox_custom_objects.api.serializers import get_serializer_class
@@ -1096,6 +1110,20 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             "disabled for MultiObject fields."
         ),
     )
+    on_delete_behavior = models.CharField(
+        verbose_name=_("on delete behavior"),
+        max_length=20,
+        choices=ObjectFieldOnDeleteChoices,
+        default=ObjectFieldOnDeleteChoices.SET_NULL,
+        blank=True,
+        help_text=_(
+            "What happens to this Custom Object when the referenced object is deleted "
+            "(applies to Object-type fields only). "
+            "Set null: clear the field and keep this object. "
+            "Cascade: delete this object too. "
+            "Protect: prevent deletion of the referenced object."
+        ),
+    )
     weight = models.PositiveSmallIntegerField(
         default=100,
         verbose_name=_("display weight"),
@@ -1220,6 +1248,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         self._original_type = self.type
         self._original_related_object_type_id = self.related_object_type_id
         self._original_is_polymorphic = self.is_polymorphic
+        self._original_on_delete_behavior = self.on_delete_behavior
 
     def __str__(self):
         return self.label or self.name.replace("_", " ").capitalize()
@@ -1557,6 +1586,10 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                         )
                     }
                 )
+
+        # on_delete_behavior is only meaningful for Object-type fields; reset it on others.
+        if self.type != CustomFieldTypeChoices.TYPE_OBJECT:
+            self.on_delete_behavior = ObjectFieldOnDeleteChoices.SET_NULL
 
         # Check for recursion in object and multiobject fields (non-polymorphic only).
         # Polymorphic fields' allowed types are a M2M set after save(), so their recursion
@@ -2160,13 +2193,12 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                         model_field.contribute_to_class(model, self.name)
                         schema_editor.alter_field(model, old_field, model_field)
 
-        # Ensure FK constraints are properly created for non-polymorphic OBJECT fields
+        # Ensure FK constraints are properly created for OBJECT fields
         should_ensure_fk = False
         if self.type == CustomFieldTypeChoices.TYPE_OBJECT and not self.is_polymorphic:
             if self._state.adding:
                 should_ensure_fk = True
             else:
-                # Existing field - check if type changed to OBJECT or related_object_type changed
                 type_changed_to_object = (
                     self._original_type != CustomFieldTypeChoices.TYPE_OBJECT
                     and self.type == CustomFieldTypeChoices.TYPE_OBJECT
@@ -2175,7 +2207,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     self._original_type == CustomFieldTypeChoices.TYPE_OBJECT
                     and self.related_object_type_id != self._original_related_object_type_id
                 )
-                should_ensure_fk = type_changed_to_object or related_object_changed
+                on_delete_changed = (
+                    self._original_type == CustomFieldTypeChoices.TYPE_OBJECT
+                    and self.on_delete_behavior != self._original_on_delete_behavior
+                )
+                should_ensure_fk = type_changed_to_object or related_object_changed or on_delete_changed
 
         # Clear and refresh the model cache for this CustomObjectType when a field is modified
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)
@@ -2187,8 +2223,19 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
         # Ensure FK constraints AFTER the transaction commits to avoid "pending trigger events" errors
         if should_ensure_fk:
+            _on_delete = self.on_delete_behavior
+            _field_name = self.name
+
             def ensure_constraint():
-                self.custom_object_type._ensure_field_fk_constraint(model, self.name)
+                try:
+                    self.custom_object_type._ensure_field_fk_constraint(
+                        model, _field_name, on_delete_behavior=_on_delete
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Failed to ensure FK constraint for field %r on COT %r: %s",
+                        _field_name, self.custom_object_type_id, e,
+                    )
 
             transaction.on_commit(ensure_constraint)
 
@@ -2333,6 +2380,20 @@ def clear_cache_on_field_save(sender, instance, **kwargs):
         related_object_types=instance.custom_object_type.object_type,
     ):
         CustomObjectType.clear_model_cache(pointing_field.custom_object_type_id)
+
+    # When a TYPE_OBJECT field is saved, the FK's on_delete behavior is contributed as
+    # a reverse relation to the related model's _meta.related_objects. If the related
+    # model is a custom object type, bump its cache_timestamp so that all workers
+    # regenerate its model and pick up the correct on_delete behavior. Without this,
+    # a worker with a stale cached related model will still see the old on_delete value
+    # and may bypass a PROTECT or RESTRICT constraint via Django's pre-delete SET NULL.
+    if instance.type == CustomFieldTypeChoices.TYPE_OBJECT and instance.related_object_type_id:
+        try:
+            related_cot = CustomObjectType.objects.get(object_type_id=instance.related_object_type_id)
+            CustomObjectType.clear_model_cache(related_cot.id)
+            related_cot.save(update_fields=['cache_timestamp'])
+        except CustomObjectType.DoesNotExist:
+            pass
 
 
 @receiver(pre_delete, sender=CustomObjectTypeField)

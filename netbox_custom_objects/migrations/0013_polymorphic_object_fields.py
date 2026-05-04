@@ -5,7 +5,7 @@ class Migration(migrations.Migration):
 
     dependencies = [
         ("core", "0018_concrete_objecttype"),
-        ("netbox_custom_objects", "0011_non_deferrable_fk_constraints"),
+        ("netbox_custom_objects", "0012_fix_fk_and_on_delete_behavior"),
     ]
 
     operations = [

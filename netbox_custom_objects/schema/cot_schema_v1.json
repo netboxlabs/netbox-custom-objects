@@ -201,6 +201,12 @@
             "related_object_filter": {
               "type": ["object", "null"],
               "description": "Query params dict to filter the related object selection."
+            },
+            "on_delete_behavior": {
+              "type": "string",
+              "enum": ["set_null", "cascade", "protect"],
+              "default": "set_null",
+              "description": "Behavior when the referenced object is deleted. Only applies to object-type fields."
             }
           }
         }
