@@ -635,6 +635,12 @@ class PolymorphicFieldUITest(TransactionCleanupMixin, CustomObjectsTestCase, Tra
             kwargs={"custom_object_type": self.cot.slug},
         )
 
+    def _detail_url(self, pk):
+        return reverse(
+            "plugins:netbox_custom_objects:customobject",
+            kwargs={"custom_object_type": self.cot.slug, "pk": pk},
+        )
+
     def _field_delete_url(self, field_pk):
         return reverse(
             "plugins:netbox_custom_objects:customobjecttypefield_delete",
@@ -910,6 +916,32 @@ class PolymorphicFieldUITest(TransactionCleanupMixin, CustomObjectsTestCase, Tra
         self.assertNotIn(response.status_code, [400, 403, 500])
         self.assertIn(self.site1, obj1.poly_multi.all())
         self.assertIn(self.site1, obj2.poly_multi.all())
+
+    # --- Detail view ---
+
+    def test_detail_view_shows_type_column_for_polymorphic_m2m(self):
+        """
+        The detail view renders a 'Type' column header and the verbose_name of each
+        linked object's model when the field is polymorphic.  Non-polymorphic M2M
+        fields must not show that column.
+        """
+        obj = self.model.objects.create(name="detail-poly-obj")
+        obj.poly_multi.add(self.site1, self.prefix1)
+
+        response = self.client.get(self._detail_url(obj.pk))
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode()
+
+        # The polymorphic card must have a Type column header
+        self.assertIn("Type", content)
+        # Each object's model verbose_name must appear
+        site_vn = str(Site._meta.verbose_name)       # "site"
+        prefix_vn = str(Prefix._meta.verbose_name)   # "prefix"
+        self.assertIn(site_vn, content)
+        self.assertIn(prefix_vn, content)
+        # Both linked objects themselves must appear
+        self.assertIn(str(self.site1), content)
+        self.assertIn(str(self.prefix1), content)
 
     # --- Delete confirmation for polymorphic fields ---
 
