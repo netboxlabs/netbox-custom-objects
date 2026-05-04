@@ -767,7 +767,7 @@ class CustomObjectType(NetBoxModel):
                 constraint_name = row[0]
                 cursor.execute(f'ALTER TABLE "{table_name}" DROP CONSTRAINT IF EXISTS "{constraint_name}"')
 
-            # Create new FK constraint with ON DELETE CASCADE
+            # Create new FK constraint with ON DELETE CASCADE.
             constraint_name = f"{table_name}_{column_name}_fk_cascade"
             cursor.execute(f"""
                 ALTER TABLE "{table_name}"
@@ -775,7 +775,6 @@ class CustomObjectType(NetBoxModel):
                 FOREIGN KEY ("{column_name}")
                 REFERENCES "{related_table}" ("id")
                 ON DELETE CASCADE
-                DEFERRABLE INITIALLY DEFERRED
             """)
 
     def _ensure_all_fk_constraints(self, model):
