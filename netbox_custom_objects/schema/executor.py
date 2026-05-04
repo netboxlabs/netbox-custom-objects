@@ -99,11 +99,18 @@ def _build_dep_order(diffs):
     deps: dict[str, set[str]] = {d.slug: set() for d in diffs}
     for diff in diffs:
         for fc in diff.field_changes:
+            # Non-polymorphic: single related_object_type string.
             rot = fc.schema_def.get("related_object_type", "")
             if rot.startswith(prefix):
                 dep_slug = rot[len(prefix):]
                 if dep_slug in new_slugs and dep_slug != diff.slug:
                     deps[diff.slug].add(dep_slug)
+            # Polymorphic: list of related_object_types strings.
+            for rot in fc.schema_def.get("related_object_types", []):
+                if rot.startswith(prefix):
+                    dep_slug = rot[len(prefix):]
+                    if dep_slug in new_slugs and dep_slug != diff.slug:
+                        deps[diff.slug].add(dep_slug)
 
     # DFS-based topological sort.
     ordered: list[str] = []
@@ -240,7 +247,11 @@ def _schema_def_to_field_kwargs(schema_def: dict) -> dict:
                 f"Choice set {cs_name!r} not found in DB."
             )
 
-    if "related_object_type" in type_specific:
+    is_polymorphic = schema_def.get("is_polymorphic", False)
+    if "is_polymorphic" in type_specific:
+        kwargs["is_polymorphic"] = is_polymorphic
+
+    if "related_object_type" in type_specific and not is_polymorphic:
         rot_str = schema_def.get("related_object_type")
         if not rot_str:
             raise UnknownObjectTypeError(
@@ -248,6 +259,9 @@ def _schema_def_to_field_kwargs(schema_def: dict) -> dict:
                 "has no related_object_type specified."
             )
         kwargs["related_object_type"] = _resolve_related_object_type(rot_str)
+
+    # related_object_types is M2M — cannot go in constructor kwargs.
+    # Callers (_apply_field_add / _apply_field_alter) must call .set() after save().
 
     if "related_object_filter" in type_specific:
         kwargs["related_object_filter"] = schema_def.get(
@@ -260,6 +274,11 @@ def _schema_def_to_field_kwargs(schema_def: dict) -> dict:
         )
 
     return kwargs
+
+
+def _resolve_related_object_types(rot_list: list) -> list:
+    """Resolve a list of encoded ROT strings to ObjectType instances."""
+    return [_resolve_related_object_type(s) for s in rot_list]
 
 
 # ---------------------------------------------------------------------------
@@ -277,6 +296,13 @@ def _apply_field_add(cot, fc) -> None:
 
     field = CustomObjectTypeField(**kwargs)
     field.save()
+
+    # Wire up M2M related_object_types for polymorphic fields (must be after save).
+    if fc.schema_def.get("is_polymorphic"):
+        rot_list = fc.schema_def.get("related_object_types", [])
+        if rot_list:
+            field.related_object_types.set(_resolve_related_object_types(rot_list))
+
     logger.debug(
         "ADD field %r (schema_id=%s) on COT %r",
         fc.schema_def["name"], fc.schema_id, cot.slug,
@@ -298,6 +324,8 @@ def _apply_field_alter(cot, fc) -> None:
         .get(schema_id=fc.schema_id)
     )
 
+    pending_m2m: dict[str, list] = {}
+
     for attr, (db_val, schema_val) in fc.changed_attrs.items():
         if attr == "type":
             # comparator stores CustomFieldTypeChoices values for type diffs
@@ -317,10 +345,19 @@ def _apply_field_alter(cot, fc) -> None:
                 field.related_object_type = None
             else:
                 field.related_object_type = _resolve_related_object_type(schema_val)
+        elif attr == "related_object_types":
+            # M2M — defer until after save().
+            pending_m2m["related_object_types"] = schema_val or []
         else:
             setattr(field, attr, schema_val)
 
     field.save()
+
+    if "related_object_types" in pending_m2m:
+        field.related_object_types.set(
+            _resolve_related_object_types(pending_m2m["related_object_types"])
+        )
+
     logger.debug(
         "ALTER field %r (schema_id=%s) on COT %r — changed: %s",
         field.name, fc.schema_id, cot.slug, list(fc.changed_attrs.keys()),

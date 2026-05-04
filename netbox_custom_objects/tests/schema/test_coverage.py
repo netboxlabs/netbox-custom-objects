@@ -39,12 +39,6 @@ _SCHEMA_EXCLUDED_ATTRS = frozenset({
     # ── Not yet in the schema format (pending design decision) ──────────────
     "context",             # display preference flag — not structural; omitted for now
     "related_name",        # reverse relation accessor name — omitted for now
-    # Polymorphic field support in the schema pipeline is deferred (#442 follow-up):
-    # - is_polymorphic: bool flag that changes how object/multiobject fields resolve targets
-    # - related_object_types: M2M — requires list encoding/decoding and M2M apply logic
-    #   that does not yet exist in exporter, comparator, or executor.
-    "is_polymorphic",
-    "related_object_types",
 })
 
 

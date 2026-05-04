@@ -117,6 +117,25 @@ class ExecutorBuildDepOrderTestCase(SimpleTestCase):
         result = _build_dep_order([a, b])
         self.assertEqual(set(d.slug for d in result), {"a", "b"})
 
+    def test_polymorphic_rot_list_dependency_ordering(self):
+        # b is listed in poly_a's related_object_types → b must come first.
+        a = COTDiff(name="a", slug="a", is_new=True, field_changes=[
+            FieldChange(
+                op=FieldOp.ADD,
+                schema_id=1,
+                db_name=None,
+                schema_def={
+                    "id": 1, "name": "poly_f", "type": "multiobject",
+                    "is_polymorphic": True,
+                    "related_object_types": ["custom-objects/b", "dcim/device"],
+                },
+            )
+        ])
+        b = self._make_diff("b")
+        result = _build_dep_order([a, b])
+        slugs = [d.slug for d in result]
+        self.assertLess(slugs.index("b"), slugs.index("a"))
+
 
 # ---------------------------------------------------------------------------
 # Helper base for DDL tests
@@ -764,3 +783,118 @@ class ExecutorApplyDiffsTestCase(_ExecutorTestBase):
 
         with self.assertRaises(DestructiveChangesError):
             apply_diffs(diffs, type_defs_by_slug)
+
+
+# ---------------------------------------------------------------------------
+# Polymorphic field ADD and ALTER
+# ---------------------------------------------------------------------------
+
+class ExecutorPolymorphicFieldTestCase(_ExecutorTestBase):
+    """Executor correctly handles polymorphic object/multiobject field ADD and ALTER."""
+
+    def setUp(self):
+        super().setUp()
+        self.device_ot = self.get_device_object_type()
+        self.site_ot = self.get_site_object_type()
+        self.prefix_ot = self.get_prefix_object_type()
+
+    def test_add_polymorphic_object_field(self):
+        cot = self.create_custom_object_type(name='polyadd', slug='poly-add')
+        schema_doc = {
+            "schema_version": "1",
+            "types": [{
+                "name": "polyadd",
+                "slug": "poly-add",
+                "fields": [{
+                    "id": 1,
+                    "name": "poly_obj",
+                    "type": "object",
+                    "is_polymorphic": True,
+                    "related_object_types": ["dcim/device", "dcim/site"],
+                }],
+            }],
+        }
+        apply_document(schema_doc)
+        field = cot.fields.prefetch_related("related_object_types").get(name="poly_obj")
+        self.assertTrue(field.is_polymorphic)
+        encoded = sorted(
+            f"{rot.app_label}/{rot.model}"
+            for rot in field.related_object_types.all()
+        )
+        self.assertEqual(encoded, ["dcim/device", "dcim/site"])
+
+    def test_add_polymorphic_multiobject_field(self):
+        cot = self.create_custom_object_type(name='polyadd2', slug='poly-add-2')
+        schema_doc = {
+            "schema_version": "1",
+            "types": [{
+                "name": "polyadd2",
+                "slug": "poly-add-2",
+                "fields": [{
+                    "id": 1,
+                    "name": "poly_multi",
+                    "type": "multiobject",
+                    "is_polymorphic": True,
+                    "related_object_types": ["dcim/device", "dcim/site"],
+                }],
+            }],
+        }
+        apply_document(schema_doc)
+        field = cot.fields.prefetch_related("related_object_types").get(name="poly_multi")
+        self.assertTrue(field.is_polymorphic)
+        self.assertEqual(field.related_object_types.count(), 2)
+
+    def test_alter_polymorphic_related_object_types(self):
+        cot = self.create_custom_object_type(name='polyalter', slug='poly-alter')
+        self.create_polymorphic_field(
+            cot, [self.device_ot, self.site_ot], name='poly_f', type='object'
+        )
+        type_def = export_cot(cot)
+        for f in type_def.get("fields", []):
+            if f["name"] == "poly_f":
+                f["related_object_types"] = ["dcim/device", "ipam/prefix"]
+        apply_document({"schema_version": "1", "types": [type_def]})
+        field = cot.fields.prefetch_related("related_object_types").get(name="poly_f")
+        encoded = sorted(
+            f"{rot.app_label}/{rot.model}"
+            for rot in field.related_object_types.all()
+        )
+        self.assertEqual(encoded, ["dcim/device", "ipam/prefix"])
+
+    def test_round_trip_polymorphic_field_no_changes(self):
+        cot = self.create_custom_object_type(name='polyrt', slug='poly-rt')
+        self.create_polymorphic_field(
+            cot, [self.device_ot, self.site_ot], name='poly_rt', type='object'
+        )
+        schema_doc = {"schema_version": "1", "types": [export_cot(cot)]}
+        diffs = apply_document(schema_doc)
+        self.assertFalse(diffs[0].has_changes)
+
+    def test_dep_order_polymorphic_reference_to_new_cot(self):
+        """
+        _build_dep_order must respect polymorphic references via related_object_types.
+        """
+        schema_doc = {
+            "schema_version": "1",
+            "types": [
+                {
+                    "name": "cot_poly_a",
+                    "slug": "cot-poly-a",
+                    "fields": [{
+                        "id": 1,
+                        "name": "multi_ref",
+                        "type": "multiobject",
+                        "is_polymorphic": True,
+                        "related_object_types": ["custom-objects/cot-poly-b", "dcim/device"],
+                    }],
+                },
+                {
+                    "name": "cot_poly_b",
+                    "slug": "cot-poly-b",
+                    "fields": [{"id": 1, "name": "title", "type": "text"}],
+                },
+            ],
+        }
+        apply_document(schema_doc)
+        self.assertTrue(CustomObjectType.objects.filter(slug="cot-poly-a").exists())
+        self.assertTrue(CustomObjectType.objects.filter(slug="cot-poly-b").exists())

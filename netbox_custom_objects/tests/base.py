@@ -201,6 +201,26 @@ class CustomObjectsTestCase:
         """Get the site content type for object field testing."""
         return ObjectType.objects.get(app_label='dcim', model='site')
 
+    @classmethod
+    def get_prefix_object_type(cls):
+        """Get the prefix content type for object field testing."""
+        return ObjectType.objects.get(app_label='ipam', model='prefix')
+
+    @classmethod
+    def create_polymorphic_field(cls, custom_object_type, related_object_types, **kwargs):
+        """Create a polymorphic object/multiobject field with a list of allowed ObjectTypes."""
+        defaults = {
+            'custom_object_type': custom_object_type,
+            'name': 'poly_field',
+            'type': 'object',
+            'is_polymorphic': True,
+        }
+        defaults.update(kwargs)
+        rot_list = defaults.pop('related_object_types', None) or related_object_types
+        field = CustomObjectTypeField.objects.create(**defaults)
+        field.related_object_types.set(rot_list)
+        return field
+
     def create_simple_custom_object_type(self, **kwargs):
         """Create a simple custom object type with basic fields."""
         custom_object_type = CustomObjectsTestCase.create_custom_object_type(**kwargs)

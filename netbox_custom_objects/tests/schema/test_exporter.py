@@ -323,6 +323,69 @@ class ExporterFieldTypesTestCase(CustomObjectsTestCase, TestCase):
             self.assertNotIn(spurious, f)
 
 
+class ExporterPolymorphicTestCase(CustomObjectsTestCase, TestCase):
+    """Polymorphic object/multiobject field export."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.cot = cls.create_custom_object_type(name='polyexp', slug='poly-exp')
+        cls.device_ot = cls.get_device_object_type()
+        cls.site_ot = cls.get_site_object_type()
+
+    def test_polymorphic_flag_emitted(self):
+        self.create_polymorphic_field(
+            self.cot, [self.device_ot, self.site_ot], name='poly_obj', type='object'
+        )
+        f = _field_by_name(export_cot(self.cot), "poly_obj")
+        self.assertTrue(f.get("is_polymorphic"))
+
+    def test_polymorphic_related_object_types_sorted(self):
+        self.create_polymorphic_field(
+            self.cot, [self.device_ot, self.site_ot], name='poly_sorted', type='object'
+        )
+        f = _field_by_name(export_cot(self.cot), "poly_sorted")
+        self.assertIn("related_object_types", f)
+        self.assertEqual(f["related_object_types"], sorted(f["related_object_types"]))
+        self.assertIn("dcim/device", f["related_object_types"])
+        self.assertIn("dcim/site", f["related_object_types"])
+
+    def test_polymorphic_omits_singular_related_object_type(self):
+        self.create_polymorphic_field(
+            self.cot, [self.device_ot], name='poly_single', type='object'
+        )
+        f = _field_by_name(export_cot(self.cot), "poly_single")
+        self.assertNotIn("related_object_type", f)
+
+    def test_non_polymorphic_omits_is_polymorphic_flag(self):
+        self.create_custom_object_type_field(
+            self.cot, name='normal_obj', type='object',
+            related_object_type=self.device_ot,
+        )
+        f = _field_by_name(export_cot(self.cot), "normal_obj")
+        self.assertNotIn("is_polymorphic", f)
+        self.assertNotIn("related_object_types", f)
+        self.assertIn("related_object_type", f)
+
+    def test_polymorphic_multiobject_field_exported(self):
+        self.create_polymorphic_field(
+            self.cot, [self.device_ot, self.site_ot], name='poly_multi', type='multiobject'
+        )
+        f = _field_by_name(export_cot(self.cot), "poly_multi")
+        self.assertTrue(f.get("is_polymorphic"))
+        self.assertIn("related_object_types", f)
+        self.assertNotIn("related_object_type", f)
+
+    def test_round_trip_no_changes(self):
+        self.create_polymorphic_field(
+            self.cot, [self.device_ot, self.site_ot], name='poly_rt', type='object'
+        )
+        from netbox_custom_objects.schema.comparator import diff_cot
+        type_def = export_cot(self.cot)
+        result = diff_cot(type_def)
+        poly_alters = [fc for fc in result.alters if fc.db_name == "poly_rt"]
+        self.assertEqual(poly_alters, [], "Polymorphic field should round-trip cleanly")
+
+
 class ExporterDeprecationTestCase(CustomObjectsTestCase, TestCase):
     """Deprecated fields are exported in 'fields', not removed_fields."""
 
@@ -464,3 +527,19 @@ class ExporterSchemaValidationTestCase(CustomObjectsTestCase, TestCase):
     def test_multi_type_document_validates(self):
         cot2 = self.create_custom_object_type(name='second', slug='second')
         self._assert_valid(export_cots([self.cot, cot2]))
+
+    def test_polymorphic_object_field_validates(self):
+        site_ot = self.get_site_object_type()
+        cot = self.create_custom_object_type(name='polyvalid', slug='poly-valid')
+        self.create_polymorphic_field(
+            cot, [self.device_ot, site_ot], name='poly_obj', type='object'
+        )
+        self._assert_valid(export_cots([cot]))
+
+    def test_polymorphic_multiobject_field_validates(self):
+        site_ot = self.get_site_object_type()
+        cot = self.create_custom_object_type(name='polymulti', slug='poly-multi')
+        self.create_polymorphic_field(
+            cot, [self.device_ot, site_ot], name='poly_multi', type='multiobject'
+        )
+        self._assert_valid(export_cots([cot]))
