@@ -1,19 +1,19 @@
 """
-Data migration: change ON DELETE behavior for Object-type field FK constraints
-from CASCADE to SET NULL.
+Combined migration from branch 471-object-field-on-delete-behavior.
 
-Previously, deleting a referenced object (e.g. a Contact) would silently delete
-all Custom Objects that held a reference to it via an Object-type field.  The
-correct behaviour is to null the FK column so the Custom Object is preserved.
+1. Data migration: change ON DELETE behavior for Object-type field FK constraints
+   from CASCADE to SET NULL.
 
-This migration iterates every CustomObjectType, introspects the FK constraints on
-its dynamic table for Object-type fields, drops any CASCADE constraint found, and
-recreates it as SET NULL.
+   Previously, deleting a referenced object (e.g. a Contact) would silently delete
+   all Custom Objects that held a reference to it via an Object-type field.  The
+   correct behaviour is to null the FK column so the Custom Object is preserved.
+
+2. Schema migration: add on_delete_behavior field to CustomObjectTypeField.
 """
 
 import logging
 
-from django.db import migrations
+from django.db import migrations, models
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +82,6 @@ def fix_object_fk_constraints(apps, schema_editor):
                         FOREIGN KEY ("{column_name}")
                         REFERENCES "{referenced_table}" ("id")
                         ON DELETE SET NULL
-                        DEFERRABLE INITIALLY DEFERRED
                         """
                     )
                     logger.info(
@@ -103,9 +102,31 @@ def fix_object_fk_constraints(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("netbox_custom_objects", "0009_alter_customobjecttype_version"),
+        ("netbox_custom_objects", "0011_non_deferrable_fk_constraints"),
     ]
 
     operations = [
         migrations.RunPython(fix_object_fk_constraints, migrations.RunPython.noop),
+        migrations.AddField(
+            model_name="customobjecttypefield",
+            name="on_delete_behavior",
+            field=models.CharField(
+                blank=True,
+                choices=[
+                    ("set_null", "Set null (clear the field, keep this object)"),
+                    ("cascade", "Cascade (delete this object too)"),
+                    ("protect", "Protect (prevent deletion of the referenced object)"),
+                ],
+                default="set_null",
+                help_text=(
+                    "What happens to this Custom Object when the referenced object is deleted "
+                    "(applies to Object-type fields only). "
+                    "Set null: clear the field and keep this object. "
+                    "Cascade: delete this object too. "
+                    "Protect: prevent deletion of the referenced object."
+                ),
+                max_length=20,
+                verbose_name="on delete behavior",
+            ),
+        ),
     ]
