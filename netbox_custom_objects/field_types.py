@@ -487,14 +487,12 @@ class MultiSelectFieldType(FieldType):
         return ", ".join(value)
 
 
-_ON_DELETE_MAP = {
-    ObjectFieldOnDeleteChoices.CASCADE: models.CASCADE,
-    ObjectFieldOnDeleteChoices.SET_NULL: models.SET_NULL,
-    ObjectFieldOnDeleteChoices.PROTECT: models.PROTECT,
-}
-
-
 class ObjectFieldType(FieldType):
+    _ON_DELETE_MAP = {
+        ObjectFieldOnDeleteChoices.CASCADE: models.CASCADE,
+        ObjectFieldOnDeleteChoices.SET_NULL: models.SET_NULL,
+        ObjectFieldOnDeleteChoices.PROTECT: models.PROTECT,
+    }
     def get_model_field(self, field, **kwargs):
         content_type = self._get_related_content_type(field)
         to_model = content_type.model
@@ -503,7 +501,7 @@ class ObjectFieldType(FieldType):
         field_kwargs = {k: v for k, v in kwargs.items() if not k.startswith('_')}
         field_kwargs.update({"default": field.default, "unique": field.unique})
 
-        on_delete = _ON_DELETE_MAP.get(
+        on_delete = self._ON_DELETE_MAP.get(
             getattr(field, 'on_delete_behavior', None) or ObjectFieldOnDeleteChoices.SET_NULL,
             models.SET_NULL,
         )

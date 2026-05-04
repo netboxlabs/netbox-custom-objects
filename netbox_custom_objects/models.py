@@ -189,6 +189,11 @@ class CustomObjectType(NetBoxModel):
     )  # Now stores {custom_object_type_id: {through_model_name: through_model}}
     _model_cache_locks = {}  # Per-model locks to prevent race conditions
     _global_lock = threading.RLock()  # Global lock for managing per-model locks
+    _ON_DELETE_SQL = {
+        ObjectFieldOnDeleteChoices.CASCADE: "CASCADE",
+        ObjectFieldOnDeleteChoices.SET_NULL: "SET NULL",
+        ObjectFieldOnDeleteChoices.PROTECT: "RESTRICT",
+    }
     name = models.CharField(
         max_length=100,
         unique=True,
@@ -726,12 +731,6 @@ class CustomObjectType(NetBoxModel):
         get_serializer_class(model)
         self.register_custom_object_search_index(model)
         return model
-
-    _ON_DELETE_SQL = {
-        ObjectFieldOnDeleteChoices.CASCADE: "CASCADE",
-        ObjectFieldOnDeleteChoices.SET_NULL: "SET NULL",
-        ObjectFieldOnDeleteChoices.PROTECT: "RESTRICT",
-    }
 
     def _ensure_field_fk_constraint(self, model, field_name, on_delete_behavior=None):
         """
