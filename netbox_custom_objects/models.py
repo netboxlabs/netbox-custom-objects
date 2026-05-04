@@ -535,6 +535,54 @@ class CustomObjectType(NetBoxModel):
         # Store through models on the model for yielding in get_models()
         model._through_models = through_models
 
+    @staticmethod
+    def _collect_base_columns(model, user_field_names):
+        """
+        Return a list of dicts describing the concrete DB columns contributed by the
+        CustomObject base class (mixins), excluding any user-defined field names.
+
+        Each dict has keys:
+          "name"        – DB column name (f.column, e.g. "site_id" for a FK field)
+          "field_class" – Django field class name (e.g. "AutoField", "DateTimeField")
+          "null"        – whether the column is nullable (bool)
+
+        Using f.column (not f.name) so that the snapshot key matches the actual DB
+        column name returned by DB introspection.  For non-FK fields f.name == f.column;
+        for FK fields they differ (e.g. f.name='site', f.column='site_id').
+
+        This snapshot is stored in schema_document["base_columns"] so that the
+        post_migrate auto-heal handler (issue #391, Phase 2) can detect drift when
+        NetBox upgrades add new columns to the mixin hierarchy.
+        """
+        return sorted(
+            [
+                {
+                    "name": f.column,
+                    "field_class": f.__class__.__name__,
+                    "null": f.null,
+                }
+                for f in model._meta.concrete_fields
+                if f.name not in user_field_names
+            ],
+            key=lambda e: e["name"],
+        )
+
+    def _store_base_column_snapshot(self, model):
+        """
+        Snapshot the current base columns into schema_document["base_columns"].
+
+        Called immediately after the DB table is created by create_model() so that
+        the snapshot reflects exactly what columns are present at birth.  Only the
+        "base_columns" key is written; any existing keys in schema_document
+        (e.g. "fields" written by the schema exporter) are preserved.
+        """
+        user_field_names = set(self.fields.values_list("name", flat=True))
+        base_columns = self._collect_base_columns(model, user_field_names)
+        doc = self.schema_document or {}
+        doc["base_columns"] = base_columns
+        CustomObjectType.objects.filter(pk=self.pk).update(schema_document=doc)
+        self.schema_document = doc
+
     def get_collision_safe_order_id_idx_name(self):
         return f"tbl_order_id_{self.id}_idx"
 
@@ -770,7 +818,7 @@ class CustomObjectType(NetBoxModel):
                 constraint_name = row[0]
                 cursor.execute(f'ALTER TABLE "{table_name}" DROP CONSTRAINT IF EXISTS "{constraint_name}"')
 
-            # Create new FK constraint with ON DELETE CASCADE
+            # Create new FK constraint with ON DELETE CASCADE.
             constraint_name = f"{table_name}_{column_name}_fk_cascade"
             cursor.execute(f"""
                 ALTER TABLE "{table_name}"
@@ -778,7 +826,6 @@ class CustomObjectType(NetBoxModel):
                 FOREIGN KEY ("{column_name}")
                 REFERENCES "{related_table}" ("id")
                 ON DELETE CASCADE
-                DEFERRABLE INITIALLY DEFERRED
             """)
 
     def _ensure_all_fk_constraints(self, model):
@@ -809,6 +856,8 @@ class CustomObjectType(NetBoxModel):
 
         with connection.schema_editor() as schema_editor:
             schema_editor.create_model(model)
+
+        self._store_base_column_snapshot(model)
 
         get_serializer_class(model)
         self.register_custom_object_search_index(model)

@@ -4,7 +4,7 @@ from core.models import ObjectChange
 from core.tables import ObjectChangeTable
 from django.apps import apps as django_apps
 from django.contrib.contenttypes.models import ContentType
-from django.db.models import Q
+from django.db.models import ProtectedError, Q, RestrictedError
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
@@ -19,7 +19,7 @@ from netbox.forms import (
 )
 from netbox.views import generic
 from netbox.views.generic.mixins import TableMixin
-from utilities.forms import ConfirmationForm, restrict_form_fields
+from utilities.forms import ConfirmationForm, DeleteForm, restrict_form_fields
 from utilities.querydict import normalize_querydict
 from utilities.forms.fields import ContentTypeChoiceField, DynamicModelChoiceField, DynamicModelMultipleChoiceField
 from utilities.forms.utils import get_field_value as _get_field_value
@@ -325,12 +325,20 @@ class CustomObjectTypeView(CustomObjectTableMixin, generic.ObjectView):
 class CustomObjectTypeEditView(generic.ObjectEditView):
     queryset = CustomObjectType.objects.all()
     form = forms.CustomObjectTypeForm
+    template_name = 'netbox_custom_objects/customobjecttype_edit.html'
+
+    def get_extra_context(self, request, instance):
+        return {'branch_bypass_warning': is_in_branch()}
 
 
 @register_model_view(CustomObjectType, "delete")
 class CustomObjectTypeDeleteView(generic.ObjectDeleteView):
     queryset = CustomObjectType.objects.all()
     default_return_url = "plugins:netbox_custom_objects:customobjecttype_list"
+    template_name = 'netbox_custom_objects/customobjecttype_delete.html'
+
+    def get_extra_context(self, request, instance):
+        return {'branch_bypass_warning': is_in_branch()}
 
     def _get_dependent_objects(self, obj):
         dependent_objects = super()._get_dependent_objects(obj)
@@ -375,6 +383,10 @@ class CustomObjectTypeFieldsView(generic.ObjectChildrenView):
 class CustomObjectTypeFieldEditView(generic.ObjectEditView):
     queryset = CustomObjectTypeField.objects.all()
     form = forms.CustomObjectTypeFieldForm
+    template_name = 'netbox_custom_objects/customobjecttypefield_edit.html'
+
+    def get_extra_context(self, request, instance):
+        return {'branch_bypass_warning': is_in_branch()}
 
 
 @register_model_view(CustomObjectTypeField, "delete")
@@ -417,7 +429,7 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
             form_url = reverse(viewname, kwargs={"pk": obj.pk})
             return render(
                 request,
-                "htmx/delete_form.html",
+                "netbox_custom_objects/htmx/delete_form.html",
                 {
                     "object": obj,
                     "object_type": self.queryset.model._meta.verbose_name,
@@ -463,11 +475,18 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
 
         return dependent_objects
 
+    def get_extra_context(self, request, instance):
+        return {'branch_bypass_warning': is_in_branch()}
+
 
 @register_model_view(CustomObjectType, "bulk_import", path="import", detail=False)
 class CustomObjectTypeBulkImportView(generic.BulkImportView):
     queryset = CustomObjectType.objects.all()
     model_form = forms.CustomObjectTypeImportForm
+    template_name = 'netbox_custom_objects/customobjecttype_bulk_import.html'
+
+    def get_extra_context(self, request):
+        return {'branch_bypass_warning': is_in_branch()}
 
 
 @register_model_view(CustomObjectType, "bulk_edit", path="edit", detail=False)
@@ -476,6 +495,10 @@ class CustomObjectTypeBulkEditView(generic.BulkEditView):
     filterset = filtersets.CustomObjectTypeFilterSet
     table = tables.CustomObjectTypeTable
     form = forms.CustomObjectTypeBulkEditForm
+    template_name = 'netbox_custom_objects/customobjecttype_bulk_edit.html'
+
+    def get_extra_context(self, request):
+        return {'branch_bypass_warning': is_in_branch()}
 
 
 @register_model_view(CustomObjectType, "bulk_delete", path="delete", detail=False)
@@ -483,6 +506,10 @@ class CustomObjectTypeBulkDeleteView(generic.BulkDeleteView):
     queryset = CustomObjectType.objects.all()
     filterset = filtersets.CustomObjectTypeFilterSet
     table = tables.CustomObjectTypeTable
+    template_name = 'netbox_custom_objects/customobjecttype_bulk_delete.html'
+
+    def get_extra_context(self, request):
+        return {'branch_bypass_warning': is_in_branch()}
 
 
 #
@@ -906,6 +933,7 @@ class CustomObjectDeleteView(generic.ObjectDeleteView):
     queryset = None
     object = None
     default_return_url = "plugins:netbox_custom_objects:customobject_list"
+    template_name = 'netbox_custom_objects/customobject_delete.html'
 
     def setup(self, request, *args, **kwargs):
         super().setup(request, *args, **kwargs)
@@ -940,6 +968,35 @@ class CustomObjectDeleteView(generic.ObjectDeleteView):
             "plugins:netbox_custom_objects:customobject_list",
             kwargs={"custom_object_type": custom_object_type},
         )
+
+    def get(self, request, *args, **kwargs):
+        obj = self.get_object(**kwargs)
+        form = DeleteForm(instance=obj, initial=request.GET)
+
+        try:
+            dependent_objects = self._get_dependent_objects(obj)
+        except ProtectedError as e:
+            return self._handle_protected_objects(obj, e.protected_objects, request, e)
+        except RestrictedError as e:
+            return self._handle_protected_objects(obj, e.restricted_objects, request, e)
+
+        context = {
+            'object': obj,
+            'object_type': obj._meta.verbose_name,
+            'form': form,
+            'dependent_objects': dependent_objects,
+            **self.get_extra_context(request, obj),
+        }
+
+        if htmx_partial(request):
+            context['form_url'] = request.path
+            return render(request, 'netbox_custom_objects/htmx/co_delete_form.html', context)
+
+        context['return_url'] = self.get_return_url(request, obj)
+        return render(request, self.template_name, context)
+
+    def get_extra_context(self, request, instance):
+        return {'branch_warning': is_in_branch()}
 
 
 @register_model_view(CustomObject, "bulk_edit", path="edit", detail=False)
@@ -1147,6 +1204,7 @@ class CustomObjectBulkDeleteView(CustomObjectTableMixin, generic.BulkDeleteView)
     custom_object_type = None
     table = None
     form = None
+    template_name = 'netbox_custom_objects/custom_object_bulk_delete.html'
 
     def setup(self, request, *args, **kwargs):
         super().setup(request, *args, **kwargs)
@@ -1162,6 +1220,9 @@ class CustomObjectBulkDeleteView(CustomObjectTableMixin, generic.BulkDeleteView)
         )
         model = self.custom_object_type.get_model_with_serializer()
         return model.objects.all()
+
+    def get_extra_context(self, request):
+        return {'branch_warning': is_in_branch()}
 
 
 @register_model_view(CustomObject, "bulk_import", path="import", detail=False)
