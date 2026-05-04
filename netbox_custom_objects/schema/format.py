@@ -108,7 +108,9 @@ FIELD_TYPE_ATTRS = {
     FIELD_TYPE_JSON: set(),
     FIELD_TYPE_SELECT: {"choice_set"},
     FIELD_TYPE_MULTISELECT: {"choice_set"},
-    FIELD_TYPE_OBJECT: {"is_polymorphic", "related_object_type", "related_object_types", "related_object_filter", "on_delete_behavior"},
+    FIELD_TYPE_OBJECT: {
+        "is_polymorphic", "related_object_type", "related_object_types", "related_object_filter", "on_delete_behavior"
+    },
     FIELD_TYPE_MULTIOBJECT: {"is_polymorphic", "related_object_type", "related_object_types", "related_object_filter"},
 }
 

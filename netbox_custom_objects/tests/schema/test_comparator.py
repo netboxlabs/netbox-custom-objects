@@ -441,7 +441,7 @@ class ComparatorPolymorphicTestCase(CustomObjectsTestCase, TestCase):
         self.assertIn("ipam/prefix", schema_val)
 
     def test_is_polymorphic_change_detected(self):
-        field = self.create_polymorphic_field(
+        self.create_polymorphic_field(
             self.cot, [self.device_ot], name='poly_flag', type='object'
         )
         type_def = export_cot(self.cot)
