@@ -289,13 +289,6 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
             data['on_delete_behavior'] = None
         return data
 
-    def create(self, validated_data):
-        """
-        Record the user who created the Custom Object as its owner.
-        """
-        return super().create(validated_data)
-
-
     def get_related_object_type(self, obj):
         if obj.related_object_type:
             return dict(
