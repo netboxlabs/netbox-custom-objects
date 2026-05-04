@@ -29,6 +29,7 @@ from utilities.forms.widgets import (
 from utilities.templatetags.builtins.filters import linkify, render_markdown
 from netbox.tables.columns import BooleanColumn
 
+from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name, generate_model
 
@@ -487,6 +488,12 @@ class MultiSelectFieldType(FieldType):
 
 
 class ObjectFieldType(FieldType):
+    _ON_DELETE_MAP = {
+        ObjectFieldOnDeleteChoices.CASCADE: models.CASCADE,
+        ObjectFieldOnDeleteChoices.SET_NULL: models.SET_NULL,
+        ObjectFieldOnDeleteChoices.PROTECT: models.PROTECT,
+    }
+
     def get_model_field(self, field, **kwargs):
         content_type = self._get_related_content_type(field)
         to_model = content_type.model
@@ -494,6 +501,11 @@ class ObjectFieldType(FieldType):
         # Extract our custom parameters and keep only Django field parameters
         field_kwargs = {k: v for k, v in kwargs.items() if not k.startswith('_')}
         field_kwargs.update({"default": field.default, "unique": field.unique})
+
+        on_delete = self._ON_DELETE_MAP.get(
+            getattr(field, 'on_delete_behavior', None) or ObjectFieldOnDeleteChoices.SET_NULL,
+            models.SET_NULL,
+        )
 
         # Handle self-referential fields by using string references
         if content_type.app_label == APP_LABEL:
@@ -522,7 +534,7 @@ class ObjectFieldType(FieldType):
                     model_name,
                     null=True,
                     blank=True,
-                    on_delete=models.CASCADE,
+                    on_delete=on_delete,
                     related_name=related_name,
                     **field_kwargs
                 )
@@ -542,7 +554,7 @@ class ObjectFieldType(FieldType):
             table_model_name = field.custom_object_type.get_table_model_name(field.custom_object_type.id).lower()
             related_name = f"{table_model_name}_{field.name}_set"
         f = models.ForeignKey(
-            model, null=True, blank=True, on_delete=models.CASCADE, related_name=related_name, **field_kwargs
+            model, null=True, blank=True, on_delete=on_delete, related_name=related_name, **field_kwargs
         )
 
         return f

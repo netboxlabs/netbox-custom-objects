@@ -718,6 +718,10 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
             related_object_type=first_object_ct,
         )
 
+        # Refresh second_custom_object_type so its in-memory cache_timestamp matches the
+        # DB value bumped by the signal when TYPE_OBJECT fields were saved above.
+        cls.second_custom_object_type.refresh_from_db()
+
         # Get the dynamic model
         cls.model = cls.custom_object_type.get_model()
 
@@ -961,7 +965,10 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
             related_name="certificates",
         )
         # Generate Certificate's model so it contributes the FK (and its reverse) to SLB's class.
+        # Refresh slb_cot so its Python-side cache_timestamp matches the DB value bumped by the
+        # signal (creating a TYPE_OBJECT field bumps the related COT's cache_timestamp).
         self.cert_cot.get_model()
+        self.slb_cot.refresh_from_db()
         slb_model = self.slb_cot.get_model()
         self.assertTrue(
             hasattr(slb_model, "certificates"),
@@ -978,6 +985,7 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
             related_name="certificates",
         )
         cert_model = self.cert_cot.get_model()
+        self.slb_cot.refresh_from_db()
         slb_model = self.slb_cot.get_model()
 
         slb_a = slb_model.objects.create(name="SLB-A")
@@ -1001,6 +1009,7 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
             related_object_type=self.slb_object_type,
         )
         self.cert_cot.get_model()
+        self.slb_cot.refresh_from_db()
         slb_model = self.slb_cot.get_model()
 
         table_model_name = self.cert_cot.get_table_model_name(self.cert_cot.id).lower()
@@ -1502,7 +1511,12 @@ class CrossCOTStubSearchIndexRegressionTestCase(CustomObjectsTestCase, TestCase)
         """
         from netbox.search import registry
 
-        self.target_cot.get_model()
+        # Refresh so cache_timestamp matches the DB value bumped by the signal during setUp,
+        # then explicitly generate the stub to re-register its search index (which excludes
+        # object-type fields).  Without refresh_from_db the timestamps mismatch → full model
+        # is generated instead, which includes 'device' and makes assertNotIn fail.
+        self.target_cot.refresh_from_db()
+        self.target_cot.get_model(skip_object_fields=True)
         label = f"netbox_custom_objects.{self.target_cot.get_table_model_name(self.target_cot.id).lower()}"
         search_index = registry["search"].get(label)
 

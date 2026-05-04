@@ -2,6 +2,19 @@ from django.utils.translation import gettext_lazy as _
 from utilities.choices import ChoiceSet
 
 
+class ObjectFieldOnDeleteChoices(ChoiceSet):
+    """Controls what happens to a Custom Object when the referenced object is deleted."""
+    CASCADE = "cascade"
+    SET_NULL = "set_null"
+    PROTECT = "protect"
+
+    CHOICES = (
+        (SET_NULL, _("Set null (clear the field, keep this object)")),
+        (CASCADE, _("Cascade (delete this object too)")),
+        (PROTECT, _("Protect (prevent deletion of the referenced object)")),
+    )
+
+
 class MappingFieldTypeChoices(ChoiceSet):
     CHAR = "char"
     INTEGER = "integer"

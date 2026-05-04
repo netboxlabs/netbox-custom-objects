@@ -87,6 +87,7 @@ FIELD_DEFAULTS = {
     "validation_minimum": None,
     "validation_maximum": None,
     "related_object_filter": None,
+    "on_delete_behavior": "set_null",
 }
 
 # ── Field groups by type ─────────────────────────────────────────────────────
@@ -105,7 +106,7 @@ FIELD_TYPE_ATTRS = {
     FIELD_TYPE_JSON: set(),
     FIELD_TYPE_SELECT: {"choice_set"},
     FIELD_TYPE_MULTISELECT: {"choice_set"},
-    FIELD_TYPE_OBJECT: {"related_object_type", "related_object_filter"},
+    FIELD_TYPE_OBJECT: {"related_object_type", "related_object_filter", "on_delete_behavior"},
     FIELD_TYPE_MULTIOBJECT: {"related_object_type", "related_object_filter"},
 }
 
