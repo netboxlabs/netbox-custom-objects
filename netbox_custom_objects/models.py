@@ -768,8 +768,6 @@ class CustomObjectType(NetBoxModel):
                 cursor.execute(f'ALTER TABLE "{table_name}" DROP CONSTRAINT IF EXISTS "{constraint_name}"')
 
             # Create new FK constraint with ON DELETE CASCADE.
-            # Not DEFERRABLE: a deferred constraint leaves pending trigger events that block
-            # subsequent ALTER TABLE calls (e.g. during branch revert remove_field).
             constraint_name = f"{table_name}_{column_name}_fk_cascade"
             cursor.execute(f"""
                 ALTER TABLE "{table_name}"
