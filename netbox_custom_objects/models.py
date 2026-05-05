@@ -850,7 +850,7 @@ class CustomObjectType(NetBoxModel):
 
         :param model: The model to ensure FK constraints for
         """
-        object_fields = self.fields.filter(type=CustomFieldTypeChoices.TYPE_OBJECT)
+        object_fields = self.fields.filter(type=CustomFieldTypeChoices.TYPE_OBJECT, is_polymorphic=False)
 
         for field in object_fields:
             self._ensure_field_fk_constraint(model, field.name, on_delete_behavior=field.on_delete_behavior)
@@ -1587,8 +1587,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     }
                 )
 
-        # on_delete_behavior is only meaningful for Object-type fields; reset it on others.
-        if self.type != CustomFieldTypeChoices.TYPE_OBJECT:
+        # on_delete_behavior is only meaningful for non-polymorphic Object-type fields.
+        # Polymorphic GFK fields have no real DB FK constraint to enforce (the content_type
+        # column always uses SET_NULL); silently normalise to SET_NULL so stored values
+        # never create a false impression of cascade/protect semantics.
+        if self.type != CustomFieldTypeChoices.TYPE_OBJECT or self.is_polymorphic:
             self.on_delete_behavior = ObjectFieldOnDeleteChoices.SET_NULL
 
         # Check for recursion in object and multiobject fields (non-polymorphic only).
