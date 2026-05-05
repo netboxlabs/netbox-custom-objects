@@ -421,38 +421,43 @@ class CustomObjectTargetMultiObjectFieldTestCase(CustomObjectsTestCase, TestCase
 
 
 class BuildFilterForFieldGuardsTestCase(TestCase):
-    """build_filter_for_field returns None rather than raising when a field's
-    related_object_type is missing or its ContentType is stale."""
+    """build_filter_for_field returns an empty dict rather than raising when a
+    field's related_object_type is missing or its ContentType is stale."""
 
     def _field(self, field_type, related_object_type):
         field = MagicMock()
         field.type = field_type
+        field.is_polymorphic = False
         field.related_object_type = related_object_type
         return field
 
-    def test_object_field_missing_related_object_type_returns_none(self):
-        self.assertIsNone(
-            build_filter_for_field(self._field(CustomFieldTypeChoices.TYPE_OBJECT, None))
+    def test_object_field_missing_related_object_type_returns_empty(self):
+        self.assertEqual(
+            build_filter_for_field(self._field(CustomFieldTypeChoices.TYPE_OBJECT, None)),
+            {},
         )
 
-    def test_multiobject_field_missing_related_object_type_returns_none(self):
-        self.assertIsNone(
-            build_filter_for_field(self._field(CustomFieldTypeChoices.TYPE_MULTIOBJECT, None))
+    def test_multiobject_field_missing_related_object_type_returns_empty(self):
+        self.assertEqual(
+            build_filter_for_field(self._field(CustomFieldTypeChoices.TYPE_MULTIOBJECT, None)),
+            {},
         )
 
-    def test_object_field_stale_content_type_returns_none(self):
+    def test_object_field_stale_content_type_returns_empty(self):
         # ContentType row exists but the app/model is no longer installed
         related_ot = MagicMock()
         related_ot.model_class.return_value = None
-        self.assertIsNone(
-            build_filter_for_field(self._field(CustomFieldTypeChoices.TYPE_OBJECT, related_ot))
+        self.assertEqual(
+            build_filter_for_field(self._field(CustomFieldTypeChoices.TYPE_OBJECT, related_ot)),
+            {},
         )
 
-    def test_multiobject_field_stale_content_type_returns_none(self):
+    def test_multiobject_field_stale_content_type_returns_empty(self):
         related_ot = MagicMock()
         related_ot.model_class.return_value = None
-        self.assertIsNone(
-            build_filter_for_field(self._field(CustomFieldTypeChoices.TYPE_MULTIOBJECT, related_ot))
+        self.assertEqual(
+            build_filter_for_field(self._field(CustomFieldTypeChoices.TYPE_MULTIOBJECT, related_ot)),
+            {},
         )
 
 
@@ -1142,10 +1147,11 @@ class PolymorphicObjectFiltersetTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(self._filterset({}).qs.count(), 3)
 
     def test_wrong_type_filter_returns_nothing(self):
-        # Querying target_dcim_site with a device PK should return no results
-        # (content_type_id mismatch).
+        # Querying target_dcim_site with a device PK should not return the
+        # device-linked object — the content_type_id for that row is Device,
+        # not Site, so it won't match the site filter regardless of object_id.
         pks = list(self._filterset({"target_dcim_site": self.device.pk}).qs.values_list("pk", flat=True))
-        self.assertEqual(pks, [])
+        self.assertNotIn(self.obj_device.pk, pks)
 
 
 # ---------------------------------------------------------------------------

@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Optional, Type
 
+from django import forms as django_forms
 from django.db.models import QuerySet, Q
 from django.utils.dateparse import parse_date, parse_datetime
 
@@ -20,7 +21,7 @@ __all__ = (
 )
 
 
-class PolymorphicObjectFilter(django_filters.ModelChoiceFilter):
+class PolymorphicObjectFilter(django_filters.Filter):
     """
     Filter for one allowed type of a polymorphic GFK object field.
 
@@ -29,12 +30,18 @@ class PolymorphicObjectFilter(django_filters.ModelChoiceFilter):
     (integer PK).  One instance is created per allowed content type; it
     matches rows where both columns equal the fixed content-type ID and the
     submitted object PK.
+
+    Inherits from ``django_filters.Filter`` (not ``ModelChoiceFilter``) so that
+    ``NetBoxModelFilterSet.get_additional_lookups()`` does not attempt to validate
+    the virtual filter name against real model fields and raise ``ValueError``.
     """
 
-    def __init__(self, *, content_type_id, gfk_field_name, **kwargs):
+    field_class = django_forms.ModelChoiceField
+
+    def __init__(self, *, content_type_id, gfk_field_name, queryset, **kwargs):
         self.content_type_id = content_type_id
         self.gfk_field_name = gfk_field_name
-        super().__init__(**kwargs)
+        super().__init__(queryset=queryset, **kwargs)
 
     def filter(self, qs, value):
         if value in (None, "", [], ()):
@@ -45,7 +52,7 @@ class PolymorphicObjectFilter(django_filters.ModelChoiceFilter):
         })
 
 
-class PolymorphicMultiObjectFilter(django_filters.ModelMultipleChoiceFilter):
+class PolymorphicMultiObjectFilter(django_filters.Filter):
     """
     Filter for one allowed type of a polymorphic GFK multiobject field.
 
@@ -53,12 +60,18 @@ class PolymorphicMultiObjectFilter(django_filters.ModelMultipleChoiceFilter):
     One instance is created per allowed content type; submitting one or more
     PKs returns all source objects that reference any of those PKs via this
     type (OR semantics, no duplicates).
+
+    Inherits from ``django_filters.Filter`` (not ``ModelMultipleChoiceFilter``)
+    so that ``NetBoxModelFilterSet.get_additional_lookups()`` does not attempt
+    to validate the virtual filter name against real model fields.
     """
 
-    def __init__(self, *, content_type_id, through_model_name, **kwargs):
+    field_class = django_forms.ModelMultipleChoiceField
+
+    def __init__(self, *, content_type_id, through_model_name, queryset, **kwargs):
         self.content_type_id = content_type_id
         self.through_model_name = through_model_name
-        super().__init__(**kwargs)
+        super().__init__(queryset=queryset, **kwargs)
 
     def filter(self, qs, value):
         if not value:
