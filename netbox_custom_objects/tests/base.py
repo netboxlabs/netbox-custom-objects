@@ -142,16 +142,85 @@ class CustomObjectsTestCase:
 
     def setUp(self):
         """Set up test data."""
+        from django.apps import apps as django_apps
+        from netbox_custom_objects.constants import APP_LABEL
         self.user = create_test_user('testuser')
         self.client = Client()
         self.client.force_login(self.user)
+        # Snapshot the current plugin model registry before this test method
+        # runs.  tearDown uses this to identify models (and fields on existing
+        # models) that were added during the test so they can be deregistered
+        # before the transaction savepoint rolls back.  After the rollback the
+        # DB columns / tables are gone, but Django's in-process app registry is
+        # not transactional — stale entries cause cascade-collector errors in
+        # later tests.
+        app_models = django_apps.all_models.get(APP_LABEL, {})
+        self._plugin_model_snapshot = {
+            name: frozenset(f.column for f in model._meta.local_fields)
+            for name, model in app_models.items()
+        }
 
     def tearDown(self):
         """Clean up after each test."""
-        # Clear the model cache to ensure test isolation
-        # This prevents cached models with deleted fields from affecting other tests
+        from django.apps import apps as django_apps
+        from django.contrib.contenttypes.models import ContentType
+        from netbox_custom_objects.constants import APP_LABEL
         CustomObjectType.clear_model_cache()
+        # Identify plugin models that were added or mutated during this test.
+        # Both through-models (new entries) and COT main models that gained new
+        # FK columns must be removed so that ContentType._meta.related_objects
+        # doesn't reference columns/tables that no longer exist after the
+        # transaction savepoint rolls back.
+        before = getattr(self, '_plugin_model_snapshot', None)
+        if before is None:
+            # setUp() was not invoked via super() for this test class —
+            # skip per-test model cleanup to avoid deleting static models.
+            super().tearDown()
+            return
+        app_models = django_apps.all_models.get(APP_LABEL, {})
+        to_remove = []
+        for name, model in list(app_models.items()):
+            pre_cols = before.get(name)
+            if pre_cols is None:
+                # Entirely new model registered during this test.
+                to_remove.append(name)
+            else:
+                # Existing model — check whether it gained new FK columns.
+                cur_cols = frozenset(f.column for f in model._meta.local_fields)
+                if cur_cols != pre_cols:
+                    to_remove.append(name)
+        if to_remove:
+            for name in to_remove:
+                del app_models[name]
+            # Expire reverse-relation caches so related_objects is rebuilt
+            # from the pruned registry on next access.
+            ContentType._meta._expire_cache(forward=False)
+            for model in list(app_models.values()):
+                model._meta._expire_cache(forward=False)
         super().tearDown()
+
+    @classmethod
+    def tearDownClass(cls):
+        """Remove class-level dynamic model registrations after all tests run."""
+        from django.apps import apps as django_apps
+        from django.contrib.contenttypes.models import ContentType
+        from netbox_custom_objects.constants import APP_LABEL
+        # After tearDownClass the class-level savepoint rolls back, dropping
+        # all COT tables created by setUpTestData.  Remove dynamic models from
+        # the registry first so the cascade collector never tries to query those
+        # dropped tables.  Static plugin models (CustomObjectType, etc.) must
+        # NOT be removed.
+        app_models = django_apps.all_models.get(APP_LABEL, {})
+        dynamic = [
+            name for name, model in list(app_models.items())
+            if hasattr(model, '_meta')
+            and model._meta.db_table.startswith(_DYNAMIC_TABLE_PREFIX)
+        ]
+        if dynamic:
+            for name in dynamic:
+                del app_models[name]
+            ContentType._meta._expire_cache(forward=False)
+        super().tearDownClass()
 
     @classmethod
     def create_custom_object_type(cls, **kwargs):
