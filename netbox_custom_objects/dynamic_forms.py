@@ -24,7 +24,12 @@ def build_filterset_form_class(model):
     for field in custom_object_type.fields.all():
         field_type = field_types.FIELD_TYPE_CLASS[field.type]()
         try:
-            attrs[field.name] = field_type.get_filterform_field(field)
+            form_field = field_type.get_filterform_field(field)
+            if isinstance(form_field, dict):
+                # Polymorphic fields return one form field per allowed type.
+                attrs.update(form_field)
+            elif form_field is not None:
+                attrs[field.name] = form_field
         except NotImplementedError:
             logger.debug("build_filterset_form_class: {} field is not supported".format(field.name))
 

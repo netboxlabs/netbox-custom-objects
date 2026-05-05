@@ -13,7 +13,10 @@ from extras.choices import CustomFieldTypeChoices
 from extras.models import CustomFieldChoiceSet
 
 from netbox_custom_objects.field_types import MultiObjectFieldType, ObjectFieldType
-from netbox_custom_objects.filtersets import ArrayContainsFilter, build_filter_for_field, get_filterset_class
+from netbox_custom_objects.filtersets import (
+    ArrayContainsFilter, PolymorphicMultiObjectFilter, PolymorphicObjectFilter,
+    build_filter_for_field, get_filterset_class,
+)
 from netbox_custom_objects.models import CustomObjectTypeField
 from utilities.forms.fields import (
     DynamicModelChoiceField,
@@ -1037,3 +1040,201 @@ class MultiSelectFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
         model = self.cot.get_model()
         fs_class = get_filterset_class(model)
         self.assertIsInstance(fs_class.base_filters.get('colors'), ArrayContainsFilter)
+
+
+# ---------------------------------------------------------------------------
+# Polymorphic Object field — filter form fields and filterset queryset
+# ---------------------------------------------------------------------------
+
+
+class PolymorphicObjectFilterFormFieldTestCase(CustomObjectsTestCase, TestCase):
+    """get_filterform_field() for a polymorphic object field returns a dict of
+    DynamicModelChoiceField instances keyed by {field}_{app}_{model}."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(name="PolyObjFFTest", slug="poly-obj-ff-test")
+        cls.create_custom_object_type_field(
+            cls.cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        cls.field = cls.create_polymorphic_field(
+            cls.cot,
+            related_object_types=[cls.get_device_object_type(), cls.get_site_object_type()],
+            name="target",
+            label="Target",
+            type="object",
+        )
+
+    def test_returns_dict(self):
+        result = ObjectFieldType().get_filterform_field(self.field)
+        self.assertIsInstance(result, dict)
+
+    def test_dict_has_one_key_per_allowed_type(self):
+        result = ObjectFieldType().get_filterform_field(self.field)
+        self.assertIn("target_dcim_device", result)
+        self.assertIn("target_dcim_site", result)
+
+    def test_each_form_field_is_dynamic_model_choice(self):
+        result = ObjectFieldType().get_filterform_field(self.field)
+        for form_field in result.values():
+            self.assertIsInstance(form_field, DynamicModelChoiceField)
+
+    def test_each_form_field_not_required(self):
+        result = ObjectFieldType().get_filterform_field(self.field)
+        for form_field in result.values():
+            self.assertFalse(form_field.required)
+
+    def test_filterset_has_per_type_filters(self):
+        model = self.cot.get_model()
+        fs_class = get_filterset_class(model)
+        self.assertIsInstance(fs_class.base_filters.get("target_dcim_device"), PolymorphicObjectFilter)
+        self.assertIsInstance(fs_class.base_filters.get("target_dcim_site"), PolymorphicObjectFilter)
+        self.assertNotIn("target", fs_class.base_filters)
+
+
+class PolymorphicObjectFiltersetTestCase(CustomObjectsTestCase, TestCase):
+    """?{field}_{app}_{model}=<pk> filters correctly for polymorphic GFK object fields."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(name="PolyObjFSTest", slug="poly-obj-fs-test")
+        cls.create_custom_object_type_field(
+            cls.cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        cls.field = cls.create_polymorphic_field(
+            cls.cot,
+            related_object_types=[cls.get_device_object_type(), cls.get_site_object_type()],
+            name="target",
+            label="Target",
+            type="object",
+        )
+
+        site, dt, role = _make_device_fixtures("polyobj")
+        cls.device = Device.objects.create(
+            name="Device PolyObj", site=site, device_type=dt, role=role
+        )
+        cls.site = site
+
+        model = cls.cot.get_model()
+        cls.obj_device = model.objects.create(name="Obj Device", target=cls.device)
+        cls.obj_site = model.objects.create(name="Obj Site", target=cls.site)
+        cls.obj_none = model.objects.create(name="Obj None")
+
+    def _filterset(self, params):
+        model = self.cot.get_model()
+        return get_filterset_class(model)(params, model.objects.all())
+
+    def test_filter_by_device(self):
+        pks = list(self._filterset({"target_dcim_device": self.device.pk}).qs.values_list("pk", flat=True))
+        self.assertIn(self.obj_device.pk, pks)
+        self.assertNotIn(self.obj_site.pk, pks)
+        self.assertNotIn(self.obj_none.pk, pks)
+
+    def test_filter_by_site(self):
+        pks = list(self._filterset({"target_dcim_site": self.site.pk}).qs.values_list("pk", flat=True))
+        self.assertIn(self.obj_site.pk, pks)
+        self.assertNotIn(self.obj_device.pk, pks)
+        self.assertNotIn(self.obj_none.pk, pks)
+
+    def test_no_filter_returns_all(self):
+        self.assertEqual(self._filterset({}).qs.count(), 3)
+
+    def test_wrong_type_filter_returns_nothing(self):
+        # Querying target_dcim_site with a device PK should return no results
+        # (content_type_id mismatch).
+        pks = list(self._filterset({"target_dcim_site": self.device.pk}).qs.values_list("pk", flat=True))
+        self.assertEqual(pks, [])
+
+
+# ---------------------------------------------------------------------------
+# Polymorphic MultiObject field — filterset queryset
+# ---------------------------------------------------------------------------
+
+
+class PolymorphicMultiObjectFiltersetTestCase(CustomObjectsTestCase, TestCase):
+    """?{field}_{app}_{model}=<pk> filters correctly for polymorphic GFK multiobject fields."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(name="PolyMoFSTest", slug="poly-mo-fs-test")
+        cls.create_custom_object_type_field(
+            cls.cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        cls.field = cls.create_polymorphic_field(
+            cls.cot,
+            related_object_types=[cls.get_device_object_type(), cls.get_site_object_type()],
+            name="targets",
+            label="Targets",
+            type="multiobject",
+        )
+
+        site, dt, role = _make_device_fixtures("polymo")
+        cls.device1 = Device.objects.create(
+            name="Device PolyMo 1", site=site, device_type=dt, role=role
+        )
+        cls.device2 = Device.objects.create(
+            name="Device PolyMo 2", site=site, device_type=dt, role=role
+        )
+        cls.site = site
+
+        model = cls.cot.get_model()
+        cls.obj_d1 = model.objects.create(name="Obj D1")
+        cls.obj_d1.targets.add(cls.device1)
+        cls.obj_d2 = model.objects.create(name="Obj D2")
+        cls.obj_d2.targets.add(cls.device2)
+        cls.obj_site = model.objects.create(name="Obj Site")
+        cls.obj_site.targets.add(cls.site)
+        cls.obj_both = model.objects.create(name="Obj Both")
+        cls.obj_both.targets.add(cls.device1, cls.site)
+        cls.obj_none = model.objects.create(name="Obj None")
+
+    def _filterset(self, params):
+        model = self.cot.get_model()
+        return get_filterset_class(model)(params, model.objects.all())
+
+    def test_filter_by_device_returns_linked_objects(self):
+        pks = list(self._filterset({"targets_dcim_device": [self.device1.pk]}).qs.values_list("pk", flat=True))
+        self.assertIn(self.obj_d1.pk, pks)
+        self.assertIn(self.obj_both.pk, pks)
+        self.assertNotIn(self.obj_d2.pk, pks)
+        self.assertNotIn(self.obj_site.pk, pks)
+        self.assertNotIn(self.obj_none.pk, pks)
+
+    def test_filter_by_site(self):
+        pks = list(self._filterset({"targets_dcim_site": [self.site.pk]}).qs.values_list("pk", flat=True))
+        self.assertIn(self.obj_site.pk, pks)
+        self.assertIn(self.obj_both.pk, pks)
+        self.assertNotIn(self.obj_d1.pk, pks)
+        self.assertNotIn(self.obj_none.pk, pks)
+
+    def test_filter_multiple_devices_returns_union(self):
+        pks = list(
+            self._filterset({"targets_dcim_device": [self.device1.pk, self.device2.pk]}).qs.values_list("pk", flat=True)
+        )
+        self.assertIn(self.obj_d1.pk, pks)
+        self.assertIn(self.obj_d2.pk, pks)
+        self.assertIn(self.obj_both.pk, pks)
+        self.assertNotIn(self.obj_none.pk, pks)
+
+    def test_no_duplicates_for_object_matching_multiple_values(self):
+        qs = self._filterset({"targets_dcim_device": [self.device1.pk, self.device2.pk]}).qs
+        self.assertEqual(qs.filter(pk=self.obj_both.pk).count(), 1)
+
+    def test_no_filter_returns_all(self):
+        self.assertEqual(self._filterset({}).qs.count(), 5)
+
+    def test_filterset_has_per_type_filters(self):
+        model = self.cot.get_model()
+        fs_class = get_filterset_class(model)
+        self.assertIsInstance(fs_class.base_filters.get("targets_dcim_device"), PolymorphicMultiObjectFilter)
+        self.assertIsInstance(fs_class.base_filters.get("targets_dcim_site"), PolymorphicMultiObjectFilter)
+        self.assertNotIn("targets", fs_class.base_filters)
+
+    def test_form_fields_are_multi_choice(self):
+        result = MultiObjectFieldType().get_filterform_field(self.field)
+        self.assertIsInstance(result, dict)
+        for form_field in result.values():
+            self.assertIsInstance(form_field, DynamicModelMultipleChoiceField)

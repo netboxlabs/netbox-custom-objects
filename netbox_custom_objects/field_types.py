@@ -679,7 +679,19 @@ class ObjectFieldType(FieldType):
 
     def get_filterform_field(self, field, **kwargs):
         if field.is_polymorphic:
-            return None  # Filtering polymorphic fields not supported yet
+            base_label = field.label or field.name
+            result = {}
+            for ot in field.related_object_types.all():
+                model_class = ot.model_class()
+                if model_class is None:
+                    continue
+                result[f"{field.name}_{ot.app_label}_{ot.model}"] = DynamicModelChoiceField(
+                    queryset=model_class.objects.all(),
+                    required=False,
+                    label=f"{base_label} ({model_class._meta.verbose_name})",
+                    selector=ot.app_label != APP_LABEL,
+                )
+            return result
         content_type = self._get_related_content_type(field)
         if content_type.app_label == APP_LABEL:
             from netbox_custom_objects.models import CustomObjectType
@@ -1203,7 +1215,19 @@ class MultiObjectFieldType(FieldType):
 
     def get_filterform_field(self, field, **kwargs):
         if field.is_polymorphic:
-            return None  # Filtering polymorphic fields not supported yet
+            base_label = field.label or field.name
+            result = {}
+            for ot in field.related_object_types.all():
+                model_class = ot.model_class()
+                if model_class is None:
+                    continue
+                result[f"{field.name}_{ot.app_label}_{ot.model}"] = DynamicModelMultipleChoiceField(
+                    queryset=model_class.objects.all(),
+                    required=False,
+                    label=f"{base_label} ({model_class._meta.verbose_name})",
+                    selector=ot.app_label != APP_LABEL,
+                )
+            return result
         content_type = self._get_related_content_type(field)
         if content_type.app_label == APP_LABEL:
             from netbox_custom_objects.models import CustomObjectType
