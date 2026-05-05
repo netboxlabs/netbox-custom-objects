@@ -287,6 +287,7 @@ def _resolve_related_object_types(rot_list: list) -> list:
 
 def _apply_field_add(cot, fc) -> None:
     """Create a new field on *cot* as described by the ADD FieldChange *fc*."""
+    from django.db import transaction  # noqa: PLC0415
     from netbox_custom_objects.models import CustomObjectTypeField  # noqa: PLC0415
 
     kwargs = _schema_def_to_field_kwargs(fc.schema_def)
@@ -294,14 +295,19 @@ def _apply_field_add(cot, fc) -> None:
     # Set schema_id explicitly so the auto-assign block in save() is skipped.
     kwargs["schema_id"] = fc.schema_id
 
-    field = CustomObjectTypeField(**kwargs)
-    field.save()
+    # Wrap save + M2M assignment atomically: if the M2M step fails (unknown
+    # type, signal rejection) the field row is cleaned up so we never leave an
+    # orphaned polymorphic field with is_polymorphic=True but empty
+    # related_object_types.
+    with transaction.atomic():
+        field = CustomObjectTypeField(**kwargs)
+        field.save()
 
-    # Wire up M2M related_object_types for polymorphic fields (must be after save).
-    if fc.schema_def.get("is_polymorphic"):
-        rot_list = fc.schema_def.get("related_object_types", [])
-        if rot_list:
-            field.related_object_types.set(_resolve_related_object_types(rot_list))
+        # Wire up M2M related_object_types for polymorphic fields (must be after save).
+        if fc.schema_def.get("is_polymorphic"):
+            rot_list = fc.schema_def.get("related_object_types", [])
+            if rot_list:
+                field.related_object_types.set(_resolve_related_object_types(rot_list))
 
     logger.debug(
         "ADD field %r (schema_id=%s) on COT %r",

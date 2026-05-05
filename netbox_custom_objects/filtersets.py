@@ -102,6 +102,7 @@ class PolymorphicMultiObjectFilter(django_filters.Filter):
     def __init__(self, *, content_type_id, through_model_name, **kwargs):
         self.content_type_id = content_type_id
         self.through_model_name = through_model_name
+        kwargs.setdefault("required", False)
         super().__init__(**kwargs)
 
     def filter(self, qs, value):
