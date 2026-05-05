@@ -4,12 +4,14 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Optional, Type
 
 from django import forms as django_forms
+from django.apps import apps as django_apps
 from django.db.models import QuerySet, Q
 from django.utils.dateparse import parse_date, parse_datetime
 
 from extras.choices import CustomFieldTypeChoices
 from netbox.filtersets import NetBoxModelFilterSet
 
+from .constants import APP_LABEL
 from .models import CustomObjectType
 
 __all__ = (
@@ -108,8 +110,6 @@ class PolymorphicMultiObjectFilter(django_filters.Filter):
     def filter(self, qs, value):
         if not value:
             return qs
-        from django.apps import apps as django_apps
-        from netbox_custom_objects.constants import APP_LABEL
         try:
             through = django_apps.get_model(APP_LABEL, self.through_model_name)
         except LookupError:

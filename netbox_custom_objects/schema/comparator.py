@@ -47,6 +47,7 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 from netbox_custom_objects import constants
+from netbox_custom_objects.models import CustomObjectType
 
 if TYPE_CHECKING:
     from django.contrib.contenttypes.models import ContentType
@@ -305,8 +306,6 @@ def diff_cot(type_def: dict) -> COTDiff:
         raise ValueError(
             f"type_def is missing required key(s) {missing}; got keys: {list(type_def)}"
         )
-
-    from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
 
     slug = type_def["slug"]
     name = type_def["name"]

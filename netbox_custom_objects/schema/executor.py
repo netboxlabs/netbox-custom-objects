@@ -30,9 +30,13 @@ Public API
 
 import logging
 
+from core.models import ObjectType
 from django.db import transaction
+from extras.models import CustomFieldChoiceSet
 
 from netbox_custom_objects import constants
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.schema.comparator import FieldOp, diff_document
 from netbox_custom_objects.schema.format import (
     CUSTOM_OBJECTS_APP_LABEL_SLUG,
     FIELD_BASE_ATTRS,
@@ -151,9 +155,6 @@ def _resolve_related_object_type(rot_str: str):
 
     Raises :exc:`UnknownObjectTypeError` if the target cannot be found.
     """
-    from core.models import ObjectType  # noqa: PLC0415
-    from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
-
     prefix = CUSTOM_OBJECTS_APP_LABEL_SLUG + "/"
     if rot_str.startswith(prefix):
         slug = rot_str[len(prefix):]
@@ -202,8 +203,6 @@ def _schema_def_to_field_kwargs(schema_def: dict) -> dict:
     Raises :exc:`UnknownChoiceSetError` or :exc:`UnknownObjectTypeError` if
     FK targets cannot be resolved.
     """
-    from extras.models import CustomFieldChoiceSet  # noqa: PLC0415
-
     schema_type = schema_def["type"]
     if schema_type not in SCHEMA_TYPE_TO_CHOICES:
         raise UnknownFieldTypeError(
@@ -287,9 +286,6 @@ def _resolve_related_object_types(rot_list: list) -> list:
 
 def _apply_field_add(cot, fc) -> None:
     """Create a new field on *cot* as described by the ADD FieldChange *fc*."""
-    from django.db import transaction  # noqa: PLC0415
-    from netbox_custom_objects.models import CustomObjectTypeField  # noqa: PLC0415
-
     kwargs = _schema_def_to_field_kwargs(fc.schema_def)
     kwargs["custom_object_type"] = cot
     # Set schema_id explicitly so the auto-assign block in save() is skipped.
@@ -322,8 +318,6 @@ def _apply_field_alter(cot, fc) -> None:
     Only the attributes listed in *fc.changed_attrs* are mutated; everything
     else remains as-is in the DB.
     """
-    from extras.models import CustomFieldChoiceSet  # noqa: PLC0415
-
     field = (
         cot.fields
         .select_related("choice_set", "related_object_type")
@@ -395,8 +389,6 @@ def _update_schema_document(cot, type_def: dict) -> None:
     Uses ``QuerySet.update()`` rather than ``save()`` so that ``post_save`` is
     not dispatched and the model cache is not prematurely invalidated.
     """
-    from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
-
     doc = {
         "schema_version": SCHEMA_FORMAT_VERSION,
         "types": [type_def],
@@ -418,9 +410,6 @@ def _sync_next_schema_id(cot, diff) -> None:
 
     Uses ``QuerySet.update()`` to avoid dispatching ``post_save``.
     """
-    from netbox_custom_objects.schema.comparator import FieldOp  # noqa: PLC0415
-    from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
-
     added_ids = [fc.schema_id for fc in diff.field_changes if fc.op is FieldOp.ADD]
     if not added_ids:
         return
@@ -446,8 +435,6 @@ def _phase1_cots(ordered_diffs, type_defs_by_slug) -> dict:
     creates the backing DB table).  Existing COTs are updated in-place if
     their top-level attributes changed.
     """
-    from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
-
     cot_map: dict[str, object] = {}
 
     for diff in ordered_diffs:
@@ -488,8 +475,6 @@ def _phase2_fields(ordered_diffs, cot_map, *, allow_destructive: bool) -> None:
     All COT tables are guaranteed to exist at this point (created in Phase 1),
     so cross-COT object-field references can be resolved freely.
     """
-    from netbox_custom_objects.schema.comparator import FieldOp  # noqa: PLC0415
-
     for diff in ordered_diffs:
         cot = cot_map[diff.slug]
         for fc in diff.field_changes:
@@ -573,8 +558,6 @@ def apply_document(
     objects that were computed and applied (regardless of whether each had
     changes).
     """
-    from netbox_custom_objects.schema.comparator import diff_document  # noqa: PLC0415
-
     diffs = diff_document(schema_doc)
     type_defs_by_slug = {
         td["slug"]: td for td in schema_doc.get("types", [])

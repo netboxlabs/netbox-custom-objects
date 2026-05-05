@@ -28,6 +28,15 @@ from netbox.api.authentication import IsAuthenticatedOrLoginNotRequired, TokenWr
 
 from netbox_custom_objects.filtersets import get_filterset_class
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.schema.comparator import diff_document
+from netbox_custom_objects.schema.executor import (
+    apply_document,
+    CircularDependencyError,
+    DestructiveChangesError,
+    UnknownChoiceSetError,
+    UnknownFieldTypeError,
+    UnknownObjectTypeError,
+)
 from netbox_custom_objects.utilities import is_in_branch
 
 from . import serializers
@@ -328,10 +337,6 @@ class SchemaPreviewView(APIView):
     permission_classes = [IsAuthenticatedOrLoginNotRequired]
 
     def post(self, request, *args, **kwargs):
-        # Deferred import: the schema package imports Django models at module level, which
-        # triggers app-registry access before it is ready if imported at the top of views.py.
-        from netbox_custom_objects.schema.comparator import diff_document  # noqa: PLC0415
-
         schema_doc = request.data
         _validate_schema_doc(schema_doc)
         diffs = diff_document(schema_doc)
@@ -405,16 +410,6 @@ class SchemaApplyView(APIView):
                 "You do not have permission to apply a schema document. "
                 "Both add and change permissions on CustomObjectType are required."
             )
-
-        # Deferred import: same app-registry concern as the comparator import above.
-        from netbox_custom_objects.schema.executor import (  # noqa: PLC0415
-            apply_document,
-            CircularDependencyError,
-            DestructiveChangesError,
-            UnknownChoiceSetError,
-            UnknownFieldTypeError,
-            UnknownObjectTypeError,
-        )
 
         allow_destructive = request.data.get("allow_destructive", False)
         if not isinstance(allow_destructive, bool):
