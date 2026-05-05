@@ -21,34 +21,67 @@ __all__ = (
 )
 
 
+class _IntegerListField(django_forms.Field):
+    """
+    Accepts a single integer or a list of integers; always returns a list of
+    ints.  Designed for multi-valued PK inputs that should not be validated
+    against a model queryset.
+    """
+
+    def to_python(self, value):
+        if value in (None, "", [], ()):
+            return []
+        if not isinstance(value, (list, tuple)):
+            value = [value]
+        result = []
+        for v in value:
+            if v in ("", None):
+                continue
+            try:
+                result.append(int(v))
+            except (TypeError, ValueError):
+                raise django_forms.ValidationError(f"Invalid integer: {v!r}")
+        return result
+
+    def validate(self, value):
+        # An empty list is valid — it just means the filter is inactive.
+        pass
+
+
 class PolymorphicObjectFilter(django_filters.Filter):
     """
     Filter for one allowed type of a polymorphic GFK object field.
 
-    A polymorphic GFK field stores its value as two concrete columns:
-    ``{name}_content_type_id`` (FK to ContentType) and ``{name}_object_id``
-    (integer PK).  One instance is created per allowed content type; it
-    matches rows where both columns equal the fixed content-type ID and the
-    submitted object PK.
+    Accepts a raw integer PK; no model-queryset validation is performed.
+    The content_type_id is baked in at construction time, so only custom
+    objects whose GFK points to *this* content type AND has the submitted
+    object_id are returned.
 
-    Inherits from ``django_filters.Filter`` (not ``ModelChoiceFilter``) so that
-    ``NetBoxModelFilterSet.get_additional_lookups()`` does not attempt to validate
-    the virtual filter name against real model fields and raise ``ValueError``.
+    Using IntegerField (not ModelChoiceField) means the filter is applied
+    even when the submitted PK doesn't correspond to any existing object —
+    the DB query simply returns an empty set rather than bypassing the filter
+    entirely (which ModelChoiceField would do via ValidationError → missing
+    cleaned_data entry).
+
+    Inherits from ``django_filters.Filter`` (not ``ModelChoiceFilter``) so
+    that ``NetBoxModelFilterSet.get_additional_lookups()`` returns {} without
+    attempting to validate the virtual filter name against real model fields.
     """
 
-    field_class = django_forms.ModelChoiceField
+    field_class = django_forms.IntegerField
 
-    def __init__(self, *, content_type_id, gfk_field_name, queryset, **kwargs):
+    def __init__(self, *, content_type_id, gfk_field_name, **kwargs):
         self.content_type_id = content_type_id
         self.gfk_field_name = gfk_field_name
-        super().__init__(queryset=queryset, **kwargs)
+        kwargs.setdefault("required", False)
+        super().__init__(**kwargs)
 
     def filter(self, qs, value):
-        if value in (None, "", [], ()):
+        if value is None:
             return qs
         return qs.filter(**{
             f"{self.gfk_field_name}_content_type_id": self.content_type_id,
-            f"{self.gfk_field_name}_object_id": value.pk,
+            f"{self.gfk_field_name}_object_id": value,
         })
 
 
@@ -56,22 +89,20 @@ class PolymorphicMultiObjectFilter(django_filters.Filter):
     """
     Filter for one allowed type of a polymorphic GFK multiobject field.
 
-    The through table has (source_id, content_type_id, object_id) columns.
-    One instance is created per allowed content type; submitting one or more
-    PKs returns all source objects that reference any of those PKs via this
-    type (OR semantics, no duplicates).
+    Accepts one or more raw integer PKs (list).  The through table is queried
+    for rows matching (content_type_id, object_id__in=pks) and the
+    corresponding source objects are returned (OR semantics, no duplicates).
 
-    Inherits from ``django_filters.Filter`` (not ``ModelMultipleChoiceFilter``)
-    so that ``NetBoxModelFilterSet.get_additional_lookups()`` does not attempt
-    to validate the virtual filter name against real model fields.
+    Using _IntegerListField (not ModelMultipleChoiceField) ensures the filter
+    is applied regardless of whether the submitted PKs match existing objects.
     """
 
-    field_class = django_forms.ModelMultipleChoiceField
+    field_class = _IntegerListField
 
-    def __init__(self, *, content_type_id, through_model_name, queryset, **kwargs):
+    def __init__(self, *, content_type_id, through_model_name, **kwargs):
         self.content_type_id = content_type_id
         self.through_model_name = through_model_name
-        super().__init__(queryset=queryset, **kwargs)
+        super().__init__(**kwargs)
 
     def filter(self, qs, value):
         if not value:
@@ -84,7 +115,7 @@ class PolymorphicMultiObjectFilter(django_filters.Filter):
             return qs.none()
         source_ids = through.objects.filter(
             content_type_id=self.content_type_id,
-            object_id__in=[obj.pk for obj in value],
+            object_id__in=value,
         ).values_list("source_id", flat=True)
         return qs.filter(pk__in=source_ids).distinct()
 
@@ -193,19 +224,16 @@ def _build_polymorphic_filters(field) -> dict:
             continue
         filter_name = f"{field.name}_{ot.app_label}_{ot.model}"
         label = f"{base_label} ({model_class._meta.verbose_name})"
-        queryset = model_class.objects.all()
         if is_multi:
             filters[filter_name] = PolymorphicMultiObjectFilter(
                 content_type_id=ot.id,
                 through_model_name=field.through_model_name,
-                queryset=queryset,
                 label=label,
             )
         else:
             filters[filter_name] = PolymorphicObjectFilter(
                 content_type_id=ot.id,
                 gfk_field_name=field.name,
-                queryset=queryset,
                 label=label,
             )
 
