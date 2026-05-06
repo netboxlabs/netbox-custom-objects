@@ -1302,7 +1302,7 @@ class CustomObjectLinkPanelTest(CustomObjectsTestCase, TestCase):
 
     def _linked_objects_for(self, obj):
         """Return the list of LinkedCustomObject entries the panel would render."""
-        panel = self._panel(obj)
+        self._panel(obj)
         # Intercept just before template rendering by extracting the data
         # the same way left_page() does, without actually rendering HTML.
         from django.contrib.contenttypes.models import ContentType
