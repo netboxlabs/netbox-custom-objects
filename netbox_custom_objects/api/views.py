@@ -5,6 +5,7 @@ from pathlib import Path
 
 import jsonschema
 
+from django.apps import apps as django_apps
 from django.contrib.contenttypes.models import ContentType
 from django.http import Http404
 from django.utils.translation import gettext_lazy as _
@@ -26,6 +27,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from netbox.api.authentication import IsAuthenticatedOrLoginNotRequired, TokenWritePermission
 
 
+from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.filtersets import get_filterset_class
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.schema.comparator import diff_document
@@ -262,24 +264,42 @@ class LinkedObjectsView(APIView):
         except (model_class.DoesNotExist, ValueError):
             raise Http404
 
-        fields = CustomObjectTypeField.objects.filter(
+        non_poly_fields = CustomObjectTypeField.objects.filter(
             related_object_type=content_type,
             type__in=[CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT],
         ).select_related('custom_object_type')
 
+        poly_fields = CustomObjectTypeField.objects.filter(
+            related_object_types=content_type,
+            type__in=[CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT],
+        ).select_related('custom_object_type')
+
         results = []
-        for field in fields:
+        for field in list(non_poly_fields) + list(poly_fields):
             custom_object_model = field.custom_object_type.get_model()
 
             if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                m2m_field = custom_object_model._meta.get_field(field.name)
-                through_model = m2m_field.remote_field.through
-                linked_ids = through_model.objects.filter(
-                    target_id=target_obj.pk
-                ).values_list('source_id', flat=True)
+                if field.is_polymorphic:
+                    through = django_apps.get_model(APP_LABEL, field.through_model_name)
+                    linked_ids = through.objects.filter(
+                        content_type_id=content_type.id,
+                        object_id=target_obj.pk,
+                    ).values_list('source_id', flat=True)
+                else:
+                    m2m_field = custom_object_model._meta.get_field(field.name)
+                    through_model = m2m_field.remote_field.through
+                    linked_ids = through_model.objects.filter(
+                        target_id=target_obj.pk
+                    ).values_list('source_id', flat=True)
                 linked_objects = custom_object_model.objects.filter(pk__in=linked_ids)
             else:
-                linked_objects = custom_object_model.objects.filter(**{field.name: target_obj})
+                if field.is_polymorphic:
+                    linked_objects = custom_object_model.objects.filter(**{
+                        f"{field.name}_content_type_id": content_type.id,
+                        f"{field.name}_object_id": target_obj.pk,
+                    })
+                else:
+                    linked_objects = custom_object_model.objects.filter(**{field.name: target_obj})
 
             serializer_class = serializers.get_serializer_class(custom_object_model)
             for linked_obj in linked_objects:

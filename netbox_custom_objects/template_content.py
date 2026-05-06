@@ -1,10 +1,12 @@
 from dataclasses import dataclass
 from typing import Any
+from django.apps import apps as django_apps
 from django.contrib.contenttypes.models import ContentType
 from django.template import Template, Context
 from netbox.plugins import PluginTemplateExtension
 from extras.choices import CustomFieldTypeChoices
 from utilities.paginator import EnhancedPaginator
+from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.models import CustomObjectTypeField
 from netbox_custom_objects.tables import LinkedCustomObjectTable
 
@@ -44,42 +46,45 @@ class CustomObjectLink(PluginTemplateExtension):
         content_type = ContentType.objects.get_for_model(
             self.context["object"]._meta.model
         )
-        custom_object_type_fields = CustomObjectTypeField.objects.filter(
+        non_poly_fields = CustomObjectTypeField.objects.filter(
             related_object_type=content_type
         )
+        poly_fields = CustomObjectTypeField.objects.filter(
+            related_object_types=content_type
+        )
         linked_custom_objects = []
+        target_obj = self.context["object"]
 
-        for field in custom_object_type_fields:
+        for field in list(non_poly_fields) + list(poly_fields):
             model = field.custom_object_type.get_model(no_cache=True)
 
             if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                # Get the M2M field from the model
-                m2m_field = model._meta.get_field(field.name)
-                through_model = m2m_field.remote_field.through
-
-                linked_ids = through_model.objects.filter(
-                    target_id=self.context["object"].pk
-                ).values_list('source_id', flat=True)
-
+                if field.is_polymorphic:
+                    through = django_apps.get_model(APP_LABEL, field.through_model_name)
+                    linked_ids = through.objects.filter(
+                        content_type_id=content_type.id,
+                        object_id=target_obj.pk,
+                    ).values_list('source_id', flat=True)
+                else:
+                    m2m_field = model._meta.get_field(field.name)
+                    through_model = m2m_field.remote_field.through
+                    linked_ids = through_model.objects.filter(
+                        target_id=target_obj.pk
+                    ).values_list('source_id', flat=True)
                 linked_objects = model.objects.filter(pk__in=linked_ids)
-
-                for model_object in linked_objects:
-                    linked_custom_objects.append(
-                        LinkedCustomObject(
-                            custom_object=model_object, field=field
-                        )
-                    )
             else:
-                # Build a filter dynamically using the field name
-                filter_kwargs = {field.name: self.context["object"]}
-                linked_objects = model.objects.filter(**filter_kwargs)
+                if field.is_polymorphic:
+                    linked_objects = model.objects.filter(**{
+                        f"{field.name}_content_type_id": content_type.id,
+                        f"{field.name}_object_id": target_obj.pk,
+                    })
+                else:
+                    linked_objects = model.objects.filter(**{field.name: target_obj})
 
-                for model_object in linked_objects:
-                    linked_custom_objects.append(
-                        LinkedCustomObject(
-                            custom_object=model_object, field=field
-                        )
-                    )
+            for model_object in linked_objects:
+                linked_custom_objects.append(
+                    LinkedCustomObject(custom_object=model_object, field=field)
+                )
 
         request = self.context["request"]
         linked_objects_table = LinkedCustomObjectTable(linked_custom_objects, orderable=False)
