@@ -2320,17 +2320,16 @@ class CustomObjectObjectTypeManager(ObjectTypeManager):
 
     def public(self):
         """
-        Filter the base queryset to return only ContentTypes corresponding to "public" models; those which are listed
-        in registry['models'] and intended for reference by other objects.
+        Return ObjectTypes for public models plus all custom object models (excluding through tables).
+
+        NetBox marks models as public via the ObjectType.public boolean field (set when the
+        ObjectType row is created from model_is_public()).  Dynamic custom object models are
+        included unconditionally by app_label so they appear in object-type pickers even before
+        their ObjectType rows have been lazily created.
         """
-        q = Q()
-        for app_label, model_list in registry["models"].items():
-            q |= Q(app_label=app_label, model__in=model_list)
-        # Add CTs of custom object models, but not the "through" tables
-        q |= Q(app_label=APP_LABEL)
         return (
             self.get_queryset()
-            .filter(q)
+            .filter(Q(public=True) | Q(app_label=APP_LABEL))
             .exclude(app_label=APP_LABEL, model__startswith="through")
         )
 
