@@ -47,6 +47,7 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 from netbox_custom_objects import constants
+from netbox_custom_objects.models import CustomObjectType
 
 if TYPE_CHECKING:
     from django.contrib.contenttypes.models import ContentType
@@ -227,19 +228,44 @@ def _compare_field_attrs(db_field, schema_field: dict, cot_slug_cache: dict, war
         if dv != sv:
             changes["choice_set"] = (dv, sv)
 
-    if "related_object_type" in type_specific:
-        dv = (
-            _encode_related_object_type(db_field.related_object_type, cot_slug_cache, warnings)
-        ) if db_field.related_object_type_id else None
-        sv = schema_field.get("related_object_type")
+    if "is_polymorphic" in type_specific:
+        dv = db_field.is_polymorphic
+        sv = schema_field.get("is_polymorphic", FIELD_DEFAULTS.get("is_polymorphic", False))
         if dv != sv:
-            changes["related_object_type"] = (dv, sv)
+            changes["is_polymorphic"] = (dv, sv)
+
+    if "related_object_type" in type_specific:
+        # Only compare for non-polymorphic fields; polymorphic fields use related_object_types.
+        if not db_field.is_polymorphic and not schema_field.get("is_polymorphic", False):
+            dv = (
+                _encode_related_object_type(db_field.related_object_type, cot_slug_cache, warnings)
+            ) if db_field.related_object_type_id else None
+            sv = schema_field.get("related_object_type")
+            if dv != sv:
+                changes["related_object_type"] = (dv, sv)
+
+    if "related_object_types" in type_specific:
+        # Only compare for polymorphic fields.
+        if db_field.is_polymorphic or schema_field.get("is_polymorphic", False):
+            dv = sorted(
+                _encode_related_object_type(rot, cot_slug_cache, warnings)
+                for rot in db_field.related_object_types.all()
+            )
+            sv = sorted(schema_field.get("related_object_types", []))
+            if dv != sv:
+                changes["related_object_types"] = (dv, sv)
 
     if "related_object_filter" in type_specific:
         dv = db_field.related_object_filter
         sv = schema_field.get("related_object_filter", None)
         if dv != sv:
             changes["related_object_filter"] = (dv, sv)
+
+    if "on_delete_behavior" in type_specific:
+        dv = db_field.on_delete_behavior or FIELD_DEFAULTS["on_delete_behavior"]
+        sv = schema_field.get("on_delete_behavior", FIELD_DEFAULTS["on_delete_behavior"])
+        if dv != sv:
+            changes["on_delete_behavior"] = (dv, sv)
 
     return changes
 
@@ -281,8 +307,6 @@ def diff_cot(type_def: dict) -> COTDiff:
             f"type_def is missing required key(s) {missing}; got keys: {list(type_def)}"
         )
 
-    from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
-
     slug = type_def["slug"]
     name = type_def["name"]
 
@@ -323,7 +347,7 @@ def diff_cot(type_def: dict) -> COTDiff:
     }
     # Single query for all fields; partition into tracked/untracked in Python.
     db_fields: dict[int, object] = {}
-    for f in cot.fields.select_related("choice_set", "related_object_type"):
+    for f in cot.fields.select_related("choice_set", "related_object_type").prefetch_related("related_object_types"):
         if f.schema_id is None:
             diff.warnings.append(
                 f"Field {f.name!r} (pk={f.pk}) has no schema_id and cannot be "
@@ -334,12 +358,18 @@ def diff_cot(type_def: dict) -> COTDiff:
 
     # Pre-fetch slugs for all custom-COT related_object_type references in a
     # single query to avoid one DB round-trip per object/multiobject field.
+    # Covers both the FK (non-polymorphic) and the M2M (polymorphic) cases.
     cot_ids: set[int] = set()
     for f in db_fields.values():
         if f.related_object_type_id and f.related_object_type.app_label == constants.APP_LABEL:
             m = constants.TABLE_MODEL_RE.match(f.related_object_type.model)
             if m:
                 cot_ids.add(int(m.group(1)))
+        for rot in f.related_object_types.all():
+            if rot.app_label == constants.APP_LABEL:
+                m = constants.TABLE_MODEL_RE.match(rot.model)
+                if m:
+                    cot_ids.add(int(m.group(1)))
     cot_slug_cache: dict[int, str] = (
         dict(CustomObjectType.objects.filter(pk__in=cot_ids).values_list("pk", "slug"))
         if cot_ids else {}

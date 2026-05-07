@@ -5,6 +5,7 @@ from pathlib import Path
 
 import jsonschema
 
+from django.apps import apps as django_apps
 from django.contrib.contenttypes.models import ContentType
 from django.http import Http404
 from django.utils.translation import gettext_lazy as _
@@ -26,10 +27,18 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from netbox.api.authentication import IsAuthenticatedOrLoginNotRequired, TokenWritePermission
 
 
+from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.filtersets import get_filterset_class
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
-from netbox_custom_objects.utilities import is_in_branch
-
+from netbox_custom_objects.schema.comparator import diff_document
+from netbox_custom_objects.schema.executor import (
+    apply_document,
+    CircularDependencyError,
+    DestructiveChangesError,
+    UnknownChoiceSetError,
+    UnknownFieldTypeError,
+    UnknownObjectTypeError,
+)
 from . import serializers
 
 logger = logging.getLogger(__name__)
@@ -91,17 +100,13 @@ def _serialize_diff(diff) -> dict:
     }
 
 
-# Constants
-BRANCH_ACTIVE_ERROR_MESSAGE = _("Please switch to the main branch to perform this operation.")
-
-
 class RootView(APIRootView):
     def get_view_name(self):
         return "CustomObjects"
 
 
 class CustomObjectTypeViewSet(ModelViewSet):
-    queryset = CustomObjectType.objects.all()
+    queryset = CustomObjectType.objects.prefetch_related('fields__related_object_types')
     serializer_class = serializers.CustomObjectTypeSerializer
 
 
@@ -185,7 +190,7 @@ class CustomObjectViewSet(ETagMixin, ModelViewSet):
 
 
 class CustomObjectTypeFieldViewSet(ModelViewSet):
-    queryset = CustomObjectTypeField.objects.all()
+    queryset = CustomObjectTypeField.objects.prefetch_related('related_object_types')
     serializer_class = serializers.CustomObjectTypeFieldSerializer
 
 
@@ -248,24 +253,42 @@ class LinkedObjectsView(APIView):
         except (model_class.DoesNotExist, ValueError):
             raise Http404
 
-        fields = CustomObjectTypeField.objects.filter(
+        non_poly_fields = CustomObjectTypeField.objects.filter(
             related_object_type=content_type,
             type__in=[CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT],
         ).select_related('custom_object_type')
 
+        poly_fields = CustomObjectTypeField.objects.filter(
+            related_object_types=content_type,
+            type__in=[CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT],
+        ).select_related('custom_object_type')
+
         results = []
-        for field in fields:
+        for field in list(non_poly_fields) + list(poly_fields):
             custom_object_model = field.custom_object_type.get_model()
 
             if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                m2m_field = custom_object_model._meta.get_field(field.name)
-                through_model = m2m_field.remote_field.through
-                linked_ids = through_model.objects.filter(
-                    target_id=target_obj.pk
-                ).values_list('source_id', flat=True)
+                if field.is_polymorphic:
+                    through = django_apps.get_model(APP_LABEL, field.through_model_name)
+                    linked_ids = through.objects.filter(
+                        content_type_id=content_type.id,
+                        object_id=target_obj.pk,
+                    ).values_list('source_id', flat=True)
+                else:
+                    m2m_field = custom_object_model._meta.get_field(field.name)
+                    through_model = m2m_field.remote_field.through
+                    linked_ids = through_model.objects.filter(
+                        target_id=target_obj.pk
+                    ).values_list('source_id', flat=True)
                 linked_objects = custom_object_model.objects.filter(pk__in=linked_ids)
             else:
-                linked_objects = custom_object_model.objects.filter(**{field.name: target_obj})
+                if field.is_polymorphic:
+                    linked_objects = custom_object_model.objects.filter(**{
+                        f"{field.name}_content_type_id": content_type.id,
+                        f"{field.name}_object_id": target_obj.pk,
+                    })
+                else:
+                    linked_objects = custom_object_model.objects.filter(**{field.name: target_obj})
 
             serializer_class = serializers.get_serializer_class(custom_object_model)
             for linked_obj in linked_objects:
@@ -323,10 +346,6 @@ class SchemaPreviewView(APIView):
     permission_classes = [IsAuthenticatedOrLoginNotRequired]
 
     def post(self, request, *args, **kwargs):
-        # Deferred import: the schema package imports Django models at module level, which
-        # triggers app-registry access before it is ready if imported at the top of views.py.
-        from netbox_custom_objects.schema.comparator import diff_document  # noqa: PLC0415
-
         schema_doc = request.data
         _validate_schema_doc(schema_doc)
         diffs = diff_document(schema_doc)
@@ -385,13 +404,6 @@ class SchemaApplyView(APIView):
     permission_classes = [IsAuthenticatedOrLoginNotRequired, TokenWritePermission]
 
     def post(self, request, *args, **kwargs):
-        # TODO: Schema apply is blocked while in a branch context because the executor
-        # performs direct DDL (ALTER/DROP TABLE) that is not branch-aware.  When branching
-        # is extended to support schema operations, remove this guard and wire up the
-        # appropriate branch-scoped apply path.
-        if is_in_branch():
-            raise ValidationError(BRANCH_ACTIVE_ERROR_MESSAGE)
-
         if not (
             request.user.has_perm('netbox_custom_objects.add_customobjecttype') and
             request.user.has_perm('netbox_custom_objects.change_customobjecttype')
@@ -400,16 +412,6 @@ class SchemaApplyView(APIView):
                 "You do not have permission to apply a schema document. "
                 "Both add and change permissions on CustomObjectType are required."
             )
-
-        # Deferred import: same app-registry concern as the comparator import above.
-        from netbox_custom_objects.schema.executor import (  # noqa: PLC0415
-            apply_document,
-            CircularDependencyError,
-            DestructiveChangesError,
-            UnknownChoiceSetError,
-            UnknownFieldTypeError,
-            UnknownObjectTypeError,
-        )
 
         allow_destructive = request.data.get("allow_destructive", False)
         if not isinstance(allow_destructive, bool):

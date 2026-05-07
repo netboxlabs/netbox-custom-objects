@@ -194,15 +194,34 @@
       "allOf": [
         { "$ref": "#/$defs/field_base" },
         {
-          "required": ["related_object_type"],
           "properties": {
             "type": { "const": "object" },
+            "is_polymorphic": {
+              "type": "boolean",
+              "default": false,
+              "description": "When true, the field may reference objects of multiple types listed in related_object_types."
+            },
             "related_object_type": { "$ref": "#/$defs/related_object_type" },
+            "related_object_types": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/related_object_type" },
+              "minItems": 1,
+              "description": "Allowed object types for a polymorphic field. Required when is_polymorphic is true."
+            },
             "related_object_filter": {
               "type": ["object", "null"],
               "description": "Query params dict to filter the related object selection."
+            },
+            "on_delete_behavior": {
+              "type": "string",
+              "enum": ["set_null", "cascade", "protect"],
+              "default": "set_null",
+              "description": "Behavior when the referenced object is deleted. Only applies to object-type fields."
             }
-          }
+          },
+          "if": { "properties": { "is_polymorphic": { "const": true } }, "required": ["is_polymorphic"] },
+          "then": { "required": ["related_object_types"] },
+          "else": { "required": ["related_object_type"] }
         }
       ]
     },
@@ -212,15 +231,28 @@
       "allOf": [
         { "$ref": "#/$defs/field_base" },
         {
-          "required": ["related_object_type"],
           "properties": {
             "type": { "const": "multiobject" },
+            "is_polymorphic": {
+              "type": "boolean",
+              "default": false,
+              "description": "When true, the field may reference objects of multiple types listed in related_object_types."
+            },
             "related_object_type": { "$ref": "#/$defs/related_object_type" },
+            "related_object_types": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/related_object_type" },
+              "minItems": 1,
+              "description": "Allowed object types for a polymorphic field. Required when is_polymorphic is true."
+            },
             "related_object_filter": {
               "type": ["object", "null"],
               "description": "Query params dict to filter the related object selection."
             }
-          }
+          },
+          "if": { "properties": { "is_polymorphic": { "const": true } }, "required": ["is_polymorphic"] },
+          "then": { "required": ["related_object_types"] },
+          "else": { "required": ["related_object_type"] }
         }
       ]
     },

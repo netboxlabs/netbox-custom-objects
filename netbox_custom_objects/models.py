@@ -19,7 +19,7 @@ from django.core.validators import RegexValidator, ValidationError
 from django.db import DEFAULT_DB_ALIAS, connection, connections, IntegrityError, models, transaction
 from django.db.models import Q
 from django.db.models.functions import Lower
-from django.db.models.signals import pre_delete, post_save
+from django.db.models.signals import m2m_changed, pre_delete, post_save
 from django.dispatch import receiver
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
@@ -56,8 +56,9 @@ from utilities.serialization import deserialize_object as _deserialize_object
 from utilities.string import title
 from utilities.validators import validate_regex
 
+from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
 from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
-from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
+from netbox_custom_objects.field_types import FIELD_TYPE_CLASS, safe_table_name
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
 from netbox_custom_objects.utilities import (
     _suppress_clear_cache,
@@ -72,6 +73,11 @@ class UniquenessConstraintTestError(Exception):
     """Custom exception used to signal successful uniqueness constraint test."""
 
     pass
+
+
+def _table_exists(table_name):
+    """Return True if *table_name* exists in the current database."""
+    return table_name in connection.introspection.table_names()
 
 
 USER_TABLE_DATABASE_NAME_PREFIX = "custom_objects_"
@@ -549,6 +555,11 @@ class CustomObjectType(NetBoxModel):
     )  # Now stores {custom_object_type_id: {through_model_name: through_model}}
     _model_cache_locks = {}  # Per-model locks to prevent race conditions
     _global_lock = threading.RLock()  # Global lock for managing per-model locks
+    _ON_DELETE_SQL = {
+        ObjectFieldOnDeleteChoices.CASCADE: "CASCADE",
+        ObjectFieldOnDeleteChoices.SET_NULL: "SET NULL",
+        ObjectFieldOnDeleteChoices.PROTECT: "RESTRICT",
+    }
     name = models.CharField(
         max_length=100,
         unique=True,
@@ -778,7 +789,7 @@ class CustomObjectType(NetBoxModel):
             field_name = field.name
 
             try:
-                field_attrs[field.name] = field_type.get_model_field(
+                model_field = field_type.get_model_field(
                     field, db_column=field.effective_db_column,
                 )
             except NotImplementedError:
@@ -795,6 +806,12 @@ class CustomObjectType(NetBoxModel):
                         field.name, field.pk, self.slug, field.related_object_type_id,
                     )
                 continue
+
+            if isinstance(model_field, dict):
+                # Polymorphic Object field: dict of {attr_name: field_or_descriptor}
+                field_attrs.update(model_field)
+            else:
+                field_attrs[field.name] = model_field
 
             # Add to field objects only if the field was successfully generated
             field_attrs["_field_objects"][field.id] = {
@@ -834,12 +851,46 @@ class CustomObjectType(NetBoxModel):
 
         for field_object in all_field_objects.values():
             field_name = field_object["name"]
+            field_instance = field_object["field"]
 
             # Skip fields that were skipped due to recursion
             if field_name in skipped_fields:
                 continue
 
-            # Only process fields that actually exist on the model.
+            if field_instance.is_polymorphic:
+                if field_instance.type == CustomFieldTypeChoices.TYPE_OBJECT:
+                    # Polymorphic GFK: no through model, no after_model_generation needed.
+                    pass
+                elif field_instance.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+                    # Ensure the polymorphic through model is in the app registry.
+                    # On server restart the registry is cleared; re-register if needed.
+                    _apps = model._meta.apps
+                    try:
+                        through_model = _apps.get_model(APP_LABEL, field_instance.through_model_name)
+                        # Always update source FK to point to the current model class.
+                        # get_model() may be called multiple times (e.g. cache invalidation
+                        # after a field save changes cache_timestamp).  Without this update
+                        # the through model's source FK would keep pointing at the old class,
+                        # causing Django's Collector to raise ValueError during cascade delete:
+                        # "Cannot query 'X': Must be 'TableYModel' instance."
+                        source_field = through_model._meta.get_field("source")
+                        source_field.remote_field.model = model
+                        source_field.related_model = model
+                    except LookupError:
+                        field_type_obj = FIELD_TYPE_CLASS[CustomFieldTypeChoices.TYPE_MULTIOBJECT]()
+                        source_model_str = f"{APP_LABEL}.{model.__name__}"
+                        through_model = field_type_obj.get_polymorphic_through_model(
+                            field_instance, source_model_str
+                        )
+                        source_field = through_model._meta.get_field("source")
+                        source_field.remote_field.model = model
+                        source_field.related_model = model
+                        _apps.register_model(APP_LABEL, through_model)
+                    if through_model and through_model not in through_models:
+                        through_models.append(through_model)
+                continue
+
+            # Non-polymorphic: use safe present_fields lookup (avoids _relation_tree recursion).
             # Tombstoned fields (in _trashed_field_objects) won't be in present_fields.
             field = present_fields.get(field_name)
             if field is None:
@@ -1097,71 +1148,86 @@ class CustomObjectType(NetBoxModel):
         self.register_custom_object_search_index(model)
         return model
 
-    def _ensure_field_fk_constraint(self, model, field_name):
+    def _ensure_field_fk_constraint(self, model, field_name, on_delete_behavior=None):
         """
         Ensure that a foreign key constraint is properly created at the database level
-        for a specific OBJECT type field with ON DELETE CASCADE. This is necessary because
-        models are created with managed=False, which may not properly create FK constraints
-        with CASCADE behavior.
+        for a specific OBJECT type field. This is necessary because models are created
+        with managed=False, which may not properly create FK constraints.
 
         :param model: The model containing the field
         :param field_name: The name of the field to ensure FK constraint for
+        :param on_delete_behavior: Override the ON DELETE behavior (ObjectFieldOnDeleteChoices value).
+            If None, the value is read from the corresponding CustomObjectTypeField record.
         """
         table_name = self.get_database_table_name()
 
         # Get the model field
         try:
             model_field = model._meta.get_field(field_name)
-        except Exception:
+        except Exception as e:
+            logger.error("_ensure_field_fk_constraint: field %r not found on model %r: %s", field_name, model, e)
             return
 
         if not (hasattr(model_field, 'remote_field') and model_field.remote_field):
             return
+
+        # Resolve on_delete_behavior from the CustomObjectTypeField if not provided
+        if on_delete_behavior is None:
+            try:
+                cotf = self.fields.get(name=field_name)
+                on_delete_behavior = cotf.on_delete_behavior or ObjectFieldOnDeleteChoices.SET_NULL
+            except Exception:
+                on_delete_behavior = ObjectFieldOnDeleteChoices.SET_NULL
+
+        on_delete_sql = self._ON_DELETE_SQL.get(on_delete_behavior, "SET NULL")
 
         # Get the referenced table
         related_model = model_field.remote_field.model
         related_table = related_model._meta.db_table
         column_name = model_field.column
 
-        with _get_schema_connection().cursor() as cursor:
+        schema_conn = _get_schema_connection()
+        q = schema_conn.ops.quote_name
+        with schema_conn.cursor() as cursor:
             # Drop existing FK constraint if it exists
-            # Query for existing constraints
             cursor.execute("""
                 SELECT constraint_name
                 FROM information_schema.table_constraints
                 WHERE table_name = %s
+                AND table_schema = current_schema()
                 AND constraint_type = 'FOREIGN KEY'
                 AND constraint_name LIKE %s
             """, [table_name, f"%{column_name}%"])
 
             for row in cursor.fetchall():
                 constraint_name = row[0]
-                cursor.execute(f'ALTER TABLE "{table_name}" DROP CONSTRAINT IF EXISTS "{constraint_name}"')
+                cursor.execute(f'ALTER TABLE {q(table_name)} DROP CONSTRAINT IF EXISTS {q(constraint_name)}')
 
-            # Create new FK constraint with ON DELETE CASCADE.
-            # Not DEFERRABLE: a deferred constraint leaves pending trigger events that block
+            # PROTECT maps to RESTRICT in SQL (raises an error on delete attempt).
+            # SET NULL and CASCADE map directly.  For SET NULL the column must be
+            # nullable, which it always is for Object fields.
+            # Not DEFERRABLE: deferred constraints queue trigger events that block
             # subsequent ALTER TABLE calls (e.g. during branch revert remove_field).
-            constraint_name = f"{table_name}_{column_name}_fk_cascade"
+            constraint_name = f"{table_name}_{column_name}_fk"
             cursor.execute(f"""
-                ALTER TABLE "{table_name}"
-                ADD CONSTRAINT "{constraint_name}"
-                FOREIGN KEY ("{column_name}")
-                REFERENCES "{related_table}" ("id")
-                ON DELETE CASCADE
+                ALTER TABLE {q(table_name)}
+                ADD CONSTRAINT {q(constraint_name)}
+                FOREIGN KEY ({q(column_name)})
+                REFERENCES {q(related_table)} ("id")
+                ON DELETE {on_delete_sql}
             """)
 
     def _ensure_all_fk_constraints(self, model):
         """
         Ensure that foreign key constraints are properly created at the database level
-        for ALL OBJECT type fields with ON DELETE CASCADE.
+        for ALL OBJECT type fields, respecting each field's on_delete_behavior.
 
         :param model: The model to ensure FK constraints for
         """
-        # Query all OBJECT type fields for this CustomObjectType
-        object_fields = self.fields.filter(type=CustomFieldTypeChoices.TYPE_OBJECT)
+        object_fields = self.fields.filter(type=CustomFieldTypeChoices.TYPE_OBJECT, is_polymorphic=False)
 
         for field in object_fields:
-            self._ensure_field_fk_constraint(model, field.name)
+            self._ensure_field_fk_constraint(model, field.name, on_delete_behavior=field.on_delete_behavior)
 
     def create_model(self):
         from netbox_custom_objects.api.serializers import get_serializer_class
@@ -1244,9 +1310,17 @@ class CustomObjectType(NetBoxModel):
         schema_conn = _get_schema_connection()
         in_branch = schema_conn is not connection
 
-        # Delete all CustomObjectTypeFields that reference this CustomObjectType
+        # Delete all CustomObjectTypeFields that reference this CustomObjectType (non-polymorphic)
         for field in CustomObjectTypeField.objects.filter(related_object_type=self.object_type):
             field.delete()
+
+        # Handle polymorphic fields that include this CustomObjectType among their allowed types
+        for field in CustomObjectTypeField.objects.filter(
+            is_polymorphic=True, related_object_types=self.object_type
+        ):
+            field.related_object_types.remove(self.object_type)
+            if not field.related_object_types.exists():
+                field.delete()
 
         object_type = ObjectType.objects.get_for_model(model)
 
@@ -1277,7 +1351,8 @@ class CustomObjectType(NetBoxModel):
         with schema_conn.schema_editor() as schema_editor:
             # Drop through tables before the main table (they have FKs pointing to it).
             for through_model in getattr(model, '_through_models', []):
-                schema_editor.delete_model(through_model)
+                if _table_exists(through_model._meta.db_table):
+                    schema_editor.delete_model(through_model)
             schema_editor.delete_model(model)
 
         # Unregister the model and its through-models from Django's app registry so
@@ -1401,7 +1476,22 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         on_delete=models.PROTECT,
         blank=True,
         null=True,
-        help_text=_("The type of NetBox object this field maps to (for object fields)"),
+        help_text=_("The type of NetBox object this field maps to (for non-polymorphic object fields)"),
+    )
+    is_polymorphic = models.BooleanField(
+        default=False,
+        verbose_name=_("polymorphic"),
+        help_text=_(
+            "When enabled, this field uses a generic foreign key and may reference objects of multiple types. "
+            "Set the allowed types in 'Related object types'."
+        ),
+    )
+    related_object_types = models.ManyToManyField(
+        to="core.ObjectType",
+        blank=True,
+        related_name="polymorphic_custom_object_type_fields",
+        verbose_name=_("related object types"),
+        help_text=_("The types of objects this polymorphic field may reference (used when 'Polymorphic' is enabled)."),
     )
     name = models.CharField(
         verbose_name=_("name"),
@@ -1512,6 +1602,20 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             "<code>slb.ssl_profiles.all()</code> in export templates. "
             "If left blank, a unique auto-generated name is used for Object fields and reverse access is "
             "disabled for MultiObject fields."
+        ),
+    )
+    on_delete_behavior = models.CharField(
+        verbose_name=_("on delete behavior"),
+        max_length=20,
+        choices=ObjectFieldOnDeleteChoices,
+        default=ObjectFieldOnDeleteChoices.SET_NULL,
+        blank=True,
+        help_text=_(
+            "What happens to this Custom Object when the referenced object is deleted "
+            "(applies to Object-type fields only). "
+            "Set null: clear the field and keep this object. "
+            "Cascade: delete this object too. "
+            "Protect: prevent deletion of the referenced object."
         ),
     )
     weight = models.PositiveSmallIntegerField(
@@ -1637,12 +1741,16 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         self._original_name = self.name
         self._original_type = self.type
         self._original_related_object_type_id = self.related_object_type_id
+        self._original_is_polymorphic = self.is_polymorphic
+        self._original_on_delete_behavior = self.on_delete_behavior
 
     def __str__(self):
         return self.label or self.name.replace("_", " ").capitalize()
 
     @property
     def model_class(self):
+        if self.is_polymorphic:
+            raise ValueError("Polymorphic fields reference multiple model classes; use related_object_types instead.")
         return apps.get_model(
             self.related_object_type.app_label, self.related_object_type.model
         )
@@ -1690,10 +1798,23 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
     @property
     def related_object_type_label(self):
+        if self.is_polymorphic:
+            labels = []
+            for ot in self.related_object_types.all():
+                if ot.app_label == APP_LABEL:
+                    cot_id = extract_cot_id_from_model_name(ot.model)
+                    if cot_id is not None:
+                        try:
+                            labels.append(CustomObjectType.get_content_type_label(cot_id))
+                            continue
+                        except CustomObjectType.DoesNotExist:
+                            pass
+                labels.append(object_type_name(ot, include_app=True))
+            return ", ".join(labels) if labels else "—"
+        if not self.related_object_type:
+            return "—"
         if self.related_object_type.app_label == APP_LABEL:
-            custom_object_type_id = self.related_object_type.model.replace(
-                "table", ""
-            ).replace("model", "")
+            custom_object_type_id = extract_cot_id_from_model_name(self.related_object_type.model)
             return CustomObjectType.get_content_type_label(custom_object_type_id)
         return object_type_name(self.related_object_type, include_app=True)
 
@@ -1837,19 +1958,40 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             CustomFieldTypeChoices.TYPE_OBJECT,
             CustomFieldTypeChoices.TYPE_MULTIOBJECT,
         ):
-            if not self.related_object_type:
-                raise ValidationError(
-                    {
-                        "related_object_type": _(
-                            "Object fields must define an object type."
-                        )
-                    }
-                )
+            if self.is_polymorphic:
+                # For polymorphic fields, related_object_type must be null
+                if self.related_object_type:
+                    raise ValidationError(
+                        {
+                            "related_object_type": _(
+                                "Polymorphic object fields must not define a single object type; "
+                                "use 'Related object types' instead."
+                            )
+                        }
+                    )
+                # related_object_types validation happens in forms (M2M set after save)
+            else:
+                if not self.related_object_type:
+                    raise ValidationError(
+                        {
+                            "related_object_type": _(
+                                "Object fields must define an object type."
+                            )
+                        }
+                    )
         elif self.related_object_type:
             raise ValidationError(
                 {
                     "type": _("{type} fields may not define an object type.").format(
                         type=self.get_type_display()
+                    )
+                }
+            )
+        elif self.is_polymorphic:
+            raise ValidationError(
+                {
+                    "is_polymorphic": _(
+                        "Only Object and Multi-Object fields may be polymorphic."
                     )
                 }
             )
@@ -1876,6 +2018,36 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     }
                 )
 
+        # Prevent flipping is_polymorphic on an existing field.  The DB schema
+        # (concrete GFK columns or through table) was created for the original value;
+        # changing it would leave the schema in an inconsistent state.
+        if self.pk and bool(self.is_polymorphic) != bool(self._original_is_polymorphic):
+            raise ValidationError(
+                {"is_polymorphic": _("Cannot change the polymorphic flag after field creation.")}
+            )
+
+        # Prevent renaming a polymorphic field.
+        #
+        # For a polymorphic GFK field the concrete DB columns are named
+        # "{name}_content_type" and "{name}_object_id"; for a polymorphic
+        # MultiObject field the through table is named
+        # "custom_objects_{cot_id}_{name}".  The save() path currently has no
+        # logic to rename these artefacts (it falls through to `pass`), so
+        # allowing a rename would silently leave the DB schema out of sync with
+        # the field name stored in the row — causing query failures at runtime.
+        #
+        # Until explicit rename logic is implemented (renaming the GFK columns
+        # and/or the through table analogously to the non-polymorphic rename path
+        # at save() line ~1749), we reject renames outright.
+        if (
+            self.pk
+            and (self.is_polymorphic or self._original_is_polymorphic)
+            and self.name != self._original_name
+        ):
+            raise ValidationError(
+                {"name": _("Cannot rename a polymorphic field after creation.")}
+            )
+
         # related_name can only be set for object-type fields
         if self.related_name and self.type not in (
             CustomFieldTypeChoices.TYPE_OBJECT,
@@ -1885,6 +2057,18 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 {
                     "related_name": _(
                         "A reverse relation name can only be set for Object and MultiObject fields."
+                    )
+                }
+            )
+
+        # related_name is not supported on polymorphic fields: GenericForeignKey ignores it
+        # and PolymorphicM2MDescriptor never consumes it, so any value set here would be silently
+        # dropped with no working reverse accessor.
+        if self.related_name and self.is_polymorphic:
+            raise ValidationError(
+                {
+                    "related_name": _(
+                        "Reverse relation names are not supported for polymorphic fields."
                     )
                 }
             )
@@ -1909,8 +2093,17 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     }
                 )
 
-        # Check for recursion in object and multiobject fields
-        if (self.type in (
+        # on_delete_behavior is only meaningful for non-polymorphic Object-type fields.
+        # Polymorphic GFK fields have no real DB FK constraint to enforce (the content_type
+        # column always uses SET_NULL); silently normalise to SET_NULL so stored values
+        # never create a false impression of cascade/protect semantics.
+        if self.type != CustomFieldTypeChoices.TYPE_OBJECT or self.is_polymorphic:
+            self.on_delete_behavior = ObjectFieldOnDeleteChoices.SET_NULL
+
+        # Check for recursion in object and multiobject fields (non-polymorphic only).
+        # Polymorphic fields' allowed types are a M2M set after save(), so their recursion
+        # check runs in the check_polymorphic_recursion m2m_changed signal handler instead.
+        if (not self.is_polymorphic and self.type in (
             CustomFieldTypeChoices.TYPE_OBJECT,
             CustomFieldTypeChoices.TYPE_MULTIOBJECT,
         ) and self.related_object_type_id and
@@ -1962,7 +2155,21 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         # Add this type to visited set
         visited.add(custom_object_type.id)
 
-        # Check all object and multiobject fields in this custom object type
+        # Check all *non-polymorphic* object and multiobject fields in this COT.
+        #
+        # KNOWN LIMITATION: polymorphic fields (is_polymorphic=True) store their
+        # allowed target types on the related_object_types M2M, not on the
+        # related_object_type FK.  This DFS therefore does not traverse edges
+        # introduced by polymorphic fields.  A cycle that passes entirely through
+        # polymorphic legs (e.g. A →(poly) B →(poly) A) will go undetected.
+        #
+        # Fixing this requires also iterating field.related_object_types.filter(
+        # app_label=APP_LABEL) and recursing into each.  The check_polymorphic_recursion
+        # signal already guards the direct A→B assignment, but cannot see multi-hop
+        # cycles that depend on polymorphic fields already on intermediate types.
+        #
+        # TODO: extend this DFS to also traverse polymorphic related_object_types
+        # so that multi-hop polymorphic cycles are detected at assignment time.
         related_objects_checked = set()
         for field in custom_object_type.fields.filter(
             type__in=[
@@ -2002,8 +2209,17 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         ):
             return value.isoformat()
         if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
+            if self.is_polymorphic and value is not None:
+                ct = ContentType.objects.get_for_model(value)
+                return {"content_type_id": ct.pk, "object_id": value.pk}
             return value.pk
         if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+            if self.is_polymorphic:
+                result = []
+                for obj in value:
+                    ct = ContentType.objects.get_for_model(obj)
+                    result.append({"content_type_id": ct.pk, "object_id": obj.pk})
+                return result or None
             return [obj.pk for obj in value] or None
         return value
 
@@ -2024,9 +2240,34 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             except ValueError:
                 return value
         if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
+            if self.is_polymorphic and isinstance(value, dict):
+                try:
+                    ct = ContentType.objects.get(pk=value["content_type_id"])
+                    model = ct.model_class()
+                    return model.objects.filter(pk=value["object_id"]).first() if model else None
+                except (ContentType.DoesNotExist, KeyError):
+                    return None
+            if not self.related_object_type:
+                return None
             model = self.related_object_type.model_class()
             return model.objects.filter(pk=value).first()
         if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+            if self.is_polymorphic and isinstance(value, list):
+                results = []
+                for item in value:
+                    if isinstance(item, dict):
+                        try:
+                            ct = ContentType.objects.get(pk=item["content_type_id"])
+                            model = ct.model_class()
+                            if model:
+                                obj = model.objects.filter(pk=item["object_id"]).first()
+                                if obj:
+                                    results.append(obj)
+                        except (ContentType.DoesNotExist, KeyError):
+                            pass
+                return results
+            if not self.related_object_type:
+                return []
             model = self.related_object_type.model_class()
             return model.objects.filter(pk__in=value)
         return value
@@ -2217,7 +2458,18 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
             # Validate selected object
             elif self.type == CustomFieldTypeChoices.TYPE_OBJECT:
-                if type(value) is not int:
+                if self.is_polymorphic:
+                    # Polymorphic value is {"content_type_id": int, "object_id": int}
+                    if not isinstance(value, dict) or not isinstance(
+                        value.get("content_type_id"), int
+                    ) or not isinstance(value.get("object_id"), int):
+                        raise ValidationError(
+                            _(
+                                "Polymorphic object value must be a dict with integer "
+                                "content_type_id and object_id keys, not {type}."
+                            ).format(type=type(value).__name__)
+                        )
+                elif type(value) is not int:
                     raise ValidationError(
                         _("Value must be an object ID, not {type}").format(
                             type=type(value).__name__
@@ -2233,7 +2485,18 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                         )
                     )
                 for id in value:
-                    if type(id) is not int:
+                    if self.is_polymorphic:
+                        # Each polymorphic entry is {"content_type_id": int, "object_id": int}
+                        if not isinstance(id, dict) or not isinstance(
+                            id.get("content_type_id"), int
+                        ) or not isinstance(id.get("object_id"), int):
+                            raise ValidationError(
+                                _(
+                                    "Each polymorphic multiobject value must be a dict with "
+                                    "integer content_type_id and object_id keys."
+                                )
+                            )
+                    elif type(id) is not int:
                         raise ValidationError(
                             _("Found invalid object ID: {id}").format(id=id)
                         )
@@ -2258,10 +2521,30 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
     @property
     def through_table_name(self):
-        return f"custom_objects_{self.custom_object_type_id}_{self.name}"
+        # STABILITY CONTRACT — do not change this formula without a data migration.
+        #
+        # The table name is computed from (custom_object_type_id, name) and is
+        # never stored in the database.  It is used as the physical PostgreSQL
+        # table name for polymorphic M2M through tables and as part of the
+        # in-memory Django model name returned by through_model_name.
+        #
+        # Consequences of changing the formula:
+        #   • Existing through tables in live databases would be orphaned (the
+        #     new name would not match any table on disk).
+        #   • Any serialised reference to the through model (e.g. in cached app
+        #     state or migration history) would become unresolvable.
+        #
+        # If the formula must change, write a data migration that renames every
+        # affected table with ALTER TABLE … RENAME TO before deploying the new
+        # code, and update through_model_name to match.
+        raw = f"custom_objects_{self.custom_object_type_id}_{self.name}"
+        return safe_table_name(raw)
 
     @property
     def through_model_name(self):
+        # Derived directly from through_table_name; see its stability contract above.
+        # The "Through_" prefix ensures the in-memory model name is unique within
+        # the app registry and does not collide with user-visible model names.
         return f"Through_{self.through_table_name}"
 
     @classmethod
@@ -2324,6 +2607,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         if self._state.adding and not self.db_column:
             self.db_column = self.name
 
+        field_type = FIELD_TYPE_CLASS[self.type]()
         # Use the branch connection when operating inside a branch so that schema
         # editor operations target the branch schema rather than main.
         schema_conn = _get_schema_connection()
@@ -2331,23 +2615,44 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
         with schema_conn.schema_editor() as schema_editor:
             if self._state.adding:
-                _schema_add_field(self, model, schema_editor, schema_conn)
-                _apply_deferred_co_field(self)
+                if self.is_polymorphic:
+                    # Polymorphic Object: add content_type + object_id columns + index.
+                    # Polymorphic MultiObject: create through table with content_type + object_id.
+                    if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
+                        field_type.add_polymorphic_object_columns(self, model, schema_editor)
+                    elif self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+                        field_type.create_polymorphic_m2m_table(self, model, schema_editor)
+                else:
+                    _schema_add_field(self, model, schema_editor, schema_conn)
+                    _apply_deferred_co_field(self)
             else:
-                _schema_alter_field(self.original, self, model, schema_editor, schema_conn)
+                # Polymorphic fields: renames and type changes are rejected by clean().
+                # Non-schema attributes (label, description, …) may still change here.
+                # If clean() was bypassed and a rename slipped through, raise rather
+                # than silently leaving DB columns / through table out of sync.
+                if self.is_polymorphic or self._original_is_polymorphic:
+                    if self.name != self._original_name:
+                        raise ValidationError(
+                            {"name": _("Cannot rename a polymorphic field after creation.")}
+                        )
+                else:
+                    _schema_alter_field(self.original, self, model, schema_editor, schema_conn)
 
         # When the field is renamed, update ObjectChange / ChangeDiff JSON keys so
         # historical audit records and branch diffs stay consistent with the new name.
-        if not self._state.adding and self._original_name != self.name:
+        if (
+            not self._state.adding
+            and not self.is_polymorphic
+            and self._original_name != self.name
+        ):
             _rename_objectchange_field_key(self, self._original_name, self.name)
 
-        # Ensure FK constraints are properly created for OBJECT fields with CASCADE behavior
+        # Ensure FK constraints are properly created for OBJECT fields
         should_ensure_fk = False
-        if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
+        if self.type == CustomFieldTypeChoices.TYPE_OBJECT and not self.is_polymorphic:
             if self._state.adding:
                 should_ensure_fk = True
             else:
-                # Existing field - check if type changed to OBJECT or related_object_type changed
                 type_changed_to_object = (
                     self._original_type != CustomFieldTypeChoices.TYPE_OBJECT
                     and self.type == CustomFieldTypeChoices.TYPE_OBJECT
@@ -2356,7 +2661,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     self._original_type == CustomFieldTypeChoices.TYPE_OBJECT
                     and self.related_object_type_id != self._original_related_object_type_id
                 )
-                should_ensure_fk = type_changed_to_object or related_object_changed
+                on_delete_changed = (
+                    self._original_type == CustomFieldTypeChoices.TYPE_OBJECT
+                    and self.on_delete_behavior != self._original_on_delete_behavior
+                )
+                should_ensure_fk = type_changed_to_object or related_object_changed or on_delete_changed
 
         # Clear and refresh the model cache for this CustomObjectType when a field is modified
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)
@@ -2371,8 +2680,19 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
         # Ensure FK constraints AFTER the transaction commits to avoid "pending trigger events" errors
         if should_ensure_fk:
+            _on_delete = self.on_delete_behavior
+            _field_name = self.name
+
             def ensure_constraint():
-                self.custom_object_type._ensure_field_fk_constraint(model, self.name)
+                try:
+                    self.custom_object_type._ensure_field_fk_constraint(
+                        model, _field_name, on_delete_behavior=_on_delete
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Failed to ensure FK constraint for field %r on COT %r: %s",
+                        _field_name, self.custom_object_type_id, e,
+                    )
 
             transaction.on_commit(ensure_constraint)
 
@@ -2399,13 +2719,19 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             transaction.on_commit(lambda: ReindexCustomObjectTypeJob.enqueue(cot_id=_cot_id))
 
     def delete(self, *args, **kwargs):
+        field_type = FIELD_TYPE_CLASS[self.type]()
+        model = self.custom_object_type.get_model()
         # Use the branch connection when operating inside a branch.
         schema_conn = _get_schema_connection()
 
-        model = self.custom_object_type.get_model()
-
         with schema_conn.schema_editor() as schema_editor:
-            _schema_remove_field(self, model, schema_editor)
+            if self.is_polymorphic:
+                if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
+                    field_type.remove_polymorphic_object_columns(self, model, schema_editor)
+                elif self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+                    field_type.drop_polymorphic_m2m_table(self, model, schema_editor)
+            else:
+                _schema_remove_field(self, model, schema_editor)
 
         # Clear the model cache for this CustomObjectType when a field is deleted
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)
@@ -2474,6 +2800,38 @@ def clear_cache_on_custom_object_type_save(sender, instance, **kwargs):
     CustomObjectType.clear_model_cache(instance.id)
 
 
+@receiver(m2m_changed, sender=CustomObjectTypeField.related_object_types.through)
+def check_polymorphic_recursion(sender, instance, action, pk_set, **kwargs):
+    """
+    Prevent circular references in polymorphic field allowed-type lists.
+
+    clean() cannot check this because related_object_types is a M2M that is set
+    after the instance is saved.  m2m_changed fires on pre_add, which lets us abort
+    the operation before any rows are written.
+    """
+    if action != "pre_add" or not pk_set:
+        return
+
+    own_object_type_id = instance.custom_object_type.object_type_id
+
+    for ot_pk in pk_set:
+        if ot_pk == own_object_type_id:
+            # Self-reference is permitted (same pattern as non-polymorphic check).
+            continue
+        try:
+            related_cot = CustomObjectType.objects.get(object_type_id=ot_pk)
+        except CustomObjectType.DoesNotExist:
+            continue  # Native NetBox type — no COT dependency chain to traverse.
+        visited = {instance.custom_object_type_id}
+        if instance._has_circular_reference(related_cot, visited):
+            raise ValidationError(
+                _(
+                    "Circular reference detected: one of the selected object types would "
+                    "create a circular dependency between custom object types."
+                )
+            )
+
+
 @receiver(post_save, sender=CustomObjectTypeField)
 def clear_cache_on_field_save(sender, instance, **kwargs):
     """
@@ -2482,10 +2840,31 @@ def clear_cache_on_field_save(sender, instance, **kwargs):
     """
     if instance.custom_object_type_id:
         CustomObjectType.clear_model_cache(instance.custom_object_type_id)
+    # Clear caches for non-polymorphic fields pointing to this custom object type
     for pointing_field in CustomObjectTypeField.objects.filter(
         related_object_type=instance.custom_object_type.object_type
     ):
         CustomObjectType.clear_model_cache(pointing_field.custom_object_type_id)
+    # Clear caches for polymorphic fields that include this custom object type
+    for pointing_field in CustomObjectTypeField.objects.filter(
+        is_polymorphic=True,
+        related_object_types=instance.custom_object_type.object_type,
+    ):
+        CustomObjectType.clear_model_cache(pointing_field.custom_object_type_id)
+
+    # When a TYPE_OBJECT field is saved, the FK's on_delete behavior is contributed as
+    # a reverse relation to the related model's _meta.related_objects. If the related
+    # model is a custom object type, bump its cache_timestamp so that all workers
+    # regenerate its model and pick up the correct on_delete behavior. Without this,
+    # a worker with a stale cached related model will still see the old on_delete value
+    # and may bypass a PROTECT or RESTRICT constraint via Django's pre-delete SET NULL.
+    if instance.type == CustomFieldTypeChoices.TYPE_OBJECT and instance.related_object_type_id:
+        try:
+            related_cot = CustomObjectType.objects.get(object_type_id=instance.related_object_type_id)
+            CustomObjectType.clear_model_cache(related_cot.id)
+            related_cot.save(update_fields=['cache_timestamp'])
+        except CustomObjectType.DoesNotExist:
+            pass
 
 
 @receiver(pre_delete, sender=CustomObjectTypeField)

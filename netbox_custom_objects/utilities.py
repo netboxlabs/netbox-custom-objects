@@ -13,7 +13,6 @@ __all__ = (
     "generate_model",
     "get_viewname",
     "install_clear_cache_suppressor",
-    "is_in_branch",
 )
 
 # ---------------------------------------------------------------------------
@@ -175,15 +174,6 @@ def get_viewname(model, action=None, rest_api=False):
             viewname = f"{viewname}_{action}"
 
     return viewname
-
-
-def is_in_branch() -> bool:
-    """Return True if the current request is executing inside a branch context."""
-    try:
-        from netbox_branching.contextvars import active_branch
-        return active_branch.get() is not None
-    except ImportError:
-        return False
 
 
 def generate_model(*args, **kwargs):

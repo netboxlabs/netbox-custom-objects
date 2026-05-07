@@ -342,14 +342,18 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         try:
             # Deleting the site now triggers Django's cascade-delete Collector,
             # which finds the stale FK, queries the dropped table, and fails.
-            sid = transaction.savepoint()
-            try:
+            # Use transaction.atomic() rather than a manual savepoint: when the
+            # ProgrammingError propagates through Atomic.__exit__, it clears
+            # connection.needs_rollback before issuing ROLLBACK TO SAVEPOINT, so
+            # the subsequent savepoint_rollback SQL can actually execute.  A raw
+            # transaction.savepoint_rollback() call goes through cursor.execute()
+            # which calls validate_no_broken_transaction() while needs_rollback is
+            # still True, raising TransactionManagementError instead.
+            with transaction.atomic():
                 site.delete()
-                transaction.savepoint_commit(sid)
                 self.fail('Expected ProgrammingError was not raised — the bug is not being reproduced')
-            except ProgrammingError as exc:
-                transaction.savepoint_rollback(sid)
-                self.assertIn('does not exist', str(exc))
+        except ProgrammingError as exc:
+            self.assertIn('does not exist', str(exc))
         finally:
             # Restore clean registry state so subsequent tests are unaffected.
             django_apps.all_models[APP_LABEL].pop(stale_model_name, None)
@@ -722,6 +726,10 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
             related_object_type=first_object_ct,
         )
 
+        # Refresh second_custom_object_type so its in-memory cache_timestamp matches the
+        # DB value bumped by the signal when TYPE_OBJECT fields were saved above.
+        cls.second_custom_object_type.refresh_from_db()
+
         # Get the dynamic model
         cls.model = cls.custom_object_type.get_model()
 
@@ -965,7 +973,10 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
             related_name="certificates",
         )
         # Generate Certificate's model so it contributes the FK (and its reverse) to SLB's class.
+        # Refresh slb_cot so its Python-side cache_timestamp matches the DB value bumped by the
+        # signal (creating a TYPE_OBJECT field bumps the related COT's cache_timestamp).
         self.cert_cot.get_model()
+        self.slb_cot.refresh_from_db()
         slb_model = self.slb_cot.get_model()
         self.assertTrue(
             hasattr(slb_model, "certificates"),
@@ -982,6 +993,7 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
             related_name="certificates",
         )
         cert_model = self.cert_cot.get_model()
+        self.slb_cot.refresh_from_db()
         slb_model = self.slb_cot.get_model()
 
         slb_a = slb_model.objects.create(name="SLB-A")
@@ -1005,6 +1017,7 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
             related_object_type=self.slb_object_type,
         )
         self.cert_cot.get_model()
+        self.slb_cot.refresh_from_db()
         slb_model = self.slb_cot.get_model()
 
         table_model_name = self.cert_cot.get_table_model_name(self.cert_cot.id).lower()

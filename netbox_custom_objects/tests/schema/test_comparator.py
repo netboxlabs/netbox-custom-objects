@@ -358,6 +358,28 @@ class ComparatorFieldAlterTestCase(CustomObjectsTestCase, TestCase):
         fc = next(fc for fc in result.alters if fc.db_name == "filtered")
         self.assertIn("related_object_filter", fc.changed_attrs)
 
+    def test_on_delete_behavior_change_detected(self):
+        self.create_custom_object_type_field(
+            self.cot, name='odchange', type='object',
+            related_object_type=self.device_ot,
+        )
+        result = self._alter_field("odchange", on_delete_behavior="cascade")
+        fc = next(fc for fc in result.alters if fc.db_name == "odchange")
+        self.assertIn("on_delete_behavior", fc.changed_attrs)
+        self.assertEqual(fc.changed_attrs["on_delete_behavior"], ("set_null", "cascade"))
+
+    def test_on_delete_behavior_default_no_diff(self):
+        """SET_NULL not present in schema dict → same as default → no diff."""
+        self.create_custom_object_type_field(
+            self.cot, name='oddefault', type='object',
+            related_object_type=self.device_ot,
+        )
+        # Export omits on_delete_behavior when it's the default; re-diffing must produce no ALTER.
+        type_def = export_cot(self.cot)
+        result = diff_cot(type_def)
+        oddefault_alters = [fc for fc in result.alters if fc.db_name == "oddefault"]
+        self.assertEqual(oddefault_alters, [])
+
     def test_no_alter_when_nothing_changed(self):
         self.create_custom_object_type_field(
             self.cot, name='unchanged', type='text'
@@ -381,6 +403,77 @@ class ComparatorFieldAlterTestCase(CustomObjectsTestCase, TestCase):
         self.assertIn("deprecated", fc.changed_attrs)
         self.assertIn("deprecated_since", fc.changed_attrs)
         self.assertIn("scheduled_removal", fc.changed_attrs)
+
+
+class ComparatorPolymorphicTestCase(CustomObjectsTestCase, TestCase):
+    """Polymorphic field comparison."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.cot = cls.create_custom_object_type(name='polycomp', slug='poly-comp')
+        cls.device_ot = cls.get_device_object_type()
+        cls.site_ot = cls.get_site_object_type()
+        cls.prefix_ot = cls.get_prefix_object_type()
+
+    def test_polymorphic_field_clean_round_trip(self):
+        self.create_polymorphic_field(
+            self.cot, [self.device_ot, self.site_ot], name='poly_clean', type='object'
+        )
+        type_def = export_cot(self.cot)
+        result = diff_cot(type_def)
+        poly_alters = [fc for fc in result.alters if fc.db_name == "poly_clean"]
+        self.assertEqual(poly_alters, [])
+
+    def test_polymorphic_related_object_types_change_detected(self):
+        self.create_polymorphic_field(
+            self.cot, [self.device_ot, self.site_ot], name='poly_change', type='object'
+        )
+        type_def = export_cot(self.cot)
+        for sf in type_def.get("fields", []):
+            if sf["name"] == "poly_change":
+                sf["related_object_types"] = ["dcim/device", "ipam/prefix"]
+                break
+        result = diff_cot(type_def)
+        fc = next(fc for fc in result.alters if fc.db_name == "poly_change")
+        self.assertIn("related_object_types", fc.changed_attrs)
+        db_val, schema_val = fc.changed_attrs["related_object_types"]
+        self.assertIn("dcim/site", db_val)
+        self.assertIn("ipam/prefix", schema_val)
+
+    def test_is_polymorphic_change_detected(self):
+        self.create_polymorphic_field(
+            self.cot, [self.device_ot], name='poly_flag', type='object'
+        )
+        type_def = export_cot(self.cot)
+        for sf in type_def.get("fields", []):
+            if sf["name"] == "poly_flag":
+                sf["is_polymorphic"] = False
+                sf["related_object_type"] = "dcim/device"
+                sf.pop("related_object_types", None)
+                break
+        result = diff_cot(type_def)
+        fc = next(fc for fc in result.alters if fc.db_name == "poly_flag")
+        self.assertIn("is_polymorphic", fc.changed_attrs)
+        self.assertEqual(fc.changed_attrs["is_polymorphic"], (True, False))
+
+    def test_non_polymorphic_field_does_not_diff_related_object_types(self):
+        self.create_custom_object_type_field(
+            self.cot, name='normal', type='object',
+            related_object_type=self.device_ot,
+        )
+        type_def = export_cot(self.cot)
+        result = diff_cot(type_def)
+        normal_alters = [fc for fc in result.alters if fc.db_name == "normal"]
+        self.assertEqual(normal_alters, [])
+
+    def test_polymorphic_multiobject_clean_round_trip(self):
+        self.create_polymorphic_field(
+            self.cot, [self.device_ot, self.site_ot], name='poly_multi', type='multiobject'
+        )
+        type_def = export_cot(self.cot)
+        result = diff_cot(type_def)
+        poly_alters = [fc for fc in result.alters if fc.db_name == "poly_multi"]
+        self.assertEqual(poly_alters, [])
 
 
 class ComparatorWarningsTestCase(CustomObjectsTestCase, TestCase):

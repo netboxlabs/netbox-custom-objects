@@ -116,15 +116,32 @@ def _export_field(field) -> dict:
                     f"Field {field.name!r} is type {schema_type!r} but has no choice_set assigned."
                 )
             result["choice_set"] = field.choice_set.name
+        elif attr == "is_polymorphic":
+            if field.is_polymorphic:
+                result["is_polymorphic"] = True
         elif attr == "related_object_type":
-            # Required for object/multiobject; always present.
-            result["related_object_type"] = _encode_related_object_type(
-                field.related_object_type
-            )
+            # Only for non-polymorphic object/multiobject; always present when applicable.
+            if not field.is_polymorphic:
+                result["related_object_type"] = _encode_related_object_type(
+                    field.related_object_type
+                )
+        elif attr == "related_object_types":
+            # Only for polymorphic object/multiobject; encode each allowed type.
+            if field.is_polymorphic:
+                encoded = sorted(
+                    _encode_related_object_type(rot)
+                    for rot in field.related_object_types.all()
+                )
+                if encoded:
+                    result["related_object_types"] = encoded
         elif attr == "related_object_filter":
             value = field.related_object_filter
             if value != FIELD_DEFAULTS.get("related_object_filter"):
                 result["related_object_filter"] = value
+        elif attr == "on_delete_behavior":
+            value = field.on_delete_behavior or FIELD_DEFAULTS["on_delete_behavior"]
+            if value != FIELD_DEFAULTS["on_delete_behavior"]:
+                result[attr] = value
         elif attr in ("validation_regex", "validation_minimum", "validation_maximum"):
             value = getattr(field, attr)
             if value != FIELD_DEFAULTS.get(attr):
@@ -177,7 +194,7 @@ def export_cot(cot) -> dict:
 
     # Active + deprecated fields, ordered by schema_id for stable output.
     exported_fields = []
-    for field in cot.fields.order_by("schema_id"):
+    for field in cot.fields.order_by("schema_id").prefetch_related("related_object_types"):
         if field.schema_id is None:
             logger.warning(
                 "Skipping field %r on COT %r during export: no schema_id assigned. "

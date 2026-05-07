@@ -816,6 +816,8 @@ class CrossReferentialFieldTestCase(FieldTypeTestCase):
         )
 
         model1 = self.custom_object_type.get_model()
+        # Refresh second_type so cache_timestamp matches the DB value bumped by the signal.
+        second_type.refresh_from_db()
         model2 = second_type.get_model()
 
         # Create instances
@@ -898,6 +900,9 @@ class MultipleObjectFieldsToSameCOTTestCase(FieldTypeTestCase):
             related_object_type=target.object_type,
         )
 
+        # Refresh target so its cache_timestamp matches the DB value bumped by the signal
+        # when both TYPE_OBJECT fields above were saved.
+        target.refresh_from_db()
         target_model = target.get_model()
         model = self.custom_object_type.get_model()
 
@@ -983,6 +988,9 @@ class MultipleObjectFieldsToSameCOTTestCase(FieldTypeTestCase):
             related_object_type=target.object_type,
         )
 
+        # Refresh target so cache_timestamp matches the DB value bumped by the signal
+        # when the TYPE_OBJECT 'single_ref' field was saved above.
+        target.refresh_from_db()
         target_model = target.get_model()
         model = self.custom_object_type.get_model()
 
@@ -1059,6 +1067,9 @@ class PrimaryFieldChangeTestCase(FieldTypeTestCase):
             related_object_type=self.custom_object_type.object_type,
         )
 
+        # Refresh so cache_timestamp matches the DB value bumped by the signal when
+        # the TYPE_OBJECT 'ref' field was saved pointing to custom_object_type.
+        self.custom_object_type.refresh_from_db()
         model_target = self.custom_object_type.get_model()
         model_ref = ref_cot.get_model()
 

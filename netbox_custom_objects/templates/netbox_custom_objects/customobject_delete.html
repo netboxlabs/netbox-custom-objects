@@ -1,0 +1,17 @@
+{% extends 'generic/_base.html' %}
+{% load helpers %}
+{% load i18n %}
+
+{% block title %}
+  {% trans "Delete" %} {{ object|meta:"verbose_name" }}?
+{% endblock %}
+
+{% block content %}
+  <div class="modal modal-lg" tabindex="-1" style="display: block; position: static">
+    <div class="modal-dialog">
+      <div class="modal-content border-1 border-danger">
+        {% include 'netbox_custom_objects/htmx/co_delete_form.html' %}
+      </div>
+    </div>
+  </div>
+{% endblock %}
