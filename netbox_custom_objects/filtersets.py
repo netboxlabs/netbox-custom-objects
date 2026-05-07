@@ -3,19 +3,122 @@ from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Optional, Type
 
+from django import forms as django_forms
+from django.apps import apps as django_apps
 from django.db.models import QuerySet, Q
 from django.utils.dateparse import parse_date, parse_datetime
 
 from extras.choices import CustomFieldTypeChoices
 from netbox.filtersets import NetBoxModelFilterSet
 
+from .constants import APP_LABEL
 from .models import CustomObjectType
 
 __all__ = (
     "ArrayContainsFilter",
     "CustomObjectTypeFilterSet",
+    "PolymorphicMultiObjectFilter",
+    "PolymorphicObjectFilter",
     "get_filterset_class",
 )
+
+
+class _IntegerListField(django_forms.Field):
+    """
+    Accepts a single integer or a list of integers; always returns a list of
+    ints.  Designed for multi-valued PK inputs that should not be validated
+    against a model queryset.
+    """
+
+    def to_python(self, value):
+        if value in (None, "", [], ()):
+            return []
+        if not isinstance(value, (list, tuple)):
+            value = [value]
+        result = []
+        for v in value:
+            if v in ("", None):
+                continue
+            try:
+                result.append(int(v))
+            except (TypeError, ValueError):
+                raise django_forms.ValidationError(f"Invalid integer: {v!r}")
+        return result
+
+    def validate(self, value):
+        # An empty list is valid — it just means the filter is inactive.
+        pass
+
+
+class PolymorphicObjectFilter(django_filters.Filter):
+    """
+    Filter for one allowed type of a polymorphic GFK object field.
+
+    Accepts a raw integer PK; no model-queryset validation is performed.
+    The content_type_id is baked in at construction time, so only custom
+    objects whose GFK points to *this* content type AND has the submitted
+    object_id are returned.
+
+    Using IntegerField (not ModelChoiceField) means the filter is applied
+    even when the submitted PK doesn't correspond to any existing object —
+    the DB query simply returns an empty set rather than bypassing the filter
+    entirely (which ModelChoiceField would do via ValidationError → missing
+    cleaned_data entry).
+
+    Inherits from ``django_filters.Filter`` (not ``ModelChoiceFilter``) so
+    that ``NetBoxModelFilterSet.get_additional_lookups()`` returns {} without
+    attempting to validate the virtual filter name against real model fields.
+    """
+
+    field_class = django_forms.IntegerField
+
+    def __init__(self, *, content_type_id, gfk_field_name, **kwargs):
+        self.content_type_id = content_type_id
+        self.gfk_field_name = gfk_field_name
+        kwargs.setdefault("required", False)
+        super().__init__(**kwargs)
+
+    def filter(self, qs, value):
+        if value is None:
+            return qs
+        return qs.filter(**{
+            f"{self.gfk_field_name}_content_type_id": self.content_type_id,
+            f"{self.gfk_field_name}_object_id": value,
+        })
+
+
+class PolymorphicMultiObjectFilter(django_filters.Filter):
+    """
+    Filter for one allowed type of a polymorphic GFK multiobject field.
+
+    Accepts one or more raw integer PKs (list).  The through table is queried
+    for rows matching (content_type_id, object_id__in=pks) and the
+    corresponding source objects are returned (OR semantics, no duplicates).
+
+    Using _IntegerListField (not ModelMultipleChoiceField) ensures the filter
+    is applied regardless of whether the submitted PKs match existing objects.
+    """
+
+    field_class = _IntegerListField
+
+    def __init__(self, *, content_type_id, through_model_name, **kwargs):
+        self.content_type_id = content_type_id
+        self.through_model_name = through_model_name
+        kwargs.setdefault("required", False)
+        super().__init__(**kwargs)
+
+    def filter(self, qs, value):
+        if not value:
+            return qs
+        try:
+            through = django_apps.get_model(APP_LABEL, self.through_model_name)
+        except LookupError:
+            return qs.none()
+        source_ids = through.objects.filter(
+            content_type_id=self.content_type_id,
+            object_id__in=value,
+        ).values_list("source_id", flat=True)
+        return qs.filter(pk__in=source_ids).distinct()
 
 
 class ArrayContainsFilter(django_filters.MultipleChoiceFilter):
@@ -110,9 +213,52 @@ class CustomObjectTypeFilterSet(NetBoxModelFilterSet):
         )
 
 
-def build_filter_for_field(field) -> Optional[django_filters.Filter]:
-    if not (spec := FIELD_TYPE_FILTERS.get(field.type)):
-        return None
+def _build_polymorphic_filters(field) -> dict:
+    """Build one filter per allowed type for a polymorphic object/multiobject field."""
+    filters = {}
+    base_label = field.label or field.name
+    is_multi = field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
+
+    for ot in field.related_object_types.all():
+        model_class = ot.model_class()
+        if model_class is None:
+            continue
+        filter_name = f"{field.name}_{ot.app_label}_{ot.model}"
+        label = f"{base_label} ({model_class._meta.verbose_name})"
+        if is_multi:
+            filters[filter_name] = PolymorphicMultiObjectFilter(
+                content_type_id=ot.id,
+                through_model_name=field.through_model_name,
+                label=label,
+            )
+        else:
+            filters[filter_name] = PolymorphicObjectFilter(
+                content_type_id=ot.id,
+                gfk_field_name=field.name,
+                label=label,
+            )
+
+    return filters
+
+
+def build_filter_for_field(field) -> dict:
+    """
+    Build django-filter Filter instances for a CustomObjectTypeField.
+
+    Returns a mapping of filter name → Filter.  For non-polymorphic fields
+    this is always ``{field.name: filter}``; for polymorphic object/multiobject
+    fields one entry is emitted per allowed related type, named
+    ``{field.name}_{app_label}_{model}``.
+    """
+    if field.is_polymorphic and field.type in (
+        CustomFieldTypeChoices.TYPE_OBJECT,
+        CustomFieldTypeChoices.TYPE_MULTIOBJECT,
+    ):
+        return _build_polymorphic_filters(field)
+
+    spec = FIELD_TYPE_FILTERS.get(field.type)
+    if not spec:
+        return {}
 
     queryset = None
     if field.type in (
@@ -123,11 +269,11 @@ def build_filter_for_field(field) -> Optional[django_filters.Filter]:
         if not related_object_type:
             # Defensive guard: if data integrity is compromised and the related object type
             # is missing, skip building a filter for this field rather than raising.
-            return None
+            return {}
         model_class = related_object_type.model_class()
         if model_class is None:
             # ContentType exists but the model is no longer installed (e.g. stale content type).
-            return None
+            return {}
         queryset = model_class.objects.all()
 
     extra_kwargs = {}
@@ -135,12 +281,14 @@ def build_filter_for_field(field) -> Optional[django_filters.Filter]:
         for key, value in spec.extra_kwargs.items():
             extra_kwargs[key] = value(field) if callable(value) else value
 
-    return spec.build(
-        field_name=field.name,
-        label=field.label or field.name,
-        queryset=queryset,
-        **extra_kwargs,
-    )
+    return {
+        field.name: spec.build(
+            field_name=field.name,
+            label=field.label or field.name,
+            queryset=queryset,
+            **extra_kwargs,
+        )
+    }
 
 
 def get_filterset_class(model):
@@ -202,11 +350,9 @@ def get_filterset_class(model):
         "search": search,
     }
 
-    # For each custom field, add a corresponding filter
+    # For each custom field, add a corresponding filter (dict of name → Filter).
     for field in model.custom_object_type.fields.all():
-        filter_instance = build_filter_for_field(field)
-        if filter_instance:
-            attrs[field.name] = filter_instance
+        attrs.update(build_filter_for_field(field))
 
     return type(
         f"{model._meta.object_name}FilterSet",

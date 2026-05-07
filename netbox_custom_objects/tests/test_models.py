@@ -338,14 +338,18 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         try:
             # Deleting the site now triggers Django's cascade-delete Collector,
             # which finds the stale FK, queries the dropped table, and fails.
-            sid = transaction.savepoint()
-            try:
+            # Use transaction.atomic() rather than a manual savepoint: when the
+            # ProgrammingError propagates through Atomic.__exit__, it clears
+            # connection.needs_rollback before issuing ROLLBACK TO SAVEPOINT, so
+            # the subsequent savepoint_rollback SQL can actually execute.  A raw
+            # transaction.savepoint_rollback() call goes through cursor.execute()
+            # which calls validate_no_broken_transaction() while needs_rollback is
+            # still True, raising TransactionManagementError instead.
+            with transaction.atomic():
                 site.delete()
-                transaction.savepoint_commit(sid)
                 self.fail('Expected ProgrammingError was not raised — the bug is not being reproduced')
-            except ProgrammingError as exc:
-                transaction.savepoint_rollback(sid)
-                self.assertIn('does not exist', str(exc))
+        except ProgrammingError as exc:
+            self.assertIn('does not exist', str(exc))
         finally:
             # Restore clean registry state so subsequent tests are unaffected.
             django_apps.all_models[APP_LABEL].pop(stale_model_name, None)

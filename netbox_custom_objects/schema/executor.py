@@ -30,9 +30,13 @@ Public API
 
 import logging
 
+from core.models import ObjectType
 from django.db import transaction
+from extras.models import CustomFieldChoiceSet
 
 from netbox_custom_objects import constants
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.schema.comparator import FieldOp, diff_document
 from netbox_custom_objects.schema.format import (
     CUSTOM_OBJECTS_APP_LABEL_SLUG,
     FIELD_BASE_ATTRS,
@@ -99,11 +103,18 @@ def _build_dep_order(diffs):
     deps: dict[str, set[str]] = {d.slug: set() for d in diffs}
     for diff in diffs:
         for fc in diff.field_changes:
+            # Non-polymorphic: single related_object_type string.
             rot = fc.schema_def.get("related_object_type", "")
             if rot.startswith(prefix):
                 dep_slug = rot[len(prefix):]
                 if dep_slug in new_slugs and dep_slug != diff.slug:
                     deps[diff.slug].add(dep_slug)
+            # Polymorphic: list of related_object_types strings.
+            for rot in fc.schema_def.get("related_object_types", []):
+                if rot.startswith(prefix):
+                    dep_slug = rot[len(prefix):]
+                    if dep_slug in new_slugs and dep_slug != diff.slug:
+                        deps[diff.slug].add(dep_slug)
 
     # DFS-based topological sort.
     ordered: list[str] = []
@@ -144,9 +155,6 @@ def _resolve_related_object_type(rot_str: str):
 
     Raises :exc:`UnknownObjectTypeError` if the target cannot be found.
     """
-    from core.models import ObjectType  # noqa: PLC0415
-    from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
-
     prefix = CUSTOM_OBJECTS_APP_LABEL_SLUG + "/"
     if rot_str.startswith(prefix):
         slug = rot_str[len(prefix):]
@@ -195,8 +203,6 @@ def _schema_def_to_field_kwargs(schema_def: dict) -> dict:
     Raises :exc:`UnknownChoiceSetError` or :exc:`UnknownObjectTypeError` if
     FK targets cannot be resolved.
     """
-    from extras.models import CustomFieldChoiceSet  # noqa: PLC0415
-
     schema_type = schema_def["type"]
     if schema_type not in SCHEMA_TYPE_TO_CHOICES:
         raise UnknownFieldTypeError(
@@ -240,7 +246,11 @@ def _schema_def_to_field_kwargs(schema_def: dict) -> dict:
                 f"Choice set {cs_name!r} not found in DB."
             )
 
-    if "related_object_type" in type_specific:
+    is_polymorphic = schema_def.get("is_polymorphic", False)
+    if "is_polymorphic" in type_specific:
+        kwargs["is_polymorphic"] = is_polymorphic
+
+    if "related_object_type" in type_specific and not is_polymorphic:
         rot_str = schema_def.get("related_object_type")
         if not rot_str:
             raise UnknownObjectTypeError(
@@ -248,6 +258,9 @@ def _schema_def_to_field_kwargs(schema_def: dict) -> dict:
                 "has no related_object_type specified."
             )
         kwargs["related_object_type"] = _resolve_related_object_type(rot_str)
+
+    # related_object_types is M2M — cannot go in constructor kwargs.
+    # Callers (_apply_field_add / _apply_field_alter) must call .set() after save().
 
     if "related_object_filter" in type_specific:
         kwargs["related_object_filter"] = schema_def.get(
@@ -262,21 +275,36 @@ def _schema_def_to_field_kwargs(schema_def: dict) -> dict:
     return kwargs
 
 
+def _resolve_related_object_types(rot_list: list) -> list:
+    """Resolve a list of encoded ROT strings to ObjectType instances."""
+    return [_resolve_related_object_type(s) for s in rot_list]
+
+
 # ---------------------------------------------------------------------------
 # Per-operation helpers
 # ---------------------------------------------------------------------------
 
 def _apply_field_add(cot, fc) -> None:
     """Create a new field on *cot* as described by the ADD FieldChange *fc*."""
-    from netbox_custom_objects.models import CustomObjectTypeField  # noqa: PLC0415
-
     kwargs = _schema_def_to_field_kwargs(fc.schema_def)
     kwargs["custom_object_type"] = cot
     # Set schema_id explicitly so the auto-assign block in save() is skipped.
     kwargs["schema_id"] = fc.schema_id
 
-    field = CustomObjectTypeField(**kwargs)
-    field.save()
+    # Wrap save + M2M assignment atomically: if the M2M step fails (unknown
+    # type, signal rejection) the field row is cleaned up so we never leave an
+    # orphaned polymorphic field with is_polymorphic=True but empty
+    # related_object_types.
+    with transaction.atomic():
+        field = CustomObjectTypeField(**kwargs)
+        field.save()
+
+        # Wire up M2M related_object_types for polymorphic fields (must be after save).
+        if fc.schema_def.get("is_polymorphic"):
+            rot_list = fc.schema_def.get("related_object_types", [])
+            if rot_list:
+                field.related_object_types.set(_resolve_related_object_types(rot_list))
+
     logger.debug(
         "ADD field %r (schema_id=%s) on COT %r",
         fc.schema_def["name"], fc.schema_id, cot.slug,
@@ -290,13 +318,13 @@ def _apply_field_alter(cot, fc) -> None:
     Only the attributes listed in *fc.changed_attrs* are mutated; everything
     else remains as-is in the DB.
     """
-    from extras.models import CustomFieldChoiceSet  # noqa: PLC0415
-
     field = (
         cot.fields
         .select_related("choice_set", "related_object_type")
         .get(schema_id=fc.schema_id)
     )
+
+    pending_m2m: dict[str, list] = {}
 
     for attr, (db_val, schema_val) in fc.changed_attrs.items():
         if attr == "type":
@@ -317,10 +345,19 @@ def _apply_field_alter(cot, fc) -> None:
                 field.related_object_type = None
             else:
                 field.related_object_type = _resolve_related_object_type(schema_val)
+        elif attr == "related_object_types":
+            # M2M — defer until after save().
+            pending_m2m["related_object_types"] = schema_val or []
         else:
             setattr(field, attr, schema_val)
 
     field.save()
+
+    if "related_object_types" in pending_m2m:
+        field.related_object_types.set(
+            _resolve_related_object_types(pending_m2m["related_object_types"])
+        )
+
     logger.debug(
         "ALTER field %r (schema_id=%s) on COT %r — changed: %s",
         field.name, fc.schema_id, cot.slug, list(fc.changed_attrs.keys()),
@@ -352,8 +389,6 @@ def _update_schema_document(cot, type_def: dict) -> None:
     Uses ``QuerySet.update()`` rather than ``save()`` so that ``post_save`` is
     not dispatched and the model cache is not prematurely invalidated.
     """
-    from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
-
     doc = {
         "schema_version": SCHEMA_FORMAT_VERSION,
         "types": [type_def],
@@ -375,9 +410,6 @@ def _sync_next_schema_id(cot, diff) -> None:
 
     Uses ``QuerySet.update()`` to avoid dispatching ``post_save``.
     """
-    from netbox_custom_objects.schema.comparator import FieldOp  # noqa: PLC0415
-    from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
-
     added_ids = [fc.schema_id for fc in diff.field_changes if fc.op is FieldOp.ADD]
     if not added_ids:
         return
@@ -403,8 +435,6 @@ def _phase1_cots(ordered_diffs, type_defs_by_slug) -> dict:
     creates the backing DB table).  Existing COTs are updated in-place if
     their top-level attributes changed.
     """
-    from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
-
     cot_map: dict[str, object] = {}
 
     for diff in ordered_diffs:
@@ -445,8 +475,6 @@ def _phase2_fields(ordered_diffs, cot_map, *, allow_destructive: bool) -> None:
     All COT tables are guaranteed to exist at this point (created in Phase 1),
     so cross-COT object-field references can be resolved freely.
     """
-    from netbox_custom_objects.schema.comparator import FieldOp  # noqa: PLC0415
-
     for diff in ordered_diffs:
         cot = cot_map[diff.slug]
         for fc in diff.field_changes:
@@ -530,8 +558,6 @@ def apply_document(
     objects that were computed and applied (regardless of whether each had
     changes).
     """
-    from netbox_custom_objects.schema.comparator import diff_document  # noqa: PLC0415
-
     diffs = diff_document(schema_doc)
     type_defs_by_slug = {
         td["slug"]: td for td in schema_doc.get("types", [])
