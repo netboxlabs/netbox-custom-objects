@@ -43,68 +43,6 @@ def _migration_finished(sender, **kwargs):
     _migrations_checked = None
 
 
-def _patch_get_serializer_for_model():
-    """
-    Patch utilities.api.get_serializer_for_model to handle dynamically-generated
-    custom object models.
-
-    The default implementation resolves serializers by import path convention
-    (e.g. netbox_custom_objects.api.serializers.Table1ModelSerializer).  Dynamic
-    models have no importable serializer at that path, so the call raises
-    SerializerNotFound.  This patch intercepts the lookup for APP_LABEL models and
-    delegates to get_serializer_class(), which generates the serializer on the fly.
-
-    Patching the source module (utilities.api) is not enough: any module that
-    did ``from utilities.api import get_serializer_for_model`` before ``ready()``
-    ran holds its own bound reference and would call the unpatched version.
-    Known callers in NetBox core include ``extras.events``, ``extras.api.customfields``,
-    ``extras.api.serializers_.tags``, ``core.api.serializers_.jobs``,
-    ``netbox.api.gfk_fields``, ``netbox.api.serializers.generic``, ``ipam.api.views``
-    and several ``dcim.api`` modules.  Rather than enumerate them (and break when
-    NetBox adds new ones), we sweep ``sys.modules`` and rebind every module-level
-    attribute that points at the original function.
-    """
-    # utilities.api is imported lazily because importing it at module top would
-    # trigger ContentType model definition before the app registry is ready
-    # (plugin __init__.py runs during app discovery).
-    import utilities.api as _api_utils
-
-    _original = _api_utils.get_serializer_for_model
-
-    def _patched(model, prefix=''):
-        # Only intercept dynamically-generated custom object models (Table1Model,
-        # Table2Model, …) identified by their Table{n}Model name pattern.
-        # CustomObjectType and CustomObjectTypeField live in the same app but
-        # have importable serializers and must go through the normal path.
-        if getattr(model, '_meta', None) and model._meta.app_label == APP_LABEL \
-                and extract_cot_id_from_model_name(model.__name__.lower()) is not None:
-            from netbox_custom_objects.api.serializers import get_serializer_class
-            return get_serializer_class(model)
-        return _original(model, prefix=prefix)
-
-    _api_utils.get_serializer_for_model = _patched
-
-    # Rebind every module that imported the original symbol by name.
-    rebound = []
-    for _mod in list(sys.modules.values()):
-        if _mod is None or _mod is _api_utils:
-            continue
-        if getattr(_mod, 'get_serializer_for_model', None) is _original:
-            try:
-                _mod.get_serializer_for_model = _patched
-                rebound.append(getattr(_mod, '__name__', repr(_mod)))
-            except (AttributeError, TypeError):
-                # Some module objects (e.g. namespace packages) may reject attribute writes.
-                pass
-
-    # Surface the sweep result so the next person debugging a SerializerNotFound
-    # can tell whether the patch ran and which modules it touched.
-    logger.info(
-        '_patch_get_serializer_for_model: rebound %d module(s): %s',
-        len(rebound), ', '.join(sorted(rebound)) or '<none>',
-    )
-
-
 def _connect_deferred_data_reset_signals():
     """
     Reset the ``_deferred_co_field_data`` ContextVar at every merge/sync/revert
@@ -229,6 +167,12 @@ class CustomObjectsPluginConfig(PluginConfig):
     }
     required_settings = []
     template_extensions = "template_content.template_extensions"
+    # Resolves dynamically-generated CustomObject models (table{n}model) to
+    # serializers built on the fly via get_serializer_class.  Required because
+    # those models have no importable serializer at the conventional
+    # {app_label}.api.serializers.{Model}Serializer path.  See
+    # netbox_custom_objects/api/serializers.py:serializer_resolver.
+    serializer_resolver = "api.serializers.serializer_resolver"
 
     @staticmethod
     def should_skip_dynamic_model_creation():
@@ -329,10 +273,6 @@ class CustomObjectsPluginConfig(PluginConfig):
 
         # Patch ObjectSelectorView to support dynamically-generated custom object models
         _patch_object_selector_view()
-
-        # Patch get_serializer_for_model so event rules, job serializers, etc. can
-        # resolve serializers for dynamically-generated custom object models.
-        _patch_get_serializer_for_model()
 
         # Clear deferred CO field data on every merge/sync/revert boundary so
         # leftover entries from a failed prior operation don't leak forward.

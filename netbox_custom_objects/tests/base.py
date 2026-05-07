@@ -123,6 +123,29 @@ def _drop_dynamic_tables():
         django_apps.clear_cache()
 
 
+def _reset_netbox_request_context():
+    """Clear ``netbox.context.current_request`` and ``events_queue``.
+
+    netbox.context_managers.event_tracking() yields without try/finally, so an
+    exception inside the ``with`` block leaves current_request set to the
+    previous request.  In test runs that means the next test's pre_save signal
+    handler attributes ObjectChange to the previous test's user (whose row has
+    since been truncated by _fixture_teardown), producing
+    ``IntegrityError: insert or update on table "core_objectchange" violates
+    foreign key constraint`` on user_id.
+    """
+    try:
+        from netbox.context import current_request, events_queue, query_cache
+    except ImportError:
+        return
+    current_request.set(None)
+    events_queue.set({})
+    try:
+        query_cache.set(None)
+    except Exception:
+        pass
+
+
 def create_api_token(user):
     """Create an API token for *user*, handling the NetBox ≥ 4.5 version field."""
     try:
@@ -164,11 +187,22 @@ class TransactionCleanupMixin:
         # Must run before any code that iterates the model registry (e.g.
         # netbox-branching's get_tables_to_replicate() during provisioning).
         _purge_stale_generated_models()
+        # Clear netbox's request-scoped ContextVars.  netbox.context_managers
+        # event_tracking() sets current_request on entry but only clears it
+        # *after* yield — if a test raises inside the with block, the cleanup
+        # never runs and the next test's branch.save() (which reads
+        # current_request to attribute ObjectChange) still sees the previous
+        # test's user, whose row was truncated by _fixture_teardown → FK
+        # violation on core_objectchange.user_id.
+        _reset_netbox_request_context()
         super().setUp()
 
     def tearDown(self):
         # Reset deferred CO field data so it doesn't bleed into the next test.
         _deferred_co_field_data.set(None)
+        # Defensive reset — see setUp for rationale.  Belt-and-braces in case a
+        # test enters event_tracking but raises before super().tearDown() runs.
+        _reset_netbox_request_context()
         # Delete COTs and their backing tables before the DB flush.
         for cot in CustomObjectType.objects.all():
             try:

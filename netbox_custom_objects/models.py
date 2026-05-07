@@ -1768,10 +1768,12 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         """
         Return the physical database column name for this field.
 
-        ``db_column`` is frozen at creation time so that renames are pure
-        metadata operations — the physical column name never changes.
+        Equal to ``self.name`` — the column name tracks the field name, so
+        renames perform an ALTER TABLE RENAME COLUMN (handled by
+        ``_schema_alter_field``).  The stored ``db_column`` field is kept for
+        change-logging legibility but is not used for column resolution.
         """
-        return self.db_column
+        return self.name
 
     def get_child_relations(self, instance):
         return instance.get_field_value(self)
@@ -2578,6 +2580,10 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     def save(self, *args, **kwargs):
         is_new = self._state.adding
 
+        # Use the branch connection when operating inside a branch so that schema
+        # editor operations target the branch schema rather than main.
+        schema_conn = _get_schema_connection()
+
         # Auto-assign schema_id for new fields that don't have one yet.
         # Increments the monotonic counter on the parent CustomObjectType so that IDs are
         # never reused, even after a field is deleted.  The UniqueConstraint on
@@ -2587,8 +2593,12 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         # fields created via CustomObjectTypeField.objects.bulk_create(...). Always set
         # schema_id explicitly when using bulk_create.
         if self._state.adding and self.schema_id is None:
-            with transaction.atomic():
-                cot = CustomObjectType.objects.select_for_update().get(
+            # transaction.atomic() must target the same connection that the
+            # SELECT FOR UPDATE runs against; in a branch context the branching
+            # router routes CustomObjectType to the branch connection, so we
+            # pin both the atomic block and the queryset to schema_conn.alias.
+            with transaction.atomic(using=schema_conn.alias):
+                cot = CustomObjectType.objects.using(schema_conn.alias).select_for_update().get(
                     pk=self.custom_object_type_id
                 )
                 new_schema_id = cot.next_schema_id + 1
@@ -2596,9 +2606,9 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 # CustomObjectType, which would clear the model cache prematurely.
                 # The model cache must remain valid until this field's own save() calls
                 # get_model() below (to contribute the new field and alter the DB table).
-                CustomObjectType.objects.filter(pk=self.custom_object_type_id).update(
-                    next_schema_id=new_schema_id
-                )
+                CustomObjectType.objects.using(schema_conn.alias).filter(
+                    pk=self.custom_object_type_id
+                ).update(next_schema_id=new_schema_id)
                 self.schema_id = new_schema_id
 
         # Freeze the physical column name at creation.  db_column is set once
@@ -2608,9 +2618,6 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             self.db_column = self.name
 
         field_type = FIELD_TYPE_CLASS[self.type]()
-        # Use the branch connection when operating inside a branch so that schema
-        # editor operations target the branch schema rather than main.
-        schema_conn = _get_schema_connection()
         model = self.custom_object_type.get_model()
 
         with schema_conn.schema_editor() as schema_editor:
