@@ -139,11 +139,10 @@ class CustomObject(
 
     def clean(self):
         super().clean()
-        # CustomValidationMixin.clean() (called above) fires the post_clean signal with
-        # sender.__name__ == 'Table{id}Model', so CUSTOM_VALIDATORS entries must use the
-        # key 'netbox_custom_objects.table{id}model' — not the COT slug.  Run validators a
-        # second time using the slug-based key so users can write intuitive config like:
-        #   CUSTOM_VALIDATORS = {"netbox_custom_objects.my-cot-slug": [...]}
+        # CustomValidationMixin.clean() (called above) fires the post_clean signal whose
+        # receiver looks up validators under 'netbox_custom_objects.table{id}model' — an
+        # internal name users cannot discover.  Also run validators under the slug key so
+        # users can write: CUSTOM_VALIDATORS = {"netbox_custom_objects.my-slug": [...]}
         slug_key = f'{APP_LABEL}.{self.custom_object_type.slug}'
         validators = get_config_value_ci(get_config().CUSTOM_VALIDATORS, slug_key, default=[])
         if validators:

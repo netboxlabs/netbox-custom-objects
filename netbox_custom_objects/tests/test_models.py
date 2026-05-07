@@ -864,6 +864,31 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
         # Should not raise
         instance.full_clean()
 
+    @override_settings(CUSTOM_VALIDATORS={
+        "netbox_custom_objects.test-objects": [{"count": {"min": 10}}],
+    })
+    def test_custom_validators_non_text_field_enforced(self):
+        """CUSTOM_VALIDATORS is applied to non-text fields (integer count < min raises)."""
+        instance = self.model(name="valid", count=5)
+        with self.assertRaises(ValidationError):
+            instance.full_clean()
+
+    @override_settings(CUSTOM_VALIDATORS={})
+    def test_custom_validators_no_key_configured_passes(self):
+        """When no CUSTOM_VALIDATORS key is configured for this COT, clean() passes."""
+        instance = self.model(name="x")
+        # Should not raise regardless of field value
+        instance.full_clean()
+
+    @override_settings(CUSTOM_VALIDATORS={
+        "NETBOX_CUSTOM_OBJECTS.TEST-OBJECTS": [{"name": {"min_length": 5}}],
+    })
+    def test_custom_validators_slug_key_case_insensitive(self):
+        """CUSTOM_VALIDATORS key lookup is case-insensitive."""
+        instance = self.model(name="ab")
+        with self.assertRaises(ValidationError):
+            instance.full_clean()
+
 
 class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
     """Tests for the related_name field on Object and MultiObject fields."""
