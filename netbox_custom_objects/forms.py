@@ -213,7 +213,7 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
 
     class Meta:
         model = CustomObjectTypeField
-        exclude = ('db_column',)
+        fields = '__all__'
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)

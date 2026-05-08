@@ -192,7 +192,7 @@ def _schema_add_field(fi, model, schema_editor, schema_conn):
     sync/merge replays an ObjectChange that was already applied).
     """
     ft = FIELD_TYPE_CLASS[fi.type]()
-    mf = ft.get_model_field(fi, db_column=fi.effective_db_column)
+    mf = ft.get_model_field(fi)
     mf.contribute_to_class(model, fi.name)
 
     with schema_conn.cursor() as cursor:
@@ -223,7 +223,7 @@ def _schema_remove_field(fi, model, schema_editor, existing_tables=None):
     to reject the subsequent ALTER TABLE.
     """
     ft = FIELD_TYPE_CLASS[fi.type]()
-    mf = ft.get_model_field(fi, db_column=fi.effective_db_column)
+    mf = ft.get_model_field(fi)
     mf.contribute_to_class(model, fi.name)
 
     if fi.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
@@ -286,8 +286,8 @@ def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, exist
         )
         return
 
-    old_mf = FIELD_TYPE_CLASS[old_fi.type]().get_model_field(old_fi, db_column=old_fi.effective_db_column)
-    new_mf = FIELD_TYPE_CLASS[new_fi.type]().get_model_field(new_fi, db_column=new_fi.effective_db_column)
+    old_mf = FIELD_TYPE_CLASS[old_fi.type]().get_model_field(old_fi)
+    new_mf = FIELD_TYPE_CLASS[new_fi.type]().get_model_field(new_fi)
     old_mf.contribute_to_class(model, old_fi.name)
     new_mf.contribute_to_class(model, new_fi.name)
 
@@ -324,7 +324,7 @@ def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, exist
                 new_fi.pk, schema_conn.alias,
             )
             return
-        live_mf = FIELD_TYPE_CLASS[live_fi.type]().get_model_field(live_fi, db_column=live_fi.effective_db_column)
+        live_mf = FIELD_TYPE_CLASS[live_fi.type]().get_model_field(live_fi)
         live_mf.contribute_to_class(model, live_fi.name)
         if live_mf.column not in existing_cols:
             logger.debug(
@@ -549,6 +549,17 @@ def validate_pep440(value):
 
 class CustomObjectType(NetBoxModel):
     # Class-level cache for generated models
+    # Branch-aware model cache.
+    #
+    # Key: (custom_object_type_id, branch_id_or_None)
+    #   branch_id_or_None == None  → main schema (the canonical apps-registered class)
+    #   branch_id_or_None == int   → that branch's schema (cached only, not registered)
+    #
+    # Branch-specific classes are NEVER inserted into Django's apps registry.
+    # apps.all_models[APP_LABEL][<table_name>] always points to main's class so that
+    # ``content_type.model_class()`` (used by netbox-branching's record_change_diff
+    # inside `with deactivate_branch():`) resolves to a class consistent with main's
+    # schema — branch's schema can have renamed columns that wouldn't exist in main.
     _model_cache = {}
     _through_model_cache = (
         {}
@@ -657,18 +668,55 @@ class CustomObjectType(NetBoxModel):
                     "exceeded; adjust max_custom_object_types to raise this limit"
                 ))
 
-    @classmethod
-    def clear_model_cache(cls, custom_object_type_id=None):
-        """
-        Clear the model cache for a specific CustomObjectType or all models.
+    @staticmethod
+    def _active_branch_id():
+        """Return the active netbox-branching Branch id, or None for main.
 
-        :param custom_object_type_id: ID of the CustomObjectType to clear cache for, or None to clear all
+        Used as the second component of the model cache key so that branch and
+        main contexts each get their own cached class, with main's class being
+        the only one registered in Django's apps registry.
+        """
+        try:
+            from netbox_branching.contextvars import active_branch
+        except ImportError:
+            return None
+        try:
+            branch = active_branch.get()
+        except LookupError:
+            return None
+        return branch.id if branch is not None else None
+
+    @classmethod
+    def clear_model_cache(cls, custom_object_type_id=None, *, all_branches=False):
+        """
+        Clear the cached generated model for a CustomObjectType.
+
+        Default behaviour clears only the **current branch context's** entry
+        (main vs. a specific branch).  This preserves the other context's
+        cached class — important because that's the class registered in
+        ``apps.all_models`` and used by ``content_type.model_class()``.
+
+        Pass ``all_branches=True`` to wipe every (cot, branch) entry for the
+        given cot — appropriate for COT deletion or full re-init.
+
+        :param custom_object_type_id: ID of the CustomObjectType to clear cache
+            for, or None to clear *everything*.
+        :param all_branches: When True with a specific cot id, clear that cot's
+            cache for all branch contexts, not just the active one.
         """
         with cls._global_lock:
             if custom_object_type_id is not None:
-                cls._model_cache.pop(custom_object_type_id, None)
-                cls._through_model_cache.pop(custom_object_type_id, None)
-                cls._model_cache_locks.pop(custom_object_type_id, None)
+                if all_branches:
+                    for key in list(cls._model_cache):
+                        if key[0] == custom_object_type_id:
+                            cls._model_cache.pop(key, None)
+                    cls._through_model_cache.pop(custom_object_type_id, None)
+                    cls._model_cache_locks.pop(custom_object_type_id, None)
+                else:
+                    branch_id = cls._active_branch_id()
+                    cls._model_cache.pop((custom_object_type_id, branch_id), None)
+                    # Through-model cache and per-cot lock are not branch-scoped;
+                    # leave them alone for context-only clears.
             else:
                 cls._model_cache.clear()
                 cls._through_model_cache.clear()
@@ -678,42 +726,43 @@ class CustomObjectType(NetBoxModel):
         apps.get_models.cache_clear()
 
     @classmethod
-    def get_cached_model(cls, custom_object_type_id):
+    def get_cached_model(cls, custom_object_type_id, branch_id=None):
         """
-        Get a cached model for a specific CustomObjectType if it exists.
+        Get the cached model for a CustomObjectType in the given branch context.
 
         :param custom_object_type_id: ID of the CustomObjectType
+        :param branch_id: Branch id, or None for main (default)
         :return: The cached model or None if not found
         """
-        cache_entry = cls._model_cache.get(custom_object_type_id)
+        cache_entry = cls._model_cache.get((custom_object_type_id, branch_id))
         if cache_entry:
-            # Cache stores (model, timestamp) tuples
             return cache_entry[0]
         return None
 
     @classmethod
-    def get_cached_timestamp(cls, custom_object_type_id):
+    def get_cached_timestamp(cls, custom_object_type_id, branch_id=None):
         """
-        Get the timestamp of a cached model for a specific CustomObjectType.
+        Get the timestamp of a cached model for a CustomObjectType in the given branch context.
 
         :param custom_object_type_id: ID of the CustomObjectType
+        :param branch_id: Branch id, or None for main (default)
         :return: The cached timestamp or None if not found
         """
-        cache_entry = cls._model_cache.get(custom_object_type_id)
+        cache_entry = cls._model_cache.get((custom_object_type_id, branch_id))
         if cache_entry:
-            # Cache stores (model, timestamp) tuples
             return cache_entry[1]
         return None
 
     @classmethod
-    def is_model_cached(cls, custom_object_type_id):
+    def is_model_cached(cls, custom_object_type_id, branch_id=None):
         """
-        Check if a model is cached for a specific CustomObjectType.
+        Check if a model is cached for a CustomObjectType in the given branch context.
 
         :param custom_object_type_id: ID of the CustomObjectType
+        :param branch_id: Branch id, or None for main (default)
         :return: True if the model is cached, False otherwise
         """
-        return custom_object_type_id in cls._model_cache
+        return (custom_object_type_id, branch_id) in cls._model_cache
 
     @classmethod
     def get_cached_through_model(cls, custom_object_type_id, through_model_name):
@@ -789,9 +838,7 @@ class CustomObjectType(NetBoxModel):
             field_name = field.name
 
             try:
-                model_field = field_type.get_model_field(
-                    field, db_column=field.effective_db_column,
-                )
+                model_field = field_type.get_model_field(field)
             except NotImplementedError:
                 if field.related_object_type_id is None:
                     logger.debug(
@@ -1035,12 +1082,22 @@ class CustomObjectType(NetBoxModel):
         :rtype: Model
         """
 
+        branch_id = self._active_branch_id()
+
         with self._global_lock:
-            if self.is_model_cached(self.id) and not no_cache:
-                cached_timestamp = self.get_cached_timestamp(self.id)
+            if self.is_model_cached(self.id, branch_id) and not no_cache:
+                cached_timestamp = self.get_cached_timestamp(self.id, branch_id)
                 # Only use cache if the timestamps are available and match
                 if cached_timestamp and self.cache_timestamp and cached_timestamp == self.cache_timestamp:
-                    model = self.get_cached_model(self.id)
+                    model = self.get_cached_model(self.id, branch_id)
+                    # Re-register the SearchIndex against this cached class.  The
+                    # ``registry["search"]`` dict is global, not per-branch, so a
+                    # previous get_model() call in a different context may have
+                    # left it bound to a class with a different field set.
+                    # Without this refresh, the next CO save in this context
+                    # would fail when post_save's search-cache handler reads
+                    # field names that don't exist on the active model class.
+                    self.register_custom_object_search_index(model)
                     return model
                 else:
                     self.clear_model_cache(self.id)
@@ -1119,17 +1176,36 @@ class CustomObjectType(NetBoxModel):
         # Without suppression: register_model() → clear_cache() → get_models() →
         # get_model() → generate_model() → register_model() recurses infinitely.
         with _suppress_clear_cache():
-            if model_name.lower() in apps.all_models[APP_LABEL]:
-                # Remove the existing model from all_models before registering the new one
-                del apps.all_models[APP_LABEL][model_name.lower()]
-
-            apps.register_model(APP_LABEL, model)
+            # Django's ModelBase metaclass auto-registers every concrete model with
+            # ``Meta.app_label`` set into ``apps.all_models`` at ``type()``-creation
+            # time (inside generate_model() above).  That's the right behaviour for
+            # main's class, but for branch classes we must NOT leave the auto-
+            # registration in place — content_type.model_class() (used by
+            # netbox-branching's record_change_diff inside `with deactivate_branch():`)
+            # would then return a class with branch's column set, producing
+            # `column "beta" does not exist` errors when querying main.
+            #
+            # So: for main (branch_id is None) overwrite the registration cleanly;
+            # for a branch context, restore main's previously-cached class so the
+            # apps registry continues to reflect main's schema.
+            model_key = model_name.lower()
+            if branch_id is None:
+                if model_key in apps.all_models[APP_LABEL]:
+                    del apps.all_models[APP_LABEL][model_key]
+                apps.register_model(APP_LABEL, model)
+            else:
+                main_class = self.get_cached_model(self.id, branch_id=None)
+                if main_class is not None:
+                    apps.all_models[APP_LABEL][model_key] = main_class
+                # If main hasn't been generated yet, the branch class stays
+                # registered until the next main-context get_model() call, which
+                # will replace it.  This is rare and self-healing.
 
             self._after_model_generation(attrs, model)
 
             # Cache the generated model with its timestamp (protected by lock for thread safety)
             with self._global_lock:
-                self._model_cache[self.id] = (model, self.cache_timestamp)
+                self._model_cache[(self.id, branch_id)] = (model, self.cache_timestamp)
 
         # Now that the model is in _model_cache, clear_cache() is safe:
         # re-entrant get_model() calls for this COT hit the cache immediately.
@@ -1303,8 +1379,9 @@ class CustomObjectType(NetBoxModel):
             self.clear_model_cache(self.id)
 
     def delete(self, *args, **kwargs):
-        # Clear the model cache for this CustomObjectType
-        self.clear_model_cache(self.id)
+        # Clear the model cache for this CustomObjectType (across all branches —
+        # the COT itself is going away, so every branch's cached class becomes stale).
+        self.clear_model_cache(self.id, all_branches=True)
 
         model = self.get_model()
         schema_conn = _get_schema_connection()
@@ -1375,8 +1452,9 @@ class CustomObjectType(NetBoxModel):
         # longer discovered during cascade-delete collector traversal.
         apps.clear_cache()
 
-        # Re-clear the model cache to remove re-cached model from get_model.
-        self.clear_model_cache(self.id)
+        # Re-clear the model cache to remove re-cached model from get_model
+        # (across all branches — see comment at the top of this method).
+        self.clear_model_cache(self.id, all_branches=True)
 
 
 @receiver(post_save, sender=CustomObjectType)
@@ -1505,15 +1583,6 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     "Names may not start or end with an underscore, and double underscores are not permitted."
                 ),
             ),
-        ),
-    )
-    db_column = models.CharField(
-        verbose_name=_("database column"),
-        max_length=50,
-        blank=True,
-        help_text=_(
-            "Physical database column name. Set once at creation and never changed, "
-            "so renames are pure metadata changes that do not require DDL."
         ),
     )
     label = models.CharField(
@@ -1763,18 +1832,6 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     def many(self):
         return self.type in ["multiobject"]
 
-    @property
-    def effective_db_column(self):
-        """
-        Return the physical database column name for this field.
-
-        Equal to ``self.name`` — the column name tracks the field name, so
-        renames perform an ALTER TABLE RENAME COLUMN (handled by
-        ``_schema_alter_field``).  The stored ``db_column`` field is kept for
-        change-logging legibility but is not used for column resolution.
-        """
-        return self.name
-
     def get_child_relations(self, instance):
         return instance.get_field_value(self)
 
@@ -1912,11 +1969,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             and not self.original.unique
         ):
             field_type = FIELD_TYPE_CLASS[self.type]()
-            model_field = field_type.get_model_field(self, db_column=self.effective_db_column)
+            model_field = field_type.get_model_field(self)
             model = self.custom_object_type.get_model()
             model_field.contribute_to_class(model, self.name)
 
-            old_field = field_type.get_model_field(self.original, db_column=self.original.effective_db_column)
+            old_field = field_type.get_model_field(self.original)
             old_field.contribute_to_class(model, self._original_name)
 
             try:
@@ -2611,12 +2668,6 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 ).update(next_schema_id=new_schema_id)
                 self.schema_id = new_schema_id
 
-        # Freeze the physical column name at creation.  db_column is set once
-        # here and never updated, so subsequent renames only update the ORM
-        # field name — no DDL is required for renames.
-        if self._state.adding and not self.db_column:
-            self.db_column = self.name
-
         field_type = FIELD_TYPE_CLASS[self.type]()
         model = self.custom_object_type.get_model()
 
@@ -2646,7 +2697,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     _schema_alter_field(self.original, self, model, schema_editor, schema_conn)
 
         # When the field is renamed, update ObjectChange / ChangeDiff JSON keys so
-        # historical audit records and branch diffs stay consistent with the new name.
+        # historical audit records and branch diffs stay consistent with the new
+        # name.  Combined with the netbox-branching attr translator registered
+        # in branching.translate_renamed_field_attr, this lets later replays
+        # (whether iterative undo or squash undo) resolve any data key — old or
+        # new name — to the field's current name on the model.
         if (
             not self._state.adding
             and not self.is_polymorphic

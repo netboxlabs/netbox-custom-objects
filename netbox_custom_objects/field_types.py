@@ -918,20 +918,58 @@ class CustomManyToManyManager(Manager):
         # Add default ordering by pk
         return qs.order_by("pk")
 
+    def _fire_m2m_changed(self, action, pk_set):
+        """
+        Send Django's ``m2m_changed`` signal so change-logging /
+        netbox-branching can observe the relationship update.  Without this,
+        bypassing Django's built-in ManyRelatedManager (as our direct-SQL
+        ``add`` / ``remove`` / ``set`` do) leaves the m2m write invisible
+        to ``handle_changed_object`` — which means a merge or sync replays
+        zero through-table rows for CustomObject M2M fields.
+        """
+        if not pk_set:
+            return
+        from django.db.models.signals import m2m_changed
+        m2m_changed.send(
+            sender=self.through,
+            instance=self.instance,
+            action=action,
+            reverse=False,
+            model=getattr(self.through._meta.get_field('target').remote_field, 'model', None),
+            pk_set=pk_set,
+            using='default',
+        )
+
     def add(self, *objs):
+        added = set()
         for obj in objs:
-            self.through.objects.get_or_create(
+            _, created = self.through.objects.get_or_create(
                 source_id=self.instance.pk, target_id=obj.pk
             )
+            if created:
+                added.add(obj.pk)
+        if added:
+            self._fire_m2m_changed('post_add', added)
 
     def remove(self, *objs):
+        removed = set()
         for obj in objs:
-            self.through.objects.filter(
+            n, _ = self.through.objects.filter(
                 source_id=self.instance.pk, target_id=obj.pk
             ).delete()
+            if n:
+                removed.add(obj.pk)
+        if removed:
+            self._fire_m2m_changed('post_remove', removed)
 
     def clear(self):
-        self.through.objects.filter(source_id=self.instance.pk).delete()
+        existing = set(
+            self.through.objects.filter(source_id=self.instance.pk)
+            .values_list('target_id', flat=True)
+        )
+        if existing:
+            self.through.objects.filter(source_id=self.instance.pk).delete()
+            self._fire_m2m_changed('post_clear', existing)
 
     def set(self, objs, clear=False):
         objs = tuple(objs)  # force evaluation before any mutation
@@ -951,11 +989,15 @@ class CustomManyToManyManager(Manager):
                     source_id=self.instance.pk,
                     target_id__in=to_remove,
                 ).delete()
+                self._fire_m2m_changed('post_remove', to_remove)
             # Add only genuinely new relationships
-            for pk in new_pks - old_pks:
+            to_add = new_pks - old_pks
+            for pk in to_add:
                 self.through.objects.get_or_create(
                     source_id=self.instance.pk, target_id=pk
                 )
+            if to_add:
+                self._fire_m2m_changed('post_add', to_add)
 
 
 class CustomManyToManyDescriptor(ManyToManyDescriptor):
