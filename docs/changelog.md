@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.5.0
+---
+
+### New Features
+
+**Polymorphic Object Fields**
+
+Object and multiobject fields can now reference objects of multiple content types via a generic foreign key. Enabled per-field with the `is_polymorphic` flag; allowed types are configured via the `related_object_types` M2M relation.
+
+- [#31](https://github.com/netboxlabs/netbox-custom-objects/issues/31) - Allow GenericForeignKey Custom Object Type Fields
+
+**Portable Schema System**
+
+Custom Object Type definitions can now be exported, compared, and applied as portable JSON schema documents, enabling version-controlled schema management and automated COT lifecycle operations.
+
+- [#386](https://github.com/netboxlabs/netbox-custom-objects/issues/386) - Define a schema format for portable Custom Object Type definitions
+- [#387](https://github.com/netboxlabs/netbox-custom-objects/issues/387) - Custom Object Type state comparator
+- [#388](https://github.com/netboxlabs/netbox-custom-objects/issues/388) - Custom Object Type schema exporter
+- [#389](https://github.com/netboxlabs/netbox-custom-objects/issues/389) - Custom Object Type schema executor (upgrade tool)
+- [#390](https://github.com/netboxlabs/netbox-custom-objects/issues/390) - Schema validation and apply API endpoints
+
+### Enhancements
+
+- [#49](https://github.com/netboxlabs/netbox-custom-objects/issues/49) - Support NetBox `CUSTOM_VALIDATORS` setting keyed by COT slug (e.g. `netbox_custom_objects.my-slug`)
+- [#224](https://github.com/netboxlabs/netbox-custom-objects/issues/224) - Accept `app_label`/`model` in API when creating object-type fields (removes requirement for `related_object_type` ID)
+- [#270](https://github.com/netboxlabs/netbox-custom-objects/issues/270) - Add context field on Custom Object Type Fields to support secondary contextual info in dropdown selects
+- [#296](https://github.com/netboxlabs/netbox-custom-objects/issues/296) / [#366](https://github.com/netboxlabs/netbox-custom-objects/issues/366) - Filterset and filter-form support for all custom field types (object, multiobject, boolean, select)
+- [#385](https://github.com/netboxlabs/netbox-custom-objects/issues/385) - Add `related_name` field to Custom Object Type Fields for configurable reverse accessor names
+- [#391](https://github.com/netboxlabs/netbox-custom-objects/issues/391) - Automatically heal mixin column drift on `post_migrate` to keep COT schemas consistent with base class changes
+- [#392](https://github.com/netboxlabs/netbox-custom-objects/issues/392) - Validate Custom Object Type `version` field as a PEP 440 semantic version string
+- [#397](https://github.com/netboxlabs/netbox-custom-objects/issues/397) - Add branch limitation warnings to all write-operation views
+
+### Bug Fixes
+
+- [#488](https://github.com/netboxlabs/netbox-custom-objects/issues/488) - Make custom-object FK constraints non-DEFERRABLE to prevent potential deadlocks
+
+
 ## 0.4.10
 ---
 
