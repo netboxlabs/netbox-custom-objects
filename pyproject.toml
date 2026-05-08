@@ -1,6 +1,6 @@
 [project]
 name = "netboxlabs-netbox-custom-objects"
-version = "0.4.10"
+version = "0.5.0"
 description = "A plugin to manage custom objects in NetBox"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -25,6 +25,8 @@ classifiers = [
 
 dependencies = [
     "Django",
+    "jsonschema",
+    "packaging",
 ]
 
 [project.optional-dependencies]

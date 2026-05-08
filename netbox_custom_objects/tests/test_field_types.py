@@ -7,7 +7,9 @@ from decimal import Decimal
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 
-from netbox_custom_objects.models import CustomObjectTypeField
+from core.models import ObjectType
+from netbox_custom_objects.field_types import MultiObjectFieldType, ObjectFieldType
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from .base import CustomObjectsTestCase
 
 
@@ -610,6 +612,23 @@ class ObjectFieldTypeTestCase(FieldTypeTestCase):
         self.assertEqual(field.type, "object")
         self.assertEqual(field.related_object_type, self.device_object_type)
 
+    def test_get_model_field_raises_not_implemented_error_for_null_related_object_type(self):
+        """get_model_field() must raise NotImplementedError (not ContentType.DoesNotExist)
+        when related_object_type_id is NULL.  All callers catch NotImplementedError to
+        skip broken fields; an unexpected ContentType.DoesNotExist would propagate up
+        and crash model generation or the serializer."""
+        field = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="broken_obj",
+            label="Broken",
+            type="object",
+            related_object_type=self.device_object_type,
+        )
+        CustomObjectTypeField.objects.filter(pk=field.pk).update(related_object_type=None)
+        field.refresh_from_db()
+        with self.assertRaises(NotImplementedError):
+            ObjectFieldType().get_model_field(field)
+
     def test_object_field_model_generation(self):
         """Test object field model generation."""
         self.create_custom_object_type_field(
@@ -663,6 +682,21 @@ class MultiObjectFieldTypeTestCase(FieldTypeTestCase):
 
         self.assertEqual(field.type, "multiobject")
         self.assertEqual(field.related_object_type, self.device_object_type)
+
+    def test_get_model_field_raises_not_implemented_error_for_null_related_object_type(self):
+        """get_model_field() must raise NotImplementedError (not ContentType.DoesNotExist)
+        when related_object_type_id is NULL so callers handle it consistently."""
+        field = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="broken_multi",
+            label="Broken Multi",
+            type="multiobject",
+            related_object_type=self.device_object_type,
+        )
+        CustomObjectTypeField.objects.filter(pk=field.pk).update(related_object_type=None)
+        field.refresh_from_db()
+        with self.assertRaises(NotImplementedError):
+            MultiObjectFieldType().get_model_field(field)
 
     def test_multiobject_field_model_generation(self):
         """Test multiobject field model generation."""
@@ -781,6 +815,8 @@ class CrossReferentialFieldTestCase(FieldTypeTestCase):
         )
 
         model1 = self.custom_object_type.get_model()
+        # Refresh second_type so cache_timestamp matches the DB value bumped by the signal.
+        second_type.refresh_from_db()
         model2 = second_type.get_model()
 
         # Create instances
@@ -863,6 +899,9 @@ class MultipleObjectFieldsToSameCOTTestCase(FieldTypeTestCase):
             related_object_type=target.object_type,
         )
 
+        # Refresh target so its cache_timestamp matches the DB value bumped by the signal
+        # when both TYPE_OBJECT fields above were saved.
+        target.refresh_from_db()
         target_model = target.get_model()
         model = self.custom_object_type.get_model()
 
@@ -948,6 +987,9 @@ class MultipleObjectFieldsToSameCOTTestCase(FieldTypeTestCase):
             related_object_type=target.object_type,
         )
 
+        # Refresh target so cache_timestamp matches the DB value bumped by the signal
+        # when the TYPE_OBJECT 'single_ref' field was saved above.
+        target.refresh_from_db()
         target_model = target.get_model()
         model = self.custom_object_type.get_model()
 
@@ -1024,6 +1066,9 @@ class PrimaryFieldChangeTestCase(FieldTypeTestCase):
             related_object_type=self.custom_object_type.object_type,
         )
 
+        # Refresh so cache_timestamp matches the DB value bumped by the signal when
+        # the TYPE_OBJECT 'ref' field was saved pointing to custom_object_type.
+        self.custom_object_type.refresh_from_db()
         model_target = self.custom_object_type.get_model()
         model_ref = ref_cot.get_model()
 
@@ -1067,3 +1112,214 @@ class PrimaryFieldChangeTestCase(FieldTypeTestCase):
         # __str__ on the referenced target must reflect the new primary field ('code')
         refreshed_target = new_target_model.objects.get(pk=target_instance.pk)
         self.assertIn("T-001", str(refreshed_target))
+
+
+# ---------------------------------------------------------------------------
+# Context field — ts-parent-field widget attribute on get_form_field()
+# ---------------------------------------------------------------------------
+
+
+class ContextFieldWidgetTestCase(CustomObjectsTestCase, TestCase):
+    """
+    ObjectFieldType.get_form_field() and MultiObjectFieldType.get_form_field()
+    must set ts-parent-field="_context" on the widget whenever the target COT
+    has at least one field marked context=True, and must NOT set it otherwise.
+
+    Two target scenarios are exercised:
+      • target has a primary field  → display uses the field value
+      • target has no primary field → display falls back to "{COT name} {id}"
+    Both scenarios still have a context field, so ts-parent-field must appear.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+
+        # Target A: primary field + context field
+        cls.target_with_primary = cls.create_custom_object_type(
+            name="ctxwidgetprimary", slug="ctx-widget-primary"
+        )
+        cls.create_custom_object_type_field(
+            cls.target_with_primary, name="name", type="text", primary=True
+        )
+        cls.create_custom_object_type_field(
+            cls.target_with_primary, name="owner", type="text", context=True
+        )
+
+        # Target B: no primary field, has a context field (fallback display)
+        cls.target_no_primary = cls.create_custom_object_type(
+            name="ctxwidgetnoprimary", slug="ctx-widget-no-primary"
+        )
+        cls.create_custom_object_type_field(
+            cls.target_no_primary, name="owner", type="text", context=True
+        )
+
+        # Target C: no context fields at all
+        cls.target_no_context = cls.create_custom_object_type(
+            name="ctxwidgetnocontext", slug="ctx-widget-no-context"
+        )
+        cls.create_custom_object_type_field(
+            cls.target_no_context, name="name", type="text", primary=True
+        )
+
+        # Target D: multiple context fields
+        cls.target_multi_ctx = cls.create_custom_object_type(
+            name="ctxwidgetmultictx", slug="ctx-widget-multi-ctx"
+        )
+        cls.create_custom_object_type_field(
+            cls.target_multi_ctx, name="name", type="text", primary=True
+        )
+        cls.create_custom_object_type_field(
+            cls.target_multi_ctx, name="owner", type="text", context=True
+        )
+        cls.create_custom_object_type_field(
+            cls.target_multi_ctx, name="region", type="text", context=True
+        )
+
+        # Source COT with object/multiobject fields pointing at each target
+        cls.source_cot = cls.create_custom_object_type(
+            name="ctxwidgetsource", slug="ctx-widget-source"
+        )
+        cls.field_obj_with_ctx = cls.create_custom_object_type_field(
+            cls.source_cot,
+            name="ref_obj_with_ctx",
+            type="object",
+            related_object_type=ObjectType.objects.get_for_model(
+                cls.target_with_primary.get_model()
+            ),
+        )
+        cls.field_obj_no_primary = cls.create_custom_object_type_field(
+            cls.source_cot,
+            name="ref_obj_no_primary",
+            type="object",
+            related_object_type=ObjectType.objects.get_for_model(
+                cls.target_no_primary.get_model()
+            ),
+        )
+        cls.field_obj_no_ctx = cls.create_custom_object_type_field(
+            cls.source_cot,
+            name="ref_obj_no_ctx",
+            type="object",
+            related_object_type=ObjectType.objects.get_for_model(
+                cls.target_no_context.get_model()
+            ),
+        )
+        cls.field_multi_with_ctx = cls.create_custom_object_type_field(
+            cls.source_cot,
+            name="ref_multi_with_ctx",
+            type="multiobject",
+            related_object_type=ObjectType.objects.get_for_model(
+                cls.target_with_primary.get_model()
+            ),
+        )
+        cls.field_multi_no_ctx = cls.create_custom_object_type_field(
+            cls.source_cot,
+            name="ref_multi_no_ctx",
+            type="multiobject",
+            related_object_type=ObjectType.objects.get_for_model(
+                cls.target_no_context.get_model()
+            ),
+        )
+        cls.field_obj_multi_ctx = cls.create_custom_object_type_field(
+            cls.source_cot,
+            name="ref_obj_multi_ctx",
+            type="object",
+            related_object_type=ObjectType.objects.get_for_model(
+                cls.target_multi_ctx.get_model()
+            ),
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        CustomObjectType.clear_model_cache()
+        super().tearDownClass()
+
+    # --- ObjectFieldType ---
+
+    def test_object_field_with_context_sets_ts_parent_field(self):
+        """Widget must carry ts-parent-field="_context" when target has a context field."""
+        form_field = ObjectFieldType().get_form_field(self.field_obj_with_ctx)
+        self.assertEqual(form_field.widget.attrs.get("ts-parent-field"), "_context")
+
+    def test_object_field_fallback_display_still_sets_ts_parent_field(self):
+        """ts-parent-field must be set even when the target uses fallback display
+        (i.e. has no primary field)."""
+        form_field = ObjectFieldType().get_form_field(self.field_obj_no_primary)
+        self.assertEqual(form_field.widget.attrs.get("ts-parent-field"), "_context")
+
+    def test_object_field_without_context_does_not_set_ts_parent_field(self):
+        """Widget must NOT have ts-parent-field when the target has no context fields."""
+        form_field = ObjectFieldType().get_form_field(self.field_obj_no_ctx)
+        self.assertNotIn("ts-parent-field", form_field.widget.attrs)
+
+    # --- MultiObjectFieldType ---
+
+    def test_multiobject_field_with_context_sets_ts_parent_field(self):
+        """Same behaviour applies to multi-object fields."""
+        form_field = MultiObjectFieldType().get_form_field(self.field_multi_with_ctx)
+        self.assertEqual(form_field.widget.attrs.get("ts-parent-field"), "_context")
+
+    def test_multiobject_field_without_context_does_not_set_ts_parent_field(self):
+        """Multi-object widget must NOT have ts-parent-field without context fields."""
+        form_field = MultiObjectFieldType().get_form_field(self.field_multi_no_ctx)
+        self.assertNotIn("ts-parent-field", form_field.widget.attrs)
+
+    def test_object_field_with_multiple_context_fields_sets_ts_parent_field(self):
+        """ts-parent-field must be set when the target has more than one context field."""
+        form_field = ObjectFieldType().get_form_field(self.field_obj_multi_ctx)
+        self.assertEqual(form_field.widget.attrs.get("ts-parent-field"), "_context")
+
+
+# ---------------------------------------------------------------------------
+# Context field — model validation
+# ---------------------------------------------------------------------------
+
+
+class ContextFieldValidationTestCase(CustomObjectsTestCase, TestCase):
+    """A field cannot be simultaneously marked as primary and context."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(
+            name="ctxvalidationcot", slug="ctx-validation-cot"
+        )
+
+    def test_primary_and_context_raises_validation_error(self):
+        """clean() must reject a field with both primary=True and context=True."""
+        from netbox_custom_objects.models import CustomObjectTypeField
+        field = CustomObjectTypeField(
+            custom_object_type=self.cot,
+            name="dual",
+            type="text",
+            primary=True,
+            context=True,
+        )
+        with self.assertRaises(ValidationError):
+            field.full_clean()
+
+    def test_primary_only_is_valid(self):
+        """primary=True without context=True must pass validation."""
+        from netbox_custom_objects.models import CustomObjectTypeField
+        field = CustomObjectTypeField(
+            custom_object_type=self.cot,
+            name="primaryonly",
+            type="text",
+            primary=True,
+            context=False,
+        )
+        # Should not raise
+        field.full_clean()
+
+    def test_context_only_is_valid(self):
+        """context=True without primary=True must pass validation."""
+        from netbox_custom_objects.models import CustomObjectTypeField
+        field = CustomObjectTypeField(
+            custom_object_type=self.cot,
+            name="contextonly",
+            type="text",
+            primary=False,
+            context=True,
+        )
+        # Should not raise
+        field.full_clean()

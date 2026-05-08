@@ -1,0 +1,36 @@
+{% load form_helpers %}
+{% load i18n %}
+{% load custom_object_utils %}
+
+{# Render all visible form fields with poly grouping headings. #}
+{# Used by both the bulk edit page and the HTMX partial reload. #}
+{% for field in form.visible_fields %}
+  {% if field.name in form.meta_fields %}
+    {# Handled separately in the meta section. #}
+  {% elif field.name in form.custom_object_type_poly_obj_ct_names %}
+    {# Polymorphic single-object pair: heading + type selector + object picker #}
+    {% with pair=form.custom_object_type_poly_obj_pairs|dict_get:field.name %}
+      <div class="row">
+        <h3 class="col-9 offset-3 mb-3 h4">{{ pair.1 }}</h3>
+      </div>
+      {% render_field field %}
+      {% render_field form|getfield:pair.0 %}
+    {% endwith %}
+  {% elif field.name in form.custom_object_type_poly_m2m_groups %}
+    {# Polymorphic multi-object group: heading + one sub-field per allowed type #}
+    {% with group_info=form.custom_object_type_poly_m2m_groups|dict_get:field.name %}
+      <div class="row">
+        <h3 class="col-9 offset-3 mb-3 h4">{{ group_info.1 }}</h3>
+      </div>
+      {% for sub_name in group_info.0 %}
+        {% render_field form|getfield:sub_name bulk_nullable=True %}
+      {% endfor %}
+    {% endwith %}
+  {% elif field.name in form.custom_object_type_rendered_names %}
+    {# Non-group-start poly sub-field: already rendered via its group — skip. #}
+  {% elif field.name in form.nullable_fields %}
+    {% render_field field bulk_nullable=True %}
+  {% else %}
+    {% render_field field %}
+  {% endif %}
+{% endfor %}

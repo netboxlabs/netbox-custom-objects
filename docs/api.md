@@ -166,6 +166,27 @@ The response will include the created object with its assigned ID and additional
 }
 ```
 
+### Custom Validation
+
+NetBox's [`CUSTOM_VALIDATORS`](https://netboxlabs.com/docs/netbox/en/stable/configuration/data-validation/#custom_validators) setting is supported for Custom Objects. Use `netbox_custom_objects.<cot-slug>` as the key, where `<cot-slug>` is the slug of the Custom Object Type:
+
+```python
+# configuration.py
+CUSTOM_VALIDATORS = {
+    "netbox_custom_objects.server": [
+        {
+            "hostname": {"min_length": 3, "max_length": 64},
+            "cpu_cores": {"min": 1},
+        }
+    ]
+}
+```
+
+Validators are enforced on both API writes and UI form submissions. Any violation raises a 400 error (API) or a form validation error (UI).
+
+> [!NOTE]
+> The key must use the COT **slug** (e.g. `server`), not the COT name or the internal model name.
+
 ### Linked Objects
 
 Any object in NetBox (whether a core object such as Device or Site, or a Custom Object) can be pointed to by one or more Custom Objects via `object` or `multiobject` fields. You can get a list of all these "linked" Custom Objects (analogous to the "Custom Objects linking to this object" table in the NetBox UI) by querying the following endpoint:

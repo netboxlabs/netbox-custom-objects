@@ -1,0 +1,354 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://netboxlabs.com/schemas/netbox-custom-objects/cot-schema-v1.json",
+  "title": "NetBox Custom Object Type Schema (v1)",
+  "description": "Portable schema format for NetBox Custom Object Type definitions.",
+
+  "$defs": {
+    "semver": {
+      "type": "string",
+      "description": "Semantic version string (PEP 440 / semver compatible).",
+      "examples": ["1.0.0", "2.3.1", "1.0.0-alpha.1"]
+    },
+
+    "identifier": {
+      "type": "string",
+      "description": "Lowercase alphanumeric characters and single underscores only. No leading/trailing underscores and no double underscores. This pattern matches the model validator for CustomObjectType.name and CustomObjectTypeField.name.",
+      "pattern": "^[a-z0-9]+(_[a-z0-9]+)*$"
+    },
+
+    "slug": {
+      "type": "string",
+      "description": "URL-friendly identifier (lowercase alphanumeric and hyphens).",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+    },
+
+    "related_object_type": {
+      "type": "string",
+      "description": "Reference to a NetBox object type. Built-in: 'app_label/model' (e.g. 'dcim/device'). Custom Object Type: 'custom-objects/<slug>'.",
+      "pattern": "^[a-z0-9_-]+/[a-z0-9_-]+$",
+      "examples": ["dcim/device", "ipam/prefix", "custom-objects/circuit"]
+    },
+
+    "field_type": {
+      "type": "string",
+      "enum": [
+        "text",
+        "longtext",
+        "integer",
+        "decimal",
+        "boolean",
+        "date",
+        "datetime",
+        "url",
+        "json",
+        "select",
+        "multiselect",
+        "object",
+        "multiobject"
+      ]
+    },
+
+    "field_base": {
+      "type": "object",
+      "required": ["id", "name", "type"],
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Stable numeric identifier. Never changes and never reused within this COT."
+        },
+        "name": { "$ref": "#/$defs/identifier" },
+        "type": { "$ref": "#/$defs/field_type" },
+        "label": {
+          "type": "string",
+          "maxLength": 50,
+          "description": "Display label. Defaults to name with underscores replaced by spaces."
+        },
+        "description": { "type": "string", "maxLength": 200 },
+        "group_name": { "type": "string", "maxLength": 50 },
+        "primary": { "type": "boolean", "default": false },
+        "required": { "type": "boolean", "default": false },
+        "unique": { "type": "boolean", "default": false },
+        "default": { "description": "JSON-serialisable default value." },
+        "weight": { "type": "integer", "minimum": 0, "default": 100 },
+        "search_weight": { "type": "integer", "minimum": 0, "default": 500 },
+        "filter_logic": {
+          "type": "string",
+          "enum": ["disabled", "loose", "exact"],
+          "default": "loose"
+        },
+        "ui_visible": {
+          "type": "string",
+          "enum": ["always", "if-set", "hidden"],
+          "default": "always"
+        },
+        "ui_editable": {
+          "type": "string",
+          "enum": ["yes", "no", "hidden"],
+          "default": "yes"
+        },
+        "is_cloneable": { "type": "boolean", "default": false },
+        "deprecated": { "type": "boolean", "default": false },
+        "deprecated_since": {
+          "type": "string",
+          "description": "Schema version in which this field was marked deprecated."
+        },
+        "scheduled_removal": {
+          "type": "string",
+          "description": "Schema version in which this field is planned to be removed."
+        }
+      }
+    },
+
+    "text_field": {
+      "unevaluatedProperties": false,
+      "allOf": [
+        { "$ref": "#/$defs/field_base" },
+        {
+          "properties": {
+            "type": { "const": "text" },
+            "validation_regex": { "type": "string", "maxLength": 500 }
+          }
+        }
+      ]
+    },
+
+    "longtext_field": {
+      "unevaluatedProperties": false,
+      "allOf": [
+        { "$ref": "#/$defs/field_base" },
+        {
+          "properties": {
+            "type": { "const": "longtext" },
+            "validation_regex": { "type": "string", "maxLength": 500 }
+          }
+        }
+      ]
+    },
+
+    "integer_field": {
+      "unevaluatedProperties": false,
+      "allOf": [
+        { "$ref": "#/$defs/field_base" },
+        {
+          "properties": {
+            "type": { "const": "integer" },
+            "validation_minimum": { "type": "integer" },
+            "validation_maximum": { "type": "integer" }
+          }
+        }
+      ]
+    },
+
+    "decimal_field": {
+      "unevaluatedProperties": false,
+      "allOf": [
+        { "$ref": "#/$defs/field_base" },
+        {
+          "properties": {
+            "type": { "const": "decimal" },
+            "validation_minimum": { "type": "number" },
+            "validation_maximum": { "type": "number" }
+          }
+        }
+      ]
+    },
+
+    "select_field": {
+      "unevaluatedProperties": false,
+      "allOf": [
+        { "$ref": "#/$defs/field_base" },
+        {
+          "required": ["choice_set"],
+          "properties": {
+            "type": { "const": "select" },
+            "choice_set": {
+              "type": "string",
+              "description": "Name of the CustomFieldChoiceSet to use."
+            }
+          }
+        }
+      ]
+    },
+
+    "multiselect_field": {
+      "unevaluatedProperties": false,
+      "allOf": [
+        { "$ref": "#/$defs/field_base" },
+        {
+          "required": ["choice_set"],
+          "properties": {
+            "type": { "const": "multiselect" },
+            "choice_set": {
+              "type": "string",
+              "description": "Name of the CustomFieldChoiceSet to use."
+            }
+          }
+        }
+      ]
+    },
+
+    "object_field": {
+      "unevaluatedProperties": false,
+      "allOf": [
+        { "$ref": "#/$defs/field_base" },
+        {
+          "properties": {
+            "type": { "const": "object" },
+            "is_polymorphic": {
+              "type": "boolean",
+              "default": false,
+              "description": "When true, the field may reference objects of multiple types listed in related_object_types."
+            },
+            "related_object_type": { "$ref": "#/$defs/related_object_type" },
+            "related_object_types": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/related_object_type" },
+              "minItems": 1,
+              "description": "Allowed object types for a polymorphic field. Required when is_polymorphic is true."
+            },
+            "related_object_filter": {
+              "type": ["object", "null"],
+              "description": "Query params dict to filter the related object selection."
+            },
+            "on_delete_behavior": {
+              "type": "string",
+              "enum": ["set_null", "cascade", "protect"],
+              "default": "set_null",
+              "description": "Behavior when the referenced object is deleted. Only applies to object-type fields."
+            }
+          },
+          "if": { "properties": { "is_polymorphic": { "const": true } }, "required": ["is_polymorphic"] },
+          "then": { "required": ["related_object_types"] },
+          "else": { "required": ["related_object_type"] }
+        }
+      ]
+    },
+
+    "multiobject_field": {
+      "unevaluatedProperties": false,
+      "allOf": [
+        { "$ref": "#/$defs/field_base" },
+        {
+          "properties": {
+            "type": { "const": "multiobject" },
+            "is_polymorphic": {
+              "type": "boolean",
+              "default": false,
+              "description": "When true, the field may reference objects of multiple types listed in related_object_types."
+            },
+            "related_object_type": { "$ref": "#/$defs/related_object_type" },
+            "related_object_types": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/related_object_type" },
+              "minItems": 1,
+              "description": "Allowed object types for a polymorphic field. Required when is_polymorphic is true."
+            },
+            "related_object_filter": {
+              "type": ["object", "null"],
+              "description": "Query params dict to filter the related object selection."
+            }
+          },
+          "if": { "properties": { "is_polymorphic": { "const": true } }, "required": ["is_polymorphic"] },
+          "then": { "required": ["related_object_types"] },
+          "else": { "required": ["related_object_type"] }
+        }
+      ]
+    },
+
+    "simple_field": {
+      "unevaluatedProperties": false,
+      "allOf": [
+        { "$ref": "#/$defs/field_base" },
+        {
+          "properties": {
+            "type": {
+              "enum": ["boolean", "date", "datetime", "url", "json"]
+            }
+          }
+        }
+      ]
+    },
+
+    "field": {
+      "oneOf": [
+        { "$ref": "#/$defs/text_field" },
+        { "$ref": "#/$defs/longtext_field" },
+        { "$ref": "#/$defs/integer_field" },
+        { "$ref": "#/$defs/decimal_field" },
+        { "$ref": "#/$defs/select_field" },
+        { "$ref": "#/$defs/multiselect_field" },
+        { "$ref": "#/$defs/object_field" },
+        { "$ref": "#/$defs/multiobject_field" },
+        { "$ref": "#/$defs/simple_field" }
+      ],
+      "discriminator": {
+        "propertyName": "type",
+        "$comment": "discriminator is an OpenAPI 3.x extension, not part of JSON Schema 2020-12. Standard validators (including the jsonschema library) will silently ignore it. The oneOf above is what actually enforces field type constraints; the discriminator is present only as documentation for tooling that understands it."
+      }
+    },
+
+    "removed_field": {
+      "type": "object",
+      "required": ["id", "name", "type"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The stable ID that was permanently retired when this field was removed."
+        },
+        "name": { "$ref": "#/$defs/identifier" },
+        "type": { "$ref": "#/$defs/field_type" },
+        "removed_in": {
+          "type": "string",
+          "description": "Schema version in which this field was removed."
+        }
+      }
+    },
+
+    "cot_definition": {
+      "$comment": "The 'comments' field present on both CustomObjectType and CustomObjectTypeField is intentionally excluded from this schema format. It is editorial annotation, not structural schema, and would create noise in diffs and cross-installation sharing.",
+      "type": "object",
+      "required": ["name", "slug"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/identifier" },
+        "slug": { "$ref": "#/$defs/slug" },
+        "version": { "$ref": "#/$defs/semver" },
+        "verbose_name": { "type": "string", "maxLength": 100 },
+        "verbose_name_plural": { "type": "string", "maxLength": 100 },
+        "description": { "type": "string", "maxLength": 200 },
+        "group_name": { "type": "string", "maxLength": 100 },
+        "fields": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/field" },
+          "description": "Active and deprecated fields. Each id must be unique within this COT."
+        },
+        "removed_fields": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/removed_field" },
+          "description": "Tombstone records for permanently removed fields. IDs here must not appear in 'fields'."
+        }
+      }
+    }
+  },
+
+  "type": "object",
+  "required": ["schema_version", "types"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "1",
+      "description": "Format spec version. Identifies this document as COT Schema Format v1."
+    },
+    "types": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/cot_definition" },
+      "description": "One or more Custom Object Type definitions."
+    }
+  }
+}

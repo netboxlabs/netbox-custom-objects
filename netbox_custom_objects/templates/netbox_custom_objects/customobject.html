@@ -149,9 +149,20 @@
                     {% if group_name %}{{ group_name }}: {% endif %}{{ field }}
                   </h2>
                   <table class="table table-hover attr-table">
+                    {% if field.is_polymorphic %}
+                      <thead>
+                        <tr>
+                          <th scope="col">{% trans "Type" %}</th>
+                          <th scope="col">{% trans "Object" %}</th>
+                        </tr>
+                      </thead>
+                    {% endif %}
                     {% for relation in field_values.all %}
                       <tr>
-                        <th scope="row">{{ relation|linkify }}</th>
+                        {% if field.is_polymorphic %}
+                          <td class="text-muted">{{ relation|meta:"verbose_name" }}</td>
+                        {% endif %}
+                        <td>{{ relation|linkify }}</td>
                       </tr>
                     {% endfor %}
                   </table>

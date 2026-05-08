@@ -7,7 +7,7 @@ from decimal import Decimal
 
 from django.core.exceptions import ValidationError
 from django.db import connection
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
@@ -18,7 +18,42 @@ from netbox.search.backends import get_backend
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
 from netbox_custom_objects.models import CustomObjectTypeField
 from core.models import ObjectType
+from netbox_custom_objects.utilities import extract_cot_id_from_model_name
 from .base import CustomObjectsTestCase
+
+
+class ExtractCotIdFromModelNameTestCase(TestCase):
+    """Unit tests for extract_cot_id_from_model_name()."""
+
+    def test_valid_names_return_id_string(self):
+        self.assertEqual(extract_cot_id_from_model_name("table1model"), "1")
+        self.assertEqual(extract_cot_id_from_model_name("table42model"), "42")
+        self.assertEqual(extract_cot_id_from_model_name("table999model"), "999")
+
+    def test_returns_none_for_missing_prefix(self):
+        # No leading "table"
+        self.assertIsNone(extract_cot_id_from_model_name("42model"))
+
+    def test_returns_none_for_missing_suffix(self):
+        # No trailing "model"
+        self.assertIsNone(extract_cot_id_from_model_name("table42"))
+
+    def test_returns_none_for_non_digit_id(self):
+        self.assertIsNone(extract_cot_id_from_model_name("tableabcmodel"))
+
+    def test_returns_none_for_substring_match(self):
+        # "table" and "model" present as substrings but wrong structure
+        self.assertIsNone(extract_cot_id_from_model_name("sometablemodel"))
+        self.assertIsNone(extract_cot_id_from_model_name("table_model"))
+        self.assertIsNone(extract_cot_id_from_model_name("table42modelextra"))
+
+    def test_returns_none_for_empty_string(self):
+        self.assertIsNone(extract_cot_id_from_model_name(""))
+
+    def test_case_sensitive(self):
+        # The regex is anchored and lowercase-only; uppercase should not match
+        self.assertIsNone(extract_cot_id_from_model_name("Table42Model"))
+        self.assertIsNone(extract_cot_id_from_model_name("TABLE42MODEL"))
 
 
 class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
@@ -38,6 +73,20 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(custom_object_type.verbose_name_plural, "Test Objects")
         self.assertEqual(custom_object_type.slug, "test-objects")
         self.assertEqual(str(custom_object_type), "TestObject")
+
+    def test_custom_object_type_name_validation(self):
+        """COT name must match the schema identifier pattern (no leading/trailing/double underscores)."""
+        from netbox_custom_objects.models import CustomObjectType
+        invalid_names = [
+            "test-type",    # hyphen not allowed
+            "test__type",   # double underscore not allowed
+            "_test_type",   # leading underscore not allowed
+            "test_type_",   # trailing underscore not allowed
+        ]
+        for invalid_name in invalid_names:
+            with self.assertRaises(ValidationError, msg=f"Expected ValidationError for name={invalid_name!r}"):
+                cot = CustomObjectType(name=invalid_name, slug=f"slug-{invalid_name}")
+                cot.full_clean()
 
     def test_custom_object_type_unique_name_constraint(self):
         """Test that custom object type names must be unique (case-insensitive)."""
@@ -154,6 +203,36 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
             expected_table = f"custom_objects_{custom_object_type.id}"
             self.assertIn(expected_table, tables)
 
+    def test_register_search_index_skips_object_field_absent_from_stub_model(self):
+        """register_custom_object_search_index() must use local_fields/local_many_to_many
+        rather than _meta.get_field() to check field presence.  _meta.get_field() for a
+        name not in _forward_fields_map triggers Django's lazy _relation_tree computation,
+        which calls apps.get_models() → our override → get_model() for every COT →
+        infinite recursion when called during model registration.
+
+        Regression for PR #474: the stub model generated with skip_object_fields=True
+        does not have the OBJECT field, but self.fields.filter(search_weight__gt=0)
+        still returns it from the database.
+        """
+        cot = self.create_custom_object_type(name="StubSearchTest", slug="stub-search-test")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, search_weight=1000,
+        )
+        self.create_custom_object_type_field(
+            cot, name="ref_site", label="Site", type="object",
+            related_object_type=self.get_site_object_type(),
+            search_weight=500,
+        )
+        stub_model = cot.get_model(skip_object_fields=True)
+        model_field_names = (
+            {f.name for f in stub_model._meta.local_fields}
+            | {f.name for f in stub_model._meta.local_many_to_many}
+        )
+        self.assertNotIn("ref_site", model_field_names,
+                         "OBJECT field must be absent from stub model")
+        # Must not raise FieldDoesNotExist, RecursionError, or any other exception.
+        cot.register_custom_object_search_index(stub_model)
+
     @skip("Fails in suite but not individually")
     def test_custom_object_type_delete_removes_table(self):
         """Test that deleting a custom object type removes the database table."""
@@ -259,14 +338,18 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         try:
             # Deleting the site now triggers Django's cascade-delete Collector,
             # which finds the stale FK, queries the dropped table, and fails.
-            sid = transaction.savepoint()
-            try:
+            # Use transaction.atomic() rather than a manual savepoint: when the
+            # ProgrammingError propagates through Atomic.__exit__, it clears
+            # connection.needs_rollback before issuing ROLLBACK TO SAVEPOINT, so
+            # the subsequent savepoint_rollback SQL can actually execute.  A raw
+            # transaction.savepoint_rollback() call goes through cursor.execute()
+            # which calls validate_no_broken_transaction() while needs_rollback is
+            # still True, raising TransactionManagementError instead.
+            with transaction.atomic():
                 site.delete()
-                transaction.savepoint_commit(sid)
                 self.fail('Expected ProgrammingError was not raised — the bug is not being reproduced')
-            except ProgrammingError as exc:
-                transaction.savepoint_rollback(sid)
-                self.assertIn('does not exist', str(exc))
+        except ProgrammingError as exc:
+            self.assertIn('does not exist', str(exc))
         finally:
             # Restore clean registry state so subsequent tests are unaffected.
             django_apps.all_models[APP_LABEL].pop(stale_model_name, None)
@@ -303,23 +386,20 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
 
     def test_custom_object_type_field_name_validation(self):
         """Test field name validation."""
-        # Test invalid characters
-        with self.assertRaises(ValidationError):
-            field = CustomObjectTypeField(
-                custom_object_type=self.custom_object_type,
-                name="test-field",  # Invalid: contains hyphen
-                type="text"
-            )
-            field.full_clean()
-
-        # Test double underscores
-        with self.assertRaises(ValidationError):
-            field = CustomObjectTypeField(
-                custom_object_type=self.custom_object_type,
-                name="test__field",  # Invalid: contains double underscore
-                type="text"
-            )
-            field.full_clean()
+        invalid_names = [
+            "test-field",   # hyphen not allowed
+            "test__field",  # double underscore not allowed
+            "_test_field",  # leading underscore not allowed
+            "test_field_",  # trailing underscore not allowed
+        ]
+        for invalid_name in invalid_names:
+            with self.assertRaises(ValidationError, msg=f"Expected ValidationError for name={invalid_name!r}"):
+                field = CustomObjectTypeField(
+                    custom_object_type=self.custom_object_type,
+                    name=invalid_name,
+                    type="text",
+                )
+                field.full_clean()
 
     def test_custom_object_type_field_unique_name_per_type(self):
         """Test that field names must be unique within a custom object type."""
@@ -642,6 +722,10 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
             related_object_type=first_object_ct,
         )
 
+        # Refresh second_custom_object_type so its in-memory cache_timestamp matches the
+        # DB value bumped by the signal when TYPE_OBJECT fields were saved above.
+        cls.second_custom_object_type.refresh_from_db()
+
         # Get the dynamic model
         cls.model = cls.custom_object_type.get_model()
 
@@ -761,6 +845,294 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
 
         # Verify it's gone
         self.assertEqual(self.model.objects.count(), 0)
+
+    @override_settings(CUSTOM_VALIDATORS={
+        "netbox_custom_objects.test-objects": [{"name": {"min_length": 5}}],
+    })
+    def test_custom_validators_slug_key_enforced(self):
+        """CUSTOM_VALIDATORS keyed by COT slug is applied during full_clean()."""
+        instance = self.model(name="ab")
+        with self.assertRaises(ValidationError):
+            instance.full_clean()
+
+    @override_settings(CUSTOM_VALIDATORS={
+        "netbox_custom_objects.test-objects": [{"name": {"min_length": 5}}],
+    })
+    def test_custom_validators_slug_key_passes_for_valid_value(self):
+        """CUSTOM_VALIDATORS slug-key validator passes when the value satisfies the rule."""
+        instance = self.model(name="abcde")
+        # Should not raise
+        instance.full_clean()
+
+    @override_settings(CUSTOM_VALIDATORS={
+        "netbox_custom_objects.test-objects": [{"count": {"min": 10}}],
+    })
+    def test_custom_validators_non_text_field_enforced(self):
+        """CUSTOM_VALIDATORS is applied to non-text fields (integer count < min raises)."""
+        instance = self.model(name="valid", count=5)
+        with self.assertRaises(ValidationError):
+            instance.full_clean()
+
+    @override_settings(CUSTOM_VALIDATORS={})
+    def test_custom_validators_no_key_configured_passes(self):
+        """When no CUSTOM_VALIDATORS key is configured for this COT, clean() passes."""
+        instance = self.model(name="x")
+        # Should not raise regardless of field value
+        instance.full_clean()
+
+    @override_settings(CUSTOM_VALIDATORS={
+        "NETBOX_CUSTOM_OBJECTS.TEST-OBJECTS": [{"name": {"min_length": 5}}],
+    })
+    def test_custom_validators_slug_key_case_insensitive(self):
+        """CUSTOM_VALIDATORS key lookup is case-insensitive."""
+        instance = self.model(name="ab")
+        with self.assertRaises(ValidationError):
+            instance.full_clean()
+
+
+class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
+    """Tests for the related_name field on Object and MultiObject fields."""
+
+    def setUp(self):
+        super().setUp()
+        # "SLB" is the target (reverse side); "Certificate" holds the forward relation.
+        self.slb_cot = self.create_custom_object_type(name="SLB", slug="slb")
+        self.create_custom_object_type_field(
+            self.slb_cot, name="name", label="Name", type="text", primary=True
+        )
+        self.slb_object_type = ObjectType.objects.get(
+            app_label="netbox_custom_objects",
+            model=self.slb_cot.get_table_model_name(self.slb_cot.id).lower(),
+        )
+
+        self.cert_cot = self.create_custom_object_type(name="Certificate", slug="certificate")
+        self.create_custom_object_type_field(
+            self.cert_cot, name="name", label="Name", type="text", primary=True
+        )
+
+    # ------------------------------------------------------------------ #
+    # Validation                                                           #
+    # ------------------------------------------------------------------ #
+
+    def test_related_name_rejected_on_non_object_field(self):
+        """related_name cannot be set on non-object field types."""
+        for field_type in ("text", "integer", "boolean", "date"):
+            with self.subTest(field_type=field_type):
+                field = CustomObjectTypeField(
+                    custom_object_type=self.cert_cot,
+                    name="some_field",
+                    type=field_type,
+                    related_name="my_reverse",
+                )
+                with self.assertRaises(ValidationError) as cm:
+                    field.full_clean()
+                self.assertIn("related_name", cm.exception.message_dict)
+
+    def test_related_name_invalid_characters_rejected(self):
+        """related_name must contain only lowercase alphanumeric characters and underscores."""
+        for bad_value in ("My-Name", "has space", "UPPER", "has--double", "has__double"):
+            with self.subTest(value=bad_value):
+                field = CustomObjectTypeField(
+                    custom_object_type=self.cert_cot,
+                    name="slb",
+                    type="object",
+                    related_object_type=self.slb_object_type,
+                    related_name=bad_value,
+                )
+                with self.assertRaises(ValidationError):
+                    field.full_clean()
+
+    def test_duplicate_related_name_same_target_rejected(self):
+        """Two fields with the same related_name pointing at the same related_object_type raise ValidationError."""
+        self.create_custom_object_type_field(
+            self.cert_cot,
+            name="slb",
+            type="object",
+            related_object_type=self.slb_object_type,
+            related_name="certificates",
+        )
+        field = CustomObjectTypeField(
+            custom_object_type=self.cert_cot,
+            name="slb2",
+            type="object",
+            related_object_type=self.slb_object_type,
+            related_name="certificates",
+        )
+        with self.assertRaises(ValidationError) as cm:
+            field.full_clean()
+        self.assertIn("related_name", cm.exception.message_dict)
+
+    def test_same_related_name_different_targets_allowed(self):
+        """The same related_name is allowed when the related_object_type differs."""
+        site_ct = self.get_site_object_type()
+        self.create_custom_object_type_field(
+            self.cert_cot,
+            name="slb",
+            type="object",
+            related_object_type=self.slb_object_type,
+            related_name="certificates",
+        )
+        # Same related_name but targeting a different model — should not raise.
+        field = CustomObjectTypeField(
+            custom_object_type=self.cert_cot,
+            name="site",
+            type="object",
+            related_object_type=site_ct,
+            related_name="certificates",
+        )
+        field.full_clean()  # Should not raise.
+
+    def test_blank_related_name_allows_multiple_fields_same_target(self):
+        """Multiple fields with no related_name targeting the same object type are allowed."""
+        self.create_custom_object_type_field(
+            self.cert_cot,
+            name="slb",
+            type="object",
+            related_object_type=self.slb_object_type,
+        )
+        field = CustomObjectTypeField(
+            custom_object_type=self.cert_cot,
+            name="slb2",
+            type="object",
+            related_object_type=self.slb_object_type,
+        )
+        field.full_clean()  # blank related_name is excluded from the uniqueness constraint.
+
+    # ------------------------------------------------------------------ #
+    # Object (FK) reverse accessor                                        #
+    # ------------------------------------------------------------------ #
+
+    def test_object_field_with_related_name_creates_reverse_accessor(self):
+        """A named reverse accessor is available on the related model after an Object field is saved."""
+        self.create_custom_object_type_field(
+            self.cert_cot,
+            name="slb",
+            type="object",
+            related_object_type=self.slb_object_type,
+            related_name="certificates",
+        )
+        # Generate Certificate's model so it contributes the FK (and its reverse) to SLB's class.
+        # Refresh slb_cot so its Python-side cache_timestamp matches the DB value bumped by the
+        # signal (creating a TYPE_OBJECT field bumps the related COT's cache_timestamp).
+        self.cert_cot.get_model()
+        self.slb_cot.refresh_from_db()
+        slb_model = self.slb_cot.get_model()
+        self.assertTrue(
+            hasattr(slb_model, "certificates"),
+            "Expected reverse accessor 'certificates' on SLB model.",
+        )
+
+    def test_object_field_reverse_accessor_returns_correct_objects(self):
+        """The reverse FK manager returns only the Certificate instances that reference a given SLB."""
+        self.create_custom_object_type_field(
+            self.cert_cot,
+            name="slb",
+            type="object",
+            related_object_type=self.slb_object_type,
+            related_name="certificates",
+        )
+        cert_model = self.cert_cot.get_model()
+        self.slb_cot.refresh_from_db()
+        slb_model = self.slb_cot.get_model()
+
+        slb_a = slb_model.objects.create(name="SLB-A")
+        slb_b = slb_model.objects.create(name="SLB-B")
+        cert_1 = cert_model.objects.create(name="Cert-1", slb=slb_a)
+        cert_2 = cert_model.objects.create(name="Cert-2", slb=slb_a)
+        cert_model.objects.create(name="Cert-3", slb=slb_b)
+
+        result = list(slb_a.certificates.all())
+        self.assertIn(cert_1, result)
+        self.assertIn(cert_2, result)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(slb_b.certificates.count(), 1)
+
+    def test_object_field_without_related_name_uses_auto_generated_name(self):
+        """Without related_name, the auto-generated accessor follows the {table}_{field}_set convention."""
+        self.create_custom_object_type_field(
+            self.cert_cot,
+            name="slb",
+            type="object",
+            related_object_type=self.slb_object_type,
+        )
+        self.cert_cot.get_model()
+        self.slb_cot.refresh_from_db()
+        slb_model = self.slb_cot.get_model()
+
+        table_model_name = self.cert_cot.get_table_model_name(self.cert_cot.id).lower()
+        expected_accessor = f"{table_model_name}_slb_set"
+        self.assertTrue(
+            hasattr(slb_model, expected_accessor),
+            f"Expected auto-generated reverse accessor '{expected_accessor}' on SLB model.",
+        )
+
+    # ------------------------------------------------------------------ #
+    # MultiObject (M2M) reverse accessor                                  #
+    # ------------------------------------------------------------------ #
+
+    def test_multiobject_field_with_related_name_creates_reverse_manager(self):
+        """A named reverse manager is available on the related model after a MultiObject field is saved."""
+        self.create_custom_object_type_field(
+            self.cert_cot,
+            name="slbs",
+            type="multiobject",
+            related_object_type=self.slb_object_type,
+            related_name="certificates",
+        )
+        self.cert_cot.get_model()
+        slb_model = self.slb_cot.get_model()
+        self.assertTrue(
+            hasattr(slb_model, "certificates"),
+            "Expected reverse manager 'certificates' on SLB model.",
+        )
+
+    def test_multiobject_field_reverse_manager_returns_correct_objects(self):
+        """The reverse M2M manager returns only the Certificate instances linked to a given SLB."""
+        self.create_custom_object_type_field(
+            self.cert_cot,
+            name="slbs",
+            type="multiobject",
+            related_object_type=self.slb_object_type,
+            related_name="certificates",
+        )
+        cert_model = self.cert_cot.get_model()
+        slb_model = self.slb_cot.get_model()
+
+        slb_a = slb_model.objects.create(name="SLB-A")
+        slb_b = slb_model.objects.create(name="SLB-B")
+        cert_1 = cert_model.objects.create(name="Cert-1")
+        cert_2 = cert_model.objects.create(name="Cert-2")
+        cert_1.slbs.add(slb_a)
+        cert_2.slbs.add(slb_a, slb_b)
+
+        result = list(slb_a.certificates.all())
+        self.assertIn(cert_1, result)
+        self.assertIn(cert_2, result)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(slb_b.certificates.count(), 1)
+        self.assertIn(cert_2, slb_b.certificates.all())
+
+    def test_multiobject_field_without_related_name_has_no_reverse_accessor(self):
+        """Without related_name, a MultiObject field has no reverse accessor on the related model."""
+        self.create_custom_object_type_field(
+            self.cert_cot,
+            name="slbs",
+            type="multiobject",
+            related_object_type=self.slb_object_type,
+        )
+        self.cert_cot.get_model()
+        slb_model = self.slb_cot.get_model()
+
+        # No user-defined or auto-generated reverse accessor should exist.
+        table_model_name = self.cert_cot.get_table_model_name(self.cert_cot.id).lower()
+        self.assertFalse(
+            hasattr(slb_model, "slbs"),
+            "MultiObject field without related_name should not create a reverse accessor.",
+        )
+        self.assertFalse(
+            hasattr(slb_model, f"{table_model_name}_slbs_set"),
+            "MultiObject field without related_name should not create an auto-generated reverse accessor.",
+        )
 
 
 class SearchReindexTestCase(CustomObjectsTestCase, TestCase):
@@ -927,7 +1299,7 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
     def test_get_model_returns_model_when_not_skipping(self):
         """get_model() successfully returns the dynamic model when migrations are up to date."""
         cot = self.create_custom_object_type(name="MigrateTest2", slug="migrate-test-2")
-        model_name = f"{cot.pk}tablemodel"
+        model_name = f"table{cot.pk}model"
 
         with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
             model = self.config.get_model(model_name)
@@ -1186,7 +1558,12 @@ class CrossCOTStubSearchIndexRegressionTestCase(CustomObjectsTestCase, TestCase)
         """
         from netbox.search import registry
 
-        self.target_cot.get_model()
+        # Refresh so cache_timestamp matches the DB value bumped by the signal during setUp,
+        # then explicitly generate the stub to re-register its search index (which excludes
+        # object-type fields).  Without refresh_from_db the timestamps mismatch → full model
+        # is generated instead, which includes 'device' and makes assertNotIn fail.
+        self.target_cot.refresh_from_db()
+        self.target_cot.get_model(skip_object_fields=True)
         label = f"netbox_custom_objects.{self.target_cot.get_table_model_name(self.target_cot.id).lower()}"
         search_index = registry["search"].get(label)
 
@@ -1204,3 +1581,142 @@ class CrossCOTStubSearchIndexRegressionTestCase(CustomObjectsTestCase, TestCase)
             indexed_field_names,
             "Object-type fields absent from the stub must be excluded from the search index",
         )
+
+
+# ---------------------------------------------------------------------------
+# Semver / version string validation (issue #392)
+# ---------------------------------------------------------------------------
+
+class SemverValidationTestCase(CustomObjectsTestCase, TestCase):
+    """Validate that version-string fields reject non-PEP-440 values."""
+
+    # ------------------------------------------------------------------
+    # CustomObjectType.version
+    # ------------------------------------------------------------------
+
+    def test_cot_version_blank_is_valid(self):
+        cot = self.create_custom_object_type(name='semver_cot', slug='semver-cot')
+        cot.version = ''
+        cot.full_clean()  # must not raise
+
+    def test_cot_version_valid_semver(self):
+        cot = self.create_custom_object_type(name='semver_cot2', slug='semver-cot-2')
+        for v in ('1.0.0', '2.3.4', '0.0.1', '1.0.0.post1', '1.0.0a1'):
+            cot.version = v
+            cot.full_clean()  # must not raise
+
+    def test_cot_version_invalid_raises_validation_error(self):
+        cot = self.create_custom_object_type(name='semver_cot3', slug='semver-cot-3')
+        for bad in ('not-a-version', '1.x.0', 'latest', '!!invalid!!'):
+            cot.version = bad
+            with self.assertRaises(ValidationError, msg=f"Expected ValidationError for version={bad!r}"):
+                cot.full_clean()
+
+    # ------------------------------------------------------------------
+    # CustomObjectTypeField.deprecated_since
+    # ------------------------------------------------------------------
+
+    def test_field_deprecated_since_blank_is_valid(self):
+        cot = self.create_custom_object_type(name='semver_f1', slug='semver-f1')
+        field = self.create_custom_object_type_field(cot, name='alpha', type='text')
+        field.deprecated_since = ''
+        field.full_clean()
+
+    def test_field_deprecated_since_valid_semver(self):
+        cot = self.create_custom_object_type(name='semver_f2', slug='semver-f2')
+        field = self.create_custom_object_type_field(cot, name='beta', type='text')
+        field.deprecated_since = '2.0.0'
+        field.full_clean()
+
+    def test_field_deprecated_since_invalid_raises(self):
+        cot = self.create_custom_object_type(name='semver_f3', slug='semver-f3')
+        field = self.create_custom_object_type_field(cot, name='gamma', type='text')
+        for bad in ('not-a-version', '1.x.0', 'latest', '!!invalid!!'):
+            field.deprecated_since = bad
+            with self.assertRaises(ValidationError, msg=f"Expected ValidationError for deprecated_since={bad!r}"):
+                field.full_clean()
+
+    # ------------------------------------------------------------------
+    # CustomObjectTypeField.scheduled_removal
+    # ------------------------------------------------------------------
+
+    def test_field_scheduled_removal_blank_is_valid(self):
+        cot = self.create_custom_object_type(name='semver_f4', slug='semver-f4')
+        field = self.create_custom_object_type_field(cot, name='delta', type='text')
+        field.scheduled_removal = ''
+        field.full_clean()
+
+    def test_field_scheduled_removal_valid_semver(self):
+        cot = self.create_custom_object_type(name='semver_f5', slug='semver-f5')
+        field = self.create_custom_object_type_field(cot, name='epsilon', type='text')
+        field.scheduled_removal = '3.0.0'
+        field.full_clean()
+
+    def test_field_scheduled_removal_invalid_raises(self):
+        cot = self.create_custom_object_type(name='semver_f6', slug='semver-f6')
+        field = self.create_custom_object_type_field(cot, name='zeta', type='text')
+        for bad in ('v-bad', '1.x.0', 'latest', '!!invalid!!'):
+            field.scheduled_removal = bad
+            with self.assertRaises(ValidationError, msg=f"Expected ValidationError for scheduled_removal={bad!r}"):
+                field.full_clean()
+
+
+class NullRelatedObjectTypeTestCase(CustomObjectsTestCase, TestCase):
+    """Regression tests for graceful handling of OBJECT/MULTIOBJECT fields whose
+    related_object_type_id is NULL or points to a deleted ContentType.
+
+    A NULL FK can occur when a COT field is created via direct DB manipulation or
+    when the referenced ContentType is deleted.  All code paths that build the
+    dynamic model or serializer must skip such fields rather than crashing.
+
+    Covers the fixes in _fetch_and_generate_field_attrs (ContentType.DoesNotExist →
+    NotImplementedError) and get_serializer_class (Meta.fields/attrs mismatch guard).
+    """
+
+    def _make_cot_with_null_object_field(self, name, slug, field_name="broken_ref"):
+        from netbox_custom_objects.models import CustomObjectType
+        cot = self.create_custom_object_type(name=name, slug=slug)
+        self.create_custom_object_type_field(
+            cot, name="title", label="Title", type="text", primary=True, required=True,
+        )
+        field = self.create_custom_object_type_field(
+            cot, name=field_name, label="Broken Ref", type="object",
+            related_object_type=self.get_site_object_type(),
+        )
+        # Force the FK to NULL to simulate stale/corrupt data (e.g. ContentType deleted)
+        CustomObjectTypeField.objects.filter(pk=field.pk).update(related_object_type=None)
+        CustomObjectType.clear_model_cache()
+        return cot
+
+    def test_get_model_skips_object_field_with_null_related_object_type(self):
+        """get_model() must succeed and silently skip an OBJECT field whose
+        related_object_type_id is NULL rather than raising ContentType.DoesNotExist."""
+        cot = self._make_cot_with_null_object_field("NullRelObj", "null-rel-obj")
+        model = cot.get_model()
+        self.assertIsNotNone(model)
+        model_field_names = (
+            {f.name for f in model._meta.local_fields}
+            | {f.name for f in model._meta.local_many_to_many}
+        )
+        self.assertNotIn("broken_ref", model_field_names,
+                         "Field with null FK must be absent from the generated model")
+        self.assertIn("title", model_field_names,
+                      "Normal fields must still be present")
+
+    def test_get_serializer_class_handles_null_related_object_type(self):
+        """get_serializer_class() must not raise AttributeError when an OBJECT field
+        was skipped during model generation due to a NULL related_object_type_id.
+        Regression for the Meta.fields/attrs mismatch that caused DRF to raise a
+        validation error at serializer initialization time."""
+        from netbox_custom_objects.api.serializers import get_serializer_class
+
+        cot = self._make_cot_with_null_object_field(
+            "NullRelSerializer", "null-rel-serializer"
+        )
+        model = cot.get_model()
+        serializer_cls = get_serializer_class(model)
+        self.assertIsNotNone(serializer_cls)
+        self.assertNotIn("broken_ref", serializer_cls.Meta.fields,
+                         "Null-FK field must not appear in serializer Meta.fields")
+        self.assertIn("title", serializer_cls.Meta.fields,
+                      "Normal fields must still be present in serializer")

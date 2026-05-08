@@ -5,11 +5,14 @@ from extras.forms import CustomFieldForm
 from netbox.forms import (NetBoxModelBulkEditForm, NetBoxModelFilterSetForm,
                           NetBoxModelForm, NetBoxModelImportForm)
 from utilities.forms.fields import (CommentField, ContentTypeChoiceField,
+                                    ContentTypeMultipleChoiceField,
                                     DynamicModelChoiceField, SlugField, TagFilterField)
 from utilities.forms.rendering import FieldSet
+from utilities.forms.utils import get_field_value
 from utilities.object_types import object_type_name
 
 from netbox_custom_objects.choices import SearchWeightChoices
+from netbox_custom_objects.utilities import extract_cot_id_from_model_name
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.models import (CustomObjectObjectType,
                                           CustomObjectType,
@@ -106,8 +109,27 @@ class CustomContentTypeChoiceField(ContentTypeChoiceField):
 
     def label_from_instance(self, obj):
         if obj.app_label == APP_LABEL:
-            custom_object_type_id = obj.model.replace("table", "").replace("model", "")
-            if custom_object_type_id.isdigit():
+            custom_object_type_id = extract_cot_id_from_model_name(obj.model)
+            if custom_object_type_id is not None:
+                try:
+                    return CustomObjectType.get_content_type_label(
+                        custom_object_type_id
+                    )
+                except CustomObjectType.DoesNotExist:
+                    pass
+        try:
+            return object_type_name(obj)
+        except AttributeError:
+            return super().label_from_instance(obj)
+
+
+class CustomContentTypeMultipleChoiceField(ContentTypeMultipleChoiceField):
+    """Multi-select version of CustomContentTypeChoiceField for polymorphic object fields."""
+
+    def label_from_instance(self, obj):
+        if obj.app_label == APP_LABEL:
+            custom_object_type_id = extract_cot_id_from_model_name(obj.model)
+            if custom_object_type_id is not None:
                 try:
                     return CustomObjectType.get_content_type_label(
                         custom_object_type_id
@@ -135,7 +157,17 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
     related_object_type = CustomContentTypeChoiceField(
         label=_("Related object type"),
         queryset=CustomObjectObjectType.objects.public(),
-        help_text=_("Type of the related object (for object/multi-object fields only)"),
+        required=False,
+        help_text=_("Type of the related object (for non-polymorphic object/multi-object fields)"),
+    )
+    related_object_types = CustomContentTypeMultipleChoiceField(
+        label=_("Related object types"),
+        queryset=CustomObjectObjectType.objects.public(),
+        required=False,
+        help_text=_(
+            "Allowed object types for a polymorphic field (select one or more). "
+            "Only used when 'Polymorphic' is enabled."
+        ),
     )
     search_weight = forms.ChoiceField(
         choices=SearchWeightChoices,
@@ -152,6 +184,7 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
             "name",
             "label",
             "primary",
+            "context",
             "group_name",
             "description",
             "type",
@@ -159,6 +192,13 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
             "unique",
             "default",
             name=_("Field"),
+        ),
+        FieldSet(
+            "is_polymorphic",
+            "related_object_type",
+            "related_object_types",
+            "related_object_filter",
+            name=_("Related Object"),
         ),
         FieldSet(
             "search_weight",
@@ -178,15 +218,113 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        # Disable changing the custom object type or related object type of a field
+        # Toggling the polymorphic checkbox should re-render the form so only the
+        # relevant related-object field is shown.
+        self.fields['is_polymorphic'].widget.attrs.update({
+            'hx-get': '.',
+            'hx-include': '#form_fields',
+            'hx-target': '#form_fields',
+        })
+
+        # Determine current field type and polymorphic state.
+        # For existing instances is_polymorphic cannot be changed, so read it from the
+        # instance directly; for new fields use whatever the form currently carries.
+        field_type = get_field_value(self, 'type')
+        if self.instance.pk:
+            is_polymorphic = self.instance.is_polymorphic
+        elif self.is_bound:
+            # get_field_value() falls back to initial for BooleanField (no valid_value);
+            # read the submitted checkbox value from self.data directly instead.
+            is_polymorphic = bool(self.data.get('is_polymorphic'))
+        else:
+            is_polymorphic = bool(get_field_value(self, 'is_polymorphic'))
+
+        # Show only the relevant related-object field and rebuild fieldsets cleanly.
+        # The parent __init__ inserts a simple FieldSet('related_object_type', ...) for
+        # object/multiobject types, which would create a duplicate section; replacing
+        # self.fieldsets here keeps a single "Related Object" group.
+        if field_type in (CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT):
+            if is_polymorphic:
+                if 'related_object_type' in self.fields:
+                    del self.fields['related_object_type']
+                related_obj_fields = ('is_polymorphic', 'related_object_types', 'related_object_filter')
+            else:
+                if 'related_object_types' in self.fields:
+                    del self.fields['related_object_types']
+                related_obj_fields = ('is_polymorphic', 'related_object_type', 'related_object_filter')
+            self.fieldsets = (
+                CustomObjectTypeFieldForm.fieldsets[0],
+                FieldSet(*related_obj_fields, name=_('Related Object')),
+                CustomObjectTypeFieldForm.fieldsets[2],
+            )
+        else:
+            # Parent already removed related_object_type/related_object_filter;
+            # remove the remaining related-object fields too.
+            for fname in ('related_object_types', 'is_polymorphic'):
+                if fname in self.fields:
+                    del self.fields[fname]
+            # Drop the Related Object fieldset entirely so no empty section header renders.
+            # Filter by checking that every item in a fieldset belongs to the related-object
+            # field set (handles both our full FieldSet and any parent-inserted simple one).
+            _related_names = frozenset({
+                'is_polymorphic', 'related_object_type', 'related_object_types', 'related_object_filter',
+            })
+            self.fieldsets = tuple(
+                fs for fs in self.fieldsets
+                if not all(isinstance(item, str) and item in _related_names for item in fs.items)
+            )
+
+        # Disable immutable fields on existing instances.
         if self.instance.pk:
             self.fields["custom_object_type"].disabled = True
-            if "related_object_type" in self.fields:
+            if 'is_polymorphic' in self.fields:
+                self.fields["is_polymorphic"].disabled = True
+            if 'related_object_types' in self.fields:
+                self.fields["related_object_types"].disabled = True
+            if 'related_object_type' in self.fields:
                 self.fields["related_object_type"].disabled = True
 
         # Multi-object fields may not be set unique
-        if self.initial["type"] == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+        if get_field_value(self, 'type') == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
             self.fields["unique"].disabled = True
+
+        # Add related_name (and on_delete_behavior for single-object fields) to the
+        # Related Object fieldset.  The parent CustomFieldForm.__init__ removes
+        # related_object_type from self.fields for non-object types, so we use its
+        # presence as a signal.
+        if "related_object_type" in self.fields:
+            field_type = get_field_value(self, 'type')
+            is_single_object = field_type == CustomFieldTypeChoices.TYPE_OBJECT
+            extra = ("related_name", "on_delete_behavior") if is_single_object else ("related_name",)
+            self.fieldsets = tuple(
+                FieldSet(*fs.items, *extra, name=fs.name)
+                if "related_object_type" in fs.items
+                else fs
+                for fs in self.fieldsets
+            )
+            if not is_single_object:
+                del self.fields["on_delete_behavior"]
+        else:
+            del self.fields["related_name"]
+            del self.fields["on_delete_behavior"]
+
+    def clean(self):
+        cleaned_data = super().clean()
+        field_type = cleaned_data.get("type")
+        is_polymorphic = cleaned_data.get("is_polymorphic", False)
+
+        if field_type in (
+            CustomFieldTypeChoices.TYPE_OBJECT,
+            CustomFieldTypeChoices.TYPE_MULTIOBJECT,
+        ) and is_polymorphic:
+            related_object_types = cleaned_data.get("related_object_types")
+            if not related_object_types:
+                self.add_error(
+                    "related_object_types",
+                    _("Polymorphic object fields must specify at least one related object type."),
+                )
+
+        return cleaned_data
 
     def clean_primary(self):
         primary_fields = self.cleaned_data["custom_object_type"].fields.filter(
@@ -194,20 +332,16 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
         )
         if self.cleaned_data["primary"]:
             primary_fields.update(primary=False)
-        # It should be possible to have NO primary fields set on an object, and thus for its name to appear
-        # as the default of e.g. "Cat 1"; therefore don't try to guarantee that a primary is set
-        # else:
-        #     if self.instance:
-        #         other_primary_fields = primary_fields.exclude(pk=self.instance.id)
-        #     else:
-        #         other_primary_fields = primary_fields
-        #     if not other_primary_fields.exists():
-        #         return True
         return self.cleaned_data["primary"]
 
     def save(self, commit=True):
         obj = super().save(commit=commit)
-        if obj.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT and obj.default:
+        # For polymorphic multiobject fields, skip default value propagation
+        if (
+            not obj.is_polymorphic
+            and obj.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
+            and obj.default
+        ):
             qs = obj.related_object_type.model_class().objects.filter(
                 pk__in=obj.default
             )
