@@ -30,6 +30,8 @@ from extras.choices import (
     CustomFieldUIVisibleChoices,
 )
 from extras.models.customfields import SEARCH_TYPES
+from extras.utils import run_validators
+from netbox.config import get_config
 from netbox.models import ChangeLoggedModel, NetBoxModel
 from netbox.models.features import (
     BookmarksMixin,
@@ -48,6 +50,7 @@ from netbox.plugins import get_plugin_config
 from netbox.registry import registry
 from netbox.search import SearchIndex
 from utilities import filters
+from utilities.data import get_config_value_ci
 from utilities.datetime import datetime_from_timestamp
 from utilities.object_types import object_type_name
 from utilities.querysets import RestrictedQuerySet
@@ -102,6 +105,16 @@ class CustomObject(
     This class should not be used directly - instead, use CustomObjectType.get_model()
     to create concrete model classes for specific custom object types.
 
+    Custom validation
+    -----------------
+    NetBox's CUSTOM_VALIDATORS setting is supported. Use the COT slug as the key:
+
+        CUSTOM_VALIDATORS = {
+            "netbox_custom_objects.<cot-slug>": [
+                {"<field_name>": {"min_length": 5}},
+            ],
+        }
+
     Attributes:
         _generated_table_model (property): Indicates this is a generated table model
     """
@@ -123,6 +136,17 @@ class CustomObject(
         if not primary_field_value:
             return f"{self.custom_object_type.display_name} {self.id}"
         return str(primary_field_value) or str(self.id)
+
+    def clean(self):
+        super().clean()
+        # CustomValidationMixin.clean() (called above) fires the post_clean signal whose
+        # receiver looks up validators under 'netbox_custom_objects.table{id}model' — an
+        # internal name users cannot discover.  Also run validators under the slug key so
+        # users can write: CUSTOM_VALIDATORS = {"netbox_custom_objects.my-slug": [...]}
+        slug_key = f'{APP_LABEL}.{self.custom_object_type.slug}'
+        validators = get_config_value_ci(get_config().CUSTOM_VALIDATORS, slug_key, default=[])
+        if validators:
+            run_validators(self, validators)
 
     @property
     def _generated_table_model(self):
@@ -2295,17 +2319,16 @@ class CustomObjectObjectTypeManager(ObjectTypeManager):
 
     def public(self):
         """
-        Filter the base queryset to return only ContentTypes corresponding to "public" models; those which are listed
-        in registry['models'] and intended for reference by other objects.
+        Return ObjectTypes for public models plus all custom object models (excluding through tables).
+
+        NetBox marks models as public via the ObjectType.public boolean field (set when the
+        ObjectType row is created from model_is_public()).  Dynamic custom object models are
+        included unconditionally by app_label so they appear in object-type pickers even before
+        their ObjectType rows have been lazily created.
         """
-        q = Q()
-        for app_label, model_list in registry["models"].items():
-            q |= Q(app_label=app_label, model__in=model_list)
-        # Add CTs of custom object models, but not the "through" tables
-        q |= Q(app_label=APP_LABEL)
         return (
             self.get_queryset()
-            .filter(q)
+            .filter(Q(public=True) | Q(app_label=APP_LABEL))
             .exclude(app_label=APP_LABEL, model__startswith="through")
         )
 
