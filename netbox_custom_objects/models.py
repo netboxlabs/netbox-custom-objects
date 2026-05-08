@@ -1620,7 +1620,7 @@ def _rename_objectchange_field_key(fi, old_name, new_name):
         'SET {col} = ({col} - %s) || jsonb_build_object(%s, {col}->%s) '
         'WHERE changed_object_type_id = %s AND {col} ? %s'
     )
-    with connections[conn.alias].cursor() as cursor:
+    with conn.cursor() as cursor:
         for json_col in ('prechange_data', 'postchange_data'):
             cursor.execute(oc_sql.format(col=json_col), [old_name, new_name, old_name, ct.id, old_name])
 
@@ -1628,19 +1628,32 @@ def _rename_objectchange_field_key(fi, old_name, new_name):
 
     try:
         from netbox_branching.models import ChangeDiff  # noqa: F401 — presence check only
-        cd_sql = (
-            'UPDATE netbox_branching_changediff '
-            'SET {col} = ({col} - %s) || jsonb_build_object(%s, {col}->%s) '
-            'WHERE object_type_id = %s AND {col} IS NOT NULL AND {col} ? %s'
-        )
-        with connections[conn.alias].cursor() as cursor:
-            for json_col in ('original', 'modified', 'current'):
-                cursor.execute(cd_sql.format(col=json_col), [old_name, new_name, old_name, ct.id, old_name])
     except ImportError:
-        pass  # netbox-branching not installed
-    except Exception:
-        logger.debug(
-            '_rename_objectchange_field_key: ChangeDiff rename failed for %r → %r',
+        return  # netbox-branching not installed; nothing more to update
+
+    cd_sql = (
+        'UPDATE netbox_branching_changediff '
+        'SET {col} = ({col} - %s) || jsonb_build_object(%s, {col}->%s) '
+        'WHERE object_type_id = %s AND {col} IS NOT NULL AND {col} ? %s'
+    )
+    # Wrap in a savepoint so a ProgrammingError (table/column missing due to
+    # netbox-branching schema mismatch) doesn't poison the outer merge
+    # transaction — every subsequent statement on the same connection would
+    # otherwise raise InFailedSqlTransaction.  Other DatabaseError subclasses
+    # are allowed to propagate so a real bug aborts the rename instead of
+    # silently corrupting audit data.
+    try:
+        with transaction.atomic(using=conn.alias):
+            with conn.cursor() as cursor:
+                for json_col in ('original', 'modified', 'current'):
+                    cursor.execute(
+                        cd_sql.format(col=json_col),
+                        [old_name, new_name, old_name, ct.id, old_name],
+                    )
+    except ProgrammingError:
+        logger.warning(
+            '_rename_objectchange_field_key: ChangeDiff schema mismatch; '
+            'audit data for %r may not reflect rename to %r',
             old_name, new_name, exc_info=True,
         )
 
