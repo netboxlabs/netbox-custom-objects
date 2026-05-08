@@ -2,7 +2,7 @@
 Tests for all the different field types supported by Custom Object Type Fields.
 """
 from unittest import skip
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from django.core.exceptions import ValidationError
 from django.test import TestCase
@@ -390,9 +390,8 @@ class DateTimeFieldTypeTestCase(FieldTypeTestCase):
             type="datetime"
         )
 
-        import datetime as dt
         model = self.custom_object_type.get_model()
-        test_datetime = datetime(2023, 1, 1, 12, 0, 0, tzinfo=dt.timezone.utc)
+        test_datetime = datetime(2023, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
         instance = model.objects.create(name="Test", created_datetime=test_datetime)
 
         self.assertEqual(instance.created_datetime, test_datetime)

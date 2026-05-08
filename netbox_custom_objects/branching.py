@@ -8,6 +8,8 @@ deferred / optional — none of these functions run if netbox-branching is not
 installed (the registration call sites in ``__init__.ready()`` are guarded).
 """
 
+from django.db.models import Q
+
 from core.choices import ObjectChangeActionChoices
 from core.models import ObjectChange
 
@@ -65,18 +67,18 @@ def translate_renamed_field_attr(instance, attr):
 
     # The field we're looking for is one of this COT's CustomObjectTypeFields
     # whose history (via ObjectChanges of name) includes ``attr`` as a former
-    # or current name.  We match by walking ObjectChanges whose
-    # postchange_data['name'] or prechange_data['name'] equals ``attr``.
-    field_ct = ObjectChange.objects.filter(
-        changed_object_type__app_label='netbox_custom_objects',
-        changed_object_type__model='customobjecttypefield',
+    # or current name.  Match at the DB level on JSON keys
+    # ``postchange_data->>'name'`` / ``prechange_data->>'name'`` so we don't
+    # pull every UPDATE row into Python on every translator invocation.
+    candidate_pks = set(
+        ObjectChange.objects.filter(
+            changed_object_type__app_label='netbox_custom_objects',
+            changed_object_type__model='customobjecttypefield',
+            action=ObjectChangeActionChoices.ACTION_UPDATE,
+        ).filter(
+            Q(postchange_data__name=attr) | Q(prechange_data__name=attr)
+        ).values_list('changed_object_id', flat=True)
     )
-    candidate_pks = set()
-    for oc in field_ct.filter(action=ObjectChangeActionChoices.ACTION_UPDATE):
-        post = oc.postchange_data or {}
-        pre = oc.prechange_data or {}
-        if post.get('name') == attr or pre.get('name') == attr:
-            candidate_pks.add(oc.changed_object_id)
     if not candidate_pks:
         return None
 

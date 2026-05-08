@@ -13,6 +13,7 @@ from django.core.validators import RegexValidator
 from django.db import connection, models
 from django.db.models.fields.related import ForeignKey, ManyToManyDescriptor
 from django.db.models.manager import Manager
+from django.db.models.signals import m2m_changed
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
@@ -929,7 +930,6 @@ class CustomManyToManyManager(Manager):
         """
         if not pk_set:
             return
-        from django.db.models.signals import m2m_changed
         m2m_changed.send(
             sender=self.through,
             instance=self.instance,

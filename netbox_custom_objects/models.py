@@ -15,9 +15,12 @@ from django.conf import settings
 
 # from django.contrib.contenttypes.management import create_contenttypes
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import FieldDoesNotExist
 from django.core.validators import RegexValidator, ValidationError
 from django.db import DEFAULT_DB_ALIAS, connection, connections, IntegrityError, models, transaction
+from django.db.utils import OperationalError, ProgrammingError
 from django.db.models import Q
+from django.db.models.fields.related import ForeignKey, ManyToManyField
 from django.db.models.functions import Lower
 from django.db.models.signals import m2m_changed, pre_delete, post_save
 from django.dispatch import receiver
@@ -31,7 +34,7 @@ from extras.choices import (
     CustomFieldUIVisibleChoices,
 )
 from extras.models.customfields import SEARCH_TYPES
-from extras.utils import run_validators
+from extras.utils import is_taggable, run_validators
 from netbox.config import get_config
 from netbox.models import ChangeLoggedModel, NetBoxModel
 from netbox.models.features import (
@@ -155,9 +158,12 @@ def _apply_deferred_co_field(field_instance):
 
     with schema_conn.cursor() as cursor:
         for co_pk, entry in per_table.items():
-            value = entry['data'].get(data_key)
-            if value is None:
+            # Distinguish "key absent" from "key present with NULL".  An explicit
+            # None is a legitimate write and must reach the column; only a
+            # missing key should be skipped.
+            if data_key not in entry['data']:
                 continue
+            value = entry['data'][data_key]
             # table_name comes from get_database_table_name() (controlled by our
             # code) and col_name from field.name, which is validated by the
             # ^[a-z0-9_]+$ regex — no double-quote characters are possible, so
@@ -472,8 +478,6 @@ class CustomObject(
         # branching.translate_renamed_field_attr) lets us map the data dict's
         # old field names to the current model's field names where they
         # diverge.
-        from django.db.models.fields.related import ForeignKey, ManyToManyField
-        from extras.utils import is_taggable
 
         # Try the registered netbox-branching attr translator if available so
         # that data dicts carrying old field names are reshaped to the current
@@ -512,7 +516,7 @@ class CustomObject(
                     continue
             try:
                 f = fresh_model._meta.get_field(attr)
-            except Exception:
+            except FieldDoesNotExist:
                 setattr(obj, raw_attr, value)
                 continue
             if isinstance(f, ManyToManyField):
@@ -523,9 +527,12 @@ class CustomObject(
                 setattr(obj, f.attname, value)
             else:
                 # Coerce via the field's to_python() to handle datetimes etc.
+                # Field.to_python raises ValidationError for parse failures; the
+                # raw value is also acceptable for ValueError/TypeError on
+                # malformed input from older serialized data.
                 try:
                     setattr(obj, attr, f.to_python(value))
-                except Exception:
+                except (ValidationError, ValueError, TypeError):
                     setattr(obj, attr, value)
 
         table_name = fresh_model._meta.db_table
@@ -542,16 +549,19 @@ class CustomObject(
                 obj_pk = obj.pk
                 # Re-apply M2M relations.  Each ``accessor`` is a manager
                 # attribute name on the saved instance and ``related_pks`` is a
-                # list of related PKs.  Skipped quietly if the manager isn't
-                # present yet (squash ordering can defer the field's column
-                # creation; the through-table is created when the field's own
-                # CREATE ObjectChange is later applied, and the
-                # _deferred_co_field_data registration below will pick it up).
+                # list of related PKs.  Skipped quietly when the through table
+                # or its columns aren't present yet — squash ordering can defer
+                # field creation, and the through-table appears when the field's
+                # own CREATE ObjectChange is later applied.  We narrow the
+                # except to the failure modes that signature: ``AttributeError``
+                # if the manager descriptor isn't bound to ``obj`` yet, and
+                # ``ProgrammingError``/``OperationalError`` if the through
+                # table/column is missing in the active schema.
                 for accessor, related_pks in m2m_data.items():
                     try:
                         manager = getattr(obj, accessor)
                         manager.set(related_pks)
-                    except Exception:
+                    except (AttributeError, ProgrammingError, OperationalError):
                         logger.debug(
                             'deserialize_object: deferred M2M %r on %s pk=%s',
                             accessor, table_name, obj_pk, exc_info=True,
