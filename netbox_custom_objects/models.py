@@ -442,8 +442,79 @@ class CustomObject(
         except CustomObjectType.DoesNotExist:
             fresh_model = cls
 
-        inner = _deserialize_object(fresh_model, data, pk=pk)
-        obj = inner.object
+        # Build the instance directly against ``fresh_model`` rather than going
+        # through Django's ``serializers.deserialize('python', ...)``: that
+        # helper re-resolves the model class from the data's natural_key via
+        # ``apps.get_model``, which returns *main's* class (the one registered
+        # in ``apps.all_models``).  In branch context, main's class can have a
+        # different field set than the branch's class — e.g. main has 'alpha'
+        # while branch has 'branch_alpha' after a branch-side rename — so the
+        # eventual save would emit SQL with main's column names against a
+        # branch table that doesn't have them, raising
+        # ``column "alpha" does not exist``.
+        #
+        # Building directly off ``fresh_model`` (the context-aware class) keeps
+        # the field set aligned with the schema we're writing to, and the attr
+        # translator registered with netbox-branching (see
+        # branching.translate_renamed_field_attr) lets us map the data dict's
+        # old field names to the current model's field names where they
+        # diverge.
+        from django.db.models.fields.related import ForeignKey, ManyToManyField
+        from extras.utils import is_taggable
+
+        # Try the registered netbox-branching attr translator if available so
+        # that data dicts carrying old field names are reshaped to the current
+        # context's field names before deserialization.  Falls back gracefully
+        # when the translator isn't registered (e.g. branching not installed).
+        try:
+            from netbox_branching.utilities import _translate_attr  # type: ignore[attr-defined]
+        except ImportError:
+            def _translate_attr(_inst, attr):  # noqa: D401
+                return None
+
+        obj = fresh_model()
+        if pk is not None:
+            obj.pk = pk
+        m2m_data = {}
+        field_names = {f.name for f in fresh_model._meta.get_fields()}
+
+        for raw_attr, value in data.items():
+            attr = raw_attr
+            if attr == 'custom_fields':
+                attr = 'custom_field_data'
+            # Tags via the standard NetBox path (Tag rows are looked up by name).
+            if attr == 'tags' and is_taggable(fresh_model):
+                tag_model = apps.get_model('extras', 'Tag')
+                m2m_data['tags'] = list(tag_model.objects.filter(name__in=value or []))
+                continue
+            if attr not in field_names:
+                resolved = _translate_attr(obj, attr)
+                if resolved and resolved in field_names:
+                    attr = resolved
+                else:
+                    # Unknown attribute (likely a removed field) — preserve it as
+                    # a Python attribute so downstream code (e.g.
+                    # _deferred_co_field_data) can still see it.
+                    setattr(obj, raw_attr, value)
+                    continue
+            try:
+                f = fresh_model._meta.get_field(attr)
+            except Exception:
+                setattr(obj, raw_attr, value)
+                continue
+            if isinstance(f, ManyToManyField):
+                m2m_data[attr] = value
+            elif isinstance(f, ForeignKey):
+                # FK values arrive as the related PK; assign via the FK column
+                # (``<name>_id``) to avoid an extra DB lookup.
+                setattr(obj, f.attname, value)
+            else:
+                # Coerce via the field's to_python() to handle datetimes etc.
+                try:
+                    setattr(obj, attr, f.to_python(value))
+                except Exception:
+                    setattr(obj, attr, value)
+
         table_name = fresh_model._meta.db_table
         full_data = dict(data)
 
@@ -456,6 +527,22 @@ class CustomObject(
                 # Read pk after save_base so that auto-assigned PKs are captured.
                 # (If pk was None before save_base, obj.pk is now the DB-assigned id.)
                 obj_pk = obj.pk
+                # Re-apply M2M relations.  Each ``accessor`` is a manager
+                # attribute name on the saved instance and ``related_pks`` is a
+                # list of related PKs.  Skipped quietly if the manager isn't
+                # present yet (squash ordering can defer the field's column
+                # creation; the through-table is created when the field's own
+                # CREATE ObjectChange is later applied, and the
+                # _deferred_co_field_data registration below will pick it up).
+                for accessor, related_pks in m2m_data.items():
+                    try:
+                        manager = getattr(obj, accessor)
+                        manager.set(related_pks)
+                    except Exception:
+                        logger.debug(
+                            'deserialize_object: deferred M2M %r on %s pk=%s',
+                            accessor, table_name, obj_pk, exc_info=True,
+                        )
                 # Register full data for deferred column updates (squash ordering fix).
                 deferred = _deferred_co_field_data.get()
                 if deferred is None:

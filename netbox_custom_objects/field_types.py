@@ -940,25 +940,37 @@ class CustomManyToManyManager(Manager):
             using='default',
         )
 
+    @staticmethod
+    def _resolve_pk(obj):
+        """Accept either a model instance (with ``.pk``) or a raw PK value.
+
+        Django's standard ManyRelatedManager allows both forms (instances or
+        PKs); netbox-branching's ``update_object`` passes PKs from
+        deserialized JSON, so we mirror that contract here.
+        """
+        return obj.pk if hasattr(obj, 'pk') else obj
+
     def add(self, *objs):
         added = set()
         for obj in objs:
+            pk = self._resolve_pk(obj)
             _, created = self.through.objects.get_or_create(
-                source_id=self.instance.pk, target_id=obj.pk
+                source_id=self.instance.pk, target_id=pk
             )
             if created:
-                added.add(obj.pk)
+                added.add(pk)
         if added:
             self._fire_m2m_changed('post_add', added)
 
     def remove(self, *objs):
         removed = set()
         for obj in objs:
+            pk = self._resolve_pk(obj)
             n, _ = self.through.objects.filter(
-                source_id=self.instance.pk, target_id=obj.pk
+                source_id=self.instance.pk, target_id=pk
             ).delete()
             if n:
-                removed.add(obj.pk)
+                removed.add(pk)
         if removed:
             self._fire_m2m_changed('post_remove', removed)
 
@@ -977,7 +989,7 @@ class CustomManyToManyManager(Manager):
             self.clear()
             self.add(*objs)
         else:
-            new_pks = {obj.pk for obj in objs}
+            new_pks = {self._resolve_pk(obj) for obj in objs}
             old_pks = set(
                 self.through.objects.filter(source_id=self.instance.pk)
                 .values_list('target_id', flat=True)
@@ -1303,10 +1315,22 @@ class MultiObjectFieldType(FieldType):
 
         field = model._meta.get_field(field_name)
 
+        # Mark the through model as "auto-created" by the parent CO model.
+        # Django's JSON serializer (django/core/serializers/python.py
+        # handle_m2m_field) skips M2M fields whose through is *not*
+        # auto-created — assuming an explicit through table will be serialized
+        # directly.  Our through tables are dynamically generated to mirror
+        # Django's auto behaviour; setting ``auto_created`` on the through's
+        # _meta makes the serializer include the M2M values in
+        # ``serialize_object`` output, which is what netbox change-logging
+        # and netbox-branching's merge replay rely on.
+        through_model = field.remote_field.through
+        if through_model is not None:
+            through_model._meta.auto_created = model
+
         # Skip model resolution for self-referential fields
         if getattr(field, "_is_self_referential", False):
             field.remote_field.model = model
-            through_model = field.remote_field.through
 
             # Update both source and target fields to point to the same model
             source_field = through_model._meta.get_field("source")
