@@ -2845,18 +2845,31 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
             transaction.on_commit(ensure_constraint)
 
-        # Regenerate the model from DB now that the field change is persisted.
-        # _schema_alter_field adds both old and new field names to the model
-        # class via contribute_to_class, and something between clear_model_cache
-        # and super().save() (e.g. a post_save signal on the COT) can call
-        # get_model() while the DB still has the old name, caching a stale model
-        # without the new name.  Forcing a no_cache regeneration here (after
-        # super().save() committed the new name) ensures apps.all_models holds a
-        # clean model with exactly the current DB field list.
-        updated_model = self.custom_object_type.get_model(no_cache=True)
-
-        # Reregister SearchIndex with new set of searchable fields
-        self.custom_object_type.register_custom_object_search_index(updated_model)
+        # On rename, ``_schema_alter_field`` calls contribute_to_class for both
+        # the old and new field names on the same model class, leaving the
+        # _meta in a corrupt state.  Force a no_cache regeneration so the
+        # next access sees a clean model.  This regeneration ALSO triggers
+        # apps.clear_cache() at the end of get_model(), which cascades into
+        # AppConfig.get_models() and re-caches every COT — but on rename
+        # that's tolerable because the rename doesn't affect related COTs'
+        # FK reverse relations.
+        #
+        # For non-rename changes (new field, attribute toggle, etc.) the
+        # cache_timestamp bump done above is sufficient: the next get_model()
+        # call detects the timestamp mismatch and regenerates lazily.  We
+        # skip both the regeneration AND the search-index re-register here
+        # so that the cache invalidations performed by signal handlers — most
+        # importantly the eviction of related COTs in ``clear_cache_on_field_save``
+        # for an OBJECT-type field — are not undone by the apps.clear_cache()
+        # cascade re-caching every COT in sight.
+        renamed = (
+            not self._state.adding
+            and not self.is_polymorphic
+            and self._original_name != self.name
+        )
+        if renamed:
+            updated_model = self.custom_object_type.get_model(no_cache=True)
+            self.custom_object_type.register_custom_object_search_index(updated_model)
 
         # Reindex all objects of this type if search indexing was affected
         if is_new:
