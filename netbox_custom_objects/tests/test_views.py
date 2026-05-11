@@ -653,7 +653,7 @@ class ObjectFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObject
             # Skip if DCIM models are not available
             cls.site = None
             cls.device = None
-            cls.instance = None
+            cls.instance_1 = None
 
     def setUp(self):
         """Set up test data."""
@@ -731,6 +731,21 @@ class ObjectFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObject
 
     def test_bulk_delete_objects_with_constrained_permission(self):
         ...
+
+    def test_delete_confirmation_page_with_populated_multiobject_field(self):
+        """Regression #477: delete confirmation page returns 200 and omits through-table model names."""
+        if self.instance_1 is None:
+            self.skipTest("DCIM models not available")
+        # Dynamic models have unpredictable permission names (table{id}model), so grant
+        # superuser access rather than using add_permissions().
+        self.user.is_superuser = True
+        self.user.save()
+        url = self._get_url('delete', self.instance_1)
+        response = self.client.get(url)
+        self.assertHttpStatus(response, 200)
+        # M2M through-table rows must not appear on the confirmation page —
+        # they are implementation details, not user-facing business objects.
+        self.assertNotIn(b'through_', response.content)
 
 
 class ObjectSelectorViewTestCase(TestCase):
