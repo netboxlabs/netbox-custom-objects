@@ -1,23 +1,28 @@
 """
 Tests for the concrete and dynamically generated models that are managed by this plugin.
 """
+import sys
+from decimal import Decimal
 from unittest import skip
 from unittest.mock import patch
-from decimal import Decimal
 
+from django.apps import apps as django_apps
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db import connection
+from django.db import connection, transaction
+from django.db.utils import OperationalError, ProgrammingError
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-
-from django.contrib.contenttypes.models import ContentType
+from core.choices import JobStatusChoices
+from core.models import ObjectType
 from extras.models import CachedValue
 from netbox.search.backends import get_backend
+from netbox_custom_objects.constants import APP_LABEL
+from netbox_custom_objects.field_types import LazyForeignKey
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
-from netbox_custom_objects.models import CustomObjectTypeField
-from core.models import ObjectType
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name
 from .base import CustomObjectsTestCase
 
@@ -76,7 +81,6 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
 
     def test_custom_object_type_name_validation(self):
         """COT name must match the schema identifier pattern (no leading/trailing/double underscores)."""
-        from netbox_custom_objects.models import CustomObjectType
         invalid_names = [
             "test-type",    # hyphen not allowed
             "test__type",   # double underscore not allowed
@@ -270,9 +274,6 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         Collector discovers the stale model class, tries to query the dropped table
         and raises "relation '<table>' does not exist".
         """
-        from django.apps import apps as django_apps
-        from netbox_custom_objects.constants import APP_LABEL
-
         custom_object_type = self.create_custom_object_type(
             name="RegTestObject", slug="reg-test-object"
         )
@@ -307,10 +308,7 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         The test uses a savepoint so the aborted PostgreSQL transaction does not
         poison the surrounding test transaction.
         """
-        from django.apps import apps as django_apps
-        from django.db import ProgrammingError, transaction
         from dcim.models import Site
-        from netbox_custom_objects.constants import APP_LABEL
 
         site = Site.objects.create(name='Stale Registry Test Site', slug='stale-registry-test-site')
 
@@ -1258,8 +1256,6 @@ class SearchReindexTestCase(CustomObjectsTestCase, TestCase):
 
     def test_duplicate_job_not_enqueued(self):
         """A second enqueue for the same COT returns the existing pending job without creating a new one."""
-        from core.choices import JobStatusChoices
-
         with patch('django_rq.get_queue'):
             first_job = ReindexCustomObjectTypeJob.enqueue(cot_id=self.cot.pk)
         # Simulate the first job still pending
@@ -1284,8 +1280,7 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
 
     def setUp(self):
         super().setUp()
-        from django.apps import apps
-        self.config = apps.get_app_config('netbox_custom_objects')
+        self.config = django_apps.get_app_config('netbox_custom_objects')
 
     def test_get_model_raises_lookup_error_when_skipping(self):
         """get_model() raises LookupError instead of querying DB when should_skip returns True."""
@@ -1307,7 +1302,6 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
 
     def test_get_model_skips_db_with_migrate_in_argv(self):
         """get_model() raises LookupError when 'migrate' is in sys.argv (pre-migration state)."""
-        import sys
         cot = self.create_custom_object_type(name="MigrateTest3", slug="migrate-test-3")
         model_name = f"{cot.pk}tablemodel"
 
@@ -1335,9 +1329,6 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
         already in the app registry; this ensures we reach the objects.get() call
         that needs to be guarded.
         """
-        from django.db.utils import ProgrammingError
-        from netbox_custom_objects.models import CustomObjectType
-
         model_name = "table99998model"  # no such COT — not in the app registry
 
         with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
@@ -1351,9 +1342,6 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
         get_model() must convert OperationalError (e.g. table missing entirely)
         to LookupError for the same reason as ProgrammingError above.
         """
-        from django.db.utils import OperationalError
-        from netbox_custom_objects.models import CustomObjectType
-
         model_name = "table99999model"  # no such COT — not in the app registry
 
         with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
@@ -1368,9 +1356,6 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
         Calling ready() a second time is safe — signals are re-connected idempotently
         and the dynamic model loop is the only part that can raise here.
         """
-        from django.db.utils import ProgrammingError
-        from netbox_custom_objects.models import CustomObjectType
-
         with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
             with patch.object(CustomObjectType.objects, 'all',
                               side_effect=ProgrammingError("column does not exist")):
@@ -1379,9 +1364,6 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
 
     def test_ready_survives_operational_error(self):
         """ready() must not propagate OperationalError from a missing table."""
-        from django.db.utils import OperationalError
-        from netbox_custom_objects.models import CustomObjectType
-
         with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
             with patch.object(CustomObjectType.objects, 'all',
                               side_effect=OperationalError("no such table")):
@@ -1393,9 +1375,6 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
         incomplete.  The DB-driven portion yields nothing; static models already
         in the app registry are still returned via super().get_models().
         """
-        from django.db.utils import ProgrammingError
-        from netbox_custom_objects.models import CustomObjectType
-
         with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
             with patch.object(CustomObjectType.objects, 'all',
                               side_effect=ProgrammingError("column does not exist")):
@@ -1404,9 +1383,6 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
 
     def test_get_models_survives_operational_error(self):
         """get_models() must not propagate OperationalError from a missing table."""
-        from django.db.utils import OperationalError
-        from netbox_custom_objects.models import CustomObjectType
-
         with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
             with patch.object(CustomObjectType.objects, 'all',
                               side_effect=OperationalError("no such table")):
@@ -1420,7 +1396,6 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
         would bypass all the guards in ready(), get_model(), and get_models().
         """
         import netbox_custom_objects as nco
-        from django.db.utils import ProgrammingError
 
         original_checked = nco._migrations_checked
         nco._migrations_checked = None  # force the migration-loader path
@@ -1440,7 +1415,6 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
         infrastructure raises OperationalError (e.g. django_migrations missing).
         """
         import netbox_custom_objects as nco
-        from django.db.utils import OperationalError
 
         original_checked = nco._migrations_checked
         nco._migrations_checked = None
@@ -1674,7 +1648,6 @@ class NullRelatedObjectTypeTestCase(CustomObjectsTestCase, TestCase):
     """
 
     def _make_cot_with_null_object_field(self, name, slug, field_name="broken_ref"):
-        from netbox_custom_objects.models import CustomObjectType
         cot = self.create_custom_object_type(name=name, slug=slug)
         self.create_custom_object_type_field(
             cot, name="title", label="Title", type="text", primary=True, required=True,
@@ -1734,8 +1707,6 @@ class NestedCOTStartupOrderingTestCase(CustomObjectsTestCase, TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
-
         # Names chosen so alphabetical ordering is: alpha_type < beta_type < gamma_type
         # (worst-case: each model is processed before its FK target exists in the registry)
 
@@ -1784,9 +1755,6 @@ class NestedCOTStartupOrderingTestCase(CustomObjectsTestCase, TestCase):
 
         Keep in sync with the two-pass loop in ready() (__init__.py).
         """
-        from netbox_custom_objects.models import CustomObjectType
-        from netbox_custom_objects.field_types import LazyForeignKey
-
         CustomObjectType.clear_model_cache()
 
         qs = list(CustomObjectType.objects.all())  # alphabetical: alpha_type, beta_type, gamma_type
@@ -1846,8 +1814,6 @@ class LazyForeignKeySaveResolutionTestCase(CustomObjectsTestCase, TestCase):
 
     @classmethod
     def setUpTestData(cls):
-        from netbox_custom_objects.models import CustomObjectType
-
         cls.target_type = CustomObjectType.objects.create(
             name="save_target", slug="save-target", verbose_name_plural="save_targets",
         )
@@ -1860,10 +1826,6 @@ class LazyForeignKeySaveResolutionTestCase(CustomObjectsTestCase, TestCase):
     def test_save_object_field_when_target_absent_from_all_models(self):
         """save() must resolve the LazyFK target via cot.get_model() even when
         the target model is absent from apps.all_models."""
-        from django.apps import apps as django_apps
-        from netbox_custom_objects.models import CustomObjectType
-        from netbox_custom_objects.constants import APP_LABEL
-
         target_model = self.target_type.get_model()
         target_model_name = target_model._meta.model_name
 

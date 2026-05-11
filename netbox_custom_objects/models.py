@@ -60,7 +60,7 @@ from utilities.validators import validate_regex
 
 from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
 from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
-from netbox_custom_objects.field_types import FIELD_TYPE_CLASS, safe_table_name
+from netbox_custom_objects.field_types import FIELD_TYPE_CLASS, LazyForeignKey, safe_table_name
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
 from netbox_custom_objects.utilities import _suppress_clear_cache, extract_cot_id_from_model_name, generate_model
 
@@ -2115,9 +2115,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     # the target model from the registry.  Resolve it directly here —
                     # bypassing the app-config's skip guard — so that schema_editor
                     # .add_field() always sees a model class, not a string.
-                    from netbox_custom_objects.field_types import LazyForeignKey
                     if isinstance(model_field, LazyForeignKey) and isinstance(model_field.remote_field.model, str):
-                        from netbox_custom_objects.utilities import extract_cot_id_from_model_name
                         _app_label, _model_name = model_field._to_model_name.rsplit('.', 1)
                         _cot_id_str = extract_cot_id_from_model_name(_model_name.lower())
                         if _cot_id_str is not None:
