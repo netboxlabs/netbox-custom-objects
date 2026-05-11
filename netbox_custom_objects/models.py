@@ -2110,6 +2110,25 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 else:
                     model_field = field_type.get_model_field(self)
                     model_field.contribute_to_class(model, self.name)
+                    # LazyForeignKey starts with a string remote_field.model.  Django's
+                    # lazy_related_operation fires immediately when the target is in
+                    # apps.all_models, but tearDown() cleanup between tests can remove
+                    # the target model from the registry.  Resolve it directly here —
+                    # bypassing the app-config's skip guard — so that schema_editor
+                    # .add_field() always sees a model class, not a string.
+                    from netbox_custom_objects.field_types import LazyForeignKey
+                    if isinstance(model_field, LazyForeignKey) and isinstance(model_field.remote_field.model, str):
+                        from netbox_custom_objects.utilities import extract_cot_id_from_model_name
+                        _app_label, _model_name = model_field._to_model_name.rsplit('.', 1)
+                        _cot_id_str = extract_cot_id_from_model_name(_model_name.lower())
+                        if _cot_id_str is not None:
+                            try:
+                                _cot = CustomObjectType.objects.get(pk=int(_cot_id_str))
+                                _actual = _cot.get_model()
+                                model_field.remote_field.model = _actual
+                                model_field.to = _actual
+                            except Exception:
+                                pass
                     schema_editor.add_field(model, model_field)
                     if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                         field_type.create_m2m_table(self, model, self.name)
