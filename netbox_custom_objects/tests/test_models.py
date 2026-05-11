@@ -15,10 +15,15 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
+import netbox_custom_objects as nco
+
 from core.choices import JobStatusChoices
 from core.models import ObjectType
+from dcim.models import Site
 from extras.models import CachedValue
+from netbox.search import registry
 from netbox.search.backends import get_backend
+from netbox_custom_objects.api.serializers import get_serializer_class
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.field_types import LazyForeignKey
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
@@ -308,8 +313,6 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         The test uses a savepoint so the aborted PostgreSQL transaction does not
         poison the surrounding test transaction.
         """
-        from dcim.models import Site
-
         site = Site.objects.create(name='Stale Registry Test Site', slug='stale-registry-test-site')
 
         cot = self.create_custom_object_type(name='SiteLinked', slug='site-linked')
@@ -1309,7 +1312,6 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
         try:
             sys.argv = ['manage.py', 'migrate']
             # Reset cached migration check so argv is re-evaluated
-            import netbox_custom_objects as nco
             nco._migrations_checked = None
             with self.assertRaises(LookupError):
                 self.config.get_model(model_name)
@@ -1395,8 +1397,6 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
         before the django_migrations table exists.  An uncaught exception here
         would bypass all the guards in ready(), get_model(), and get_models().
         """
-        import netbox_custom_objects as nco
-
         original_checked = nco._migrations_checked
         nco._migrations_checked = None  # force the migration-loader path
         try:
@@ -1414,8 +1414,6 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
         should_skip_dynamic_model_creation() must return True when the migration
         infrastructure raises OperationalError (e.g. django_migrations missing).
         """
-        import netbox_custom_objects as nco
-
         original_checked = nco._migrations_checked
         nco._migrations_checked = None
         try:
@@ -1530,8 +1528,6 @@ class CrossCOTStubSearchIndexRegressionTestCase(CustomObjectsTestCase, TestCase)
         fields are excluded from the model class.  The search index must only contain
         fields that are actually present.
         """
-        from netbox.search import registry
-
         # Refresh so cache_timestamp matches the DB value bumped by the signal during setUp,
         # then explicitly generate the stub to re-register its search index (which excludes
         # object-type fields).  Without refresh_from_db the timestamps mismatch → full model
@@ -1681,8 +1677,6 @@ class NullRelatedObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         was skipped during model generation due to a NULL related_object_type_id.
         Regression for the Meta.fields/attrs mismatch that caused DRF to raise a
         validation error at serializer initialization time."""
-        from netbox_custom_objects.api.serializers import get_serializer_class
-
         cot = self._make_cot_with_null_object_field(
             "NullRelSerializer", "null-rel-serializer"
         )
