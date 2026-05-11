@@ -649,7 +649,7 @@ class ObjectFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObject
             # Skip if DCIM models are not available
             cls.site = None
             cls.device = None
-            cls.instance = None
+            cls.instance_1 = None
 
     def setUp(self):
         """Set up test data."""
@@ -725,12 +725,7 @@ class ObjectFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObject
         ...
 
     def test_delete_confirmation_page_with_populated_multiobject_field(self):
-        """
-        Regression test for #477: GET on the delete confirmation page must not raise
-        ValueError when the object has a populated multiobject field.  Django's Collector
-        (used inside _get_dependent_objects) traverses M2M through tables; a bug in the
-        through-model FK resolution caused a 500 instead of a confirmation page.
-        """
+        """Regression #477: delete confirmation page returns 200 and omits through-table model names."""
         if self.instance_1 is None:
             self.skipTest("DCIM models not available")
         # Dynamic models have unpredictable permission names (table{id}model), so grant
