@@ -308,7 +308,9 @@ class CustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjec
         ...
 
     def test_get_object_changelog(self):
-        ...
+        """Regression #500: changelog tab must return 200, not 500 from deprecated user kwarg."""
+        url = self._get_url('changelog', self.instance1)
+        self.assertHttpStatus(self.client.get(url), 200)
 
     def test_create_object_with_permission(self):
         ...
@@ -516,7 +518,9 @@ class ComplexCustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.Prima
         ...
 
     def test_get_object_changelog(self):
-        ...
+        """Regression #500: changelog tab must return 200, not 500 from deprecated user kwarg."""
+        url = self._get_url('changelog', self.instance_1)
+        self.assertHttpStatus(self.client.get(url), 200)
 
     def test_create_object_with_permission(self):
         ...
@@ -680,7 +684,11 @@ class ObjectFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObject
         ...
 
     def test_get_object_changelog(self):
-        ...
+        """Regression #500: changelog tab must return 200, not 500 from deprecated user kwarg."""
+        if self.instance_1 is None:
+            self.skipTest("DCIM models not available")
+        url = self._get_url('changelog', self.instance_1)
+        self.assertHttpStatus(self.client.get(url), 200)
 
     def test_create_object_with_permission(self):
         ...
