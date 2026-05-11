@@ -268,7 +268,7 @@ class CustomObjectsPluginConfig(PluginConfig):
                         if model is None:
                             continue
                         for field in model._meta.local_fields:
-                            if isinstance(field, LazyForeignKey):
+                            if isinstance(field, LazyForeignKey) and isinstance(field.remote_field.model, str):
                                 resolve_method = getattr(model, f'_resolve_{field.name}_model', None)
                                 if resolve_method:
                                     resolve_method(model)

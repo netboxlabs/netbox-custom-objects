@@ -11,6 +11,7 @@ from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import FieldDoesNotExist
 from django.core.validators import RegexValidator
 from django.db import connection, models
+from django.db.utils import OperationalError, ProgrammingError
 from django.db.models.fields.related import ForeignKey, ManyToManyDescriptor
 from django.db.models.manager import Manager
 from django.utils.html import escape
@@ -130,11 +131,36 @@ class LazyForeignKey(ForeignKey):
                 if not CustomObjectType.is_model_cached(cot.id):
                     with CustomObjectType._global_lock:
                         CustomObjectType._model_cache[cot.id] = (actual_model, cot.cache_timestamp)
-            except Exception:
+            except (CustomObjectType.DoesNotExist, OperationalError, ProgrammingError):
                 pass
 
         self.remote_field.model = actual_model
         self.to = actual_model
+
+
+def _make_lazy_cot_fk(cot, field, on_delete, **field_kwargs):
+    """Build a LazyForeignKey pointing to the given COT model.
+
+    Shared by the self-referential and cross-COT branches of
+    ObjectFieldType.get_model_field — both use an identical LazyForeignKey
+    construction that defers resolution until Pass 2 of the startup loop.
+    """
+    model_name = f"{APP_LABEL}.{cot.get_table_model_name(cot.id)}"
+    if field.related_name:
+        related_name = field.related_name
+    else:
+        table_model_name = field.custom_object_type.get_table_model_name(
+            field.custom_object_type.id
+        ).lower()
+        related_name = f"{table_model_name}_{field.name}_set"
+    return LazyForeignKey(
+        model_name,
+        null=True,
+        blank=True,
+        on_delete=on_delete,
+        related_name=related_name,
+        **field_kwargs
+    )
 
 
 class FieldType:
@@ -609,50 +635,12 @@ class ObjectFieldType(FieldType):
                 )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
 
-            # Check if this is a self-referential field
-            if custom_object_type.id == field.custom_object_type.id:
-                # For self-referential fields, use LazyForeignKey to defer resolution
-                model_name = f"{APP_LABEL}.{custom_object_type.get_table_model_name(custom_object_type.id)}"
-                # Use user-specified related_name if provided, otherwise generate a unique one
-                if field.related_name:
-                    related_name = field.related_name
-                else:
-                    table_model_name = field.custom_object_type.get_table_model_name(
-                        field.custom_object_type.id
-                    ).lower()
-                    related_name = f"{table_model_name}_{field.name}_set"
-                f = LazyForeignKey(
-                    model_name,
-                    null=True,
-                    blank=True,
-                    on_delete=on_delete,
-                    related_name=related_name,
-                    **field_kwargs
-                )
-                return f
-            else:
-                # Cross-COT FK: use LazyForeignKey with a string reference, identical
-                # to the self-referential case above.  Calling get_model() here causes
-                # the related COT to be generated with skip_object_fields=True and that
-                # partial model gets cached, permanently stripping its own object-type
-                # fields when startup alphabetical ordering processes a dependent COT
-                # before its dependency (issue #408).
-                model_name = f"{APP_LABEL}.{custom_object_type.get_table_model_name(custom_object_type.id)}"
-                if field.related_name:
-                    related_name = field.related_name
-                else:
-                    table_model_name = field.custom_object_type.get_table_model_name(
-                        field.custom_object_type.id
-                    ).lower()
-                    related_name = f"{table_model_name}_{field.name}_set"
-                return LazyForeignKey(
-                    model_name,
-                    null=True,
-                    blank=True,
-                    on_delete=on_delete,
-                    related_name=related_name,
-                    **field_kwargs
-                )
+            # Both self-referential and cross-COT FKs use LazyForeignKey to defer
+            # resolution until Pass 2 of the startup loop (issue #408).  Calling
+            # get_model() here to obtain the target class would cache a partial model
+            # (skip_object_fields=True) whenever the target hasn't been generated yet,
+            # permanently stripping its FK fields on future lookups.
+            return _make_lazy_cot_fk(custom_object_type, field, on_delete, **field_kwargs)
         else:
             # to_model = content_type.model_class()._meta.object_name
             to_ct = f"{content_type.app_label}.{to_model}"

@@ -1801,7 +1801,7 @@ class NestedCOTStartupOrderingTestCase(CustomObjectsTestCase, TestCase):
             if model is None:
                 continue
             for field in model._meta.local_fields:
-                if isinstance(field, LazyForeignKey):
+                if isinstance(field, LazyForeignKey) and isinstance(field.remote_field.model, str):
                     resolve_method = getattr(model, f'_resolve_{field.name}_model', None)
                     if resolve_method:
                         resolve_method(model)
@@ -1834,3 +1834,59 @@ class NestedCOTStartupOrderingTestCase(CustomObjectsTestCase, TestCase):
         # The related model must have its own FK to gamma_type
         self.assertIn('gamma', [f.name for f in related_beta._meta.local_fields],
                       "beta_type (as FK target from alpha_type) must itself have FK to gamma_type")
+
+
+class LazyForeignKeySaveResolutionTestCase(CustomObjectsTestCase, TestCase):
+    """Regression test for the save() path in CustomObjectTypeField.
+
+    Verifies that creating a TYPE_OBJECT field via save() succeeds even when the
+    target COT model has been removed from apps.all_models (the state left by
+    tearDown() between test methods that add FK columns to existing COTs).
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        from netbox_custom_objects.models import CustomObjectType
+
+        cls.target_type = CustomObjectType.objects.create(
+            name="save_target", slug="save-target", verbose_name_plural="save_targets",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.target_type, name="name", label="Name",
+            type="text", primary=True, required=True,
+        )
+        cls.target_type.get_model()
+
+    def test_save_object_field_when_target_absent_from_all_models(self):
+        """save() must resolve the LazyFK target via cot.get_model() even when
+        the target model is absent from apps.all_models."""
+        from django.apps import apps as django_apps
+        from netbox_custom_objects.models import CustomObjectType
+        from netbox_custom_objects.constants import APP_LABEL
+
+        target_model = self.target_type.get_model()
+        target_model_name = target_model._meta.model_name
+
+        source_type = CustomObjectType.objects.create(
+            name="save_source", slug="save-source", verbose_name_plural="save_sources",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=source_type, name="name", label="Name",
+            type="text", primary=True, required=True,
+        )
+        source_type.get_model()
+
+        # Simulate tearDown removing the target model from the app registry
+        django_apps.all_models.get(APP_LABEL, {}).pop(target_model_name, None)
+        CustomObjectType.clear_model_cache()
+
+        # ObjectType lookup works via ContentType DB row — unaffected by registry removal
+        target_ot = ObjectType.objects.get(app_label=APP_LABEL, model=target_model_name)
+
+        # This save() call must not raise ValueError about remote_field.model being a string
+        field = CustomObjectTypeField.objects.create(
+            custom_object_type=source_type, name="target_ref", label="Target Ref",
+            type="object", related_object_type=target_ot,
+        )
+        self.assertEqual(field.name, "target_ref")
+        self.assertEqual(field.type, "object")

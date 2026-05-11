@@ -16,6 +16,7 @@ from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.core.validators import RegexValidator, ValidationError
 from django.db import connection, IntegrityError, models, transaction
+from django.db.utils import OperationalError, ProgrammingError
 from django.db.models import Q
 from django.db.models.functions import Lower
 from django.db.models.signals import m2m_changed, pre_delete, post_save
@@ -62,8 +63,6 @@ from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS, safe_table_name
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
 from netbox_custom_objects.utilities import _suppress_clear_cache, extract_cot_id_from_model_name, generate_model
-
-logger = logging.getLogger(__name__)
 
 logger = logging.getLogger(__name__)
 
@@ -2127,8 +2126,12 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                                 _actual = _cot.get_model()
                                 model_field.remote_field.model = _actual
                                 model_field.to = _actual
-                            except Exception:
-                                pass
+                            except (CustomObjectType.DoesNotExist, OperationalError, ProgrammingError):
+                                logger.warning(
+                                    "Could not resolve LazyForeignKey target %r before add_field; "
+                                    "schema_editor.add_field may fail",
+                                    model_field._to_model_name,
+                                )
                     schema_editor.add_field(model, model_field)
                     if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                         field_type.create_m2m_table(self, model, self.name)
