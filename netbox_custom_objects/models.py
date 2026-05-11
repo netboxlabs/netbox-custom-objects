@@ -780,9 +780,13 @@ class CustomObjectType(NetBoxModel):
 
             self._after_model_generation(attrs, model)
 
-            # Cache the generated model with its timestamp (protected by lock for thread safety)
+            # Only cache fully-generated models.  Models generated with
+            # skip_object_fields=True omit FK fields to other COTs; caching them
+            # would permanently hide those fields if a dependent COT triggers
+            # generation before this one in the startup loop (issue #408).
             with self._global_lock:
-                self._model_cache[self.id] = (model, self.cache_timestamp)
+                if not skip_object_fields:
+                    self._model_cache[self.id] = (model, self.cache_timestamp)
 
         # Now that the model is in _model_cache, clear_cache() is safe:
         # re-entrant get_model() calls for this COT hit the cache immediately.

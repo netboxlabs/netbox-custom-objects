@@ -1720,3 +1720,114 @@ class NullRelatedObjectTypeTestCase(CustomObjectsTestCase, TestCase):
                          "Null-FK field must not appear in serializer Meta.fields")
         self.assertIn("title", serializer_cls.Meta.fields,
                       "Normal fields must still be present in serializer")
+
+
+class NestedCOTStartupOrderingTestCase(CustomObjectsTestCase, TestCase):
+    """Regression tests for issue #408: nested COT FK fields missing after restart.
+
+    Three COTs are created with names chosen so alphabetical startup ordering
+    (alpha_type < beta_type < gamma_type) processes the FK-source models before
+    their FK-target models — the worst-case ordering that exposed the bug.
+    The fix uses LazyForeignKey for all cross-COT FKs and re-resolves them in a
+    second pass after all models are in the app registry.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+
+        # Names chosen so alphabetical ordering is: alpha_type < beta_type < gamma_type
+        # (worst-case: each model is processed before its FK target exists in the registry)
+
+        cls.gamma_type = CustomObjectType.objects.create(
+            name="gamma_type", slug="gamma-type", verbose_name_plural="gamma_types",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.gamma_type, name="name", label="Name",
+            type="text", primary=True, required=True,
+        )
+
+        cls.beta_type = CustomObjectType.objects.create(
+            name="beta_type", slug="beta-type", verbose_name_plural="beta_types",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.beta_type, name="name", label="Name",
+            type="text", primary=True, required=True,
+        )
+        gamma_model = cls.gamma_type.get_model()
+        gamma_ot = ObjectType.objects.get(
+            app_label=gamma_model._meta.app_label, model=gamma_model._meta.model_name,
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.beta_type, name="gamma", label="Gamma",
+            type="object", related_object_type=gamma_ot,
+        )
+
+        cls.alpha_type = CustomObjectType.objects.create(
+            name="alpha_type", slug="alpha-type", verbose_name_plural="alpha_types",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.alpha_type, name="name", label="Name",
+            type="text", primary=True, required=True,
+        )
+        beta_model = cls.beta_type.get_model()
+        beta_ot = ObjectType.objects.get(
+            app_label=beta_model._meta.app_label, model=beta_model._meta.model_name,
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.alpha_type, name="beta", label="Beta",
+            type="object", related_object_type=beta_ot,
+        )
+
+    def _simulate_startup_ordering(self):
+        """Clear all model caches and regenerate in alphabetical order, as ready() does."""
+        from netbox_custom_objects.models import CustomObjectType
+        from netbox_custom_objects.field_types import LazyForeignKey
+
+        CustomObjectType.clear_model_cache()
+
+        qs = list(CustomObjectType.objects.all())  # alphabetical: alpha_type, beta_type, gamma_type
+
+        # Pass 1
+        for obj in qs:
+            obj.get_model()
+
+        # Pass 2: re-resolve lazy FKs
+        for obj in qs:
+            model = CustomObjectType.get_cached_model(obj.id)
+            if model is None:
+                continue
+            for field in model._meta.local_fields:
+                if isinstance(field, LazyForeignKey):
+                    resolve_method = getattr(model, f'_resolve_{field.name}_model', None)
+                    if resolve_method:
+                        resolve_method(model)
+
+        return {obj.slug: CustomObjectType.get_cached_model(obj.id) for obj in qs}
+
+    def test_beta_type_has_gamma_fk_after_startup(self):
+        """beta_type model must have its FK to gamma_type after the startup passes."""
+        models = self._simulate_startup_ordering()
+        beta_model = models['beta-type']
+        field_names = [f.name for f in beta_model._meta.local_fields]
+        self.assertIn('gamma', field_names,
+                      "beta_type FK field to gamma_type must be present after startup")
+
+    def test_alpha_type_has_beta_fk_after_startup(self):
+        """alpha_type model must have its FK to beta_type after the startup passes."""
+        models = self._simulate_startup_ordering()
+        alpha_model = models['alpha-type']
+        field_names = [f.name for f in alpha_model._meta.local_fields]
+        self.assertIn('beta', field_names,
+                      "alpha_type FK field to beta_type must be present after startup")
+
+    def test_three_level_chain_fk_targets_are_full_models(self):
+        """FK remote_field.model on each level must be the full model (with its own FKs)."""
+        models = self._simulate_startup_ordering()
+
+        alpha_model = models['alpha-type']
+        beta_fk = alpha_model._meta.get_field('beta')
+        related_beta = beta_fk.related_model
+        # The related model must have its own FK to gamma_type
+        self.assertIn('gamma', [f.name for f in related_beta._meta.local_fields],
+                      "beta_type (as FK target from alpha_type) must itself have FK to gamma_type")

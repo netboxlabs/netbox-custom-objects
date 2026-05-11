@@ -599,8 +599,28 @@ class ObjectFieldType(FieldType):
                 )
                 return f
             else:
-                # For cross-referential fields, use skip_object_fields to avoid infinite loops
-                model = custom_object_type.get_model(skip_object_fields=True)
+                # Cross-COT FK: use LazyForeignKey with a string reference, identical
+                # to the self-referential case above.  Calling get_model() here causes
+                # the related COT to be generated with skip_object_fields=True and that
+                # partial model gets cached, permanently stripping its own object-type
+                # fields when startup alphabetical ordering processes a dependent COT
+                # before its dependency (issue #408).
+                model_name = f"{APP_LABEL}.{custom_object_type.get_table_model_name(custom_object_type.id)}"
+                if field.related_name:
+                    related_name = field.related_name
+                else:
+                    table_model_name = field.custom_object_type.get_table_model_name(
+                        field.custom_object_type.id
+                    ).lower()
+                    related_name = f"{table_model_name}_{field.name}_set"
+                return LazyForeignKey(
+                    model_name,
+                    null=True,
+                    blank=True,
+                    on_delete=on_delete,
+                    related_name=related_name,
+                    **field_kwargs
+                )
         else:
             # to_model = content_type.model_class()._meta.object_name
             to_ct = f"{content_type.app_label}.{to_model}"
@@ -746,7 +766,13 @@ class ObjectFieldType(FieldType):
             return  # GFK needs no post-generation resolution
         # Check if this field has a resolution method
         if resolve_method := getattr(model, f'_resolve_{field_name}_model', None):
-            resolve_method(model)
+            try:
+                resolve_method(model)
+            except LookupError:
+                # The related COT hasn't been generated yet (startup ordering).
+                # ready() runs a second pass to resolve all lazy FKs once every
+                # COT model is in the app registry (issue #408).
+                pass
 
     def add_polymorphic_object_columns(self, field_instance, model, schema_editor):
         """
