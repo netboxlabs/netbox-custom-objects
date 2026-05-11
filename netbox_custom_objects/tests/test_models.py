@@ -1780,7 +1780,10 @@ class NestedCOTStartupOrderingTestCase(CustomObjectsTestCase, TestCase):
         )
 
     def _simulate_startup_ordering(self):
-        """Clear all model caches and regenerate in alphabetical order, as ready() does."""
+        """Clear all model caches and regenerate in alphabetical order, as ready() does.
+
+        Keep in sync with the two-pass loop in ready() (__init__.py).
+        """
         from netbox_custom_objects.models import CustomObjectType
         from netbox_custom_objects.field_types import LazyForeignKey
 
