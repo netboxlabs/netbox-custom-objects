@@ -724,6 +724,26 @@ class ObjectFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObject
     def test_bulk_delete_objects_with_constrained_permission(self):
         ...
 
+    def test_delete_confirmation_page_with_populated_multiobject_field(self):
+        """
+        Regression test for #477: GET on the delete confirmation page must not raise
+        ValueError when the object has a populated multiobject field.  Django's Collector
+        (used inside _get_dependent_objects) traverses M2M through tables; a bug in the
+        through-model FK resolution caused a 500 instead of a confirmation page.
+        """
+        if self.instance_1 is None:
+            self.skipTest("DCIM models not available")
+        # Dynamic models have unpredictable permission names (table{id}model), so grant
+        # superuser access rather than using add_permissions().
+        self.user.is_superuser = True
+        self.user.save()
+        url = self._get_url('delete', self.instance_1)
+        response = self.client.get(url)
+        self.assertHttpStatus(response, 200)
+        # M2M through-table rows must not appear on the confirmation page —
+        # they are implementation details, not user-facing business objects.
+        self.assertNotIn(b'through_', response.content.lower())
+
 
 class ObjectSelectorViewTestCase(TestCase):
     """
