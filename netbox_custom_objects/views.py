@@ -1399,7 +1399,7 @@ class CustomObjectChangeLogView(ConditionalLoginRequiredMixin, View):
         )
 
         objectchanges_table = ObjectChangeTable(
-            data=objectchanges, orderable=False, user=request.user
+            data=objectchanges, orderable=False
         )
         objectchanges_table.configure(request)
 
