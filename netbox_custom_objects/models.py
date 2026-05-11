@@ -529,6 +529,8 @@ class CustomObjectType(NetBoxModel):
                         source_field = through_model._meta.get_field("source")
                         source_field.remote_field.model = model
                         source_field.related_model = model
+                        source_field.__dict__.pop('path_infos', None)
+                        source_field.__dict__.pop('reverse_path_infos', None)
                     except LookupError:
                         field_type_obj = FIELD_TYPE_CLASS[CustomFieldTypeChoices.TYPE_MULTIOBJECT]()
                         source_model_str = f"{APP_LABEL}.{model.__name__}"
@@ -538,6 +540,8 @@ class CustomObjectType(NetBoxModel):
                         source_field = through_model._meta.get_field("source")
                         source_field.remote_field.model = model
                         source_field.related_model = model
+                        source_field.__dict__.pop('path_infos', None)
+                        source_field.__dict__.pop('reverse_path_infos', None)
                         _apps.register_model(APP_LABEL, through_model)
                     if through_model and through_model not in through_models:
                         through_models.append(through_model)
@@ -779,6 +783,35 @@ class CustomObjectType(NetBoxModel):
             apps.register_model(APP_LABEL, model)
 
             self._after_model_generation(attrs, model)
+
+            # When this COT's model is regenerated (cache miss), non-polymorphic through
+            # models owned by OTHER COTs that point to this COT as their M2M target keep
+            # their target FK stale (pointing at the old model class).  Django's deletion
+            # collector finds those through FKs in the new model's related_objects and
+            # raises ValueError: "Cannot query X: Must be OldModel instance."
+            # Fix: walk all inbound non-polymorphic multiobject fields and patch the
+            # through model's target FK to the freshly generated model class.
+            # (Same pattern as the existing fix for polymorphic source FKs above at
+            # _after_model_generation lines 526-531.)
+            for inbound_field in CustomObjectTypeField.objects.filter(
+                related_object_type=self.object_type,
+                type=CustomFieldTypeChoices.TYPE_MULTIOBJECT,
+                is_polymorphic=False,
+            ).iterator():
+                try:
+                    through_model = apps.get_model(APP_LABEL, inbound_field.through_model_name)
+                except LookupError:
+                    continue
+                target_field = through_model._meta.get_field('target')
+                target_field.remote_field.model = model
+                target_field.related_model = model
+                # path_infos is a @cached_property on ForeignKey (see Django's
+                # related.py). Clear it so the path is rebuilt using the updated
+                # remote_field.model; stale cached path_infos would make Django's
+                # deletion collector compare obj against the old model class and
+                # raise ValueError: "Cannot query X: Must be OldModel instance."
+                target_field.__dict__.pop('path_infos', None)
+                target_field.__dict__.pop('reverse_path_infos', None)
 
             # Cache the generated model with its timestamp (protected by lock for thread safety)
             with self._global_lock:
