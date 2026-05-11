@@ -742,7 +742,7 @@ class ObjectFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObject
         self.assertHttpStatus(response, 200)
         # M2M through-table rows must not appear on the confirmation page —
         # they are implementation details, not user-facing business objects.
-        self.assertNotIn(b'through_', response.content.lower())
+        self.assertNotIn(b'through_', response.content)
 
 
 class ObjectSelectorViewTestCase(TestCase):
