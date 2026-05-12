@@ -1,7 +1,6 @@
-# Changelog
+# Releases
 
 ## 0.5.0
----
 
 ### New Features
 
@@ -36,25 +35,25 @@ Custom Object Type definitions can now be exported, compared, and applied as por
 
 - [#488](https://github.com/netboxlabs/netbox-custom-objects/issues/488) - Make custom-object FK constraints non-DEFERRABLE to prevent potential deadlocks
 
+---
 
 ## 0.4.10
----
 
 ### Bug Fixes
 
 - [#456](https://github.com/netboxlabs/netbox-custom-objects/issues/456) - Additional guards against a partially-migrated schema crashing during `manage.py migrate`
 
+---
 
 ## 0.4.9
----
 
 ### Bug Fixes
 
 - [#456](https://github.com/netboxlabs/netbox-custom-objects/issues/456) - Error executing migration due to missing `group_name` column when upgrading from v0.4.6
 
+---
 
 ## 0.4.8
----
 
 **Note:** See also v0.4.7 for recent bug fixes and enhancements, as this release is a fast-follow.
 
@@ -62,9 +61,9 @@ Custom Object Type definitions can now be exported, compared, and applied as por
 
 - [#441](https://github.com/netboxlabs/netbox-custom-objects/issues/441) - ObjectSelectorView does not support targeting custom objects from core custom fields
 
+---
 
 ## 0.4.7
----
 
 ### Enhancements
 
@@ -85,18 +84,18 @@ Custom Object Type definitions can now be exported, compared, and applied as por
 - [#429](https://github.com/netboxlabs/netbox-custom-objects/issues/429) - Deleting Custom Object and Custom Object Type Together Causes Missing Relation Error
 - [#440](https://github.com/netboxlabs/netbox-custom-objects/issues/440) - Typeahead search returns no results for non-text primary fields
 
+---
 
 ## 0.4.6
----
 
 ### Bug Fixes
 
 - [#348](https://github.com/netboxlabs/netbox-custom-objects/issues/348) - Saving a custom object type field breaks object-field relationships
 - [#372](https://github.com/netboxlabs/netbox-custom-objects/issues/372) - Double queryset evaluation in custom object list view
 
+---
 
 ## 0.4.5
----
 
 ### Bug Fixes
 
@@ -105,9 +104,9 @@ Custom Object Type definitions can now be exported, compared, and applied as por
 - [#340](https://github.com/netboxlabs/netbox-custom-objects/issues/340) - Improve query performance for related models
 - [#351](https://github.com/netboxlabs/netbox-custom-objects/issues/351) - Prevent makemigrations from picking up custom object changes
 
+---
 
 ## 0.4.4
----
 
 ### Bug Fixes
 
@@ -117,9 +116,9 @@ Custom Object Type definitions can now be exported, compared, and applied as por
 - [#310](https://github.com/netboxlabs/netbox-custom-objects/issues/310) - Linkify primary field in custom object table view
 - [#336](https://github.com/netboxlabs/netbox-custom-objects/issues/336) - Support NetBox v4.5 (Beta)
 
+---
 
 ## 0.4.3
----
 
 ### Bug Fixes
 
@@ -127,9 +126,9 @@ Custom Object Type definitions can now be exported, compared, and applied as por
 - [#326](https://github.com/netboxlabs/netbox-custom-objects/issues/326) - Improve initialization code check when running migrations
 - [#330](https://github.com/netboxlabs/netbox-custom-objects/issues/330) - Fix limit checking for max_custom_object_types
 
+---
 
 ## 0.4.2
----
 
 ### Enhancements
 
@@ -144,9 +143,9 @@ Custom Object Type definitions can now be exported, compared, and applied as por
 - [#290](https://github.com/netboxlabs/netbox-custom-objects/issues/290) - Improve API object_types Labels for Custom Object Types
 - [#313](https://github.com/netboxlabs/netbox-custom-objects/issues/313) - Cap number of "Custom Objects linking to this object" on Detail view
 
+---
 
 ## 0.4.1
----
 
 ### Bug Fixes
 
@@ -154,9 +153,9 @@ Custom Object Type definitions can now be exported, compared, and applied as por
 - [#251](https://github.com/netboxlabs/netbox-custom-objects/issues/251) - Bulk import broken due to incorrect slug handling
 - [#273](https://github.com/netboxlabs/netbox-custom-objects/issues/273) - `group_name` missing from Custom Object Type serializer
 
+---
 
 ## 0.4.0
----
 
 ### New Features
 
