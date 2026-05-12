@@ -555,7 +555,7 @@ class FiltersetAfterClearCacheTestCase(CustomObjectsTestCase, TestCase):
 
         fs = get_filterset_class(model)({"manufacturer": self.mfr.pk}, model.objects.all())
         pks = list(fs.qs.values_list("pk", flat=True))
-        self.assertEqual(pks, [obj.pk])
+        self.assertEqual(set(pks), {obj.pk})
 
     def test_filter_by_m2m_value_returns_matching_objects(self):
         """NonPolymorphicMultiObjectFilter correctly filters by M2M value."""
@@ -567,7 +567,7 @@ class FiltersetAfterClearCacheTestCase(CustomObjectsTestCase, TestCase):
         Site.objects.create(name="Other503", slug="other-site-503")
         fs = get_filterset_class(model)({"sites": [self.site.pk]}, model.objects.all())
         pks = list(fs.qs.values_list("pk", flat=True))
-        self.assertIn(obj.pk, pks)
+        self.assertEqual(set(pks), {obj.pk})
 
 
 # ---------------------------------------------------------------------------

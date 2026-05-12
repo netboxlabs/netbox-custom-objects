@@ -191,7 +191,7 @@ class NonPolymorphicMultiObjectFilter(django_filters.Filter):
     def filter(self, qs, value):
         if not value:
             return qs
-        pks = [obj.pk for obj in value]
+        pks = list(value.values_list("pk", flat=True))
         return qs.filter(**{f"{self.field_name}__in": pks}).distinct()
 
 
