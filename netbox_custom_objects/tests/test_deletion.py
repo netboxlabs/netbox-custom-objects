@@ -629,11 +629,11 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
             'Source CO must survive when target CO is deleted.',
         )
 
-    def test_delete_target_co_after_source_model_regeneration(self):
-        """#483 – Deletion of the target CO succeeds even after the source COT's
-        model is regenerated (cache miss), which invalidates the through model's
-        in-memory FK references.  The DB-level CASCADE constraint must clean up
-        through rows when the ORM-level cascade is not wired."""
+    def test_delete_target_co_after_target_model_regeneration(self):
+        """#483 – Deletion of the target CO succeeds even after the TARGET COT's
+        model is regenerated (cache miss), which leaves the through model's target
+        FK pointing at the old class.  The fix repoints the FK so the ORM-level
+        cascade wires up correctly and the deletion succeeds."""
         cot_source = self.create_simple_custom_object_type(name='m2msrc3', slug='m2m-src3')
         cot_target = self.create_simple_custom_object_type(name='m2mtrg3', slug='m2m-trg3')
 

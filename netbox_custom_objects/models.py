@@ -14,6 +14,7 @@ from django.conf import settings
 
 # from django.contrib.contenttypes.management import create_contenttypes
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import FieldDoesNotExist
 from django.core.validators import RegexValidator, ValidationError
 from django.db import connection, IntegrityError, models, transaction
 from django.db.utils import OperationalError, ProgrammingError
@@ -528,6 +529,7 @@ class CustomObjectType(NetBoxModel):
                         source_field = through_model._meta.get_field("source")
                         source_field.remote_field.model = model
                         source_field.related_model = model
+                        # Clear @cached_property so deletion collector rebuilds path from updated model.
                         source_field.__dict__.pop('path_infos', None)
                         source_field.__dict__.pop('reverse_path_infos', None)
                     except LookupError:
@@ -539,6 +541,7 @@ class CustomObjectType(NetBoxModel):
                         source_field = through_model._meta.get_field("source")
                         source_field.remote_field.model = model
                         source_field.related_model = model
+                        # Clear @cached_property so deletion collector rebuilds path from updated model.
                         source_field.__dict__.pop('path_infos', None)
                         source_field.__dict__.pop('reverse_path_infos', None)
                         _apps.register_model(APP_LABEL, through_model)
@@ -799,9 +802,9 @@ class CustomObjectType(NetBoxModel):
             ).iterator():
                 try:
                     through_model = apps.get_model(APP_LABEL, inbound_field.through_model_name)
-                except LookupError:
+                    target_field = through_model._meta.get_field('target')
+                except (LookupError, FieldDoesNotExist):
                     continue
-                target_field = through_model._meta.get_field('target')
                 target_field.remote_field.model = model
                 target_field.related_model = model
                 # path_infos is a @cached_property on ForeignKey (see Django's
