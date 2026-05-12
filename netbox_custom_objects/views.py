@@ -1284,7 +1284,7 @@ class CustomObjectJournalView(ConditionalLoginRequiredMixin, View):
         )
 
         journal_table = JournalEntryTable(
-            data=journal_entries, orderable=False, user=request.user
+            data=journal_entries, orderable=False
         )
         journal_table.configure(request)
         journal_table.columns.hide("assigned_object_type")
