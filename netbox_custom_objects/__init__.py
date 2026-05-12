@@ -125,7 +125,7 @@ class CustomObjectsPluginConfig(PluginConfig):
     author_email = 'support@netboxlabs.com'
     base_url = "custom-objects"
     # Remember to update COMPATIBILITY.md when modifying the minimum/maximum supported NetBox versions.
-    min_version = "4.4.0"
+    min_version = "4.5.2"
     max_version = "4.6.99"
     default_settings = {
         # The maximum number of Custom Object Types that may be created
