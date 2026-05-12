@@ -7,7 +7,27 @@ because it has pending trigger events". Recreate any existing DEFERRABLE FKs
 on custom_objects_* tables as non-DEFERRABLE.
 """
 
+import hashlib
+
 from django.db import migrations
+
+_PG_MAX_IDENTIFIER_LEN = 63
+
+
+def _safe_constraint_name(table_name, column_name, suffix='_fk_cascade'):
+    """
+    Return a constraint name that fits within PostgreSQL's 63-char identifier limit.
+
+    Uses the same truncate-and-hash strategy as field_types._safe_pg_identifier so
+    that long through-table names (e.g. custom_objects_14_technical_account_accounts)
+    combined with column names do not silently collide after PostgreSQL truncation.
+    """
+    full_name = f'{table_name}_{column_name}{suffix}'
+    if len(full_name) <= _PG_MAX_IDENTIFIER_LEN:
+        return full_name
+    digest = hashlib.md5(full_name.encode()).hexdigest()[:8]
+    prefix = full_name[:_PG_MAX_IDENTIFIER_LEN - 9].rstrip('_')
+    return f'{prefix}_{digest}'
 
 
 def fix_deferrable_fk_constraints(apps, schema_editor):
@@ -36,9 +56,17 @@ def fix_deferrable_fk_constraints(apps, schema_editor):
         rows = cursor.fetchall()
 
         for table_name, constraint_name, column_name, foreign_table in rows:
-            new_constraint_name = f'{table_name}_{column_name}_fk_cascade'
+            new_constraint_name = _safe_constraint_name(table_name, column_name)
+            # IF EXISTS on the old name handles partial re-runs where the old constraint
+            # was already dropped in a previous (failed) attempt.
             cursor.execute(
-                f'ALTER TABLE "{table_name}" DROP CONSTRAINT "{constraint_name}"'
+                f'ALTER TABLE "{table_name}" DROP CONSTRAINT IF EXISTS "{constraint_name}"'
+            )
+            # Pre-drop the new name too: if a previous run converted this constraint and
+            # then failed later (leaving the non-DEFERRABLE copy behind), the ADD below
+            # would collide. Dropping first makes every iteration idempotent.
+            cursor.execute(
+                f'ALTER TABLE "{table_name}" DROP CONSTRAINT IF EXISTS "{new_constraint_name}"'
             )
             cursor.execute(f"""
                 ALTER TABLE "{table_name}"
