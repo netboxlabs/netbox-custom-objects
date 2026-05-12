@@ -278,19 +278,15 @@ class CustomObjectsPluginConfig(PluginConfig):
         # leftover entries from a failed prior operation don't leak forward.
         _connect_deferred_data_reset_signals()
 
-        # Register netbox-branching hooks so its router and update_object
-        # know about our dynamically-generated models.  Guarded so the
-        # plugin still works without netbox-branching installed.
+        # Register netbox-branching hooks so its router knows about our
+        # dynamically-generated through models.  Guarded so the plugin still
+        # works without netbox-branching installed.  Field-rename translation
+        # is handled by ``CustomObject.canonicalize_data`` on the model itself,
+        # which netbox-branching invokes from ``update_object`` and
+        # ``ChangeDiff._update_conflicts`` — no registration required.
         try:
-            from netbox_branching.utilities import (
-                register_attr_translator,
-                register_branching_resolver,
-            )
-            from .branching import (
-                supports_branching_resolver,
-                translate_renamed_field_attr,
-            )
-            register_attr_translator(translate_renamed_field_attr)
+            from netbox_branching.utilities import register_branching_resolver
+            from .branching import supports_branching_resolver
             register_branching_resolver(supports_branching_resolver)
         except ImportError:
             pass

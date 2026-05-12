@@ -2,16 +2,16 @@
 netbox-branching integration hooks for netbox-custom-objects.
 
 These functions plug into extension points exposed by netbox-branching so the
-plugin can correctly handle changes to its dynamically-generated CustomObject
-models across schema-rename history.  Importing netbox-branching is
-deferred / optional — none of these functions run if netbox-branching is not
-installed (the registration call sites in ``__init__.ready()`` are guarded).
+plugin can correctly route queries for its dynamically-generated through
+models when an active branch is set.  Importing netbox-branching is deferred /
+optional — the registration call site in ``__init__.ready()`` is guarded so
+the plugin still works when netbox-branching is not installed.
+
+Field-rename translation lives on ``CustomObject.canonicalize_data`` (a model
+classmethod) and is invoked directly by netbox-branching from
+``update_object`` and ``ChangeDiff._update_conflicts``; no registration is
+required for that path.
 """
-
-from django.db.models import Q
-
-from core.choices import ObjectChangeActionChoices
-from core.models import ObjectChange
 
 
 def supports_branching_resolver(model):
@@ -38,65 +38,4 @@ def supports_branching_resolver(model):
     # that prefix.
     if name.startswith('through_custom_objects_'):
         return True
-    return None
-
-
-def translate_renamed_field_attr(instance, attr):
-    """
-    Resolve a CustomObject data-attribute name to its current field name,
-    walking the field's rename history when the raw name doesn't match the
-    instance's current field set.
-
-    Called by ``netbox_branching.utilities.update_object()`` when a stored
-    ObjectChange / ChangeDiff data dict carries a key that does not match
-    any current field on ``instance`` — the typical case is a squash-merge
-    revert where the collapsed prechange dict still uses the field's old
-    name (e.g. 'beta') while the model class has the field's current name
-    (e.g. 'gamma').  Returning the current name lets ``update_object``
-    write the value to the correct column.
-
-    For non-CustomObject instances or unresolved names, returns ``None`` so
-    other registered translators (or the default behaviour) get a chance.
-    """
-    if not getattr(instance, '_generated_table_model', False):
-        return None  # not a CustomObject — defer to other translators
-
-    cot = getattr(instance, 'custom_object_type', None)
-    if cot is None:
-        return None
-
-    # The field we're looking for is one of this COT's CustomObjectTypeFields
-    # whose history (via ObjectChanges of name) includes ``attr`` as a former
-    # or current name.  Match at the DB level on JSON keys
-    # ``postchange_data->>'name'`` / ``prechange_data->>'name'`` so we don't
-    # pull every UPDATE row into Python on every translator invocation.
-    candidate_pks = set(
-        ObjectChange.objects.filter(
-            changed_object_type__app_label='netbox_custom_objects',
-            changed_object_type__model='customobjecttypefield',
-            action=ObjectChangeActionChoices.ACTION_UPDATE,
-        ).filter(
-            Q(postchange_data__name=attr) | Q(prechange_data__name=attr)
-        ).values_list('changed_object_id', flat=True)
-    )
-    if not candidate_pks:
-        return None
-
-    # Filter candidate fields to those belonging to this COT.  The fields
-    # have stable PKs across schemas, and current name reflects the latest
-    # state in the active context.
-    fields_qs = cot.fields.filter(pk__in=candidate_pks)
-    fields = list(fields_qs.values_list('name', flat=True))
-    if not fields:
-        return None
-
-    # If a field was renamed, ``attr`` mapped to its PK; the field's current
-    # ``name`` is the translated attribute.  When more than one field has
-    # ``attr`` somewhere in its history (renamed away then renamed back, or
-    # multiple fields cycling through the same name) we abstain — picking
-    # arbitrarily would silently overwrite the wrong column.  This is
-    # vanishingly rare for normal use and produces a clear "unknown attr"
-    # signal at the call site rather than data corruption.
-    if len(fields) == 1:
-        return fields[0]
     return None

@@ -8,6 +8,7 @@ from datetime import date, datetime
 from packaging.version import Version, InvalidVersion
 
 import django_filters
+from core.choices import ObjectChangeActionChoices
 from core.models import ObjectType, ObjectChange
 from core.models.object_types import ObjectTypeManager
 from django.apps import apps
@@ -385,6 +386,57 @@ def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, exist
     schema_editor.alter_field(model, old_mf, new_mf)
 
 
+def _translate_renamed_field_name(cot, attr):
+    """
+    Resolve ``attr`` to a CustomObjectTypeField's *current* name on *cot* by
+    walking the field's rename history.
+
+    The field we're looking for is one of this COT's CustomObjectTypeFields
+    whose history (via ObjectChanges of ``name``) includes ``attr`` as a former
+    or current name.  We match at the DB level on JSON keys
+    ``postchange_data->>'name'`` / ``prechange_data->>'name'`` so we don't pull
+    every UPDATE row into Python on every invocation.
+
+    Returns the field's current name when there is exactly one matching field,
+    or ``None`` otherwise.  We abstain on ambiguity (the same name appearing in
+    multiple fields' rename history) because picking arbitrarily would
+    silently overwrite the wrong column; the caller then preserves the raw
+    key.  This case is vanishingly rare for normal use.
+    """
+    candidate_pks = set(
+        ObjectChange.objects.filter(
+            changed_object_type__app_label='netbox_custom_objects',
+            changed_object_type__model='customobjecttypefield',
+            action=ObjectChangeActionChoices.ACTION_UPDATE,
+        ).filter(
+            Q(postchange_data__name=attr) | Q(prechange_data__name=attr)
+        ).values_list('changed_object_id', flat=True)
+    )
+    if not candidate_pks:
+        return None
+    fields = list(
+        cot.fields.filter(pk__in=candidate_pks).values_list('name', flat=True)
+    )
+    if len(fields) == 1:
+        return fields[0]
+    return None
+
+
+def _set_with_collision_preference(result, key, value):
+    """
+    Assign ``result[key] = value``; on collision prefer the non-None value.
+
+    Two raw data keys can map to the same canonical key after rename
+    translation (squash-merge artefact: both the old name and the new name
+    appear, with the new name often carrying a sentinel ``None`` from
+    ``deep_compare_dict``'s "new-only-in-post" handling).  Preserving the
+    non-None value keeps the meaningful write from being clobbered.
+    """
+    if key in result and value is None and result[key] is not None:
+        return
+    result[key] = value
+
+
 class CustomObject(
     BookmarksMixin,
     ChangeLoggingMixin,
@@ -426,6 +478,58 @@ class CustomObject(
 
     class Meta:
         abstract = True
+
+    @classmethod
+    def canonicalize_data(cls, data):
+        """
+        Translate stale field-name keys in *data* to this model's current
+        attribute names.
+
+        Plugin hook called by netbox-branching's ``update_object()`` and
+        ``ChangeDiff._update_conflicts()``.  When a CustomObjectTypeField has
+        been renamed between when an ObjectChange was recorded and when it is
+        being replayed/compared, the data dict's keys may refer to the field's
+        old name while this model class has the field's current name.  We walk
+        the field's rename history (recorded as ObjectChange records on
+        ``CustomObjectTypeField``) and rewrite each unrecognised key to the
+        field's current name on this COT.
+
+        When two raw keys map to the same target field (a squash-merge artefact
+        in which both the old name and the new name appear, the new name often
+        carrying a sentinel ``None`` from ``deep_compare_dict``'s "new-only-in-
+        post" treatment), the non-None value wins.  When no translation is
+        possible the original key is preserved so downstream code can still
+        observe it.
+        """
+        if not data:
+            return data
+
+        cot_id_str = extract_cot_id_from_model_name(cls.__name__.lower())
+        if cot_id_str is None:
+            return data
+        cot_id = int(cot_id_str)
+        try:
+            cot = CustomObjectType.objects.get(pk=cot_id)
+        except CustomObjectType.DoesNotExist:
+            return data
+
+        field_names = {f.name for f in cls._meta.get_fields()}
+        result = {}
+        for raw_key, value in data.items():
+            # Honour custom_fields → custom_field_data the same way update_object
+            # used to, so this hook is a true superset of the previous behaviour.
+            key = 'custom_field_data' if raw_key == 'custom_fields' else raw_key
+            if key in field_names:
+                _set_with_collision_preference(result, key, value)
+                continue
+            translated = _translate_renamed_field_name(cot, key)
+            if translated and translated in field_names:
+                _set_with_collision_preference(result, translated, value)
+            else:
+                # Unknown key (e.g. removed field) — preserve raw key so callers
+                # that inspect the dict for non-field metadata can still see it.
+                _set_with_collision_preference(result, raw_key, value)
+        return result
 
     @classmethod
     def deserialize_object(cls, data, pk=None):
@@ -473,21 +577,11 @@ class CustomObject(
         # ``column "alpha" does not exist``.
         #
         # Building directly off ``fresh_model`` (the context-aware class) keeps
-        # the field set aligned with the schema we're writing to, and the attr
-        # translator registered with netbox-branching (see
-        # branching.translate_renamed_field_attr) lets us map the data dict's
-        # old field names to the current model's field names where they
-        # diverge.
-
-        # Try the registered netbox-branching attr translator if available so
-        # that data dicts carrying old field names are reshaped to the current
-        # context's field names before deserialization.  Falls back gracefully
-        # when the translator isn't registered (e.g. branching not installed).
-        try:
-            from netbox_branching.utilities import _translate_attr  # type: ignore[attr-defined]
-        except ImportError:
-            def _translate_attr(_inst, attr):  # noqa: D401
-                return None
+        # the field set aligned with the schema we're writing to.  We then
+        # canonicalize the data dict via the same hook netbox-branching calls
+        # from ``update_object``, so the keys map to the model's current field
+        # names regardless of any renames in history.
+        canonical = fresh_model.canonicalize_data(data)
 
         obj = fresh_model()
         if pk is not None:
@@ -495,29 +589,22 @@ class CustomObject(
         m2m_data = {}
         field_names = {f.name for f in fresh_model._meta.get_fields()}
 
-        for raw_attr, value in data.items():
-            attr = raw_attr
-            if attr == 'custom_fields':
-                attr = 'custom_field_data'
+        for attr, value in canonical.items():
             # Tags via the standard NetBox path (Tag rows are looked up by name).
             if attr == 'tags' and is_taggable(fresh_model):
                 tag_model = apps.get_model('extras', 'Tag')
                 m2m_data['tags'] = list(tag_model.objects.filter(name__in=value or []))
                 continue
             if attr not in field_names:
-                resolved = _translate_attr(obj, attr)
-                if resolved and resolved in field_names:
-                    attr = resolved
-                else:
-                    # Unknown attribute (likely a removed field) — preserve it as
-                    # a Python attribute so downstream code (e.g.
-                    # _deferred_co_field_data) can still see it.
-                    setattr(obj, raw_attr, value)
-                    continue
+                # Unknown attribute (likely a removed field) — preserve it as a
+                # Python attribute so downstream code (e.g. _deferred_co_field_data)
+                # can still see it.
+                setattr(obj, attr, value)
+                continue
             try:
                 f = fresh_model._meta.get_field(attr)
             except FieldDoesNotExist:
-                setattr(obj, raw_attr, value)
+                setattr(obj, attr, value)
                 continue
             if isinstance(f, ManyToManyField):
                 m2m_data[attr] = value
