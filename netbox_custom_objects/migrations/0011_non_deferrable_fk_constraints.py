@@ -18,9 +18,13 @@ def _safe_constraint_name(table_name, column_name, suffix='_fk_cascade'):
     """
     Return a constraint name that fits within PostgreSQL's 63-char identifier limit.
 
-    Uses the same truncate-and-hash strategy as field_types._safe_pg_identifier so
-    that long through-table names (e.g. custom_objects_14_technical_account_accounts)
-    combined with column names do not silently collide after PostgreSQL truncation.
+    Intentionally duplicates the logic from field_types._safe_pg_identifier rather
+    than importing it: migrations must be self-contained so they remain correct even
+    if the live codebase is later refactored.
+
+    Uses the same truncate-and-hash strategy so that long through-table names
+    (e.g. custom_objects_14_technical_account_accounts) combined with column names
+    do not silently collide after PostgreSQL truncation.
     """
     full_name = f'{table_name}_{column_name}{suffix}'
     if len(full_name) <= _PG_MAX_IDENTIFIER_LEN:

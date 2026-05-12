@@ -177,7 +177,7 @@ class LongTableNameTestCase(_Migration0011TestCase):
     collide; _safe_constraint_name must keep names unique and ≤ 63 chars.
     """
 
-    # 47 chars — long enough that any column with name > 5 chars overflows 63.
+    # 47 chars — long enough that any column with name > 4 chars overflows 63.
     TABLE = 'custom_objects_99902_long_through_table_name_abc'
 
     def setUp(self):
@@ -266,3 +266,24 @@ class PartialRerunTestCase(_Migration0011TestCase):
         self.assertEqual(len(constraints), 2, f'Expected 2 constraints, got: {list(constraints)}')
         for name, deferrable in constraints.items():
             self.assertEqual(deferrable, 'NO', f'{name!r} should be non-DEFERRABLE')
+
+    def test_site_id_has_exactly_one_fk_after_rerun(self):
+        """The old DEFERRABLE + pre-existing non-DEFERRABLE must collapse to one constraint."""
+        self._run_migration()
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT count(*)
+                FROM information_schema.table_constraints AS tc
+                JOIN information_schema.key_column_usage AS kcu
+                    ON tc.constraint_name = kcu.constraint_name
+                   AND tc.table_schema = kcu.table_schema
+                WHERE tc.constraint_type = 'FOREIGN KEY'
+                  AND tc.table_name = %s
+                  AND tc.table_schema = current_schema()
+                  AND kcu.column_name = 'site_id'
+                """,
+                [self.TABLE],
+            )
+            count = cursor.fetchone()[0]
+        self.assertEqual(count, 1, f'site_id should have exactly 1 FK constraint after migration, got {count}')
