@@ -561,13 +561,33 @@ class FiltersetAfterClearCacheTestCase(CustomObjectsTestCase, TestCase):
         """NonPolymorphicMultiObjectFilter correctly filters by M2M value."""
         model = self.cot_m2m.get_model()
         obj = model.objects.create(name="linked")
-        getattr(obj, "sites").add(self.site)
+        obj.sites.add(self.site)
         model.objects.create(name="unlinked")
 
         Site.objects.create(name="Other503", slug="other-site-503")
         fs = get_filterset_class(model)({"sites": [self.site.pk]}, model.objects.all())
         pks = list(fs.qs.values_list("pk", flat=True))
         self.assertEqual(set(pks), {obj.pk})
+
+    def test_object_filter_none_value_returns_full_queryset(self):
+        """NonPolymorphicObjectFilter short-circuits on None and returns qs unchanged."""
+        model = self.cot_obj.get_model()
+        model.objects.create(name="obj-a", manufacturer=self.mfr)
+        model.objects.create(name="obj-b")
+        total = model.objects.count()
+
+        fs = get_filterset_class(model)({}, model.objects.all())
+        self.assertEqual(fs.qs.count(), total)
+
+    def test_multiobject_filter_empty_value_returns_full_queryset(self):
+        """NonPolymorphicMultiObjectFilter short-circuits on empty list and returns qs unchanged."""
+        model = self.cot_m2m.get_model()
+        model.objects.create(name="obj-a")
+        model.objects.create(name="obj-b")
+        total = model.objects.count()
+
+        fs = get_filterset_class(model)({}, model.objects.all())
+        self.assertEqual(fs.qs.count(), total)
 
 
 # ---------------------------------------------------------------------------
