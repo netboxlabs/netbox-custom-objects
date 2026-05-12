@@ -1545,6 +1545,26 @@ class CrossCOTMultiObjectAPITest(CustomObjectsTestCase, TestCase):
             'PATCH on a scalar field must not clear existing M2M relationships.',
         )
 
+    def test_put_updates_scalar_field(self):
+        """#443 – PUT must update scalar fields (issue title covers both PATCH and PUT)."""
+        self._add_perm('change', self.model_source)
+
+        # PUT requires the full object payload; supply name + empty refs.
+        response = self.client.put(
+            self._detail_url(self.obj_source),
+            {'name': 'Put Updated Name', 'refs': []},
+            format='json',
+            **self.header,
+        )
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK,
+            f'Expected 200; got {response.status_code}: {getattr(response, "data", response.content)}',
+        )
+
+        self.obj_source.refresh_from_db()
+        self.assertEqual(self.obj_source.name, 'Put Updated Name')
+
     def test_get_response_includes_cross_cot_m2m_field(self):
         """#443 – GET must return the M2M field as a nested list."""
         self._add_perm('view', self.model_source)
