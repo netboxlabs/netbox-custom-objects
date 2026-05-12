@@ -16,6 +16,7 @@ from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.core.validators import RegexValidator, ValidationError
 from django.db import connection, IntegrityError, models, transaction
+from django.db.utils import OperationalError, ProgrammingError
 from django.db.models import Q
 from django.db.models.functions import Lower
 from django.db.models.signals import m2m_changed, pre_delete, post_save
@@ -59,11 +60,9 @@ from utilities.validators import validate_regex
 
 from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
 from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
-from netbox_custom_objects.field_types import FIELD_TYPE_CLASS, safe_table_name
+from netbox_custom_objects.field_types import FIELD_TYPE_CLASS, LazyForeignKey, safe_table_name
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
 from netbox_custom_objects.utilities import _suppress_clear_cache, extract_cot_id_from_model_name, generate_model
-
-logger = logging.getLogger(__name__)
 
 logger = logging.getLogger(__name__)
 
@@ -813,9 +812,13 @@ class CustomObjectType(NetBoxModel):
                 target_field.__dict__.pop('path_infos', None)
                 target_field.__dict__.pop('reverse_path_infos', None)
 
-            # Cache the generated model with its timestamp (protected by lock for thread safety)
+            # Only cache fully-generated models.  Models generated with
+            # skip_object_fields=True omit FK fields to other COTs; caching them
+            # would permanently hide those fields if a dependent COT triggers
+            # generation before this one in the startup loop (issue #408).
             with self._global_lock:
-                self._model_cache[self.id] = (model, self.cache_timestamp)
+                if not skip_object_fields:
+                    self._model_cache[self.id] = (model, self.cache_timestamp)
 
         # Now that the model is in _model_cache, clear_cache() is safe:
         # re-entrant get_model() calls for this COT hit the cache immediately.
@@ -2139,6 +2142,27 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 else:
                     model_field = field_type.get_model_field(self)
                     model_field.contribute_to_class(model, self.name)
+                    # LazyForeignKey starts with a string remote_field.model.  Django's
+                    # lazy_related_operation fires immediately when the target is in
+                    # apps.all_models, but tearDown() cleanup between tests can remove
+                    # the target model from the registry.  Resolve it directly here —
+                    # bypassing the app-config's skip guard — so that schema_editor
+                    # .add_field() always sees a model class, not a string.
+                    if isinstance(model_field, LazyForeignKey) and isinstance(model_field.remote_field.model, str):
+                        _app_label, _model_name = model_field._to_model_name.rsplit('.', 1)
+                        _cot_id_str = extract_cot_id_from_model_name(_model_name.lower())
+                        if _cot_id_str is not None:
+                            try:
+                                _cot = CustomObjectType.objects.get(pk=int(_cot_id_str))
+                                _actual = _cot.get_model()
+                                model_field.remote_field.model = _actual
+                                model_field.to = _actual
+                            except (CustomObjectType.DoesNotExist, OperationalError, ProgrammingError):
+                                logger.warning(
+                                    "Could not resolve LazyForeignKey target %r before add_field; "
+                                    "schema_editor.add_field may fail",
+                                    model_field._to_model_name,
+                                )
                     schema_editor.add_field(model, model_field)
                     if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                         field_type.create_m2m_table(self, model, self.name)

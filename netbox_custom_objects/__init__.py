@@ -250,10 +250,35 @@ class CustomObjectsPluginConfig(PluginConfig):
 
             try:
                 with transaction.atomic():
-                    qs = CustomObjectType.objects.all()
+                    qs = list(CustomObjectType.objects.all())
+
+                    # Pass 1: generate all COT models.  Cross-COT LazyForeignKey
+                    # fields that point to a not-yet-generated COT are left with an
+                    # unresolved string reference (LookupError is caught in
+                    # ObjectFieldType.after_model_generation).
                     for obj in qs:
-                        model = obj.get_model()
-                        get_serializer_class(model)
+                        obj.get_model()
+
+                    # Pass 2: now that every COT is in the app registry, re-resolve
+                    # any LazyForeignKey fields that were deferred in Pass 1 due to
+                    # startup ordering (issue #408).
+                    from netbox_custom_objects.field_types import LazyForeignKey
+                    for obj in qs:
+                        model = CustomObjectType.get_cached_model(obj.id)
+                        if model is None:
+                            continue
+                        for field in model._meta.local_fields:
+                            if isinstance(field, LazyForeignKey) and isinstance(field.remote_field.model, str):
+                                resolve_method = getattr(model, f'_resolve_{field.name}_model', None)
+                                if resolve_method:
+                                    resolve_method(model)
+
+                    # Register serializers after all FK references are fully resolved.
+                    for obj in qs:
+                        model = CustomObjectType.get_cached_model(obj.id)
+                        if model:
+                            get_serializer_class(model)
+
             except (ProgrammingError, OperationalError):
                 # DB schema is incomplete (unapplied migrations). Skip dynamic
                 # model registration — it will happen after migrations finish.

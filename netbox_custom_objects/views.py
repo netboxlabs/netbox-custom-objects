@@ -995,6 +995,20 @@ class CustomObjectDeleteView(generic.ObjectDeleteView):
         context['return_url'] = self.get_return_url(request, obj)
         return render(request, self.template_name, context)
 
+    def _get_dependent_objects(self, obj):
+        dependent_objects = super()._get_dependent_objects(obj)
+        # M2M through-table rows (named Through_custom_objects_<id>_<field>) are
+        # implementation details, not business objects.  Strip them from the
+        # confirmation page so users see meaningful dependent objects only.
+        return {
+            model: instances
+            for model, instances in dependent_objects.items()
+            if not (
+                model._meta.app_label == APP_LABEL
+                and model._meta.model_name.startswith('through_')
+            )
+        }
+
     def get_extra_context(self, request, instance):
         return {'branch_warning': is_in_branch()}
 
@@ -1399,7 +1413,7 @@ class CustomObjectChangeLogView(ConditionalLoginRequiredMixin, View):
         )
 
         objectchanges_table = ObjectChangeTable(
-            data=objectchanges, orderable=False, user=request.user
+            data=objectchanges, orderable=False
         )
         objectchanges_table.configure(request)
 
