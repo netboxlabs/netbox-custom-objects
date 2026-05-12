@@ -1,15 +1,16 @@
 """
-Regression tests for migration 0011 (fix_deferrable_fk_constraints).
+Migration regression tests.
 
-Covers:
-- Basic conversion: DEFERRABLE FK constraints are recreated as non-DEFERRABLE.
-- Long table names: constraint names exceeding PostgreSQL's 63-char limit are
-  handled via _safe_constraint_name (truncate + MD5 digest) so that two columns
-  on the same long-named table never collide.
-- Partial re-run / idempotency: if a previous migration attempt left behind a
-  non-DEFERRABLE _fk_cascade constraint alongside the original DEFERRABLE one
-  (possible in non-atomic or interrupted runs), the migration succeeds instead
-  of raising DuplicateObject.
+Each migration with complex data or schema operations gets its own section here.
+The shared infrastructure (scratch-table base case, FK helpers) is defined once
+and reused across migration-specific groups.
+
+Adding tests for a new migration
+---------------------------------
+1. Load the migration with ``_load_migration('NNNN_migration_name')``.
+2. Subclass ``_MigrationTestCase`` (and optionally a thin migration-specific
+   intermediate) to get scratch-table creation and teardown for free.
+3. Add a clearly-delimited section below.
 """
 
 import importlib
@@ -19,23 +20,21 @@ from django.test import TransactionTestCase
 
 from .base import TransactionCleanupMixin
 
-# Import the migration module whose name starts with a digit.
-_m0011 = importlib.import_module(
-    'netbox_custom_objects.migrations.0011_non_deferrable_fk_constraints'
-)
-fix_deferrable_fk_constraints = _m0011.fix_deferrable_fk_constraints
-_safe_constraint_name = _m0011._safe_constraint_name
+
+def _load_migration(name):
+    """Import a migration module by its migration name (handles digit-prefixed names)."""
+    return importlib.import_module(f'netbox_custom_objects.migrations.{name}')
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Shared helpers
 # ---------------------------------------------------------------------------
 
 _REF_TABLE = 'django_content_type'  # always present; provides a real FK target
 
 
 class _FakeSchemaEditor:
-    """Minimal stand-in accepted by fix_deferrable_fk_constraints."""
+    """Minimal stand-in for the schema_editor argument in RunPython functions."""
     connection = connection
 
 
@@ -86,14 +85,14 @@ def _add_nondeferrable_fk(table_name, constraint_name, column_name, ref_table=_R
 # Base TestCase
 # ---------------------------------------------------------------------------
 
-class Migration0011TestCase(TransactionCleanupMixin, TransactionTestCase):
+class _MigrationTestCase(TransactionCleanupMixin, TransactionTestCase):
     """
-    Each subclass creates its own scratch table(s) in setUp and drops them in
-    tearDown.  Tables use IDs in the 99900+ range to avoid colliding with any
-    real CustomObjectType rows.
-    """
+    Base for migration tests that need ephemeral custom_objects_* tables.
 
-    scratch_tables: list[str] = []
+    Subclasses call ``_create_scratch_table()`` in setUp; tables are dropped
+    automatically in tearDown.  Use IDs in the 99900+ range to avoid colliding
+    with any real CustomObjectType rows created during the test run.
+    """
 
     def setUp(self):
         super().setUp()
@@ -114,15 +113,29 @@ class Migration0011TestCase(TransactionCleanupMixin, TransactionTestCase):
             )
         self._created_tables.append(table_name)
 
+
+# ===========================================================================
+# Migration 0011 — fix_deferrable_fk_constraints
+# ===========================================================================
+#
+# Covers three failure modes reported in #507:
+#   1. Truncation collision — long through-table names combined with column names
+#      can exceed PostgreSQL's 63-char identifier limit; two columns sharing the
+#      same truncated prefix would collide on ADD CONSTRAINT.
+#   2. DROP without IF EXISTS — a re-run after a partial failure would error when
+#      the old constraint name was already gone.
+#   3. No pre-drop of new name — if a prior run left a non-DEFERRABLE _fk_cascade
+#      constraint behind, the ADD CONSTRAINT would raise DuplicateObject.
+
+_m0011 = _load_migration('0011_non_deferrable_fk_constraints')
+
+
+class _Migration0011TestCase(_MigrationTestCase):
     def _run_migration(self):
-        fix_deferrable_fk_constraints(None, _FakeSchemaEditor())
+        _m0011.fix_deferrable_fk_constraints(None, _FakeSchemaEditor())
 
 
-# ---------------------------------------------------------------------------
-# Test: basic conversion (short names)
-# ---------------------------------------------------------------------------
-
-class BasicConversionTestCase(Migration0011TestCase):
+class BasicConversionTestCase(_Migration0011TestCase):
     """DEFERRABLE constraints on a short-named table are converted to non-DEFERRABLE."""
 
     TABLE = 'custom_objects_99901'
@@ -145,8 +158,7 @@ class BasicConversionTestCase(Migration0011TestCase):
 
     def test_new_constraint_names_have_fk_cascade_suffix(self):
         self._run_migration()
-        constraints = _get_fk_constraints(self.TABLE)
-        for name in constraints:
+        for name in _get_fk_constraints(self.TABLE):
             self.assertTrue(
                 name.endswith('_fk_cascade'),
                 f'Expected _fk_cascade suffix on {name!r}',
@@ -158,15 +170,11 @@ class BasicConversionTestCase(Migration0011TestCase):
         self.assertEqual(len(constraints), 2, f'Expected 2 constraints, got: {list(constraints)}')
 
 
-# ---------------------------------------------------------------------------
-# Test: long table name — truncation safety
-# ---------------------------------------------------------------------------
-
-class LongTableNameTestCase(Migration0011TestCase):
+class LongTableNameTestCase(_Migration0011TestCase):
     """
     Through-table with a 47-char name + columns whose combined constraint name
     exceeds 63 chars.  The old code would silently truncate and potentially
-    collide; the new _safe_constraint_name must keep names unique and ≤ 63 chars.
+    collide; _safe_constraint_name must keep names unique and ≤ 63 chars.
     """
 
     # 47 chars — long enough that any column with name > 5 chars overflows 63.
@@ -183,16 +191,8 @@ class LongTableNameTestCase(Migration0011TestCase):
         )
         # Use short hash-style names for the original DEFERRABLE constraints,
         # matching how Django's migration system auto-names them in production.
-        _add_deferrable_fk(
-            self.TABLE,
-            'old_deferrable_col1_99902a',
-            'applicant_user_id_first_variant',
-        )
-        _add_deferrable_fk(
-            self.TABLE,
-            'old_deferrable_col2_99902b',
-            'applicant_user_id_secnd_variant',
-        )
+        _add_deferrable_fk(self.TABLE, 'old_deferrable_col1_99902a', 'applicant_user_id_first_variant')
+        _add_deferrable_fk(self.TABLE, 'old_deferrable_col2_99902b', 'applicant_user_id_secnd_variant')
 
     def test_migration_succeeds_without_duplicate_object_error(self):
         """Should not raise DuplicateObject even though naïve names would collide."""
@@ -223,18 +223,15 @@ class LongTableNameTestCase(Migration0011TestCase):
 
     def test_safe_constraint_name_unit(self):
         """_safe_constraint_name produces distinct names for the two colliding columns."""
-        n1 = _safe_constraint_name(self.TABLE, 'applicant_user_id_first_variant')
-        n2 = _safe_constraint_name(self.TABLE, 'applicant_user_id_secnd_variant')
+        safe = _m0011._safe_constraint_name
+        n1 = safe(self.TABLE, 'applicant_user_id_first_variant')
+        n2 = safe(self.TABLE, 'applicant_user_id_secnd_variant')
         self.assertNotEqual(n1, n2)
         self.assertLessEqual(len(n1), 63)
         self.assertLessEqual(len(n2), 63)
 
 
-# ---------------------------------------------------------------------------
-# Test: partial re-run / idempotency
-# ---------------------------------------------------------------------------
-
-class PartialRerunTestCase(Migration0011TestCase):
+class PartialRerunTestCase(_Migration0011TestCase):
     """
     Simulate a database left in partial state: one column still has its original
     DEFERRABLE constraint PLUS the _fk_cascade non-DEFERRABLE constraint already
@@ -251,7 +248,7 @@ class PartialRerunTestCase(Migration0011TestCase):
         # site_id: partial state — old DEFERRABLE constraint still present
         # AND the new _fk_cascade non-DEFERRABLE one already exists.
         _add_deferrable_fk(self.TABLE, f'{self.TABLE}_site_id_old_hash', 'site_id')
-        new_site_name = _safe_constraint_name(self.TABLE, 'site_id')
+        new_site_name = _m0011._safe_constraint_name(self.TABLE, 'site_id')
         _add_nondeferrable_fk(self.TABLE, new_site_name, 'site_id')
 
         # tenant_id: normal state — only old DEFERRABLE constraint.
