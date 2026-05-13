@@ -27,6 +27,7 @@ from utilities.forms.widgets import HTMXSelect
 from utilities.htmx import htmx_partial
 from utilities.object_types import object_type_name
 from utilities.templatetags.builtins.filters import bettertitle
+from utilities.permissions import get_permission_for_model
 from utilities.views import ConditionalLoginRequiredMixin, ViewTab, get_viewname, register_model_view
 
 from netbox_custom_objects.filtersets import get_filterset_class
@@ -604,6 +605,15 @@ class CustomObjectEditView(generic.ObjectEditView):
     form = None
     queryset = None
     object = None
+
+    def get_required_permission(self):
+        # ObjectEditView.dispatch() sets _permission_action based on whether kwargs is
+        # truthy. Our add URL always includes 'custom_object_type', so kwargs is truthy
+        # even when adding — causing 'change' permission to be required instead of 'add'.
+        # setup() → get_object() pops 'custom_object_type' from self.kwargs, so checking
+        # self.kwargs.get('pk') correctly distinguishes add (no pk) from edit (pk present).
+        action = 'change' if self.kwargs.get('pk') else 'add'
+        return get_permission_for_model(self.queryset.model, action)
 
     def setup(self, request, *args, **kwargs):
         super().setup(request, *args, **kwargs)
