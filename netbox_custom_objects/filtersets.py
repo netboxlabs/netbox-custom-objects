@@ -17,6 +17,8 @@ from .models import CustomObjectType
 __all__ = (
     "ArrayContainsFilter",
     "CustomObjectTypeFilterSet",
+    "NonPolymorphicMultiObjectFilter",
+    "NonPolymorphicObjectFilter",
     "PolymorphicMultiObjectFilter",
     "PolymorphicObjectFilter",
     "get_filterset_class",
@@ -140,6 +142,59 @@ class ArrayContainsFilter(django_filters.MultipleChoiceFilter):
         return qs.filter(q).distinct()
 
 
+class NonPolymorphicObjectFilter(django_filters.Filter):
+    """
+    Filter for non-polymorphic FK Object fields on dynamically-generated COT models.
+
+    Inherits from django_filters.Filter (not ModelChoiceFilter) so that
+    NetBoxModelFilterSet.get_additional_lookups() exits early without attempting
+    to validate the filter name against real model fields via get_model_field().
+    After apps.clear_cache() has cleared _meta._forward_fields_map, that
+    validation falls through to _relation_tree → apps.get_models() →
+    recursive get_model() calls → ValueError (issue #503).
+
+    Filters by {field_name}_id to also sidestep Django's isinstance check in
+    check_query_object_type, consistent with the fix for issue #508.
+    """
+
+    field_class = django_forms.ModelChoiceField
+
+    def __init__(self, *args, queryset, **kwargs):
+        kwargs.setdefault("required", False)
+        super().__init__(*args, queryset=queryset, **kwargs)
+
+    def filter(self, qs, value):
+        if value is None:
+            return qs
+        return qs.filter(**{f"{self.field_name}_id": value.pk})
+
+
+class NonPolymorphicMultiObjectFilter(django_filters.Filter):
+    """
+    Filter for non-polymorphic M2M MultiObject fields on dynamically-generated
+    COT models.
+
+    Inherits from django_filters.Filter (not ModelMultipleChoiceFilter) for the
+    same reason as NonPolymorphicObjectFilter: avoids get_additional_lookups()
+    introspecting _meta after apps.clear_cache() has cleared _forward_fields_map.
+
+    Filters by {field_name}__in=pks (M2M JOIN via through table) using PKs
+    rather than instances to sidestep Django's isinstance check.
+    """
+
+    field_class = django_forms.ModelMultipleChoiceField
+
+    def __init__(self, *args, queryset, **kwargs):
+        kwargs.setdefault("required", False)
+        super().__init__(*args, queryset=queryset, **kwargs)
+
+    def filter(self, qs, value):
+        if not value:
+            return qs
+        pks = list(value.values_list("pk", flat=True))
+        return qs.filter(**{f"{self.field_name}__in": pks}).distinct()
+
+
 @dataclass
 class FilterSpec:
     """
@@ -193,13 +248,10 @@ FIELD_TYPE_FILTERS = {
         ArrayContainsFilter,
         extra_kwargs={"choices": lambda f: f.choices}
     ),
-    CustomFieldTypeChoices.TYPE_OBJECT: FilterSpec(django_filters.ModelChoiceFilter),
-    # CustomManyToManyField inherits ManyToManyField, so Django's ORM translates
-    # `field__in=values` to a JOIN through the through table at the SQL level.
-    # The custom descriptor/manager only affects instance-level access (e.g.
-    # `instance.field.all()`), not queryset filtering, so ModelMultipleChoiceFilter
-    # is correct here without needing explicit through-table queries.
-    CustomFieldTypeChoices.TYPE_MULTIOBJECT: FilterSpec(django_filters.ModelMultipleChoiceFilter),
+    CustomFieldTypeChoices.TYPE_OBJECT: FilterSpec(NonPolymorphicObjectFilter),
+    # NonPolymorphicMultiObjectFilter uses field__in=pks, which Django's ORM
+    # translates to a JOIN through the through table at the SQL level.
+    CustomFieldTypeChoices.TYPE_MULTIOBJECT: FilterSpec(NonPolymorphicMultiObjectFilter),
 }
 
 

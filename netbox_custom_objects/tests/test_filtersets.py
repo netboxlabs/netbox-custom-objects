@@ -5,16 +5,19 @@ import datetime
 from decimal import Decimal
 from unittest.mock import MagicMock
 
+import django_filters
 from django.test import TestCase
 from django.utils import timezone
 
+from core.models import ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
 from extras.choices import CustomFieldTypeChoices
 from extras.models import CustomFieldChoiceSet
 
 from netbox_custom_objects.field_types import MultiObjectFieldType, ObjectFieldType
 from netbox_custom_objects.filtersets import (
-    ArrayContainsFilter, PolymorphicMultiObjectFilter, PolymorphicObjectFilter,
+    ArrayContainsFilter, NonPolymorphicMultiObjectFilter, NonPolymorphicObjectFilter,
+    PolymorphicMultiObjectFilter, PolymorphicObjectFilter,
     build_filter_for_field, get_filterset_class,
 )
 from netbox_custom_objects.models import CustomObjectTypeField
@@ -459,6 +462,132 @@ class BuildFilterForFieldGuardsTestCase(TestCase):
             build_filter_for_field(self._field(CustomFieldTypeChoices.TYPE_MULTIOBJECT, related_ot)),
             {},
         )
+
+
+# ---------------------------------------------------------------------------
+# Regression: get_filterset_class must not raise after apps.clear_cache()
+# (issue #503)
+# ---------------------------------------------------------------------------
+
+
+class FiltersetAfterClearCacheTestCase(CustomObjectsTestCase, TestCase):
+    """
+    Regression for #503: get_filterset_class() must not raise ValueError when
+    apps.clear_cache() has cleared _meta._forward_fields_map on the model.
+
+    When get_model() generates a fresh class it calls apps.clear_cache() at the
+    end of the method (models.py line ~828).  This runs _expire_cache() on all
+    registered models, deleting _forward_fields_map.  A subsequent call to
+    get_filterset_class() in the same request builds a ModelChoiceFilter /
+    ModelMultipleChoiceFilter in declared_filters; NetBoxModelFilterSet's
+    get_additional_lookups() then calls get_model_field(), which falls through
+    to _relation_tree → apps.get_models() → recursive get_model() → ValueError.
+
+    The fix uses NonPolymorphicObjectFilter / NonPolymorphicMultiObjectFilter
+    (both inheriting from django_filters.Filter, not ModelChoiceFilter) so that
+    _get_filter_lookup_dict returns None and get_additional_lookups exits early.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.site = Site.objects.create(name="Site503", slug="site-503")
+        cls.mfr = Manufacturer.objects.create(name="Mfr503", slug="mfr-503")
+        mfr_ot = ObjectType.objects.get(app_label="dcim", model="manufacturer")
+        site_ot = ObjectType.objects.get(app_label="dcim", model="site")
+
+        # COT with a non-polymorphic FK Object field (→ dcim.Manufacturer)
+        cls.cot_obj = cls.create_custom_object_type(name="C503Obj", slug="c503obj")
+        cls.create_custom_object_type_field(
+            cls.cot_obj, name="name", label="Name", type="text", primary=True, required=True
+        )
+        cls.create_custom_object_type_field(
+            cls.cot_obj, name="manufacturer", label="Manufacturer",
+            type="object", related_object_type=mfr_ot,
+        )
+
+        # COT with a non-polymorphic M2M MultiObject field (→ dcim.Site)
+        cls.cot_m2m = cls.create_custom_object_type(name="C503M2m", slug="c503m2m")
+        cls.create_custom_object_type_field(
+            cls.cot_m2m, name="name", label="Name", type="text", primary=True, required=True
+        )
+        cls.create_custom_object_type_field(
+            cls.cot_m2m, name="sites", label="Sites",
+            type="multiobject", related_object_type=site_ot,
+        )
+
+    def test_filterset_builds_after_expire_cache_object_field(self):
+        """get_filterset_class() does not raise after _expire_cache() on an Object-field COT."""
+        model = self.cot_obj.get_model()
+        model._meta._expire_cache()
+        filterset_class = get_filterset_class(model)
+        self.assertIsNotNone(filterset_class)
+
+    def test_filterset_builds_after_expire_cache_multiobject_field(self):
+        """get_filterset_class() does not raise after _expire_cache() on a MultiObject-field COT."""
+        model = self.cot_m2m.get_model()
+        model._meta._expire_cache()
+        filterset_class = get_filterset_class(model)
+        self.assertIsNotNone(filterset_class)
+
+    def test_filter_class_is_non_polymorphic_object_filter(self):
+        """The object-field filter is a NonPolymorphicObjectFilter, not ModelChoiceFilter."""
+        model = self.cot_obj.get_model()
+        filterset_class = get_filterset_class(model)
+        manufacturer_filter = filterset_class.base_filters.get("manufacturer")
+        self.assertIsInstance(manufacturer_filter, NonPolymorphicObjectFilter)
+        self.assertNotIsInstance(manufacturer_filter, django_filters.ModelChoiceFilter)
+
+    def test_filter_class_is_non_polymorphic_multiobject_filter(self):
+        """The multiobject-field filter is a NonPolymorphicMultiObjectFilter, not ModelMultipleChoiceFilter."""
+        model = self.cot_m2m.get_model()
+        filterset_class = get_filterset_class(model)
+        sites_filter = filterset_class.base_filters.get("sites")
+        self.assertIsInstance(sites_filter, NonPolymorphicMultiObjectFilter)
+        self.assertNotIsInstance(sites_filter, django_filters.ModelMultipleChoiceFilter)
+
+    def test_filter_by_fk_value_returns_matching_objects(self):
+        """NonPolymorphicObjectFilter correctly filters by FK value."""
+        model = self.cot_obj.get_model()
+        obj = model.objects.create(name="test-obj", manufacturer=self.mfr)
+        other_mfr = Manufacturer.objects.create(name="Other503", slug="other-503")
+        model.objects.create(name="other-obj", manufacturer=other_mfr)
+
+        fs = get_filterset_class(model)({"manufacturer": self.mfr.pk}, model.objects.all())
+        pks = list(fs.qs.values_list("pk", flat=True))
+        self.assertEqual(set(pks), {obj.pk})
+
+    def test_filter_by_m2m_value_returns_matching_objects(self):
+        """NonPolymorphicMultiObjectFilter correctly filters by M2M value."""
+        model = self.cot_m2m.get_model()
+        obj = model.objects.create(name="linked")
+        obj.sites.add(self.site)
+        model.objects.create(name="unlinked")
+
+        Site.objects.create(name="Other503", slug="other-site-503")
+        fs = get_filterset_class(model)({"sites": [self.site.pk]}, model.objects.all())
+        pks = list(fs.qs.values_list("pk", flat=True))
+        self.assertEqual(set(pks), {obj.pk})
+
+    def test_object_filter_none_value_returns_full_queryset(self):
+        """NonPolymorphicObjectFilter short-circuits on None and returns qs unchanged."""
+        model = self.cot_obj.get_model()
+        model.objects.create(name="obj-a", manufacturer=self.mfr)
+        model.objects.create(name="obj-b")
+        total = model.objects.count()
+
+        fs = get_filterset_class(model)({}, model.objects.all())
+        self.assertEqual(fs.qs.count(), total)
+
+    def test_multiobject_filter_empty_value_returns_full_queryset(self):
+        """NonPolymorphicMultiObjectFilter short-circuits on empty list and returns qs unchanged."""
+        model = self.cot_m2m.get_model()
+        model.objects.create(name="obj-a")
+        model.objects.create(name="obj-b")
+        total = model.objects.count()
+
+        fs = get_filterset_class(model)({}, model.objects.all())
+        self.assertEqual(fs.qs.count(), total)
 
 
 # ---------------------------------------------------------------------------
