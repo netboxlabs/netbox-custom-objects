@@ -371,6 +371,12 @@ class CustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjec
         edit_url = self._get_url('edit', self.instance1)
         self.assertHttpStatus(self.client.get(edit_url), 403)
 
+        # Symmetrical: change-only permission must not grant access to the add URL
+        obj_perm.actions = ['change']
+        obj_perm.save()
+        self.assertHttpStatus(self.client.get(add_url), 403)
+        self.assertHttpStatus(self.client.get(edit_url), 200)
+
 
 class ComplexCustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase):
     """Test cases for complex custom objects with various field types."""
