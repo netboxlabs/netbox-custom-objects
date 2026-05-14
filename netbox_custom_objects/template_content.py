@@ -79,7 +79,13 @@ class CustomObjectLink(PluginTemplateExtension):
                         f"{field.name}_object_id": target_obj.pk,
                     })
                 else:
-                    linked_objects = model.objects.filter(**{field.name: target_obj})
+                    # Filter by PK rather than by instance to avoid Django's
+                    # isinstance check in check_query_object_type.  When
+                    # no_cache=True generates a fresh class object, a
+                    # self-referential field's target_obj (from the cached
+                    # class) and model (the fresh class) are not identity-equal,
+                    # causing "Must be TableNModel instance" ValueError (#508).
+                    linked_objects = model.objects.filter(**{f"{field.name}_id": target_obj.pk})
 
             for model_object in linked_objects:
                 linked_custom_objects.append(

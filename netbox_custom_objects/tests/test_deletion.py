@@ -538,6 +538,211 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
             "Target object must survive the failed deletion.",
         )
 
+    # ------------------------------------------------------------------
+    # Cross-COT multiobject (M2M) deletion – issue #483
+    # ------------------------------------------------------------------
+
+    def test_delete_source_co_with_cross_cot_multiobject_field(self):
+        """#483 – Deleting a CO that is the SOURCE of a cross-COT M2M field
+        succeeds and cascade-deletes the through rows."""
+        cot_source = self.create_simple_custom_object_type(name='m2msrc', slug='m2m-src')
+        cot_target = self.create_simple_custom_object_type(name='m2mtrg', slug='m2m-trg')
+
+        self.create_custom_object_type_field(
+            cot_source,
+            name='refs',
+            label='References',
+            type='multiobject',
+            related_object_type=cot_target.object_type,
+        )
+
+        # Per cross-COT FK convention: generate source first, refresh target, then target.
+        model_source = cot_source.get_model()
+        cot_target.refresh_from_db()
+        model_target = cot_target.get_model()
+
+        obj_target = model_target.objects.create(name='Target 1')
+        obj_source = model_source.objects.create(name='Source 1')
+        obj_source.refs.add(obj_target)
+
+        m2m_field = model_source._meta.get_field('refs')
+        through_model = m2m_field.remote_field.through
+        self.assertEqual(through_model.objects.filter(source_id=obj_source.pk).count(), 1)
+
+        # Deleting the source CO must cascade-delete through rows and succeed.
+        obj_source.delete()
+
+        self.assertFalse(
+            model_source.objects.filter(pk=obj_source.pk).exists(),
+            'Source CO should be deleted.',
+        )
+        self.assertEqual(
+            through_model.objects.filter(source_id=obj_source.pk).count(),
+            0,
+            'Through rows must be deleted when the source CO is deleted.',
+        )
+        self.assertTrue(
+            model_target.objects.filter(pk=obj_target.pk).exists(),
+            'Target CO must survive when source CO is deleted.',
+        )
+
+    def test_delete_target_co_with_cross_cot_multiobject_field(self):
+        """#483 – Deleting a CO that is the TARGET of a cross-COT M2M field
+        succeeds and cascade-deletes the through rows."""
+        cot_source = self.create_simple_custom_object_type(name='m2msrc2', slug='m2m-src2')
+        cot_target = self.create_simple_custom_object_type(name='m2mtrg2', slug='m2m-trg2')
+
+        self.create_custom_object_type_field(
+            cot_source,
+            name='refs',
+            label='References',
+            type='multiobject',
+            related_object_type=cot_target.object_type,
+        )
+
+        model_source = cot_source.get_model()
+        cot_target.refresh_from_db()
+        model_target = cot_target.get_model()
+
+        obj_target = model_target.objects.create(name='Target 2')
+        obj_source = model_source.objects.create(name='Source 2')
+        obj_source.refs.add(obj_target)
+
+        m2m_field = model_source._meta.get_field('refs')
+        through_model = m2m_field.remote_field.through
+        self.assertEqual(through_model.objects.filter(target_id=obj_target.pk).count(), 1)
+
+        # Deleting the target CO must cascade-delete through rows and succeed.
+        obj_target.delete()
+
+        self.assertFalse(
+            model_target.objects.filter(pk=obj_target.pk).exists(),
+            'Target CO should be deleted.',
+        )
+        self.assertEqual(
+            through_model.objects.filter(target_id=obj_target.pk).count(),
+            0,
+            'Through rows must be deleted when the target CO is deleted.',
+        )
+        self.assertTrue(
+            model_source.objects.filter(pk=obj_source.pk).exists(),
+            'Source CO must survive when target CO is deleted.',
+        )
+
+    def test_delete_target_co_after_target_model_regeneration(self):
+        """#483 – Deletion of the target CO succeeds even after the TARGET COT's
+        model is regenerated (cache miss), which leaves the through model's target
+        FK pointing at the old class.  The fix repoints the FK so the ORM-level
+        cascade wires up correctly and the deletion succeeds."""
+        cot_source = self.create_simple_custom_object_type(name='m2msrc3', slug='m2m-src3')
+        cot_target = self.create_simple_custom_object_type(name='m2mtrg3', slug='m2m-trg3')
+
+        self.create_custom_object_type_field(
+            cot_source,
+            name='refs',
+            label='References',
+            type='multiobject',
+            related_object_type=cot_target.object_type,
+        )
+
+        model_source = cot_source.get_model()
+        cot_target.refresh_from_db()
+        model_target = cot_target.get_model()
+
+        obj_target = model_target.objects.create(name='Target 3')
+        obj_source = model_source.objects.create(name='Source 3')
+        obj_source.refs.add(obj_target)
+
+        m2m_field = model_source._meta.get_field('refs')
+        through_model = m2m_field.remote_field.through
+        self.assertEqual(through_model.objects.filter(target_id=obj_target.pk).count(), 1)
+
+        # Force model regeneration for cot_target (simulates a cache-miss in production).
+        CustomObjectType.clear_model_cache(cot_target.id)
+        cot_target.refresh_from_db()
+        model_target_v2 = cot_target.get_model()
+
+        # Ensure we actually got a fresh class.
+        obj_target_v2 = model_target_v2.objects.get(pk=obj_target.pk)
+
+        # Deletion must succeed — DB-level CASCADE must clean up through rows even
+        # if the ORM-level related_objects cache is stale.
+        obj_target_v2.delete()
+
+        self.assertFalse(
+            model_target_v2.objects.filter(pk=obj_target.pk).exists(),
+            'Target CO should be deleted after model regeneration.',
+        )
+        self.assertEqual(
+            through_model.objects.filter(target_id=obj_target.pk).count(),
+            0,
+            'Through rows must be deleted (DB CASCADE) even after model regeneration.',
+        )
+
+    def test_delete_co_in_multi_hop_cross_cot_m2m_chain(self):
+        """#483 – Complex cross-COT chain: A.refs→B, B.ports→C.
+        Deleting a B instance must cascade-delete both A→B through rows and
+        B→C through rows (B is both source and target in different M2M relations)."""
+        cot_a = self.create_simple_custom_object_type(name='m2mcha', slug='m2m-ch-a')
+        cot_b = self.create_simple_custom_object_type(name='m2mchb', slug='m2m-ch-b')
+        cot_c = self.create_simple_custom_object_type(name='m2mchc', slug='m2m-ch-c')
+
+        # A.refs → B (M2M)
+        self.create_custom_object_type_field(
+            cot_a,
+            name='refs',
+            label='References',
+            type='multiobject',
+            related_object_type=cot_b.object_type,
+        )
+        # B.ports → C (M2M)
+        self.create_custom_object_type_field(
+            cot_b,
+            name='ports',
+            label='Ports',
+            type='multiobject',
+            related_object_type=cot_c.object_type,
+        )
+
+        model_a = cot_a.get_model()
+        cot_b.refresh_from_db()
+        model_b = cot_b.get_model()
+        cot_c.refresh_from_db()
+        model_c = cot_c.get_model()
+
+        obj_a = model_a.objects.create(name='A1')
+        obj_b = model_b.objects.create(name='B1')
+        obj_c = model_c.objects.create(name='C1')
+
+        obj_a.refs.add(obj_b)
+        obj_b.ports.add(obj_c)
+
+        refs_field = model_a._meta.get_field('refs')
+        through_ab = refs_field.remote_field.through
+        ports_field = model_b._meta.get_field('ports')
+        through_bc = ports_field.remote_field.through
+
+        self.assertEqual(through_ab.objects.filter(target_id=obj_b.pk).count(), 1)
+        self.assertEqual(through_bc.objects.filter(source_id=obj_b.pk).count(), 1)
+
+        # Deleting B must cascade-delete both sets of through rows.
+        obj_b.delete()
+
+        self.assertFalse(model_b.objects.filter(pk=obj_b.pk).exists())
+        self.assertEqual(
+            through_ab.objects.filter(target_id=obj_b.pk).count(),
+            0,
+            'A→B through rows must be deleted when B is deleted.',
+        )
+        self.assertEqual(
+            through_bc.objects.filter(source_id=obj_b.pk).count(),
+            0,
+            'B→C through rows must be deleted when B is deleted.',
+        )
+        # A and C must survive.
+        self.assertTrue(model_a.objects.filter(pk=obj_a.pk).exists())
+        self.assertTrue(model_c.objects.filter(pk=obj_c.pk).exists())
+
     def test_non_object_field_save_does_not_bump_unrelated_cot_cache_timestamp(self):
         """Saving a non-object field must not affect an unrelated COT's cache_timestamp."""
         cot_target = self.create_simple_custom_object_type(name='notarget', slug='no-target')
