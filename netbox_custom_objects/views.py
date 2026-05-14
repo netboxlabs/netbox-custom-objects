@@ -1024,6 +1024,7 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
     def setup(self, request, *args, **kwargs):
         super().setup(request, *args, **kwargs)
         self.queryset = self.get_queryset(request)
+        self.filterset = get_filterset_class(self.queryset.model)
         self.form = self.get_form(self.queryset)
         self.table = self.get_table(self.queryset, request).__class__
 
@@ -1223,6 +1224,7 @@ class CustomObjectBulkDeleteView(CustomObjectTableMixin, generic.BulkDeleteView)
     def setup(self, request, *args, **kwargs):
         super().setup(request, *args, **kwargs)
         self.queryset = self.get_queryset(request)
+        self.filterset = get_filterset_class(self.queryset.model)
         self.table = self.get_table(self.queryset, request).__class__
 
     def get_queryset(self, request):
