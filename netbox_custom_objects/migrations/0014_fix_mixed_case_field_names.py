@@ -50,6 +50,31 @@ def fix_mixed_case_field_names(apps, schema_editor):
     if not mixed_case_fields:
         return
 
+    # Detect case-collisions: e.g. 'fieldname' and 'FieldName' on the same COT.
+    # The UniqueConstraint on (name, custom_object_type) is case-sensitive, so both
+    # can coexist. Renaming either to lowercase would collide with the other's DB
+    # column/table — we cannot resolve this automatically.
+    lower_name_groups = {}
+    for f in CustomObjectTypeField.objects.select_related("custom_object_type").all():
+        key = (f.custom_object_type_id, f.name.lower())
+        lower_name_groups.setdefault(key, []).append(f)
+
+    collisions = [fields for fields in lower_name_groups.values() if len(fields) > 1]
+
+    if collisions:
+        print("\nCannot automatically rename: the following fields would collide after lowercasing.\n")
+        for fields in collisions:
+            names = ", ".join(repr(f.name) for f in fields)
+            cot = fields[0].custom_object_type
+            print(
+                f"  COT #{cot.pk} ({cot.name!r}): {names} all lower to {fields[0].name.lower()!r}"
+            )
+        print("\nRename or delete the conflicting fields manually, then re-run this migration.")
+        raise RuntimeError(
+            "Case-collision detected among CustomObjectTypeField names. "
+            "Manual intervention required before this migration can proceed."
+        )
+
     print("\nThe following CustomObjectTypeField records have mixed-case names.")
     print("Mixed-case names create quoted PostgreSQL identifiers, which can")
     print("cause query failures when referenced without quotes.\n")
