@@ -356,7 +356,13 @@ class CustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjec
         ...
 
     def test_bulk_edit_select_all_respects_full_queryset(self):
-        """Regression #380: 'select all matching query' must edit all objects, not just the current page."""
+        """Regression #380: 'select all matching query' must edit all objects, not just the current page.
+
+        The fix sets self.filterset on BulkEditView so that the _all flag causes the view to
+        build pk_list from the full queryset. We verify this by submitting a description update
+        with _all set: before the fix, pk_list is empty so zero objects are updated (200 returned,
+        no redirect); after the fix, all objects are updated and the view redirects (302).
+        """
         model = self.model
         content_type = ContentType.objects.get_for_model(model)
         obj_perm = ObjectPermission(name='bulk-edit-all', actions=['view', 'change'])
@@ -366,20 +372,20 @@ class CustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjec
 
         extra = [model(name=f"bulk-{i}", count=i) for i in range(60)]
         model.objects.bulk_create(extra)
-
-        bulk_edit_url = self._get_url('bulk_edit')
         total = model.objects.count()
         self.assertGreater(total, 50)
 
+        bulk_edit_url = self._get_url('bulk_edit')
         response = self.client.post(bulk_edit_url, data={
             '_all': 'on',
-            'pk': [],
             '_apply': 'Apply',
+            'pk': [],
+            'description': 'updated-by-select-all',
         })
-        # 200 means form re-displayed (e.g. validation); 302 means redirect after success.
-        # Either is acceptable — we just need to confirm there's no 403/500 and that
-        # the view processed the _all flag rather than silently falling back to page PKs.
-        self.assertNotIn(response.status_code, [403, 500])
+        # Successful bulk edit redirects; without the fix pk_list is empty so the view
+        # returns a 200 (warning: no objects selected) instead.
+        self.assertHttpStatus(response, 302)
+        self.assertEqual(model.objects.filter(description='updated-by-select-all').count(), total)
 
     def test_bulk_delete_select_all_respects_full_queryset(self):
         """Regression #380: 'select all matching query' must delete all objects, not just the current page.
