@@ -2094,7 +2094,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         # If the formula must change, write a data migration that renames every
         # affected table with ALTER TABLE … RENAME TO before deploying the new
         # code, and update through_model_name to match.
-        raw = f"custom_objects_{self.custom_object_type_id}_{self.name}"
+        raw = f"custom_objects_{self.custom_object_type_id}_{self.name.lower()}"
         return safe_table_name(raw)
 
     @property
