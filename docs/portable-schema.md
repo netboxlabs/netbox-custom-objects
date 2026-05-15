@@ -7,7 +7,7 @@ and repeatable way.
 
 ## Concepts
 
-### Schema documents
+### Schema Documents
 
 A schema document is a JSON object that fully describes one or more Custom Object Types —
 their names, metadata, and all field definitions. The document is self-contained: a reader
@@ -72,7 +72,7 @@ a `REMOVE`.
 Tombstones are persisted in the `CustomObjectType.schema_document` field and read back into
 every subsequent export, so the full removal history accumulates over time.
 
-### Schema document storage
+### Schema Document Storage
 
 `CustomObjectType.schema_document` stores the most recently applied or exported schema
 snapshot as a JSON blob. It is written by the executor after a successful apply, and read
@@ -81,9 +81,9 @@ applied, the field is `null`.
 
 ---
 
-## Design decisions
+## Design Decisions
 
-### Integer `schema_id` instead of UUID
+### Integer `schema_id` Instead of UUID
 
 Several alternatives were considered for the stable field identity value:
 
@@ -105,7 +105,7 @@ places the responsibility for incrementing them on the schema author.
 > need to be reconciled — integer IDs would need to be replaced with UUIDs. The current design
 > does not support that workflow.
 
-### Single-source-of-truth distribution model
+### Single-Source-of-Truth Distribution Model
 
 The feature is designed around a hub-and-spoke topology:
 
@@ -119,7 +119,7 @@ The comparator and executor handle the downstream side: they diff an incoming sc
 the live DB state and apply the delta atomically. There is no merge logic for reconciling
 independent changes from multiple peers.
 
-### Identifier pattern alignment
+### Identifier Pattern Alignment
 
 COT names (`CustomObjectType.name`) and field names (`CustomObjectTypeField.name`) must satisfy
 the pattern `^[a-z0-9]+(_[a-z0-9]+)*$`. This is the same pattern used by the JSON Schema
@@ -137,20 +137,20 @@ The pattern rejects:
 
 ---
 
-## Schema document format
+## Schema Document Format
 
 The JSON Schema validator for schema documents lives at
-`netbox_custom_objects/schemas/cot_schema_v1.json` and is used by the API endpoints to
+`netbox_custom_objects/schema/cot_schema_v1.json` and is used by the API endpoints to
 validate incoming documents before any DB access.
 
-### Top-level structure
+### Top-Level Structure
 
 | Key | Type | Description |
 |-----|------|-------------|
 | `schema_version` | `"1"` | Format version. Currently only `"1"` is supported. |
 | `types` | array of COT definitions | One entry per Custom Object Type. |
 
-### COT definition
+### COT Definition
 
 | Key | Required | Description |
 |-----|----------|-------------|
@@ -158,12 +158,16 @@ validate incoming documents before any DB access.
 | `slug` | yes | URL-safe slug. Used as the stable lookup key when applying. |
 | `verbose_name` | no | Singular display name. |
 | `verbose_name_plural` | no | Plural display name. |
-| `version` | no | Free-form version string for the COT schema (e.g. `"2.1.0"`). |
-| `description` | no | Short description. |
+| `version` | no | [PEP 440](https://peps.python.org/pep-0440/) version string for the schema (e.g. `"2.1.0"`). |
+| `description` | no | Short description (max 200 characters). |
+| `group_name` | no | Navigation menu grouping. |
 | `fields` | yes | Array of active field definitions. |
 | `removed_fields` | no | Array of tombstone records for previously removed fields. |
 
-### Field definition
+!!! note
+    The `comments` attribute on Custom Object Types and Custom Object Type Fields is intentionally **excluded** from the schema document format. It is editorial annotation rather than structural schema, and including it would create noise in diffs and across-installation sharing.
+
+### Field Definition
 
 All fields share these base attributes:
 
@@ -186,29 +190,34 @@ All fields share these base attributes:
 | `ui_editable` | no | `"yes"`, `"no"`, or `"hidden"`. Default: `"yes"`. |
 | `is_cloneable` | no | Whether the field is copied when cloning objects. Default: `false`. |
 | `deprecated` | no | Marks the field as deprecated. Default: `false`. |
-| `deprecated_since` | no | Version string when the field was deprecated (e.g. `"2.0.0"`). |
-| `scheduled_removal` | no | Version string when the field is planned for removal (e.g. `"3.0.0"`). |
+| `deprecated_since` | no | [PEP 440](https://peps.python.org/pep-0440/) version string when the field was deprecated (e.g. `"2.0.0"`). |
+| `scheduled_removal` | no | [PEP 440](https://peps.python.org/pep-0440/) version string when the field is planned for removal (e.g. `"3.0.0"`). |
 
 Attributes that match their defaults are omitted from exported documents to keep output minimal.
 
-### Field types and type-specific attributes
+### Field Types and Type-Specific Attributes
 
 | Type | Additional attributes |
 |------|-----------------------|
 | `text`, `longtext` | `validation_regex` |
 | `integer`, `decimal` | `validation_minimum`, `validation_maximum` |
-| `select`, `multiselect` | `choice_set` (required — name of a `CustomFieldChoiceSet`) |
-| `object`, `multiobject` | `related_object_type` (required), `related_object_filter` |
+| `select`, `multiselect` | `choice_set` (required — **name** of a `CustomFieldChoiceSet`) |
+| `object` | `related_object_type` (required when `is_polymorphic` is `false`), `related_object_types` (required when `is_polymorphic` is `true`), `is_polymorphic`, `related_object_filter`, `on_delete_behavior` |
+| `multiobject` | `related_object_type` (required when `is_polymorphic` is `false`), `related_object_types` (required when `is_polymorphic` is `true`), `is_polymorphic`, `related_object_filter` |
 | `boolean`, `date`, `datetime`, `url`, `json` | (none) |
 
-### Related object type encoding
+`on_delete_behavior` is one of `"set_null"` (default), `"cascade"`, or `"protect"`. It applies only to single `object` fields.
 
-`related_object_type` is encoded as a `/`-separated string:
+`is_polymorphic` defaults to `false`. When `true`, the field uses a generic foreign key and accepts references to any of the types listed in `related_object_types`. The `is_polymorphic` flag and the set of allowed types cannot be changed after the field is created.
+
+### Related Object Type Encoding
+
+`related_object_type` (and each entry in `related_object_types`) is encoded as a `/`-separated string:
 
 - **Built-in NetBox model:** `"dcim/device"`, `"ipam/prefix"`
 - **Custom Object Type:** `"custom-objects/<cot-slug>"`, e.g. `"custom-objects/circuit"`
 
-### Tombstone record
+### Tombstone Record
 
 ```json
 {
@@ -226,13 +235,13 @@ Attributes that match their defaults are omitted from exported documents to keep
 
 ## Usage
 
-### Exporting a schema
+### Exporting a Schema
 
-Use the Python API from the `exporter` module. This is typically called from a management
-command or script:
+Use the Python API from `netbox_custom_objects.schema.exporter`. This is typically called
+from a management command or script:
 
 ```python
-from netbox_custom_objects.exporter import export_cots
+from netbox_custom_objects.schema.exporter import export_cots
 from netbox_custom_objects.models import CustomObjectType
 
 cots = CustomObjectType.objects.filter(slug__in=["circuit", "device-profile"])
@@ -249,7 +258,7 @@ document wrapper, use `export_cot(cot)`.
 > are skipped with a `WARNING` log entry. Run the backfill migration (see below) to assign IDs
 > to pre-existing fields.
 
-### Previewing a schema (API)
+### Previewing a Schema (API)
 
 `POST /api/plugins/custom-objects/schema/preview/`
 
@@ -315,7 +324,7 @@ Response `200`:
 `has_destructive_changes: true` indicates that applying this schema would drop at least one
 column. The preview endpoint never returns `409` — it is safe to call at any time.
 
-### Applying a schema (API)
+### Applying a Schema (API)
 
 `POST /api/plugins/custom-objects/schema/apply/`
 
@@ -337,6 +346,9 @@ Authorization: Token <token>
   created COT tables (PostgreSQL supports transactional DDL).
 - On success, `schema_document` is persisted on each affected COT so tombstones are available
   for future export/diff cycles.
+- Schema apply is **blocked while a [NetBox Branching](branching.md) branch is active**, since
+  the executor performs direct DDL that is not branch-aware. Run schema applies from the main
+  context.
 
 Response `200`:
 
@@ -366,7 +378,7 @@ Response `400 Bad Request` (invalid schema, unresolvable reference, or circular 
 }
 ```
 
-### Typical end-to-end workflow
+### Typical End-to-End Workflow
 
 1. **Define and iterate** on COT schemas in a development environment using the NetBox UI or
    API.
@@ -380,7 +392,7 @@ Response `400 Bad Request` (invalid schema, unresolvable reference, or circular 
 
 ---
 
-## Field deprecation lifecycle
+## Field Deprecation Lifecycle
 
 Fields can be marked deprecated without being removed, allowing a grace period before deletion:
 
@@ -404,12 +416,12 @@ is actually deleted, at which point a tombstone entry should be added.
 
 ---
 
-## Comparator (developer reference)
+## Comparator (Developer Reference)
 
-`netbox_custom_objects/comparator.py` — pure-read, no DB writes.
+`netbox_custom_objects/schema/comparator.py` — pure-read, no DB writes.
 
 ```python
-from netbox_custom_objects.comparator import diff_document, diff_cot
+from netbox_custom_objects.schema.comparator import diff_document, diff_cot
 
 diffs = diff_document(schema_doc)   # list[COTDiff]
 diff  = diff_cot(type_def)          # COTDiff
@@ -440,7 +452,7 @@ Convenience properties: `has_changes`, `has_destructive_changes`, `adds`, `remov
 
 Properties: `is_rename`, `is_type_change`.
 
-### Matching rules
+### Matching Rules
 
 - Fields are matched exclusively by `schema_id`. DB fields with no `schema_id` generate a
   **warning**, not a `REMOVE`.
@@ -449,12 +461,12 @@ Properties: `is_rename`, `is_type_change`.
 
 ---
 
-## Executor (developer reference)
+## Executor (Developer Reference)
 
-`netbox_custom_objects/executor.py` — writes to the DB.
+`netbox_custom_objects/schema/executor.py` — writes to the DB.
 
 ```python
-from netbox_custom_objects.executor import apply_document, apply_diffs
+from netbox_custom_objects.schema.executor import apply_document, apply_diffs
 
 diffs = apply_document(schema_doc, allow_destructive=False)  # list[COTDiff]
 apply_diffs(diffs, type_defs_by_slug, allow_destructive=False)  # lower-level
@@ -474,11 +486,12 @@ full rollback.
 | `CircularDependencyError` | Cross-COT `related_object_type` references form a cycle among new COTs |
 | `UnknownChoiceSetError` | A `choice_set` name cannot be resolved |
 | `UnknownObjectTypeError` | A `related_object_type` string cannot be resolved |
+| `UnknownFieldTypeError` | A `type` value is not one of the supported field type strings |
 
 `DestructiveChangesError` is raised **before** the transaction opens, so the DB is never
 touched. The other exceptions may be raised mid-transaction, triggering a full rollback.
 
-### Dependency ordering
+### Dependency Ordering
 
 When a schema document contains multiple new COTs that reference each other via
 `related_object_type: "custom-objects/<slug>"`, the executor performs a topological sort to
@@ -487,10 +500,10 @@ COTs raise `CircularDependencyError`.
 
 ---
 
-## Backfilling pre-existing fields
+## Backfilling Pre-Existing Fields
 
 Fields created before the portable schema feature was introduced have `schema_id = null`.
-Migration `0007_backfill_schema_ids` assigns IDs to all such fields in PK order and updates
+Migration `0008_backfill_schema_ids` assigns IDs to all such fields in PK order and updates
 each COT's `next_schema_id` counter accordingly. This migration runs automatically with
 `manage.py migrate`.
 

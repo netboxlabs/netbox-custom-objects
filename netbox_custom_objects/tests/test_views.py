@@ -421,6 +421,28 @@ class CustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjec
         # All objects deleted (not just the 2 submitted PKs)
         self.assertEqual(model.objects.count(), 0)
 
+    def test_add_permission_is_sufficient_to_access_add_url(self):
+        """Regression #396: add-only permission must grant access to the add URL, not require change."""
+        model = self.model
+        content_type = ContentType.objects.get_for_model(model)
+        obj_perm = ObjectPermission(name='add-only', actions=['add'])
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        obj_perm.object_types.add(content_type)
+
+        add_url = self._get_url('add')
+        self.assertHttpStatus(self.client.get(add_url), 200)
+
+        # User with only 'add' must not be able to edit existing objects
+        edit_url = self._get_url('edit', self.instance1)
+        self.assertHttpStatus(self.client.get(edit_url), 403)
+
+        # Symmetrical: change-only permission must not grant access to the add URL
+        obj_perm.actions = ['change']
+        obj_perm.save()
+        self.assertHttpStatus(self.client.get(add_url), 403)
+        self.assertHttpStatus(self.client.get(edit_url), 200)
+
 
 class ComplexCustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase):
     """Test cases for complex custom objects with various field types."""
