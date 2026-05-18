@@ -1,5 +1,4 @@
 import hashlib
-import sys
 
 from django.db import connection, migrations
 
@@ -75,29 +74,13 @@ def fix_mixed_case_field_names(apps, schema_editor):
             "Manual intervention required before this migration can proceed."
         )
 
-    print("\nThe following CustomObjectTypeField records have mixed-case names.")
-    print("Mixed-case names create quoted PostgreSQL identifiers, which can")
-    print("cause query failures when referenced without quotes.\n")
+    print(f"\nRenaming {len(mixed_case_fields)} mixed-case CustomObjectTypeField name(s) to lowercase.\n")
     for field in mixed_case_fields:
         print(
             f"  COT #{field.custom_object_type_id} ({field.custom_object_type.name!r})"
             f"  field #{field.pk}: {field.name!r}  →  {field.name.lower()!r}"
         )
     print()
-
-    if not sys.stdin.isatty():
-        raise RuntimeError(
-            "Mixed-case CustomObjectTypeField names detected but stdin is not a TTY "
-            "(non-interactive run). Run this migration interactively to fix them. "
-            "The migration has NOT been recorded as applied."
-        )
-
-    answer = input("Rename all fields to lowercase now? [y/N] ").strip().lower()
-    if answer != "y":
-        raise RuntimeError(
-            "Aborted by user. The migration has NOT been recorded as applied "
-            "and can be re-run once you are ready to rename the fields."
-        )
 
     with connection.cursor() as cursor:
         for field in mixed_case_fields:
@@ -147,10 +130,6 @@ def fix_mixed_case_field_names(apps, schema_editor):
     print("Done. All mixed-case field names have been renamed to lowercase.")
 
 
-def noop(apps, schema_editor):
-    pass
-
-
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -158,5 +137,5 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.RunPython(fix_mixed_case_field_names, reverse_code=noop),
+        migrations.RunPython(fix_mixed_case_field_names, reverse_code=migrations.RunPython.noop),
     ]
