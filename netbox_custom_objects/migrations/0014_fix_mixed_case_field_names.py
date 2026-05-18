@@ -38,6 +38,51 @@ def _table_exists(cursor, table_name):
     return cursor.fetchone() is not None
 
 
+def _normalize_fk_constraint(cursor, table_name, new_col_name):
+    """
+    ALTER TABLE RENAME COLUMN leaves FK constraint names unchanged (they still
+    reference the old mixed-case column name).  Find all FK constraints on the
+    renamed column via pg_attribute (which IS updated by RENAME COLUMN), drop
+    them, and recreate under the standard {table}_{col}_fk name so that
+    _ensure_field_fk_constraint can manage them correctly going forward.
+    """
+    cursor.execute(
+        """
+        SELECT c.conname, ref.relname, c.confdeltype
+        FROM pg_constraint c
+        JOIN pg_class t  ON c.conrelid  = t.oid
+        JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(c.conkey)
+        JOIN pg_class ref ON c.confrelid = ref.oid
+        WHERE t.relname = %s
+          AND a.attname = %s
+          AND c.contype = 'f'
+        """,
+        [table_name, new_col_name],
+    )
+    rows = cursor.fetchall()
+    if not rows:
+        return
+
+    foreign_table = rows[0][1]
+    on_delete_sql = {
+        'a': 'NO ACTION', 'r': 'RESTRICT', 'c': 'CASCADE',
+        'n': 'SET NULL',  'd': 'SET DEFAULT',
+    }.get(rows[0][2], 'NO ACTION')
+
+    for (constraint_name, _, _) in rows:
+        cursor.execute(
+            f'ALTER TABLE "{table_name}" DROP CONSTRAINT IF EXISTS "{constraint_name}"'
+        )
+
+    cursor.execute(
+        f'ALTER TABLE "{table_name}"'
+        f' ADD CONSTRAINT "{table_name}_{new_col_name}_fk"'
+        f' FOREIGN KEY ("{new_col_name}")'
+        f' REFERENCES "{foreign_table}" ("id")'
+        f' ON DELETE {on_delete_sql}'
+    )
+
+
 def fix_mixed_case_field_names(apps, schema_editor):
     CustomObjectTypeField = apps.get_model("netbox_custom_objects", "CustomObjectTypeField")
 
@@ -117,6 +162,9 @@ def fix_mixed_case_field_names(apps, schema_editor):
                     cursor.execute(
                         f'ALTER TABLE "{main_table}" RENAME COLUMN "{old_col}" TO "{new_col}"'
                     )
+                    # RENAME COLUMN doesn't update FK constraint names; normalize them so
+                    # _ensure_field_fk_constraint can find and manage them going forward.
+                    _normalize_fk_constraint(cursor, main_table, new_col)
 
             else:
                 # Scalar field: column name equals field name.

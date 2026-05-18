@@ -880,15 +880,20 @@ class CustomObjectType(NetBoxModel):
 
         q = connection.ops.quote_name
         with connection.cursor() as cursor:
-            # Drop existing FK constraint if it exists
+            # Drop existing FK constraint if it exists.
+            # Join on key_column_usage so we match by actual column name, not constraint name —
+            # RENAME COLUMN updates kcu but leaves the constraint name unchanged.
             cursor.execute("""
-                SELECT constraint_name
-                FROM information_schema.table_constraints
-                WHERE table_name = %s
-                AND table_schema = current_schema()
-                AND constraint_type = 'FOREIGN KEY'
-                AND constraint_name LIKE %s
-            """, [table_name, f"%{column_name}%"])
+                SELECT tc.constraint_name
+                FROM information_schema.table_constraints tc
+                JOIN information_schema.key_column_usage kcu
+                    ON tc.constraint_name = kcu.constraint_name
+                    AND tc.table_schema = kcu.table_schema
+                WHERE tc.table_name = %s
+                AND tc.table_schema = current_schema()
+                AND tc.constraint_type = 'FOREIGN KEY'
+                AND kcu.column_name = %s
+            """, [table_name, column_name])
 
             for row in cursor.fetchall():
                 constraint_name = row[0]
