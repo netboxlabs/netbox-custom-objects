@@ -66,7 +66,7 @@ def _normalize_fk_constraint(cursor, table_name, new_col_name):
     foreign_table = rows[0][1]
     on_delete_sql = {
         'a': 'NO ACTION', 'r': 'RESTRICT', 'c': 'CASCADE',
-        'n': 'SET NULL',  'd': 'SET DEFAULT',
+        'n': 'SET NULL', 'd': 'SET DEFAULT',
     }.get(rows[0][2], 'NO ACTION')
 
     for (constraint_name, _, _) in rows:
