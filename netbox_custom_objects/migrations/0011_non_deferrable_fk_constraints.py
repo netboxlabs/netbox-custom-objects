@@ -54,6 +54,7 @@ def fix_deferrable_fk_constraints(apps, schema_editor):
                 ON tc.constraint_name = rc.constraint_name
                 AND tc.table_schema = rc.constraint_schema
             WHERE tc.constraint_type = 'FOREIGN KEY'
+                AND tc.table_schema = current_schema()
                 AND tc.table_name LIKE 'custom_objects\\_%'
                 AND tc.is_deferrable = 'YES'
         """)
