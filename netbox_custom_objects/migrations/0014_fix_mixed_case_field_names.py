@@ -50,10 +50,12 @@ def _normalize_fk_constraint(cursor, table_name, new_col_name):
         """
         SELECT c.conname, ref.relname, c.confdeltype
         FROM pg_constraint c
-        JOIN pg_class t  ON c.conrelid  = t.oid
-        JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(c.conkey)
+        JOIN pg_class t   ON c.conrelid  = t.oid
+        JOIN pg_namespace ns ON t.relnamespace = ns.oid
+        JOIN pg_attribute a  ON a.attrelid = t.oid AND a.attnum = ANY(c.conkey)
         JOIN pg_class ref ON c.confrelid = ref.oid
         WHERE t.relname = %s
+          AND ns.nspname = current_schema()
           AND a.attname = %s
           AND c.contype = 'f'
         """,
@@ -173,6 +175,8 @@ def fix_mixed_case_field_names(apps, schema_editor):
                         f'ALTER TABLE "{main_table}" RENAME COLUMN "{old_name}" TO "{new_name}"'
                     )
 
+            # Always update the row even if no DDL ran — the field name must satisfy
+            # the v0.5 lowercase-only validator regardless of physical column state.
             CustomObjectTypeField.objects.filter(pk=field.pk).update(name=new_name)
 
     print("Done. All mixed-case field names have been renamed to lowercase.")
