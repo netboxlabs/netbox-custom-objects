@@ -7,8 +7,8 @@ models when an active branch is set.  Importing netbox-branching is deferred /
 optional — the registration call site in ``__init__.ready()`` is guarded so
 the plugin still works when netbox-branching is not installed.
 
-Field-rename translation lives on ``CustomObject.canonicalize_data`` (a model
-classmethod) and is invoked directly by netbox-branching from
+Field-rename translation lives on ``CustomObject.resolve_field_aliases`` (a
+model classmethod) and is invoked directly by netbox-branching from
 ``update_object`` and ``ChangeDiff._update_conflicts``; no registration is
 required for that path.
 """

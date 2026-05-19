@@ -281,8 +281,8 @@ class CustomObjectsPluginConfig(PluginConfig):
         # Register netbox-branching hooks so its router knows about our
         # dynamically-generated through models.  Guarded so the plugin still
         # works without netbox-branching installed.  Field-rename translation
-        # is handled by ``CustomObject.canonicalize_data`` on the model itself,
-        # which netbox-branching invokes from ``update_object`` and
+        # is handled by ``CustomObject.resolve_field_aliases`` on the model
+        # itself, which netbox-branching invokes from ``update_object`` and
         # ``ChangeDiff._update_conflicts`` — no registration required.
         try:
             from netbox_branching.utilities import register_branching_resolver

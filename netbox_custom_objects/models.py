@@ -480,7 +480,7 @@ class CustomObject(
         abstract = True
 
     @classmethod
-    def canonicalize_data(cls, data):
+    def resolve_field_aliases(cls, data):
         """
         Translate stale field-name keys in *data* to this model's current
         attribute names.
@@ -578,10 +578,10 @@ class CustomObject(
         #
         # Building directly off ``fresh_model`` (the context-aware class) keeps
         # the field set aligned with the schema we're writing to.  We then
-        # canonicalize the data dict via the same hook netbox-branching calls
-        # from ``update_object``, so the keys map to the model's current field
-        # names regardless of any renames in history.
-        canonical = fresh_model.canonicalize_data(data)
+        # resolve any aliased keys in the data dict via the same hook
+        # netbox-branching calls from ``update_object``, so the keys map to the
+        # model's current field names regardless of any renames in history.
+        resolved = fresh_model.resolve_field_aliases(data)
 
         obj = fresh_model()
         if pk is not None:
@@ -589,7 +589,7 @@ class CustomObject(
         m2m_data = {}
         field_names = {f.name for f in fresh_model._meta.get_fields()}
 
-        for attr, value in canonical.items():
+        for attr, value in resolved.items():
             # Tags via the standard NetBox path (Tag rows are looked up by name).
             if attr == 'tags' and is_taggable(fresh_model):
                 tag_model = apps.get_model('extras', 'Tag')
