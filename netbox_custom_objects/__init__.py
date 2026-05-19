@@ -279,15 +279,20 @@ class CustomObjectsPluginConfig(PluginConfig):
         _connect_deferred_data_reset_signals()
 
         # Register netbox-branching hooks so its router knows about our
-        # dynamically-generated through models.  Guarded so the plugin still
-        # works without netbox-branching installed.  Field-rename translation
-        # is handled by ``CustomObject.resolve_field_aliases`` on the model
-        # itself, which netbox-branching invokes from ``update_object`` and
-        # ``ChangeDiff._update_conflicts`` — no registration required.
+        # dynamically-generated through models and can translate field-name
+        # keys in stored ObjectChange data when fields are renamed at runtime.
+        # Guarded so the plugin still works without netbox-branching installed.
         try:
-            from netbox_branching.utilities import register_branching_resolver
-            from .branching import supports_branching_resolver
+            from netbox_branching.utilities import (
+                register_branching_resolver,
+                register_objectchange_field_migrator,
+            )
+            from .branching import (
+                objectchange_field_migrator,
+                supports_branching_resolver,
+            )
             register_branching_resolver(supports_branching_resolver)
+            register_objectchange_field_migrator(objectchange_field_migrator)
         except ImportError:
             pass
 
