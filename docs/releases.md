@@ -1,5 +1,25 @@
 # Releases
 
+## 0.5.1
+
+### Bug Fixes
+
+- [#380](https://github.com/netboxlabs/netbox-custom-objects/issues/380) - Bulk edit "Select all N objects matching query" only selected the current page
+- [#396](https://github.com/netboxlabs/netbox-custom-objects/issues/396) - Add permission was not sufficient to access the add URL; change permission was incorrectly required
+- [#408](https://github.com/netboxlabs/netbox-custom-objects/issues/408) - Cross-COT FK fields missing after server restart
+- [#443](https://github.com/netboxlabs/netbox-custom-objects/issues/443) - API updates failed for some objects due to non-dict data in generated serializer `validate()`
+- [#477](https://github.com/netboxlabs/netbox-custom-objects/issues/477) - Deleting a custom object via the UI raised a `ValueError` due to through-table entries being included in the delete confirmation queryset
+- [#483](https://github.com/netboxlabs/netbox-custom-objects/issues/483) - Deletion of objects with M2M relations failed due to stale `path_infos` on through-model FKs after COT model regeneration
+- [#500](https://github.com/netboxlabs/netbox-custom-objects/issues/500) - Viewing the changelog for a custom object raised `unexpected keyword argument 'user'`
+- [#503](https://github.com/netboxlabs/netbox-custom-objects/issues/503) - FilterSet `ValueError` caused by `ModelChoiceFilter` not handling polymorphic objects; replaced with `NonPolymorphicObjectFilter`
+- [#507](https://github.com/netboxlabs/netbox-custom-objects/issues/507) - Migration 0011 failed with `DuplicateObject` on partial re-run and raised errors for long table names
+- [#508](https://github.com/netboxlabs/netbox-custom-objects/issues/508) - `ValueError: Must be 'TableNModel' instance` in `CustomObjectLink.left_page()` due to `no_cache=True` breaking dynamic model identity
+- [#511](https://github.com/netboxlabs/netbox-custom-objects/issues/511) - Raised minimum compatible NetBox version to 4.5.2
+- [#517](https://github.com/netboxlabs/netbox-custom-objects/issues/517) - Mixed-case field names created quoted PostgreSQL identifiers that broke schema cloning; migration 0014 renames them to lowercase
+- [#519](https://github.com/netboxlabs/netbox-custom-objects/issues/519) - Migration 0011 raised `constraint already exists` when `table_schema` was not filtered to the current schema
+
+---
+
 ## 0.5.0
 
 ### New Features
