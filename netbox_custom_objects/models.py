@@ -31,6 +31,7 @@ from extras.choices import (
     CustomFieldUIEditableChoices,
     CustomFieldUIVisibleChoices,
 )
+from extras.models import CustomField
 from extras.models.customfields import SEARCH_TYPES
 from extras.utils import run_validators
 from netbox.config import get_config
@@ -976,6 +977,12 @@ class CustomObjectType(NetBoxModel):
 
         object_type = ObjectType.objects.get_for_model(model)
         ObjectChange.objects.filter(changed_object_type=object_type).delete()
+
+        # Delete any NetBox CustomField records (extras) with related_object_type pointing
+        # to this COT's ObjectType. CustomField.related_object_type uses on_delete=PROTECT,
+        # so these must be removed before object_type.delete() is called below.
+        CustomField.objects.filter(related_object_type=object_type).delete()
+
         super().delete(*args, **kwargs)
 
         # Temporarily disconnect the pre_delete handler to skip the ObjectType deletion
