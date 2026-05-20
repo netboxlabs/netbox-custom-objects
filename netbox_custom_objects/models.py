@@ -2919,10 +2919,10 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
         # When the field is renamed, update ObjectChange / ChangeDiff JSON keys so
         # historical audit records and branch diffs stay consistent with the new
-        # name.  Combined with the netbox-branching attr translator registered
-        # in branching.translate_renamed_field_attr, this lets later replays
-        # (whether iterative undo or squash undo) resolve any data key — old or
-        # new name — to the field's current name on the model.
+        # name.  Combined with the netbox-branching ObjectChange field migrator
+        # registered in branching.objectchange_field_migrator, this lets later
+        # replays (whether iterative undo or squash undo) resolve any data key —
+        # old or new name — to the field's current name on the model.
         if (
             not self._state.adding
             and not self.is_polymorphic
