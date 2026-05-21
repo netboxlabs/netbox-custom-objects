@@ -1734,6 +1734,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 CustomFieldTypeChoices.TYPE_OBJECT,
                 CustomFieldTypeChoices.TYPE_MULTIOBJECT,
             ],
+            is_polymorphic=False,
             related_object_type__isnull=False,
             related_object_type__app_label=APP_LABEL
         ):
