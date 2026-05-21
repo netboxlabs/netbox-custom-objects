@@ -11,6 +11,7 @@ cannot be rolled back inside a single SAVEPOINT-based transaction.
 """
 import datetime
 import decimal
+import os
 import time
 import unittest
 import uuid
@@ -46,19 +47,29 @@ def _make_request(user):
     return request
 
 
-def _provision_branch(name, merge_strategy, user):
-    """Create and wait for a branch to reach READY status (up to 30 s)."""
+# Provisioning timeout for branch tests.  Defaults to 30 s, which is generous
+# for local laptops but can be tight on shared CI runners — override via the
+# ``NETBOX_CO_BRANCH_PROVISION_TIMEOUT`` env var (seconds) when CI flakes.
+BRANCH_PROVISION_TIMEOUT = float(
+    os.environ.get('NETBOX_CO_BRANCH_PROVISION_TIMEOUT', '30')
+)
+
+
+def _provision_branch(name, merge_strategy, user, timeout=None):
+    """Create and wait for a branch to reach READY status."""
+    if timeout is None:
+        timeout = BRANCH_PROVISION_TIMEOUT
     branch = Branch(name=name, merge_strategy=merge_strategy)
     branch.save(provision=False)
     branch.provision(user=user)
-    deadline = time.time() + 30
+    deadline = time.time() + timeout
     while time.time() < deadline:
         branch.refresh_from_db()
         if branch.status == BranchStatusChoices.READY:
             return branch
         time.sleep(0.1)
     raise TimeoutError(
-        f'Branch {name!r} did not reach READY within 30 s '
+        f'Branch {name!r} did not reach READY within {timeout:.0f} s '
         f'(status={branch.status!r})'
     )
 
@@ -1403,7 +1414,7 @@ class SequentialRenameTestCase(TransactionCleanupMixin, TransactionTestCase):
             co = cot.get_model().objects.create(alpha='original')
 
         co_pk = co.pk
-        branch = _provision_branch('Seq Sync Branch', 'iterative', self.user)
+        branch = _provision_branch('Seq Sync Branch', self.MERGE_STRATEGY, self.user)
         branch_request = _make_request(self.user)
 
         # ── branch: alpha → beta → gamma ──────────────────────────────────
@@ -1491,7 +1502,7 @@ class SequentialRenameTestCase(TransactionCleanupMixin, TransactionTestCase):
             co = cot.get_model().objects.create(alpha='original')
 
         co_pk = co.pk
-        branch = _provision_branch('Seq Merge Conflict Branch', 'iterative', self.user)
+        branch = _provision_branch('Seq Merge Conflict Branch', self.MERGE_STRATEGY, self.user)
         branch_request = _make_request(self.user)
 
         # ── branch: alpha → beta → gamma ──────────────────────────────────

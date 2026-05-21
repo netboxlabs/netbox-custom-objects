@@ -49,6 +49,17 @@ def _purge_stale_generated_models():
     for name in stale:
         django_apps.all_models[APP_LABEL].pop(name, None)
     if stale:
+        # Expire reverse-relation caches so any other app whose
+        # ``related_objects`` already pointed at the now-removed dynamic
+        # models gets rebuilt on next access.  ``apps.clear_cache()`` alone
+        # clears the apps registry's own cache, but per-model
+        # ``_meta._relation_tree`` snapshots taken by Django outside this
+        # plugin survive — they need explicit expiry.
+        from django.contrib.contenttypes.models import ContentType  # noqa: PLC0415
+        ContentType._meta._expire_cache(forward=False)
+        for app_models in django_apps.all_models.values():
+            for model in app_models.values():
+                model._meta._expire_cache(forward=False)
         django_apps.clear_cache()
 
 

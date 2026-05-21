@@ -123,6 +123,32 @@ def _get_schema_connection():
     return connection
 
 
+def _historical_names_for_field(field_pk):
+    """
+    Return the set of all names this CustomObjectTypeField has ever held,
+    derived from its own ObjectChange UPDATE history.
+
+    Used when applying deferred CO field data after a squash merge so that a
+    deferred entry recorded under an *old* field name (because the CO CREATE
+    was replayed before the rename) still matches the field's current name.
+    """
+    names = set()
+    rows = ObjectChange.objects.filter(
+        changed_object_type__app_label='netbox_custom_objects',
+        changed_object_type__model='customobjecttypefield',
+        changed_object_id=field_pk,
+        action=ObjectChangeActionChoices.ACTION_UPDATE,
+    ).values_list('prechange_data', 'postchange_data')
+    for pre, post in rows:
+        for blob in (pre, post):
+            if not blob:
+                continue
+            n = blob.get('name')
+            if n:
+                names.add(n)
+    return names
+
+
 def _apply_deferred_co_field(field_instance):
     """
     Apply any deferred CO field values after a column is added to the DB.
@@ -139,6 +165,13 @@ def _apply_deferred_co_field(field_instance):
     is ``{name}_id`` — this function maps accordingly.
     For TYPE_MULTIOBJECT fields there is no column on the main table, so they are
     skipped entirely.
+
+    Rename awareness: in a squash merge the CO CREATE for a renamed field
+    arrives with the *old* field name in ``data`` (the name recorded in the
+    ObjectChange at write time), while this function is invoked when the
+    field is being created in the target schema under its *new* name.
+    We accept any historical name for this field — derived from the field's
+    own ObjectChange UPDATE history — as a match.
     """
     # No deferred data at all — fast path.
     deferred = _deferred_co_field_data.get()
@@ -156,22 +189,30 @@ def _apply_deferred_co_field(field_instance):
         return
 
     # For TYPE_OBJECT the data key is the field name but the DB column ends with _id.
-    data_key = field_instance.name
     if field_instance.type == CustomFieldTypeChoices.TYPE_OBJECT:
         col_name = f'{field_instance.name}_id'
     else:
         col_name = field_instance.name
 
+    # Candidate data keys: current name + all historical names.  pk may be None
+    # when called before the field row is persisted; in that case we skip the
+    # history lookup and only match by current name.
+    candidate_keys = {field_instance.name}
+    if field_instance.pk is not None:
+        candidate_keys.update(_historical_names_for_field(field_instance.pk))
+
     schema_conn = _get_schema_connection()
 
     with schema_conn.cursor() as cursor:
         for co_pk, entry in per_table.items():
-            # Distinguish "key absent" from "key present with NULL".  An explicit
-            # None is a legitimate write and must reach the column; only a
-            # missing key should be skipped.
-            if data_key not in entry['data']:
+            data = entry['data']
+            # Find any candidate key actually present in this entry.
+            # Distinguish "key absent" from "key present with NULL": an
+            # explicit None is a legitimate write and must reach the column.
+            matched = next((k for k in candidate_keys if k in data), None)
+            if matched is None:
                 continue
-            value = entry['data'][data_key]
+            value = data[matched]
             # table_name comes from get_database_table_name() (controlled by our
             # code) and col_name from field.name, which is validated by the
             # ^[a-z0-9_]+$ regex — no double-quote characters are possible, so
@@ -181,11 +222,13 @@ def _apply_deferred_co_field(field_instance):
                 [value, co_pk],
             )
 
-    # Remove the consumed key from each entry so that processed field data does
-    # not persist in the ContextVar beyond its useful lifetime (e.g. on a retry
-    # after a partial failure, stale data from a previous attempt is avoided).
+    # Remove the consumed keys (any of the candidates) from each entry so that
+    # processed field data does not persist in the ContextVar beyond its
+    # useful lifetime (e.g. on a retry after a partial failure, stale data
+    # from a previous attempt is avoided).
     for entry in per_table.values():
-        entry['data'].pop(data_key, None)
+        for k in candidate_keys:
+            entry['data'].pop(k, None)
 
     # Prune entries whose data dict is now exhausted.
     exhausted = [pk for pk, entry in per_table.items() if not entry['data']]
@@ -393,7 +436,7 @@ def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, exist
     schema_editor.alter_field(model, old_mf, new_mf)
 
 
-def _translate_renamed_field_name(cot, attr):
+def _translate_renamed_field_name(cot, attr, rename_map=None):
     """
     Resolve ``attr`` to a CustomObjectTypeField's *current* name on *cot* by
     walking the field's rename history.
@@ -409,7 +452,14 @@ def _translate_renamed_field_name(cot, attr):
     multiple fields' rename history) because picking arbitrarily would
     silently overwrite the wrong column; the caller then preserves the raw
     key.  This case is vanishingly rare for normal use.
+
+    Pass ``rename_map`` (an old_name → current_name dict built via
+    ``_build_rename_map``) to skip the DB query.  ``resolve_field_aliases``
+    constructs that map once per call so a payload with many renamed keys
+    incurs a single ObjectChange scan instead of one per key.
     """
+    if rename_map is not None:
+        return rename_map.get(attr)
     candidate_pks = set(
         ObjectChange.objects.filter(
             changed_object_type__app_label='netbox_custom_objects',
@@ -427,6 +477,54 @@ def _translate_renamed_field_name(cot, attr):
     if len(fields) == 1:
         return fields[0]
     return None
+
+
+def _build_rename_map(cot, attrs):
+    """
+    Return ``{old_name: current_name}`` for those entries in *attrs* that
+    resolve to exactly one of *cot*'s fields via rename history.
+
+    One ObjectChange query covers all candidates.  Ambiguous mappings (same
+    historical name appearing in multiple fields' history) are omitted so the
+    caller falls back to preserving the raw key — matching the
+    abstain-on-ambiguity behaviour of ``_translate_renamed_field_name``.
+    """
+    attrs = [a for a in attrs if a]
+    if not attrs:
+        return {}
+    rows = ObjectChange.objects.filter(
+        changed_object_type__app_label='netbox_custom_objects',
+        changed_object_type__model='customobjecttypefield',
+        action=ObjectChangeActionChoices.ACTION_UPDATE,
+    ).filter(
+        Q(postchange_data__name__in=attrs) | Q(prechange_data__name__in=attrs)
+    ).values_list('changed_object_id', 'prechange_data', 'postchange_data')
+
+    # attr → {field_pks that have this name anywhere in their history}
+    attr_to_field_pks: dict[str, set[int]] = {}
+    for field_pk, pre, post in rows:
+        for blob in (pre, post):
+            if not blob:
+                continue
+            name = blob.get('name')
+            if name in attrs:
+                attr_to_field_pks.setdefault(name, set()).add(field_pk)
+
+    if not attr_to_field_pks:
+        return {}
+
+    # Resolve the field pks we collected to their current names in one query.
+    pk_to_name = dict(
+        cot.fields.filter(
+            pk__in={pk for pks in attr_to_field_pks.values() for pk in pks}
+        ).values_list('pk', 'name')
+    )
+    result = {}
+    for attr, field_pks in attr_to_field_pks.items():
+        matched = [pk_to_name[pk] for pk in field_pks if pk in pk_to_name]
+        if len(matched) == 1:
+            result[attr] = matched[0]
+    return result
 
 
 def _set_with_collision_preference(result, key, value):
@@ -521,6 +619,16 @@ class CustomObject(
             return data
 
         field_names = {f.name for f in cls._meta.get_fields()}
+
+        # Collect the keys that don't match a current field name so we can do
+        # one batched ObjectChange query instead of one per unknown key.
+        unknown_keys = []
+        for raw_key in data:
+            key = 'custom_field_data' if raw_key == 'custom_fields' else raw_key
+            if key not in field_names:
+                unknown_keys.append(key)
+        rename_map = _build_rename_map(cot, unknown_keys) if unknown_keys else {}
+
         result = {}
         for raw_key, value in data.items():
             # Honour custom_fields → custom_field_data the same way update_object
@@ -529,7 +637,7 @@ class CustomObject(
             if key in field_names:
                 _set_with_collision_preference(result, key, value)
                 continue
-            translated = _translate_renamed_field_name(cot, key)
+            translated = _translate_renamed_field_name(cot, key, rename_map=rename_map)
             if translated and translated in field_names:
                 _set_with_collision_preference(result, translated, value)
             else:
@@ -1720,8 +1828,10 @@ def custom_object_type_post_save_handler(sender, instance, created, **kwargs):
             app_label=APP_LABEL,
             model=content_type_name
         )
-        # Snapshot before modifying so change logging records a correct pre-state.
-        # Without this, diff()['pre'] would set all fields to None during branch revert.
+        # The snapshot here is for the *second* save (object_type assignment)
+        # below — not for the create that just fired this handler.  Without it,
+        # the second save's ObjectChange would mark every field as changed
+        # instead of just the object_type FK.
         instance.snapshot()
         instance.object_type = ct
         instance.save()
@@ -2964,74 +3074,82 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         field_type = FIELD_TYPE_CLASS[self.type]()
         model = self.custom_object_type.get_model()
 
-        with schema_conn.schema_editor() as schema_editor:
-            if self._state.adding:
-                if self.is_polymorphic:
-                    # Polymorphic Object: add content_type + object_id columns + index.
-                    # Polymorphic MultiObject: create through table with content_type + object_id.
-                    if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
-                        field_type.add_polymorphic_object_columns(self, model, schema_editor)
-                    elif self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                        field_type.create_polymorphic_m2m_table(self, model, schema_editor)
+        # Wrap the schema mutation, audit-key rewrite, cache_timestamp bump, and
+        # parent save() in a single atomic so a failure between the DDL and the
+        # field row save can't leave audit data rewritten but the field record
+        # un-persisted (or vice versa).  Nests inside the schema_id allocation
+        # block above as a savepoint.
+        with transaction.atomic(using=schema_conn.alias):
+            with schema_conn.schema_editor() as schema_editor:
+                if self._state.adding:
+                    if self.is_polymorphic:
+                        # Polymorphic Object: add content_type + object_id columns + index.
+                        # Polymorphic MultiObject: create through table with content_type + object_id.
+                        if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
+                            field_type.add_polymorphic_object_columns(self, model, schema_editor)
+                        elif self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+                            field_type.create_polymorphic_m2m_table(self, model, schema_editor)
+                    else:
+                        _schema_add_field(self, model, schema_editor, schema_conn)
+                        _apply_deferred_co_field(self)
                 else:
-                    _schema_add_field(self, model, schema_editor, schema_conn)
-                    _apply_deferred_co_field(self)
-            else:
-                # Polymorphic fields: renames and type changes are rejected by clean().
-                # Non-schema attributes (label, description, …) may still change here.
-                # If clean() was bypassed and a rename slipped through, raise rather
-                # than silently leaving DB columns / through table out of sync.
-                if self.is_polymorphic or self._original_is_polymorphic:
-                    if self.name != self._original_name:
-                        raise ValidationError(
-                            {"name": _("Cannot rename a polymorphic field after creation.")}
-                        )
+                    # Polymorphic fields: renames and type changes are rejected by clean().
+                    # Non-schema attributes (label, description, …) may still change here.
+                    # If clean() was bypassed and a rename slipped through, raise rather
+                    # than silently leaving DB columns / through table out of sync.
+                    if self.is_polymorphic or self._original_is_polymorphic:
+                        if self.name != self._original_name:
+                            raise ValidationError(
+                                {"name": _("Cannot rename a polymorphic field after creation.")}
+                            )
+                    else:
+                        _schema_alter_field(self.original, self, model, schema_editor, schema_conn)
+
+            # When the field is renamed, update ObjectChange / ChangeDiff JSON keys so
+            # historical audit records and branch diffs stay consistent with the new
+            # name.  Combined with the netbox-branching ObjectChange field migrator
+            # registered in branching.objectchange_field_migrator, this lets later
+            # replays (whether iterative undo or squash undo) resolve any data key —
+            # old or new name — to the field's current name on the model.
+            if (
+                not self._state.adding
+                and not self.is_polymorphic
+                and self._original_name != self.name
+            ):
+                _rename_objectchange_field_key(self, self._original_name, self.name)
+
+            # Ensure FK constraints are properly created for OBJECT fields.  Decide
+            # whether one is needed inside the atomic so any in-progress rollback
+            # also discards the decision.
+            should_ensure_fk = False
+            if self.type == CustomFieldTypeChoices.TYPE_OBJECT and not self.is_polymorphic:
+                if self._state.adding:
+                    should_ensure_fk = True
                 else:
-                    _schema_alter_field(self.original, self, model, schema_editor, schema_conn)
+                    type_changed_to_object = (
+                        self._original_type != CustomFieldTypeChoices.TYPE_OBJECT
+                        and self.type == CustomFieldTypeChoices.TYPE_OBJECT
+                    )
+                    related_object_changed = (
+                        self._original_type == CustomFieldTypeChoices.TYPE_OBJECT
+                        and self.related_object_type_id != self._original_related_object_type_id
+                    )
+                    on_delete_changed = (
+                        self._original_type == CustomFieldTypeChoices.TYPE_OBJECT
+                        and self.on_delete_behavior != self._original_on_delete_behavior
+                    )
+                    should_ensure_fk = type_changed_to_object or related_object_changed or on_delete_changed
 
-        # When the field is renamed, update ObjectChange / ChangeDiff JSON keys so
-        # historical audit records and branch diffs stay consistent with the new
-        # name.  Combined with the netbox-branching ObjectChange field migrator
-        # registered in branching.objectchange_field_migrator, this lets later
-        # replays (whether iterative undo or squash undo) resolve any data key —
-        # old or new name — to the field's current name on the model.
-        if (
-            not self._state.adding
-            and not self.is_polymorphic
-            and self._original_name != self.name
-        ):
-            _rename_objectchange_field_key(self, self._original_name, self.name)
+            # Clear and refresh the model cache for this CustomObjectType when a field is modified
+            self.custom_object_type.clear_model_cache(self.custom_object_type.id)
 
-        # Ensure FK constraints are properly created for OBJECT fields
-        should_ensure_fk = False
-        if self.type == CustomFieldTypeChoices.TYPE_OBJECT and not self.is_polymorphic:
-            if self._state.adding:
-                should_ensure_fk = True
-            else:
-                type_changed_to_object = (
-                    self._original_type != CustomFieldTypeChoices.TYPE_OBJECT
-                    and self.type == CustomFieldTypeChoices.TYPE_OBJECT
-                )
-                related_object_changed = (
-                    self._original_type == CustomFieldTypeChoices.TYPE_OBJECT
-                    and self.related_object_type_id != self._original_related_object_type_id
-                )
-                on_delete_changed = (
-                    self._original_type == CustomFieldTypeChoices.TYPE_OBJECT
-                    and self.on_delete_behavior != self._original_on_delete_behavior
-                )
-                should_ensure_fk = type_changed_to_object or related_object_changed or on_delete_changed
+            # Update parent's cache_timestamp to invalidate cache across all workers.
+            # snapshot() must be called first so that change logging has a correct pre-state;
+            # without it, diff()['pre'] would set ALL fields to None during branch revert.
+            self.custom_object_type.snapshot()
+            self.custom_object_type.save(update_fields=['cache_timestamp'])
 
-        # Clear and refresh the model cache for this CustomObjectType when a field is modified
-        self.custom_object_type.clear_model_cache(self.custom_object_type.id)
-
-        # Update parent's cache_timestamp to invalidate cache across all workers.
-        # snapshot() must be called first so that change logging has a correct pre-state;
-        # without it, diff()['pre'] would set ALL fields to None during branch revert.
-        self.custom_object_type.snapshot()
-        self.custom_object_type.save(update_fields=['cache_timestamp'])
-
-        super().save(*args, **kwargs)
+            super().save(*args, **kwargs)
 
         # Ensure FK constraints AFTER the transaction commits to avoid "pending trigger events" errors
         if should_ensure_fk:

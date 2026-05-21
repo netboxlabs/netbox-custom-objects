@@ -179,7 +179,7 @@ class FieldType:
 
     def after_model_generation(self, instance, model, field_name): ...
 
-    def create_m2m_table(self, instance, model, field_name): ...
+    def create_m2m_table(self, instance, model, field_name, schema_conn=None): ...
 
 
 class TextFieldType(FieldType):
@@ -928,6 +928,10 @@ class CustomManyToManyManager(Manager):
         to ``handle_changed_object`` — which means a merge or sync replays
         zero through-table rows for CustomObject M2M fields.
 
+        Both ``pre_*`` and ``post_*`` actions are emitted, matching Django's
+        standard ManyRelatedManager flow.  ``pre_clear`` is the one place
+        Django passes ``pk_set=None`` — callers should pass ``None`` there.
+
         ``using`` must reflect the alias the through-table write actually
         happened on so that branch-aware receivers (and Django's own
         router-based dispatch) route subsequent queries to the same schema.
@@ -935,7 +939,9 @@ class CustomManyToManyManager(Manager):
         ``supports_branching_resolver``, so ``router.db_for_write`` returns
         the active branch's connection alias inside a branch context.
         """
-        if not pk_set:
+        # pk_set is None for *_clear actions; an empty set means "no objects
+        # changed" so skip the signal entirely.
+        if pk_set is not None and not pk_set:
             return
         db = router.db_for_write(self.through, instance=self.instance)
         m2m_changed.send(
@@ -959,9 +965,15 @@ class CustomManyToManyManager(Manager):
         return obj.pk if hasattr(obj, 'pk') else obj
 
     def add(self, *objs):
+        # Send pre_add with the candidate pk_set before any write so
+        # receivers (e.g. validation hooks) get a chance to abort.  An empty
+        # candidate set is a no-op.
+        candidate_pks = {self._resolve_pk(obj) for obj in objs}
+        if not candidate_pks:
+            return
+        self._fire_m2m_changed('pre_add', candidate_pks)
         added = set()
-        for obj in objs:
-            pk = self._resolve_pk(obj)
+        for pk in candidate_pks:
             _, created = self.through.objects.get_or_create(
                 source_id=self.instance.pk, target_id=pk
             )
@@ -971,9 +983,12 @@ class CustomManyToManyManager(Manager):
             self._fire_m2m_changed('post_add', added)
 
     def remove(self, *objs):
+        candidate_pks = {self._resolve_pk(obj) for obj in objs}
+        if not candidate_pks:
+            return
+        self._fire_m2m_changed('pre_remove', candidate_pks)
         removed = set()
-        for obj in objs:
-            pk = self._resolve_pk(obj)
+        for pk in candidate_pks:
             n, _ = self.through.objects.filter(
                 source_id=self.instance.pk, target_id=pk
             ).delete()
@@ -987,9 +1002,13 @@ class CustomManyToManyManager(Manager):
             self.through.objects.filter(source_id=self.instance.pk)
             .values_list('target_id', flat=True)
         )
-        if existing:
-            self.through.objects.filter(source_id=self.instance.pk).delete()
-            self._fire_m2m_changed('post_clear', existing)
+        if not existing:
+            return
+        # Django sends pre_clear with pk_set=None (it doesn't know yet which
+        # rows will go).  Match that contract.
+        self._fire_m2m_changed('pre_clear', None)
+        self.through.objects.filter(source_id=self.instance.pk).delete()
+        self._fire_m2m_changed('post_clear', existing)
 
     def set(self, objs, clear=False):
         objs = tuple(objs)  # force evaluation before any mutation
@@ -1005,6 +1024,7 @@ class CustomManyToManyManager(Manager):
             # Remove relationships no longer in the target set
             to_remove = old_pks - new_pks
             if to_remove:
+                self._fire_m2m_changed('pre_remove', to_remove)
                 self.through.objects.filter(
                     source_id=self.instance.pk,
                     target_id__in=to_remove,
@@ -1012,11 +1032,12 @@ class CustomManyToManyManager(Manager):
                 self._fire_m2m_changed('post_remove', to_remove)
             # Add only genuinely new relationships
             to_add = new_pks - old_pks
-            for pk in to_add:
-                self.through.objects.get_or_create(
-                    source_id=self.instance.pk, target_id=pk
-                )
             if to_add:
+                self._fire_m2m_changed('pre_add', to_add)
+                for pk in to_add:
+                    self.through.objects.get_or_create(
+                        source_id=self.instance.pk, target_id=pk
+                    )
                 self._fire_m2m_changed('post_add', to_add)
 
 
