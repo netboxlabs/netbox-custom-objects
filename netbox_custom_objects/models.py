@@ -82,9 +82,16 @@ class UniquenessConstraintTestError(Exception):
     pass
 
 
-def _table_exists(table_name):
-    """Return True if *table_name* exists in the current database."""
-    return table_name in connection.introspection.table_names()
+def _table_exists(table_name, conn=None):
+    """Return True if *table_name* exists in the database reachable via *conn*.
+
+    Defaults to the global ``connection`` (main schema).  When the caller is
+    operating inside a branch context, pass the branch's connection so the
+    lookup runs against the active branch's PostgreSQL schema.
+    """
+    if conn is None:
+        conn = connection
+    return table_name in conn.introspection.table_names()
 
 
 USER_TABLE_DATABASE_NAME_PREFIX = "custom_objects_"
@@ -933,6 +940,37 @@ class CustomObjectType(NetBoxModel):
         # Clear Django apps registry cache to ensure newly created models are recognized
         apps.get_models.cache_clear()
 
+    @staticmethod
+    def _realign_through_models(model):
+        """
+        Re-point every through-model's ``source`` FK at *model*.
+
+        The dynamic M2M through models live in Django's global ``apps``
+        registry as one shared class per through-table name, but each
+        (cot_id, branch_id) cache key holds a different parent CO model
+        class.  ``_after_model_generation`` mutates the through's
+        ``source.remote_field.model`` to the CO class being built; on a
+        subsequent cache-hit return for a *different* context (e.g. main
+        after a branch call) the through still points at the previous
+        context's class, which breaks Django's collector during cascade
+        delete ("Cannot query 'X': Must be 'TableYModel' instance.").
+
+        Calling this on every get_model() return path — under
+        ``_global_lock`` — guarantees that at the moment a caller sees a
+        model, the through it references in the apps registry agrees on
+        the source class.  This does **not** make the registry safe for
+        concurrent cross-context use across threads; that's an
+        architectural limitation of sharing through models globally and
+        would require per-(cot, branch) through registration to fix.
+        """
+        for through_model in getattr(model, '_through_models', None) or ():
+            try:
+                source_field = through_model._meta.get_field('source')
+            except FieldDoesNotExist:
+                continue
+            source_field.remote_field.model = model
+            source_field.related_model = model
+
     @classmethod
     def get_cached_model(cls, custom_object_type_id, branch_id=None):
         """
@@ -1306,6 +1344,11 @@ class CustomObjectType(NetBoxModel):
                     # would fail when post_save's search-cache handler reads
                     # field names that don't exist on the active model class.
                     self.register_custom_object_search_index(model)
+                    # Through-models in the global apps registry may still be
+                    # pointing at a different context's CO class — realign
+                    # while we hold ``_global_lock`` so callers see a
+                    # consistent (model, through_model.source) pair.
+                    self._realign_through_models(model)
                     return model
                 else:
                     self.clear_model_cache(self.id)
@@ -1635,8 +1678,11 @@ class CustomObjectType(NetBoxModel):
 
         with schema_conn.schema_editor() as schema_editor:
             # Drop through tables before the main table (they have FKs pointing to it).
+            # Pass schema_conn so existence checks run against the active branch's
+            # schema, not main's — otherwise inside a branch we'd skip drops that
+            # need to happen (or attempt drops on tables that don't exist there).
             for through_model in getattr(model, '_through_models', []):
-                if _table_exists(through_model._meta.db_table):
+                if _table_exists(through_model._meta.db_table, conn=schema_conn):
                     schema_editor.delete_model(through_model)
             schema_editor.delete_model(model)
 
@@ -1700,6 +1746,13 @@ def _rename_objectchange_field_key(fi, old_name, new_name):
     cot = fi.custom_object_type
     model = cot.get_model()
     ct = ContentType.objects.get_for_model(model)
+    # core.ObjectChange is branched by netbox-branching (migrations are allowed
+    # on the branch schema, and read routing sends ObjectChange queries to the
+    # active branch — see netbox_branching.database.BranchAwareRouter).  Using
+    # _get_schema_connection() therefore updates the branch's copy of
+    # core_objectchange, keeping branch-context history consistent with the
+    # rename.  Main's copy is updated when the rename is later merged and this
+    # function runs again in main context.
     conn = _get_schema_connection()
 
     oc_sql = (
@@ -1707,11 +1760,25 @@ def _rename_objectchange_field_key(fi, old_name, new_name):
         'SET {col} = ({col} - %s) || jsonb_build_object(%s, {col}->%s) '
         'WHERE changed_object_type_id = %s AND {col} ? %s'
     )
-    with conn.cursor() as cursor:
-        for json_col in ('prechange_data', 'postchange_data'):
-            cursor.execute(oc_sql.format(col=json_col), [old_name, new_name, old_name, ct.id, old_name])
+    # Wrap in a savepoint so a ProgrammingError (e.g. core_objectchange
+    # unexpectedly missing from the active schema) doesn't poison the outer
+    # transaction.  Mirrors the ChangeDiff guard below.
+    try:
+        with transaction.atomic(using=conn.alias):
+            with conn.cursor() as cursor:
+                for json_col in ('prechange_data', 'postchange_data'):
+                    cursor.execute(
+                        oc_sql.format(col=json_col),
+                        [old_name, new_name, old_name, ct.id, old_name],
+                    )
+    except ProgrammingError:
+        logger.warning(
+            '_rename_objectchange_field_key: ObjectChange schema mismatch; '
+            'audit data for %r may not reflect rename to %r',
+            old_name, new_name, exc_info=True,
+        )
 
-    logger.debug('_rename_objectchange_field_key: %r → %r for %s', old_name, new_name, ct)
+    logger.debug('_rename_objectchange_field_key: %r -> %r for %s', old_name, new_name, ct)
 
     try:
         from netbox_branching.models import ChangeDiff  # noqa: F401 — presence check only
@@ -2197,9 +2264,14 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             old_field = field_type.get_model_field(self.original)
             old_field.contribute_to_class(model, self._original_name)
 
+            # Route the probe through the branch's connection so the ALTER
+            # TABLE runs in the active schema.  Using the default connection
+            # here would either probe main's table from a branch context or
+            # fail outright if the table only exists in the branch schema.
+            probe_conn = _get_schema_connection()
             try:
-                with transaction.atomic():
-                    with connection.schema_editor() as test_schema_editor:
+                with transaction.atomic(using=probe_conn.alias):
+                    with probe_conn.schema_editor() as test_schema_editor:
                         test_schema_editor.alter_field(model, old_field, model_field)
                         # If we get here, the constraint was applied successfully
                         # Now raise a custom exception to rollback the test transaction

@@ -10,7 +10,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import FieldDoesNotExist
 from django.core.validators import RegexValidator
-from django.db import connection, models
+from django.db import connection, models, router
 from django.db.models.fields.related import ForeignKey, ManyToManyDescriptor
 from django.db.models.manager import Manager
 from django.db.models.signals import m2m_changed
@@ -927,9 +927,17 @@ class CustomManyToManyManager(Manager):
         ``add`` / ``remove`` / ``set`` do) leaves the m2m write invisible
         to ``handle_changed_object`` — which means a merge or sync replays
         zero through-table rows for CustomObject M2M fields.
+
+        ``using`` must reflect the alias the through-table write actually
+        happened on so that branch-aware receivers (and Django's own
+        router-based dispatch) route subsequent queries to the same schema.
+        The through models are registered as branchable via
+        ``supports_branching_resolver``, so ``router.db_for_write`` returns
+        the active branch's connection alias inside a branch context.
         """
         if not pk_set:
             return
+        db = router.db_for_write(self.through, instance=self.instance)
         m2m_changed.send(
             sender=self.through,
             instance=self.instance,
@@ -937,7 +945,7 @@ class CustomManyToManyManager(Manager):
             reverse=False,
             model=getattr(self.through._meta.get_field('target').remote_field, 'model', None),
             pk_set=pk_set,
-            using='default',
+            using=db,
         )
 
     @staticmethod
