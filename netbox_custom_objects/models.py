@@ -1760,6 +1760,39 @@ class CustomObjectType(NetBoxModel):
 
         return _SchemaAwareDeserialized(inner)
 
+    def clean_fields(self, exclude=None):
+        """
+        Tolerate a stale ``object_type`` FK on instances built by
+        netbox-branching's DELETE-undo path.
+
+        ``CustomObjectType.delete()`` destroys the related
+        ``core_objecttype`` row to satisfy ChangeDiff's PROTECT FK.
+        When the same COT is later restored by a branch revert, the
+        standard ``DeserializedObject`` + ``full_clean`` path validates
+        ``object_type_id`` against a row that no longer exists and
+        raises ``ValidationError``.
+
+        Nulling the dangling FK here lets validation pass.  The
+        ``custom_object_type_post_save_handler`` then sees
+        ``created=True`` on the resulting INSERT and rebuilds the
+        ContentType/ObjectType pair via ``get_or_create``, restoring
+        the link with a fresh pk.  This intentionally does *not*
+        preserve the original pk — any cross-branch audit data that
+        referenced the old pk was already invalidated when the COT
+        was deleted, so a fresh pk is the honest representation of
+        the restored state.
+
+        Only acts when the FK genuinely doesn't resolve, so normal
+        lifecycle saves are unaffected.
+        """
+        if (
+            self.object_type_id is not None
+            and not ObjectType.objects.filter(pk=self.object_type_id).exists()
+        ):
+            self.object_type = None
+            self.object_type_id = None
+        super().clean_fields(exclude=exclude)
+
     def save(self, *args, **kwargs):
         needs_db_create = self._state.adding
 

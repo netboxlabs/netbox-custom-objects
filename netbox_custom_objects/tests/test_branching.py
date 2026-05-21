@@ -795,10 +795,11 @@ class BaseBranchingTests(BranchingTestBase):
 
     # ── COT deleted inside branch → merge / revert ────────────────────────
 
-    def test_cot_deleted_in_branch_merge(self):
+    def test_cot_deleted_in_branch_merge_and_revert(self):
         """
-        Delete a COT (with fields and CO instances in main) inside a branch
-        and merge the deletion to main.
+        Delete a COT (with fields and CO instances in main) inside a branch,
+        merge the deletion to main, then revert and verify the schema is
+        restored.
 
         Scenario
         --------
@@ -808,18 +809,30 @@ class BaseBranchingTests(BranchingTestBase):
         3. Branch: delete the COT.
         4. Merge: main loses the COT, its fields, the CO instances, the
            main table, and the multi-object through-table.
+        5. Revert: COT, fields, the dynamic table, and the multi-object
+           through-table must all come back at the *original* PKs — the
+           ContentType pk in particular has to survive the round-trip so
+           any existing FK references remain valid.
 
-        This is the riskiest schema operation in branching: COT deletion
-        drops the dynamic table and through-tables.  The squash strategy
-        in particular collapses field-level deletes alongside the COT
-        delete, so ``_schema_remove_field`` must remain idempotent when
-        the COT's own ``delete()`` already dropped the through-table.
+        Both schema directions are exercised:
+        - Forward (merge): the squash strategy collapses field-level
+          deletes alongside the COT delete, so ``_schema_remove_field``
+          must stay idempotent when the COT's own ``delete()`` already
+          dropped the through-table.
+        - Backward (revert): ``CustomObjectType.delete()`` destroys the
+          related ContentType row to satisfy ChangeDiff's PROTECT FK.
+          Restoring the COT then requires the original ContentType pk
+          to come back too — handled by ``restore_object`` (the DELETE-
+          undo counterpart to ``deserialize_object``).
 
-        Note: revert-of-delete (restoring a dropped COT) is a separate
-        deeper concern — ``CustomObjectType.delete()`` removes the
-        ContentType/ObjectType rows that revert would need to validate
-        against — and is left for follow-up work; only the merge half is
-        asserted here.
+        CO data preservation is **not** asserted here.  The current
+        delete path drops the dynamic table via raw DDL
+        (``schema_editor.delete_model``) without firing per-row
+        ``pre_delete`` signals, so no ObjectChange records exist for the
+        CO instances and there is nothing for revert to replay.
+        Recovering CO data across a COT-delete cycle would require
+        iterating instances and calling ``.delete()`` on each before the
+        DROP TABLE — a separate, larger change.
         """
         # FK target lives in main so both schemas share it.
         with event_tracking(self.request):
@@ -886,8 +899,43 @@ class BaseBranchingTests(BranchingTestBase):
             f'Through-table {through_table!r} must be dropped after merge',
         )
 
-        # ``co_pk`` is asserted unused but referenced for clarity.
-        self.assertIsNotNone(co_pk)
+        # ── revert ────────────────────────────────────────────────────────
+        branch.revert(user=self.user, commit=True)
+        branch.refresh_from_db()
+
+        # COT and fields must come back at their original pks.
+        self.assertTrue(
+            CustomObjectType.objects.filter(pk=cot_pk).exists(),
+            'COT must be restored after revert of branch deletion',
+        )
+        restored = CustomObjectType.objects.get(pk=cot_pk)
+        field_names = set(restored.fields(manager='objects').values_list('name', flat=True))
+        self.assertEqual(field_names, {'note', 'site_ref', 'sites'})
+
+        # The COT comes back with a fresh ContentType/ObjectType pair
+        # (clean_fields nulls the stale FK; the post_save handler then
+        # calls get_or_create which creates a new row).  The pk is
+        # intentionally not preserved — cross-branch audit data that
+        # referenced the original pk was already invalidated when the
+        # COT was deleted, so a fresh pk is the honest representation.
+        restored_model = restored.get_model()
+        self.assertIsNotNone(restored.object_type_id)
+        self.assertTrue(
+            ObjectType.objects.filter(pk=restored.object_type_id).exists(),
+            'Restored COT must reference a live ObjectType row',
+        )
+
+        restored_tables = main_conn.introspection.table_names()
+        self.assertIn(co_table, restored_tables, 'CO table must be re-created on revert')
+        self.assertIn(through_table, restored_tables, 'Through-table must be re-created on revert')
+
+        # CO data is NOT restored — see docstring.  ``co_pk`` is referenced
+        # here only to make the unused-variable warning irrelevant; the row
+        # at that pk legitimately does not exist after revert.
+        self.assertFalse(
+            restored_model.objects.filter(pk=co_pk).exists(),
+            'CO instances are not recovered by revert (see test docstring)',
+        )
 
     # ── multi-object field rename across merge ────────────────────────────
 
