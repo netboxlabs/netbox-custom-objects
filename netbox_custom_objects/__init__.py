@@ -44,16 +44,11 @@ def _migration_finished(sender, **kwargs):
 
 
 def _connect_deferred_data_reset_signals():
-    """
-    Reset the ``_deferred_co_field_data`` ContextVar at every merge/sync/revert
-    boundary so leftover entries from a previous failure cannot leak into the
-    next operation.
+    """Reset ``_deferred_co_field_data`` at every merge/sync/revert boundary.
 
-    netbox-branching's ``post_merge``/``post_sync``/``post_revert`` only fire on
-    success — if a merge raises mid-way, the ContextVar may still hold deferred
-    CO field updates that were never applied.  Connecting both pre- and post-
-    handlers guarantees the reset runs whether the prior operation succeeded or
-    not (pre catches the failure case; post is for tidiness).
+    Connect both pre- and post- so the reset runs even when the operation
+    raises (post-signals only fire on success).  ``weak=False`` keeps the
+    receiver alive past the end of ``ready()``.
     """
     try:
         from netbox_branching.signals import (
@@ -69,8 +64,6 @@ def _connect_deferred_data_reset_signals():
         _deferred_co_field_data.set(None)
 
     for sig in (pre_merge, post_merge, pre_sync, post_sync, pre_revert, post_revert):
-        # weak=False so the receiver isn't garbage-collected when the closure
-        # goes out of scope at the end of ready().
         sig.connect(_reset, weak=False)
 
 
@@ -167,11 +160,8 @@ class CustomObjectsPluginConfig(PluginConfig):
     }
     required_settings = []
     template_extensions = "template_content.template_extensions"
-    # Resolves dynamically-generated CustomObject models (table{n}model) to
-    # serializers built on the fly via get_serializer_class.  Required because
-    # those models have no importable serializer at the conventional
-    # {app_label}.api.serializers.{Model}Serializer path.  See
-    # netbox_custom_objects/api/serializers.py:serializer_resolver.
+    # Resolves dynamic CO models (table{n}model) to on-the-fly serializers —
+    # they have no importable path at the conventional location.
     serializer_resolver = "api.serializers.serializer_resolver"
 
     @staticmethod
@@ -261,9 +251,7 @@ class CustomObjectsPluginConfig(PluginConfig):
         # model is registered (must happen exactly once, before get_model() runs).
         install_clear_cache_suppressor()
 
-        # Register Django system checks (e.g. conditional netbox-branching
-        # version requirements).  Importing the module is what triggers the
-        # @register decorator.
+        # Register Django system checks (import triggers @register).
         from . import checks  # noqa: F401
 
         from .models import CustomObjectType
@@ -279,14 +267,13 @@ class CustomObjectsPluginConfig(PluginConfig):
         # Patch ObjectSelectorView to support dynamically-generated custom object models
         _patch_object_selector_view()
 
-        # Clear deferred CO field data on every merge/sync/revert boundary so
-        # leftover entries from a failed prior operation don't leak forward.
+        # Clear deferred CO data at every merge/sync/revert boundary so
+        # leftover entries from a failed op don't leak forward.
         _connect_deferred_data_reset_signals()
 
-        # Register netbox-branching hooks so its router knows about our
-        # dynamically-generated through models and can translate field-name
-        # keys in stored ObjectChange data when fields are renamed at runtime.
-        # Guarded so the plugin still works without netbox-branching installed.
+        # Register netbox-branching hooks — branchable resolver for our through
+        # models and ObjectChange field-name migrator for runtime renames.
+        # Guarded so the plugin still works without netbox-branching.
         try:
             from netbox_branching.utilities import (
                 register_branching_resolver,

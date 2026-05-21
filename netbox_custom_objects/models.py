@@ -99,20 +99,14 @@ USER_TABLE_DATABASE_NAME_PREFIX = "custom_objects_"
 # Per-context storage for CO field values deferred during squash merge.
 # Using ContextVar instead of a class-level dict so that concurrent merges
 # (different threads or coroutines) each get an isolated copy.
-# Shape: {db_table: {co_pk: {'using': alias, 'data': {field_name: value}}}}
+# Shape: {db_table: {co_pk: {'data': {field_name: value}}}}
 _deferred_co_field_data: contextvars.ContextVar[dict | None] = contextvars.ContextVar(
     '_deferred_co_field_data', default=None
 )
 
 
 def _get_schema_connection():
-    """
-    Return the active branch's DB connection when called within a branch context,
-    otherwise return the default (main-schema) connection.
-
-    Used so that schema-editor operations (add/alter/remove column) target the
-    correct PostgreSQL schema without requiring every call-site to be branch-aware.
-    """
+    """Active branch's connection if any, else the default — so DDL targets the right schema."""
     try:
         from netbox_branching.contextvars import active_branch
         branch = active_branch.get()
@@ -124,13 +118,10 @@ def _get_schema_connection():
 
 
 def _historical_names_for_field(field_pk):
-    """
-    Return the set of all names this CustomObjectTypeField has ever held,
-    derived from its own ObjectChange UPDATE history.
+    """All names this field has ever held, from its ObjectChange UPDATE history.
 
-    Used when applying deferred CO field data after a squash merge so that a
-    deferred entry recorded under an *old* field name (because the CO CREATE
-    was replayed before the rename) still matches the field's current name.
+    Used so a deferred CO entry recorded under the field's old name still
+    matches when the field is created in the target schema under its new name.
     """
     names = set()
     rows = ObjectChange.objects.filter(
@@ -150,28 +141,15 @@ def _historical_names_for_field(field_pk):
 
 
 def _apply_deferred_co_field(field_instance):
-    """
-    Apply any deferred CO field values after a column is added to the DB.
+    """Apply deferred CO field values via raw UPDATE after the column is added.
 
-    Called by CustomObjectTypeField.save() after schema_editor.add_field() so that
-    custom object rows inserted before their columns existed (squash merge ordering)
-    receive their correct values via a raw UPDATE.
-
-    ``_deferred_co_field_data`` (ContextVar) has the shape::
-
-        {db_table: {co_pk: {'using': alias, 'data': {field_name: value}}}}
-
-    For TYPE_OBJECT fields the postchange_data key is ``{name}`` but the DB column
-    is ``{name}_id`` — this function maps accordingly.
-    For TYPE_MULTIOBJECT fields there is no column on the main table, so they are
-    skipped entirely.
-
-    Rename awareness: in a squash merge the CO CREATE for a renamed field
-    arrives with the *old* field name in ``data`` (the name recorded in the
-    ObjectChange at write time), while this function is invoked when the
-    field is being created in the target schema under its *new* name.
-    We accept any historical name for this field — derived from the field's
-    own ObjectChange UPDATE history — as a match.
+    Squash merge fix: when a CO CREATE replays before its field's CREATE, the
+    field values stash in ``_deferred_co_field_data`` (shape:
+    ``{db_table: {co_pk: {'data': {field_name: value}}}}``); when the field
+    finally lands we UPDATE those rows.  TYPE_OBJECT data key is ``{name}``
+    but the column is ``{name}_id``; TYPE_MULTIOBJECT has no parent-table
+    column so it's skipped.  Historical names (rename history) are accepted
+    as matches so a renamed field still picks up its pre-rename data.
     """
     # No deferred data at all — fast path.
     deferred = _deferred_co_field_data.get()
@@ -206,31 +184,25 @@ def _apply_deferred_co_field(field_instance):
     with schema_conn.cursor() as cursor:
         for co_pk, entry in per_table.items():
             data = entry['data']
-            # Find any candidate key actually present in this entry.
-            # Distinguish "key absent" from "key present with NULL": an
-            # explicit None is a legitimate write and must reach the column.
+            # Distinguish "key absent" from "key present with NULL" — explicit
+            # None is a legitimate write and must reach the column.
             matched = next((k for k in candidate_keys if k in data), None)
             if matched is None:
                 continue
             value = data[matched]
-            # table_name comes from get_database_table_name() (controlled by our
-            # code) and col_name from field.name, which is validated by the
-            # ^[a-z0-9_]+$ regex — no double-quote characters are possible, so
-            # the f-string interpolation is safe against SQL injection here.
+            # table_name / col_name come from validated identifiers
+            # (^[a-z0-9_]+$ on field.name) — safe to interpolate.
             cursor.execute(
                 f'UPDATE "{table_name}" SET "{col_name}" = %s WHERE id = %s',
                 [value, co_pk],
             )
 
-    # Remove the consumed keys (any of the candidates) from each entry so that
-    # processed field data does not persist in the ContextVar beyond its
-    # useful lifetime (e.g. on a retry after a partial failure, stale data
-    # from a previous attempt is avoided).
+    # Pop consumed keys and prune empty entries so the ContextVar doesn't
+    # accumulate stale state across retries.
     for entry in per_table.values():
         for k in candidate_keys:
             entry['data'].pop(k, None)
 
-    # Prune entries whose data dict is now exhausted.
     exhausted = [pk for pk, entry in per_table.items() if not entry['data']]
     for pk in exhausted:
         del per_table[pk]
@@ -241,15 +213,10 @@ def _apply_deferred_co_field(field_instance):
 
 
 def _schema_add_field(fi, model, schema_editor, schema_conn):
-    """
-    Issue ``add_field`` against the physical schema for *fi*.
+    """``add_field`` against *schema_conn*; idempotent (skips if column exists).
 
-    Handles through-table creation for MULTIOBJECT fields.  Does NOT apply
-    deferred CO field data — callers that need that (squash merge context) must
-    call ``_apply_deferred_co_field(fi)`` separately after this returns.
-
-    Idempotent: skips the ALTER TABLE if the column already exists (e.g. when
-    sync/merge replays an ObjectChange that was already applied).
+    Creates the through table for MULTIOBJECT.  Deferred CO field data is NOT
+    applied here — call ``_apply_deferred_co_field`` separately after.
     """
     ft = FIELD_TYPE_CLASS[fi.type]()
     mf = ft.get_model_field(fi)
@@ -270,26 +237,12 @@ def _schema_add_field(fi, model, schema_editor, schema_conn):
 
 
 def _schema_remove_field(fi, model, schema_editor, schema_conn=None, existing_tables=None):
-    """
-    Issue ``remove_field`` against the physical schema for *fi*.
+    """``remove_field`` against *schema_conn*; idempotent.
 
-    For MULTIOBJECT fields the through table is dropped first.  The function
-    is idempotent: when the through table is already absent (e.g. the parent
-    COT's ``delete()`` dropped it before the field's own ObjectChange was
-    replayed during a squash merge) the drop is skipped.
-
-    *existing_tables* — optional pre-fetched list of tables in the target
-    schema.  When provided it short-circuits the per-call introspection.
-    *schema_conn* — connection to use when *existing_tables* is None.  Falls
-    back to the global ``connection`` so legacy callers (main-schema delete
-    path) keep working without modification.
-
-    For scalar fields, ``SET CONSTRAINTS ALL IMMEDIATE`` is issued before
-    ``remove_field`` to flush DEFERRABLE FK trigger events that would
-    otherwise cause PostgreSQL to reject the ALTER TABLE.  M2M fields have
-    no parent-table column, so ``remove_field`` is skipped — Django's
-    ``schema_editor.remove_field`` for an explicit-through M2M is a no-op
-    at the DB layer and would otherwise produce confusing log noise.
+    For MULTIOBJECT, drops the through table (skipped if already gone).
+    For scalar fields, flushes DEFERRABLE FK triggers before ALTER TABLE so
+    PostgreSQL doesn't reject the call with "pending trigger events".
+    *existing_tables* optionally short-circuits the per-call introspection.
     """
     ft = FIELD_TYPE_CLASS[fi.type]()
     mf = ft.get_model_field(fi)
@@ -322,37 +275,16 @@ def _schema_remove_field(fi, model, schema_editor, schema_conn=None, existing_ta
 
 
 def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, existing_tables=None):
-    """
-    Issue ``alter_field`` against the physical schema, updating *old_fi* to *new_fi*.
+    """``alter_field`` from *old_fi* to *new_fi*; idempotent across replays.
 
-    For MULTIOBJECT fields whose name changes the through table is renamed before
-    ``alter_field`` is called.  When the old through table is absent (e.g. the
-    branch has never seen this field) the new through table is created from scratch
-    instead.
-
-    *existing_tables* — optional pre-fetched table name list from the target
-    connection.  When given, through-table operations are guarded by membership
-    checks.  When ``None`` (main-schema context) the schema_conn is introspected
-    once on demand.
-
-    Idempotent: skips the ALTER TABLE if the old column is already gone and the
-    new column already exists (e.g. when sync/merge replays an ObjectChange that
-    was already applied).
-
-    Conflict resolution: when neither the old nor the new column exists (the field
-    was independently renamed in the target schema — e.g. branch renamed A→X while
-    main renamed A→Y), the live field record is looked up from the target schema to
-    find the actual current column name, which is then renamed to the new target.
-    A warning is logged to flag the conflict.
+    M2M renames go through ``_rename_or_create_m2m_through`` first.  When
+    neither old nor new column exists (rename conflict — branch A→X vs main
+    A→Y), looks up the live field record to find the actual current column.
+    MULTIOBJECT↔scalar type changes are unsupported — caller must remove+add.
     """
     old_is_m2m = old_fi.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
     new_is_m2m = new_fi.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
 
-    # A type change between MULTIOBJECT and a scalar type (or vice versa) is not
-    # a simple column rename/alter — the storage representation is fundamentally
-    # different (through-table vs column).  Attempting alter_field in this case
-    # would fail at the DB level.  Log and skip; the caller is expected to handle
-    # such changes as remove + add rather than alter.
     if old_is_m2m != new_is_m2m:
         logger.warning(
             '_schema_alter_field: skipping unsupported type change %r→%r on %s '
@@ -366,11 +298,7 @@ def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, exist
     old_mf.contribute_to_class(model, old_fi.name)
     new_mf.contribute_to_class(model, new_fi.name)
 
-    # M2M fields have no column on the parent table — all the schema work for
-    # them happens against the through-table.  Skip the column-existence
-    # check (which would always report "absent" since ``column`` is ``''``)
-    # and jump straight to the rename / create logic below; the trailing
-    # ``alter_field`` is also redundant for M2M so we return after.
+    # M2M has no parent-table column — schema work happens on the through table.
     if new_is_m2m:
         if old_fi.name != new_fi.name:
             _rename_or_create_m2m_through(
@@ -390,14 +318,11 @@ def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, exist
                 old_mf.column, new_mf.column, model._meta.db_table,
             )
             return
-        # Scalar field: neither the old nor the new column exists.  The field was
-        # independently renamed in this schema (e.g. branch renamed A→X while main
-        # renamed A→Y; now applying main's rename to the branch).  Look up the live
-        # field record in the target schema to find the actual column and rename it.
+        # Both source and target columns absent → independent rename in this
+        # schema; look up the live column and converge on the merge target.
         logger.warning(
-            '_schema_alter_field: rename conflict on %s — source column %r and '
-            'target column %r are both absent; field pk=%d was independently renamed '
-            'in this schema; resolving by looking up live column',
+            '_schema_alter_field: rename conflict on %s — neither %r nor %r '
+            'exists; resolving via live field pk=%d',
             model._meta.db_table, old_mf.column, new_mf.column, new_fi.pk,
         )
         try:
@@ -462,26 +387,10 @@ def _rename_or_create_m2m_through(old_fi, new_fi, model, schema_editor, schema_c
 
 
 def _translate_renamed_field_name(cot, attr, rename_map=None):
-    """
-    Resolve ``attr`` to a CustomObjectTypeField's *current* name on *cot* by
-    walking the field's rename history.
-
-    The field we're looking for is one of this COT's CustomObjectTypeFields
-    whose history (via ObjectChanges of ``name``) includes ``attr`` as a former
-    or current name.  We match at the DB level on JSON keys
-    ``postchange_data->>'name'`` / ``prechange_data->>'name'`` so we don't pull
-    every UPDATE row into Python on every invocation.
-
-    Returns the field's current name when there is exactly one matching field,
-    or ``None`` otherwise.  We abstain on ambiguity (the same name appearing in
-    multiple fields' rename history) because picking arbitrarily would
-    silently overwrite the wrong column; the caller then preserves the raw
-    key.  This case is vanishingly rare for normal use.
-
-    Pass ``rename_map`` (an old_name → current_name dict built via
-    ``_build_rename_map``) to skip the DB query.  ``resolve_field_aliases``
-    constructs that map once per call so a payload with many renamed keys
-    incurs a single ObjectChange scan instead of one per key.
+    """Resolve *attr* to the current name of one of *cot*'s fields via its
+    ObjectChange rename history.  Returns ``None`` on ambiguity (caller falls
+    back to raw key) so we never silently overwrite the wrong column.  Pass
+    *rename_map* (built once via ``_build_rename_map``) to skip the DB query.
     """
     if rename_map is not None:
         return rename_map.get(attr)
@@ -553,14 +462,11 @@ def _build_rename_map(cot, attrs):
 
 
 def _set_with_collision_preference(result, key, value):
-    """
-    Assign ``result[key] = value``; on collision prefer the non-None value.
+    """Set ``result[key] = value``; on collision prefer the non-None side.
 
-    Two raw data keys can map to the same canonical key after rename
-    translation (squash-merge artefact: both the old name and the new name
-    appear, with the new name often carrying a sentinel ``None`` from
-    ``deep_compare_dict``'s "new-only-in-post" handling).  Preserving the
-    non-None value keeps the meaningful write from being clobbered.
+    Squash-merge can map both the old and new name of a renamed field to the
+    same canonical key, with the new-side often carrying a sentinel ``None``
+    from ``deep_compare_dict``.  Preferring non-None keeps the real write.
     """
     if key in result and value is None and result[key] is not None:
         return
@@ -611,25 +517,14 @@ class CustomObject(
 
     @classmethod
     def resolve_field_aliases(cls, data):
-        """
-        Translate stale field-name keys in *data* to this model's current
-        attribute names.
+        """Rewrite *data* keys to this model's current field names.
 
-        Plugin hook called by netbox-branching's ``update_object()`` and
-        ``ChangeDiff._update_conflicts()``.  When a CustomObjectTypeField has
-        been renamed between when an ObjectChange was recorded and when it is
-        being replayed/compared, the data dict's keys may refer to the field's
-        old name while this model class has the field's current name.  We walk
-        the field's rename history (recorded as ObjectChange records on
-        ``CustomObjectTypeField``) and rewrite each unrecognised key to the
-        field's current name on this COT.
-
-        When two raw keys map to the same target field (a squash-merge artefact
-        in which both the old name and the new name appear, the new name often
-        carrying a sentinel ``None`` from ``deep_compare_dict``'s "new-only-in-
-        post" treatment), the non-None value wins.  When no translation is
-        possible the original key is preserved so downstream code can still
-        observe it.
+        Called by netbox-branching's ``update_object()`` and
+        ``ChangeDiff._update_conflicts()`` when a CustomObjectTypeField has
+        been renamed between an ObjectChange recording and its replay.  Walks
+        each field's rename history via ObjectChange records.  Unknown keys
+        are preserved as-is; on collision the non-None value wins (see
+        ``_set_with_collision_preference``).
         """
         if not data:
             return data
@@ -673,31 +568,21 @@ class CustomObject(
 
     @classmethod
     def deserialize_object(cls, data, pk=None):
-        """
-        Hook called by ObjectChange.apply() for CREATE actions.
+        """ObjectChange.apply() hook for CREATE actions.
 
-        The squash merge strategy may apply a CO's CREATE before its
-        CustomObjectTypeField rows are in main (the dependency graph has no FK
-        from CO to fields).  When that happens, the standard Django
-        deserialization would INSERT the CO with NULL custom-field values
-        because the columns don't exist yet.
-
-        This hook:
-        1. Deserializes the CO using a fresh model (re-queried from DB).
-        2. Does save_base(raw=True) as normal.
-        3. Stores the full postchange_data in _deferred_co_field_data (ContextVar)
-           so that CustomObjectTypeField.save() can UPDATE the row after each
-           column is added (handles the squash ordering case).
+        Builds against the context-aware ``fresh_model`` (not Django's default
+        ``apps.get_model`` lookup, which would return main's class with the
+        wrong column set inside a branch).  Stashes ``data`` in
+        ``_deferred_co_field_data`` so squash-ordering — a CO CREATE replayed
+        before its field's CREATE — can apply the values via raw UPDATE once
+        each column is added.
         """
-        # Derive the COT primary key from the model class name (e.g. 'Table1Model' → 1)
         cot_id_str = extract_cot_id_from_model_name(cls.__name__.lower())
         if cot_id_str is None:
-            # Not a generated model name — fall back to standard deserialization.
             return _deserialize_object(cls, data, pk=pk)
-        cot_id = int(cot_id_str)  # regex guarantees digits-only
+        cot_id = int(cot_id_str)
 
-        # Refresh the model cache so we pick up any fields already applied to main.
-        # (In the squash case the cache may still point to a zero-field model.)
+        # In the squash case the cache may still point to a zero-field model.
         CustomObjectType.clear_model_cache(cot_id)
         try:
             cot = CustomObjectType.objects.get(pk=cot_id)
@@ -705,22 +590,6 @@ class CustomObject(
         except CustomObjectType.DoesNotExist:
             fresh_model = cls
 
-        # Build the instance directly against ``fresh_model`` rather than going
-        # through Django's ``serializers.deserialize('python', ...)``: that
-        # helper re-resolves the model class from the data's natural_key via
-        # ``apps.get_model``, which returns *main's* class (the one registered
-        # in ``apps.all_models``).  In branch context, main's class can have a
-        # different field set than the branch's class — e.g. main has 'alpha'
-        # while branch has 'branch_alpha' after a branch-side rename — so the
-        # eventual save would emit SQL with main's column names against a
-        # branch table that doesn't have them, raising
-        # ``column "alpha" does not exist``.
-        #
-        # Building directly off ``fresh_model`` (the context-aware class) keeps
-        # the field set aligned with the schema we're writing to.  We then
-        # resolve any aliased keys in the data dict via the same hook
-        # netbox-branching calls from ``update_object``, so the keys map to the
-        # model's current field names regardless of any renames in history.
         resolved = fresh_model.resolve_field_aliases(data)
 
         obj = fresh_model()
@@ -749,14 +618,10 @@ class CustomObject(
             if isinstance(f, ManyToManyField):
                 m2m_data[attr] = value
             elif isinstance(f, ForeignKey):
-                # FK values arrive as the related PK; assign via the FK column
-                # (``<name>_id``) to avoid an extra DB lookup.
+                # FK values arrive as the related PK; assign via the _id column.
                 setattr(obj, f.attname, value)
             else:
-                # Coerce via the field's to_python() to handle datetimes etc.
-                # Field.to_python raises ValidationError for parse failures; the
-                # raw value is also acceptable for ValueError/TypeError on
-                # malformed input from older serialized data.
+                # Coerce via to_python() for datetimes etc; fall back to raw on parse failure.
                 try:
                     setattr(obj, attr, f.to_python(value))
                 except (ValidationError, ValueError, TypeError):
@@ -771,25 +636,15 @@ class CustomObject(
             def save(self, using=None, **_kwargs):
                 _using = using or DEFAULT_DB_ALIAS
                 models.Model.save_base(obj, using=_using, raw=True)
-                # Read pk after save_base so that auto-assigned PKs are captured.
-                # (If pk was None before save_base, obj.pk is now the DB-assigned id.)
-                obj_pk = obj.pk
-                # Re-apply M2M relations.  Each ``accessor`` is a manager
-                # attribute name on the saved instance and ``related_pks`` is a
-                # list of related PKs.  Skipped quietly when the through table
-                # or its columns aren't present yet — squash ordering can defer
-                # field creation, and the through-table appears when the field's
-                # own CREATE ObjectChange is later applied.
-                #
-                # AttributeError is checked up front with ``hasattr`` so the
-                # except below stays scoped to genuine DB-state mismatches.
-                # That way a typo or missing method on a manager surfaces as
-                # an exception instead of being silently swallowed at DEBUG.
+                obj_pk = obj.pk  # captures auto-assigned PK
+                # Re-apply M2M relations.  Skipped quietly when the through
+                # table or column isn't present yet (squash ordering — the
+                # field's own CREATE replays later).  hasattr() narrows the
+                # except below to genuine DB-state mismatches.
                 for accessor, related_pks in m2m_data.items():
                     if not hasattr(obj, accessor):
                         logger.debug(
-                            'deserialize_object: deferred M2M %r on %s pk=%s '
-                            '(descriptor not yet bound to model)',
+                            'deserialize_object: deferred M2M %r on %s pk=%s (descriptor unbound)',
                             accessor, table_name, obj_pk,
                         )
                         continue
@@ -798,21 +653,17 @@ class CustomObject(
                         manager.set(related_pks)
                     except (ProgrammingError, OperationalError):
                         logger.debug(
-                            'deserialize_object: deferred M2M %r on %s pk=%s '
-                            '(through table/column not yet present in schema)',
+                            'deserialize_object: deferred M2M %r on %s pk=%s (table absent)',
                             accessor, table_name, obj_pk, exc_info=True,
                         )
-                # Register full data for deferred column updates (squash ordering fix).
+                # Stash full data for deferred column updates (squash ordering fix).
                 deferred = _deferred_co_field_data.get()
                 if deferred is None:
                     deferred = {}
                     _deferred_co_field_data.set(deferred)
                 if table_name not in deferred:
                     deferred[table_name] = {}
-                deferred[table_name][obj_pk] = {
-                    'using': _using,
-                    'data': full_data,
-                }
+                deferred[table_name][obj_pk] = {'data': full_data}
 
         return _Deserialized()
 
@@ -906,23 +757,17 @@ def validate_pep440(value):
 
 class CustomObjectType(NetBoxModel):
     # Class-level cache for generated models
-    # Branch-aware model cache.
-    #
-    # Key: (custom_object_type_id, branch_id_or_None)
-    #   branch_id_or_None == None  → main schema (the canonical apps-registered class)
-    #   branch_id_or_None == int   → that branch's schema (cached only, not registered)
-    #
-    # Branch-specific classes are NEVER inserted into Django's apps registry.
-    # apps.all_models[APP_LABEL][<table_name>] always points to main's class so that
-    # ``content_type.model_class()`` (used by netbox-branching's record_change_diff
-    # inside `with deactivate_branch():`) resolves to a class consistent with main's
-    # schema — branch's schema can have renamed columns that wouldn't exist in main.
+    # Branch-aware model cache keyed by (cot_id, branch_id_or_None).  Only main's
+    # class (branch_id=None) is registered in apps.all_models so that
+    # content_type.model_class() resolves to a class with main's column set —
+    # branches may have renamed columns that don't exist in main.
     _model_cache = {}
-    _through_model_cache = (
-        {}
-    )  # Now stores {custom_object_type_id: {through_model_name: through_model}}
-    _model_cache_locks = {}  # Per-model locks to prevent race conditions
-    _global_lock = threading.RLock()  # Global lock for managing per-model locks
+    # Per-(cot, branch) through-model registry: {(cot_id, branch_id): {name: through}}.
+    # Each context owns its through class so the source FK is set once at
+    # generation time and never mutated to follow another context's CO class.
+    _through_model_cache = {}
+    _model_cache_locks = {}
+    _global_lock = threading.RLock()
     _ON_DELETE_SQL = {
         ObjectFieldOnDeleteChoices.CASCADE: "CASCADE",
         ObjectFieldOnDeleteChoices.SET_NULL: "SET NULL",
@@ -1027,12 +872,7 @@ class CustomObjectType(NetBoxModel):
 
     @staticmethod
     def _active_branch_id():
-        """Return the active netbox-branching Branch id, or None for main.
-
-        Used as the second component of the model cache key so that branch and
-        main contexts each get their own cached class, with main's class being
-        the only one registered in Django's apps registry.
-        """
+        """Active Branch id, or None for main — second component of the cache key."""
         try:
             from netbox_branching.contextvars import active_branch
         except ImportError:
@@ -1045,21 +885,13 @@ class CustomObjectType(NetBoxModel):
 
     @classmethod
     def clear_model_cache(cls, custom_object_type_id=None, *, all_branches=False):
-        """
-        Clear the cached generated model for a CustomObjectType.
+        """Clear the cached generated model.
 
-        Default behaviour clears only the **current branch context's** entry
-        (main vs. a specific branch).  This preserves the other context's
-        cached class — important because that's the class registered in
-        ``apps.all_models`` and used by ``content_type.model_class()``.
-
-        Pass ``all_branches=True`` to wipe every (cot, branch) entry for the
-        given cot — appropriate for COT deletion or full re-init.
-
-        :param custom_object_type_id: ID of the CustomObjectType to clear cache
-            for, or None to clear *everything*.
-        :param all_branches: When True with a specific cot id, clear that cot's
-            cache for all branch contexts, not just the active one.
+        Defaults to clearing only the current branch context's entry so the
+        other context's class (which is registered in ``apps.all_models``)
+        stays valid.  ``all_branches=True`` wipes every (cot, branch) entry,
+        appropriate for COT deletion or full re-init.  ``custom_object_type_id=None``
+        clears everything.
         """
         with cls._global_lock:
             if custom_object_type_id is not None:
@@ -1067,13 +899,14 @@ class CustomObjectType(NetBoxModel):
                     for key in list(cls._model_cache):
                         if key[0] == custom_object_type_id:
                             cls._model_cache.pop(key, None)
-                    cls._through_model_cache.pop(custom_object_type_id, None)
+                    for key in list(cls._through_model_cache):
+                        if key[0] == custom_object_type_id:
+                            cls._through_model_cache.pop(key, None)
                     cls._model_cache_locks.pop(custom_object_type_id, None)
                 else:
                     branch_id = cls._active_branch_id()
                     cls._model_cache.pop((custom_object_type_id, branch_id), None)
-                    # Through-model cache and per-cot lock are not branch-scoped;
-                    # leave them alone for context-only clears.
+                    cls._through_model_cache.pop((custom_object_type_id, branch_id), None)
             else:
                 cls._model_cache.clear()
                 cls._through_model_cache.clear()
@@ -1082,100 +915,48 @@ class CustomObjectType(NetBoxModel):
         # Clear Django apps registry cache to ensure newly created models are recognized
         apps.get_models.cache_clear()
 
-    @staticmethod
-    def _realign_through_models(model):
+    @classmethod
+    def _restore_main_through_registration(cls, cot_id, through_model_name):
+        """Restore main's through to ``apps.all_models`` after a branch
+        generation overwrote it (Django's metaclass auto-registers under the
+        same name).  Keeps ``apps.get_model`` lookups returning main's class.
         """
-        Re-point every through-model's ``source`` FK at *model*.
-
-        The dynamic M2M through models live in Django's global ``apps``
-        registry as one shared class per through-table name, but each
-        (cot_id, branch_id) cache key holds a different parent CO model
-        class.  ``_after_model_generation`` mutates the through's
-        ``source.remote_field.model`` to the CO class being built; on a
-        subsequent cache-hit return for a *different* context (e.g. main
-        after a branch call) the through still points at the previous
-        context's class, which breaks Django's collector during cascade
-        delete ("Cannot query 'X': Must be 'TableYModel' instance.").
-
-        Calling this on every get_model() return path — under
-        ``_global_lock`` — guarantees that at the moment a caller sees a
-        model, the through it references in the apps registry agrees on
-        the source class.  This does **not** make the registry safe for
-        concurrent cross-context use across threads; that's an
-        architectural limitation of sharing through models globally and
-        would require per-(cot, branch) through registration to fix.
-        """
-        for through_model in getattr(model, '_through_models', None) or ():
-            try:
-                source_field = through_model._meta.get_field('source')
-            except FieldDoesNotExist:
-                continue
-            source_field.remote_field.model = model
-            source_field.related_model = model
+        main_throughs = cls._through_model_cache.get((cot_id, None))
+        if not main_throughs:
+            return
+        main_through = main_throughs.get(through_model_name)
+        if main_through is None:
+            return
+        apps.all_models[APP_LABEL][through_model_name.lower()] = main_through
 
     @classmethod
     def get_cached_model(cls, custom_object_type_id, branch_id=None):
-        """
-        Get the cached model for a CustomObjectType in the given branch context.
-
-        :param custom_object_type_id: ID of the CustomObjectType
-        :param branch_id: Branch id, or None for main (default)
-        :return: The cached model or None if not found
-        """
+        """Cached model for (cot, branch), or None."""
         cache_entry = cls._model_cache.get((custom_object_type_id, branch_id))
-        if cache_entry:
-            return cache_entry[0]
-        return None
+        return cache_entry[0] if cache_entry else None
 
     @classmethod
     def get_cached_timestamp(cls, custom_object_type_id, branch_id=None):
-        """
-        Get the timestamp of a cached model for a CustomObjectType in the given branch context.
-
-        :param custom_object_type_id: ID of the CustomObjectType
-        :param branch_id: Branch id, or None for main (default)
-        :return: The cached timestamp or None if not found
-        """
+        """Cached timestamp for (cot, branch), or None."""
         cache_entry = cls._model_cache.get((custom_object_type_id, branch_id))
-        if cache_entry:
-            return cache_entry[1]
-        return None
+        return cache_entry[1] if cache_entry else None
 
     @classmethod
     def is_model_cached(cls, custom_object_type_id, branch_id=None):
-        """
-        Check if a model is cached for a CustomObjectType in the given branch context.
-
-        :param custom_object_type_id: ID of the CustomObjectType
-        :param branch_id: Branch id, or None for main (default)
-        :return: True if the model is cached, False otherwise
-        """
+        """True if a model is cached for (cot, branch)."""
         return (custom_object_type_id, branch_id) in cls._model_cache
 
     @classmethod
-    def get_cached_through_model(cls, custom_object_type_id, through_model_name):
-        """
-        Get a specific cached through model for a CustomObjectType.
-
-        :param custom_object_type_id: ID of the CustomObjectType
-        :param through_model_name: Name of the through model to retrieve
-        :return: The cached through model or None if not found
-        """
-        if custom_object_type_id in cls._through_model_cache:
-            return cls._through_model_cache[custom_object_type_id].get(
-                through_model_name
-            )
-        return None
+    def get_cached_through_model(cls, custom_object_type_id, through_model_name, branch_id=None):
+        """Get a cached through model for a (cot, branch) context, or None."""
+        return cls._through_model_cache.get((custom_object_type_id, branch_id), {}).get(
+            through_model_name
+        )
 
     @classmethod
-    def get_cached_through_models(cls, custom_object_type_id):
-        """
-        Get all cached through models for a CustomObjectType.
-
-        :param custom_object_type_id: ID of the CustomObjectType
-        :return: Dict of through models or empty dict if not found
-        """
-        return cls._through_model_cache.get(custom_object_type_id, {})
+    def get_cached_through_models(cls, custom_object_type_id, branch_id=None):
+        """Get all cached through models for a (cot, branch) context."""
+        return cls._through_model_cache.get((custom_object_type_id, branch_id), {})
 
     def serialize_object(self, exclude=None):
         # cache_timestamp is an internal cache-invalidation field; exclude it
@@ -1281,7 +1062,12 @@ class CustomObjectType(NetBoxModel):
             for f in list(model._meta.local_fields) + list(model._meta.local_many_to_many)
         }
 
-        # Collect through models during after_model_generation
+        # Per-(cot, branch) through models — fresh per context so their source FK
+        # is set once at generation time and never mutated to follow another
+        # context's CO class.  Main's throughs stay canonical in apps.all_models;
+        # branch's throughs are kept private (we restore main's registration
+        # after Django's metaclass auto-registers ours).
+        branch_id = self._active_branch_id()
         through_models = []
 
         for field_object in all_field_objects.values():
@@ -1294,34 +1080,23 @@ class CustomObjectType(NetBoxModel):
 
             if field_instance.is_polymorphic:
                 if field_instance.type == CustomFieldTypeChoices.TYPE_OBJECT:
-                    # Polymorphic GFK: no through model, no after_model_generation needed.
+                    # Polymorphic GFK: no through model.
                     pass
                 elif field_instance.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                    # Ensure the polymorphic through model is in the app registry.
-                    # On server restart the registry is cleared; re-register if needed.
-                    _apps = model._meta.apps
-                    try:
-                        through_model = _apps.get_model(APP_LABEL, field_instance.through_model_name)
-                        # Always update source FK to point to the current model class.
-                        # get_model() may be called multiple times (e.g. cache invalidation
-                        # after a field save changes cache_timestamp).  Without this update
-                        # the through model's source FK would keep pointing at the old class,
-                        # causing Django's Collector to raise ValueError during cascade delete:
-                        # "Cannot query 'X': Must be 'TableYModel' instance."
-                        source_field = through_model._meta.get_field("source")
-                        source_field.remote_field.model = model
-                        source_field.related_model = model
-                    except LookupError:
-                        field_type_obj = FIELD_TYPE_CLASS[CustomFieldTypeChoices.TYPE_MULTIOBJECT]()
-                        source_model_str = f"{APP_LABEL}.{model.__name__}"
-                        through_model = field_type_obj.get_polymorphic_through_model(
-                            field_instance, source_model_str
-                        )
-                        source_field = through_model._meta.get_field("source")
-                        source_field.remote_field.model = model
-                        source_field.related_model = model
-                        _apps.register_model(APP_LABEL, through_model)
-                    if through_model and through_model not in through_models:
+                    # Always create a fresh polymorphic through for THIS context.
+                    # Reusing apps.get_model would hand back another context's
+                    # through and require mutating its source FK — the very race
+                    # this fix eliminates.
+                    field_type_obj = FIELD_TYPE_CLASS[CustomFieldTypeChoices.TYPE_MULTIOBJECT]()
+                    source_model_str = f"{APP_LABEL}.{model.__name__}"
+                    through_model = field_type_obj.get_polymorphic_through_model(
+                        field_instance, source_model_str
+                    )
+                    source_field = through_model._meta.get_field("source")
+                    source_field.remote_field.model = model
+                    source_field.related_model = model
+                    self._register_context_through(branch_id, through_model)
+                    if through_model not in through_models:
                         through_models.append(through_model)
                 continue
 
@@ -1335,17 +1110,29 @@ class CustomObjectType(NetBoxModel):
                 field_object["field"], model, field_name
             )
 
-            # Collect through models from M2M fields
+            # Collect through models from M2M fields — already fresh per CO from
+            # MultiObjectFieldType.get_model_field → get_through_model.
             if hasattr(field, 'remote_field') and hasattr(field.remote_field, 'through'):
                 through_model = field.remote_field.through
-                # Only collect custom through models, not auto-created Django ones
                 if (through_model and through_model not in through_models and
                     hasattr(through_model._meta, 'app_label') and
                     through_model._meta.app_label == APP_LABEL):
                     through_models.append(through_model)
+                    self._register_context_through(branch_id, through_model)
 
         # Store through models on the model for yielding in get_models()
         model._through_models = through_models
+
+    def _register_context_through(self, branch_id, through_model):
+        """Cache *through_model* under (self.pk, branch_id) and, for branch
+        contexts, restore main's canonical registration in apps.all_models
+        (Django's metaclass auto-registered this branch-side through with the
+        same name, overwriting main's entry)."""
+        key = (self.pk, branch_id)
+        bucket = type(self)._through_model_cache.setdefault(key, {})
+        bucket[through_model.__name__] = through_model
+        if branch_id is not None:
+            self._restore_main_through_registration(self.pk, through_model.__name__)
 
     @staticmethod
     def _collect_base_columns(model, user_field_names):
@@ -1425,11 +1212,9 @@ class CustomObjectType(NetBoxModel):
         return f"Custom Objects > {custom_object_type.display_name}"
 
     def register_custom_object_search_index(self, model):
-        # model must be an instance of this CustomObjectType's get_model() generated class
-        # Use local_fields / local_many_to_many — plain lists populated at class-creation
-        # time — instead of _meta.get_field(), which triggers Django's lazy _relation_tree
-        # computation.  _relation_tree calls apps.get_models(), which re-enters our
-        # get_models() override, which calls get_model() for every COT → infinite recursion.
+        # Use local_fields / local_many_to_many directly — calling _meta.get_field()
+        # triggers Django's lazy _relation_tree which re-enters get_models() and
+        # recurses through get_model() for every COT.
         present = (
             {f.name for f in model._meta.local_fields}
             | {f.name for f in model._meta.local_many_to_many}
@@ -1475,22 +1260,11 @@ class CustomObjectType(NetBoxModel):
         with self._global_lock:
             if self.is_model_cached(self.id, branch_id) and not no_cache:
                 cached_timestamp = self.get_cached_timestamp(self.id, branch_id)
-                # Only use cache if the timestamps are available and match
                 if cached_timestamp and self.cache_timestamp and cached_timestamp == self.cache_timestamp:
                     model = self.get_cached_model(self.id, branch_id)
-                    # Re-register the SearchIndex against this cached class.  The
-                    # ``registry["search"]`` dict is global, not per-branch, so a
-                    # previous get_model() call in a different context may have
-                    # left it bound to a class with a different field set.
-                    # Without this refresh, the next CO save in this context
-                    # would fail when post_save's search-cache handler reads
-                    # field names that don't exist on the active model class.
+                    # registry["search"] is global, not per-branch — re-bind so
+                    # post_save's search-cache handler sees this context's fields.
                     self.register_custom_object_search_index(model)
-                    # Through-models in the global apps registry may still be
-                    # pointing at a different context's CO class — realign
-                    # while we hold ``_global_lock`` so callers see a
-                    # consistent (model, through_model.source) pair.
-                    self._realign_through_models(model)
                     return model
                 else:
                     self.clear_model_cache(self.id)
@@ -1559,28 +1333,13 @@ class CustomObjectType(NetBoxModel):
         finally:
             TM.post_through_setup = original_post_through_setup
 
-        # Register the main model with Django's app registry.
-        # _suppress_clear_cache() is used directly here (rather than going
-        # through generate_model()) because we are calling apps.register_model()
-        # explicitly, not type().  generate_model() wraps type() and suppresses
-        # clear_cache only for that call; the suppression window needs to extend
-        # through the _model_cache write that follows so the model is safely
-        # cached before any re-entrant get_model() call can observe it.
-        # Without suppression: register_model() → clear_cache() → get_models() →
-        # get_model() → generate_model() → register_model() recurses infinitely.
+        # Suppress clear_cache() through the _model_cache write so a re-entrant
+        # get_model() inside register_model → clear_cache → get_models() can hit
+        # the cache instead of recursing into another generation.
         with _suppress_clear_cache():
-            # Django's ModelBase metaclass auto-registers every concrete model with
-            # ``Meta.app_label`` set into ``apps.all_models`` at ``type()``-creation
-            # time (inside generate_model() above).  That's the right behaviour for
-            # main's class, but for branch classes we must NOT leave the auto-
-            # registration in place — content_type.model_class() (used by
-            # netbox-branching's record_change_diff inside `with deactivate_branch():`)
-            # would then return a class with branch's column set, producing
-            # `column "beta" does not exist` errors when querying main.
-            #
-            # So: for main (branch_id is None) overwrite the registration cleanly;
-            # for a branch context, restore main's previously-cached class so the
-            # apps registry continues to reflect main's schema.
+            # Main's class is the canonical registration in apps.all_models;
+            # branch's class is cached only.  Without this, content_type.model_class()
+            # would return a class with the wrong column set across contexts.
             model_key = model_name.lower()
             if branch_id is None:
                 if model_key in apps.all_models[APP_LABEL]:
@@ -1590,18 +1349,14 @@ class CustomObjectType(NetBoxModel):
                 main_class = self.get_cached_model(self.id, branch_id=None)
                 if main_class is not None:
                     apps.all_models[APP_LABEL][model_key] = main_class
-                # If main hasn't been generated yet, the branch class stays
-                # registered until the next main-context get_model() call, which
-                # will replace it.  This is rare and self-healing.
+                # Else: branch class stays registered until main is generated —
+                # self-healing on the next main-context get_model() call.
 
             self._after_model_generation(attrs, model)
 
-            # Cache the generated model with its timestamp (protected by lock for thread safety)
             with self._global_lock:
                 self._model_cache[(self.id, branch_id)] = (model, self.cache_timestamp)
 
-        # Now that the model is in _model_cache, clear_cache() is safe:
-        # re-entrant get_model() calls for this COT hit the cache immediately.
         apps.clear_cache()
         ContentType.objects.clear_cache()
 
@@ -1618,15 +1373,11 @@ class CustomObjectType(NetBoxModel):
         return model
 
     def _ensure_field_fk_constraint(self, model, field_name, on_delete_behavior=None):
-        """
-        Ensure that a foreign key constraint is properly created at the database level
-        for a specific OBJECT type field. This is necessary because models are created
-        with managed=False, which may not properly create FK constraints.
+        """Create the FK constraint for an OBJECT-type field at the DB level.
 
-        :param model: The model containing the field
-        :param field_name: The name of the field to ensure FK constraint for
-        :param on_delete_behavior: Override the ON DELETE behavior (ObjectFieldOnDeleteChoices value).
-            If None, the value is read from the corresponding CustomObjectTypeField record.
+        Required because dynamic models are ``managed=False``, so Django won't
+        emit the FK on its own.  ``on_delete_behavior`` defaults to the field's
+        recorded value, falling back to SET_NULL.
         """
         table_name = self.get_database_table_name()
 
@@ -1672,11 +1423,9 @@ class CustomObjectType(NetBoxModel):
                 constraint_name = row[0]
                 cursor.execute(f'ALTER TABLE {q(table_name)} DROP CONSTRAINT IF EXISTS {q(constraint_name)}')
 
-            # PROTECT maps to RESTRICT in SQL (raises an error on delete attempt).
-            # SET NULL and CASCADE map directly.  For SET NULL the column must be
-            # nullable, which it always is for Object fields.
-            # Not DEFERRABLE: deferred constraints queue trigger events that block
-            # subsequent ALTER TABLE calls (e.g. during branch revert remove_field).
+            # PROTECT → RESTRICT; SET NULL needs a nullable column (always true
+            # for Object fields).  NOT DEFERRABLE — deferred constraints queue
+            # trigger events that block subsequent ALTER TABLE calls.
             constraint_name = f"{table_name}_{column_name}_fk"
             cursor.execute(f"""
                 ALTER TABLE {q(table_name)}
@@ -1719,22 +1468,14 @@ class CustomObjectType(NetBoxModel):
 
     @classmethod
     def deserialize_object(cls, data, pk=None):
-        """
-        Custom deserialization hook for netbox-branching's merge/revert engine.
+        """Branching merge/revert hook — replays through the real ``save()``.
 
-        ``ObjectChange.apply()`` normally uses ``DeserializedObject.save()``, which
-        calls ``Model.save_base(raw=True)`` — bypassing our ``save()`` override and
-        all ``post_save`` signals.  That means ``create_model()`` never runs and the
-        physical table is never created in the destination schema.
-
-        By implementing this classmethod the apply engine calls our version instead,
-        returning a wrapper whose ``save()`` invokes the full ``CustomObjectType.save()``
-        lifecycle (signals included) so that the table is created as a side effect of
-        replaying the ObjectChange.
-
-        ``object_type`` is cleared before saving so the ``custom_object_type_post_save_handler``
-        can re-create and link it correctly in the destination schema, avoiding any FK
-        mismatch between the branch and main ``ObjectType`` pks.
+        The default ``DeserializedObject.save()`` does ``save_base(raw=True)``,
+        which skips signals and our ``save()`` override, so the dynamic table
+        never gets created in the destination schema.  This wrapper runs the
+        full lifecycle.  ``object_type`` is nulled only when the FK doesn't
+        resolve (mirrors ``clean_fields``) so normal merges don't churn the
+        ContentType/ObjectType pair.
         """
         inner = _deserialize_object(cls, data, pk=pk)
 
@@ -1747,10 +1488,15 @@ class CustomObjectType(NetBoxModel):
                 # Snapshot before modifying so that diff()['pre'] records the
                 # current state rather than showing all fields as None on revert.
                 self.object.snapshot()
-                # Clear the ObjectType FK — it may not exist in main yet.
-                # custom_object_type_post_save_handler re-sets it after INSERT.
-                self.object.object_type = None
-                self.object.object_type_id = None
+                # Only null the ObjectType FK when it doesn't resolve in the
+                # destination schema; custom_object_type_post_save_handler will
+                # then rebuild the link via get_or_create after INSERT.
+                if (
+                    self.object.object_type_id is not None
+                    and not ObjectType.objects.filter(pk=self.object.object_type_id).exists()
+                ):
+                    self.object.object_type = None
+                    self.object.object_type_id = None
                 self.object.save()
                 # Re-apply any M2M data (tags, etc.) that was stripped during deserialization.
                 if self._inner.m2m_data:
@@ -1761,29 +1507,14 @@ class CustomObjectType(NetBoxModel):
         return _SchemaAwareDeserialized(inner)
 
     def clean_fields(self, exclude=None):
-        """
-        Tolerate a stale ``object_type`` FK on instances built by
-        netbox-branching's DELETE-undo path.
+        """Tolerate a stale ``object_type`` FK on revert (DELETE-undo path).
 
-        ``CustomObjectType.delete()`` destroys the related
-        ``core_objecttype`` row to satisfy ChangeDiff's PROTECT FK.
-        When the same COT is later restored by a branch revert, the
-        standard ``DeserializedObject`` + ``full_clean`` path validates
-        ``object_type_id`` against a row that no longer exists and
-        raises ``ValidationError``.
-
-        Nulling the dangling FK here lets validation pass.  The
-        ``custom_object_type_post_save_handler`` then sees
-        ``created=True`` on the resulting INSERT and rebuilds the
-        ContentType/ObjectType pair via ``get_or_create``, restoring
-        the link with a fresh pk.  This intentionally does *not*
-        preserve the original pk — any cross-branch audit data that
-        referenced the old pk was already invalidated when the COT
-        was deleted, so a fresh pk is the honest representation of
-        the restored state.
-
-        Only acts when the FK genuinely doesn't resolve, so normal
-        lifecycle saves are unaffected.
+        ``delete()`` destroys the core_objecttype row to satisfy ChangeDiff's
+        PROTECT FK; revert then re-inserts the COT, but full_clean would fail
+        validating the dangling FK.  We null it here so validation passes;
+        ``custom_object_type_post_save_handler`` rebuilds the ContentType/
+        ObjectType pair via get_or_create on the resulting INSERT.  The new
+        pk is intentional — the old one's audit refs were already invalidated.
         """
         if (
             self.object_type_id is not None
@@ -1805,8 +1536,7 @@ class CustomObjectType(NetBoxModel):
             self.clear_model_cache(self.id)
 
     def delete(self, *args, **kwargs):
-        # Clear the model cache for this CustomObjectType (across all branches —
-        # the COT itself is going away, so every branch's cached class becomes stale).
+        # COT is going away — every branch's cached class is stale.
         self.clear_model_cache(self.id, all_branches=True)
 
         model = self.get_model()
@@ -1852,21 +1582,16 @@ class CustomObjectType(NetBoxModel):
                 pre_delete.connect(handle_deleted_object)
 
         with schema_conn.schema_editor() as schema_editor:
-            # Drop through tables before the main table (they have FKs pointing to it).
-            # Pass schema_conn so existence checks run against the active branch's
-            # schema, not main's — otherwise inside a branch we'd skip drops that
-            # need to happen (or attempt drops on tables that don't exist there).
+            # Drop through tables before the main table (FKs).  Existence checks
+            # use schema_conn so they target the active branch's schema.
             for through_model in getattr(model, '_through_models', []):
                 if _table_exists(through_model._meta.db_table, conn=schema_conn):
                     schema_editor.delete_model(through_model)
             schema_editor.delete_model(model)
 
-        # Unregister the model and its through-models from Django's app registry so
-        # that subsequent ORM operations (e.g. deleting a related device) do not try
-        # to query the now-dropped table and receive a
-        # "relation 'custom_objects_<id>' does not exist" error.
-        # Use _global_lock to prevent a concurrent get_model() call from racing
-        # against this de-registration and re-adding the model mid-cleanup.
+        # Unregister from apps.all_models so cascade-delete doesn't query the
+        # dropped table.  _global_lock guards against a concurrent get_model()
+        # racing and re-registering mid-cleanup.
         with self._global_lock:
             model_name = model.__name__.lower()
             if model_name in apps.all_models.get(APP_LABEL, {}):
@@ -1877,12 +1602,9 @@ class CustomObjectType(NetBoxModel):
                 if through_name in apps.all_models.get(APP_LABEL, {}):
                     del apps.all_models[APP_LABEL][through_name]
 
-        # Clear Django's internal relation/field caches so the removed model is no
-        # longer discovered during cascade-delete collector traversal.
         apps.clear_cache()
 
-        # Re-clear the model cache to remove re-cached model from get_model
-        # (across all branches — see comment at the top of this method).
+        # Re-clear in case anything re-cached during cleanup.
         self.clear_model_cache(self.id, all_branches=True)
 
 
@@ -1895,30 +1617,20 @@ def custom_object_type_post_save_handler(sender, instance, created, **kwargs):
             app_label=APP_LABEL,
             model=content_type_name
         )
-        # The snapshot here is for the *second* save (object_type assignment)
-        # below — not for the create that just fired this handler.  Without it,
-        # the second save's ObjectChange would mark every field as changed
-        # instead of just the object_type FK.
+        # Snapshot for the second save below (the object_type assignment).
+        # Without this, its ObjectChange would mark every field as changed.
         instance.snapshot()
         instance.object_type = ct
         instance.save()
 
 
 def _rename_objectchange_field_key(fi, old_name, new_name):
-    """
-    Rename a JSON key in all ObjectChange records for CustomObject instances of
-    this field's type, reflecting a field rename from *old_name* to *new_name*.
+    """Rewrite *old_name* → *new_name* JSON keys in ObjectChange (and
+    ChangeDiff when netbox-branching is installed) for this field's COT.
 
-    Updates both ``prechange_data`` and ``postchange_data`` in the ObjectChange
-    table, and ``original``/``modified``/``current`` in netbox-branching's
-    ChangeDiff table when that plugin is installed.
-
-    Field names are validated with ``^[a-z0-9_]+$`` so string formatting of the
-    column names here is safe against SQL injection.
-
-    This runs inside the same ``transaction.atomic()`` block as
-    ``CustomObjectTypeField.save()``, so it rolls back cleanly if the enclosing
-    transaction is aborted.
+    Runs inside ``CustomObjectTypeField.save()``'s atomic so it rolls back
+    cleanly.  JSON column names are literals and field names are validated
+    against ``^[a-z0-9_]+$`` — safe to interpolate.
     """
     cot = fi.custom_object_type
     model = cot.get_model()
@@ -1937,9 +1649,8 @@ def _rename_objectchange_field_key(fi, old_name, new_name):
         'SET {col} = ({col} - %s) || jsonb_build_object(%s, {col}->%s) '
         'WHERE changed_object_type_id = %s AND {col} ? %s'
     )
-    # Wrap in a savepoint so a ProgrammingError (e.g. core_objectchange
-    # unexpectedly missing from the active schema) doesn't poison the outer
-    # transaction.  Mirrors the ChangeDiff guard below.
+    # Savepoint contains the failure cleanly, then we re-raise so the outer
+    # field save aborts — silently logging would leave audit data inconsistent.
     try:
         with transaction.atomic(using=conn.alias):
             with conn.cursor() as cursor:
@@ -1949,30 +1660,25 @@ def _rename_objectchange_field_key(fi, old_name, new_name):
                         [old_name, new_name, old_name, ct.id, old_name],
                     )
     except ProgrammingError:
-        logger.warning(
-            '_rename_objectchange_field_key: ObjectChange schema mismatch; '
-            'audit data for %r may not reflect rename to %r',
+        logger.error(
+            '_rename_objectchange_field_key: ObjectChange schema mismatch '
+            'rewriting %r -> %r; aborting rename',
             old_name, new_name, exc_info=True,
         )
+        raise
 
     logger.debug('_rename_objectchange_field_key: %r -> %r for %s', old_name, new_name, ct)
 
     try:
-        from netbox_branching.models import ChangeDiff  # noqa: F401 — presence check only
+        from netbox_branching.models import ChangeDiff  # noqa: F401
     except ImportError:
-        return  # netbox-branching not installed; nothing more to update
+        return
 
     cd_sql = (
         'UPDATE netbox_branching_changediff '
         'SET {col} = ({col} - %s) || jsonb_build_object(%s, {col}->%s) '
         'WHERE object_type_id = %s AND {col} IS NOT NULL AND {col} ? %s'
     )
-    # Wrap in a savepoint so a ProgrammingError (table/column missing due to
-    # netbox-branching schema mismatch) doesn't poison the outer merge
-    # transaction — every subsequent statement on the same connection would
-    # otherwise raise InFailedSqlTransaction.  Other DatabaseError subclasses
-    # are allowed to propagate so a real bug aborts the rename instead of
-    # silently corrupting audit data.
     try:
         with transaction.atomic(using=conn.alias):
             with conn.cursor() as cursor:
@@ -1982,11 +1688,12 @@ def _rename_objectchange_field_key(fi, old_name, new_name):
                         [old_name, new_name, old_name, ct.id, old_name],
                     )
     except ProgrammingError:
-        logger.warning(
-            '_rename_objectchange_field_key: ChangeDiff schema mismatch; '
-            'audit data for %r may not reflect rename to %r',
+        logger.error(
+            '_rename_objectchange_field_key: ChangeDiff schema mismatch '
+            'rewriting %r -> %r; aborting rename',
             old_name, new_name, exc_info=True,
         )
+        raise
 
 
 class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedModel):
@@ -3078,15 +2785,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
     @classmethod
     def deserialize_object(cls, data, pk=None):
-        """
-        Custom deserialization hook for netbox-branching's merge/revert engine.
+        """Branching merge/revert hook — replays through the real ``save()``.
 
-        Same problem as ``CustomObjectType.deserialize_object``: the default
-        ``DeserializedObject.save(raw=True)`` bypasses ``CustomObjectTypeField.save()``,
-        so the physical column is never added to the custom object table.
-
-        This wrapper calls the real ``save()`` so that ``add_field`` runs as a side
-        effect of replaying the CREATE ObjectChange during a merge.
+        Same shape as ``CustomObjectType.deserialize_object``: the default
+        ``DeserializedObject.save(raw=True)`` skips our ``save()``, so the
+        column never gets added.  This wrapper runs the full lifecycle.
         """
         inner = _deserialize_object(cls, data, pk=pk)
 
@@ -3107,32 +2810,22 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     def save(self, *args, **kwargs):
         is_new = self._state.adding
 
-        # Use the branch connection when operating inside a branch so that schema
-        # editor operations target the branch schema rather than main.
         schema_conn = _get_schema_connection()
 
-        # Auto-assign schema_id for new fields that don't have one yet.
-        # Increments the monotonic counter on the parent CustomObjectType so that IDs are
-        # never reused, even after a field is deleted.  The UniqueConstraint on
-        # (schema_id, custom_object_type) is the safety net against races; a concurrent
-        # writer would get an IntegrityError and must retry.
-        # Note: bulk_create() bypasses save() entirely, so auto-assignment will NOT fire for
-        # fields created via CustomObjectTypeField.objects.bulk_create(...). Always set
-        # schema_id explicitly when using bulk_create.
+        # Auto-assign schema_id from the parent's monotonic counter.  IDs are
+        # never reused, even after a field is deleted; the
+        # UniqueConstraint(schema_id, custom_object_type) is the race safety net.
+        # bulk_create() bypasses save() — callers must set schema_id explicitly.
         if self._state.adding and self.schema_id is None:
-            # transaction.atomic() must target the same connection that the
-            # SELECT FOR UPDATE runs against; in a branch context the branching
-            # router routes CustomObjectType to the branch connection, so we
-            # pin both the atomic block and the queryset to schema_conn.alias.
+            # Atomic and queryset pinned to schema_conn — the branching router
+            # routes CustomObjectType writes to the branch connection.
             with transaction.atomic(using=schema_conn.alias):
                 cot = CustomObjectType.objects.using(schema_conn.alias).select_for_update().get(
                     pk=self.custom_object_type_id
                 )
                 new_schema_id = cot.next_schema_id + 1
-                # Use update() rather than save() to avoid dispatching post_save on
-                # CustomObjectType, which would clear the model cache prematurely.
-                # The model cache must remain valid until this field's own save() calls
-                # get_model() below (to contribute the new field and alter the DB table).
+                # update() avoids post_save → clear_model_cache; the cache must
+                # remain valid until this field's own get_model() below.
                 CustomObjectType.objects.using(schema_conn.alias).filter(
                     pk=self.custom_object_type_id
                 ).update(next_schema_id=new_schema_id)
@@ -3141,17 +2834,13 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         field_type = FIELD_TYPE_CLASS[self.type]()
         model = self.custom_object_type.get_model()
 
-        # Wrap the schema mutation, audit-key rewrite, cache_timestamp bump, and
-        # parent save() in a single atomic so a failure between the DDL and the
-        # field row save can't leave audit data rewritten but the field record
-        # un-persisted (or vice versa).  Nests inside the schema_id allocation
-        # block above as a savepoint.
+        # Schema mutation + audit-key rewrite + cache bump + parent save() share
+        # one atomic so a failure between DDL and row save can't leave audit
+        # data rewritten but the field record un-persisted (or vice versa).
         with transaction.atomic(using=schema_conn.alias):
             with schema_conn.schema_editor() as schema_editor:
                 if self._state.adding:
                     if self.is_polymorphic:
-                        # Polymorphic Object: add content_type + object_id columns + index.
-                        # Polymorphic MultiObject: create through table with content_type + object_id.
                         if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
                             field_type.add_polymorphic_object_columns(self, model, schema_editor)
                         elif self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
@@ -3160,10 +2849,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                         _schema_add_field(self, model, schema_editor, schema_conn)
                         _apply_deferred_co_field(self)
                 else:
-                    # Polymorphic fields: renames and type changes are rejected by clean().
-                    # Non-schema attributes (label, description, …) may still change here.
-                    # If clean() was bypassed and a rename slipped through, raise rather
-                    # than silently leaving DB columns / through table out of sync.
+                    # Polymorphic renames/type changes are rejected in clean();
+                    # raise here if one slipped through to avoid silent column drift.
                     if self.is_polymorphic or self._original_is_polymorphic:
                         if self.name != self._original_name:
                             raise ValidationError(
@@ -3172,12 +2859,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     else:
                         _schema_alter_field(self.original, self, model, schema_editor, schema_conn)
 
-            # When the field is renamed, update ObjectChange / ChangeDiff JSON keys so
-            # historical audit records and branch diffs stay consistent with the new
-            # name.  Combined with the netbox-branching ObjectChange field migrator
-            # registered in branching.objectchange_field_migrator, this lets later
-            # replays (whether iterative undo or squash undo) resolve any data key —
-            # old or new name — to the field's current name on the model.
+            # Rewrite historical audit-data keys so any future replay can
+            # resolve old or new name to the current field name.
             if (
                 not self._state.adding
                 and not self.is_polymorphic
@@ -3185,9 +2868,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             ):
                 _rename_objectchange_field_key(self, self._original_name, self.name)
 
-            # Ensure FK constraints are properly created for OBJECT fields.  Decide
-            # whether one is needed inside the atomic so any in-progress rollback
-            # also discards the decision.
+            # FK-constraint decision inside the atomic so a rollback discards it too.
             should_ensure_fk = False
             if self.type == CustomFieldTypeChoices.TYPE_OBJECT and not self.is_polymorphic:
                 if self._state.adding:
@@ -3207,18 +2888,16 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     )
                     should_ensure_fk = type_changed_to_object or related_object_changed or on_delete_changed
 
-            # Clear and refresh the model cache for this CustomObjectType when a field is modified
             self.custom_object_type.clear_model_cache(self.custom_object_type.id)
 
-            # Update parent's cache_timestamp to invalidate cache across all workers.
-            # snapshot() must be called first so that change logging has a correct pre-state;
-            # without it, diff()['pre'] would set ALL fields to None during branch revert.
+            # Bump cache_timestamp to invalidate other workers.  snapshot() first
+            # so change logging records a correct pre-state.
             self.custom_object_type.snapshot()
             self.custom_object_type.save(update_fields=['cache_timestamp'])
 
             super().save(*args, **kwargs)
 
-        # Ensure FK constraints AFTER the transaction commits to avoid "pending trigger events" errors
+        # FK constraint runs AFTER commit to avoid "pending trigger events".
         if should_ensure_fk:
             _on_delete = self.on_delete_behavior
             _field_name = self.name
@@ -3236,23 +2915,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
             transaction.on_commit(ensure_constraint)
 
-        # On rename, ``_schema_alter_field`` calls contribute_to_class for both
-        # the old and new field names on the same model class, leaving the
-        # _meta in a corrupt state.  Force a no_cache regeneration so the
-        # next access sees a clean model.  This regeneration ALSO triggers
-        # apps.clear_cache() at the end of get_model(), which cascades into
-        # AppConfig.get_models() and re-caches every COT — but on rename
-        # that's tolerable because the rename doesn't affect related COTs'
-        # FK reverse relations.
-        #
-        # For non-rename changes (new field, attribute toggle, etc.) the
-        # cache_timestamp bump done above is sufficient: the next get_model()
-        # call detects the timestamp mismatch and regenerates lazily.  We
-        # skip both the regeneration AND the search-index re-register here
-        # so that the cache invalidations performed by signal handlers — most
-        # importantly the eviction of related COTs in ``clear_cache_on_field_save``
-        # for an OBJECT-type field — are not undone by the apps.clear_cache()
-        # cascade re-caching every COT in sight.
+        # On rename, _schema_alter_field calls contribute_to_class twice on the
+        # same class — force a no_cache regeneration so _meta is clean.  Non-
+        # rename changes lean on cache_timestamp for lazy invalidation; we skip
+        # the apps.clear_cache() cascade so signal-driven cache evictions (e.g.
+        # clear_cache_on_field_save for OBJECT fields) survive.
         renamed = (
             not self._state.adding
             and not self.is_polymorphic
@@ -3274,7 +2941,6 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     def delete(self, *args, **kwargs):
         field_type = FIELD_TYPE_CLASS[self.type]()
         model = self.custom_object_type.get_model()
-        # Use the branch connection when operating inside a branch.
         schema_conn = _get_schema_connection()
 
         with schema_conn.schema_editor() as schema_editor:
@@ -3286,27 +2952,21 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             else:
                 _schema_remove_field(self, model, schema_editor, schema_conn=schema_conn)
 
-        # Clear the model cache for this CustomObjectType when a field is deleted
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)
 
-        # Update parent's cache_timestamp to invalidate cache across all workers.
-        # snapshot() must be called first so that change logging has a correct pre-state.
+        # snapshot() first so change logging records a correct pre-state.
         self.custom_object_type.snapshot()
         self.custom_object_type.save(update_fields=['cache_timestamp'])
 
         super().delete(*args, **kwargs)
 
-        # Regenerate and re-register the model so the app registry no longer includes
-        # the removed field.  During squash revert the squash strategy may try to query
-        # CO rows (model.objects.get(pk=...)) after undoing this field but before undoing
-        # the CO itself.  If the stale model class is still in the app registry it will
-        # include the now-absent column in its SELECT, causing ProgrammingError.
+        # Regenerate so the apps registry no longer holds a class with the
+        # removed column — squash revert may SELECT via the model class between
+        # field-undo and CO-undo, and a stale class would emit ProgrammingError.
         updated_model = self.custom_object_type.get_model()
 
-        # Reregister SearchIndex with new set of searchable fields
         self.custom_object_type.register_custom_object_search_index(updated_model)
 
-        # Reindex all objects of this type since a searchable field was removed
         if self.search_weight > 0:
             _cot_id = self.custom_object_type_id
             transaction.on_commit(lambda: ReindexCustomObjectTypeJob.enqueue(cot_id=_cot_id))

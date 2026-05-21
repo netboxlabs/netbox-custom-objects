@@ -894,6 +894,35 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
             instance.full_clean()
 
 
+class M2MSerializationRegressionTestCase(CustomObjectsTestCase, TestCase):
+    """Guards the ``through._meta.auto_created = model`` opt-in in
+    ``MultiObjectFieldType.after_model_generation`` — without it, Django's
+    JSON serializer skips the M2M and merge replay zeroes through-table rows.
+    """
+
+    def test_serialize_object_includes_m2m_values(self):
+        cot = self.create_custom_object_type(name="M2MSerialize", slug="m2m-serialize")
+        site_ct = self.get_site_object_type()
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name="sites", label="Sites", type="multiobject",
+            related_object_type=site_ct,
+        )
+        model = cot.get_model()
+        site_model = site_ct.model_class()
+        site_a = site_model.objects.create(name="A", slug="a")
+        site_b = site_model.objects.create(name="B", slug="b")
+
+        obj = model.objects.create(name="obj")
+        obj.sites.set([site_a, site_b])
+
+        data = obj.serialize_object()
+        self.assertIn("sites", data)
+        self.assertEqual(set(data["sites"]), {site_a.pk, site_b.pk})
+
+
 class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
     """Tests for the related_name field on Object and MultiObject fields."""
 

@@ -49,8 +49,7 @@ def _make_request(user):
     return request
 
 
-# Provisioning timeout for branch tests.  Defaults to 30 s, which is generous
-# for local laptops but can be tight on shared CI runners — override via the
+# Provisioning timeout for branch tests. Override via the
 # ``NETBOX_CO_BRANCH_PROVISION_TIMEOUT`` env var (seconds) when CI flakes.
 BRANCH_PROVISION_TIMEOUT = float(
     os.environ.get('NETBOX_CO_BRANCH_PROVISION_TIMEOUT', '30')

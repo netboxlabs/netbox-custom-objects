@@ -1,13 +1,8 @@
-"""
-System checks for netbox-custom-objects.
+"""Django system checks.
 
-These run as part of Django's check framework (``manage.py check`` and any
-command that invokes it — runserver, migrate, test, etc.).  Their purpose is
-to enforce *conditional* compatibility requirements that PluginConfig's
-unconditional ``min_version`` / ``max_version`` cannot express: when
-netbox-branching is installed alongside this plugin, the supported NetBox
-and netbox-branching version ranges narrow.  Users who never enable
-branching keep the broader compatibility window.
+Enforces conditional version floors that PluginConfig's static
+``min_version``/``max_version`` can't express: when netbox-branching is
+installed, NetBox and netbox-branching versions are pinned tighter.
 """
 
 from importlib.metadata import PackageNotFoundError, version as _pkg_version
@@ -18,19 +13,14 @@ from django.core.checks import Error, register
 from packaging.version import InvalidVersion, Version
 
 
-# Version floors that apply only when netbox-branching is installed.
-# Users without branching are governed by PluginConfig.min_version instead.
+# Version floors enforced only when netbox-branching is installed.
 REQUIRED_NETBOX_VERSION = '4.6.2'
 REQUIRED_BRANCHING_VERSION = '1.1.0'
 
 
 @register()
 def check_branching_compatibility(app_configs, **kwargs):
-    """
-    If netbox-branching is installed, enforce the version floors required for
-    custom objects to integrate with it safely.  Returns no errors when
-    netbox-branching is not installed.
-    """
+    """Enforce branching-only version floors; no-op without netbox-branching."""
     if not apps.is_installed('netbox_branching'):
         return []
 
@@ -47,8 +37,7 @@ def check_branching_compatibility(app_configs, **kwargs):
                 id='netbox_custom_objects.E001',
             ))
     except (AttributeError, InvalidVersion):
-        # settings.RELEASE missing or unparseable — let other checks surface it.
-        pass
+        pass  # settings.RELEASE missing/unparseable — other checks surface it
 
     try:
         branching_version = Version(_pkg_version('netbox-branching'))
@@ -60,9 +49,6 @@ def check_branching_compatibility(app_configs, **kwargs):
                 id='netbox_custom_objects.E002',
             ))
     except (PackageNotFoundError, InvalidVersion):
-        # Installed as an app but not discoverable via importlib.metadata
-        # (e.g. editable install with a non-standard dist-info).  Skip the
-        # version pin rather than emit a confusing error.
-        pass
+        pass  # editable install without dist-info — skip rather than warn
 
     return errors

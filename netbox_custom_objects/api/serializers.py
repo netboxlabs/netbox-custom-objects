@@ -692,16 +692,11 @@ def get_serializer_class(model, skip_object_fields=False):
 
 
 def serializer_resolver(model, prefix=''):
-    """
-    NetBox serializer resolver for dynamically-generated custom object models.
+    """Resolve dynamic CO models (``table{n}model``) to on-the-fly serializers.
 
-    Registered via PluginConfig.serializer_resolver and called by
-    ``utilities.api.get_serializer_for_model`` before its default import-path
-    lookup.  Dynamic CO models (named ``table{n}model``) have no importable
-    serializer at the conventional path, so we generate one on the fly via
-    ``get_serializer_class``.  All other models — including this plugin's own
-    ``CustomObjectType`` / ``CustomObjectTypeField`` — return ``None`` so the
-    default lookup runs.
+    Called by ``utilities.api.get_serializer_for_model`` before its default
+    import-path lookup.  Returns ``None`` for non-CO models so the default
+    lookup runs (including this plugin's static CustomObjectType serializer).
     """
     if (
         getattr(model, '_meta', None)

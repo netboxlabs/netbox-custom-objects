@@ -920,27 +920,14 @@ class CustomManyToManyManager(Manager):
         return qs.order_by("pk")
 
     def _fire_m2m_changed(self, action, pk_set):
-        """
-        Send Django's ``m2m_changed`` signal so change-logging /
-        netbox-branching can observe the relationship update.  Without this,
-        bypassing Django's built-in ManyRelatedManager (as our direct-SQL
-        ``add`` / ``remove`` / ``set`` do) leaves the m2m write invisible
-        to ``handle_changed_object`` — which means a merge or sync replays
-        zero through-table rows for CustomObject M2M fields.
+        """Emit ``m2m_changed`` so change-logging / branching can observe the write.
 
-        Both ``pre_*`` and ``post_*`` actions are emitted, matching Django's
-        standard ManyRelatedManager flow.  ``pre_clear`` is the one place
-        Django passes ``pk_set=None`` — callers should pass ``None`` there.
-
-        ``using`` must reflect the alias the through-table write actually
-        happened on so that branch-aware receivers (and Django's own
-        router-based dispatch) route subsequent queries to the same schema.
-        The through models are registered as branchable via
-        ``supports_branching_resolver``, so ``router.db_for_write`` returns
-        the active branch's connection alias inside a branch context.
+        Our direct-SQL add/remove/set/clear bypass Django's ManyRelatedManager,
+        which would otherwise fire this signal — without it, merge/sync replays
+        zero through-table rows.  ``using`` reflects the alias the write
+        actually happened on; for ``*_clear`` callers pass ``pk_set=None`` to
+        match Django's contract.
         """
-        # pk_set is None for *_clear actions; an empty set means "no objects
-        # changed" so skip the signal entirely.
         if pk_set is not None and not pk_set:
             return
         db = router.db_for_write(self.through, instance=self.instance)
@@ -956,18 +943,10 @@ class CustomManyToManyManager(Manager):
 
     @staticmethod
     def _resolve_pk(obj):
-        """Accept either a model instance (with ``.pk``) or a raw PK value.
-
-        Django's standard ManyRelatedManager allows both forms (instances or
-        PKs); netbox-branching's ``update_object`` passes PKs from
-        deserialized JSON, so we mirror that contract here.
-        """
+        """Accept an instance or raw PK — mirrors Django's ManyRelatedManager."""
         return obj.pk if hasattr(obj, 'pk') else obj
 
     def add(self, *objs):
-        # Send pre_add with the candidate pk_set before any write so
-        # receivers (e.g. validation hooks) get a chance to abort.  An empty
-        # candidate set is a no-op.
         candidate_pks = {self._resolve_pk(obj) for obj in objs}
         if not candidate_pks:
             return
@@ -1004,8 +983,7 @@ class CustomManyToManyManager(Manager):
         )
         if not existing:
             return
-        # Django sends pre_clear with pk_set=None (it doesn't know yet which
-        # rows will go).  Match that contract.
+        # Django's contract: pre_clear with pk_set=None.
         self._fire_m2m_changed('pre_clear', None)
         self.through.objects.filter(source_id=self.instance.pk).delete()
         self._fire_m2m_changed('post_clear', existing)
@@ -1344,15 +1322,9 @@ class MultiObjectFieldType(FieldType):
 
         field = model._meta.get_field(field_name)
 
-        # Mark the through model as "auto-created" by the parent CO model.
-        # Django's JSON serializer (django/core/serializers/python.py
-        # handle_m2m_field) skips M2M fields whose through is *not*
-        # auto-created — assuming an explicit through table will be serialized
-        # directly.  Our through tables are dynamically generated to mirror
-        # Django's auto behaviour; setting ``auto_created`` on the through's
-        # _meta makes the serializer include the M2M values in
-        # ``serialize_object`` output, which is what netbox change-logging
-        # and netbox-branching's merge replay rely on.
+        # Django's JSON serializer (handle_m2m_field) skips non-auto-created
+        # through models; mark ours so M2M values appear in change-log output.
+        # Guarded by test_serialize_object_includes_m2m_values.
         through_model = field.remote_field.through
         if through_model is not None:
             through_model._meta.auto_created = model
@@ -1449,44 +1421,31 @@ class MultiObjectFieldType(FieldType):
             else:
                 to_model = content_type.model_class()
 
-        # Create the through model with actual model references
+        # Create a fresh through for THIS CO model.  Django's metaclass will
+        # auto-register it in apps.all_models, but the M2M field itself keeps
+        # a direct reference — so even if a later branch generation overwrites
+        # the registry entry, this field's through is unaffected.
         through = self.get_through_model(instance, model)
 
-        # Update the through model's foreign key references
         source_field = through._meta.get_field("source")
         target_field = through._meta.get_field("target")
-
-        # Source field should point to the current model
         source_field.remote_field.model = model
         source_field.remote_field.field_name = model._meta.pk.name
         source_field.related_model = model
-
-        # Target field should point to the related model
         target_field.remote_field.model = to_model
         target_field.remote_field.field_name = to_model._meta.pk.name
         target_field.related_model = to_model
 
-        # Register the model with Django's app registry
-        apps = model._meta.apps
-
-        try:
-            through_model = apps.get_model(APP_LABEL, instance.through_model_name)
-        except LookupError:
-            apps.register_model(APP_LABEL, through)
-            through_model = through
-
-        # Update the M2M field's through model and target model
-        field.remote_field.through = through_model
+        field.remote_field.through = through
         field.remote_field.model = to_model
         field.remote_field.field_name = to_model._meta.pk.name
 
-        # Create the through table
         with connection.schema_editor() as schema_editor:
-            table_name = through_model._meta.db_table
+            table_name = through._meta.db_table
             with connection.cursor() as cursor:
                 tables = connection.introspection.table_names(cursor)
                 if table_name not in tables:
-                    schema_editor.create_model(through_model)
+                    schema_editor.create_model(through)
 
     def get_polymorphic_through_model(self, field_instance, source_model_string):
         """
@@ -1549,39 +1508,36 @@ class MultiObjectFieldType(FieldType):
         source_model_string = f"{APP_LABEL}.{model.__name__}"
         through = self.get_polymorphic_through_model(field_instance, source_model_string)
 
-        # Update source FK to point to the actual model
         source_field = through._meta.get_field("source")
         source_field.remote_field.model = model
         source_field.related_model = model
 
-        # Register with Django's app registry
-        _apps = model._meta.apps
-        try:
-            through_model = _apps.get_model(APP_LABEL, field_instance.through_model_name)
-        except LookupError:
-            _apps.register_model(APP_LABEL, through)
-            through_model = through
-
-        table_name = through_model._meta.db_table
+        table_name = through._meta.db_table
         with connection.cursor() as cursor:
             existing_tables = connection.introspection.table_names(cursor)
             if table_name not in existing_tables:
-                schema_editor.create_model(through_model)
+                schema_editor.create_model(through)
 
     def drop_polymorphic_m2m_table(self, field_instance, model, schema_editor):
-        """
-        Drops the DB table for a polymorphic MultiObject through model.
+        """Drops the DB table for a polymorphic MultiObject through.
 
-        ``schema_editor`` must be supplied by the caller for the same reason as
-        ``remove_polymorphic_object_columns``: all DDL in a single operation
-        should share one schema editor context.
+        Looks up the through on the CO model (per-context) rather than via
+        apps.get_model, so we drop the table this model knows about, not
+        whatever happens to be registered in the global app registry.
+        ``schema_editor`` is shared by the caller — opening a nested one would
+        flush deferred SQL prematurely on PostgreSQL.
         """
-        _apps = model._meta.apps
-        try:
-            through_model = _apps.get_model(APP_LABEL, field_instance.through_model_name)
-            schema_editor.delete_model(through_model)
-        except LookupError:
-            pass  # Already dropped or never created
+        through_model = None
+        for tm in getattr(model, '_through_models', None) or ():
+            if tm._meta.db_table == field_instance.through_table_name:
+                through_model = tm
+                break
+        if through_model is None:
+            try:
+                through_model = model._meta.apps.get_model(APP_LABEL, field_instance.through_model_name)
+            except LookupError:
+                return  # already gone
+        schema_editor.delete_model(through_model)
 
 
 class PolymorphicResultList:

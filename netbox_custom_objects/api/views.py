@@ -404,6 +404,14 @@ class SchemaApplyView(APIView):
     permission_classes = [IsAuthenticatedOrLoginNotRequired, TokenWritePermission]
 
     def post(self, request, *args, **kwargs):
+        # Branch context: this endpoint no longer rejects requests with an active
+        # branch.  Schema-editor calls inside ``apply_document`` route through
+        # ``_get_schema_connection()`` in models.py, which selects the active
+        # branch's connection when one is set.  The resulting DDL therefore lands
+        # in the branch's PostgreSQL schema, and the CustomObjectType /
+        # CustomObjectTypeField writes flow through netbox-branching's router.
+        # See ``_schema_add_field`` / ``_schema_remove_field`` / ``_schema_alter_field``
+        # and ``CustomObjectType.save`` for the routing details.
         if not (
             request.user.has_perm('netbox_custom_objects.add_customobjecttype') and
             request.user.has_perm('netbox_custom_objects.change_customobjecttype')
