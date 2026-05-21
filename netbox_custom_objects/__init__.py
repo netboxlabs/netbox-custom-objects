@@ -261,6 +261,11 @@ class CustomObjectsPluginConfig(PluginConfig):
         # model is registered (must happen exactly once, before get_model() runs).
         install_clear_cache_suppressor()
 
+        # Register Django system checks (e.g. conditional netbox-branching
+        # version requirements).  Importing the module is what triggers the
+        # @register decorator.
+        from . import checks  # noqa: F401
+
         from .models import CustomObjectType
         from netbox_custom_objects.api.serializers import get_serializer_class
 

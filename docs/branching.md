@@ -2,6 +2,15 @@
 
 As of version 0.4.0 Custom Objects is _compatible_ with NetBox Branching, but not fully supported. This means that users can safely use both plugins together, but there are some caveats to be aware of. See below to learn how each of the Custom Objects models interacts with NetBox Branching.
 
+## Version Requirements
+
+When using Custom Objects together with NetBox Branching, the following minimum versions are required:
+
+- NetBox >= 4.6.2
+- netbox-branching >= 1.1.0
+
+These requirements are only enforced when `netbox_branching` is present in `PLUGINS`. If you do not use branching, the standard compatibility matrix in `COMPATIBILITY.md` applies. A Django system check (`netbox_custom_objects.E001` / `E002`) will fail at startup if the combination is misconfigured.
+
 > [!NOTE]
 > We are working towards full support for Custom Objects on branches. Keep an eye on the GitHub issues for updates ahead of future releases.  
 
