@@ -1171,19 +1171,26 @@ class PolymorphicCycleDetectionTest(
     def setUp(self):
         super().setUp()
 
-        for slug, name, plural in [
-            ("cycle-a", "CycleA", "Cycle As"),
-            ("cycle-b", "CycleB", "Cycle Bs"),
-            ("cycle-c", "CycleC", "Cycle Cs"),
-        ]:
-            cot = CustomObjectType.objects.create(
-                name=name, slug=slug, verbose_name_plural=plural,
-            )
-            CustomObjectTypeField.objects.create(
-                custom_object_type=cot,
-                name="name", type="text", primary=True, required=True,
-            )
-            setattr(self, f"cot_{slug[-1]}", cot)
+        self.cot_a = CustomObjectType.objects.create(
+            name="CycleA", slug="cycle-a", verbose_name_plural="Cycle As",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot_a, name="name", type="text", primary=True, required=True,
+        )
+
+        self.cot_b = CustomObjectType.objects.create(
+            name="CycleB", slug="cycle-b", verbose_name_plural="Cycle Bs",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot_b, name="name", type="text", primary=True, required=True,
+        )
+
+        self.cot_c = CustomObjectType.objects.create(
+            name="CycleC", slug="cycle-c", verbose_name_plural="Cycle Cs",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot_c, name="name", type="text", primary=True, required=True,
+        )
 
         # Generate models so ContentTypes are registered.
         self.cot_a.get_model()
@@ -1244,3 +1251,20 @@ class PolymorphicCycleDetectionTest(
         )
         with self.assertRaises(ValidationError):
             field_c.related_object_types.set([self.ot_a])  # closes A→B→C→A cycle
+
+    def test_mixed_leg_cycle_is_detected(self):
+        """A →(non-poly) B →(poly) A must be rejected."""
+        # Non-polymorphic object field on A pointing to B.
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot_a,
+            name="link_to_b", type="object",
+            related_object_type=self.ot_b,
+        )
+
+        # Polymorphic object field on B attempting to point back to A.
+        field_b = CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot_b,
+            name="link_to_a", type="object", is_polymorphic=True,
+        )
+        with self.assertRaises(ValidationError):
+            field_b.related_object_types.set([self.ot_a])  # closes A→B→A cycle
