@@ -1,4 +1,6 @@
 # Test utilities for netbox_custom_objects plugin
+import logging
+
 from django.apps import apps as django_apps
 from django.contrib.contenttypes.management import create_contenttypes
 from django.db import connection
@@ -10,6 +12,8 @@ from utilities.testing import create_test_user
 
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField, _deferred_co_field_data
+
+logger = logging.getLogger(__name__)
 
 
 def _recreate_contenttypes():
@@ -122,9 +126,10 @@ def _drop_dynamic_tables():
     all_tables = connection.introspection.table_names()
     dynamic = [t for t in all_tables if t.startswith(_DYNAMIC_TABLE_PREFIX)]
     if dynamic:
+        quote = connection.ops.quote_name
         with connection.cursor() as cursor:
             for table in dynamic:
-                cursor.execute(f'DROP TABLE IF EXISTS "{table}" CASCADE')
+                cursor.execute(f'DROP TABLE IF EXISTS {quote(table)} CASCADE')
 
     # Step 5 — rebuild the app registry cache now that both the stale model
     # entries (step 2) and the stale COT rows (step 3) are gone.  get_models()
@@ -151,10 +156,13 @@ def _reset_netbox_request_context():
         return
     current_request.set(None)
     events_queue.set({})
+    # ``query_cache`` is a ContextVar in current NetBox; in older releases it
+    # was a thread-local without ``.set()``.  Catch AttributeError narrowly so
+    # an unrelated bug surfaces instead of being swallowed silently.
     try:
         query_cache.set(None)
-    except Exception:
-        pass
+    except AttributeError:
+        logger.debug('netbox.context.query_cache has no .set(); skipping reset')
 
 
 def create_api_token(user):
@@ -214,12 +222,17 @@ class TransactionCleanupMixin:
         # Defensive reset — see setUp for rationale.  Belt-and-braces in case a
         # test enters event_tracking but raises before super().tearDown() runs.
         _reset_netbox_request_context()
-        # Delete COTs and their backing tables before the DB flush.
+        # Delete COTs and their backing tables before the DB flush.  Cleanup
+        # is best-effort — if a previous test left the schema in a weird
+        # state, log and continue rather than failing tearDown (which would
+        # mask the real failure that put us here).
         for cot in CustomObjectType.objects.all():
             try:
                 cot.delete()
-            except Exception as exc:
-                print(f"WARNING: tearDown could not delete COT {cot.pk}: {exc}")
+            except Exception:
+                logger.warning(
+                    'tearDown could not delete COT %s', cot.pk, exc_info=True,
+                )
         # Remove any ObjectChange records created during the test (merge/revert creates
         # them in main with the test user's ID).  If left in place, the serialized_rollback
         # snapshot accumulates them and restoring it after the next flush produces FK

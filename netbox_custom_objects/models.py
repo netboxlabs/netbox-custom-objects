@@ -754,18 +754,27 @@ class CustomObject(
                 # list of related PKs.  Skipped quietly when the through table
                 # or its columns aren't present yet — squash ordering can defer
                 # field creation, and the through-table appears when the field's
-                # own CREATE ObjectChange is later applied.  We narrow the
-                # except to the failure modes that signature: ``AttributeError``
-                # if the manager descriptor isn't bound to ``obj`` yet, and
-                # ``ProgrammingError``/``OperationalError`` if the through
-                # table/column is missing in the active schema.
+                # own CREATE ObjectChange is later applied.
+                #
+                # AttributeError is checked up front with ``hasattr`` so the
+                # except below stays scoped to genuine DB-state mismatches.
+                # That way a typo or missing method on a manager surfaces as
+                # an exception instead of being silently swallowed at DEBUG.
                 for accessor, related_pks in m2m_data.items():
-                    try:
-                        manager = getattr(obj, accessor)
-                        manager.set(related_pks)
-                    except (AttributeError, ProgrammingError, OperationalError):
+                    if not hasattr(obj, accessor):
                         logger.debug(
-                            'deserialize_object: deferred M2M %r on %s pk=%s',
+                            'deserialize_object: deferred M2M %r on %s pk=%s '
+                            '(descriptor not yet bound to model)',
+                            accessor, table_name, obj_pk,
+                        )
+                        continue
+                    manager = getattr(obj, accessor)
+                    try:
+                        manager.set(related_pks)
+                    except (ProgrammingError, OperationalError):
+                        logger.debug(
+                            'deserialize_object: deferred M2M %r on %s pk=%s '
+                            '(through table/column not yet present in schema)',
                             accessor, table_name, obj_pk, exc_info=True,
                         )
                 # Register full data for deferred column updates (squash ordering fix).

@@ -11,6 +11,7 @@ cannot be rolled back inside a single SAVEPOINT-based transaction.
 """
 import datetime
 import decimal
+import logging
 import os
 import time
 import unittest
@@ -36,6 +37,7 @@ except ImportError:
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.tests.base import TransactionCleanupMixin, _recreate_contenttypes
 
+logger = logging.getLogger(__name__)
 User = get_user_model()
 
 
@@ -75,18 +77,55 @@ def _provision_branch(name, merge_strategy, user, timeout=None):
 
 
 def _close_branch_connections():
-    """Close any open branch database connections."""
+    """Close any open branch database connections.
+
+    Best-effort cleanup between tests.  A ``DatabaseError`` here typically
+    just means the connection was already closed by a previous teardown
+    pass; we log at DEBUG so a genuine bug isn't silently hidden but normal
+    multi-pass teardown stays quiet.
+    """
+    from django.db.utils import DatabaseError
     for branch in Branch.objects.all():
         try:
             connections[branch.connection_name].close()
-        except Exception:
-            pass
+        except DatabaseError:
+            logger.debug(
+                'failed to close branch connection %r',
+                branch.connection_name, exc_info=True,
+            )
+
+
+class BranchingTestBase(TransactionCleanupMixin):
+    """
+    Common per-test lifecycle for branching-aware test classes.
+
+    Centralises the ``_recreate_contenttypes`` / ``_make_request`` /
+    ``_close_branch_connections`` boilerplate that was repeated across every
+    branch test class so a new test class doesn't accidentally skip a step.
+
+    Subclasses still need to inherit from ``TransactionTestCase`` (directly,
+    not via this mixin) because branch schemas live in separate PostgreSQL
+    schemas backed by distinct DB connections that can't be rolled back
+    inside a single SAVEPOINT-based transaction.
+    """
+
+    def setUp(self):
+        # → TransactionCleanupMixin.setUp() → _purge_stale_generated_models()
+        super().setUp()
+        _recreate_contenttypes()
+        self.user = User.objects.create_user(username='testuser')
+        self.request = _make_request(self.user)
+
+    def tearDown(self):
+        _close_branch_connections()
+        # → TransactionCleanupMixin.tearDown() → TransactionTestCase
+        super().tearDown()
 
 
 # ── Shared merge/revert tests (strategy-agnostic) ────────────────────────────
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
-class BaseBranchingTests(TransactionCleanupMixin):
+class BaseBranchingTests(BranchingTestBase):
     """
     Merge and revert tests that run against every merge strategy.
 
@@ -101,16 +140,6 @@ class BaseBranchingTests(TransactionCleanupMixin):
     """
 
     MERGE_STRATEGY = None
-
-    def setUp(self):
-        super().setUp()  # → TransactionCleanupMixin.setUp() → _purge_stale_generated_models()
-        _recreate_contenttypes()
-        self.user = User.objects.create_user(username='testuser')
-        self.request = _make_request(self.user)
-
-    def tearDown(self):
-        _close_branch_connections()
-        super().tearDown()  # → TransactionCleanupMixin → TransactionTestCase
 
     # ── simple: one COT, one text field, one CO ───────────────────────────
 
@@ -768,22 +797,12 @@ class SquashBranchingTestCase(BaseBranchingTests, TransactionTestCase):
 # ── Sync test ─────────────────────────────────────────────────────────────────
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
-class BranchSyncTestCase(TransactionCleanupMixin, TransactionTestCase):
+class BranchSyncTestCase(BranchingTestBase, TransactionTestCase):
     """
     Test that objects created in main after a branch is provisioned are not
     visible in the branch until the branch is synced, and are correctly
     available in the branch after sync.
     """
-
-    def setUp(self):
-        super().setUp()  # → TransactionCleanupMixin.setUp() → _purge_stale_generated_models()
-        _recreate_contenttypes()
-        self.user = User.objects.create_user(username='testuser')
-        self.request = _make_request(self.user)
-
-    def tearDown(self):
-        _close_branch_connections()
-        super().tearDown()  # → TransactionCleanupMixin → TransactionTestCase
 
     def test_main_changes_synced_to_branch(self):
         """
@@ -850,7 +869,7 @@ class BranchSyncTestCase(TransactionCleanupMixin, TransactionTestCase):
 # ── Concurrent-edit tests (both main and branch modified before sync/merge) ───
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
-class ConcurrentEditSyncTestCase(TransactionCleanupMixin, TransactionTestCase):
+class ConcurrentEditSyncTestCase(BranchingTestBase, TransactionTestCase):
     """
     Sync scenarios where both main and branch accumulate changes before sync().
 
@@ -858,16 +877,6 @@ class ConcurrentEditSyncTestCase(TransactionCleanupMixin, TransactionTestCase):
     after sync(), main's ObjectChanges are applied on top of whatever the branch
     did, so main's post-change state takes precedence for any conflicting record.
     """
-
-    def setUp(self):
-        super().setUp()
-        _recreate_contenttypes()
-        self.user = User.objects.create_user(username='testuser')
-        self.request = _make_request(self.user)
-
-    def tearDown(self):
-        _close_branch_connections()
-        super().tearDown()
 
     def test_co_values_modified_in_both_sync(self):
         """
@@ -1054,11 +1063,10 @@ class ConcurrentEditSyncTestCase(TransactionCleanupMixin, TransactionTestCase):
             f.label = 'Main Alpha'
             f.save()
 
-        # ── sync — must not raise ──────────────────────────────────────────
-        try:
-            branch.sync(user=self.user, commit=True)
-        except Exception as exc:
-            self.fail(f'sync() raised an unexpected exception: {exc!r}')
+        # ── sync — must not raise.  Let any failure propagate with its
+        # original traceback rather than catching to ``self.fail`` (which
+        # would flatten the stack).
+        branch.sync(user=self.user, commit=True)
 
         branch.refresh_from_db()
 
@@ -1080,7 +1088,7 @@ class ConcurrentEditSyncTestCase(TransactionCleanupMixin, TransactionTestCase):
 # ── Concurrent-edit merge tests ───────────────────────────────────────────────
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
-class BaseConcurrentEditMergeTests(TransactionCleanupMixin):
+class BaseConcurrentEditMergeTests(BranchingTestBase):
     """
     Merge scenarios where both main and branch accumulate changes before merge().
 
@@ -1090,16 +1098,6 @@ class BaseConcurrentEditMergeTests(TransactionCleanupMixin):
     """
 
     MERGE_STRATEGY = None
-
-    def setUp(self):
-        super().setUp()
-        _recreate_contenttypes()
-        self.user = User.objects.create_user(username='testuser')
-        self.request = _make_request(self.user)
-
-    def tearDown(self):
-        _close_branch_connections()
-        super().tearDown()
 
     def test_field_rename_in_branch_co_changes_merge(self):
         """
@@ -1263,7 +1261,7 @@ class SquashConcurrentEditMergeTestCase(BaseConcurrentEditMergeTests, Transactio
 # ── Sequential multi-rename tests ─────────────────────────────────────────────
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
-class SequentialRenameTestCase(TransactionCleanupMixin, TransactionTestCase):
+class SequentialRenameTestCase(BranchingTestBase, TransactionTestCase):
     """
     Tests for sequential field renames (A→B→C) in a branch with CO changes at
     each step, plus independent changes in main.
@@ -1277,16 +1275,6 @@ class SequentialRenameTestCase(TransactionCleanupMixin, TransactionTestCase):
     """
 
     MERGE_STRATEGY = 'iterative'
-
-    def setUp(self):
-        super().setUp()
-        _recreate_contenttypes()
-        self.user = User.objects.create_user(username='testuser')
-        self.request = _make_request(self.user)
-
-    def tearDown(self):
-        _close_branch_connections()
-        super().tearDown()
 
     def _run_sequential_rename_merge(self, cot_name, cot_slug):
         """
@@ -1456,11 +1444,8 @@ class SequentialRenameTestCase(TransactionCleanupMixin, TransactionTestCase):
             co_m.save()
             MM.objects.create(delta='main new')
 
-        # ── sync ──────────────────────────────────────────────────────────
-        try:
-            branch.sync(user=self.user, commit=True)
-        except Exception as exc:
-            self.fail(f'sync() must not raise when schemas have conflicting renames: {exc!r}')
+        # ── sync — let any failure propagate with its original traceback ───
+        branch.sync(user=self.user, commit=True)
 
         branch.refresh_from_db()
 
@@ -1538,11 +1523,8 @@ class SequentialRenameTestCase(TransactionCleanupMixin, TransactionTestCase):
             f.label = 'Delta'
             f.save()
 
-        # ── merge ─────────────────────────────────────────────────────────
-        try:
-            branch.merge(user=self.user, commit=True)
-        except Exception as exc:
-            self.fail(f'merge() must not raise when schemas have conflicting renames: {exc!r}')
+        # ── merge — let any failure propagate with its original traceback ──
+        branch.merge(user=self.user, commit=True)
 
         branch.refresh_from_db()
 
