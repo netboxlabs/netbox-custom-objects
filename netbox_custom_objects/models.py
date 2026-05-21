@@ -269,18 +269,27 @@ def _schema_add_field(fi, model, schema_editor, schema_conn):
         ft.create_m2m_table(fi, model, fi.name, schema_conn=schema_conn)
 
 
-def _schema_remove_field(fi, model, schema_editor, existing_tables=None):
+def _schema_remove_field(fi, model, schema_editor, schema_conn=None, existing_tables=None):
     """
     Issue ``remove_field`` against the physical schema for *fi*.
 
-    For MULTIOBJECT fields the through table is dropped first.  When
-    *existing_tables* is a pre-fetched list only tables present in it are
-    dropped; when it is ``None`` (main-schema context) the drop is always
-    attempted.
+    For MULTIOBJECT fields the through table is dropped first.  The function
+    is idempotent: when the through table is already absent (e.g. the parent
+    COT's ``delete()`` dropped it before the field's own ObjectChange was
+    replayed during a squash merge) the drop is skipped.
 
-    Always issues ``SET CONSTRAINTS ALL IMMEDIATE`` before ``remove_field`` to
-    flush any DEFERRABLE FK trigger events that would otherwise cause PostgreSQL
-    to reject the subsequent ALTER TABLE.
+    *existing_tables* — optional pre-fetched list of tables in the target
+    schema.  When provided it short-circuits the per-call introspection.
+    *schema_conn* — connection to use when *existing_tables* is None.  Falls
+    back to the global ``connection`` so legacy callers (main-schema delete
+    path) keep working without modification.
+
+    For scalar fields, ``SET CONSTRAINTS ALL IMMEDIATE`` is issued before
+    ``remove_field`` to flush DEFERRABLE FK trigger events that would
+    otherwise cause PostgreSQL to reject the ALTER TABLE.  M2M fields have
+    no parent-table column, so ``remove_field`` is skipped — Django's
+    ``schema_editor.remove_field`` for an explicit-through M2M is a no-op
+    at the DB layer and would otherwise produce confusing log noise.
     """
     ft = FIELD_TYPE_CLASS[fi.type]()
     mf = ft.get_model_field(fi)
@@ -288,7 +297,11 @@ def _schema_remove_field(fi, model, schema_editor, existing_tables=None):
 
     if fi.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
         through_table = fi.through_table_name
-        if existing_tables is None or through_table in existing_tables:
+        if existing_tables is None:
+            conn = schema_conn if schema_conn is not None else connection
+            with conn.cursor() as cursor:
+                existing_tables = set(conn.introspection.table_names(cursor))
+        if through_table in existing_tables:
             through_meta = type(
                 'Meta', (),
                 {'db_table': through_table, 'app_label': APP_LABEL, 'managed': True},
@@ -299,6 +312,8 @@ def _schema_remove_field(fi, model, schema_editor, existing_tables=None):
                 {'Meta': through_meta, '__module__': 'netbox_custom_objects.models'},
             )
             schema_editor.delete_model(through_model)
+        # M2M has no column on the parent table — nothing further to remove.
+        return
 
     # Flush any pending DEFERRABLE FK trigger events before ALTER TABLE;
     # otherwise PostgreSQL raises "pending trigger events" when removing a FK field.
@@ -351,6 +366,18 @@ def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, exist
     old_mf.contribute_to_class(model, old_fi.name)
     new_mf.contribute_to_class(model, new_fi.name)
 
+    # M2M fields have no column on the parent table — all the schema work for
+    # them happens against the through-table.  Skip the column-existence
+    # check (which would always report "absent" since ``column`` is ``''``)
+    # and jump straight to the rename / create logic below; the trailing
+    # ``alter_field`` is also redundant for M2M so we return after.
+    if new_is_m2m:
+        if old_fi.name != new_fi.name:
+            _rename_or_create_m2m_through(
+                old_fi, new_fi, model, schema_editor, schema_conn, existing_tables,
+            )
+        return
+
     with schema_conn.cursor() as cursor:
         existing_cols = {
             col.name
@@ -362,9 +389,6 @@ def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, exist
                 '_schema_alter_field: %r already renamed to %r on %s, skipping',
                 old_mf.column, new_mf.column, model._meta.db_table,
             )
-            return
-        if old_is_m2m:
-            # M2M fields have no physical column; the old through table is absent.
             return
         # Scalar field: neither the old nor the new column exists.  The field was
         # independently renamed in this schema (e.g. branch renamed A→X while main
@@ -395,45 +419,46 @@ def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, exist
         schema_editor.alter_field(model, live_mf, new_mf)
         return
 
-    if (
-        new_is_m2m
-        and old_fi.name != new_fi.name
-    ):
-        old_through = old_fi.through_table_name
-        new_through = new_fi.through_table_name
-
-        tables = existing_tables
-        if tables is None:
-            with schema_conn.cursor() as cursor:
-                tables = schema_conn.introspection.table_names(cursor)
-
-        if old_through in tables:
-            old_through_meta = type(
-                'Meta', (),
-                {'db_table': old_through, 'app_label': APP_LABEL, 'managed': True},
-            )
-            old_through_model = generate_model(
-                f'_TempOldThrough_{old_through}',
-                (models.Model,),
-                {
-                    '__module__': 'netbox_custom_objects.models',
-                    'Meta': old_through_meta,
-                    'id': models.AutoField(primary_key=True),
-                    'source': models.ForeignKey(
-                        model, on_delete=models.CASCADE, db_column='source_id', related_name='+',
-                    ),
-                    'target': models.ForeignKey(
-                        model, on_delete=models.CASCADE, db_column='target_id', related_name='+',
-                    ),
-                },
-            )
-            schema_editor.alter_db_table(old_through_model, old_through, new_through)
-        else:
-            # Old through table absent — create the new one from scratch
-            ft = FIELD_TYPE_CLASS[new_fi.type]()
-            ft.create_m2m_table(new_fi, model, new_fi.name, schema_conn=schema_conn)
-
     schema_editor.alter_field(model, old_mf, new_mf)
+
+
+def _rename_or_create_m2m_through(old_fi, new_fi, model, schema_editor, schema_conn, existing_tables):
+    """Rename the through-table for a renamed M2M field, or create the new one
+    if the old table is absent (sync/merge against a schema that never had it).
+    """
+    old_through = old_fi.through_table_name
+    new_through = new_fi.through_table_name
+
+    tables = existing_tables
+    if tables is None:
+        with schema_conn.cursor() as cursor:
+            tables = schema_conn.introspection.table_names(cursor)
+
+    if old_through in tables:
+        old_through_meta = type(
+            'Meta', (),
+            {'db_table': old_through, 'app_label': APP_LABEL, 'managed': True},
+        )
+        old_through_model = generate_model(
+            f'_TempOldThrough_{old_through}',
+            (models.Model,),
+            {
+                '__module__': 'netbox_custom_objects.models',
+                'Meta': old_through_meta,
+                'id': models.AutoField(primary_key=True),
+                'source': models.ForeignKey(
+                    model, on_delete=models.CASCADE, db_column='source_id', related_name='+',
+                ),
+                'target': models.ForeignKey(
+                    model, on_delete=models.CASCADE, db_column='target_id', related_name='+',
+                ),
+            },
+        )
+        schema_editor.alter_db_table(old_through_model, old_through, new_through)
+    else:
+        # Old through table absent — create the new one from scratch
+        ft = FIELD_TYPE_CLASS[new_fi.type]()
+        ft.create_m2m_table(new_fi, model, new_fi.name, schema_conn=schema_conn)
 
 
 def _translate_renamed_field_name(cot, attr, rename_map=None):
@@ -3226,7 +3251,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 elif self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                     field_type.drop_polymorphic_m2m_table(self, model, schema_editor)
             else:
-                _schema_remove_field(self, model, schema_editor)
+                _schema_remove_field(self, model, schema_editor, schema_conn=schema_conn)
 
         # Clear the model cache for this CustomObjectType when a field is deleted
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)

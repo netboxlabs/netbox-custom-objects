@@ -342,6 +342,11 @@ class BaseBranchingTests(BranchingTestBase):
         self.assertEqual(co_main.select_field, 'active')
         self.assertEqual(co_main.obj_field_id, site.pk)
 
+        # Capture the multi_field's physical through-table name *while* it
+        # still exists so we can confirm it's gone after revert.
+        multi_field_main = CustomObjectTypeField.objects.get(pk=field_pks['multi_field'])
+        through_table = multi_field_main.through_table_name
+
         # ── revert ────────────────────────────────────────────────────────
         branch.revert(user=self.user, commit=True)
         branch.refresh_from_db()
@@ -356,6 +361,15 @@ class BaseBranchingTests(BranchingTestBase):
                 CustomObjectTypeField.objects.filter(pk=pk).exists(),
                 f'Field {name!r} must not be in main after revert',
             )
+        # The multi_field's through-table must also be physically dropped from
+        # main's schema — ORM absence isn't enough; without this assertion an
+        # orphaned through table could survive the revert and break a later
+        # COT that picks up the same id.
+        self.assertNotIn(
+            through_table,
+            main_conn.introspection.table_names(),
+            f'Through-table {through_table!r} must be physically dropped after revert',
+        )
 
     # ── object modified inside branch ─────────────────────────────────────
 
@@ -779,6 +793,228 @@ class BaseBranchingTests(BranchingTestBase):
             'CO created in branch must be gone after revert',
         )
 
+    # ── COT deleted inside branch → merge / revert ────────────────────────
+
+    def test_cot_deleted_in_branch_merge(self):
+        """
+        Delete a COT (with fields and CO instances in main) inside a branch
+        and merge the deletion to main.
+
+        Scenario
+        --------
+        1. Main: create COT with a text field, an object field, and a
+           multiobject field; insert one CO using all three.
+        2. Provision branch.
+        3. Branch: delete the COT.
+        4. Merge: main loses the COT, its fields, the CO instances, the
+           main table, and the multi-object through-table.
+
+        This is the riskiest schema operation in branching: COT deletion
+        drops the dynamic table and through-tables.  The squash strategy
+        in particular collapses field-level deletes alongside the COT
+        delete, so ``_schema_remove_field`` must remain idempotent when
+        the COT's own ``delete()`` already dropped the through-table.
+
+        Note: revert-of-delete (restoring a dropped COT) is a separate
+        deeper concern — ``CustomObjectType.delete()`` removes the
+        ContentType/ObjectType rows that revert would need to validate
+        against — and is left for follow-up work; only the merge half is
+        asserted here.
+        """
+        # FK target lives in main so both schemas share it.
+        with event_tracking(self.request):
+            site = Site.objects.create(name='COT-delete Site', slug='cot-delete-site')
+
+        site_ot = ObjectType.objects.get(app_label='dcim', model='site')
+
+        # ── main: COT + fields + CO ───────────────────────────────────────
+        with event_tracking(self.request):
+            cot = CustomObjectType.objects.create(name='doomed_cot', slug='doomed-cot')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='note', label='Note', type='text',
+            )
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='site_ref', label='Site',
+                type='object', related_object_type=site_ot,
+            )
+            multi_field = CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='sites', label='Sites',
+                type='multiobject', related_object_type=site_ot,
+            )
+            Model = cot.get_model()
+            co = Model.objects.create(note='hello', site_ref_id=site.pk)
+            co.sites.set([site])
+
+        cot_pk = cot.pk
+        co_pk = co.pk
+        co_table = cot.get_database_table_name()
+        through_table = multi_field.through_table_name
+
+        # Sanity: physical tables exist in main before we touch anything.
+        self.assertIn(co_table, main_conn.introspection.table_names())
+        self.assertIn(through_table, main_conn.introspection.table_names())
+
+        branch = _provision_branch('COT Delete Branch', self.MERGE_STRATEGY, self.user)
+        branch_request = _make_request(self.user)
+
+        # ── branch: delete the COT ────────────────────────────────────────
+        with activate_branch(branch), event_tracking(branch_request):
+            branch_cot = CustomObjectType.objects.get(pk=cot_pk)
+            branch_cot.snapshot()
+            branch_cot.delete()
+
+        # Main still has the COT before the merge applies.
+        self.assertTrue(CustomObjectType.objects.filter(pk=cot_pk).exists())
+
+        # ── merge ─────────────────────────────────────────────────────────
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        # COT, fields, and physical tables must all be gone from main.
+        self.assertFalse(
+            CustomObjectType.objects.filter(pk=cot_pk).exists(),
+            'COT must be gone from main after merge of branch deletion',
+        )
+        main_tables = main_conn.introspection.table_names()
+        self.assertNotIn(
+            co_table, main_tables,
+            f'Main CO table {co_table!r} must be dropped after merge',
+        )
+        self.assertNotIn(
+            through_table, main_tables,
+            f'Through-table {through_table!r} must be dropped after merge',
+        )
+
+        # ``co_pk`` is asserted unused but referenced for clarity.
+        self.assertIsNotNone(co_pk)
+
+    # ── multi-object field rename across merge ────────────────────────────
+
+    def test_multiobject_field_rename_merge_and_revert(self):
+        """
+        Rename a multi-object field inside a branch and merge.
+
+        Through-table renames are the most fragile schema operation: the
+        physical table name changes (``alter_db_table``) but the integer
+        FKs to the parent CO model and to the related object type must
+        keep pointing at the same rows.  This test verifies that:
+
+        * The old through-table is gone from main after merge.
+        * The new through-table is present and holds the same rows.
+        * Reading the M2M via the new accessor returns the original
+          values intact.
+        * Revert restores the old through-table name and field name.
+        """
+        site_ot = ObjectType.objects.get(app_label='dcim', model='site')
+
+        with event_tracking(self.request):
+            site_a = Site.objects.create(name='M2M Site A', slug='m2m-site-a')
+            site_b = Site.objects.create(name='M2M Site B', slug='m2m-site-b')
+
+        # ── main: COT with a multi-object field + a CO with M2M values ────
+        with event_tracking(self.request):
+            cot = CustomObjectType.objects.create(name='m2m_rename_cot', slug='m2m-rename-cot')
+            field = CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='tags_old', label='Tags',
+                type='multiobject', related_object_type=site_ot,
+            )
+            MainModel = cot.get_model()
+            co = MainModel.objects.create()
+            co.tags_old.set([site_a, site_b])
+
+        cot_pk = cot.pk
+        field_pk = field.pk
+        co_pk = co.pk
+        old_through = field.through_table_name
+
+        branch = _provision_branch('M2M Rename Branch', self.MERGE_STRATEGY, self.user)
+        branch_request = _make_request(self.user)
+
+        # ── branch: rename the multi-object field ─────────────────────────
+        with activate_branch(branch), event_tracking(branch_request):
+            f = CustomObjectTypeField.objects.get(pk=field_pk)
+            f.snapshot()
+            f.name = 'tags_new'
+            f.label = 'Tags (renamed)'
+            f.save()
+
+        # Compute the post-rename through-table name from a freshly-loaded
+        # field record so we don't depend on the in-memory branch state.
+        renamed_field = CustomObjectTypeField.objects.get(pk=field_pk)
+        # Field name in main hasn't applied yet (still 'tags_old' there) — we
+        # need the *branch's* current name, which is what the rename target is.
+        new_through = (
+            f"custom_objects_{renamed_field.custom_object_type_id}_tags_new"
+        )
+
+        # Before merge: main still sees the old field/through-table.
+        self.assertEqual(
+            CustomObjectTypeField.objects.get(pk=field_pk).name, 'tags_old',
+        )
+        main_tables_before = main_conn.introspection.table_names()
+        self.assertIn(old_through, main_tables_before)
+        self.assertNotIn(new_through, main_tables_before)
+
+        # ── merge ─────────────────────────────────────────────────────────
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        # After merge: field name is updated; old through-table is gone, new
+        # through-table is present, and its rows survived the rename.
+        self.assertEqual(
+            CustomObjectTypeField.objects.get(pk=field_pk).name, 'tags_new',
+        )
+        main_tables_after = main_conn.introspection.table_names()
+        self.assertNotIn(
+            old_through, main_tables_after,
+            f'Old through-table {old_through!r} must be gone after rename merge',
+        )
+        self.assertIn(
+            new_through, main_tables_after,
+            f'New through-table {new_through!r} must exist after rename merge',
+        )
+
+        MergedModel = CustomObjectType.objects.get(pk=cot_pk).get_model()
+        co_merged = MergedModel.objects.get(pk=co_pk)
+        self.assertEqual(
+            set(co_merged.tags_new.values_list('pk', flat=True)),
+            {site_a.pk, site_b.pk},
+            'M2M values must survive the through-table rename',
+        )
+        # Old accessor must no longer be accessible on the model.
+        self.assertFalse(
+            hasattr(co_merged, 'tags_old'),
+            'Old field accessor must be gone after rename merge',
+        )
+
+        # ── revert ────────────────────────────────────────────────────────
+        branch.revert(user=self.user, commit=True)
+        branch.refresh_from_db()
+
+        # Field name restored, through-table restored, rows intact.
+        self.assertEqual(
+            CustomObjectTypeField.objects.get(pk=field_pk).name, 'tags_old',
+        )
+        main_tables_reverted = main_conn.introspection.table_names()
+        self.assertIn(
+            old_through, main_tables_reverted,
+            f'Old through-table {old_through!r} must be restored after revert',
+        )
+        self.assertNotIn(
+            new_through, main_tables_reverted,
+            f'New through-table {new_through!r} must be gone after revert',
+        )
+
+        RevertedModel = CustomObjectType.objects.get(pk=cot_pk).get_model()
+        co_reverted = RevertedModel.objects.get(pk=co_pk)
+        self.assertEqual(
+            set(co_reverted.tags_old.values_list('pk', flat=True)),
+            {site_a.pk, site_b.pk},
+            'M2M values must survive the round-trip rename → revert',
+        )
+
 
 # ── Concrete test classes (one per merge strategy) ────────────────────────────
 
@@ -792,6 +1028,119 @@ class IterativeBranchingTestCase(BaseBranchingTests, TransactionTestCase):
 class SquashBranchingTestCase(BaseBranchingTests, TransactionTestCase):
     """Run BaseBranchingTests with the squash merge strategy."""
     MERGE_STRATEGY = 'squash'
+
+
+# ── Branch deletion (abandon without merge) ───────────────────────────────────
+
+@unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
+class BranchDeletionTestCase(BranchingTestBase, TransactionTestCase):
+    """
+    Deleting a branch without merging must drop the branch's PostgreSQL
+    schema and must NOT leak any of the branch's COT / field / table state
+    into main.
+
+    The branch deletion path (``Branch.delete()`` → ``deprovision()`` →
+    ``DROP SCHEMA ... CASCADE``) bypasses the merge/revert ObjectChange
+    replay engine.  We exercise it here so that the abandon flow stays
+    correct even though it doesn't go through the same code as merge.
+    """
+
+    def test_branch_delete_without_merge_does_not_leak_to_main(self):
+        site_ot = ObjectType.objects.get(app_label='dcim', model='site')
+
+        with event_tracking(self.request):
+            site = Site.objects.create(name='Abandon Site', slug='abandon-site')
+
+        branch = _provision_branch('Abandon Branch', 'iterative', self.user)
+        schema_name = branch.schema_name
+        branch_request = _make_request(self.user)
+
+        # ── branch: create COT + fields + CO that exist ONLY in the branch ─
+        branch_cot_pk = None
+        branch_field_pk = None
+        branch_co_pk = None
+        with activate_branch(branch), event_tracking(branch_request):
+            cot = CustomObjectType.objects.create(name='abandon_cot', slug='abandon-cot')
+            field = CustomObjectTypeField.objects.create(
+                custom_object_type=cot,
+                name='label',
+                label='Label',
+                type='text',
+            )
+            multi_field = CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='multi', label='Multi',
+                type='multiobject', related_object_type=site_ot,
+            )
+            co = cot.get_model().objects.create(label='only in branch')
+            co.multi.set([site])
+            branch_cot_pk = cot.pk
+            branch_field_pk = field.pk
+            branch_co_pk = co.pk
+            branch_multi_through = multi_field.through_table_name
+            branch_co_table = cot.get_database_table_name()
+
+        # The branch's schema must exist before we delete it.
+        with main_conn.cursor() as cursor:
+            cursor.execute(
+                'SELECT 1 FROM information_schema.schemata WHERE schema_name = %s',
+                [schema_name],
+            )
+            self.assertTrue(cursor.fetchone(), f'Branch schema {schema_name!r} must exist before delete')
+
+        # Main must NOT have any of the branch-only state.
+        self.assertFalse(
+            CustomObjectType.objects.filter(pk=branch_cot_pk).exists(),
+            'COT created in branch must not be visible in main',
+        )
+        self.assertFalse(
+            CustomObjectTypeField.objects.filter(pk=branch_field_pk).exists(),
+            'Field created in branch must not be visible in main',
+        )
+        main_tables_pre = main_conn.introspection.table_names()
+        self.assertNotIn(branch_co_table, main_tables_pre)
+        self.assertNotIn(branch_multi_through, main_tables_pre)
+
+        # ── delete (abandon) the branch ───────────────────────────────────
+        branch.delete()
+
+        # Schema must be gone.
+        with main_conn.cursor() as cursor:
+            cursor.execute(
+                'SELECT 1 FROM information_schema.schemata WHERE schema_name = %s',
+                [schema_name],
+            )
+            self.assertIsNone(
+                cursor.fetchone(),
+                f'Branch schema {schema_name!r} must be dropped after Branch.delete()',
+            )
+
+        # Main is still clean — no branch-only state was promoted.
+        self.assertFalse(
+            CustomObjectType.objects.filter(pk=branch_cot_pk).exists(),
+            'Abandoned-branch COT must not appear in main',
+        )
+        self.assertFalse(
+            CustomObjectTypeField.objects.filter(pk=branch_field_pk).exists(),
+            'Abandoned-branch field must not appear in main',
+        )
+        main_tables_post = main_conn.introspection.table_names()
+        self.assertNotIn(
+            branch_co_table, main_tables_post,
+            'Branch-only CO table must not appear in main after delete',
+        )
+        self.assertNotIn(
+            branch_multi_through, main_tables_post,
+            'Branch-only through-table must not appear in main after delete',
+        )
+
+        # The Branch row itself must be gone.
+        self.assertFalse(
+            Branch.objects.filter(pk=branch.pk).exists(),
+            'Branch row must be deleted',
+        )
+
+        # branch_co_pk is asserted unused but referenced for clarity.
+        self.assertIsNotNone(branch_co_pk)
 
 
 # ── Sync test ─────────────────────────────────────────────────────────────────
