@@ -104,6 +104,45 @@ _deferred_co_field_data: contextvars.ContextVar[dict | None] = contextvars.Conte
     '_deferred_co_field_data', default=None
 )
 
+# Sidecar key listing polymorphic-M2M fields in a serialized CO dict, as
+# ``[{'name': ..., 'pk': ...}, ...]``.  ``pk`` lets the squash dependency
+# resolver in ``branching.py`` produce a CO → field CREATE edge without
+# looking the field up in main (it isn't there yet during a branch-only
+# merge).  ``name`` lets ``deserialize_object`` map rows to through tables.
+POLY_M2M_SIDECAR_KEY = '__nco_poly_m2m_fields__'
+
+
+def _apply_poly_m2m_rows(schema_conn, through_table, co_pk, rows):
+    """Insert polymorphic M2M *rows* into *through_table* on *schema_conn*,
+    set-style (clear existing for *co_pk* first).  ContentType resolved by
+    natural key, also via *schema_conn*.
+    """
+    alias = schema_conn.alias
+    with schema_conn.cursor() as cursor:
+        cursor.execute(
+            f'DELETE FROM "{through_table}" WHERE source_id = %s', [co_pk],
+        )
+        for row in rows:
+            ct_label = row.get('content_type')
+            obj_id = row.get('object_id')
+            if not ct_label or obj_id is None:
+                continue
+            try:
+                app_label, model_name = ct_label.split('.', 1)
+                ct = ContentType.objects.using(alias).get(
+                    app_label=app_label, model=model_name,
+                )
+            except (ValueError, ContentType.DoesNotExist) as exc:
+                logger.debug(
+                    'poly M2M replay: ct %r unresolved (%s)', ct_label, exc,
+                )
+                continue
+            cursor.execute(
+                f'INSERT INTO "{through_table}" '
+                '(source_id, content_type_id, object_id) VALUES (%s, %s, %s)',
+                [co_pk, ct.pk, obj_id],
+            )
+
 
 def _get_schema_connection():
     """Active branch's connection if any, else the default — so DDL targets the right schema."""
@@ -596,13 +635,28 @@ class CustomObject(
         if pk is not None:
             obj.pk = pk
         m2m_data = {}
+        # Polymorphic M2M data: keys named by serialize_object's sidecar
+        # (POLY_M2M_SIDECAR_KEY) — explicit so we don't rely on _field_objects
+        # (empty when squash replays the CO CREATE before its field CREATE)
+        # or value-shape guessing.
+        poly_m2m_field_names = {
+            entry['name']
+            for entry in (resolved.get(POLY_M2M_SIDECAR_KEY) or ())
+            if isinstance(entry, dict) and entry.get('name')
+        }
+        poly_m2m_data = {}
         field_names = {f.name for f in fresh_model._meta.get_fields()}
 
         for attr, value in resolved.items():
+            if attr == POLY_M2M_SIDECAR_KEY:
+                continue
             # Tags via the standard NetBox path (Tag rows are looked up by name).
             if attr == 'tags' and is_taggable(fresh_model):
                 tag_model = apps.get_model('extras', 'Tag')
                 m2m_data['tags'] = list(tag_model.objects.filter(name__in=value or []))
+                continue
+            if attr in poly_m2m_field_names:
+                poly_m2m_data[attr] = value or []
                 continue
             if attr not in field_names:
                 # Unknown attribute (likely a removed field) — preserve it as a
@@ -656,6 +710,15 @@ class CustomObject(
                             'deserialize_object: deferred M2M %r on %s pk=%s (table absent)',
                             accessor, table_name, obj_pk, exc_info=True,
                         )
+                # Replay polymorphic M2M directly via the through, pinned to
+                # _using.  Bypasses manager.add() → m2m_changed →
+                # handle_changed_object, which can route across DB aliases.
+                schema_conn_local = connections[_using]
+                for field_name, rows in poly_m2m_data.items():
+                    through_table = (
+                        f'{USER_TABLE_DATABASE_NAME_PREFIX}{cot_id}_{field_name}'
+                    )
+                    _apply_poly_m2m_rows(schema_conn_local, through_table, obj_pk, rows)
                 # Stash full data for deferred column updates (squash ordering fix).
                 deferred = _deferred_co_field_data.get()
                 if deferred is None:
@@ -691,10 +754,96 @@ class CustomObject(
         if validators:
             run_validators(self, validators)
 
+    def serialize_object(self, exclude=None):
+        """Standard serialization plus polymorphic-field metadata.
+
+        For polymorphic MULTIOBJECT fields, also appends
+        ``[{content_type, object_id}, ...]`` per field (Django's serializer
+        skips them — the descriptor isn't on ``_meta``).  For both polymorphic
+        OBJECT and MULTIOBJECT, emits a sidecar of ``[{name, pk}, ...]`` so
+        the squash dependency resolver in ``branching.py`` can order the
+        field's CREATE before the CO's CREATE — without it, squash would
+        apply the CO before the columns/through exist.
+        """
+        data = super().serialize_object(exclude=exclude)
+        field_objects = getattr(type(self), '_field_objects', None) or {}
+        poly_entries = []
+        for fo in field_objects.values():
+            field = fo['field']
+            if not field.is_polymorphic:
+                continue
+            if field.type not in (
+                CustomFieldTypeChoices.TYPE_OBJECT,
+                CustomFieldTypeChoices.TYPE_MULTIOBJECT,
+            ):
+                continue
+            if exclude and field.name in exclude:
+                continue
+            poly_entries.append({'name': field.name, 'pk': field.pk})
+            if field.type != CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+                continue
+            # MULTIOBJECT-only: append the through-table rows.
+            try:
+                manager = getattr(self, field.name)
+                through = manager._get_through_model()
+            except (AttributeError, LookupError):
+                continue
+            rows = list(
+                through.objects.filter(source_id=self.pk)
+                .values('content_type_id', 'object_id')
+            )
+            if not rows:
+                data[field.name] = []
+                continue
+            ct_ids = {r['content_type_id'] for r in rows}
+            ct_map = {
+                ct.id: f'{ct.app_label}.{ct.model}'
+                for ct in ContentType.objects.filter(id__in=ct_ids)
+            }
+            data[field.name] = [
+                {'content_type': ct_map.get(r['content_type_id']), 'object_id': r['object_id']}
+                for r in rows
+                if r['content_type_id'] in ct_map
+            ]
+        if poly_entries:
+            data[POLY_M2M_SIDECAR_KEY] = poly_entries
+        return data
+
     @property
     def _generated_table_model(self):
         # An indication that the model is a generated table model.
         return True
+
+    def delete(self, *args, **kwargs):
+        # Two prep steps before super() so the deletion collector doesn't
+        # raise traversing reverse FKs from through models:
+        #   1. Realign each through's ``source`` FK to ``type(self)`` —
+        #      isinstance(instance, fk.related_model) otherwise sees two
+        #      Table*Model classes and fails.
+        #   2. Temporarily unregister throughs whose physical table is gone
+        #      (squash revert drops field-CREATEs before CO-CREATEs, so the
+        #      CO's collector hits ``relation does not exist`` otherwise).
+        cls = type(self)
+        prefix = f'through_{cls._meta.db_table}'
+        registry = apps.all_models.get(APP_LABEL, {})
+        existing_tables = connection.introspection.table_names()
+        hidden = {}
+        for name, through in list(registry.items()):
+            if not name.startswith(prefix):
+                continue
+            if through._meta.db_table not in existing_tables:
+                hidden[name] = registry.pop(name)
+                continue
+            try:
+                source_field = through._meta.get_field('source')
+            except FieldDoesNotExist:
+                continue
+            source_field.remote_field.model = cls
+            source_field.__dict__.pop('related_model', None)
+        try:
+            return super().delete(*args, **kwargs)
+        finally:
+            registry.update(hidden)
 
     @property
     def clone_fields(self):
@@ -1083,15 +1232,18 @@ class CustomObjectType(NetBoxModel):
                     # Polymorphic GFK: no through model.
                     pass
                 elif field_instance.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                    # Always create a fresh polymorphic through for THIS context.
-                    # Reusing apps.get_model would hand back another context's
-                    # through and require mutating its source FK — the very race
-                    # this fix eliminates.
-                    field_type_obj = FIELD_TYPE_CLASS[CustomFieldTypeChoices.TYPE_MULTIOBJECT]()
-                    source_model_str = f"{APP_LABEL}.{model.__name__}"
-                    through_model = field_type_obj.get_polymorphic_through_model(
-                        field_instance, source_model_str
-                    )
+                    # Reuse the apps-registered through if present; otherwise
+                    # create one.  Avoids parallel through instances diverging
+                    # from apps.all_models (collector class-identity mismatch).
+                    _apps = model._meta.apps
+                    try:
+                        through_model = _apps.get_model(APP_LABEL, field_instance.through_model_name)
+                    except LookupError:
+                        field_type_obj = FIELD_TYPE_CLASS[CustomFieldTypeChoices.TYPE_MULTIOBJECT]()
+                        source_model_str = f"{APP_LABEL}.{model.__name__}"
+                        through_model = field_type_obj.get_polymorphic_through_model(
+                            field_instance, source_model_str
+                        )
                     source_field = through_model._meta.get_field("source")
                     source_field.remote_field.model = model
                     source_field.related_model = model
@@ -1587,7 +1739,31 @@ class CustomObjectType(NetBoxModel):
             for through_model in getattr(model, '_through_models', []):
                 if _table_exists(through_model._meta.db_table, conn=schema_conn):
                     schema_editor.delete_model(through_model)
-            schema_editor.delete_model(model)
+            # Django's schema_editor.delete_model(parent) auto-recurses into
+            # M2M fields' through models when their _meta.auto_created is
+            # truthy — which we set deliberately in
+            # MultiObjectFieldType.after_model_generation so Django's JSON
+            # serializer includes M2M values.  That recursion would attempt a
+            # DROP TABLE for through tables whose actual DB tables are absent
+            # (e.g. when this delete runs on a COT whose branch-side through
+            # was already dropped by a revert).  Clear auto_created on those
+            # missing-table throughs for the duration of delete_model(parent)
+            # and restore it after.
+            cleared = []
+            for field in model._meta.local_many_to_many:
+                through = field.remote_field.through
+                if through._meta.auto_created and not _table_exists(
+                    through._meta.db_table, conn=schema_conn,
+                ):
+                    cleared.append((through, through._meta.auto_created))
+                    through._meta.auto_created = False
+            try:
+                # Flush DEFERRABLE FK triggers so PG doesn't reject the DROP.
+                schema_editor.execute('SET CONSTRAINTS ALL IMMEDIATE')
+                schema_editor.delete_model(model)
+            finally:
+                for through, original in cleared:
+                    through._meta.auto_created = original
 
         # Unregister from apps.all_models so cascade-delete doesn't query the
         # dropped table.  _global_lock guards against a concurrent get_model()
@@ -3074,6 +3250,7 @@ def clear_cache_on_field_save(sender, instance, **kwargs):
         try:
             related_cot = CustomObjectType.objects.get(object_type_id=instance.related_object_type_id)
             CustomObjectType.clear_model_cache(related_cot.id)
+            related_cot.snapshot()
             related_cot.save(update_fields=['cache_timestamp'])
         except CustomObjectType.DoesNotExist:
             pass

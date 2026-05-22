@@ -11,7 +11,11 @@ from users.models import Token
 from utilities.testing import create_test_user
 
 from netbox_custom_objects.constants import APP_LABEL
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField, _deferred_co_field_data
+from netbox_custom_objects.models import (
+    CustomObjectType,
+    CustomObjectTypeField,
+    _deferred_co_field_data,
+)
 
 logger = logging.getLogger(__name__)
 

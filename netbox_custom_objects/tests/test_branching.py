@@ -20,6 +20,7 @@ import uuid
 from core.models import ObjectType
 from dcim.models import Site
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from django.db import connection as main_conn, connections
 from django.test import RequestFactory, TransactionTestCase
 from django.urls import reverse
@@ -1062,6 +1063,389 @@ class BaseBranchingTests(BranchingTestBase):
             'M2M values must survive the round-trip rename → revert',
         )
 
+    # ── single-field DELETE inside branch ─────────────────────────────────
+
+    def test_single_field_delete_merge_and_revert(self):
+        """
+        Delete one field from a COT in a branch (parent COT intact).
+
+        Exercises ``_schema_remove_field`` via the merge replay engine
+        without the through-table-already-gone shortcut that
+        ``test_cot_deleted_in_branch_merge_and_revert`` triggers.  Covers
+        the most direct CRUD gap: per-field delete is the common
+        production case but was previously only exercised transitively.
+        """
+        site_ot = ObjectType.objects.get(app_label='dcim', model='site')
+
+        with event_tracking(self.request):
+            site = Site.objects.create(name='Field-Delete Site', slug='field-delete-site')
+            cot = CustomObjectType.objects.create(name='field_delete_cot', slug='field-delete-cot')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='keep_me', label='Keep', type='text',
+            )
+            scalar_field = CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='drop_me', label='Drop', type='integer',
+            )
+            multi_field = CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='drop_m2m', label='Drop M2M',
+                type='multiobject', related_object_type=site_ot,
+            )
+            Model = cot.get_model()
+            co = Model.objects.create(keep_me='hello', drop_me=7)
+            co.drop_m2m.set([site])
+
+        cot_pk = cot.pk
+        co_pk = co.pk
+        scalar_field_pk = scalar_field.pk
+        multi_field_pk = multi_field.pk
+        through_table = multi_field.through_table_name
+        co_table = cot.get_database_table_name()
+
+        # Sanity: column + through table exist in main before the merge.
+        with main_conn.cursor() as cursor:
+            cols_before = {
+                c.name for c in main_conn.introspection.get_table_description(cursor, co_table)
+            }
+        self.assertIn('drop_me', cols_before)
+        self.assertIn(through_table, main_conn.introspection.table_names())
+
+        branch = _provision_branch('Field Delete Branch', self.MERGE_STRATEGY, self.user)
+        branch_request = _make_request(self.user)
+
+        with activate_branch(branch), event_tracking(branch_request):
+            CustomObjectTypeField.objects.get(pk=scalar_field_pk).delete()
+            CustomObjectTypeField.objects.get(pk=multi_field_pk).delete()
+
+        # Before merge: main still has both fields and their schema.
+        self.assertTrue(CustomObjectTypeField.objects.filter(pk=scalar_field_pk).exists())
+        self.assertTrue(CustomObjectTypeField.objects.filter(pk=multi_field_pk).exists())
+
+        # ── merge ─────────────────────────────────────────────────────────
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        # Fields gone from ORM; physical column + through table gone too.
+        self.assertFalse(CustomObjectTypeField.objects.filter(pk=scalar_field_pk).exists())
+        self.assertFalse(CustomObjectTypeField.objects.filter(pk=multi_field_pk).exists())
+        with main_conn.cursor() as cursor:
+            cols_after = {
+                c.name for c in main_conn.introspection.get_table_description(cursor, co_table)
+            }
+        self.assertNotIn('drop_me', cols_after, 'drop_me column must be removed from main')
+        self.assertIn('keep_me', cols_after, 'keep_me column must remain in main')
+        self.assertNotIn(
+            through_table, main_conn.introspection.table_names(),
+            f'Through-table {through_table!r} must be dropped after merge',
+        )
+
+        # The retained field's data on the CO must still be readable.
+        cot_main = CustomObjectType.objects.get(pk=cot_pk)
+        co_main = cot_main.get_model().objects.get(pk=co_pk)
+        self.assertEqual(co_main.keep_me, 'hello')
+
+        # ── revert ────────────────────────────────────────────────────────
+        branch.revert(user=self.user, commit=True)
+
+        # Both fields are restored, column and through table re-created.
+        self.assertTrue(CustomObjectTypeField.objects.filter(pk=scalar_field_pk).exists())
+        self.assertTrue(CustomObjectTypeField.objects.filter(pk=multi_field_pk).exists())
+        with main_conn.cursor() as cursor:
+            cols_reverted = {
+                c.name for c in main_conn.introspection.get_table_description(cursor, co_table)
+            }
+        self.assertIn('drop_me', cols_reverted, 'drop_me column must be restored after revert')
+        self.assertIn(
+            through_table, main_conn.introspection.table_names(),
+            f'Through-table {through_table!r} must be restored after revert',
+        )
+
+    # ── polymorphic OBJECT field merge/revert ─────────────────────────────
+
+    def test_polymorphic_object_field_merge_and_revert(self):
+        """
+        Polymorphic OBJECT field (GenericForeignKey backed by content_type +
+        object_id columns).  None of the existing branching tests cover this
+        path, and the per-(cot, branch) through-model refactor changed
+        through-model handling — polymorphic GFK fields have no through but
+        do create dedicated columns that need branch-aware DDL routing.
+        """
+        site_ot = ObjectType.objects.get(app_label='dcim', model='site')
+
+        with event_tracking(self.request):
+            site = Site.objects.create(name='Poly Site', slug='poly-site')
+
+        branch = _provision_branch('Poly OBJ Branch', self.MERGE_STRATEGY, self.user)
+        branch_request = _make_request(self.user)
+
+        with activate_branch(branch), event_tracking(branch_request):
+            cot = CustomObjectType.objects.create(name='poly_obj_cot', slug='poly-obj-cot')
+            field = CustomObjectTypeField.objects.create(
+                custom_object_type=cot,
+                name='target',
+                label='Target',
+                type='object',
+                is_polymorphic=True,
+            )
+            field.related_object_types.set([site_ot])
+            Model = cot.get_model()
+            co = Model.objects.create(
+                target_content_type=ContentType.objects.get_for_model(Site),
+                target_object_id=site.pk,
+            )
+
+        cot_pk, field_pk, co_pk = cot.pk, field.pk, co.pk
+
+        # ── merge ─────────────────────────────────────────────────────────
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        cot_main = CustomObjectType.objects.get(pk=cot_pk)
+        co_main = cot_main.get_model().objects.get(pk=co_pk)
+        self.assertEqual(co_main.target_object_id, site.pk)
+        self.assertEqual(
+            co_main.target_content_type_id,
+            ContentType.objects.get_for_model(Site).pk,
+        )
+
+        # ── revert ────────────────────────────────────────────────────────
+        branch.revert(user=self.user, commit=True)
+        self.assertFalse(CustomObjectType.objects.filter(pk=cot_pk).exists())
+        self.assertFalse(CustomObjectTypeField.objects.filter(pk=field_pk).exists())
+
+    # ── polymorphic MULTIOBJECT field merge/revert ────────────────────────
+
+    def test_polymorphic_multiobject_field_merge_and_revert(self):
+        """
+        Polymorphic MULTIOBJECT field — through table has
+        (source_id, content_type_id, object_id) columns.  Asserts the
+        through-table schema lifecycle (create in branch / merge / revert)
+        AND the M2M data round-trip: rows added via
+        ``PolymorphicManyToManyManager`` in the branch must appear in main
+        after merge.
+
+        Data preservation requires three pieces:
+        - ``PolymorphicManyToManyManager`` fires ``m2m_changed``, triggering
+          an UPDATE ObjectChange on the parent CO.
+        - ``CustomObject.serialize_object`` includes polymorphic M2M values
+          (Django's serializer skips them — the descriptor isn't a real
+          M2M field on ``_meta``).
+        - ``CustomObject.deserialize_object`` replays the polymorphic
+          values via the descriptor after the CO row saves.
+        """
+        site_ot = ObjectType.objects.get(app_label='dcim', model='site')
+        site_ct = ContentType.objects.get_for_model(Site)
+
+        with event_tracking(self.request):
+            site_a = Site.objects.create(name='Poly M2M A', slug='poly-m2m-a')
+            site_b = Site.objects.create(name='Poly M2M B', slug='poly-m2m-b')
+
+        branch = _provision_branch('Poly M2M Branch', self.MERGE_STRATEGY, self.user)
+        branch_request = _make_request(self.user)
+
+        with activate_branch(branch), event_tracking(branch_request):
+            cot = CustomObjectType.objects.create(name='poly_m2m_cot', slug='poly-m2m-cot')
+            field = CustomObjectTypeField.objects.create(
+                custom_object_type=cot,
+                name='targets',
+                label='Targets',
+                type='multiobject',
+                is_polymorphic=True,
+            )
+            field.related_object_types.set([site_ot])
+            Model = cot.get_model()
+            co = Model.objects.create()
+            co.snapshot()
+            co.targets.add(site_a)
+            co.targets.add(site_b)
+
+        cot_pk, field_pk, co_pk = cot.pk, field.pk, co.pk
+        through_table = field.through_table_name
+
+        # ── merge ─────────────────────────────────────────────────────────
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        self.assertIn(
+            through_table, main_conn.introspection.table_names(),
+            'Polymorphic through-table must exist in main after merge',
+        )
+
+        # Read the through table directly: the polymorphic descriptor's
+        # query helpers are exercised elsewhere; here we just want to
+        # confirm the rows landed in main.
+        with main_conn.cursor() as cursor:
+            cursor.execute(
+                f'SELECT object_id FROM "{through_table}" '
+                'WHERE source_id = %s AND content_type_id = %s ORDER BY object_id',
+                [co_pk, site_ct.pk],
+            )
+            rows = [r[0] for r in cursor.fetchall()]
+        self.assertEqual(
+            rows, sorted([site_a.pk, site_b.pk]),
+            'Polymorphic M2M rows added in branch must land in main after merge',
+        )
+
+        # ── revert ────────────────────────────────────────────────────────
+        branch.revert(user=self.user, commit=True)
+        self.assertFalse(CustomObjectType.objects.filter(pk=cot_pk).exists())
+        self.assertFalse(CustomObjectTypeField.objects.filter(pk=field_pk).exists())
+        self.assertNotIn(
+            through_table, main_conn.introspection.table_names(),
+            'Polymorphic through-table must be dropped after revert',
+        )
+
+    # ── self-referential OBJECT field merge/revert ────────────────────────
+
+    def test_self_referential_object_field_merge_and_revert(self):
+        """
+        Self-referential OBJECT field (FK to the same COT).  The generated
+        model resolves the FK target back to itself in
+        ``after_model_generation``; we verify that path works across merge.
+        """
+        branch = _provision_branch('Self Ref OBJ Branch', self.MERGE_STRATEGY, self.user)
+        branch_request = _make_request(self.user)
+
+        with activate_branch(branch), event_tracking(branch_request):
+            cot = CustomObjectType.objects.create(name='self_ref_obj_cot', slug='self-ref-obj-cot')
+            self_ot = ObjectType.objects.get(
+                app_label='netbox_custom_objects',
+                model=cot.get_table_model_name(cot.id).lower(),
+            )
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='label', label='Label', type='text',
+            )
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='parent', label='Parent',
+                type='object', related_object_type=self_ot,
+            )
+            Model = cot.get_model()
+            root = Model.objects.create(label='root')
+            child = Model.objects.create(label='child', parent_id=root.pk)
+
+        cot_pk = cot.pk
+        root_pk, child_pk = root.pk, child.pk
+
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        Model = CustomObjectType.objects.get(pk=cot_pk).get_model()
+        child_main = Model.objects.get(pk=child_pk)
+        self.assertEqual(child_main.parent_id, root_pk)
+        self.assertEqual(child_main.label, 'child')
+
+        branch.revert(user=self.user, commit=True)
+        self.assertFalse(CustomObjectType.objects.filter(pk=cot_pk).exists())
+
+    # ── self-referential MULTIOBJECT field merge/revert ───────────────────
+
+    def test_self_referential_multiobject_field_merge_and_revert(self):
+        """
+        Self-referential MULTIOBJECT — through table with both source and
+        target FKs pointing at the same dynamic CO model.  Exercises the
+        ``_is_self_referential`` path in
+        ``MultiObjectFieldType.after_model_generation``.
+        """
+        branch = _provision_branch('Self Ref M2M Branch', self.MERGE_STRATEGY, self.user)
+        branch_request = _make_request(self.user)
+
+        with activate_branch(branch), event_tracking(branch_request):
+            cot = CustomObjectType.objects.create(name='self_ref_m2m_cot', slug='self-ref-m2m-cot')
+            self_ot = ObjectType.objects.get(
+                app_label='netbox_custom_objects',
+                model=cot.get_table_model_name(cot.id).lower(),
+            )
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='label', label='Label', type='text',
+            )
+            field = CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='peers', label='Peers',
+                type='multiobject', related_object_type=self_ot,
+            )
+            Model = cot.get_model()
+            a = Model.objects.create(label='a')
+            b = Model.objects.create(label='b')
+            c = Model.objects.create(label='c')
+            a.peers.set([b, c])
+
+        cot_pk = cot.pk
+        a_pk, b_pk, c_pk = a.pk, b.pk, c.pk
+        through_table = field.through_table_name
+
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        Model = CustomObjectType.objects.get(pk=cot_pk).get_model()
+        a_main = Model.objects.get(pk=a_pk)
+        self.assertEqual(
+            set(a_main.peers.values_list('pk', flat=True)),
+            {b_pk, c_pk},
+            'Self-referential M2M values must survive merge',
+        )
+        self.assertIn(through_table, main_conn.introspection.table_names())
+
+        branch.revert(user=self.user, commit=True)
+        self.assertFalse(CustomObjectType.objects.filter(pk=cot_pk).exists())
+        self.assertNotIn(through_table, main_conn.introspection.table_names())
+
+    # ── cross-COT FK created entirely inside branch ───────────────────────
+
+    def test_cross_cot_fk_branch_creates_both_merge_and_revert(self):
+        """
+        Branch creates COT B, then COT A with a FK pointing at B, then a CO
+        of type A referencing a CO of type B.  Merge must apply the COT
+        creates and field create in an order that respects the FK
+        dependency, and the data must survive.
+        """
+        branch = _provision_branch('Cross COT Branch', self.MERGE_STRATEGY, self.user)
+        branch_request = _make_request(self.user)
+
+        with activate_branch(branch), event_tracking(branch_request):
+            cot_b = CustomObjectType.objects.create(name='cross_b_cot', slug='cross-b-cot')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot_b, name='b_label', label='B Label', type='text',
+            )
+            b_ot = ObjectType.objects.get(
+                app_label='netbox_custom_objects',
+                model=cot_b.get_table_model_name(cot_b.id).lower(),
+            )
+
+            cot_a = CustomObjectType.objects.create(name='cross_a_cot', slug='cross-a-cot')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot_a, name='a_label', label='A Label', type='text',
+            )
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot_a, name='b_ref', label='B Ref',
+                type='object', related_object_type=b_ot,
+            )
+
+            BModel = cot_b.get_model()
+            b_inst = BModel.objects.create(b_label='hello B')
+            AModel = cot_a.get_model()
+            a_inst = AModel.objects.create(a_label='hello A', b_ref_id=b_inst.pk)
+
+        cot_a_pk, cot_b_pk = cot_a.pk, cot_b.pk
+        a_pk, b_pk = a_inst.pk, b_inst.pk
+
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        AModel = CustomObjectType.objects.get(pk=cot_a_pk).get_model()
+        BModel = CustomObjectType.objects.get(pk=cot_b_pk).get_model()
+        self.assertEqual(BModel.objects.get(pk=b_pk).b_label, 'hello B')
+        a_main = AModel.objects.get(pk=a_pk)
+        self.assertEqual(a_main.b_ref_id, b_pk)
+        self.assertEqual(a_main.a_label, 'hello A')
+
+        branch.revert(user=self.user, commit=True)
+        self.assertFalse(CustomObjectType.objects.filter(pk=cot_a_pk).exists())
+        self.assertFalse(CustomObjectType.objects.filter(pk=cot_b_pk).exists())
+
 
 # ── Concrete test classes (one per merge strategy) ────────────────────────────
 
@@ -1948,3 +2332,462 @@ class SequentialRenameSquashTestCase(SequentialRenameTestCase, TransactionTestCa
 
     def test_sequential_renames_alpha_beta_gamma_merge(self):
         self._run_sequential_rename_merge('seq_squash_cot', 'seq-squash-cot')
+
+
+# ── Missing field-type coverage (iterative only) ──────────────────────────────
+
+@unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
+class MissingFieldTypesTestCase(BranchingTestBase, TransactionTestCase):
+    """
+    Field types that ``test_comprehensive_merge_and_revert`` doesn't cover:
+    longtext, date (separate from datetime), URL, JSON, multiselect.
+
+    Iterative only — strategy-specific bugs in these field types would still
+    surface in the comprehensive squash test once they're added there.  This
+    standalone class keeps the round-trip times manageable while filling out
+    the field-type matrix.
+    """
+
+    def test_merge_and_revert_for_extra_field_types(self):
+        with event_tracking(self.request):
+            choice_set = CustomFieldChoiceSet.objects.create(
+                name='Multi Statuses',
+                extra_choices=[['a', 'A'], ['b', 'B'], ['c', 'C']],
+            )
+
+        branch = _provision_branch('Extra Types Branch', 'iterative', self.user)
+        branch_request = _make_request(self.user)
+
+        with activate_branch(branch), event_tracking(branch_request):
+            cot = CustomObjectType.objects.create(name='extra_types_cot', slug='extra-types-cot')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='longtext_field', label='Long Text', type='longtext',
+            )
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='date_field', label='Date', type='date',
+            )
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='url_field', label='URL', type='url',
+            )
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='json_field', label='JSON', type='json',
+            )
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='multiselect_field', label='Multi',
+                type='multiselect', choice_set=choice_set,
+            )
+            Model = cot.get_model()
+            co = Model.objects.create(
+                longtext_field='line1\nline2',
+                date_field=datetime.date(2026, 5, 21),
+                url_field='https://example.com/path',
+                json_field={'k': 'v', 'n': 1, 'list': [1, 2, 3]},
+                multiselect_field=['a', 'c'],
+            )
+
+        cot_pk, co_pk = cot.pk, co.pk
+
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        Model = CustomObjectType.objects.get(pk=cot_pk).get_model()
+        co_main = Model.objects.get(pk=co_pk)
+        self.assertEqual(co_main.longtext_field, 'line1\nline2')
+        self.assertEqual(co_main.date_field, datetime.date(2026, 5, 21))
+        self.assertEqual(co_main.url_field, 'https://example.com/path')
+        self.assertEqual(co_main.json_field, {'k': 'v', 'n': 1, 'list': [1, 2, 3]})
+        self.assertEqual(sorted(co_main.multiselect_field), ['a', 'c'])
+
+        branch.revert(user=self.user, commit=True)
+        self.assertFalse(CustomObjectType.objects.filter(pk=cot_pk).exists())
+
+
+# ── Field attribute changes & COT update (iterative only) ─────────────────────
+
+@unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
+class FieldAttributeChangesTestCase(BranchingTestBase, TransactionTestCase):
+    """
+    Application-layer field attribute changes that the existing tests don't
+    cover individually: COT-level updates, field type change, primary swap,
+    and required toggle.  Iterative only — these don't hit strategy-specific
+    code paths.
+    """
+
+    def test_cot_metadata_update_merge(self):
+        """COT name / verbose_name / description / version edited inside branch."""
+        with event_tracking(self.request):
+            cot = CustomObjectType.objects.create(
+                name='meta_cot', slug='meta-cot',
+                verbose_name='Original Name', description='original',
+                version='1.0.0',
+            )
+
+        cot_pk = cot.pk
+        branch = _provision_branch('Meta Branch', 'iterative', self.user)
+        branch_request = _make_request(self.user)
+
+        with activate_branch(branch), event_tracking(branch_request):
+            branch_cot = CustomObjectType.objects.get(pk=cot_pk)
+            branch_cot.snapshot()
+            branch_cot.verbose_name = 'Updated Name'
+            branch_cot.description = 'updated description'
+            branch_cot.version = '1.1.0'
+            branch_cot.save()
+
+        # Main hasn't seen the change yet.
+        cot.refresh_from_db()
+        self.assertEqual(cot.verbose_name, 'Original Name')
+
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        cot.refresh_from_db()
+        self.assertEqual(cot.verbose_name, 'Updated Name')
+        self.assertEqual(cot.description, 'updated description')
+        self.assertEqual(cot.version, '1.1.0')
+
+    def test_field_type_change_text_to_integer_merge(self):
+        """text → integer field type change across merge.
+
+        The CO has a value that's parseable as both; the column type
+        change replaces ``VARCHAR`` with ``INTEGER`` via ``alter_field``.
+        """
+        with event_tracking(self.request):
+            cot = CustomObjectType.objects.create(name='retype_cot', slug='retype-cot')
+            field = CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='value', label='Value', type='text',
+            )
+            Model = cot.get_model()
+            # Use a value that parses as both text and integer so the
+            # USING cast applied by alter_field can succeed.
+            co = Model.objects.create(value='42')
+
+        cot_pk, field_pk, co_pk = cot.pk, field.pk, co.pk
+        branch = _provision_branch('Retype Branch', 'iterative', self.user)
+        branch_request = _make_request(self.user)
+
+        with activate_branch(branch), event_tracking(branch_request):
+            f = CustomObjectTypeField.objects.get(pk=field_pk)
+            f.snapshot()
+            f.type = 'integer'
+            f.save()
+
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        field_main = CustomObjectTypeField.objects.get(pk=field_pk)
+        self.assertEqual(field_main.type, 'integer')
+
+        # PostgreSQL column type must be integer.
+        cot_main = CustomObjectType.objects.get(pk=cot_pk)
+        co_table = cot_main.get_database_table_name()
+        with main_conn.cursor() as cursor:
+            cursor.execute(
+                'SELECT data_type FROM information_schema.columns '
+                'WHERE table_name = %s AND column_name = %s',
+                [co_table, 'value'],
+            )
+            data_type = cursor.fetchone()[0]
+        self.assertEqual(data_type, 'integer')
+
+        # CO value survived the cast.
+        co_main = cot_main.get_model().objects.get(pk=co_pk)
+        self.assertEqual(co_main.value, 42)
+
+    def test_primary_field_swap_merge(self):
+        """Switch which field is ``primary``; __str__ must follow."""
+        with event_tracking(self.request):
+            cot = CustomObjectType.objects.create(name='primary_cot', slug='primary-cot')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='code', label='Code', type='text', primary=True,
+            )
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='title', label='Title', type='text', primary=False,
+            )
+            Model = cot.get_model()
+            co = Model.objects.create(code='ABC', title='Widget')
+            self.assertEqual(str(co), 'ABC')
+
+        cot_pk = cot.pk
+        co_pk = co.pk
+        branch = _provision_branch('Primary Branch', 'iterative', self.user)
+        branch_request = _make_request(self.user)
+
+        with activate_branch(branch), event_tracking(branch_request):
+            f_code = CustomObjectTypeField.objects.get(custom_object_type=cot, name='code')
+            f_code.snapshot()
+            f_code.primary = False
+            f_code.save()
+            f_title = CustomObjectTypeField.objects.get(custom_object_type=cot, name='title')
+            f_title.snapshot()
+            f_title.primary = True
+            f_title.save()
+
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        cot_main = CustomObjectType.objects.get(pk=cot_pk)
+        co_main = cot_main.get_model().objects.get(pk=co_pk)
+        # __str__ now follows the newly-primary 'title' field.
+        self.assertEqual(str(co_main), 'Widget')
+
+    def test_field_required_toggle_merge(self):
+        """Toggle a field's required flag from False to True across merge.
+
+        ``required`` is a form-layer attribute in this plugin — every field
+        constructor in ``field_types.py`` hardcodes ``null=True, blank=True``
+        on the model field, so the DB column stays nullable regardless of
+        ``required``.  This test pins both halves of that contract:
+        ``required=True`` does survive the merge as an ORM attribute (form
+        validation will reject empty values), but the underlying column does
+        NOT become NOT NULL.
+        """
+        with event_tracking(self.request):
+            cot = CustomObjectType.objects.create(name='required_cot', slug='required-cot')
+            field = CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='note', label='Note', type='text',
+                required=False,
+            )
+
+        cot_pk, field_pk = cot.pk, field.pk
+        branch = _provision_branch('Required Branch', 'iterative', self.user)
+        branch_request = _make_request(self.user)
+
+        with activate_branch(branch), event_tracking(branch_request):
+            f = CustomObjectTypeField.objects.get(pk=field_pk)
+            f.snapshot()
+            f.required = True
+            f.save()
+
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        self.assertTrue(
+            CustomObjectTypeField.objects.get(pk=field_pk).required,
+            'required=True ORM flag must survive the merge',
+        )
+
+        # DB column stays nullable — required is enforced at the form layer only.
+        cot_main = CustomObjectType.objects.get(pk=cot_pk)
+        co_table = cot_main.get_database_table_name()
+        with main_conn.cursor() as cursor:
+            cursor.execute(
+                'SELECT is_nullable FROM information_schema.columns '
+                'WHERE table_name = %s AND column_name = %s',
+                [co_table, 'note'],
+            )
+            is_nullable = cursor.fetchone()[0]
+        self.assertEqual(
+            is_nullable, 'YES',
+            'required=True must NOT produce NOT NULL — this plugin enforces '
+            'required at the form layer only (field_types.py hardcodes null=True).',
+        )
+
+
+# ── Tags + journal entries survive merge ──────────────────────────────────────
+
+@unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
+class TagsAndJournalTestCase(BranchingTestBase, TransactionTestCase):
+    """
+    Tags use a separate code path in ``CustomObject.deserialize_object`` via
+    the ``is_taggable`` branch.  Journal entries are NetBox infrastructure
+    used by NetBoxModel subclasses.  Neither is exercised by the rest of the
+    branching suite.
+    """
+
+    def test_co_with_tags_survives_merge(self):
+        from extras.models import Tag
+
+        with event_tracking(self.request):
+            tag_a = Tag.objects.create(name='Branch Tag A', slug='branch-tag-a')
+            tag_b = Tag.objects.create(name='Branch Tag B', slug='branch-tag-b')
+            cot = CustomObjectType.objects.create(name='tagged_cot', slug='tagged-cot')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='label', label='Label', type='text',
+            )
+
+        cot_pk = cot.pk
+        branch = _provision_branch('Tagged Branch', 'iterative', self.user)
+        branch_request = _make_request(self.user)
+
+        with activate_branch(branch), event_tracking(branch_request):
+            Model = cot.get_model()
+            co = Model.objects.create(label='tagged')
+            co.tags.set([tag_a, tag_b])
+
+        co_pk = co.pk
+
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        Model = CustomObjectType.objects.get(pk=cot_pk).get_model()
+        co_main = Model.objects.get(pk=co_pk)
+        self.assertEqual(
+            set(co_main.tags.values_list('name', flat=True)),
+            {'Branch Tag A', 'Branch Tag B'},
+            'Tags assigned in branch must appear on the merged CO',
+        )
+
+    def test_co_with_journal_entry_survives_merge(self):
+        """Journal entries created against a CO in branch arrive in main on merge."""
+        from extras.models import JournalEntry
+
+        with event_tracking(self.request):
+            cot = CustomObjectType.objects.create(name='journal_cot', slug='journal-cot')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='label', label='Label', type='text',
+            )
+
+        cot_pk = cot.pk
+        branch = _provision_branch('Journal Branch', 'iterative', self.user)
+        branch_request = _make_request(self.user)
+
+        with activate_branch(branch), event_tracking(branch_request):
+            Model = cot.get_model()
+            co = Model.objects.create(label='journaled')
+            JournalEntry.objects.create(
+                assigned_object=co,
+                created_by=self.user,
+                kind='info',
+                comments='Note added in branch',
+            )
+
+        co_pk = co.pk
+
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        Model = CustomObjectType.objects.get(pk=cot_pk).get_model()
+        co_ct = ContentType.objects.get_for_model(Model)
+        entries = JournalEntry.objects.filter(
+            assigned_object_type=co_ct, assigned_object_id=co_pk,
+        )
+        self.assertEqual(
+            list(entries.values_list('comments', flat=True)),
+            ['Note added in branch'],
+        )
+
+
+# ── ChoiceSet lifecycle, search_weight, sync-then-merge ───────────────────────
+
+@unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
+class ChoiceSetSearchLifecycleTestCase(BranchingTestBase, TransactionTestCase):
+    """Misc lifecycle gaps: ChoiceSet mutation, search_weight changes,
+    sync→edit→merge chains."""
+
+    def test_choice_set_choices_mutated_in_branch_merge(self):
+        """Add a new choice to a ChoiceSet inside a branch; merge to main."""
+        with event_tracking(self.request):
+            cs = CustomFieldChoiceSet.objects.create(
+                name='Mutable Choices',
+                extra_choices=[['x', 'X'], ['y', 'Y']],
+            )
+            cot = CustomObjectType.objects.create(name='cs_cot', slug='cs-cot')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='c', label='Choice',
+                type='select', choice_set=cs,
+            )
+
+        cs_pk = cs.pk
+        branch = _provision_branch('CS Branch', 'iterative', self.user)
+        branch_request = _make_request(self.user)
+
+        with activate_branch(branch), event_tracking(branch_request):
+            cs_branch = CustomFieldChoiceSet.objects.get(pk=cs_pk)
+            cs_branch.snapshot()
+            cs_branch.extra_choices = [['x', 'X'], ['y', 'Y'], ['z', 'Z']]
+            cs_branch.save()
+            Model = cot.get_model()
+            Model.objects.create(c='z')  # uses the new choice
+
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        cs_main = CustomFieldChoiceSet.objects.get(pk=cs_pk)
+        keys = {pair[0] for pair in cs_main.extra_choices}
+        self.assertIn('z', keys, 'New choice must be present in main after merge')
+
+    def test_field_search_weight_change_merge(self):
+        """Changing ``search_weight`` is a non-DDL field update.  It must
+        survive merge as an ORM-level change; reindexing happens via
+        ``ReindexCustomObjectTypeJob`` which runs out-of-band."""
+        with event_tracking(self.request):
+            cot = CustomObjectType.objects.create(name='sw_cot', slug='sw-cot')
+            field = CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='label', label='Label',
+                type='text', search_weight=10,
+            )
+
+        field_pk = field.pk
+        branch = _provision_branch('SW Branch', 'iterative', self.user)
+        branch_request = _make_request(self.user)
+
+        with activate_branch(branch), event_tracking(branch_request):
+            f = CustomObjectTypeField.objects.get(pk=field_pk)
+            f.snapshot()
+            f.search_weight = 100
+            f.save()
+
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        self.assertEqual(
+            CustomObjectTypeField.objects.get(pk=field_pk).search_weight, 100,
+        )
+
+    def test_sync_then_branch_edit_then_merge_lifecycle(self):
+        """
+        Full lifecycle: main creates state → sync pulls it into branch →
+        branch edits a CO → merge brings the edit back.  No standalone
+        test covers state persistence across sync and merge in one branch.
+        """
+        branch = _provision_branch('Lifecycle Branch', 'iterative', self.user)
+
+        # Main creates a COT + CO *after* the branch was provisioned.
+        with event_tracking(self.request):
+            cot = CustomObjectType.objects.create(name='lifecycle_cot', slug='lifecycle-cot')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='label', label='Label', type='text',
+            )
+            Model = cot.get_model()
+            co = Model.objects.create(label='initial')
+
+        co_pk = co.pk
+        cot_pk = cot.pk
+
+        # Sync the branch so it sees the COT+CO.
+        branch.sync(user=self.user, commit=True)
+        branch.refresh_from_db()
+
+        # Branch edits the CO.
+        branch_request = _make_request(self.user)
+        with activate_branch(branch), event_tracking(branch_request):
+            BranchModel = CustomObjectType.objects.get(pk=cot_pk).get_model()
+            branch_co = BranchModel.objects.get(pk=co_pk)
+            branch_co.snapshot()
+            branch_co.label = 'edited after sync'
+            branch_co.save()
+
+        # Main hasn't seen the edit yet.
+        co.refresh_from_db()
+        self.assertEqual(co.label, 'initial')
+
+        # Merge.
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        co.refresh_from_db()
+        self.assertEqual(
+            co.label, 'edited after sync',
+            'Edit made after sync must propagate to main on merge',
+        )

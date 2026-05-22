@@ -35,3 +35,30 @@ def objectchange_field_migrator(model, data):
     if resolve is None:
         return None
     return resolve(data)
+
+
+def co_polymorphic_dependency_resolver(model, data, changed_objects):
+    """Tell squash that a CO CREATE depends on its polymorphic-M2M field CREATEs.
+
+    The polymorphic M2M lives on a ``PolymorphicM2MDescriptor`` (not a Django
+    field), so squash's default FK/GFK introspection sees no edge between the
+    CO's postchange_data and the ``CustomObjectTypeField`` rows.  Without it
+    squash may apply the CO before the field — the through table doesn't
+    exist yet.  The sidecar carries field PKs so we don't need to look them
+    up in main (they aren't there yet during a branch-only merge).
+    """
+    from .constants import APP_LABEL
+    from .models import POLY_M2M_SIDECAR_KEY
+
+    meta = getattr(model, '_meta', None)
+    if meta is None or meta.app_label != APP_LABEL:
+        return ()
+    entries = data.get(POLY_M2M_SIDECAR_KEY) or ()
+    if not entries:
+        return ()
+    label = f'{APP_LABEL}.customobjecttypefield'
+    return [
+        (label, entry['pk'])
+        for entry in entries
+        if isinstance(entry, dict) and entry.get('pk') is not None
+    ]

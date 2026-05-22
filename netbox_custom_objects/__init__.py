@@ -30,6 +30,11 @@ _checking_migrations = False
 # access recomputes with the full set of COT models.
 _app_ready = False
 
+# Guards ``super().ready()`` against the duplicate-registration check in
+# NetBox's ``register_serializer_resolver`` (triggered by ``serializer_resolver``
+# on this PluginConfig).
+_super_ready_called = False
+
 
 def _migration_started(sender, **kwargs):
     """Signal handler for pre_migrate - sets the migration flag."""
@@ -246,6 +251,15 @@ class CustomObjectsPluginConfig(PluginConfig):
             # Always clear the recursion flag
             _checking_migrations = False
 
+    def _call_super_ready_once(self):
+        """Call ``super().ready()`` once; subsequent calls are no-ops.
+        ``register_serializer_resolver`` rejects duplicates."""
+        global _super_ready_called
+        if _super_ready_called:
+            return
+        super().ready()
+        _super_ready_called = True
+
     def ready(self):
         # Install the thread-safe apps.clear_cache wrapper before any dynamic
         # model is registered (must happen exactly once, before get_model() runs).
@@ -285,6 +299,14 @@ class CustomObjectsPluginConfig(PluginConfig):
             )
             register_branching_resolver(supports_branching_resolver)
             register_objectchange_field_migrator(objectchange_field_migrator)
+            # Optional dependency resolver — skipped silently on older
+            # netbox-branching that doesn't expose the hook yet.
+            try:
+                from netbox_branching.utilities import register_dependency_resolver
+                from .branching import co_polymorphic_dependency_resolver
+                register_dependency_resolver(co_polymorphic_dependency_resolver)
+            except ImportError:
+                pass
         except ImportError:
             pass
 
@@ -299,7 +321,7 @@ class CustomObjectsPluginConfig(PluginConfig):
 
             # Skip database calls if dynamic models can't be created yet
             if self.should_skip_dynamic_model_creation():
-                super().ready()
+                self._call_super_ready_once()
                 return
 
             try:
@@ -311,7 +333,7 @@ class CustomObjectsPluginConfig(PluginConfig):
             except (ProgrammingError, OperationalError):
                 # DB schema is incomplete (unapplied migrations). Skip dynamic
                 # model registration — it will happen after migrations finish.
-                super().ready()
+                self._call_super_ready_once()
                 return
 
         # Signal that ready() has fully completed.  get_models() checks this flag
@@ -325,7 +347,7 @@ class CustomObjectsPluginConfig(PluginConfig):
         from django.apps import apps as django_apps
         django_apps.clear_cache()
 
-        super().ready()
+        self._call_super_ready_once()
 
     def get_model(self, model_name, require_ready=True):
         self.apps.check_apps_ready()

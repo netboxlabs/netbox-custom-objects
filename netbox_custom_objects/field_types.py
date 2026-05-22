@@ -764,6 +764,11 @@ class ObjectFieldType(FieldType):
             on_delete=models.SET_NULL,
             related_name="+",
             db_column=f"{field_instance.name}_content_type_id",
+            # No DB-level FK to django_content_type — same reasoning as the
+            # polymorphic-MULTIOBJECT through (avoids the AccessExclusiveLock
+            # branching merge needs to release + lets test teardown TRUNCATE
+            # django_content_type without manual CASCADE).
+            db_constraint=False,
         )
         ct_field.contribute_to_class(model, ct_field_name)
         schema_editor.add_field(model, ct_field)
@@ -1461,10 +1466,10 @@ class MultiObjectFieldType(FieldType):
                 "app_label": APP_LABEL,
                 "apps": apps,
                 "managed": True,
-                "unique_together": (("source", "content_type", "object_id"),),
+                "unique_together": (("source", "content_type_id", "object_id"),),
                 "indexes": [
                     models.Index(
-                        fields=["content_type", "object_id"],
+                        fields=["content_type_id", "object_id"],
                         name=_safe_index_name(
                             f"co_{field_instance.custom_object_type_id}"
                             f"_{field_instance.name}_pgfk"
@@ -1474,6 +1479,13 @@ class MultiObjectFieldType(FieldType):
             },
         )
 
+        # content_type_id is a plain integer, not a ContentType FK.  An ORM FK
+        # would (a) install a PG trigger needing AccessExclusiveLock on
+        # django_content_type during CREATE TABLE → deadlocks netbox-branching
+        # merge (default-conn DDL vs branch-conn changed_object_type lookups),
+        # and (b) make Django's collector traverse the through when an
+        # ObjectType is deleted, querying a table revert has already dropped.
+        # The descriptor tolerates orphan content_type_ids in _get_objects.
         attrs = {
             "__module__": "netbox_custom_objects.models",
             "Meta": meta,
@@ -1484,12 +1496,7 @@ class MultiObjectFieldType(FieldType):
                 related_name="+",
                 db_column="source_id",
             ),
-            "content_type": models.ForeignKey(
-                "contenttypes.ContentType",
-                on_delete=models.CASCADE,
-                related_name="+",
-                db_column="content_type_id",
-            ),
+            "content_type_id": models.PositiveBigIntegerField(db_column="content_type_id"),
             "object_id": models.PositiveBigIntegerField(db_column="object_id"),
         }
 
@@ -1619,7 +1626,12 @@ class PolymorphicManyToManyManager:
         # Build a lookup map: (ct_id, obj_id) → object, preserving row order below.
         obj_map: dict[tuple, object] = {}
         for ct_id, obj_ids in by_ct.items():
-            ct = ContentType.objects.get_for_id(ct_id)
+            try:
+                ct = ContentType.objects.get_for_id(ct_id)
+            except ContentType.DoesNotExist:
+                # Orphan row — content_type_id has no DB FK (see
+                # get_polymorphic_through_model).  Skip.
+                continue
             model_class = ct.model_class()
             if model_class is None:
                 continue
@@ -1643,58 +1655,116 @@ class PolymorphicManyToManyManager:
     def exists(self):
         return self._get_through_model().objects.filter(source_id=self.instance.pk).exists()
 
+    def _fire_m2m_changed(self, action, pk_set):
+        """Emit ``m2m_changed`` so change-logging records the polymorphic write.
+
+        Polymorphic targets span multiple model classes, so pass the through
+        as ``model`` (NetBox's handler only checks action + pk_set truthiness).
+        Postchange data comes from ``CustomObject.serialize_object``.
+        """
+        if pk_set is not None and not pk_set:
+            return
+        through = self._get_through_model()
+        db = router.db_for_write(through, instance=self.instance)
+        m2m_changed.send(
+            sender=through,
+            instance=self.instance,
+            action=action,
+            reverse=False,
+            model=through,
+            pk_set=pk_set,
+            using=db,
+        )
+
     def add(self, *objs):
         through = self._get_through_model()
+        candidate_keys = []
         for obj in objs:
             ct = ContentType.objects.get_for_model(obj)
-            through.objects.get_or_create(
+            candidate_keys.append((ct.pk, obj.pk))
+        if not candidate_keys:
+            return
+        self._fire_m2m_changed('pre_add', {pk for _, pk in candidate_keys})
+        added = set()
+        for ct_pk, obj_pk in candidate_keys:
+            _, created = through.objects.get_or_create(
                 source_id=self.instance.pk,
-                content_type_id=ct.pk,
-                object_id=obj.pk,
+                content_type_id=ct_pk,
+                object_id=obj_pk,
             )
+            if created:
+                added.add(obj_pk)
+        if added:
+            self._fire_m2m_changed('post_add', added)
 
     def remove(self, *objs):
         through = self._get_through_model()
+        candidate_keys = []
         for obj in objs:
             ct = ContentType.objects.get_for_model(obj)
-            through.objects.filter(
+            candidate_keys.append((ct.pk, obj.pk))
+        if not candidate_keys:
+            return
+        self._fire_m2m_changed('pre_remove', {pk for _, pk in candidate_keys})
+        removed = set()
+        for ct_pk, obj_pk in candidate_keys:
+            n, _ = through.objects.filter(
                 source_id=self.instance.pk,
-                content_type_id=ct.pk,
-                object_id=obj.pk,
+                content_type_id=ct_pk,
+                object_id=obj_pk,
             ).delete()
+            if n:
+                removed.add(obj_pk)
+        if removed:
+            self._fire_m2m_changed('post_remove', removed)
 
     def clear(self):
-        self._get_through_model().objects.filter(source_id=self.instance.pk).delete()
+        through = self._get_through_model()
+        existing = set(
+            through.objects.filter(source_id=self.instance.pk)
+            .values_list('object_id', flat=True)
+        )
+        if not existing:
+            return
+        # Django's m2m_changed contract: pre_clear with pk_set=None.
+        self._fire_m2m_changed('pre_clear', None)
+        through.objects.filter(source_id=self.instance.pk).delete()
+        self._fire_m2m_changed('post_clear', existing)
 
     def set(self, objs, clear=False):
         if clear:
             self.clear()
             self.add(*objs)
-        else:
-            # Diff-based replacement: add new, remove old.  Matches Django's
-            # standard ManyRelatedManager.set(clear=False) behaviour.
-            objs = tuple(objs)
-            through = self._get_through_model()
-            existing = {
-                (ct_id, obj_id)
-                for ct_id, obj_id in through.objects.filter(source_id=self.instance.pk)
-                .values_list("content_type_id", "object_id")
-            }
-            # Pre-compute (ct_id, obj_pk) once per object to avoid duplicate CT lookups.
-            new_items = [
-                (ContentType.objects.get_for_model(obj).pk, obj.pk, obj) for obj in objs
-            ]
-            new_keys = {(ct_id, obj_pk) for ct_id, obj_pk, _ in new_items}
-            to_add = [obj for ct_id, obj_pk, obj in new_items if (ct_id, obj_pk) not in existing]
-            to_remove = existing - new_keys
-            if to_add:
-                self.add(*to_add)
+            return
+
+        # Diff-based replacement: add new, remove old.  Matches Django's
+        # standard ManyRelatedManager.set(clear=False) behaviour.
+        objs = tuple(objs)
+        through = self._get_through_model()
+        existing = {
+            (ct_id, obj_id)
+            for ct_id, obj_id in through.objects.filter(source_id=self.instance.pk)
+            .values_list("content_type_id", "object_id")
+        }
+        # Pre-compute (ct_id, obj_pk) once per object to avoid duplicate CT lookups.
+        new_items = [
+            (ContentType.objects.get_for_model(obj).pk, obj.pk, obj) for obj in objs
+        ]
+        new_keys = {(ct_id, obj_pk) for ct_id, obj_pk, _ in new_items}
+        to_add = [obj for ct_id, obj_pk, obj in new_items if (ct_id, obj_pk) not in existing]
+        to_remove = existing - new_keys
+        if to_add:
+            self.add(*to_add)
+        if to_remove:
+            remove_pks = {obj_id for _, obj_id in to_remove}
+            self._fire_m2m_changed('pre_remove', remove_pks)
             for ct_id, obj_id in to_remove:
                 through.objects.filter(
                     source_id=self.instance.pk,
                     content_type_id=ct_id,
                     object_id=obj_id,
                 ).delete()
+            self._fire_m2m_changed('post_remove', remove_pks)
 
     def __iter__(self):
         return iter(self.all())
