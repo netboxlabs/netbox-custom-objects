@@ -3,6 +3,7 @@
 Registered from ``__init__.ready()`` only when netbox-branching is installed.
 """
 
+
 def supports_branching_resolver(model):
     """Mark CustomObject M2M through models as branchable.
 
