@@ -852,6 +852,14 @@ class ObjectFieldType(FieldType):
 # fields, this is the first place to check.  The Django source to compare against
 # is django/db/models/fields/related_managers.py :: ManyRelatedManager.
 class CustomManyToManyManager(Manager):
+    """
+    Many-related manager for custom M2M fields.
+
+    m2m_changed deviation: ``post_clear`` fires with the cleared PKs instead
+    of ``None`` so netbox-branching's change-capture can log the removal.
+    Receivers that branch on ``pk_set is None`` will misread it as removes.
+    """
+
     def __init__(self, instance=None, field_name=None):
         super().__init__()
         self.instance = instance
@@ -988,13 +996,10 @@ class CustomManyToManyManager(Manager):
         )
         if not existing:
             return
-        # Django's contract: pre_clear with pk_set=None.
+        # pre_clear follows Django's contract; post_clear deliberately does
+        # not — see the class docstring.
         self._fire_m2m_changed('pre_clear', None)
         self.through.objects.filter(source_id=self.instance.pk).delete()
-        # Deliberate deviation from Django's contract (which fires post_clear
-        # with pk_set=None): netbox-branching's change-capture needs the actual
-        # cleared PKs to log the removal.  Receivers that follow Django's spec
-        # and assume pk_set is None on post_clear may treat this as a remove.
         self._fire_m2m_changed('post_clear', existing)
 
     def set(self, objs, clear=False):
@@ -1599,6 +1604,11 @@ class PolymorphicManyToManyManager:
     Manager for polymorphic many-to-many relationships.
     Handles objects from multiple model types via a through table with
     (source_id, content_type_id, object_id) columns.
+
+    m2m_changed deviation: ``post_clear`` fires with the cleared object PKs
+    instead of ``None`` so netbox-branching's change-capture can log the
+    removal.  Receivers that branch on ``pk_set is None`` will misread it as
+    removes.
     """
 
     def __init__(self, instance, field_name, through_model_name):
@@ -1726,13 +1736,10 @@ class PolymorphicManyToManyManager:
         )
         if not existing:
             return
-        # Django's m2m_changed contract: pre_clear with pk_set=None.
+        # pre_clear follows Django's contract; post_clear deliberately does
+        # not — see the class docstring.
         self._fire_m2m_changed('pre_clear', None)
         through.objects.filter(source_id=self.instance.pk).delete()
-        # Deliberate deviation from Django's contract (which fires post_clear
-        # with pk_set=None): netbox-branching's change-capture needs the actual
-        # cleared PKs to log the removal.  Receivers that follow Django's spec
-        # and assume pk_set is None on post_clear may treat this as a remove.
         self._fire_m2m_changed('post_clear', existing)
 
     def set(self, objs, clear=False):

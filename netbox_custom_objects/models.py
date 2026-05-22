@@ -111,10 +111,10 @@ _deferred_co_field_data: contextvars.ContextVar[dict | None] = contextvars.Conte
 # merge).  ``name`` lets ``deserialize_object`` map rows to through tables.
 POLY_M2M_SIDECAR_KEY = '__nco_poly_m2m_fields__'
 
-# Serializes the save/restore of TM.post_through_setup in get_model() across
-# threads — without this, concurrent generations (e.g. main + branch context)
-# can interleave their save/restore and run the original (unpatched) setup
-# inside the other call.
+# Serializes the save/restore of TM.post_through_setup in get_model().  The
+# patch needs to be in place during type() class creation, so the lock has to
+# span the whole generate_model() — that serialises unrelated COT generations.
+# Acceptable for now: the bottleneck is bounded to startup and squash merges.
 _taggable_manager_patch_lock = threading.Lock()
 
 
@@ -129,6 +129,8 @@ def _apply_poly_m2m_rows(schema_conn, through_table, co_pk, rows):
     into SQL.
     """
     alias = schema_conn.alias
+    inserted = 0
+    dropped = 0
     with schema_conn.cursor() as cursor:
         cursor.execute(
             f'DELETE FROM "{through_table}" WHERE source_id = %s', [co_pk],
@@ -137,6 +139,7 @@ def _apply_poly_m2m_rows(schema_conn, through_table, co_pk, rows):
             ct_label = row.get('content_type')
             obj_id = row.get('object_id')
             if not ct_label or obj_id is None:
+                dropped += 1
                 continue
             try:
                 app_label, model_name = ct_label.split('.', 1)
@@ -144,15 +147,25 @@ def _apply_poly_m2m_rows(schema_conn, through_table, co_pk, rows):
                     app_label=app_label, model=model_name,
                 )
             except (ValueError, ContentType.DoesNotExist) as exc:
-                logger.debug(
-                    'poly M2M replay: ct %r unresolved (%s)', ct_label, exc,
+                logger.warning(
+                    'poly M2M replay: ct %r unresolved (%s) for %s pk=%s',
+                    ct_label, exc, through_table, co_pk,
                 )
+                dropped += 1
                 continue
             cursor.execute(
                 f'INSERT INTO "{through_table}" '
                 '(source_id, content_type_id, object_id) VALUES (%s, %s, %s)',
                 [co_pk, ct.pk, obj_id],
             )
+            inserted += 1
+    # All rows dropped — flag it.  A CO with poly-M2M data should land with at
+    # least one row; zero inserts means the replay silently lost data.
+    if rows and inserted == 0 and dropped > 0:
+        logger.warning(
+            'poly M2M replay: all %d row(s) dropped for %s pk=%s — '
+            'CO will land with empty %s', dropped, through_table, co_pk, through_table,
+        )
 
 
 def _get_schema_connection():
@@ -414,8 +427,9 @@ def _rename_or_create_m2m_through(old_fi, new_fi, model, schema_editor, schema_c
             'Meta', (),
             {'db_table': old_through, 'app_label': APP_LABEL, 'managed': True},
         )
+        temp_name = f'_TempOldThrough_{old_through}'
         old_through_model = generate_model(
-            f'_TempOldThrough_{old_through}',
+            temp_name,
             (models.Model,),
             {
                 '__module__': 'netbox_custom_objects.models',
@@ -429,7 +443,12 @@ def _rename_or_create_m2m_through(old_fi, new_fi, model, schema_editor, schema_c
                 ),
             },
         )
-        schema_editor.alter_db_table(old_through_model, old_through, new_through)
+        try:
+            schema_editor.alter_db_table(old_through_model, old_through, new_through)
+        finally:
+            # generate_model() registered the temp class in apps.all_models;
+            # drop it so repeated renames don't leak entries.
+            apps.all_models.get(APP_LABEL, {}).pop(temp_name.lower(), None)
     else:
         # Old through table absent — create the new one from scratch
         ft = FIELD_TYPE_CLASS[new_fi.type]()
@@ -1048,10 +1067,7 @@ class CustomObjectType(NetBoxModel):
             from netbox_branching.contextvars import active_branch
         except ImportError:
             return None
-        try:
-            branch = active_branch.get()
-        except LookupError:
-            return None
+        branch = active_branch.get()
         return branch.id if branch is not None else None
 
     @classmethod
@@ -1429,6 +1445,10 @@ class CustomObjectType(NetBoxModel):
 
         branch_id = self._active_branch_id()
 
+        # Lock guards the cache check, not the miss → re-cache window.  Two
+        # threads can regenerate the same (cot_id, branch_id) in parallel;
+        # both produce equivalent classes, so the duplication is wasteful but
+        # not incorrect.  Worth it to avoid serialising all generation.
         with self._global_lock:
             if self.is_model_cached(self.id, branch_id) and not no_cache:
                 cached_timestamp = self.get_cached_timestamp(self.id, branch_id)
@@ -1722,6 +1742,9 @@ class CustomObjectType(NetBoxModel):
         # COT is going away — every branch's cached class is stale.
         self.clear_model_cache(self.id, all_branches=True)
 
+        # Regenerate against the current context so the model used for the
+        # DDL drop below reflects this branch's column set, not whatever
+        # stale class an earlier context cached.
         model = self.get_model()
         schema_conn = _get_schema_connection()
         in_branch = schema_conn is not connection
