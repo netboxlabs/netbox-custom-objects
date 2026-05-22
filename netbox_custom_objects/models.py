@@ -575,6 +575,12 @@ class CustomObject(
         each field's rename history via ObjectChange records.  Unknown keys
         are preserved as-is; on collision the non-None value wins (see
         ``_set_with_collision_preference``).
+
+        Only top-level keys are rewritten.  All current field-name carriers
+        (scalar columns, FK ``_id`` keys, M2M target lists, polymorphic
+        ``{content_type, object_id}`` payloads) appear at the top level, so
+        this is sufficient today.  A future field type that stores user-field
+        names as nested-dict keys would need a recursive walk.
         """
         if not data:
             return data
@@ -932,7 +938,6 @@ class CustomObjectType(NetBoxModel):
     # Each context owns its through class so the source FK is set once at
     # generation time and never mutated to follow another context's CO class.
     _through_model_cache = {}
-    _model_cache_locks = {}
     _global_lock = threading.RLock()
     _ON_DELETE_SQL = {
         ObjectFieldOnDeleteChoices.CASCADE: "CASCADE",
@@ -1068,7 +1073,6 @@ class CustomObjectType(NetBoxModel):
                     for key in list(cls._through_model_cache):
                         if key[0] == custom_object_type_id:
                             cls._through_model_cache.pop(key, None)
-                    cls._model_cache_locks.pop(custom_object_type_id, None)
                 else:
                     branch_id = cls._active_branch_id()
                     cls._model_cache.pop((custom_object_type_id, branch_id), None)
@@ -1076,7 +1080,6 @@ class CustomObjectType(NetBoxModel):
             else:
                 cls._model_cache.clear()
                 cls._through_model_cache.clear()
-                cls._model_cache_locks.clear()
 
         # Clear Django apps registry cache to ensure newly created models are recognized
         apps.get_models.cache_clear()
@@ -1436,6 +1439,11 @@ class CustomObjectType(NetBoxModel):
                     self.register_custom_object_search_index(model)
                     return model
                 else:
+                    # Only clear the current (cot_id, branch_id) entry.  Lazy
+                    # invalidation: each branch context detects its own stale
+                    # timestamp on next access — main's COT save propagates the
+                    # bumped cache_timestamp to branches via change-capture, so
+                    # they'll re-evaluate against their own row independently.
                     self.clear_model_cache(self.id)
 
         # Generate the model outside the lock to avoid holding it during expensive operations
@@ -1524,9 +1532,12 @@ class CustomObjectType(NetBoxModel):
                 # Else: branch class stays registered until main is generated —
                 # self-healing on the next main-context get_model() call.
 
-            self._after_model_generation(attrs, model)
-
+            # _after_model_generation registers through models in
+            # _through_model_cache and mutates apps.all_models; hold the lock so
+            # concurrent get_model() calls for the same (cot_id, branch_id) can't
+            # interleave their through-model registrations.
             with self._global_lock:
+                self._after_model_generation(attrs, model)
                 self._model_cache[(self.id, branch_id)] = (model, self.cache_timestamp)
 
         apps.clear_cache()
