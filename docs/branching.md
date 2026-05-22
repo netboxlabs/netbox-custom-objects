@@ -5,7 +5,7 @@ When using Custom Objects together with NetBox Branching, the following minimum 
 - NetBox >= 4.6.2
 - netbox-branching >= 1.1.0
 
-These requirements are only enforced when `netbox_branching` is present in `PLUGINS`. If you do not use branching, the standard compatibility matrix in `COMPATIBILITY.md` applies. A Django system check will fail at startup if the combination is misconfigured.
+If you do not use branching, the standard compatibility matrix in `COMPATIBILITY.md` applies.
 
 > [!NOTE]
 > We are working towards full support for Custom Objects on branches. Keep an eye on the GitHub issues for updates ahead of future releases.  
