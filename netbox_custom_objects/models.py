@@ -834,12 +834,16 @@ class CustomObject(
             if through._meta.db_table not in existing_tables:
                 hidden[name] = registry.pop(name)
                 continue
-            try:
-                source_field = through._meta.get_field('source')
-            except FieldDoesNotExist:
-                continue
-            source_field.remote_field.model = cls
-            source_field.__dict__.pop('related_model', None)
+            for fk_name in ('source', 'target'):
+                try:
+                    field = through._meta.get_field(fk_name)
+                except FieldDoesNotExist:
+                    continue
+                remote_meta = getattr(field.remote_field.model, '_meta', None)
+                if remote_meta is None or remote_meta.label != cls._meta.label:
+                    continue
+                field.remote_field.model = cls
+                field.__dict__.pop('related_model', None)
         try:
             return super().delete(*args, **kwargs)
         finally:

@@ -299,12 +299,19 @@ class CustomObjectsPluginConfig(PluginConfig):
             )
             register_branching_resolver(supports_branching_resolver)
             register_objectchange_field_migrator(objectchange_field_migrator)
-            # Optional dependency resolver — skipped silently on older
-            # netbox-branching that doesn't expose the hook yet.
+            # Subscribe to the squash dependency-graph signal so CO-specific
+            # edges (M2M targets, polymorphic-M2M sidecar) get added before
+            # topological ordering.  Skipped silently on older
+            # netbox-branching that doesn't expose the signal yet.
             try:
-                from netbox_branching.utilities import register_dependency_resolver
-                from .branching import co_polymorphic_dependency_resolver
-                register_dependency_resolver(co_polymorphic_dependency_resolver)
+                from netbox_branching.merge_strategies.squash import (
+                    squash_dependency_graph_built,
+                )
+                from .branching import add_custom_object_dependencies
+                squash_dependency_graph_built.connect(
+                    add_custom_object_dependencies,
+                    weak=False,
+                )
             except ImportError:
                 pass
         except ImportError:

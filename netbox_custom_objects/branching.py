@@ -3,7 +3,6 @@
 Registered from ``__init__.ready()`` only when netbox-branching is installed.
 """
 
-
 def supports_branching_resolver(model):
     """Mark CustomObject M2M through models as branchable.
 
@@ -37,28 +36,94 @@ def objectchange_field_migrator(model, data):
     return resolve(data)
 
 
-def co_polymorphic_dependency_resolver(model, data, changed_objects):
-    """Tell squash that a CO CREATE depends on its polymorphic-M2M field CREATEs.
+def _collect_co_refs(model_class, data):
+    """Return ``(app.model, pk)`` refs from CO-specific shapes in *data*.
 
-    The polymorphic M2M lives on a ``PolymorphicM2MDescriptor`` (not a Django
-    field), so squash's default FK/GFK introspection sees no edge between the
-    CO's postchange_data and the ``CustomObjectTypeField`` rows.  Without it
-    squash may apply the CO before the field — the through table doesn't
-    exist yet.  The sidecar carries field PKs so we don't need to look them
-    up in main (they aren't there yet during a branch-only merge).
+    Covers:
+      * Local M2M target lists (squash's default ``_get_fk_references`` only
+        walks FK / GFK fields, so M2M targets — including self-referential
+        ones — are invisible to it).
+      * Every ``CustomObjectTypeField`` on the CO's model.  A CO INSERT needs
+        the field's column (scalar) or through table (M2M) to exist first;
+        without these edges squash may apply the CO CREATE before the field
+        CREATEs.  Pulled from the model class's ``_field_objects`` plus the
+        polymorphic ``POLY_M2M_SIDECAR_KEY`` (which carries field PKs in the
+        ObjectChange payload even when ``_field_objects`` isn't available).
     """
     from .constants import APP_LABEL
     from .models import POLY_M2M_SIDECAR_KEY
 
-    meta = getattr(model, '_meta', None)
-    if meta is None or meta.app_label != APP_LABEL:
-        return ()
+    refs = set()
+    if not data:
+        return refs
+
+    for field in model_class._meta.local_many_to_many:
+        values = data.get(field.name)
+        if not values:
+            continue
+        rel_meta = field.related_model._meta
+        label = f'{rel_meta.app_label}.{rel_meta.model_name}'
+        for pk in values:
+            if isinstance(pk, int):
+                refs.add((label, pk))
+
+    field_label = f'{APP_LABEL}.customobjecttypefield'
+    for fo in (getattr(model_class, '_field_objects', None) or {}).values():
+        cotf = fo.get('field') if isinstance(fo, dict) else None
+        if cotf is not None and getattr(cotf, 'pk', None) is not None:
+            refs.add((field_label, cotf.pk))
+
     entries = data.get(POLY_M2M_SIDECAR_KEY) or ()
-    if not entries:
-        return ()
-    label = f'{APP_LABEL}.customobjecttypefield'
-    return [
-        (label, entry['pk'])
-        for entry in entries
-        if isinstance(entry, dict) and entry.get('pk') is not None
-    ]
+    for entry in entries:
+        if isinstance(entry, dict) and entry.get('pk') is not None:
+            refs.add((field_label, entry['pk']))
+
+    return refs
+
+
+def add_custom_object_dependencies(sender, collapsed_changes, **kwargs):
+    """Extend squash's dependency graph with CO-specific edges.
+
+    Walks every collapsed change for a CO model and mirrors squash's four
+    edge-direction rules (UPDATE→DELETE, UPDATE→CREATE, CREATE→CREATE,
+    DELETE→DELETE) using ``_collect_co_refs`` instead of the FK/GFK walker.
+    """
+    from .constants import APP_LABEL
+
+    deletes_map = {}
+    updates_map = {}
+    creates_map = {}
+    for key, cc in collapsed_changes.items():
+        action = cc.final_action.value if cc.final_action else None
+        if action == 'create':
+            creates_map[key] = cc
+        elif action == 'update':
+            updates_map[key] = cc
+        elif action == 'delete':
+            deletes_map[key] = cc
+
+    for cc in collapsed_changes.values():
+        meta = getattr(cc.model_class, '_meta', None)
+        if meta is None or meta.app_label != APP_LABEL:
+            continue
+        action = cc.final_action.value if cc.final_action else None
+
+        if action == 'update':
+            for ref in _collect_co_refs(cc.model_class, cc.prechange_data):
+                if ref in deletes_map:
+                    deletes_map[ref].depends_on.add(cc.key)
+                    cc.depended_by.add(ref)
+            for ref in _collect_co_refs(cc.model_class, cc.postchange_data):
+                if ref in creates_map:
+                    cc.depends_on.add(ref)
+                    creates_map[ref].depended_by.add(cc.key)
+        elif action == 'create':
+            for ref in _collect_co_refs(cc.model_class, cc.postchange_data):
+                if ref != cc.key and ref in creates_map:
+                    cc.depends_on.add(ref)
+                    creates_map[ref].depended_by.add(cc.key)
+        elif action == 'delete':
+            for ref in _collect_co_refs(cc.model_class, cc.prechange_data):
+                if ref != cc.key and ref in deletes_map:
+                    deletes_map[ref].depends_on.add(cc.key)
+                    cc.depended_by.add(ref)
