@@ -48,13 +48,34 @@ def _migration_finished(sender, **kwargs):
     _migrations_checked = None
 
 
-def _connect_deferred_data_reset_signals():
-    """Reset ``_deferred_co_field_data`` at every merge/sync/revert boundary.
+# Guards the netbox-branching hook setup against duplicate registration if
+# ``ready()`` runs more than once (e.g. test isolation paths that reset the
+# app registry).  Covers signal connects and the netbox-branching
+# ``register_*`` functions, which do not all dedupe internally.
+_branching_hooks_registered = False
 
-    Connect both pre- and post- so the reset runs even when the operation
-    raises (post-signals only fire on success).  ``weak=False`` keeps the
-    receiver alive past the end of ``ready()``.
+
+def _reset_deferred_co_field_data(sender, **kwargs):
+    """Module-level receiver so Django's ``Signal.connect`` dedupes it across
+    repeat ``ready()`` invocations (a closure would have a fresh id each call).
     """
+    from netbox_custom_objects.models import _deferred_co_field_data
+    _deferred_co_field_data.set(None)
+
+
+def _register_branching_hooks_once():
+    """Register netbox-branching integration hooks at most once per process.
+
+    Wraps the branching-resolver, objectchange-field-migrator, deferred-data
+    reset receivers, and squash-dependency-graph receiver.  Connect both pre-
+    and post- merge/sync/revert so the deferred-data reset runs even when the
+    operation raises (post-signals only fire on success).  ``weak=False`` keeps
+    the receivers alive past the end of ``ready()``.
+    """
+    global _branching_hooks_registered
+    if _branching_hooks_registered:
+        return
+
     try:
         from netbox_branching.signals import (
             pre_merge, post_merge,
@@ -64,12 +85,39 @@ def _connect_deferred_data_reset_signals():
     except ImportError:
         return
 
-    def _reset(sender, **kwargs):
-        from netbox_custom_objects.models import _deferred_co_field_data
-        _deferred_co_field_data.set(None)
-
     for sig in (pre_merge, post_merge, pre_sync, post_sync, pre_revert, post_revert):
-        sig.connect(_reset, weak=False)
+        sig.connect(_reset_deferred_co_field_data, weak=False)
+
+    try:
+        from netbox_branching.utilities import (
+            register_branching_resolver,
+            register_objectchange_field_migrator,
+        )
+        from .branching import (
+            objectchange_field_migrator,
+            supports_branching_resolver,
+        )
+        register_branching_resolver(supports_branching_resolver)
+        register_objectchange_field_migrator(objectchange_field_migrator)
+        # Subscribe to the squash dependency-graph signal so CO-specific
+        # edges (M2M targets, polymorphic-M2M sidecar) get added before
+        # topological ordering.  Skipped silently on older netbox-branching
+        # that doesn't expose the signal yet.
+        try:
+            from netbox_branching.merge_strategies.squash import (
+                squash_dependency_graph_built,
+            )
+            from .branching import add_custom_object_dependencies
+            squash_dependency_graph_built.connect(
+                add_custom_object_dependencies,
+                weak=False,
+            )
+        except ImportError:
+            pass
+    except ImportError:
+        pass
+
+    _branching_hooks_registered = True
 
 
 # Module-level flag so the heal runs at most once per process invocation even
@@ -279,41 +327,12 @@ class CustomObjectsPluginConfig(PluginConfig):
         # Patch ObjectSelectorView to support dynamically-generated custom object models
         _patch_object_selector_view()
 
-        # Clear deferred CO data at every merge/sync/revert boundary so
-        # leftover entries from a failed op don't leak forward.
-        _connect_deferred_data_reset_signals()
-
-        # Register netbox-branching hooks — branchable resolver for our through
-        # models and ObjectChange field-name migrator for runtime renames.
-        # Guarded so the plugin still works without netbox-branching.
-        try:
-            from netbox_branching.utilities import (
-                register_branching_resolver,
-                register_objectchange_field_migrator,
-            )
-            from .branching import (
-                objectchange_field_migrator,
-                supports_branching_resolver,
-            )
-            register_branching_resolver(supports_branching_resolver)
-            register_objectchange_field_migrator(objectchange_field_migrator)
-            # Subscribe to the squash dependency-graph signal so CO-specific
-            # edges (M2M targets, polymorphic-M2M sidecar) get added before
-            # topological ordering.  Skipped silently on older
-            # netbox-branching that doesn't expose the signal yet.
-            try:
-                from netbox_branching.merge_strategies.squash import (
-                    squash_dependency_graph_built,
-                )
-                from .branching import add_custom_object_dependencies
-                squash_dependency_graph_built.connect(
-                    add_custom_object_dependencies,
-                    weak=False,
-                )
-            except ImportError:
-                pass
-        except ImportError:
-            pass
+        # Register netbox-branching integration hooks (deferred-data reset
+        # receivers, branchable resolver, ObjectChange field-name migrator,
+        # squash dependency-graph receiver).  Guarded so the plugin still
+        # works without netbox-branching, and so repeat ready() invocations
+        # don't accumulate duplicate handlers.
+        _register_branching_hooks_once()
 
         # Suppress warnings about database calls during app initialization
         with warnings.catch_warnings():

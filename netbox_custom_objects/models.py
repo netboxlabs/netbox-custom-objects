@@ -259,12 +259,11 @@ def _apply_deferred_co_field(field_instance):
                 f'UPDATE "{table_name}" SET "{col_name}" = %s WHERE id = %s',
                 [value, co_pk],
             )
-
-    # Pop consumed keys and prune empty entries so the ContextVar doesn't
-    # accumulate stale state across retries.
-    for entry in per_table.values():
-        for k in candidate_keys:
-            entry['data'].pop(k, None)
+            # Pop consumed keys immediately so a mid-loop failure leaves
+            # un-applied rows intact for retry but doesn't re-apply
+            # rows that already succeeded.
+            for k in candidate_keys:
+                data.pop(k, None)
 
     exhausted = [pk for pk, entry in per_table.items() if not entry['data']]
     for pk in exhausted:
@@ -322,12 +321,18 @@ def _schema_remove_field(fi, model, schema_editor, schema_conn=None, existing_ta
                 'Meta', (),
                 {'db_table': through_table, 'app_label': APP_LABEL, 'managed': True},
             )
+            temp_name = f'_TempThrough_{through_table}'
             through_model = type(
-                f'_TempThrough_{through_table}',
+                temp_name,
                 (models.Model,),
                 {'Meta': through_meta, '__module__': 'netbox_custom_objects.models'},
             )
-            schema_editor.delete_model(through_model)
+            try:
+                schema_editor.delete_model(through_model)
+            finally:
+                # ModelBase.__new__ registered the temp class in apps.all_models;
+                # drop it so repeated remove/re-add cycles don't leak entries.
+                apps.all_models.get(APP_LABEL, {}).pop(temp_name.lower(), None)
         # M2M has no column on the parent table — nothing further to remove.
         return
 
