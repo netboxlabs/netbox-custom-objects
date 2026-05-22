@@ -111,11 +111,22 @@ _deferred_co_field_data: contextvars.ContextVar[dict | None] = contextvars.Conte
 # merge).  ``name`` lets ``deserialize_object`` map rows to through tables.
 POLY_M2M_SIDECAR_KEY = '__nco_poly_m2m_fields__'
 
+# Serializes the save/restore of TM.post_through_setup in get_model() across
+# threads — without this, concurrent generations (e.g. main + branch context)
+# can interleave their save/restore and run the original (unpatched) setup
+# inside the other call.
+_taggable_manager_patch_lock = threading.Lock()
+
 
 def _apply_poly_m2m_rows(schema_conn, through_table, co_pk, rows):
     """Insert polymorphic M2M *rows* into *through_table* on *schema_conn*,
     set-style (clear existing for *co_pk* first).  ContentType resolved by
     natural key, also via *schema_conn*.
+
+    *through_table* originates from ``CustomObjectTypeField.through_table_name``,
+    which is derived from validated identifiers (the COT id and a field name
+    matching ``^[a-z0-9]+(_[a-z0-9]+)*$``) — safe to interpolate directly
+    into SQL.
     """
     alias = schema_conn.alias
     with schema_conn.cursor() as cursor:
@@ -826,7 +837,9 @@ class CustomObject(
         cls = type(self)
         prefix = f'through_{cls._meta.db_table}'
         registry = apps.all_models.get(APP_LABEL, {})
-        existing_tables = connection.introspection.table_names()
+        # Branch contexts may have through tables only in the branch schema, so
+        # introspect via the active schema's connection, not the main one.
+        existing_tables = _get_schema_connection().introspection.table_names()
         hidden = {}
         for name, through in list(registry.items()):
             if not name.startswith(prefix):
@@ -1470,24 +1483,27 @@ class CustomObjectType(NetBoxModel):
         # Wrap the existing post_through_setup method to handle ValueError exceptions
         from taggit.managers import TaggableManager as TM
 
-        original_post_through_setup = TM.post_through_setup
+        # TM.post_through_setup is class-level state; serialize concurrent
+        # generations so save/restore can't interleave across threads.
+        with _taggable_manager_patch_lock:
+            original_post_through_setup = TM.post_through_setup
 
-        def wrapped_post_through_setup(self, cls):
+            def wrapped_post_through_setup(self, cls):
+                try:
+                    return original_post_through_setup(self, cls)
+                except ValueError:
+                    pass
+
+            TM.post_through_setup = wrapped_post_through_setup
+
             try:
-                return original_post_through_setup(self, cls)
-            except ValueError:
-                pass
-
-        TM.post_through_setup = wrapped_post_through_setup
-
-        try:
-            model = generate_model(
-                str(model_name),
-                (CustomObject, models.Model),
-                attrs,
-            )
-        finally:
-            TM.post_through_setup = original_post_through_setup
+                model = generate_model(
+                    str(model_name),
+                    (CustomObject, models.Model),
+                    attrs,
+                )
+            finally:
+                TM.post_through_setup = original_post_through_setup
 
         # Suppress clear_cache() through the _model_cache write so a re-entrant
         # get_model() inside register_model → clear_cache → get_models() can hit
@@ -2158,6 +2174,13 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        # Two distinct "original" mechanisms exist on this model:
+        #   * ``_original_name`` / ``_original_type`` / ``_original_*`` (here) are
+        #     scalar snapshots set on every instance (including freshly constructed
+        #     ones) for cheap before/after comparisons in save().
+        #   * ``_original`` (set in ``from_db``) is a full instance clone from the
+        #     DB row, used when more than a single attribute is needed; only
+        #     DB-loaded objects have it — see ``original`` property.
         self._name = self.__dict__.get("name")
         self._original_name = self.name
         self._original_type = self.type
@@ -2312,7 +2335,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             )
 
         # Check if uniqueness constraint can be applied when changing from non-unique to unique.
-        # Skip when _original is absent (e.g. during deserialization in branch merge/revert).
+        # _original is set by from_db only; deserialized objects (branch merge/revert)
+        # never load from DB and won't have it — guard before touching self.original.
         if (
             self.pk
             and self.unique
@@ -2933,7 +2957,6 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     @property
     def original(self):
         return self._original
-        # return self.__class__(**self._loaded_values)
 
     @property
     def through_table_name(self):
@@ -3109,7 +3132,10 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             updated_model = self.custom_object_type.get_model(no_cache=True)
             self.custom_object_type.register_custom_object_search_index(updated_model)
 
-        # Reindex all objects of this type if search indexing was affected
+        # Reindex all objects of this type if search indexing was affected.
+        # self.original (backed by _original) is only set by from_db; the
+        # `not is_new` branch implies _state.adding is False, which implies
+        # the row came from the DB, so _original is guaranteed to exist.
         if is_new:
             needs_reindex = self.search_weight > 0
         else:

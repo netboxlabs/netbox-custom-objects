@@ -96,12 +96,6 @@ def _heal_mixin_columns(sender, **kwargs):
     if any(cmd in sys.argv for cmd in ("makemigrations", "collectstatic")):
         return
 
-    # Set the flag *before* running so that subsequent post_migrate firings
-    # (one per installed app) are no-ops even if the first attempt raises.
-    # A failure here will not be retried in the same process; operators can
-    # run 'manage.py upgrade_custom_objects' manually if needed.
-    _heal_ran = True
-
     try:
         from netbox_custom_objects.mixin_migration import heal_all_cots  # noqa: PLC0415
         heal_all_cots(verbosity=kwargs.get("verbosity", 1))
@@ -110,6 +104,13 @@ def _heal_mixin_columns(sender, **kwargs):
         logging.getLogger(__name__).exception(
             "upgrade_custom_objects: unexpected error during mixin drift check"
         )
+        # Leave _heal_ran False so a subsequent post_migrate firing (or a
+        # manual 'manage.py upgrade_custom_objects') gets another attempt.
+        return
+
+    # Only mark complete on success so a transient failure can be retried by
+    # the next post_migrate firing in this process.
+    _heal_ran = True
 
 
 def _patch_object_selector_view():

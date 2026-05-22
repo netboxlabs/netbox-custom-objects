@@ -1037,10 +1037,6 @@ class CustomManyToManyDescriptor(ManyToManyDescriptor):
 
         return CustomManyToManyManager(instance=instance, field_name=self.field.name)
 
-    def get_prefetch_queryset(self, instances, queryset=None):
-        manager = CustomManyToManyManager(instances[0], self.field.name)
-        return manager.get_prefetch_queryset(instances, queryset)
-
     def is_cached(self, instance):
         """
         Returns True if the field's value has been cached for the given instance.
