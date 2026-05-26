@@ -1725,43 +1725,47 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         # Add this type to visited set
         visited.add(custom_object_type.id)
 
-        # Check all *non-polymorphic* object and multiobject fields in this COT.
-        #
-        # KNOWN LIMITATION: polymorphic fields (is_polymorphic=True) store their
-        # allowed target types on the related_object_types M2M, not on the
-        # related_object_type FK.  This DFS therefore does not traverse edges
-        # introduced by polymorphic fields.  A cycle that passes entirely through
-        # polymorphic legs (e.g. A →(poly) B →(poly) A) will go undetected.
-        #
-        # Fixing this requires also iterating field.related_object_types.filter(
-        # app_label=APP_LABEL) and recursing into each.  The check_polymorphic_recursion
-        # signal already guards the direct A→B assignment, but cannot see multi-hop
-        # cycles that depend on polymorphic fields already on intermediate types.
-        #
-        # TODO: extend this DFS to also traverse polymorphic related_object_types
-        # so that multi-hop polymorphic cycles are detected at assignment time.
+        # Track ContentTypes already enqueued for recursion to avoid redundant work.
         related_objects_checked = set()
+
+        # Non-polymorphic object/multiobject fields: target stored on related_object_type FK.
         for field in custom_object_type.fields.filter(
             type__in=[
                 CustomFieldTypeChoices.TYPE_OBJECT,
                 CustomFieldTypeChoices.TYPE_MULTIOBJECT,
             ],
+            is_polymorphic=False,
             related_object_type__isnull=False,
             related_object_type__app_label=APP_LABEL
         ):
             if field.related_object_type in related_objects_checked:
                 continue
             related_objects_checked.add(field.related_object_type)
-
-            # Get the related custom object type directly from the object_type relationship
             try:
                 next_custom_object_type = CustomObjectType.objects.get(object_type=field.related_object_type)
             except CustomObjectType.DoesNotExist:
                 continue
-
-            # Recursively check this dependency
             if self._has_circular_reference(next_custom_object_type, visited):
                 return True
+
+        # Polymorphic object/multiobject fields: targets stored on related_object_types M2M.
+        for poly_field in custom_object_type.fields.filter(
+            type__in=[
+                CustomFieldTypeChoices.TYPE_OBJECT,
+                CustomFieldTypeChoices.TYPE_MULTIOBJECT,
+            ],
+            is_polymorphic=True,
+        ):
+            for ot in poly_field.related_object_types.filter(app_label=APP_LABEL):
+                if ot in related_objects_checked:
+                    continue
+                related_objects_checked.add(ot)
+                try:
+                    next_custom_object_type = CustomObjectType.objects.get(object_type=ot)
+                except CustomObjectType.DoesNotExist:
+                    continue
+                if self._has_circular_reference(next_custom_object_type, visited):
+                    return True
 
         return False
 
