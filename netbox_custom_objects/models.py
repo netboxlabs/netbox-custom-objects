@@ -837,6 +837,7 @@ class CustomObjectType(NetBoxModel):
                     continue
                 fk_field.remote_field.model = model
                 fk_field.related_model = model
+                fk_field.to = model
                 fk_field.__dict__.pop('path_infos', None)
                 fk_field.__dict__.pop('reverse_path_infos', None)
 
