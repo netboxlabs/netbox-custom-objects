@@ -1113,6 +1113,23 @@ class PrimaryFieldChangeTestCase(FieldTypeTestCase):
         refreshed_target = new_target_model.objects.get(pk=target_instance.pk)
         self.assertIn("T-001", str(refreshed_target))
 
+    def test_str_post_delete_no_primary_field_does_not_contain_none(self):
+        """Regression #558: str() on a post-delete instance (pk=None, no primary
+        field value) must return the COT display name, not '<type> None'."""
+        cot = self.create_custom_object_type(
+            name="DeleteStrTest", slug="delete-str-test",
+            verbose_name_plural="Delete Str Tests",
+        )
+        # No primary field — falls through to the pk fallback path in __str__.
+        model = cot.get_model()
+        instance = model.objects.create()
+
+        instance.delete()  # sets instance.pk = None
+
+        result = str(instance)
+        self.assertNotIn("None", result)
+        self.assertEqual(result, cot.display_name)
+
 
 # ---------------------------------------------------------------------------
 # Context field — ts-parent-field widget attribute on get_form_field()
