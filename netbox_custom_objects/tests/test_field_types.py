@@ -534,6 +534,40 @@ class SelectFieldTypeTestCase(FieldTypeTestCase):
 
         self.assertEqual(instance.status, "choice2")
 
+    def test_select_field_display_value_returns_label(self):
+        """get_display_value() must return the human-readable label, not the raw key."""
+        from netbox_custom_objects.field_types import SelectFieldType
+        self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="status",
+            label="Status",
+            type="select",
+            choice_set=self.choice_set,
+        )
+        model = self.custom_object_type.get_model(no_cache=True)
+        instance = model.objects.create(name="Test", status="choice1")
+        field_type = SelectFieldType()
+        self.assertEqual(field_type.get_display_value(instance, "status"), "Choice 1")
+
+    def test_select_primary_field_str_uses_label(self):
+        """When a Selection field is the primary field, __str__ must show the label."""
+        cot = self.create_custom_object_type(
+            name="StrSelectObject",
+            slug="str-select-object",
+            verbose_name_plural="StrSelectObjects",
+        )
+        self.create_custom_object_type_field(
+            cot,
+            name="status",
+            label="Status",
+            type="select",
+            choice_set=self.choice_set,
+            primary=True,
+        )
+        model = cot.get_model()
+        instance = model.objects.create(status="choice2")
+        self.assertEqual(str(instance), "Choice 2")
+
 
 class MultiSelectFieldTypeTestCase(FieldTypeTestCase):
     """Test cases for multiselect field type."""
@@ -589,6 +623,24 @@ class MultiSelectFieldTypeTestCase(FieldTypeTestCase):
         instance = model.objects.create(name="Test", tags=["choice1", "choice3"])
 
         self.assertEqual(instance.tags, ["choice1", "choice3"])
+
+    def test_multiselect_field_display_value_returns_labels(self):
+        """get_display_value() must return comma-joined human-readable labels, not raw keys."""
+        from netbox_custom_objects.field_types import MultiSelectFieldType
+        self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="tags",
+            label="Tags",
+            type="multiselect",
+            choice_set=self.choice_set,
+        )
+        model = self.custom_object_type.get_model(no_cache=True)
+        instance = model.objects.create(name="Test", tags=["choice1", "choice3"])
+        field_type = MultiSelectFieldType()
+        self.assertEqual(
+            field_type.get_display_value(instance, "tags"),
+            "Choice 1, Choice 3",
+        )
 
 
 class ObjectFieldTypeTestCase(FieldTypeTestCase):
