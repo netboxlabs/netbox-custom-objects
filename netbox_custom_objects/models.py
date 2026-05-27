@@ -816,6 +816,31 @@ class CustomObjectType(NetBoxModel):
                 target_field.__dict__.pop('path_infos', None)
                 target_field.__dict__.pop('reverse_path_infos', None)
 
+            # Same staleness problem exists for direct FK fields (TYPE_OBJECT):
+            # when this COT is regenerated, any cached model for another COT that
+            # holds a LazyForeignKey pointing here still references the old class.
+            # Walk inbound non-polymorphic object fields and patch them too.
+            for inbound_fk_field in CustomObjectTypeField.objects.filter(
+                related_object_type=self.object_type,
+                type=CustomFieldTypeChoices.TYPE_OBJECT,
+                is_polymorphic=False,
+            ).iterator():
+                owner_model = CustomObjectType.get_cached_model(inbound_fk_field.custom_object_type_id)
+                if owner_model is None:
+                    continue
+                # Use local_fields list — avoids _relation_tree → get_models() recursion.
+                fk_field = next(
+                    (f for f in owner_model._meta.local_fields if f.name == inbound_fk_field.name),
+                    None,
+                )
+                if fk_field is None:
+                    continue
+                fk_field.remote_field.model = model
+                fk_field.related_model = model
+                fk_field.to = model
+                fk_field.__dict__.pop('path_infos', None)
+                fk_field.__dict__.pop('reverse_path_infos', None)
+
             # Only cache fully-generated models.  Models generated with
             # skip_object_fields=True omit FK fields to other COTs; caching them
             # would permanently hide those fields if a dependent COT triggers
@@ -1718,9 +1743,14 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         Returns:
             bool: True if a circular reference is detected, False otherwise
         """
-        # If we've already visited this type, we have a cycle
+        # If we've already visited this node, it's a genuine cycle only when the
+        # node is the origin COT (the one that owns the field being validated).
+        # Re-encountering a non-origin node that was already explored in a
+        # different branch of the DFS is NOT a cycle — returning True there
+        # would cause a false positive when an intermediate COT has a
+        # self-referencing field (e.g. a multiobject pointing back to itself).
         if custom_object_type.id in visited:
-            return True
+            return custom_object_type.id == self.custom_object_type.id
 
         # Add this type to visited set
         visited.add(custom_object_type.id)

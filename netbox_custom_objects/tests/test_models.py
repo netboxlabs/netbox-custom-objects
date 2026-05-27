@@ -1846,3 +1846,214 @@ class LazyForeignKeySaveResolutionTestCase(CustomObjectsTestCase, TestCase):
         )
         self.assertEqual(field.name, "target_ref")
         self.assertEqual(field.type, "object")
+
+
+class CycleDetectionFalsePositiveRegressionTest(CustomObjectsTestCase, TestCase):
+    """Regression test for the false-positive in _has_circular_reference.
+
+    When an intermediate COT has a self-referencing field (e.g. a multiobject
+    that points back to itself), the DFS can re-encounter that COT's ID in the
+    ``visited`` set.  Before the fix, any node already in ``visited`` caused an
+    immediate ``return True``, so validating a perfectly legal
+    EC → Control FK raised "Circular reference detected" even though there is
+    no actual cycle.
+
+    After the fix, ``return custom_object_type.id == self.custom_object_type.id``
+    only signals a real cycle when the DFS finds its way back to the ORIGIN node.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # COT Control: has a self-referencing multiobject field
+        self.cot_control = CustomObjectType.objects.create(
+            name="ControlCycle", slug="control-cycle",
+            verbose_name_plural="ControlCycles",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot_control,
+            name="name", type="text", primary=True, required=True,
+        )
+        # Self-referencing M:N field
+        self.cot_control.get_model()
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot_control,
+            name="refs", type="multiobject",
+            related_object_type=self.cot_control.object_type,
+        )
+
+        # COT EC: will hold the FK to Control
+        self.cot_ec = CustomObjectType.objects.create(
+            name="ECCycle", slug="ec-cycle",
+            verbose_name_plural="ECCycles",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot_ec,
+            name="name", type="text", primary=True, required=True,
+        )
+        self.cot_ec.get_model()
+
+    def test_fk_into_self_referencing_cot_is_not_false_positive(self):
+        """A non-circular FK from EC to Control must not raise ValidationError.
+
+        Control has a self-referencing M:N field.  Validating a new EC→Control
+        FK field must NOT report "Circular reference detected" — that would be a
+        false positive.
+        """
+        # Build an unsaved field (EC → Control) and invoke the recursion check
+        # directly.  _check_recursion() is the method called from clean().
+        field = CustomObjectTypeField(
+            custom_object_type=self.cot_ec,
+            name="control_ref",
+            type="object",
+            related_object_type=self.cot_control.object_type,
+        )
+        # Must NOT raise ValidationError ("Circular reference detected")
+        try:
+            field._check_recursion()
+        except ValidationError as exc:
+            self.fail(
+                f"_check_recursion() raised ValidationError for a valid EC→Control FK "
+                f"(Control has a self-referencing M:N field). "
+                f"This is a false positive. Error: {exc}"
+            )
+
+    def test_genuine_cycle_is_still_detected(self):
+        """A genuine A → B → A cycle must still be detected."""
+        # Create COT Alpha and Beta
+        cot_alpha = CustomObjectType.objects.create(
+            name="AlphaCycle", slug="alpha-cycle",
+            verbose_name_plural="AlphaCycles",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cot_alpha,
+            name="name", type="text", primary=True, required=True,
+        )
+        cot_alpha.get_model()
+
+        cot_beta = CustomObjectType.objects.create(
+            name="BetaCycle", slug="beta-cycle",
+            verbose_name_plural="BetaCycles",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cot_beta,
+            name="name", type="text", primary=True, required=True,
+        )
+        cot_beta.get_model()
+
+        # Beta → Alpha (legitimate so far)
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cot_beta,
+            name="alpha_ref",
+            type="object",
+            related_object_type=cot_alpha.object_type,
+        )
+
+        # Alpha → Beta: this creates a genuine cycle A → B → A
+        field = CustomObjectTypeField(
+            custom_object_type=cot_alpha,
+            name="beta_ref",
+            type="object",
+            related_object_type=cot_beta.object_type,
+        )
+        with self.assertRaises(ValidationError):
+            field._check_recursion()
+
+
+class StaleFKReferenceRegressionTest(CustomObjectsTestCase, TestCase):
+    """Regression test for issue #384: stale FK reference after COT model regeneration.
+
+    When COT A's model is regenerated (cache miss, e.g. after a schema change
+    on another worker bumps cache_timestamp), any other COT model (B) that has a
+    FK field pointing to A must have that FK field's ``remote_field.model``
+    updated to the new A class.
+
+    Without the fix, B's FK field keeps referencing the old A class object.
+    Assigning a new-class A instance to B's FK field then raises::
+
+        ValueError: Cannot assign "<TableNModel: ...>": "TableMModel.ref_a" must
+        be a "TableNModel" instance.
+
+    (Both class names are identical but they are different Python objects.)
+    """
+
+    def setUp(self):
+        super().setUp()
+        # COT A (target of the FK)
+        self.cot_a = CustomObjectType.objects.create(
+            name="FkTargetA", slug="fk-target-a",
+            verbose_name_plural="FkTargetAs",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot_a,
+            name="name", type="text", primary=True, required=True,
+        )
+
+        # COT B (source: has a direct FK to COT A)
+        self.cot_b = CustomObjectType.objects.create(
+            name="FkSourceB", slug="fk-source-b",
+            verbose_name_plural="FkSourceBs",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot_b,
+            name="name", type="text", primary=True, required=True,
+        )
+
+        # Generate A first so its ObjectType exists, then create the FK field on B
+        self.model_a_v1 = self.cot_a.get_model()
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot_b,
+            name="ref_a",
+            label="Ref A",
+            type="object",
+            related_object_type=self.cot_a.object_type,
+        )
+        # Generate B's model; this resolves the LazyForeignKey to model_a_v1
+        self.cot_b.get_model()
+        # Fetch fresh from cache to get the fully-resolved model
+        self.model_b = CustomObjectType.get_cached_model(self.cot_b.id)
+
+    def _get_fk_field(self, model, field_name):
+        """Return the FK field from model._meta.local_fields by name (avoids _relation_tree)."""
+        return next(
+            (f for f in model._meta.local_fields if f.name == field_name),
+            None,
+        )
+
+    def test_b_fk_resolves_to_a_v1_before_regeneration(self):
+        """Sanity: B's FK field must already reference A's model after initial generation."""
+        fk = self._get_fk_field(self.model_b, 'ref_a')
+        self.assertIsNotNone(fk, "B must have an 'ref_a' FK field")
+        # remote_field.model must be the class (not a string) after generation
+        self.assertNotIsInstance(
+            fk.remote_field.model, str,
+            "FK must be resolved to a class, not a string reference",
+        )
+        self.assertIs(
+            fk.remote_field.model, self.model_a_v1,
+            "B's FK must initially point to A's first model class",
+        )
+
+    def test_b_fk_is_patched_after_a_regeneration(self):
+        """After A is regenerated, B's FK field must reference the new A class.
+
+        This is the core regression for issue #384: the isinstance check in
+        ForeignKey.__set__ compares the assigned value against
+        ``self.field.remote_field.model``.  If that attribute still points to the
+        old A class after A is regenerated, assigning a new-A instance raises
+        ValueError.
+        """
+        # Force regeneration of A (simulates a cache miss, e.g. timestamp mismatch)
+        model_a_v2 = self.cot_a.get_model(no_cache=True)
+
+        # The regenerated class must be a distinct Python object
+        self.assertIsNot(model_a_v2, self.model_a_v1,
+                         "Regenerated A must be a new Python class object")
+
+        # B's FK field must now reference A v2, not v1
+        fk = self._get_fk_field(self.model_b, 'ref_a')
+        self.assertIsNotNone(fk, "B must still have an 'ref_a' FK field")
+        self.assertIs(
+            fk.remote_field.model, model_a_v2,
+            "B's FK field must be patched to the newly generated A class; "
+            "a stale reference would cause ValueError on FK assignment",
+        )
