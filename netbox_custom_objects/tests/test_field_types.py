@@ -8,7 +8,12 @@ from django.core.exceptions import ValidationError
 from django.test import TestCase
 
 from core.models import ObjectType
-from netbox_custom_objects.field_types import MultiObjectFieldType, MultiSelectFieldType, ObjectFieldType, SelectFieldType
+from netbox_custom_objects.field_types import (
+    MultiObjectFieldType,
+    MultiSelectFieldType,
+    ObjectFieldType,
+    SelectFieldType,
+)
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from .base import CustomObjectsTestCase
 
