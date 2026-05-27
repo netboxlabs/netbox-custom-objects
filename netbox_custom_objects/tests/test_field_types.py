@@ -2,6 +2,7 @@
 Tests for all the different field types supported by Custom Object Type Fields.
 """
 from unittest import skip
+from unittest.mock import Mock
 from datetime import date, datetime
 from decimal import Decimal
 from django.core.exceptions import ValidationError
@@ -572,6 +573,21 @@ class SelectFieldTypeTestCase(FieldTypeTestCase):
         instance = model.objects.create(status="choice2")
         self.assertEqual(str(instance), "Choice 2")
 
+    def test_select_column_render_returns_label(self):
+        """get_table_column_field() render() translates a raw key to its human-readable label."""
+        field = Mock()
+        field.choices = [('choice1', 'Choice 1'), ('choice2', 'Choice 2')]
+        column = SelectFieldType().get_table_column_field(field)
+        self.assertEqual(column.render(value='choice1'), 'Choice 1')
+        self.assertEqual(column.render(value='choice2'), 'Choice 2')
+
+    def test_select_column_render_unknown_key_falls_back_to_raw_value(self):
+        """get_table_column_field() render() returns the raw key when it is not in choices."""
+        field = Mock()
+        field.choices = [('choice1', 'Choice 1')]
+        column = SelectFieldType().get_table_column_field(field)
+        self.assertEqual(column.render(value='unknown'), 'unknown')
+
 
 class MultiSelectFieldTypeTestCase(FieldTypeTestCase):
     """Test cases for multiselect field type."""
@@ -644,6 +660,20 @@ class MultiSelectFieldTypeTestCase(FieldTypeTestCase):
             field_type.get_display_value(instance, "tags"),
             "Choice 1, Choice 3",
         )
+
+    def test_multiselect_column_render_returns_labels(self):
+        """get_table_column_field() render() translates raw keys to comma-joined labels."""
+        field = Mock()
+        field.choices = [('choice1', 'Choice 1'), ('choice2', 'Choice 2'), ('choice3', 'Choice 3')]
+        column = MultiSelectFieldType().get_table_column_field(field)
+        self.assertEqual(column.render(value=['choice1', 'choice3']), 'Choice 1, Choice 3')
+
+    def test_multiselect_column_render_unknown_key_falls_back_to_raw_value(self):
+        """get_table_column_field() render() preserves unknown keys in the joined output."""
+        field = Mock()
+        field.choices = [('choice1', 'Choice 1')]
+        column = MultiSelectFieldType().get_table_column_field(field)
+        self.assertEqual(column.render(value=['choice1', 'unknown']), 'Choice 1, unknown')
 
 
 class ObjectFieldTypeTestCase(FieldTypeTestCase):

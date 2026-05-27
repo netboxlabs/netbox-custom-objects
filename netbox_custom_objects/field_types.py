@@ -556,12 +556,7 @@ class MultiSelectFieldType(FieldType):
         values = getattr(instance, field_name) or []
         if not values:
             return ''
-        choices_dict = dict(
-            next(
-                (f.base_field.choices for f in instance._meta.local_fields if f.name == field_name),
-                [],
-            )
-        )
+        choices_dict = dict(instance._meta.get_field(field_name).base_field.choices)
         return ', '.join(choices_dict.get(v, v) for v in values)
 
     def get_model_field(self, field, **kwargs):
