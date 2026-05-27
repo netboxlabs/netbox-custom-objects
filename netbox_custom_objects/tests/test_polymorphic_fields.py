@@ -7,6 +7,7 @@ Covers both API and UI (form) paths for:
 """
 import json
 
+from django.core.exceptions import ValidationError
 from django.test import TransactionTestCase
 from django.urls import reverse
 from rest_framework import status
@@ -1152,74 +1153,56 @@ class ReferencedObjectDeletionTest(
 
 
 # ---------------------------------------------------------------------------
-# Cycle-detection gap: multi-hop polymorphic cycles
+# Cycle-detection: multi-hop polymorphic cycles
 # ---------------------------------------------------------------------------
 
-class PolymorphicCycleDetectionGapTest(
+class PolymorphicCycleDetectionTest(
     TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
 ):
     """
-    Pins the KNOWN LIMITATION in CustomObjectTypeField._has_circular_reference:
-    a cycle that passes entirely through polymorphic legs is NOT detected.
+    Verifies that _has_circular_reference detects cycles that pass entirely
+    through polymorphic legs.
 
-    The DFS in _has_circular_reference only follows non-polymorphic object/
-    multiobject fields (those with related_object_type set).  Polymorphic fields
-    store their allowed types on the related_object_types M2M and are therefore
-    invisible to the traversal.
-
-    Scenario: COT-A has a polymorphic field that allows COT-B objects, and COT-B
-    has a polymorphic field that allows COT-A objects.  This is a cycle, but the
-    check_polymorphic_recursion signal cannot see it because _has_circular_reference
-    returns False for every hop that uses a polymorphic field.
-
-    TODO: when _has_circular_reference is extended to traverse polymorphic legs,
-    the assertions below should be changed to assertRaises(ValidationError) and
-    this docstring updated accordingly.
+    Polymorphic fields store their allowed target types on the related_object_types
+    M2M rather than the related_object_type FK, so the DFS must explicitly walk
+    that M2M to catch multi-hop polymorphic cycles.
     """
 
     def setUp(self):
         super().setUp()
 
-        # COT A
         self.cot_a = CustomObjectType.objects.create(
             name="CycleA", slug="cycle-a", verbose_name_plural="Cycle As",
         )
         CustomObjectTypeField.objects.create(
-            custom_object_type=self.cot_a,
-            name="name", type="text", primary=True, required=True,
+            custom_object_type=self.cot_a, name="name", type="text", primary=True, required=True,
         )
 
-        # COT B
         self.cot_b = CustomObjectType.objects.create(
             name="CycleB", slug="cycle-b", verbose_name_plural="Cycle Bs",
         )
         CustomObjectTypeField.objects.create(
-            custom_object_type=self.cot_b,
-            name="name", type="text", primary=True, required=True,
+            custom_object_type=self.cot_b, name="name", type="text", primary=True, required=True,
         )
 
-        # Ensure both models are generated so their ObjectTypes exist in the registry.
+        self.cot_c = CustomObjectType.objects.create(
+            name="CycleC", slug="cycle-c", verbose_name_plural="Cycle Cs",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot_c, name="name", type="text", primary=True, required=True,
+        )
+
+        # Generate models so ContentTypes are registered.
         self.cot_a.get_model()
         self.cot_b.get_model()
+        self.cot_c.get_model()
 
-        # Resolve the ObjectType (ContentType) for each generated model.
         self.ot_a = ObjectType.objects.get_for_model(self.cot_a.get_model())
         self.ot_b = ObjectType.objects.get_for_model(self.cot_b.get_model())
+        self.ot_c = ObjectType.objects.get_for_model(self.cot_c.get_model())
 
-    def test_multihop_polymorphic_cycle_is_not_detected(self):
-        """
-        KNOWN LIMITATION: A →(poly) B →(poly) A is silently accepted.
-
-        The first set() (A allows B) succeeds because neither COT has any
-        non-polymorphic back-edges yet.  The second set() (B allows A) also
-        succeeds because _has_circular_reference traverses only non-polymorphic
-        fields, so the A→B poly edge is invisible.
-
-        Neither call should raise ValidationError under the current implementation.
-        If this test starts failing with ValidationError it means the gap has
-        been fixed and the test should be updated to assert the opposite.
-        """
-        # Step 1: create a polymorphic object field on A that allows B objects.
+    def test_first_poly_edge_is_accepted(self):
+        """A →(poly) B: no cycle yet, must succeed."""
         field_a = CustomObjectTypeField.objects.create(
             custom_object_type=self.cot_a,
             name="link_to_b", type="object", is_polymorphic=True,
@@ -1229,27 +1212,59 @@ class PolymorphicCycleDetectionGapTest(
         except Exception as exc:
             self.fail(
                 f"Adding COT-B as allowed type for COT-A's poly field raised "
-                f"{type(exc).__name__}: {exc}. Expected no error (no cycle yet)."
+                f"{type(exc).__name__}: {exc}."
             )
+        self.assertIn(self.ot_b, field_a.related_object_types.all())
 
-        # Step 2: create a polymorphic object field on B that allows A objects.
-        # This creates a cycle A →(poly) B →(poly) A, but _has_circular_reference
-        # does not traverse poly legs so it goes undetected.
+    def test_two_hop_polymorphic_cycle_is_detected(self):
+        """A →(poly) B →(poly) A must be rejected."""
+        field_a = CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot_a,
+            name="link_to_b", type="object", is_polymorphic=True,
+        )
+        field_a.related_object_types.set([self.ot_b])  # no cycle yet
+
         field_b = CustomObjectTypeField.objects.create(
             custom_object_type=self.cot_b,
             name="link_to_a", type="object", is_polymorphic=True,
         )
-        try:
-            field_b.related_object_types.set([self.ot_a])
-        except Exception as exc:
-            self.fail(
-                f"Adding COT-A as allowed type for COT-B's poly field raised "
-                f"{type(exc).__name__}: {exc}. "
-                f"This is a known limitation — multi-hop polymorphic cycles are not "
-                f"detected by _has_circular_reference. If the TODO has been resolved "
-                f"and a ValidationError is now expected here, update this test."
-            )
+        with self.assertRaises(ValidationError):
+            field_b.related_object_types.set([self.ot_a])  # closes A→B→A cycle
 
-        # Confirm the M2M rows were actually written.
-        self.assertIn(self.ot_b, field_a.related_object_types.all())
-        self.assertIn(self.ot_a, field_b.related_object_types.all())
+    def test_three_hop_polymorphic_cycle_is_detected(self):
+        """A →(poly) B →(poly) C →(poly) A must be rejected."""
+        field_a = CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot_a,
+            name="link_to_b", type="object", is_polymorphic=True,
+        )
+        field_a.related_object_types.set([self.ot_b])  # no cycle
+
+        field_b = CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot_b,
+            name="link_to_c", type="object", is_polymorphic=True,
+        )
+        field_b.related_object_types.set([self.ot_c])  # no cycle
+
+        field_c = CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot_c,
+            name="link_to_a", type="object", is_polymorphic=True,
+        )
+        with self.assertRaises(ValidationError):
+            field_c.related_object_types.set([self.ot_a])  # closes A→B→C→A cycle
+
+    def test_mixed_leg_cycle_is_detected(self):
+        """A →(non-poly) B →(poly) A must be rejected."""
+        # Non-polymorphic object field on A pointing to B.
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot_a,
+            name="link_to_b", type="object",
+            related_object_type=self.ot_b,
+        )
+
+        # Polymorphic object field on B attempting to point back to A.
+        field_b = CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot_b,
+            name="link_to_a", type="object", is_polymorphic=True,
+        )
+        with self.assertRaises(ValidationError):
+            field_b.related_object_types.set([self.ot_a])  # closes A→B→A cycle
