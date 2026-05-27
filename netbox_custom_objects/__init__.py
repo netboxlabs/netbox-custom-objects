@@ -104,7 +104,7 @@ def _register_branching_hooks_once():
         # topological ordering.  Skipped silently on older netbox-branching
         # that doesn't expose the signal yet.
         try:
-            from netbox_branching.merge_strategies.squash import (
+            from netbox_branching.signals import (
                 squash_dependency_graph_built,
             )
             from .branching import add_custom_object_dependencies

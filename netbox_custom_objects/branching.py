@@ -88,6 +88,11 @@ def add_custom_object_dependencies(sender, collapsed_changes, **kwargs):
     Walks every collapsed change for a CO model and mirrors squash's four
     edge-direction rules (UPDATE→DELETE, UPDATE→CREATE, CREATE→CREATE,
     DELETE→DELETE) using ``_collect_co_refs`` instead of the FK/GFK walker.
+
+    The signal's ``operation`` kwarg ('merge' or 'revert') is intentionally
+    ignored: these edges express physical "must exist before" relationships,
+    and revert reverses the topological order so the same edges produce the
+    correct undo sequence.
     """
     from .constants import APP_LABEL
 
