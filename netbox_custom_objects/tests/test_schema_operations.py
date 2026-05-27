@@ -154,6 +154,33 @@ class SchemaOperationsTestCase(TransactionCleanupMixin, CustomObjectsTestCase, T
             "Deleted COT's model must be removed from the app registry.",
         )
 
+    def test_delete_cot_with_netbox_custom_field_referencing_object_type(self):
+        """#523 – Deleting a COT must not raise ProtectedError when a NetBox CustomField
+        has related_object_type pointing to the COT's underlying ObjectType."""
+        from core.models import ObjectType
+        from extras.choices import CustomFieldTypeChoices
+        from extras.models import CustomField
+
+        cot = self.create_custom_object_type(name='protectedtest', slug='protected-test')
+        object_type = ObjectType.objects.get_for_model(cot.get_model())
+
+        # Create a regular NetBox CustomField of type "object" whose related_object_type
+        # points at the COT's ContentType. This is the scenario that triggered the
+        # ProtectedError because CustomField.related_object_type uses on_delete=PROTECT.
+        cf = CustomField.objects.create(
+            name='cat_ref',
+            type=CustomFieldTypeChoices.TYPE_OBJECT,
+            related_object_type=object_type,
+        )
+
+        # Should delete cleanly without raising ProtectedError.
+        cot.delete()
+
+        self.assertFalse(
+            CustomField.objects.filter(pk=cf.pk).exists(),
+            "The referencing CustomField must be deleted along with the COT.",
+        )
+
     # ------------------------------------------------------------------
     # Management commands
     # ------------------------------------------------------------------

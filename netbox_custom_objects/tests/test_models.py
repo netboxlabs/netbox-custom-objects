@@ -1,23 +1,33 @@
 """
 Tests for the concrete and dynamically generated models that are managed by this plugin.
 """
+import sys
+from decimal import Decimal
 from unittest import skip
 from unittest.mock import patch
-from decimal import Decimal
 
+from django.apps import apps as django_apps
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db import connection
+from django.db import connection, transaction
+from django.db.utils import OperationalError, ProgrammingError
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
+import netbox_custom_objects as nco
 
-from django.contrib.contenttypes.models import ContentType
-from extras.models import CachedValue
-from netbox.search.backends import get_backend
-from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
-from netbox_custom_objects.models import CustomObjectTypeField
+from core.choices import JobStatusChoices
 from core.models import ObjectType
+from dcim.models import Site
+from extras.models import CachedValue
+from netbox.search import registry
+from netbox.search.backends import get_backend
+from netbox_custom_objects.api.serializers import get_serializer_class
+from netbox_custom_objects.constants import APP_LABEL
+from netbox_custom_objects.field_types import LazyForeignKey
+from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name
 from .base import CustomObjectsTestCase
 
@@ -76,7 +86,6 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
 
     def test_custom_object_type_name_validation(self):
         """COT name must match the schema identifier pattern (no leading/trailing/double underscores)."""
-        from netbox_custom_objects.models import CustomObjectType
         invalid_names = [
             "test-type",    # hyphen not allowed
             "test__type",   # double underscore not allowed
@@ -274,9 +283,6 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         Collector discovers the stale model class, tries to query the dropped table
         and raises "relation '<table>' does not exist".
         """
-        from django.apps import apps as django_apps
-        from netbox_custom_objects.constants import APP_LABEL
-
         custom_object_type = self.create_custom_object_type(
             name="RegTestObject", slug="reg-test-object"
         )
@@ -311,11 +317,6 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         The test uses a savepoint so the aborted PostgreSQL transaction does not
         poison the surrounding test transaction.
         """
-        from django.apps import apps as django_apps
-        from django.db import ProgrammingError, transaction
-        from dcim.models import Site
-        from netbox_custom_objects.constants import APP_LABEL
-
         site = Site.objects.create(name='Stale Registry Test Site', slug='stale-registry-test-site')
 
         cot = self.create_custom_object_type(name='SiteLinked', slug='site-linked')
@@ -1291,8 +1292,6 @@ class SearchReindexTestCase(CustomObjectsTestCase, TestCase):
 
     def test_duplicate_job_not_enqueued(self):
         """A second enqueue for the same COT returns the existing pending job without creating a new one."""
-        from core.choices import JobStatusChoices
-
         with patch('django_rq.get_queue'):
             first_job = ReindexCustomObjectTypeJob.enqueue(cot_id=self.cot.pk)
         # Simulate the first job still pending
@@ -1317,8 +1316,7 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
 
     def setUp(self):
         super().setUp()
-        from django.apps import apps
-        self.config = apps.get_app_config('netbox_custom_objects')
+        self.config = django_apps.get_app_config('netbox_custom_objects')
 
     def test_get_model_raises_lookup_error_when_skipping(self):
         """get_model() raises LookupError instead of querying DB when should_skip returns True."""
@@ -1340,7 +1338,6 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
 
     def test_get_model_skips_db_with_migrate_in_argv(self):
         """get_model() raises LookupError when 'migrate' is in sys.argv (pre-migration state)."""
-        import sys
         cot = self.create_custom_object_type(name="MigrateTest3", slug="migrate-test-3")
         model_name = f"{cot.pk}tablemodel"
 
@@ -1348,7 +1345,6 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
         try:
             sys.argv = ['manage.py', 'migrate']
             # Reset cached migration check so argv is re-evaluated
-            import netbox_custom_objects as nco
             nco._migrations_checked = None
             with self.assertRaises(LookupError):
                 self.config.get_model(model_name)
@@ -1368,9 +1364,6 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
         already in the app registry; this ensures we reach the objects.get() call
         that needs to be guarded.
         """
-        from django.db.utils import ProgrammingError
-        from netbox_custom_objects.models import CustomObjectType
-
         model_name = "table99998model"  # no such COT — not in the app registry
 
         with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
@@ -1384,9 +1377,6 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
         get_model() must convert OperationalError (e.g. table missing entirely)
         to LookupError for the same reason as ProgrammingError above.
         """
-        from django.db.utils import OperationalError
-        from netbox_custom_objects.models import CustomObjectType
-
         model_name = "table99999model"  # no such COT — not in the app registry
 
         with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
@@ -1401,9 +1391,6 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
         Calling ready() a second time is safe — signals are re-connected idempotently
         and the dynamic model loop is the only part that can raise here.
         """
-        from django.db.utils import ProgrammingError
-        from netbox_custom_objects.models import CustomObjectType
-
         with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
             with patch.object(CustomObjectType.objects, 'all',
                               side_effect=ProgrammingError("column does not exist")):
@@ -1412,9 +1399,6 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
 
     def test_ready_survives_operational_error(self):
         """ready() must not propagate OperationalError from a missing table."""
-        from django.db.utils import OperationalError
-        from netbox_custom_objects.models import CustomObjectType
-
         with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
             with patch.object(CustomObjectType.objects, 'all',
                               side_effect=OperationalError("no such table")):
@@ -1426,9 +1410,6 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
         incomplete.  The DB-driven portion yields nothing; static models already
         in the app registry are still returned via super().get_models().
         """
-        from django.db.utils import ProgrammingError
-        from netbox_custom_objects.models import CustomObjectType
-
         with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
             with patch.object(CustomObjectType.objects, 'all',
                               side_effect=ProgrammingError("column does not exist")):
@@ -1437,9 +1418,6 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
 
     def test_get_models_survives_operational_error(self):
         """get_models() must not propagate OperationalError from a missing table."""
-        from django.db.utils import OperationalError
-        from netbox_custom_objects.models import CustomObjectType
-
         with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
             with patch.object(CustomObjectType.objects, 'all',
                               side_effect=OperationalError("no such table")):
@@ -1452,9 +1430,6 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
         before the django_migrations table exists.  An uncaught exception here
         would bypass all the guards in ready(), get_model(), and get_models().
         """
-        import netbox_custom_objects as nco
-        from django.db.utils import ProgrammingError
-
         original_checked = nco._migrations_checked
         nco._migrations_checked = None  # force the migration-loader path
         try:
@@ -1472,9 +1447,6 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
         should_skip_dynamic_model_creation() must return True when the migration
         infrastructure raises OperationalError (e.g. django_migrations missing).
         """
-        import netbox_custom_objects as nco
-        from django.db.utils import OperationalError
-
         original_checked = nco._migrations_checked
         nco._migrations_checked = None
         try:
@@ -1589,8 +1561,6 @@ class CrossCOTStubSearchIndexRegressionTestCase(CustomObjectsTestCase, TestCase)
         fields are excluded from the model class.  The search index must only contain
         fields that are actually present.
         """
-        from netbox.search import registry
-
         # Force stub semantics: clear any cached full model and re-register the
         # search index against a fresh stub.  This mirrors the cross-COT scenario
         # the regression covers — B's stub gets cached before any caller asks for
@@ -1711,7 +1681,6 @@ class NullRelatedObjectTypeTestCase(CustomObjectsTestCase, TestCase):
     """
 
     def _make_cot_with_null_object_field(self, name, slug, field_name="broken_ref"):
-        from netbox_custom_objects.models import CustomObjectType
         cot = self.create_custom_object_type(name=name, slug=slug)
         self.create_custom_object_type_field(
             cot, name="title", label="Title", type="text", primary=True, required=True,
@@ -1745,8 +1714,6 @@ class NullRelatedObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         was skipped during model generation due to a NULL related_object_type_id.
         Regression for the Meta.fields/attrs mismatch that caused DRF to raise a
         validation error at serializer initialization time."""
-        from netbox_custom_objects.api.serializers import get_serializer_class
-
         cot = self._make_cot_with_null_object_field(
             "NullRelSerializer", "null-rel-serializer"
         )
@@ -1757,3 +1724,373 @@ class NullRelatedObjectTypeTestCase(CustomObjectsTestCase, TestCase):
                          "Null-FK field must not appear in serializer Meta.fields")
         self.assertIn("title", serializer_cls.Meta.fields,
                       "Normal fields must still be present in serializer")
+
+
+class NestedCOTStartupOrderingTestCase(CustomObjectsTestCase, TestCase):
+    """Regression tests for issue #408: nested COT FK fields missing after restart.
+
+    Three COTs are created with names chosen so alphabetical startup ordering
+    (alpha_type < beta_type < gamma_type) processes the FK-source models before
+    their FK-target models — the worst-case ordering that exposed the bug.
+    The fix uses LazyForeignKey for all cross-COT FKs and re-resolves them in a
+    second pass after all models are in the app registry.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        # Names chosen so alphabetical ordering is: alpha_type < beta_type < gamma_type
+        # (worst-case: each model is processed before its FK target exists in the registry)
+
+        cls.gamma_type = CustomObjectType.objects.create(
+            name="gamma_type", slug="gamma-type", verbose_name_plural="gamma_types",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.gamma_type, name="name", label="Name",
+            type="text", primary=True, required=True,
+        )
+
+        cls.beta_type = CustomObjectType.objects.create(
+            name="beta_type", slug="beta-type", verbose_name_plural="beta_types",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.beta_type, name="name", label="Name",
+            type="text", primary=True, required=True,
+        )
+        gamma_model = cls.gamma_type.get_model()
+        gamma_ot = ObjectType.objects.get(
+            app_label=gamma_model._meta.app_label, model=gamma_model._meta.model_name,
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.beta_type, name="gamma", label="Gamma",
+            type="object", related_object_type=gamma_ot,
+        )
+
+        cls.alpha_type = CustomObjectType.objects.create(
+            name="alpha_type", slug="alpha-type", verbose_name_plural="alpha_types",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.alpha_type, name="name", label="Name",
+            type="text", primary=True, required=True,
+        )
+        beta_model = cls.beta_type.get_model()
+        beta_ot = ObjectType.objects.get(
+            app_label=beta_model._meta.app_label, model=beta_model._meta.model_name,
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.alpha_type, name="beta", label="Beta",
+            type="object", related_object_type=beta_ot,
+        )
+
+    def _simulate_startup_ordering(self):
+        """Clear all model caches and regenerate in alphabetical order, as ready() does.
+
+        Keep in sync with the two-pass loop in ready() (__init__.py).
+        """
+        CustomObjectType.clear_model_cache()
+
+        qs = list(CustomObjectType.objects.all())  # alphabetical: alpha_type, beta_type, gamma_type
+
+        # Pass 1
+        for obj in qs:
+            obj.get_model()
+
+        # Pass 2: re-resolve lazy FKs
+        for obj in qs:
+            model = CustomObjectType.get_cached_model(obj.id)
+            if model is None:
+                continue
+            for field in model._meta.local_fields:
+                if isinstance(field, LazyForeignKey) and isinstance(field.remote_field.model, str):
+                    resolve_method = getattr(model, f'_resolve_{field.name}_model', None)
+                    if resolve_method:
+                        resolve_method(model)
+
+        return {obj.slug: CustomObjectType.get_cached_model(obj.id) for obj in qs}
+
+    def test_beta_type_has_gamma_fk_after_startup(self):
+        """beta_type model must have its FK to gamma_type after the startup passes."""
+        models = self._simulate_startup_ordering()
+        beta_model = models['beta-type']
+        field_names = [f.name for f in beta_model._meta.local_fields]
+        self.assertIn('gamma', field_names,
+                      "beta_type FK field to gamma_type must be present after startup")
+
+    def test_alpha_type_has_beta_fk_after_startup(self):
+        """alpha_type model must have its FK to beta_type after the startup passes."""
+        models = self._simulate_startup_ordering()
+        alpha_model = models['alpha-type']
+        field_names = [f.name for f in alpha_model._meta.local_fields]
+        self.assertIn('beta', field_names,
+                      "alpha_type FK field to beta_type must be present after startup")
+
+    def test_three_level_chain_fk_targets_are_full_models(self):
+        """FK remote_field.model on each level must be the full model (with its own FKs)."""
+        models = self._simulate_startup_ordering()
+
+        alpha_model = models['alpha-type']
+        beta_fk = alpha_model._meta.get_field('beta')
+        related_beta = beta_fk.related_model
+        # The related model must have its own FK to gamma_type
+        self.assertIn('gamma', [f.name for f in related_beta._meta.local_fields],
+                      "beta_type (as FK target from alpha_type) must itself have FK to gamma_type")
+
+
+class LazyForeignKeySaveResolutionTestCase(CustomObjectsTestCase, TestCase):
+    """Regression test for the save() path in CustomObjectTypeField.
+
+    Verifies that creating a TYPE_OBJECT field via save() succeeds even when the
+    target COT model has been removed from apps.all_models (the state left by
+    tearDown() between test methods that add FK columns to existing COTs).
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.target_type = CustomObjectType.objects.create(
+            name="save_target", slug="save-target", verbose_name_plural="save_targets",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.target_type, name="name", label="Name",
+            type="text", primary=True, required=True,
+        )
+        cls.target_type.get_model()
+
+    def test_save_object_field_when_target_absent_from_all_models(self):
+        """save() must resolve the LazyFK target via cot.get_model() even when
+        the target model is absent from apps.all_models."""
+        target_model = self.target_type.get_model()
+        target_model_name = target_model._meta.model_name
+
+        source_type = CustomObjectType.objects.create(
+            name="save_source", slug="save-source", verbose_name_plural="save_sources",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=source_type, name="name", label="Name",
+            type="text", primary=True, required=True,
+        )
+        source_type.get_model()
+
+        # Simulate tearDown removing the target model from the app registry
+        django_apps.all_models.get(APP_LABEL, {}).pop(target_model_name, None)
+        CustomObjectType.clear_model_cache()
+
+        # ObjectType lookup works via ContentType DB row — unaffected by registry removal
+        target_ot = ObjectType.objects.get(app_label=APP_LABEL, model=target_model_name)
+
+        # This save() call must not raise ValueError about remote_field.model being a string
+        field = CustomObjectTypeField.objects.create(
+            custom_object_type=source_type, name="target_ref", label="Target Ref",
+            type="object", related_object_type=target_ot,
+        )
+        self.assertEqual(field.name, "target_ref")
+        self.assertEqual(field.type, "object")
+
+
+class CycleDetectionFalsePositiveRegressionTest(CustomObjectsTestCase, TestCase):
+    """Regression test for the false-positive in _has_circular_reference.
+
+    When an intermediate COT has a self-referencing field (e.g. a multiobject
+    that points back to itself), the DFS can re-encounter that COT's ID in the
+    ``visited`` set.  Before the fix, any node already in ``visited`` caused an
+    immediate ``return True``, so validating a perfectly legal
+    EC → Control FK raised "Circular reference detected" even though there is
+    no actual cycle.
+
+    After the fix, ``return custom_object_type.id == self.custom_object_type.id``
+    only signals a real cycle when the DFS finds its way back to the ORIGIN node.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # COT Control: has a self-referencing multiobject field
+        self.cot_control = CustomObjectType.objects.create(
+            name="ControlCycle", slug="control-cycle",
+            verbose_name_plural="ControlCycles",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot_control,
+            name="name", type="text", primary=True, required=True,
+        )
+        # Self-referencing M:N field
+        self.cot_control.get_model()
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot_control,
+            name="refs", type="multiobject",
+            related_object_type=self.cot_control.object_type,
+        )
+
+        # COT EC: will hold the FK to Control
+        self.cot_ec = CustomObjectType.objects.create(
+            name="ECCycle", slug="ec-cycle",
+            verbose_name_plural="ECCycles",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot_ec,
+            name="name", type="text", primary=True, required=True,
+        )
+        self.cot_ec.get_model()
+
+    def test_fk_into_self_referencing_cot_is_not_false_positive(self):
+        """A non-circular FK from EC to Control must not raise ValidationError.
+
+        Control has a self-referencing M:N field.  Validating a new EC→Control
+        FK field must NOT report "Circular reference detected" — that would be a
+        false positive.
+        """
+        # Build an unsaved field (EC → Control) and invoke the recursion check
+        # directly.  _check_recursion() is the method called from clean().
+        field = CustomObjectTypeField(
+            custom_object_type=self.cot_ec,
+            name="control_ref",
+            type="object",
+            related_object_type=self.cot_control.object_type,
+        )
+        # Must NOT raise ValidationError ("Circular reference detected")
+        try:
+            field._check_recursion()
+        except ValidationError as exc:
+            self.fail(
+                f"_check_recursion() raised ValidationError for a valid EC→Control FK "
+                f"(Control has a self-referencing M:N field). "
+                f"This is a false positive. Error: {exc}"
+            )
+
+    def test_genuine_cycle_is_still_detected(self):
+        """A genuine A → B → A cycle must still be detected."""
+        # Create COT Alpha and Beta
+        cot_alpha = CustomObjectType.objects.create(
+            name="AlphaCycle", slug="alpha-cycle",
+            verbose_name_plural="AlphaCycles",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cot_alpha,
+            name="name", type="text", primary=True, required=True,
+        )
+        cot_alpha.get_model()
+
+        cot_beta = CustomObjectType.objects.create(
+            name="BetaCycle", slug="beta-cycle",
+            verbose_name_plural="BetaCycles",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cot_beta,
+            name="name", type="text", primary=True, required=True,
+        )
+        cot_beta.get_model()
+
+        # Beta → Alpha (legitimate so far)
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cot_beta,
+            name="alpha_ref",
+            type="object",
+            related_object_type=cot_alpha.object_type,
+        )
+
+        # Alpha → Beta: this creates a genuine cycle A → B → A
+        field = CustomObjectTypeField(
+            custom_object_type=cot_alpha,
+            name="beta_ref",
+            type="object",
+            related_object_type=cot_beta.object_type,
+        )
+        with self.assertRaises(ValidationError):
+            field._check_recursion()
+
+
+class StaleFKReferenceRegressionTest(CustomObjectsTestCase, TestCase):
+    """Regression test for issue #384: stale FK reference after COT model regeneration.
+
+    When COT A's model is regenerated (cache miss, e.g. after a schema change
+    on another worker bumps cache_timestamp), any other COT model (B) that has a
+    FK field pointing to A must have that FK field's ``remote_field.model``
+    updated to the new A class.
+
+    Without the fix, B's FK field keeps referencing the old A class object.
+    Assigning a new-class A instance to B's FK field then raises::
+
+        ValueError: Cannot assign "<TableNModel: ...>": "TableMModel.ref_a" must
+        be a "TableNModel" instance.
+
+    (Both class names are identical but they are different Python objects.)
+    """
+
+    def setUp(self):
+        super().setUp()
+        # COT A (target of the FK)
+        self.cot_a = CustomObjectType.objects.create(
+            name="FkTargetA", slug="fk-target-a",
+            verbose_name_plural="FkTargetAs",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot_a,
+            name="name", type="text", primary=True, required=True,
+        )
+
+        # COT B (source: has a direct FK to COT A)
+        self.cot_b = CustomObjectType.objects.create(
+            name="FkSourceB", slug="fk-source-b",
+            verbose_name_plural="FkSourceBs",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot_b,
+            name="name", type="text", primary=True, required=True,
+        )
+
+        # Generate A first so its ObjectType exists, then create the FK field on B
+        self.model_a_v1 = self.cot_a.get_model()
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot_b,
+            name="ref_a",
+            label="Ref A",
+            type="object",
+            related_object_type=self.cot_a.object_type,
+        )
+        # Generate B's model; this resolves the LazyForeignKey to model_a_v1
+        self.cot_b.get_model()
+        # Fetch fresh from cache to get the fully-resolved model
+        self.model_b = CustomObjectType.get_cached_model(self.cot_b.id)
+
+    def _get_fk_field(self, model, field_name):
+        """Return the FK field from model._meta.local_fields by name (avoids _relation_tree)."""
+        return next(
+            (f for f in model._meta.local_fields if f.name == field_name),
+            None,
+        )
+
+    def test_b_fk_resolves_to_a_v1_before_regeneration(self):
+        """Sanity: B's FK field must already reference A's model after initial generation."""
+        fk = self._get_fk_field(self.model_b, 'ref_a')
+        self.assertIsNotNone(fk, "B must have an 'ref_a' FK field")
+        # remote_field.model must be the class (not a string) after generation
+        self.assertNotIsInstance(
+            fk.remote_field.model, str,
+            "FK must be resolved to a class, not a string reference",
+        )
+        self.assertIs(
+            fk.remote_field.model, self.model_a_v1,
+            "B's FK must initially point to A's first model class",
+        )
+
+    def test_b_fk_is_patched_after_a_regeneration(self):
+        """After A is regenerated, B's FK field must reference the new A class.
+
+        This is the core regression for issue #384: the isinstance check in
+        ForeignKey.__set__ compares the assigned value against
+        ``self.field.remote_field.model``.  If that attribute still points to the
+        old A class after A is regenerated, assigning a new-A instance raises
+        ValueError.
+        """
+        # Force regeneration of A (simulates a cache miss, e.g. timestamp mismatch)
+        model_a_v2 = self.cot_a.get_model(no_cache=True)
+
+        # The regenerated class must be a distinct Python object
+        self.assertIsNot(model_a_v2, self.model_a_v1,
+                         "Regenerated A must be a new Python class object")
+
+        # B's FK field must now reference A v2, not v1
+        fk = self._get_fk_field(self.model_b, 'ref_a')
+        self.assertIsNotNone(fk, "B must still have an 'ref_a' FK field")
+        self.assertIs(
+            fk.remote_field.model, model_a_v2,
+            "B's FK field must be patched to the newly generated A class; "
+            "a stale reference would cause ValueError on FK assignment",
+        )

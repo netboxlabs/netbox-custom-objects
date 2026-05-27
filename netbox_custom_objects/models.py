@@ -34,6 +34,7 @@ from extras.choices import (
     CustomFieldUIEditableChoices,
     CustomFieldUIVisibleChoices,
 )
+from extras.models import CustomField
 from extras.models.customfields import SEARCH_TYPES
 from extras.utils import is_taggable, run_validators
 from netbox.config import get_config
@@ -65,15 +66,13 @@ from utilities.validators import validate_regex
 
 from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
 from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
-from netbox_custom_objects.field_types import FIELD_TYPE_CLASS, safe_table_name
+from netbox_custom_objects.field_types import FIELD_TYPE_CLASS, LazyForeignKey, safe_table_name
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
 from netbox_custom_objects.utilities import (
     _suppress_clear_cache,
     extract_cot_id_from_model_name,
     generate_model,
 )
-
-logger = logging.getLogger(__name__)
 
 
 class UniquenessConstraintTestError(Exception):
@@ -292,6 +291,28 @@ def _schema_add_field(fi, model, schema_editor, schema_conn):
     if mf.column in existing_cols:
         logger.debug('_schema_add_field: %r already exists on %s, skipping', mf.column, model._meta.db_table)
         return
+
+    # LazyForeignKey starts with a string remote_field.model.  Django's
+    # lazy_related_operation fires immediately when the target is in
+    # apps.all_models, but tearDown() cleanup between tests can remove
+    # the target model from the registry.  Resolve it directly here —
+    # bypassing the app-config's skip guard — so that schema_editor
+    # .add_field() always sees a model class, not a string.
+    if isinstance(mf, LazyForeignKey) and isinstance(mf.remote_field.model, str):
+        _app_label, _model_name = mf._to_model_name.rsplit('.', 1)
+        _cot_id_str = extract_cot_id_from_model_name(_model_name.lower())
+        if _cot_id_str is not None:
+            try:
+                _cot = CustomObjectType.objects.get(pk=int(_cot_id_str))
+                _actual = _cot.get_model()
+                mf.remote_field.model = _actual
+                mf.to = _actual
+            except (CustomObjectType.DoesNotExist, OperationalError, ProgrammingError):
+                logger.warning(
+                    "Could not resolve LazyForeignKey target %r before add_field; "
+                    "schema_editor.add_field may fail",
+                    mf._to_model_name,
+                )
 
     schema_editor.add_field(model, mf)
     if fi.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
@@ -1279,17 +1300,33 @@ class CustomObjectType(NetBoxModel):
                     _apps = model._meta.apps
                     try:
                         through_model = _apps.get_model(APP_LABEL, field_instance.through_model_name)
+                        # Always update source FK to point to the current model class.
+                        # get_model() may be called multiple times (e.g. cache invalidation
+                        # after a field save changes cache_timestamp).  Without this update
+                        # the through model's source FK would keep pointing at the old class,
+                        # causing Django's Collector to raise ValueError during cascade delete:
+                        # "Cannot query 'X': Must be 'TableYModel' instance."
+                        source_field = through_model._meta.get_field("source")
+                        source_field.remote_field.model = model
+                        source_field.related_model = model
+                        # Clear @cached_property so deletion collector rebuilds path from updated model.
+                        source_field.__dict__.pop('path_infos', None)
+                        source_field.__dict__.pop('reverse_path_infos', None)
                     except LookupError:
                         field_type_obj = FIELD_TYPE_CLASS[CustomFieldTypeChoices.TYPE_MULTIOBJECT]()
                         source_model_str = f"{APP_LABEL}.{model.__name__}"
                         through_model = field_type_obj.get_polymorphic_through_model(
                             field_instance, source_model_str
                         )
-                    source_field = through_model._meta.get_field("source")
-                    source_field.remote_field.model = model
-                    source_field.related_model = model
+                        source_field = through_model._meta.get_field("source")
+                        source_field.remote_field.model = model
+                        source_field.related_model = model
+                        # Clear @cached_property so deletion collector rebuilds path from updated model.
+                        source_field.__dict__.pop('path_infos', None)
+                        source_field.__dict__.pop('reverse_path_infos', None)
+                        _apps.register_model(APP_LABEL, through_model)
                     self._register_context_through(branch_id, through_model)
-                    if through_model not in through_models:
+                    if through_model and through_model not in through_models:
                         through_models.append(through_model)
                 continue
 
@@ -1563,7 +1600,67 @@ class CustomObjectType(NetBoxModel):
             # interleave their through-model registrations.
             with self._global_lock:
                 self._after_model_generation(attrs, model)
-                self._model_cache[(self.id, branch_id)] = (model, self.cache_timestamp)
+
+                # When this COT's model is regenerated (cache miss), non-polymorphic through
+                # models owned by OTHER COTs that point to this COT as their M2M target keep
+                # their target FK stale (pointing at the old model class).  Django's deletion
+                # collector finds those through FKs in the new model's related_objects and
+                # raises ValueError: "Cannot query X: Must be OldModel instance."
+                # Fix: walk all inbound non-polymorphic multiobject fields and patch the
+                # through model's target FK to the freshly generated model class.
+                # (Same pattern as the existing fix for polymorphic source FKs above at
+                # _after_model_generation lines 526-531.)
+                for inbound_field in CustomObjectTypeField.objects.filter(
+                    related_object_type=self.object_type,
+                    type=CustomFieldTypeChoices.TYPE_MULTIOBJECT,
+                    is_polymorphic=False,
+                ).iterator():
+                    try:
+                        through_model = apps.get_model(APP_LABEL, inbound_field.through_model_name)
+                        target_field = through_model._meta.get_field('target')
+                    except (LookupError, FieldDoesNotExist):
+                        continue
+                    target_field.remote_field.model = model
+                    target_field.related_model = model
+                    # path_infos is a @cached_property on ForeignKey (see Django's
+                    # related.py). Clear it so the path is rebuilt using the updated
+                    # remote_field.model; stale cached path_infos would make Django's
+                    # deletion collector compare obj against the old model class and
+                    # raise ValueError: "Cannot query X: Must be OldModel instance."
+                    target_field.__dict__.pop('path_infos', None)
+                    target_field.__dict__.pop('reverse_path_infos', None)
+
+                # Same staleness problem exists for direct FK fields (TYPE_OBJECT):
+                # when this COT is regenerated, any cached model for another COT that
+                # holds a LazyForeignKey pointing here still references the old class.
+                # Walk inbound non-polymorphic object fields and patch them too.
+                for inbound_fk_field in CustomObjectTypeField.objects.filter(
+                    related_object_type=self.object_type,
+                    type=CustomFieldTypeChoices.TYPE_OBJECT,
+                    is_polymorphic=False,
+                ).iterator():
+                    owner_model = CustomObjectType.get_cached_model(inbound_fk_field.custom_object_type_id)
+                    if owner_model is None:
+                        continue
+                    # Use local_fields list — avoids _relation_tree → get_models() recursion.
+                    fk_field = next(
+                        (f for f in owner_model._meta.local_fields if f.name == inbound_fk_field.name),
+                        None,
+                    )
+                    if fk_field is None:
+                        continue
+                    fk_field.remote_field.model = model
+                    fk_field.related_model = model
+                    fk_field.to = model
+                    fk_field.__dict__.pop('path_infos', None)
+                    fk_field.__dict__.pop('reverse_path_infos', None)
+
+                # Only cache fully-generated models.  Models generated with
+                # skip_object_fields=True omit FK fields to other COTs; caching them
+                # would permanently hide those fields if a dependent COT triggers
+                # generation before this one in the startup loop (issue #408).
+                if not skip_object_fields:
+                    self._model_cache[(self.id, branch_id)] = (model, self.cache_timestamp)
 
         apps.clear_cache()
         ContentType.objects.clear_cache()
@@ -1617,15 +1714,21 @@ class CustomObjectType(NetBoxModel):
         schema_conn = _get_schema_connection()
         q = schema_conn.ops.quote_name
         with schema_conn.cursor() as cursor:
-            # Drop existing FK constraint if it exists
+            # Drop existing FK constraint if it exists.
+            # Join on key_column_usage so we match by actual column name, not constraint name —
+            # RENAME COLUMN updates kcu but leaves the constraint name unchanged.
             cursor.execute("""
-                SELECT constraint_name
-                FROM information_schema.table_constraints
-                WHERE table_name = %s
-                AND table_schema = current_schema()
-                AND constraint_type = 'FOREIGN KEY'
-                AND constraint_name LIKE %s
-            """, [table_name, f"%{column_name}%"])
+                SELECT tc.constraint_name
+                FROM information_schema.table_constraints tc
+                JOIN information_schema.key_column_usage kcu
+                    ON tc.constraint_name = kcu.constraint_name
+                    AND tc.table_schema = kcu.table_schema
+                    AND tc.table_name = kcu.table_name
+                WHERE tc.table_name = %s
+                AND tc.table_schema = current_schema()
+                AND tc.constraint_type = 'FOREIGN KEY'
+                AND kcu.column_name = %s
+            """, [table_name, column_name])
 
             for row in cursor.fetchall():
                 constraint_name = row[0]
@@ -1773,6 +1876,11 @@ class CustomObjectType(NetBoxModel):
         # main and must not be touched until the deletion is merged.
         if not in_branch:
             ObjectChange.objects.filter(changed_object_type=object_type).delete()
+
+            # Delete any NetBox CustomField records (extras) with related_object_type pointing
+            # to this COT's ObjectType. CustomField.related_object_type uses on_delete=PROTECT,
+            # so these must be removed before object_type.delete() is called below.
+            CustomField.objects.filter(related_object_type=object_type).delete()
 
         super().delete(*args, **kwargs)
 
@@ -2627,50 +2735,59 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         Returns:
             bool: True if a circular reference is detected, False otherwise
         """
-        # If we've already visited this type, we have a cycle
+        # If we've already visited this node, it's a genuine cycle only when the
+        # node is the origin COT (the one that owns the field being validated).
+        # Re-encountering a non-origin node that was already explored in a
+        # different branch of the DFS is NOT a cycle — returning True there
+        # would cause a false positive when an intermediate COT has a
+        # self-referencing field (e.g. a multiobject pointing back to itself).
         if custom_object_type.id in visited:
-            return True
+            return custom_object_type.id == self.custom_object_type.id
 
         # Add this type to visited set
         visited.add(custom_object_type.id)
 
-        # Check all *non-polymorphic* object and multiobject fields in this COT.
-        #
-        # KNOWN LIMITATION: polymorphic fields (is_polymorphic=True) store their
-        # allowed target types on the related_object_types M2M, not on the
-        # related_object_type FK.  This DFS therefore does not traverse edges
-        # introduced by polymorphic fields.  A cycle that passes entirely through
-        # polymorphic legs (e.g. A →(poly) B →(poly) A) will go undetected.
-        #
-        # Fixing this requires also iterating field.related_object_types.filter(
-        # app_label=APP_LABEL) and recursing into each.  The check_polymorphic_recursion
-        # signal already guards the direct A→B assignment, but cannot see multi-hop
-        # cycles that depend on polymorphic fields already on intermediate types.
-        #
-        # TODO: extend this DFS to also traverse polymorphic related_object_types
-        # so that multi-hop polymorphic cycles are detected at assignment time.
+        # Track ContentTypes already enqueued for recursion to avoid redundant work.
         related_objects_checked = set()
+
+        # Non-polymorphic object/multiobject fields: target stored on related_object_type FK.
         for field in custom_object_type.fields.filter(
             type__in=[
                 CustomFieldTypeChoices.TYPE_OBJECT,
                 CustomFieldTypeChoices.TYPE_MULTIOBJECT,
             ],
+            is_polymorphic=False,
             related_object_type__isnull=False,
             related_object_type__app_label=APP_LABEL
         ):
             if field.related_object_type in related_objects_checked:
                 continue
             related_objects_checked.add(field.related_object_type)
-
-            # Get the related custom object type directly from the object_type relationship
             try:
                 next_custom_object_type = CustomObjectType.objects.get(object_type=field.related_object_type)
             except CustomObjectType.DoesNotExist:
                 continue
-
-            # Recursively check this dependency
             if self._has_circular_reference(next_custom_object_type, visited):
                 return True
+
+        # Polymorphic object/multiobject fields: targets stored on related_object_types M2M.
+        for poly_field in custom_object_type.fields.filter(
+            type__in=[
+                CustomFieldTypeChoices.TYPE_OBJECT,
+                CustomFieldTypeChoices.TYPE_MULTIOBJECT,
+            ],
+            is_polymorphic=True,
+        ):
+            for ot in poly_field.related_object_types.filter(app_label=APP_LABEL):
+                if ot in related_objects_checked:
+                    continue
+                related_objects_checked.add(ot)
+                try:
+                    next_custom_object_type = CustomObjectType.objects.get(object_type=ot)
+                except CustomObjectType.DoesNotExist:
+                    continue
+                if self._has_circular_reference(next_custom_object_type, visited):
+                    return True
 
         return False
 

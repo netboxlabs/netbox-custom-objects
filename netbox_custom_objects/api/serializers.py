@@ -617,6 +617,14 @@ def get_serializer_class(model, skip_object_fields=False):
         return instance
 
     def validate(self, data):
+        # When this serializer is used as a nested child (e.g. resolving a PK to a
+        # model instance inside a many=True field), DRF calls validate() with the
+        # already-resolved model instance rather than a dict.  Delegate directly to
+        # the base class in that case; it handles non-dicts correctly (see
+        # TaggableModelSerializer.validate line 73 in features.py).
+        if type(data) is not dict:
+            return NetBoxModelSerializer.validate(self, data)
+
         # NetBoxModelSerializer.validate() calls Model(**attrs) to check field
         # values. Polymorphic GFK and M2M fields are not real Django model fields,
         # so they'd cause a TypeError. Pop them before delegating to the parent,

@@ -5,6 +5,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.test import TestCase
 from django.urls import reverse
 from extras.models import CustomFieldChoiceSet
+from users.models import ObjectPermission
 from utilities.testing import ViewTestCases, create_test_user
 
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
@@ -308,7 +309,9 @@ class CustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjec
         ...
 
     def test_get_object_changelog(self):
-        ...
+        """Regression #500: changelog tab must return 200, not 500 from deprecated user kwarg."""
+        url = self._get_url('changelog', self.instance1)
+        self.assertHttpStatus(self.client.get(url), 200)
 
     def test_create_object_with_permission(self):
         ...
@@ -351,6 +354,94 @@ class CustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjec
 
     def test_bulk_delete_objects_with_constrained_permission(self):
         ...
+
+    def test_bulk_edit_select_all_respects_full_queryset(self):
+        """Regression #380: 'select all matching query' must edit all objects, not just the current page.
+
+        The fix sets self.filterset on BulkEditView so that the _all flag causes the view to
+        build pk_list from the full queryset. We verify this by submitting a description update
+        with _all set: before the fix, pk_list is empty so zero objects are updated (200 returned,
+        no redirect); after the fix, all objects are updated and the view redirects (302).
+        """
+        model = self.model
+        content_type = ContentType.objects.get_for_model(model)
+        obj_perm = ObjectPermission(name='bulk-edit-all', actions=['view', 'change'])
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        obj_perm.object_types.add(content_type)
+
+        extra = [model(name=f"bulk-{i}", count=i) for i in range(60)]
+        model.objects.bulk_create(extra)
+        total = model.objects.count()
+        self.assertGreater(total, 50)
+
+        bulk_edit_url = self._get_url('bulk_edit')
+        response = self.client.post(bulk_edit_url, data={
+            '_all': 'on',
+            '_apply': 'Apply',
+            'pk': [],
+            'description': 'updated-by-select-all',
+        })
+        # Successful bulk edit redirects; without the fix pk_list is empty so the view
+        # returns a 200 (warning: no objects selected) instead.
+        self.assertHttpStatus(response, 302)
+        self.assertEqual(model.objects.filter(description='updated-by-select-all').count(), total)
+
+    def test_bulk_delete_select_all_respects_full_queryset(self):
+        """Regression #380: 'select all matching query' must delete all objects, not just the current page.
+
+        The fix sets self.filterset on BulkDeleteView so that the _all flag causes the view
+        to build pk_list from the full queryset rather than from the submitted pk form field.
+        We verify this by passing only 2 PKs in the form's pk field while _all is set:
+        before the fix only those 2 would be deleted; after the fix all objects are deleted.
+        """
+        model = self.model
+        content_type = ContentType.objects.get_for_model(model)
+        obj_perm = ObjectPermission(name='bulk-delete-all', actions=['view', 'delete'])
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        obj_perm.object_types.add(content_type)
+
+        extra = [model(name=f"del-{i}", count=i) for i in range(60)]
+        model.objects.bulk_create(extra)
+        total = model.objects.count()
+        self.assertGreater(total, 50)
+
+        # Pass only 2 PKs in the form field — with _all+filterset, the view should
+        # delete all objects regardless.
+        two_pks = list(model.objects.values_list('pk', flat=True)[:2])
+        bulk_delete_url = self._get_url('bulk_delete')
+        response = self.client.post(bulk_delete_url, data={
+            '_all': 'on',
+            '_confirm': '1',
+            'pk': two_pks,
+            'confirm': 'on',
+        })
+        self.assertNotIn(response.status_code, [403, 500])
+        # All objects deleted (not just the 2 submitted PKs)
+        self.assertEqual(model.objects.count(), 0)
+
+    def test_add_permission_is_sufficient_to_access_add_url(self):
+        """Regression #396: add-only permission must grant access to the add URL, not require change."""
+        model = self.model
+        content_type = ContentType.objects.get_for_model(model)
+        obj_perm = ObjectPermission(name='add-only', actions=['add'])
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        obj_perm.object_types.add(content_type)
+
+        add_url = self._get_url('add')
+        self.assertHttpStatus(self.client.get(add_url), 200)
+
+        # User with only 'add' must not be able to edit existing objects
+        edit_url = self._get_url('edit', self.instance1)
+        self.assertHttpStatus(self.client.get(edit_url), 403)
+
+        # Symmetrical: change-only permission must not grant access to the add URL
+        obj_perm.actions = ['change']
+        obj_perm.save()
+        self.assertHttpStatus(self.client.get(add_url), 403)
+        self.assertHttpStatus(self.client.get(edit_url), 200)
 
 
 class ComplexCustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase):
@@ -516,7 +607,9 @@ class ComplexCustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.Prima
         ...
 
     def test_get_object_changelog(self):
-        ...
+        """Regression #500: changelog tab must return 200, not 500 from deprecated user kwarg."""
+        url = self._get_url('changelog', self.instance_1)
+        self.assertHttpStatus(self.client.get(url), 200)
 
     def test_create_object_with_permission(self):
         ...
@@ -649,7 +742,7 @@ class ObjectFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObject
             # Skip if DCIM models are not available
             cls.site = None
             cls.device = None
-            cls.instance = None
+            cls.instance_1 = None
 
     def setUp(self):
         """Set up test data."""
@@ -680,7 +773,11 @@ class ObjectFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObject
         ...
 
     def test_get_object_changelog(self):
-        ...
+        """Regression #500: changelog tab must return 200, not 500 from deprecated user kwarg."""
+        if self.instance_1 is None:
+            self.skipTest("DCIM models not available")
+        url = self._get_url('changelog', self.instance_1)
+        self.assertHttpStatus(self.client.get(url), 200)
 
     def test_create_object_with_permission(self):
         ...
@@ -723,6 +820,21 @@ class ObjectFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObject
 
     def test_bulk_delete_objects_with_constrained_permission(self):
         ...
+
+    def test_delete_confirmation_page_with_populated_multiobject_field(self):
+        """Regression #477: delete confirmation page returns 200 and omits through-table model names."""
+        if self.instance_1 is None:
+            self.skipTest("DCIM models not available")
+        # Dynamic models have unpredictable permission names (table{id}model), so grant
+        # superuser access rather than using add_permissions().
+        self.user.is_superuser = True
+        self.user.save()
+        url = self._get_url('delete', self.instance_1)
+        response = self.client.get(url)
+        self.assertHttpStatus(response, 200)
+        # M2M through-table rows must not appear on the confirmation page —
+        # they are implementation details, not user-facing business objects.
+        self.assertNotIn(b'through_', response.content)
 
 
 class ObjectSelectorViewTestCase(TestCase):

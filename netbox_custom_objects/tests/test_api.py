@@ -1338,7 +1338,7 @@ class CustomObjectLinkPanelTest(CustomObjectsTestCase, TestCase):
                         f"{field.name}_object_id": obj.pk,
                     })
                 else:
-                    qs = model.objects.filter(**{field.name: obj})
+                    qs = model.objects.filter(**{f"{field.name}_id": obj.pk})
                 for o in qs:
                     results.append(LinkedCustomObject(custom_object=o, field=field))
         return results
@@ -1411,3 +1411,207 @@ class CustomObjectLinkPanelTest(CustomObjectsTestCase, TestCase):
 
         entries = self._linked_objects_for(device_b)
         self.assertEqual(entries, [], "Expected no entries for unrelated device")
+
+    def test_self_referential_fk_does_not_raise(self):
+        """
+        Regression for #508: self-referential Object fields must not raise
+        ValueError when no_cache=True causes a fresh class to be generated.
+
+        get_model(no_cache=True) returns a newly constructed Python class.
+        For a self-referential field, target_obj was created via the cached
+        class, so filter(**{field_name: target_obj}) triggers Django's
+        isinstance check between two class objects that are logically identical
+        but not identity-equal — raising "Must be TableNModel instance".
+
+        The fix filters by PK (_id suffix) instead, bypassing the check.
+        """
+        from core.models import ObjectType
+        from netbox_custom_objects.constants import APP_LABEL
+
+        cot = self.create_custom_object_type(name='SelfRefPanel', slug='self-ref-panel')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        # Look up the COT's own ObjectType for the self-referential field.
+        cot_model_name = cot.get_model()._meta.model_name
+        self_ot = ObjectType.objects.get(app_label=APP_LABEL, model=cot_model_name)
+        self.create_custom_object_type_field(
+            cot, name='parent', label='Parent', type='object', related_object_type=self_ot,
+        )
+
+        model = cot.get_model()
+        target = model.objects.create(name='target-obj')
+        child = model.objects.create(name='child-obj', parent=target)
+
+        try:
+            entries = self._linked_objects_for(target)
+        except ValueError as exc:
+            self.fail(f'left_page() raised ValueError for self-referential field: {exc}')
+
+        self.assertTrue(
+            any(e.custom_object.pk == child.pk for e in entries),
+            "Child object not found in panel entries for self-referential field",
+        )
+
+
+class CrossCOTMultiObjectAPITest(CustomObjectsTestCase, TestCase):
+    """
+    Tests for API PATCH/PUT behaviour when a CO has a cross-COT multiobject
+    (non-polymorphic M2M) field pointing to another COT.  Covers issue #443.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.client = APIClient()
+        token_key = create_token(self.user)
+        self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
+
+        # COT_SOURCE has a multiobject field → COT_TARGET
+        self.cot_target = CustomObjectsTestCase.create_custom_object_type(
+            name='CrossTarget', slug='cross-target'
+        )
+        CustomObjectsTestCase.create_custom_object_type_field(
+            self.cot_target, name='name', label='Name', type='text',
+            primary=True, required=True,
+        )
+
+        self.cot_source = CustomObjectsTestCase.create_custom_object_type(
+            name='CrossSource', slug='cross-source'
+        )
+        CustomObjectsTestCase.create_custom_object_type_field(
+            self.cot_source, name='name', label='Name', type='text',
+            primary=True, required=True,
+        )
+        CustomObjectsTestCase.create_custom_object_type_field(
+            self.cot_source,
+            name='refs',
+            label='References',
+            type='multiobject',
+            related_object_type=self.cot_target.object_type,
+        )
+
+        # Per cross-COT FK convention: generate source first, refresh target, then target.
+        self.model_source = self.cot_source.get_model()
+        self.cot_target.refresh_from_db()
+        self.model_target = self.cot_target.get_model()
+
+        self.obj_target1 = self.model_target.objects.create(name='Target-A')
+        self.obj_target2 = self.model_target.objects.create(name='Target-B')
+        self.obj_target3 = self.model_target.objects.create(name='Target-C')
+        self.obj_source = self.model_source.objects.create(name='Source-1')
+        self.obj_source.refs.add(self.obj_target1)
+
+    def _detail_url(self, instance):
+        return reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-detail',
+            kwargs={'pk': instance.pk, 'custom_object_type': instance.custom_object_type.slug},
+        )
+
+    def _add_perm(self, action, model):
+        perm = ObjectPermission(name=f'{action}-{model._meta.model_name}', actions=[action])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(model))
+        return perm
+
+    def test_patch_updates_cross_cot_m2m_field(self):
+        """#443 – PATCH with a list of target PKs must update the M2M field."""
+        self._add_perm('change', self.model_source)
+
+        # Confirm initial state.
+        self.assertSetEqual(
+            set(self.obj_source.refs.values_list('id', flat=True)),
+            {self.obj_target1.pk},
+        )
+
+        response = self.client.patch(
+            self._detail_url(self.obj_source),
+            {'refs': [self.obj_target2.pk, self.obj_target3.pk]},
+            format='json',
+            **self.header,
+        )
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK,
+            f'Expected 200; got {response.status_code}: {getattr(response, "data", response.content)}',
+        )
+
+        self.obj_source.refresh_from_db()
+        self.assertSetEqual(
+            set(self.obj_source.refs.values_list('id', flat=True)),
+            {self.obj_target2.pk, self.obj_target3.pk},
+            'PATCH must replace M2M values for a cross-COT multiobject field.',
+        )
+
+    def test_patch_clears_cross_cot_m2m_field(self):
+        """#443 – PATCH with an empty list must clear the M2M field."""
+        self._add_perm('change', self.model_source)
+
+        response = self.client.patch(
+            self._detail_url(self.obj_source),
+            {'refs': []},
+            format='json',
+            **self.header,
+        )
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK,
+            f'Expected 200; got {response.status_code}: {getattr(response, "data", response.content)}',
+        )
+
+        self.obj_source.refresh_from_db()
+        self.assertSetEqual(
+            set(self.obj_source.refs.values_list('id', flat=True)),
+            set(),
+            'PATCH with empty list must clear M2M values.',
+        )
+
+    def test_patch_scalar_field_preserves_m2m(self):
+        """#443 – PATCH a scalar field must not disturb existing M2M values."""
+        self._add_perm('change', self.model_source)
+
+        response = self.client.patch(
+            self._detail_url(self.obj_source),
+            {'name': 'Updated Name'},
+            format='json',
+            **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.obj_source.refresh_from_db()
+        self.assertEqual(self.obj_source.name, 'Updated Name')
+        self.assertSetEqual(
+            set(self.obj_source.refs.values_list('id', flat=True)),
+            {self.obj_target1.pk},
+            'PATCH on a scalar field must not clear existing M2M relationships.',
+        )
+
+    def test_put_updates_scalar_field(self):
+        """#443 – PUT must update scalar fields (issue title covers both PATCH and PUT)."""
+        self._add_perm('change', self.model_source)
+
+        # PUT requires the full object payload; supply name + empty refs.
+        response = self.client.put(
+            self._detail_url(self.obj_source),
+            {'name': 'Put Updated Name', 'refs': []},
+            format='json',
+            **self.header,
+        )
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK,
+            f'Expected 200; got {response.status_code}: {getattr(response, "data", response.content)}',
+        )
+
+        self.obj_source.refresh_from_db()
+        self.assertEqual(self.obj_source.name, 'Put Updated Name')
+
+    def test_get_response_includes_cross_cot_m2m_field(self):
+        """#443 – GET must return the M2M field as a nested list."""
+        self._add_perm('view', self.model_source)
+
+        response = self.client.get(self._detail_url(self.obj_source), **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('refs', response.data, 'Response must include the refs M2M field.')
+        ref_ids = [r['id'] for r in response.data['refs']]
+        self.assertIn(self.obj_target1.pk, ref_ids)

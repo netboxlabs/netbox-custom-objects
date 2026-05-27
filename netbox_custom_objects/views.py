@@ -27,6 +27,7 @@ from utilities.forms.widgets import HTMXSelect
 from utilities.htmx import htmx_partial
 from utilities.object_types import object_type_name
 from utilities.templatetags.builtins.filters import bettertitle
+from utilities.permissions import get_permission_for_model
 from utilities.views import ConditionalLoginRequiredMixin, ViewTab, get_viewname, register_model_view
 
 from netbox_custom_objects.filtersets import get_filterset_class
@@ -39,6 +40,15 @@ from netbox_custom_objects.dynamic_forms import build_filterset_form_class
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name
 
 logger = logging.getLogger("netbox_custom_objects.views")
+
+
+def _is_in_branch():
+    """True if a netbox-branching branch is active in this context."""
+    try:
+        from netbox_branching.contextvars import active_branch
+        return active_branch.get() is not None
+    except ImportError:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -584,6 +594,15 @@ class CustomObjectEditView(generic.ObjectEditView):
     queryset = None
     object = None
 
+    def get_required_permission(self):
+        # ObjectEditView.dispatch() sets _permission_action based on whether kwargs is
+        # truthy. Our add URL always includes 'custom_object_type', so kwargs is truthy
+        # even when adding — causing 'change' permission to be required instead of 'add'.
+        # setup() sets self.object before dispatch() runs, so self.object.pk is the
+        # semantically correct way to distinguish a new object (no pk) from an edit.
+        action = 'change' if (self.object and self.object.pk) else 'add'
+        return get_permission_for_model(self.queryset.model, action)
+
     def setup(self, request, *args, **kwargs):
         super().setup(request, *args, **kwargs)
         self.object = self.get_object()
@@ -969,6 +988,23 @@ class CustomObjectDeleteView(generic.ObjectDeleteView):
         context['return_url'] = self.get_return_url(request, obj)
         return render(request, self.template_name, context)
 
+    def _get_dependent_objects(self, obj):
+        dependent_objects = super()._get_dependent_objects(obj)
+        # M2M through-table rows (named Through_custom_objects_<id>_<field>) are
+        # implementation details, not business objects.  Strip them from the
+        # confirmation page so users see meaningful dependent objects only.
+        return {
+            model: instances
+            for model, instances in dependent_objects.items()
+            if not (
+                model._meta.app_label == APP_LABEL
+                and model._meta.model_name.startswith('through_')
+            )
+        }
+
+    def get_extra_context(self, request, instance):
+        return {'branch_warning': _is_in_branch()}
+
 
 @register_model_view(CustomObject, "bulk_edit", path="edit", detail=False)
 class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
@@ -981,6 +1017,7 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
     def setup(self, request, *args, **kwargs):
         super().setup(request, *args, **kwargs)
         self.queryset = self.get_queryset(request)
+        self.filterset = get_filterset_class(self.queryset.model)
         self.form = self.get_form(self.queryset)
         self.table = self.get_table(self.queryset, request).__class__
 
@@ -1174,6 +1211,7 @@ class CustomObjectBulkDeleteView(CustomObjectTableMixin, generic.BulkDeleteView)
     def setup(self, request, *args, **kwargs):
         super().setup(request, *args, **kwargs)
         self.queryset = self.get_queryset(request)
+        self.filterset = get_filterset_class(self.queryset.model)
         self.table = self.get_table(self.queryset, request).__class__
 
     def get_queryset(self, request):
@@ -1356,7 +1394,7 @@ class CustomObjectChangeLogView(ConditionalLoginRequiredMixin, View):
         )
 
         objectchanges_table = ObjectChangeTable(
-            data=objectchanges, orderable=False, user=request.user
+            data=objectchanges, orderable=False
         )
         objectchanges_table.configure(request)
 
