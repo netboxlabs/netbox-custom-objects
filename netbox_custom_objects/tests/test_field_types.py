@@ -8,7 +8,7 @@ from django.core.exceptions import ValidationError
 from django.test import TestCase
 
 from core.models import ObjectType
-from netbox_custom_objects.field_types import MultiObjectFieldType, ObjectFieldType
+from netbox_custom_objects.field_types import MultiObjectFieldType, MultiSelectFieldType, ObjectFieldType, SelectFieldType
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from .base import CustomObjectsTestCase
 
@@ -536,7 +536,6 @@ class SelectFieldTypeTestCase(FieldTypeTestCase):
 
     def test_select_field_display_value_returns_label(self):
         """get_display_value() must return the human-readable label, not the raw key."""
-        from netbox_custom_objects.field_types import SelectFieldType
         self.create_custom_object_type_field(
             self.custom_object_type,
             name="status",
@@ -626,7 +625,6 @@ class MultiSelectFieldTypeTestCase(FieldTypeTestCase):
 
     def test_multiselect_field_display_value_returns_labels(self):
         """get_display_value() must return comma-joined human-readable labels, not raw keys."""
-        from netbox_custom_objects.field_types import MultiSelectFieldType
         self.create_custom_object_type_field(
             self.custom_object_type,
             name="tags",

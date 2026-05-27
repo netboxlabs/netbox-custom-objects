@@ -483,6 +483,8 @@ class SelectFieldType(FieldType):
 
         class _SelectLabelColumn(tables.Column):
             def render(self, value):
+                if value is None:
+                    return self.default
                 return choices_dict.get(value, value)
 
         return _SelectLabelColumn()
