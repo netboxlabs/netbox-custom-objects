@@ -224,6 +224,8 @@ class CustomObjectTypeFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.Pri
 class CustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase):
     """Test cases for dynamic CustomObject views."""
 
+    query_count_model_label = 'customobject-simple'
+
     @classmethod
     def setUpTestData(cls):
         """Set up test data."""
@@ -447,6 +449,8 @@ class CustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjec
 class ComplexCustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase):
     """Test cases for complex custom objects with various field types."""
 
+    query_count_model_label = 'customobject-complex'
+
     @classmethod
     def setUpTestData(cls):
         """Set up test data."""
@@ -656,6 +660,8 @@ class ComplexCustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.Prima
 
 class ObjectFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase):
     """Test cases for custom objects with object and multi-object fields."""
+
+    query_count_model_label = 'customobject-objectfields'
 
     @classmethod
     def setUpTestData(cls):
