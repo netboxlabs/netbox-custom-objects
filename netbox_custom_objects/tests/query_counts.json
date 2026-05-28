@@ -1,6 +1,6 @@
 {
-  "customobject-complex:list_objects_with_permission": 30,
-  "customobject-objectfields:list_objects_with_permission": 38,
-  "customobject-simple:list_objects_with_permission": 26,
+  "customobject-complex:list_objects_with_permission": 39,
+  "customobject-objectfields:list_objects_with_permission": 50,
+  "customobject-simple:list_objects_with_permission": 33,
   "customobjecttype:list_objects_with_permission": 32
 }
