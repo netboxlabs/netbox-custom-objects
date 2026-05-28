@@ -131,9 +131,12 @@ class CustomObject(
         primary_field_value = None
         if primary_field:
             field_type = FIELD_TYPE_CLASS[primary_field["field"].type]()
-            primary_field_value = field_type.get_display_value(
-                self, primary_field["name"]
-            )
+            try:
+                primary_field_value = field_type.get_display_value(
+                    self, primary_field["name"]
+                )
+            except AttributeError:
+                primary_field_value = None
         if not primary_field_value:
             return f"{self.custom_object_type.display_name} {self.id}"
         return str(primary_field_value) or str(self.id)
@@ -454,7 +457,7 @@ class CustomObjectType(NetBoxModel):
                         field.name, field.pk, self.slug,
                     )
                 else:
-                    logger.debug(
+                    logger.warning(
                         "Skipping field %r (pk=%s) on COT %r: related_object_type_id=%s "
                         "references a ContentType that no longer exists.",
                         field.name, field.pk, self.slug, field.related_object_type_id,
