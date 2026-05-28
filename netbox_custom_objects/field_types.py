@@ -163,6 +163,33 @@ def _make_lazy_cot_fk(cot, field, on_delete, **field_kwargs):
     )
 
 
+class _LazyAPIMultipleChoiceField(DynamicMultipleChoiceField):
+    """
+    DynamicMultipleChoiceField variant that mirrors the DynamicChoiceField
+    behaviour of clearing choices to [] when no value is currently selected.
+
+    DynamicMultipleChoiceField (NetBox core) has no `else` branch in
+    get_bound_field(), so when the field has no current selection the full
+    choices list is left in place and every option is rendered as an <option>
+    element by the APISelect template (which delegates to Django's standard
+    select.html).  For large built-in choice sets such as IATA (~10 000
+    entries) this generates enough DOM nodes to OOM the browser.
+
+    The APISelectMultiple widget already loads options lazily via AJAX; the
+    static choices list is only needed at POST time to validate submitted
+    values.  Clearing it on GET is safe.
+    """
+    def get_bound_field(self, form, field_name):
+        from django.forms import BoundField as _BF
+        bound_field = _BF(form, self, field_name)
+        data = bound_field.value()
+        if data is not None:
+            self.choices = [c for c in self.choices if c[0] and c[0] in data]
+        else:
+            self.choices = []
+        return bound_field
+
+
 class FieldType:
 
     def get_display_value(self, instance, field_name):
@@ -474,7 +501,7 @@ class JSONFieldType(FieldType):
 class SelectFieldType(FieldType):
     def get_filterform_field(self, field, **kwargs):
         return DynamicMultipleChoiceField(
-            choices=field.choice_set.choices,
+            choices=[],
             label=field,
             required=False,
             widget=APISelectMultiple(
@@ -525,9 +552,8 @@ class SelectFieldType(FieldType):
 
 class MultiSelectFieldType(FieldType):
     def get_filterform_field(self, field, **kwargs):
-        choices = field.choice_set.choices
         return DynamicMultipleChoiceField(
-            choices=choices,
+            choices=[],
             label=field,
             required=False,
             widget=APISelectMultiple(
@@ -566,13 +592,11 @@ class MultiSelectFieldType(FieldType):
                 choices=choices, required=field.required, initial=initial
             )
         else:
-            field_class = DynamicMultipleChoiceField
-            widget_class = APISelectMultiple
-            return field_class(
+            return _LazyAPIMultipleChoiceField(
                 choices=choices,
                 required=field.required,
                 initial=initial,
-                widget=widget_class(
+                widget=APISelectMultiple(
                     api_url=f"/api/extras/custom-field-choice-sets/{field.choice_set.pk}/choices/"
                 ),
             )
