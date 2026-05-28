@@ -237,19 +237,72 @@ Attributes that match their defaults are omitted from exported documents to keep
 
 ### Exporting a Schema
 
-Use the Python API from `netbox_custom_objects.schema.exporter`. This is typically called
-from a management command or script:
+Use the Python API from `netbox_custom_objects.schema.exporter`. There are two supported
+ways to run it:
+
+#### Option 1 — NetBox shell (recommended)
+
+Run `manage.py nbshell` from the NetBox project directory and paste or pipe your script.
+Django is fully initialised for you, and all models are importable immediately:
+
+```bash
+cd /opt/netbox/netbox
+python manage.py nbshell
+```
+
+Then inside the shell:
 
 ```python
 from netbox_custom_objects.schema.exporter import export_cots
 from netbox_custom_objects.models import CustomObjectType
+import json
 
 cots = CustomObjectType.objects.filter(slug__in=["circuit", "device-profile"])
 document = export_cots(cots)
-
-import json
 print(json.dumps(document, indent=2))
 ```
+
+To run a script file non-interactively, pipe it in:
+
+```bash
+python manage.py nbshell < export_cot.py
+```
+
+#### Option 2 — Standalone script
+
+If you need to run a `.py` file directly (e.g. from a cron job or CI pipeline), you must
+bootstrap Django yourself **before** importing any NetBox or plugin code:
+
+```python
+import os
+import django
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "netbox.settings")
+django.setup()  # must be called before any model or app imports
+
+from netbox_custom_objects.schema.exporter import export_cots
+from netbox_custom_objects.models import CustomObjectType
+import json
+
+cots = CustomObjectType.objects.filter(slug__in=["circuit", "device-profile"])
+document = export_cots(cots)
+print(json.dumps(document, indent=2))
+```
+
+Run from the directory that contains `manage.py` so the NetBox settings module is on the
+path:
+
+```bash
+cd /opt/netbox/netbox
+python /path/to/export_cot.py
+```
+
+!!! warning "Missing `django.setup()` causes `AppRegistryNotReady`"
+    Setting `DJANGO_SETTINGS_MODULE` alone is not sufficient — Django also needs
+    `django.setup()` to populate its app registry. Without it you will see:
+    `AppRegistryNotReady: Apps aren't loaded yet.`
+
+---
 
 `export_cots` returns a dict with `schema_version` and `types`. For a single COT without the
 document wrapper, use `export_cot(cot)`.
