@@ -588,6 +588,34 @@ class SelectFieldTypeTestCase(FieldTypeTestCase):
         column = SelectFieldType().get_table_column_field(field)
         self.assertEqual(column.render(value='unknown'), 'unknown')
 
+    def test_get_field_value_returns_label_for_select(self):
+        """get_field_value template filter returns the human-readable label for select fields."""
+        from netbox_custom_objects.templatetags.custom_object_utils import get_field_value
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="status",
+            label="Status",
+            type="select",
+            choice_set=self.choice_set,
+        )
+        model = self.custom_object_type.get_model(no_cache=True)
+        instance = model.objects.create(name="Test", status="choice1")
+        self.assertEqual(get_field_value(instance, cotf), "Choice 1")
+
+    def test_get_field_value_returns_raw_value_when_select_is_none(self):
+        """get_field_value returns None (falsy) when the select field is unset."""
+        from netbox_custom_objects.templatetags.custom_object_utils import get_field_value
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="status",
+            label="Status",
+            type="select",
+            choice_set=self.choice_set,
+        )
+        model = self.custom_object_type.get_model(no_cache=True)
+        instance = model.objects.create(name="Test")
+        self.assertIsNone(get_field_value(instance, cotf))
+
 
 class MultiSelectFieldTypeTestCase(FieldTypeTestCase):
     """Test cases for multiselect field type."""
@@ -674,6 +702,34 @@ class MultiSelectFieldTypeTestCase(FieldTypeTestCase):
         field.choices = [('choice1', 'Choice 1')]
         column = MultiSelectFieldType().get_table_column_field(field)
         self.assertEqual(column.render(value=['choice1', 'unknown']), 'Choice 1, unknown')
+
+    def test_get_field_value_returns_label_list_for_multiselect(self):
+        """get_field_value template filter returns a list of labels for multiselect fields."""
+        from netbox_custom_objects.templatetags.custom_object_utils import get_field_value
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="tags",
+            label="Tags",
+            type="multiselect",
+            choice_set=self.choice_set,
+        )
+        model = self.custom_object_type.get_model(no_cache=True)
+        instance = model.objects.create(name="Test", tags=["choice1", "choice3"])
+        self.assertEqual(get_field_value(instance, cotf), ["Choice 1", "Choice 3"])
+
+    def test_get_field_value_returns_empty_list_when_multiselect_is_none(self):
+        """get_field_value returns None (falsy) when the multiselect field is unset."""
+        from netbox_custom_objects.templatetags.custom_object_utils import get_field_value
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="tags",
+            label="Tags",
+            type="multiselect",
+            choice_set=self.choice_set,
+        )
+        model = self.custom_object_type.get_model(no_cache=True)
+        instance = model.objects.create(name="Test")
+        self.assertIsNone(get_field_value(instance, cotf))
 
 
 class ObjectFieldTypeTestCase(FieldTypeTestCase):

@@ -27,8 +27,14 @@ def get_field_type_verbose_name(field: CustomObjectTypeField) -> str:
 
 
 @register.filter(name="get_field_value")
-def get_field_value(obj, field: CustomObjectTypeField) -> str:
-    return getattr(obj, field.name)
+def get_field_value(obj, field: CustomObjectTypeField):
+    value = getattr(obj, field.name)
+    if field.type == CustomFieldTypeChoices.TYPE_SELECT and value:
+        return getattr(obj, f'get_{field.name}_display')() or value
+    if field.type == CustomFieldTypeChoices.TYPE_MULTISELECT and value:
+        choices_dict = dict(obj._meta.get_field(field.name).base_field.choices)
+        return [choices_dict.get(v, v) for v in value]
+    return value
 
 
 @register.filter(name="get_field_is_ui_visible")
