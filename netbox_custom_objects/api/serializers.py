@@ -692,8 +692,44 @@ def get_serializer_class(model, skip_object_fields=False):
         attrs,
     )
 
-    # Register the serializer in the current module so NetBox can find it
-    current_module = sys.modules[__name__]
-    setattr(current_module, serializer_name, serializer)
+    # Register the FULL serializer as a module attribute so NetBox's import_string()
+    # and the module-level __getattr__ fallback can find it.
+    # The partial variant (skip_object_fields=True) is used only as a nested field
+    # descriptor inside another serializer class and must NOT be stored on the module
+    # — doing so would silently replace the full serializer with an incomplete one
+    # that drops FK fields, causing SerializerNotFound or data loss on the next
+    # request that expects those fields (issue #370).
+    if not skip_object_fields:
+        current_module = sys.modules[__name__]
+        setattr(current_module, serializer_name, serializer)
 
     return serializer
+
+
+def __getattr__(name):
+    """
+    Module-level lazy resolution for Table{N}ModelSerializer attributes (PEP 562).
+
+    NetBox's get_serializer_for_model() resolves serializers via
+    import_string("netbox_custom_objects.api.serializers.TableNModelSerializer"),
+    which ultimately calls getattr(module, name).  That lookup hits this hook
+    when the attribute has not yet been registered — for example in a worker
+    whose ready() ran against an empty database, or in any worker that started
+    before a given COT was created.
+
+    Generating on demand here means SerializerNotFound is never raised just
+    because startup-time registration was skipped or missed (issue #370).
+    The generated serializer is stored via setattr inside get_serializer_class(),
+    so subsequent lookups return it directly from __dict__ without re-entering
+    this hook.
+    """
+    match = re.match(r'^Table(\d+)ModelSerializer$', name)
+    if match:
+        cot_id = int(match.group(1))
+        try:
+            obj = CustomObjectType.objects.get(pk=cot_id)
+            model = obj.get_model()
+            return get_serializer_class(model)
+        except Exception:
+            pass
+    raise AttributeError(f"module '{__name__}' has no attribute {name!r}")
