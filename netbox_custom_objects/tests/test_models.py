@@ -2164,7 +2164,7 @@ class LazySerializerRegistrationTestCase(CustomObjectsTestCase, TestCase):
         parent_model = self.parent_cot.get_model()
         child_model = self.child_cot.get_model()
         parent_serializer_name = f"{parent_model._meta.object_name}Serializer"
-        child_serializer_name = f"{child_model._meta.object_name}Serializer"
+        # child_serializer_name = f"{child_model._meta.object_name}Serializer"
 
         # Register parent's full serializer first
         full_parent_serializer = get_serializer_class(parent_model)
