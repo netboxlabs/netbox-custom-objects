@@ -25,7 +25,7 @@ from netbox.search import registry
 from netbox.search.backends import get_backend
 from netbox_custom_objects.api.serializers import get_serializer_class
 from netbox_custom_objects.constants import APP_LABEL
-from netbox_custom_objects.field_types import LazyForeignKey
+from netbox_custom_objects.field_types import LazyForeignKey, ObjectFieldType, TextFieldType
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name
@@ -241,6 +241,31 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
                          "OBJECT field must be absent from stub model")
         # Must not raise FieldDoesNotExist, RecursionError, or any other exception.
         cot.register_custom_object_search_index(stub_model)
+
+    def test_skipped_object_field_with_stale_content_type_logs_warning(self):
+        """When get_model_field raises NotImplementedError for an object field whose
+        related_object_type_id is non-null (stale/deleted ContentType), a WARNING must
+        be emitted — not just DEBUG — so operators can identify the broken field.
+        Regression test for the fix in _fetch_and_generate_field_attrs (issue #353).
+        """
+        cot = self.create_custom_object_type(name="StaleCtTest", slug="stale-ct-test")
+        self.create_custom_object_type_field(
+            cot,
+            name="device",
+            label="Device",
+            type="object",
+            related_object_type=self.get_device_object_type(),
+        )
+        CustomObjectType.clear_model_cache(cot.id)
+        # Simulate a stale ContentType: get_model_field raises NotImplementedError
+        # while related_object_type_id is still set (non-null).
+        with patch.object(ObjectFieldType, 'get_model_field', side_effect=NotImplementedError):
+            with self.assertLogs('netbox_custom_objects.models', level='WARNING') as cm:
+                cot.get_model()
+        self.assertTrue(
+            any('device' in msg for msg in cm.output),
+            f"Expected WARNING mentioning field name 'device'; got: {cm.output}",
+        )
 
     @skip("Fails in suite but not individually")
     def test_custom_object_type_delete_removes_table(self):
@@ -889,6 +914,22 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
         instance = self.model(name="ab")
         with self.assertRaises(ValidationError):
             instance.full_clean()
+
+    def test_str_falls_back_when_primary_field_raises_attribute_error(self):
+        """CustomObject.__str__ must return "<display_name> <id>" rather than
+        propagating an AttributeError when get_display_value fails.  This can
+        happen when the generated model class is missing an attribute for the
+        primary field (e.g. the field was silently skipped during regeneration
+        due to a stale ContentType).  Regression test for issue #353.
+        """
+        instance = self.model.objects.create(name="Test Instance")
+        # Confirm normal __str__ works first.
+        self.assertEqual(str(instance), "Test Instance")
+        # Simulate the stale-model scenario: get_display_value raises AttributeError.
+        with patch.object(TextFieldType, 'get_display_value', side_effect=AttributeError("missing attr")):
+            result = str(instance)
+        expected = f"{self.custom_object_type.display_name} {instance.id}"
+        self.assertEqual(result, expected)
 
 
 class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
