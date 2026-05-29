@@ -56,7 +56,7 @@ class CustomObjectLink(PluginTemplateExtension):
         target_obj = self.context["object"]
 
         for field in list(non_poly_fields) + list(poly_fields):
-            model = field.custom_object_type.get_model(no_cache=True)
+            model = field.custom_object_type.get_model()
 
             if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                 if field.is_polymorphic:
@@ -80,11 +80,7 @@ class CustomObjectLink(PluginTemplateExtension):
                     })
                 else:
                     # Filter by PK rather than by instance to avoid Django's
-                    # isinstance check in check_query_object_type.  When
-                    # no_cache=True generates a fresh class object, a
-                    # self-referential field's target_obj (from the cached
-                    # class) and model (the fresh class) are not identity-equal,
-                    # causing "Must be TableNModel instance" ValueError (#508).
+                    # isinstance check in check_query_object_type (#508).
                     linked_objects = model.objects.filter(**{f"{field.name}_id": target_obj.pk})
 
             for model_object in linked_objects:

@@ -5,6 +5,7 @@ import sys
 from core.models import ObjectType
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
+from django.db.utils import OperationalError, ProgrammingError
 from django.urls import NoReverseMatch
 from django.utils.translation import gettext_lazy as _
 from extras.choices import CustomFieldTypeChoices
@@ -692,9 +693,17 @@ def get_serializer_class(model, skip_object_fields=False):
         attrs,
     )
 
-    # Register the serializer in the current module so NetBox can find it
-    current_module = sys.modules[__name__]
-    setattr(current_module, serializer_name, serializer)
+    # Register the FULL serializer as a module attribute so NetBox's import_string()
+    # can find it (the serializer_resolver below generates on demand; this keeps
+    # any direct import-path lookups working too).
+    # The partial variant (skip_object_fields=True) is used only as a nested field
+    # descriptor inside another serializer class and must NOT be stored on the module
+    # — doing so would silently replace the full serializer with an incomplete one
+    # that drops FK fields, causing SerializerNotFound or data loss on the next
+    # request that expects those fields (issue #370).
+    if not skip_object_fields:
+        current_module = sys.modules[__name__]
+        setattr(current_module, serializer_name, serializer)
 
     return serializer
 
@@ -705,6 +714,12 @@ def serializer_resolver(model, prefix=''):
     Called by ``utilities.api.get_serializer_for_model`` before its default
     import-path lookup.  Returns ``None`` for non-CO models so the default
     lookup runs (including this plugin's static CustomObjectType serializer).
+
+    This supersedes the import-path/``__getattr__`` fallback approach: because
+    the resolver runs before any import path is built for a CO model, the
+    serializer is always generated on demand and ``SerializerNotFound`` is never
+    raised just because startup-time registration was skipped or missed
+    (issue #370).
     """
     if (
         getattr(model, '_meta', None)
