@@ -246,11 +246,12 @@ Run `manage.py nbshell` from the NetBox project directory and paste or pipe your
 Django is fully initialised for you, and all models are importable immediately:
 
 ```bash
+# Replace /opt/netbox with your NetBox installation root.
 cd /opt/netbox/netbox
 python manage.py nbshell
 ```
 
-Then inside the shell:
+Then inside the shell, export specific COTs by slug:
 
 ```python
 from netbox_custom_objects.schema.exporter import export_cots
@@ -262,16 +263,40 @@ document = export_cots(cots)
 print(json.dumps(document, indent=2))
 ```
 
+Or export **all** COTs at once:
+
+```python
+from netbox_custom_objects.schema.exporter import export_cots
+from netbox_custom_objects.models import CustomObjectType
+import json
+
+cots = CustomObjectType.objects.all()
+document = export_cots(cots)
+print(json.dumps(document, indent=2))
+```
+
 To run a script file non-interactively, pipe it in:
 
 ```bash
-python manage.py nbshell < export_cot.py
+python manage.py nbshell < /path/to/export_cot.py
 ```
 
 #### Option 2 — Standalone script
 
 If you need to run a `.py` file directly (e.g. from a cron job or CI pipeline), you must
-bootstrap Django yourself **before** importing any NetBox or plugin code:
+activate NetBox's virtualenv and bootstrap Django yourself **before** importing any NetBox
+or plugin code:
+
+```bash
+# Replace /opt/netbox with your NetBox installation root.
+export NETBOX_ROOT=/opt/netbox
+
+source "$NETBOX_ROOT/venv/bin/activate"
+cd "$NETBOX_ROOT/netbox"
+PYTHONPATH="$NETBOX_ROOT/netbox" python /path/to/export_cot.py
+```
+
+Where `/path/to/export_cot.py` is your script, containing:
 
 ```python
 import os
@@ -287,14 +312,6 @@ import json
 cots = CustomObjectType.objects.filter(slug__in=["circuit", "device-profile"])
 document = export_cots(cots)
 print(json.dumps(document, indent=2))
-```
-
-Run from the directory that contains `manage.py` so the NetBox settings module is on the
-path:
-
-```bash
-cd /opt/netbox/netbox
-python /path/to/export_cot.py
 ```
 
 !!! warning "Missing `django.setup()` causes `AppRegistryNotReady`"
