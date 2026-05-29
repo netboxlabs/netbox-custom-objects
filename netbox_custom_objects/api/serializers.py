@@ -5,6 +5,7 @@ import sys
 from core.models import ObjectType
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
+from django.db.utils import OperationalError, ProgrammingError
 from django.urls import NoReverseMatch
 from django.utils.translation import gettext_lazy as _
 from extras.choices import CustomFieldTypeChoices
@@ -730,6 +731,11 @@ def __getattr__(name):
             obj = CustomObjectType.objects.get(pk=cot_id)
             model = obj.get_model()
             return get_serializer_class(model)
-        except Exception:
+        except (CustomObjectType.DoesNotExist, ProgrammingError, OperationalError, LookupError):
             pass
+        except Exception:
+            logger.warning(
+                "Unexpected error generating serializer for %r; serializer will not be available",
+                name, exc_info=True,
+            )
     raise AttributeError(f"module '{__name__}' has no attribute {name!r}")
