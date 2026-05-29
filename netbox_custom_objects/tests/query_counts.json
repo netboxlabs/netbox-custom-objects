@@ -1,6 +1,6 @@
 {
-  "customobjecttype:list_objects_with_permission": 32,
-  "table285model:list_objects_with_permission": 39,
-  "table289model:list_objects_with_permission": 33,
-  "table290model:list_objects_with_permission": 50
+  "customobject-complex:list_objects_with_permission": 41,
+  "customobject-objectfields:list_objects_with_permission": 50,
+  "customobject-simple:list_objects_with_permission": 33,
+  "customobjecttype:list_objects_with_permission": 32
 }

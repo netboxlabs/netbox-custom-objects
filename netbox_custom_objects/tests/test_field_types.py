@@ -2,13 +2,19 @@
 Tests for all the different field types supported by Custom Object Type Fields.
 """
 from unittest import skip
+from unittest.mock import Mock
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from django.core.exceptions import ValidationError
 from django.test import TestCase
 
 from core.models import ObjectType
-from netbox_custom_objects.field_types import MultiObjectFieldType, ObjectFieldType
+from netbox_custom_objects.field_types import (
+    MultiObjectFieldType,
+    MultiSelectFieldType,
+    ObjectFieldType,
+    SelectFieldType,
+)
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from .base import CustomObjectsTestCase
 
@@ -534,6 +540,82 @@ class SelectFieldTypeTestCase(FieldTypeTestCase):
 
         self.assertEqual(instance.status, "choice2")
 
+    def test_select_field_display_value_returns_label(self):
+        """get_display_value() must return the human-readable label, not the raw key."""
+        self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="status",
+            label="Status",
+            type="select",
+            choice_set=self.choice_set,
+        )
+        model = self.custom_object_type.get_model(no_cache=True)
+        instance = model.objects.create(name="Test", status="choice1")
+        field_type = SelectFieldType()
+        self.assertEqual(field_type.get_display_value(instance, "status"), "Choice 1")
+
+    def test_select_primary_field_str_uses_label(self):
+        """When a Selection field is the primary field, __str__ must show the label."""
+        cot = self.create_custom_object_type(
+            name="StrSelectObject",
+            slug="str-select-object",
+            verbose_name_plural="StrSelectObjects",
+        )
+        self.create_custom_object_type_field(
+            cot,
+            name="status",
+            label="Status",
+            type="select",
+            choice_set=self.choice_set,
+            primary=True,
+        )
+        model = cot.get_model()
+        instance = model.objects.create(status="choice2")
+        self.assertEqual(str(instance), "Choice 2")
+
+    def test_select_column_render_returns_label(self):
+        """get_table_column_field() render() translates a raw key to its human-readable label."""
+        field = Mock()
+        field.choices = [('choice1', 'Choice 1'), ('choice2', 'Choice 2')]
+        column = SelectFieldType().get_table_column_field(field)
+        self.assertEqual(column.render(value='choice1'), 'Choice 1')
+        self.assertEqual(column.render(value='choice2'), 'Choice 2')
+
+    def test_select_column_render_unknown_key_falls_back_to_raw_value(self):
+        """get_table_column_field() render() returns the raw key when it is not in choices."""
+        field = Mock()
+        field.choices = [('choice1', 'Choice 1')]
+        column = SelectFieldType().get_table_column_field(field)
+        self.assertEqual(column.render(value='unknown'), 'unknown')
+
+    def test_get_field_value_returns_label_for_select(self):
+        """get_field_value template filter returns the human-readable label for select fields."""
+        from netbox_custom_objects.templatetags.custom_object_utils import get_field_value
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="status",
+            label="Status",
+            type="select",
+            choice_set=self.choice_set,
+        )
+        model = self.custom_object_type.get_model(no_cache=True)
+        instance = model.objects.create(name="Test", status="choice1")
+        self.assertEqual(get_field_value(instance, cotf), "Choice 1")
+
+    def test_get_field_value_returns_raw_value_when_select_is_none(self):
+        """get_field_value returns None (falsy) when the select field is unset."""
+        from netbox_custom_objects.templatetags.custom_object_utils import get_field_value
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="status",
+            label="Status",
+            type="select",
+            choice_set=self.choice_set,
+        )
+        model = self.custom_object_type.get_model(no_cache=True)
+        instance = model.objects.create(name="Test")
+        self.assertIsNone(get_field_value(instance, cotf))
+
 
 class MultiSelectFieldTypeTestCase(FieldTypeTestCase):
     """Test cases for multiselect field type."""
@@ -589,6 +671,65 @@ class MultiSelectFieldTypeTestCase(FieldTypeTestCase):
         instance = model.objects.create(name="Test", tags=["choice1", "choice3"])
 
         self.assertEqual(instance.tags, ["choice1", "choice3"])
+
+    def test_multiselect_field_display_value_returns_labels(self):
+        """get_display_value() must return comma-joined human-readable labels, not raw keys."""
+        self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="tags",
+            label="Tags",
+            type="multiselect",
+            choice_set=self.choice_set,
+        )
+        model = self.custom_object_type.get_model(no_cache=True)
+        instance = model.objects.create(name="Test", tags=["choice1", "choice3"])
+        field_type = MultiSelectFieldType()
+        self.assertEqual(
+            field_type.get_display_value(instance, "tags"),
+            "Choice 1, Choice 3",
+        )
+
+    def test_multiselect_column_render_returns_labels(self):
+        """get_table_column_field() render() translates raw keys to comma-joined labels."""
+        field = Mock()
+        field.choices = [('choice1', 'Choice 1'), ('choice2', 'Choice 2'), ('choice3', 'Choice 3')]
+        column = MultiSelectFieldType().get_table_column_field(field)
+        self.assertEqual(column.render(value=['choice1', 'choice3']), 'Choice 1, Choice 3')
+
+    def test_multiselect_column_render_unknown_key_falls_back_to_raw_value(self):
+        """get_table_column_field() render() preserves unknown keys in the joined output."""
+        field = Mock()
+        field.choices = [('choice1', 'Choice 1')]
+        column = MultiSelectFieldType().get_table_column_field(field)
+        self.assertEqual(column.render(value=['choice1', 'unknown']), 'Choice 1, unknown')
+
+    def test_get_field_value_returns_label_list_for_multiselect(self):
+        """get_field_value template filter returns a list of labels for multiselect fields."""
+        from netbox_custom_objects.templatetags.custom_object_utils import get_field_value
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="tags",
+            label="Tags",
+            type="multiselect",
+            choice_set=self.choice_set,
+        )
+        model = self.custom_object_type.get_model(no_cache=True)
+        instance = model.objects.create(name="Test", tags=["choice1", "choice3"])
+        self.assertEqual(get_field_value(instance, cotf), ["Choice 1", "Choice 3"])
+
+    def test_get_field_value_returns_empty_list_when_multiselect_is_none(self):
+        """get_field_value returns None (falsy) when the multiselect field is unset."""
+        from netbox_custom_objects.templatetags.custom_object_utils import get_field_value
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="tags",
+            label="Tags",
+            type="multiselect",
+            choice_set=self.choice_set,
+        )
+        model = self.custom_object_type.get_model(no_cache=True)
+        instance = model.objects.create(name="Test")
+        self.assertIsNone(get_field_value(instance, cotf))
 
 
 class ObjectFieldTypeTestCase(FieldTypeTestCase):

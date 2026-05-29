@@ -473,6 +473,23 @@ class JSONFieldType(FieldType):
 
 
 class SelectFieldType(FieldType):
+    def get_display_value(self, instance, field_name):
+        value = getattr(instance, field_name)
+        if value is None:
+            return ''
+        return getattr(instance, f'get_{field_name}_display')() or value
+
+    def get_table_column_field(self, field, **kwargs):
+        choices_dict = dict(field.choices)
+
+        class _SelectLabelColumn(tables.Column):
+            def render(self, value):
+                if value is None:
+                    return self.default
+                return choices_dict.get(value, value)
+
+        return _SelectLabelColumn()
+
     def get_filterform_field(self, field, **kwargs):
         return DynamicMultipleChoiceField(
             choices=field.choice_set.choices,
@@ -537,7 +554,11 @@ class MultiSelectFieldType(FieldType):
         )
 
     def get_display_value(self, instance, field_name):
-        return ", ".join(getattr(instance, field_name) or [])
+        values = getattr(instance, field_name) or []
+        if not values:
+            return ''
+        choices_dict = dict(instance._meta.get_field(field_name).base_field.choices)
+        return ', '.join(choices_dict.get(v, v) for v in values)
 
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
@@ -584,8 +605,16 @@ class MultiSelectFieldType(FieldType):
     #         choices=field.choices, required=required, label=label, **kwargs
     #     )
 
-    def render_table_column(self, value):
-        return ", ".join(value)
+    def get_table_column_field(self, field, **kwargs):
+        choices_dict = dict(field.choices)
+
+        class _MultiSelectLabelColumn(tables.Column):
+            def render(self, value):
+                if not value:
+                    return self.default
+                return ', '.join(choices_dict.get(v, v) for v in value)
+
+        return _MultiSelectLabelColumn()
 
 
 class ObjectFieldType(FieldType):
