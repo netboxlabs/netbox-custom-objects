@@ -2098,3 +2098,124 @@ class StaleFKReferenceRegressionTest(CustomObjectsTestCase, TestCase):
             "B's FK field must be patched to the newly generated A class; "
             "a stale reference would cause ValueError on FK assignment",
         )
+
+
+class LazySerializerRegistrationTestCase(CustomObjectsTestCase, TestCase):
+    """Regression tests for issue #370: SerializerNotFound when a COT is
+    created after startup and a worker never served a custom-objects API request.
+
+    Two related bugs:
+    1. get_serializer_class(model, skip_object_fields=True) used to overwrite the
+       full module-level serializer with a partial one, causing subsequent requests
+       to fail or return incomplete data.
+    2. import_string("netbox_custom_objects.api.serializers.Table{N}ModelSerializer")
+       raised SerializerNotFound in workers whose ready() ran before the COT existed.
+       The module-level __getattr__ hook (PEP 562) fixes this by generating the
+       serializer on demand.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.parent_cot = CustomObjectType.objects.create(
+            name="lazy_parent", slug="lazy-parent", verbose_name_plural="lazy_parents",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.parent_cot, name="title", label="Title",
+            type="text", primary=True, required=True,
+        )
+
+        cls.child_cot = CustomObjectType.objects.create(
+            name="lazy_child", slug="lazy-child", verbose_name_plural="lazy_children",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.child_cot, name="title", label="Title",
+            type="text", primary=True, required=True,
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.child_cot, name="parent", label="Parent",
+            type="object", related_object_type=cls.parent_cot.object_type,
+        )
+
+    def _clear_serializer_registrations(self):
+        """Remove any previously registered serializers for parent and child COTs
+        from the module so that __getattr__ and get_serializer_class() behave as
+        they would in a fresh worker process."""
+        import netbox_custom_objects.api.serializers as ser_module
+        parent_model = self.parent_cot.get_model()
+        child_model = self.child_cot.get_model()
+        for model in (parent_model, child_model):
+            attr = f"{model._meta.object_name}Serializer"
+            ser_module.__dict__.pop(attr, None)
+
+    def test_module_getattr_generates_serializer_on_demand(self):
+        """__getattr__ must generate and return a serializer for any Table{N}Model
+        whose serializer was never pre-registered (simulates a worker that started
+        before the COT was created — issue #370 Scenario A)."""
+        import netbox_custom_objects.api.serializers as ser_module
+        self._clear_serializer_registrations()
+
+        parent_model = self.parent_cot.get_model()
+        serializer_name = f"{parent_model._meta.object_name}Serializer"
+
+        # Attribute must not be in __dict__ after clearing
+        self.assertNotIn(serializer_name, ser_module.__dict__,
+                         "precondition: serializer must not be pre-registered")
+
+        # getattr() must trigger __getattr__ and return a valid class
+        serializer_cls = getattr(ser_module, serializer_name)
+        self.assertIsNotNone(serializer_cls)
+        self.assertIn("title", serializer_cls.Meta.fields)
+
+        # After __getattr__ fires, the serializer is cached in __dict__
+        self.assertIn(serializer_name, ser_module.__dict__,
+                      "serializer must be cached in module __dict__ after first access")
+
+    def test_skip_object_fields_does_not_overwrite_full_serializer(self):
+        """get_serializer_class(model, skip_object_fields=True) must not overwrite
+        the full module-level serializer for that model.  The full serializer
+        (registered via skip_object_fields=False) must remain accessible after
+        a partial serializer is built for the same model (issue #370 Bug 2)."""
+        import netbox_custom_objects.api.serializers as ser_module
+        self._clear_serializer_registrations()
+
+        parent_model = self.parent_cot.get_model()
+        serializer_name = f"{parent_model._meta.object_name}Serializer"
+
+        # Register the full serializer first
+        full_serializer = get_serializer_class(parent_model, skip_object_fields=False)
+        self.assertIn(serializer_name, ser_module.__dict__)
+
+        # Now call with skip_object_fields=True (simulates the nested-serializer path
+        # triggered when building the child serializer's FK field)
+        partial_serializer = get_serializer_class(parent_model, skip_object_fields=True)
+
+        # Module must still hold the FULL serializer, not the partial one
+        registered = getattr(ser_module, serializer_name)
+        self.assertIs(registered, full_serializer,
+                      "full serializer must not be overwritten by the partial variant")
+        self.assertIsNot(registered, partial_serializer,
+                         "partial serializer must be a distinct object, not stored on module")
+
+    def test_child_serializer_does_not_clobber_parent_serializer(self):
+        """Building child's serializer (which creates a nested partial for parent)
+        must leave the parent's full module-level serializer intact (issue #370)."""
+        import netbox_custom_objects.api.serializers as ser_module
+        self._clear_serializer_registrations()
+
+        parent_model = self.parent_cot.get_model()
+        child_model = self.child_cot.get_model()
+        parent_serializer_name = f"{parent_model._meta.object_name}Serializer"
+
+        # Register parent's full serializer first
+        full_parent_serializer = get_serializer_class(parent_model)
+        self.assertIn("title", full_parent_serializer.Meta.fields)
+
+        # Build child serializer — internally calls get_serializer_class(parent, skip_object_fields=True)
+        get_serializer_class(child_model)
+
+        # Parent's full serializer must be unchanged
+        registered_parent = getattr(ser_module, parent_serializer_name)
+        self.assertIs(registered_parent, full_parent_serializer,
+                      "building child serializer must not clobber parent's full serializer")
+        self.assertIn("title", registered_parent.Meta.fields,
+                      "parent's full field set must be intact after child serializer is built")
