@@ -5,7 +5,6 @@ import sys
 from core.models import ObjectType
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
-from django.db.utils import OperationalError, ProgrammingError
 from django.urls import NoReverseMatch
 from django.utils.translation import gettext_lazy as _
 from extras.choices import CustomFieldTypeChoices
