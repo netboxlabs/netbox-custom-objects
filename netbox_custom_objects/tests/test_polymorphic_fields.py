@@ -1268,3 +1268,196 @@ class PolymorphicCycleDetectionTest(
         )
         with self.assertRaises(ValidationError):
             field_b.related_object_types.set([self.ot_a])  # closes A→B→A cycle
+
+
+# ---------------------------------------------------------------------------
+# Polymorphic reverse descriptor tests (issue #385 / PR #548)
+# ---------------------------------------------------------------------------
+
+class PolymorphicReverseDescriptorTest(
+    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
+):
+    """Verify that polymorphic GFK and M2M fields with a related_name expose a working
+    reverse accessor on target model instances."""
+
+    def setUp(self):
+        super().setUp()
+        self.site_ot = ObjectType.objects.get(app_label="dcim", model="site")
+        self.prefix_ot = ObjectType.objects.get(app_label="ipam", model="prefix")
+
+        self.cot = CustomObjectType.objects.create(
+            name="RevTest", slug="rev-test",
+            verbose_name_plural="Rev Tests",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name="name", type="text", primary=True, required=True,
+        )
+
+    # --- GFK reverse descriptor ---
+
+    def _create_gfk_field(self, related_name="rev_co_gfk"):
+        field = CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name="target_obj", label="Target", type="object",
+            is_polymorphic=True,
+            related_name=related_name,
+        )
+        field.related_object_types.set([self.site_ot, self.prefix_ot])
+        return field
+
+    def test_gfk_reverse_descriptor_set_on_target_class(self):
+        """After get_model(), the related_name descriptor must exist on the target class."""
+        self._create_gfk_field(related_name="co_gfk_reverse")
+        self.cot.get_model()
+        self.assertTrue(
+            hasattr(Site, "co_gfk_reverse"),
+            "Reverse descriptor must be set on Site after get_model()",
+        )
+
+    def test_gfk_reverse_descriptor_returns_matching_instances(self):
+        """site.related_name.all() returns CO instances whose GFK points at that site."""
+        from ipam.models import Prefix
+        from ipam.choices import PrefixStatusChoices
+
+        self._create_gfk_field(related_name="co_gfk_rev")
+        model = self.cot.get_model()
+
+        site = Site.objects.create(name="RevSite", slug="rev-site")
+        prefix = Prefix.objects.create(
+            prefix="192.168.0.0/24", status=PrefixStatusChoices.STATUS_ACTIVE
+        )
+
+        co_a = model.objects.create(name="co-a")
+        co_a.target_obj = site
+        co_a.save()
+
+        co_b = model.objects.create(name="co-b")
+        co_b.target_obj = prefix
+        co_b.save()
+
+        site_results = list(site.co_gfk_rev.all())
+        self.assertEqual(len(site_results), 1)
+        self.assertEqual(site_results[0].pk, co_a.pk)
+
+        prefix_results = list(prefix.co_gfk_rev.all())
+        self.assertEqual(len(prefix_results), 1)
+        self.assertEqual(prefix_results[0].pk, co_b.pk)
+
+    def test_gfk_reverse_descriptor_count_and_exists(self):
+        """count() and exists() work correctly on the reverse manager."""
+        self._create_gfk_field(related_name="co_gfk_ce")
+        model = self.cot.get_model()
+
+        site = Site.objects.create(name="CeSite", slug="ce-site")
+        self.assertEqual(site.co_gfk_ce.count(), 0)
+        self.assertFalse(site.co_gfk_ce.exists())
+
+        co = model.objects.create(name="co-ce")
+        co.target_obj = site
+        co.save()
+
+        self.assertEqual(site.co_gfk_ce.count(), 1)
+        self.assertTrue(site.co_gfk_ce.exists())
+
+    def test_gfk_no_reverse_descriptor_when_related_name_blank(self):
+        """When related_name is blank, no reverse descriptor is injected."""
+        field = CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name="anon_obj", type="object", is_polymorphic=True,
+        )
+        field.related_object_types.set([self.site_ot])
+        self.cot.get_model()
+        # A blank related_name must not inject any descriptor; no AttributeError expected
+        anon_descriptor = Site.__dict__.get("")
+        self.assertIsNone(anon_descriptor)
+
+    def test_gfk_reverse_descriptor_removed_on_field_delete(self):
+        """Deleting the field removes the reverse descriptor from target models."""
+        field = self._create_gfk_field(related_name="co_gfk_del")
+        self.cot.get_model()
+        self.assertTrue(hasattr(Site, "co_gfk_del"), "Descriptor must be present before delete")
+
+        field.delete()
+
+        self.assertFalse(
+            hasattr(Site, "co_gfk_del"),
+            "Reverse descriptor must be removed after field delete",
+        )
+
+    # --- M2M reverse descriptor ---
+
+    def _create_m2m_field(self, related_name="rev_co_m2m"):
+        field = CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name="target_multi", label="Targets", type="multiobject",
+            is_polymorphic=True,
+            related_name=related_name,
+        )
+        field.related_object_types.set([self.site_ot, self.prefix_ot])
+        return field
+
+    def test_m2m_reverse_descriptor_set_on_target_class(self):
+        """After get_model(), the related_name descriptor must exist on the target class."""
+        self._create_m2m_field(related_name="co_m2m_reverse")
+        self.cot.get_model()
+        self.assertTrue(
+            hasattr(Site, "co_m2m_reverse"),
+            "Reverse descriptor must be set on Site after get_model()",
+        )
+
+    def test_m2m_reverse_descriptor_returns_matching_instances(self):
+        """site.related_name.all() returns CO instances whose M2M includes that site."""
+        from ipam.models import Prefix
+        from ipam.choices import PrefixStatusChoices
+
+        self._create_m2m_field(related_name="co_m2m_rev")
+        model = self.cot.get_model()
+
+        site = Site.objects.create(name="M2MSite", slug="m2m-site")
+        prefix = Prefix.objects.create(
+            prefix="10.1.0.0/24", status=PrefixStatusChoices.STATUS_ACTIVE
+        )
+
+        co_a = model.objects.create(name="m2m-a")
+        co_a.target_multi.add(site)
+
+        co_b = model.objects.create(name="m2m-b")
+        co_b.target_multi.add(prefix)
+
+        co_both = model.objects.create(name="m2m-both")
+        co_both.target_multi.add(site, prefix)
+
+        site_results = {obj.pk for obj in site.co_m2m_rev.all()}
+        self.assertEqual(site_results, {co_a.pk, co_both.pk})
+
+        prefix_results = {obj.pk for obj in prefix.co_m2m_rev.all()}
+        self.assertEqual(prefix_results, {co_b.pk, co_both.pk})
+
+    def test_m2m_reverse_descriptor_count_and_exists(self):
+        """count() and exists() work correctly on the M2M reverse manager."""
+        self._create_m2m_field(related_name="co_m2m_ce")
+        model = self.cot.get_model()
+
+        site = Site.objects.create(name="M2MCeSite", slug="m2m-ce-site")
+        self.assertEqual(site.co_m2m_ce.count(), 0)
+        self.assertFalse(site.co_m2m_ce.exists())
+
+        co = model.objects.create(name="m2m-ce")
+        co.target_multi.add(site)
+
+        self.assertEqual(site.co_m2m_ce.count(), 1)
+        self.assertTrue(site.co_m2m_ce.exists())
+
+    def test_m2m_reverse_descriptor_removed_on_field_delete(self):
+        """Deleting the field removes the reverse descriptor from target models."""
+        field = self._create_m2m_field(related_name="co_m2m_del")
+        self.cot.get_model()
+        self.assertTrue(hasattr(Site, "co_m2m_del"), "Descriptor must be present before delete")
+
+        field.delete()
+
+        self.assertFalse(
+            hasattr(Site, "co_m2m_del"),
+            "Reverse descriptor must be removed after field delete",
+        )

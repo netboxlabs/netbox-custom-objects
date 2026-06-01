@@ -62,7 +62,10 @@ from utilities.validators import validate_regex
 
 from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
 from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
-from netbox_custom_objects.field_types import FIELD_TYPE_CLASS, LazyForeignKey, safe_table_name
+from netbox_custom_objects.field_types import (
+    FIELD_TYPE_CLASS, LazyForeignKey, safe_table_name,
+    PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor,
+)
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
 from netbox_custom_objects.utilities import _suppress_clear_cache, extract_cot_id_from_model_name, generate_model
 
@@ -551,6 +554,7 @@ class CustomObjectType(NetBoxModel):
                         _apps.register_model(APP_LABEL, through_model)
                     if through_model and through_model not in through_models:
                         through_models.append(through_model)
+                _wire_polymorphic_reverse_descriptors(field_instance, model)
                 continue
 
             # Non-polymorphic: use safe present_fields lookup (avoids _relation_tree recursion).
@@ -2392,6 +2396,10 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         field_type = FIELD_TYPE_CLASS[self.type]()
         model = self.custom_object_type.get_model()
 
+        # Remove reverse descriptors before the M2M rows disappear via super().delete().
+        if self.is_polymorphic:
+            _unwire_polymorphic_reverse_descriptors(self)
+
         with connection.schema_editor() as schema_editor:
             if self.is_polymorphic:
                 if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
@@ -2452,6 +2460,64 @@ class CustomObjectObjectType(ObjectType):
 
     class Meta:
         proxy = True
+
+
+# ---------------------------------------------------------------------------
+# Helpers for wiring/unwiring polymorphic reverse descriptors on target models
+# ---------------------------------------------------------------------------
+
+def _wire_polymorphic_reverse_descriptors(field_instance, model):
+    """Attach reverse descriptors on target model classes for a polymorphic field.
+
+    For each content type in ``field_instance.related_object_types``, inject a
+    descriptor on the target model class so that ``target_instance.<related_name>``
+    returns the CO instances that point at it.  Called from
+    ``CustomObjectType._after_model_generation`` for every polymorphic field that
+    has a non-empty ``related_name``.
+    """
+    if not field_instance.related_name:
+        return
+    related_name = field_instance.related_name
+    cot_pk = field_instance.custom_object_type_id
+
+    if field_instance.type == CustomFieldTypeChoices.TYPE_OBJECT:
+        descriptor = PolymorphicObjectReverseDescriptor(
+            cot_pk=cot_pk, field_name=field_instance.name
+        )
+    elif field_instance.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+        descriptor = PolymorphicMultiObjectReverseDescriptor(
+            cot_pk=cot_pk, through_model_name=field_instance.through_model_name
+        )
+    else:
+        return
+
+    for ot in field_instance.related_object_types.all():
+        target_cls = ot.model_class()
+        if target_cls is None:
+            continue
+        setattr(target_cls, related_name, descriptor)
+
+
+def _unwire_polymorphic_reverse_descriptors(field_instance):
+    """Remove reverse descriptors that were injected by ``_wire_polymorphic_reverse_descriptors``.
+
+    Called from ``CustomObjectTypeField.delete()`` before the M2M rows are removed, so
+    ``related_object_types`` is still queryable.
+    """
+    if not field_instance.related_name:
+        return
+    related_name = field_instance.related_name
+
+    for ot in field_instance.related_object_types.all():
+        target_cls = ot.model_class()
+        if target_cls is None:
+            continue
+        attr = target_cls.__dict__.get(related_name)
+        if isinstance(attr, (PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor)):
+            try:
+                delattr(target_cls, related_name)
+            except AttributeError:
+                pass
 
 
 # Signal handlers to clear model cache when definitions change
