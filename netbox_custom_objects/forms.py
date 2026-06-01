@@ -288,17 +288,18 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
         if get_field_value(self, 'type') == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
             self.fields["unique"].disabled = True
 
-        # Add related_name (and on_delete_behavior for single-object fields) to the
-        # Related Object fieldset.  The parent CustomFieldForm.__init__ removes
-        # related_object_type from self.fields for non-object types, so we use its
-        # presence as a signal.
-        if "related_object_type" in self.fields:
+        # Add related_name (and on_delete_behavior for non-polymorphic single-object
+        # fields) to the Related Object fieldset.  Polymorphic mode removes
+        # related_object_type from self.fields and substitutes related_object_types,
+        # so check for either to detect object/multiobject fields (issue #522).
+        is_object_field = "related_object_type" in self.fields or "related_object_types" in self.fields
+        if is_object_field:
             field_type = get_field_value(self, 'type')
-            is_single_object = field_type == CustomFieldTypeChoices.TYPE_OBJECT
+            is_single_object = field_type == CustomFieldTypeChoices.TYPE_OBJECT and not is_polymorphic
             extra = ("related_name", "on_delete_behavior") if is_single_object else ("related_name",)
             self.fieldsets = tuple(
                 FieldSet(*fs.items, *extra, name=fs.name)
-                if "related_object_type" in fs.items
+                if ("related_object_type" in fs.items or "related_object_types" in fs.items)
                 else fs
                 for fs in self.fieldsets
             )
