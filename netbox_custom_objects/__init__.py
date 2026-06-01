@@ -133,6 +133,7 @@ class CustomObjectsPluginConfig(PluginConfig):
     }
     required_settings = []
     template_extensions = "template_content.template_extensions"
+    serializer_resolver = "api.serializers.serializer_resolver"
 
     @staticmethod
     def should_skip_dynamic_model_creation():
