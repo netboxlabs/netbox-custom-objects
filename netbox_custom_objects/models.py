@@ -2413,15 +2413,12 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     schema_editor.delete_model(_dropped_through_model)
                 schema_editor.remove_field(model, model_field)
 
-        # The through table is now dropped, but its model class is still registered
-        # in Django's app registry. Without removing it, the cascade-delete collector
-        # finds the model, queries the missing table, and raises ProgrammingError.
-        # This mirrors the deregistration that CustomObjectType.delete() already
-        # performs for full COT teardown.
+        # Deregister the dropped through model so the cascade-delete collector no longer queries the missing table.
         if _dropped_through_model is not None:
             through_name = _dropped_through_model.__name__.lower()
-            if through_name in apps.all_models.get(APP_LABEL, {}):
-                del apps.all_models[APP_LABEL][through_name]
+            with CustomObjectType._global_lock:
+                if through_name in apps.all_models.get(APP_LABEL, {}):
+                    del apps.all_models[APP_LABEL][through_name]
             apps.clear_cache()
 
         # Clear the model cache for this CustomObjectType when a field is deleted
