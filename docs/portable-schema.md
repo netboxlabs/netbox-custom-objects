@@ -237,18 +237,23 @@ Attributes that match their defaults are omitted from exported documents to keep
 
 ### Exporting a Schema
 
-Use the Python API from `netbox_custom_objects.schema.exporter`. There are two supported
-ways to run it:
-
-#### Option 1 — NetBox shell (recommended)
-
-Run `manage.py nbshell` from the NetBox project directory and paste or pipe your script.
-Django is fully initialised for you, and all models are importable immediately:
+Use the Python API from `netbox_custom_objects.schema.exporter`. Before running either
+option, switch to your NetBox installation root and activate its virtualenv:
 
 ```bash
 # Replace /opt/netbox with your NetBox installation root.
-cd /opt/netbox/netbox
-python manage.py nbshell
+export NETBOX_ROOT=/opt/netbox
+cd "$NETBOX_ROOT"
+source "$NETBOX_ROOT/venv/bin/activate"
+```
+
+#### Option 1 — NetBox shell (recommended)
+
+Run `manage.py nbshell` from the NetBox installation root. Django is fully initialised for
+you, and all models are importable immediately:
+
+```bash
+python3 netbox/manage.py nbshell
 ```
 
 Then inside the shell, export specific COTs by slug:
@@ -278,22 +283,16 @@ print(json.dumps(document, indent=2))
 To run a script file non-interactively, pipe it in:
 
 ```bash
-python manage.py nbshell < /path/to/export_cot.py
+python3 netbox/manage.py nbshell < /path/to/export_cot.py
 ```
 
 #### Option 2 — Standalone script
 
 If you need to run a `.py` file directly (e.g. from a cron job or CI pipeline), you must
-activate NetBox's virtualenv and bootstrap Django yourself **before** importing any NetBox
-or plugin code:
+bootstrap Django yourself **before** importing any NetBox or plugin code:
 
 ```bash
-# Replace /opt/netbox with your NetBox installation root.
-export NETBOX_ROOT=/opt/netbox
-
-source "$NETBOX_ROOT/venv/bin/activate"
-cd "$NETBOX_ROOT/netbox"
-PYTHONPATH="$NETBOX_ROOT/netbox" python /path/to/export_cot.py
+PYTHONPATH="$NETBOX_ROOT/netbox" python3 /path/to/export_cot.py
 ```
 
 Where `/path/to/export_cot.py` is your script, containing:
