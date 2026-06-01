@@ -11,7 +11,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import connection, transaction
 from django.db.utils import OperationalError, ProgrammingError
-from django.test import TestCase, override_settings
+from django.test import TestCase, override_settings, tag
 from django.urls import reverse
 from django.utils import timezone
 
@@ -1176,6 +1176,7 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
             "MultiObject field without related_name should not create an auto-generated reverse accessor.",
         )
 
+    @tag('regression')  # #535
     def test_deleting_multiobject_field_deregisters_through_model(self):
         """
         After a multiobject field is deleted its through model must be removed
