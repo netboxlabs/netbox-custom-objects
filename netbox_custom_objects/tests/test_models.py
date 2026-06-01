@@ -1198,12 +1198,17 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
 
         field.delete()
 
-        self.assertNotIn(through_model_name, django_apps.all_models.get(APP_LABEL, {}))
-
+        # Primary assertion: deleting a relation target must not raise ProgrammingError.
+        # Without the fix this line raises:
+        #   ProgrammingError: relation "custom_objects_<id>_related_slbs" does not exist
+        # because the stale through model is still in apps.all_models and the
+        # cascade-delete collector queries the already-dropped table.
         try:
             slb_instance.delete()
         except ProgrammingError as exc:
             self.fail(f"Deleting a related object raised ProgrammingError after field deletion: {exc}")
+
+        self.assertNotIn(through_model_name, django_apps.all_models.get(APP_LABEL, {}))
 
 
 class SearchReindexTestCase(CustomObjectsTestCase, TestCase):
