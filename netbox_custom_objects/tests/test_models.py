@@ -1176,6 +1176,35 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
             "MultiObject field without related_name should not create an auto-generated reverse accessor.",
         )
 
+    def test_deleting_multiobject_field_deregisters_through_model(self):
+        """
+        After a multiobject field is deleted its through model must be removed
+        from Django's app registry. Without the fix the cascade-delete collector
+        still finds the model, queries the dropped table, and raises
+        ProgrammingError when deleting any object that was a relation target
+        of the field (issue #535).
+        """
+        field = self.create_custom_object_type_field(
+            self.cert_cot,
+            name="related_slbs",
+            type="multiobject",
+            related_object_type=self.slb_object_type,
+        )
+        through_model_name = field.through_model_name.lower()
+        self.assertIn(through_model_name, django_apps.all_models.get(APP_LABEL, {}))
+
+        slb_model = self.slb_cot.get_model()
+        slb_instance = slb_model.objects.create(name="SLB-To-Delete")
+
+        field.delete()
+
+        self.assertNotIn(through_model_name, django_apps.all_models.get(APP_LABEL, {}))
+
+        try:
+            slb_instance.delete()
+        except ProgrammingError as exc:
+            self.fail(f"Deleting a related object raised ProgrammingError after field deletion: {exc}")
+
 
 class SearchReindexTestCase(CustomObjectsTestCase, TestCase):
     """Test that ReindexCustomObjectTypeJob is triggered when field search weights change."""

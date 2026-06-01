@@ -2391,12 +2391,17 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     def delete(self, *args, **kwargs):
         field_type = FIELD_TYPE_CLASS[self.type]()
         model = self.custom_object_type.get_model()
+        _dropped_through_model = None
 
         with connection.schema_editor() as schema_editor:
             if self.is_polymorphic:
                 if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
                     field_type.remove_polymorphic_object_columns(self, model, schema_editor)
                 elif self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+                    try:
+                        _dropped_through_model = model._meta.apps.get_model(APP_LABEL, self.through_model_name)
+                    except LookupError:
+                        pass
                     field_type.drop_polymorphic_m2m_table(self, model, schema_editor)
             else:
                 model_field = field_type.get_model_field(self)
@@ -2404,9 +2409,20 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
                 if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                     _apps = model._meta.apps
-                    through_model = _apps.get_model(APP_LABEL, self.through_model_name)
-                    schema_editor.delete_model(through_model)
+                    _dropped_through_model = _apps.get_model(APP_LABEL, self.through_model_name)
+                    schema_editor.delete_model(_dropped_through_model)
                 schema_editor.remove_field(model, model_field)
+
+        # The through table is now dropped, but its model class is still registered
+        # in Django's app registry. Without removing it, the cascade-delete collector
+        # finds the model, queries the missing table, and raises ProgrammingError.
+        # This mirrors the deregistration that CustomObjectType.delete() already
+        # performs for full COT teardown.
+        if _dropped_through_model is not None:
+            through_name = _dropped_through_model.__name__.lower()
+            if through_name in apps.all_models.get(APP_LABEL, {}):
+                del apps.all_models[APP_LABEL][through_name]
+            apps.clear_cache()
 
         # Clear the model cache for this CustomObjectType when a field is deleted
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)
