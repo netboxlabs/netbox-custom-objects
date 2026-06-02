@@ -1544,3 +1544,45 @@ class PolymorphicReverseDescriptorTest(
             hasattr(Site, "co_m2m_cleared"),
             "Descriptor must be removed from Site after clear()",
         )
+
+    def test_gfk_reverse_descriptor_cleaned_up_on_related_name_rename(self):
+        """Renaming related_name removes the old descriptor and leaves the new one wired."""
+        field = self._create_gfk_field(related_name="co_gfk_old_name")
+        self.cot.get_model()
+        self.assertTrue(hasattr(Site, "co_gfk_old_name"), "old descriptor must be present before rename")
+
+        # Re-fetch so from_db() sets _original (mirrors real save-from-UI flow)
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.related_name = "co_gfk_new_name"
+        field.save()
+        self.cot.get_model()  # regenerate model so new descriptor is injected
+
+        self.assertFalse(
+            hasattr(Site, "co_gfk_old_name"),
+            "old descriptor must be removed from Site after rename",
+        )
+        self.assertTrue(
+            hasattr(Site, "co_gfk_new_name"),
+            "new descriptor must be present on Site after rename",
+        )
+
+    def test_m2m_reverse_descriptor_cleaned_up_on_related_name_rename(self):
+        """Renaming related_name removes the old M2M descriptor and leaves the new one wired."""
+        field = self._create_m2m_field(related_name="co_m2m_old_name")
+        self.cot.get_model()
+        self.assertTrue(hasattr(Site, "co_m2m_old_name"), "old descriptor must be present before rename")
+
+        # Re-fetch so from_db() sets _original (mirrors real save-from-UI flow)
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.related_name = "co_m2m_new_name"
+        field.save()
+        self.cot.get_model()  # regenerate model so new descriptor is injected
+
+        self.assertFalse(
+            hasattr(Site, "co_m2m_old_name"),
+            "old descriptor must be removed from Site after rename",
+        )
+        self.assertTrue(
+            hasattr(Site, "co_m2m_new_name"),
+            "new descriptor must be present on Site after rename",
+        )

@@ -2383,6 +2383,12 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         # Reregister SearchIndex with new set of searchable fields
         self.custom_object_type.register_custom_object_search_index(model)
 
+        # Clean up stale descriptor when related_name is renamed on an existing polymorphic field
+        if not is_new and self.is_polymorphic and hasattr(self, '_original'):
+            old_name = self.original.related_name
+            if old_name and old_name != self.related_name:
+                _unwire_polymorphic_reverse_descriptors(self, related_name=old_name)
+
         # Reindex all objects of this type if search indexing was affected
         if is_new:
             needs_reindex = self.search_weight > 0
@@ -2499,17 +2505,20 @@ def _wire_polymorphic_reverse_descriptors(field_instance):
             setattr(target_cls, related_name, descriptor)
 
 
-def _unwire_polymorphic_reverse_descriptors(field_instance, object_types=None):
+def _unwire_polymorphic_reverse_descriptors(field_instance, object_types=None, related_name=None):
     """Remove reverse descriptors that were injected by ``_wire_polymorphic_reverse_descriptors``.
 
     *object_types* is an optional iterable of ObjectType instances to unwire from; when
-    omitted all of ``field_instance.related_object_types`` are used.  Called from
-    ``CustomObjectTypeField.delete()`` (before the M2M rows are removed) and from the
-    ``m2m_changed`` signal handler when types are removed from a live field.
+    omitted all of ``field_instance.related_object_types`` are used.  *related_name*
+    overrides the attribute name to remove, allowing callers to clean up a stale name
+    (e.g. after a rename).  Called from ``CustomObjectTypeField.delete()`` (before the
+    M2M rows are removed), from the ``m2m_changed`` signal handler when types are removed
+    from a live field, and from ``save()`` when ``related_name`` is renamed.
     """
-    if not field_instance.related_name:
+    name = related_name if related_name is not None else field_instance.related_name
+    if not name:
         return
-    related_name = field_instance.related_name
+    related_name = name
     ots = object_types if object_types is not None else field_instance.related_object_types.all()
     for ot in ots:
         target_cls = ot.model_class()
