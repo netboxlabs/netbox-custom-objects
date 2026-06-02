@@ -804,7 +804,7 @@ class ObjectFieldType(FieldType):
             serializer = get_serializer_class(related_model_class, skip_object_fields=True)
         else:
             serializer = get_serializer_for_model(related_model_class)
-        return serializer(required=field.required, nested=True)
+        return serializer(required=field.required, allow_null=not field.required, nested=True)
 
     def after_model_generation(self, instance, model, field_name):
         """
@@ -1286,7 +1286,7 @@ class MultiObjectFieldType(FieldType):
             serializer = get_serializer_class(related_model_class, skip_object_fields=True)
         else:
             serializer = get_serializer_for_model(related_model_class)
-        return serializer(required=field.required, nested=True, many=True)
+        return serializer(required=field.required, allow_null=not field.required, nested=True, many=True)
 
     def get_filterform_field(self, field, **kwargs):
         if field.is_polymorphic:

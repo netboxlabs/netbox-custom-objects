@@ -1615,3 +1615,128 @@ class CrossCOTMultiObjectAPITest(CustomObjectsTestCase, TestCase):
         self.assertIn('refs', response.data, 'Response must include the refs M2M field.')
         ref_ids = [r['id'] for r in response.data['refs']]
         self.assertIn(self.obj_target1.pk, ref_ids)
+
+
+# ---------------------------------------------------------------------------
+# Regression: explicit null on optional object/multiobject fields (#550)
+# ---------------------------------------------------------------------------
+
+
+class NullOptionalObjectFieldTest(CustomObjectsTestCase, TestCase):
+    """
+    POST/PATCH with explicit null on a non-required object or multiobject field
+    must succeed (201/200).  Before the fix, the serializer lacked allow_null=True
+    so null was rejected with 400 'This field may not be null.'
+    """
+
+    def setUp(self):
+        self.user = create_test_user('nullobjuser')
+        token_key = create_token(self.user)
+        self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
+        self.client = APIClient()
+        self.client.credentials(HTTP_AUTHORIZATION=f'Token {token_key}')
+
+        self.cot = CustomObjectsTestCase.create_custom_object_type(
+            name='NullObjTest', slug='null-obj-test'
+        )
+        CustomObjectsTestCase.create_custom_object_type_field(
+            self.cot, name='name', type='text', primary=True, required=True,
+        )
+        device_ct = CustomObjectsTestCase.get_device_object_type()
+        CustomObjectsTestCase.create_custom_object_type_field(
+            self.cot, name='device', type='object',
+            related_object_type=device_ct, required=False,
+        )
+        CustomObjectsTestCase.create_custom_object_type_field(
+            self.cot, name='devices', type='multiobject',
+            related_object_type=device_ct, required=False,
+        )
+        self.model = self.cot.get_model()
+
+        for action in ('add', 'change', 'view'):
+            perm = ObjectPermission(name=f'null-obj-{action}', actions=[action])
+            perm.save()
+            perm.users.add(self.user)
+            perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+    def tearDown(self):
+        CustomObjectType.clear_model_cache()
+        super().tearDown()
+
+    def _list_url(self):
+        return reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-list',
+            kwargs={'custom_object_type': self.cot.slug},
+        )
+
+    def _detail_url(self, pk):
+        return reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-detail',
+            kwargs={'pk': pk, 'custom_object_type': self.cot.slug},
+        )
+
+    def test_post_null_object_field_accepted(self):
+        """POST with explicit null on an optional object field must return 201."""
+        response = self.client.post(
+            self._list_url(),
+            {'name': 'obj-null-post', 'device': None},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertIsNone(response.data['device'])
+
+    def test_post_null_multiobject_field_accepted(self):
+        """POST with explicit null on an optional multiobject field must return 201."""
+        response = self.client.post(
+            self._list_url(),
+            {'name': 'multiobj-null-post', 'devices': None},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+
+    def test_patch_null_object_field_clears_value(self):
+        """PATCH with null on an optional object field must clear it and return 200."""
+        site = Site.objects.create(name='null-test-site', slug='null-test-site')
+        manufacturer = Manufacturer.objects.create(name='null-mfr', slug='null-mfr')
+        device_type = DeviceType.objects.create(
+            manufacturer=manufacturer, model='null-dt', slug='null-dt'
+        )
+        device_role = DeviceRole.objects.create(name='null-role', slug='null-role')
+        device = Device.objects.create(
+            name='null-dev', site=site, device_type=device_type, role=device_role
+        )
+        obj = self.model.objects.create(name='patch-null-obj', device=device)
+        self.assertIsNotNone(obj.device)
+
+        response = self.client.patch(
+            self._detail_url(obj.pk),
+            {'device': None},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        obj.refresh_from_db()
+        self.assertIsNone(obj.device)
+
+    def test_patch_null_multiobject_field_clears_value(self):
+        """PATCH with null on an optional multiobject field must clear it and return 200."""
+        site = Site.objects.create(name='null-multi-site', slug='null-multi-site')
+        manufacturer = Manufacturer.objects.create(name='null-multi-mfr', slug='null-multi-mfr')
+        device_type = DeviceType.objects.create(
+            manufacturer=manufacturer, model='null-multi-dt', slug='null-multi-dt'
+        )
+        device_role = DeviceRole.objects.create(name='null-multi-role', slug='null-multi-role')
+        device = Device.objects.create(
+            name='null-multi-dev', site=site, device_type=device_type, role=device_role
+        )
+        obj = self.model.objects.create(name='patch-null-multi-obj')
+        obj.devices.add(device)
+        self.assertEqual(obj.devices.count(), 1)
+
+        response = self.client.patch(
+            self._detail_url(obj.pk),
+            {'devices': None},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        obj.refresh_from_db()
+        self.assertEqual(obj.devices.count(), 0)
