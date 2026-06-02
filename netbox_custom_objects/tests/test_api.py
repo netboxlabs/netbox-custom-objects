@@ -1693,6 +1693,7 @@ class NullOptionalObjectFieldTest(CustomObjectsTestCase, TestCase):
             format='json',
         )
         self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(response.data['devices'], [])
 
     def test_patch_null_object_field_clears_value(self):
         """PATCH with null on an optional object field must clear it and return 200."""

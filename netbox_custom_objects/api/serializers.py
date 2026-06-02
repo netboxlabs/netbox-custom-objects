@@ -566,7 +566,7 @@ def get_serializer_class(model, skip_object_fields=False):
         if many_to_many:
             for field_name, value in many_to_many.items():
                 field = getattr(instance, field_name)
-                field.set(value)
+                field.set(value if value is not None else [])
 
         for field_name, value in poly_gfk.items():
             setattr(instance, field_name, value)
@@ -609,7 +609,7 @@ def get_serializer_class(model, skip_object_fields=False):
 
         for attr, value in m2m_fields:
             field = getattr(instance, attr)
-            field.set(value, clear=True)
+            field.set(value if value is not None else [], clear=True)
 
         for field_name, value in poly_m2m.items():
             mgr = getattr(instance, field_name)
