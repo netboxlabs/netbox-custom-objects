@@ -1559,7 +1559,7 @@ class PolymorphicReverseDescriptorTest(
 
     def test_polymorphic_related_name_collision_raises(self):
         """full_clean() must raise when two polymorphic fields share a related_name on the same target type."""
-        existing = self._create_gfk_field(related_name="co_collision_name")
+        self._create_gfk_field(related_name="co_collision_name")
 
         duplicate = CustomObjectTypeField(
             custom_object_type=self.cot,
