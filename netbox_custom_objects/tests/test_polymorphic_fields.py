@@ -1496,3 +1496,51 @@ class PolymorphicReverseDescriptorTest(
             hasattr(Site, "co_m2m_del"),
             "Reverse descriptor must be removed after field delete",
         )
+
+    def test_m2m_reverse_descriptor_wired_when_type_added(self):
+        """Adding a type via m2m_changed post_add wires the M2M reverse descriptor."""
+        from dcim.models import Device
+        device_ot = ObjectType.objects.get(app_label="dcim", model="device")
+
+        field = CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name="target_multi2", label="Targets", type="multiobject",
+            is_polymorphic=True,
+            related_name="co_m2m_added",
+        )
+        field.related_object_types.set([self.site_ot])
+        self.cot.get_model()
+        self.assertFalse(hasattr(Device, "co_m2m_added"), "Device not yet in allowed types")
+
+        field.related_object_types.add(device_ot)  # fires m2m_changed post_add
+
+        self.assertTrue(
+            hasattr(Device, "co_m2m_added"),
+            "Descriptor must be wired on Device after adding it to related_object_types",
+        )
+
+    def test_gfk_reverse_descriptor_unwired_on_clear(self):
+        """Clearing related_object_types via pre_clear removes descriptors from all target classes."""
+        field = self._create_gfk_field(related_name="co_gfk_cleared")
+        self.cot.get_model()
+        self.assertTrue(hasattr(Site, "co_gfk_cleared"))
+
+        field.related_object_types.clear()  # fires m2m_changed pre_clear
+
+        self.assertFalse(
+            hasattr(Site, "co_gfk_cleared"),
+            "Descriptor must be removed from Site after clear()",
+        )
+
+    def test_m2m_reverse_descriptor_unwired_on_clear(self):
+        """Clearing related_object_types via pre_clear removes M2M descriptors from all target classes."""
+        field = self._create_m2m_field(related_name="co_m2m_cleared")
+        self.cot.get_model()
+        self.assertTrue(hasattr(Site, "co_m2m_cleared"))
+
+        field.related_object_types.clear()  # fires m2m_changed pre_clear
+
+        self.assertFalse(
+            hasattr(Site, "co_m2m_cleared"),
+            "Descriptor must be removed from Site after clear()",
+        )
