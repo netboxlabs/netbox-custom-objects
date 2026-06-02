@@ -1835,16 +1835,10 @@ class PolymorphicMultiObjectReverseManager:
         return self._source_model().objects.filter(pk__in=source_ids)
 
     def count(self):
-        ct = ContentType.objects.get_for_model(type(self._instance))
-        return self._through().objects.filter(
-            content_type_id=ct.pk, object_id=self._instance.pk
-        ).count()
+        return self.all().count()
 
     def exists(self):
-        ct = ContentType.objects.get_for_model(type(self._instance))
-        return self._through().objects.filter(
-            content_type_id=ct.pk, object_id=self._instance.pk
-        ).exists()
+        return self.all().exists()
 
     def __iter__(self):
         return iter(self.all())

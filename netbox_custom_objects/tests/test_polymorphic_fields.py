@@ -1545,6 +1545,36 @@ class PolymorphicReverseDescriptorTest(
             "Descriptor must be removed from Site after clear()",
         )
 
+    def test_polymorphic_field_full_clean_accepts_related_name(self):
+        """full_clean() must not raise when related_name is set on a polymorphic field."""
+        field = CustomObjectTypeField(
+            custom_object_type=self.cot,
+            name="clean_test_obj",
+            type="object",
+            is_polymorphic=True,
+            related_name="co_full_clean_check",
+        )
+        # Must not raise ValidationError (old guard would reject any related_name here)
+        field.full_clean()
+
+    def test_polymorphic_related_name_collision_raises(self):
+        """full_clean() must raise when two polymorphic fields share a related_name on the same target type."""
+        existing = self._create_gfk_field(related_name="co_collision_name")
+
+        duplicate = CustomObjectTypeField(
+            custom_object_type=self.cot,
+            name="dup_obj",
+            type="object",
+            is_polymorphic=True,
+            related_name="co_collision_name",
+        )
+        duplicate.save()
+        duplicate.related_object_types.set([self.site_ot])
+
+        from django.core.exceptions import ValidationError as DjangoValidationError
+        with self.assertRaises(DjangoValidationError):
+            duplicate.full_clean()
+
     def test_gfk_reverse_descriptor_cleaned_up_on_related_name_rename(self):
         """Renaming related_name removes the old descriptor and leaves the new one wired."""
         field = self._create_gfk_field(related_name="co_gfk_old_name")

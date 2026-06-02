@@ -1663,17 +1663,29 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 }
             )
 
-        # related_name is not supported on polymorphic fields: GenericForeignKey ignores it
-        # and PolymorphicM2MDescriptor never consumes it, so any value set here would be silently
-        # dropped with no working reverse accessor.
-        if self.related_name and self.is_polymorphic:
-            raise ValidationError(
-                {
-                    "related_name": _(
-                        "Reverse relation names are not supported for polymorphic fields."
+        # related_name collision detection for polymorphic fields (M2M related_object_types).
+        # Only run on saved instances; unsaved ones have no M2M rows to collide with yet.
+        if self.related_name and self.is_polymorphic and self.pk:
+            for ot in self.related_object_types.all():
+                conflict = CustomObjectTypeField.objects.filter(
+                    is_polymorphic=True,
+                    related_name=self.related_name,
+                    related_object_types=ot,
+                ).exclude(pk=self.pk).first()
+                if conflict:
+                    raise ValidationError(
+                        {
+                            "related_name": _(
+                                'Reverse relation name "{name}" is already used by field '
+                                '"{field}" on "{object_type}" for object type "{ot}".'
+                            ).format(
+                                name=self.related_name,
+                                field=conflict.name,
+                                object_type=conflict.custom_object_type,
+                                ot=ot,
+                            )
+                        }
                     )
-                }
-            )
 
         # related_name must be unique per related_object_type (when set)
         if self.related_name and self.related_object_type_id:
@@ -2518,15 +2530,14 @@ def _unwire_polymorphic_reverse_descriptors(field_instance, object_types=None, r
     name = related_name if related_name is not None else field_instance.related_name
     if not name:
         return
-    related_name = name
     ots = object_types if object_types is not None else field_instance.related_object_types.all()
     for ot in ots:
         target_cls = ot.model_class()
         if target_cls is None:
             continue
-        attr = target_cls.__dict__.get(related_name)
+        attr = target_cls.__dict__.get(name)
         if isinstance(attr, (PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor)):
-            delattr(target_cls, related_name)
+            delattr(target_cls, name)
 
 
 # Signal handlers to clear model cache when definitions change
