@@ -1,6 +1,8 @@
 """
 Tests for API code paths.
 """
+import uuid
+
 from django.test import TestCase, RequestFactory
 from django.urls import reverse
 
@@ -1653,8 +1655,9 @@ class NullOptionalObjectFieldTest(CustomObjectsTestCase, TestCase):
         )
         self.model = self.cot.get_model()
 
+        uid = uuid.uuid4().hex[:8]
         for action in ('add', 'change', 'view'):
-            perm = ObjectPermission(name=f'null-obj-{action}', actions=[action])
+            perm = ObjectPermission(name=f'null-obj-{action}-{uid}', actions=[action])
             perm.save()
             perm.users.add(self.user)
             perm.object_types.add(ObjectType.objects.get_for_model(self.model))
@@ -1741,3 +1744,35 @@ class NullOptionalObjectFieldTest(CustomObjectsTestCase, TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
         obj.refresh_from_db()
         self.assertEqual(obj.devices.count(), 0)
+
+    def test_post_null_required_object_field_rejected(self):
+        """POST with null on a required object field must still return 400."""
+        device_ct = CustomObjectsTestCase.get_device_object_type()
+        uid = uuid.uuid4().hex[:8]
+        cot = CustomObjectsTestCase.create_custom_object_type(
+            name=f'NullReqTest-{uid}', slug=f'null-req-test-{uid}'
+        )
+        CustomObjectsTestCase.create_custom_object_type_field(
+            cot, name='name', type='text', primary=True, required=True,
+        )
+        CustomObjectsTestCase.create_custom_object_type_field(
+            cot, name='req_device', type='object',
+            related_object_type=device_ct, required=True,
+        )
+        model = cot.get_model()
+        for action in ('add', 'view'):
+            perm = ObjectPermission(name=f'null-req-{action}-{uid}', actions=[action])
+            perm.save()
+            perm.users.add(self.user)
+            perm.object_types.add(ObjectType.objects.get_for_model(model))
+
+        list_url = reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-list',
+            kwargs={'custom_object_type': cot.slug},
+        )
+        response = self.client.post(
+            list_url,
+            {'name': 'req-null-post', 'req_device': None},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)

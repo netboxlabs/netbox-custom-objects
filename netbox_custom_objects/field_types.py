@@ -1286,7 +1286,21 @@ class MultiObjectFieldType(FieldType):
             serializer = get_serializer_class(related_model_class, skip_object_fields=True)
         else:
             serializer = get_serializer_for_model(related_model_class)
-        return serializer(required=field.required, allow_null=not field.required, nested=True, many=True)
+        # Construct the ListSerializer explicitly so that allow_null is set only on
+        # the outer list (permitting null to clear the whole field) and NOT on the
+        # child (preventing individual null items like [null, 3] from slipping
+        # through).  Using many=True would forward allow_null to the child via
+        # many_init(), widening null acceptance unintentionally.
+        from rest_framework import serializers as drf_serializers
+        child = serializer(required=False, nested=True)
+        meta = getattr(serializer, 'Meta', None)
+        list_serializer_class = getattr(meta, 'list_serializer_class', drf_serializers.ListSerializer)
+        return list_serializer_class(
+            child=child,
+            required=field.required,
+            allow_null=not field.required,
+            allow_empty=True,
+        )
 
     def get_filterform_field(self, field, **kwargs):
         if field.is_polymorphic:
