@@ -1361,16 +1361,51 @@ class PolymorphicReverseDescriptorTest(
         self.assertTrue(site.co_gfk_ce.exists())
 
     def test_gfk_no_reverse_descriptor_when_related_name_blank(self):
-        """When related_name is blank, no reverse descriptor is injected."""
+        """When related_name is blank, neither m2m_changed nor get_model() injects anything."""
         field = CustomObjectTypeField.objects.create(
             custom_object_type=self.cot,
             name="anon_obj", type="object", is_polymorphic=True,
         )
+        before = set(Site.__dict__.keys())
+        field.related_object_types.set([self.site_ot])  # fires m2m_changed
+        self.cot.get_model()                             # fires _after_model_generation
+        after = set(Site.__dict__.keys())
+        self.assertEqual(before, after, "No new attribute should be injected on Site for blank related_name")
+
+    def test_gfk_reverse_descriptor_wired_when_type_added(self):
+        """Adding a type to related_object_types after initial wiring injects the descriptor via m2m_changed."""
+        from dcim.models import Device
+        device_ot = ObjectType.objects.get(app_label="dcim", model="device")
+
+        field = CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name="target_obj", label="Target", type="object",
+            is_polymorphic=True,
+            related_name="co_gfk_added",
+        )
         field.related_object_types.set([self.site_ot])
         self.cot.get_model()
-        # A blank related_name must not inject any descriptor; no AttributeError expected
-        anon_descriptor = Site.__dict__.get("")
-        self.assertIsNone(anon_descriptor)
+        self.assertFalse(hasattr(Device, "co_gfk_added"), "Device not yet in allowed types")
+
+        field.related_object_types.add(device_ot)  # fires m2m_changed post_add
+
+        self.assertTrue(
+            hasattr(Device, "co_gfk_added"),
+            "Descriptor must be wired on Device after adding it to related_object_types",
+        )
+
+    def test_gfk_reverse_descriptor_unwired_when_type_removed(self):
+        """Removing a type from related_object_types removes the descriptor from that class."""
+        field = self._create_gfk_field(related_name="co_gfk_removed")
+        self.cot.get_model()
+        self.assertTrue(hasattr(Site, "co_gfk_removed"), "Descriptor must be present before removal")
+
+        field.related_object_types.remove(self.site_ot)  # fires m2m_changed pre_remove
+
+        self.assertFalse(
+            hasattr(Site, "co_gfk_removed"),
+            "Descriptor must be removed from Site after removing it from related_object_types",
+        )
 
     def test_gfk_reverse_descriptor_removed_on_field_delete(self):
         """Deleting the field removes the reverse descriptor from target models."""

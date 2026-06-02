@@ -554,7 +554,7 @@ class CustomObjectType(NetBoxModel):
                         _apps.register_model(APP_LABEL, through_model)
                     if through_model and through_model not in through_models:
                         through_models.append(through_model)
-                _wire_polymorphic_reverse_descriptors(field_instance, model)
+                _wire_polymorphic_reverse_descriptors(field_instance)
                 continue
 
             # Non-polymorphic: use safe present_fields lookup (avoids _relation_tree recursion).
@@ -2466,7 +2466,19 @@ class CustomObjectObjectType(ObjectType):
 # Helpers for wiring/unwiring polymorphic reverse descriptors on target models
 # ---------------------------------------------------------------------------
 
-def _wire_polymorphic_reverse_descriptors(field_instance, model):
+def _make_reverse_descriptor(field_instance):
+    """Return the appropriate reverse descriptor for *field_instance*, or None."""
+    cot_pk = field_instance.custom_object_type_id
+    if field_instance.type == CustomFieldTypeChoices.TYPE_OBJECT:
+        return PolymorphicObjectReverseDescriptor(cot_pk=cot_pk, field_name=field_instance.name)
+    if field_instance.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+        return PolymorphicMultiObjectReverseDescriptor(
+            cot_pk=cot_pk, through_model_name=field_instance.through_model_name
+        )
+    return None
+
+
+def _wire_polymorphic_reverse_descriptors(field_instance):
     """Attach reverse descriptors on target model classes for a polymorphic field.
 
     For each content type in ``field_instance.related_object_types``, inject a
@@ -2477,47 +2489,35 @@ def _wire_polymorphic_reverse_descriptors(field_instance, model):
     """
     if not field_instance.related_name:
         return
-    related_name = field_instance.related_name
-    cot_pk = field_instance.custom_object_type_id
-
-    if field_instance.type == CustomFieldTypeChoices.TYPE_OBJECT:
-        descriptor = PolymorphicObjectReverseDescriptor(
-            cot_pk=cot_pk, field_name=field_instance.name
-        )
-    elif field_instance.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-        descriptor = PolymorphicMultiObjectReverseDescriptor(
-            cot_pk=cot_pk, through_model_name=field_instance.through_model_name
-        )
-    else:
+    descriptor = _make_reverse_descriptor(field_instance)
+    if descriptor is None:
         return
-
+    related_name = field_instance.related_name
     for ot in field_instance.related_object_types.all():
         target_cls = ot.model_class()
-        if target_cls is None:
-            continue
-        setattr(target_cls, related_name, descriptor)
+        if target_cls is not None:
+            setattr(target_cls, related_name, descriptor)
 
 
-def _unwire_polymorphic_reverse_descriptors(field_instance):
+def _unwire_polymorphic_reverse_descriptors(field_instance, object_types=None):
     """Remove reverse descriptors that were injected by ``_wire_polymorphic_reverse_descriptors``.
 
-    Called from ``CustomObjectTypeField.delete()`` before the M2M rows are removed, so
-    ``related_object_types`` is still queryable.
+    *object_types* is an optional iterable of ObjectType instances to unwire from; when
+    omitted all of ``field_instance.related_object_types`` are used.  Called from
+    ``CustomObjectTypeField.delete()`` (before the M2M rows are removed) and from the
+    ``m2m_changed`` signal handler when types are removed from a live field.
     """
     if not field_instance.related_name:
         return
     related_name = field_instance.related_name
-
-    for ot in field_instance.related_object_types.all():
+    ots = object_types if object_types is not None else field_instance.related_object_types.all()
+    for ot in ots:
         target_cls = ot.model_class()
         if target_cls is None:
             continue
         attr = target_cls.__dict__.get(related_name)
         if isinstance(attr, (PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor)):
-            try:
-                delattr(target_cls, related_name)
-            except AttributeError:
-                pass
+            delattr(target_cls, related_name)
 
 
 # Signal handlers to clear model cache when definitions change
@@ -2561,6 +2561,36 @@ def check_polymorphic_recursion(sender, instance, action, pk_set, **kwargs):
                     "create a circular dependency between custom object types."
                 )
             )
+
+
+@receiver(m2m_changed, sender=CustomObjectTypeField.related_object_types.through)
+def sync_polymorphic_reverse_descriptors(sender, instance, action, pk_set, **kwargs):
+    """Wire or unwire reverse descriptors when a polymorphic field's allowed types change.
+
+    Complements _wire_polymorphic_reverse_descriptors() in _after_model_generation: that
+    path handles initial wiring at model-generation time; this handler keeps descriptors
+    current when types are added or removed from a live field without a full regeneration.
+    """
+    if not instance.is_polymorphic or not instance.related_name:
+        return
+
+    if action == "post_add" and pk_set:
+        descriptor = _make_reverse_descriptor(instance)
+        if descriptor is None:
+            return
+        for ot in ObjectType.objects.filter(pk__in=pk_set):
+            target_cls = ot.model_class()
+            if target_cls is not None:
+                setattr(target_cls, instance.related_name, descriptor)
+
+    elif action == "pre_remove" and pk_set:
+        _unwire_polymorphic_reverse_descriptors(
+            instance, object_types=ObjectType.objects.filter(pk__in=pk_set)
+        )
+
+    elif action == "pre_clear":
+        # pk_set is None for pre_clear; query current set before it disappears.
+        _unwire_polymorphic_reverse_descriptors(instance)
 
 
 @receiver(post_save, sender=CustomObjectTypeField)
