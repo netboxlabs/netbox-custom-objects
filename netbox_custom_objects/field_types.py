@@ -10,7 +10,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import FieldDoesNotExist
 from django.core.validators import RegexValidator
-from django.db import connection, models, router
+from django.db import models, router
 from django.db.utils import OperationalError, ProgrammingError
 from django.db.models.fields.related import ForeignKey, ManyToManyDescriptor
 from django.db.models.manager import Manager
@@ -1603,9 +1603,14 @@ class MultiObjectFieldType(FieldType):
         source_field.remote_field.model = model
         source_field.related_model = model
 
+        # Probe the same schema the DDL will target.  schema_editor is branch-aware
+        # (opened via _get_schema_connection() by the caller), whereas the module-level
+        # ``connection`` always points at the main schema — using it here would let the
+        # idempotency guard diverge from where create_model() actually writes.
+        conn = schema_editor.connection
         table_name = through._meta.db_table
-        with connection.cursor() as cursor:
-            existing_tables = connection.introspection.table_names(cursor)
+        with conn.cursor() as cursor:
+            existing_tables = conn.introspection.table_names(cursor)
             if table_name not in existing_tables:
                 schema_editor.create_model(through)
 
