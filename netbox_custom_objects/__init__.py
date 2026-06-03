@@ -1,4 +1,5 @@
 import contextvars
+import logging
 import sys
 import warnings
 
@@ -11,6 +12,8 @@ from netbox.plugins import PluginConfig
 
 from .constants import APP_LABEL as APP_LABEL
 from .utilities import extract_cot_id_from_model_name, install_clear_cache_suppressor
+
+logger = logging.getLogger(__name__)
 
 # Context variable to track if we're currently running migrations
 _is_migrating = contextvars.ContextVar('is_migrating', default=False)
@@ -27,6 +30,11 @@ _checking_migrations = False
 # access recomputes with the full set of COT models.
 _app_ready = False
 
+# Guards ``super().ready()`` against the duplicate-registration check in
+# NetBox's ``register_serializer_resolver`` (triggered by ``serializer_resolver``
+# on this PluginConfig).
+_super_ready_called = False
+
 
 def _migration_started(sender, **kwargs):
     """Signal handler for pre_migrate - sets the migration flag."""
@@ -38,6 +46,78 @@ def _migration_finished(sender, **kwargs):
     global _migrations_checked
     _is_migrating.set(False)
     _migrations_checked = None
+
+
+# Guards the netbox-branching hook setup against duplicate registration if
+# ``ready()`` runs more than once (e.g. test isolation paths that reset the
+# app registry).  Covers signal connects and the netbox-branching
+# ``register_*`` functions, which do not all dedupe internally.
+_branching_hooks_registered = False
+
+
+def _reset_deferred_co_field_data(sender, **kwargs):
+    """Module-level receiver so Django's ``Signal.connect`` dedupes it across
+    repeat ``ready()`` invocations (a closure would have a fresh id each call).
+    """
+    from netbox_custom_objects.models import _deferred_co_field_data
+    _deferred_co_field_data.set(None)
+
+
+def _register_branching_hooks_once():
+    """Register netbox-branching integration hooks at most once per process.
+
+    Wraps the branching-resolver, objectchange-field-migrator, deferred-data
+    reset receivers, and squash-dependency-graph receiver.  Connect both pre-
+    and post- merge/sync/revert so the deferred-data reset runs even when the
+    operation raises (post-signals only fire on success).  ``weak=False`` keeps
+    the receivers alive past the end of ``ready()``.
+    """
+    global _branching_hooks_registered
+    if _branching_hooks_registered:
+        return
+
+    try:
+        from netbox_branching.signals import (
+            pre_merge, post_merge,
+            pre_sync, post_sync,
+            pre_revert, post_revert,
+        )
+    except ImportError:
+        return
+
+    for sig in (pre_merge, post_merge, pre_sync, post_sync, pre_revert, post_revert):
+        sig.connect(_reset_deferred_co_field_data, weak=False)
+
+    try:
+        from netbox_branching.utilities import (
+            register_branching_resolver,
+            register_objectchange_field_migrator,
+        )
+        from .branching import (
+            objectchange_field_migrator,
+            supports_branching_resolver,
+        )
+        register_branching_resolver(supports_branching_resolver)
+        register_objectchange_field_migrator(objectchange_field_migrator)
+        # Subscribe to the squash dependency-graph signal so CO-specific
+        # edges (M2M targets, polymorphic-M2M sidecar) get added before
+        # topological ordering.  Skipped silently on older netbox-branching
+        # that doesn't expose the signal yet.
+        try:
+            from netbox_branching.signals import (
+                squash_dependency_graph_built,
+            )
+            from .branching import add_custom_object_dependencies
+            squash_dependency_graph_built.connect(
+                add_custom_object_dependencies,
+                weak=False,
+            )
+        except ImportError:
+            pass
+    except ImportError:
+        pass
+
+    _branching_hooks_registered = True
 
 
 # Module-level flag so the heal runs at most once per process invocation even
@@ -64,12 +144,6 @@ def _heal_mixin_columns(sender, **kwargs):
     if any(cmd in sys.argv for cmd in ("makemigrations", "collectstatic")):
         return
 
-    # Set the flag *before* running so that subsequent post_migrate firings
-    # (one per installed app) are no-ops even if the first attempt raises.
-    # A failure here will not be retried in the same process; operators can
-    # run 'manage.py upgrade_custom_objects' manually if needed.
-    _heal_ran = True
-
     try:
         from netbox_custom_objects.mixin_migration import heal_all_cots  # noqa: PLC0415
         heal_all_cots(verbosity=kwargs.get("verbosity", 1))
@@ -78,6 +152,13 @@ def _heal_mixin_columns(sender, **kwargs):
         logging.getLogger(__name__).exception(
             "upgrade_custom_objects: unexpected error during mixin drift check"
         )
+        # Leave _heal_ran False so a subsequent post_migrate firing (or a
+        # manual 'manage.py upgrade_custom_objects') gets another attempt.
+        return
+
+    # Only mark complete on success so a transient failure can be retried by
+    # the next post_migrate firing in this process.
+    _heal_ran = True
 
 
 def _patch_object_selector_view():
@@ -133,6 +214,9 @@ class CustomObjectsPluginConfig(PluginConfig):
     }
     required_settings = []
     template_extensions = "template_content.template_extensions"
+    # Resolves dynamic CO models (table{n}model) to on-the-fly serializers —
+    # they have no importable path at the conventional location.
+    serializer_resolver = "api.serializers.serializer_resolver"
 
     @staticmethod
     def should_skip_dynamic_model_creation():
@@ -216,6 +300,15 @@ class CustomObjectsPluginConfig(PluginConfig):
             # Always clear the recursion flag
             _checking_migrations = False
 
+    def _call_super_ready_once(self):
+        """Call ``super().ready()`` once; subsequent calls are no-ops.
+        ``register_serializer_resolver`` rejects duplicates."""
+        global _super_ready_called
+        if _super_ready_called:
+            return
+        super().ready()
+        _super_ready_called = True
+
     def ready(self):
         # Install the thread-safe apps.clear_cache wrapper before any dynamic
         # model is registered (must happen exactly once, before get_model() runs).
@@ -234,6 +327,13 @@ class CustomObjectsPluginConfig(PluginConfig):
         # Patch ObjectSelectorView to support dynamically-generated custom object models
         _patch_object_selector_view()
 
+        # Register netbox-branching integration hooks (deferred-data reset
+        # receivers, branchable resolver, ObjectChange field-name migrator,
+        # squash dependency-graph receiver).  Guarded so the plugin still
+        # works without netbox-branching, and so repeat ready() invocations
+        # don't accumulate duplicate handlers.
+        _register_branching_hooks_once()
+
         # Suppress warnings about database calls during app initialization
         with warnings.catch_warnings():
             warnings.filterwarnings(
@@ -245,7 +345,7 @@ class CustomObjectsPluginConfig(PluginConfig):
 
             # Skip database calls if dynamic models can't be created yet
             if self.should_skip_dynamic_model_creation():
-                super().ready()
+                self._call_super_ready_once()
                 return
 
             try:
@@ -282,7 +382,7 @@ class CustomObjectsPluginConfig(PluginConfig):
             except (ProgrammingError, OperationalError):
                 # DB schema is incomplete (unapplied migrations). Skip dynamic
                 # model registration — it will happen after migrations finish.
-                super().ready()
+                self._call_super_ready_once()
                 return
 
         # Signal that ready() has fully completed.  get_models() checks this flag
@@ -296,7 +396,7 @@ class CustomObjectsPluginConfig(PluginConfig):
         from django.apps import apps as django_apps
         django_apps.clear_cache()
 
-        super().ready()
+        self._call_super_ready_once()
 
     def get_model(self, model_name, require_ready=True):
         self.apps.check_apps_ready()

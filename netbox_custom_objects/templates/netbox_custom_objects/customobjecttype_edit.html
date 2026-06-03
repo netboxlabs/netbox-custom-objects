@@ -2,8 +2,5 @@
 {% load i18n %}
 
 {% block form %}
-  {% if branch_bypass_warning %}
-    {% include 'netbox_custom_objects/inc/branch_bypass_warning.html' %}
-  {% endif %}
   {{ block.super }}
 {% endblock form %}

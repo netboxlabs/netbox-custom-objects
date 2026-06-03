@@ -7,6 +7,7 @@ from django import forms as django_forms
 from django.apps import apps as django_apps
 from django.db.models import QuerySet, Q
 from django.utils.dateparse import parse_date, parse_datetime
+from django.utils.timezone import make_aware, is_aware
 
 from extras.choices import CustomFieldTypeChoices
 from netbox.filtersets import NetBoxModelFilterSet
@@ -391,6 +392,8 @@ def get_filterset_class(model):
             elif field.type == CustomFieldTypeChoices.TYPE_DATETIME:
                 parsed = parse_datetime(value)
                 if parsed is not None:
+                    if not is_aware(parsed):
+                        parsed = make_aware(parsed)
                     q |= Q(**{f"{field.name}__exact": parsed})
         if not q:
             return queryset.none()

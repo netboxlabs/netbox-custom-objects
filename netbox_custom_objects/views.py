@@ -37,9 +37,18 @@ from .models import CustomObject, CustomObjectType, CustomObjectTypeField
 from extras.choices import CustomFieldTypeChoices
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.dynamic_forms import build_filterset_form_class
-from netbox_custom_objects.utilities import extract_cot_id_from_model_name, is_in_branch
+from netbox_custom_objects.utilities import extract_cot_id_from_model_name
 
 logger = logging.getLogger("netbox_custom_objects.views")
+
+
+def _is_in_branch():
+    """True if a netbox-branching branch is active in this context."""
+    try:
+        from netbox_branching.contextvars import active_branch
+        return active_branch.get() is not None
+    except ImportError:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -328,18 +337,12 @@ class CustomObjectTypeEditView(generic.ObjectEditView):
     form = forms.CustomObjectTypeForm
     template_name = 'netbox_custom_objects/customobjecttype_edit.html'
 
-    def get_extra_context(self, request, instance):
-        return {'branch_bypass_warning': is_in_branch()}
-
 
 @register_model_view(CustomObjectType, "delete")
 class CustomObjectTypeDeleteView(generic.ObjectDeleteView):
     queryset = CustomObjectType.objects.all()
     default_return_url = "plugins:netbox_custom_objects:customobjecttype_list"
     template_name = 'netbox_custom_objects/customobjecttype_delete.html'
-
-    def get_extra_context(self, request, instance):
-        return {'branch_bypass_warning': is_in_branch()}
 
     def _get_dependent_objects(self, obj):
         dependent_objects = super()._get_dependent_objects(obj)
@@ -385,9 +388,6 @@ class CustomObjectTypeFieldEditView(generic.ObjectEditView):
     queryset = CustomObjectTypeField.objects.all()
     form = forms.CustomObjectTypeFieldForm
     template_name = 'netbox_custom_objects/customobjecttypefield_edit.html'
-
-    def get_extra_context(self, request, instance):
-        return {'branch_bypass_warning': is_in_branch()}
 
 
 @register_model_view(CustomObjectTypeField, "delete")
@@ -476,18 +476,12 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
 
         return dependent_objects
 
-    def get_extra_context(self, request, instance):
-        return {'branch_bypass_warning': is_in_branch()}
-
 
 @register_model_view(CustomObjectType, "bulk_import", path="import", detail=False)
 class CustomObjectTypeBulkImportView(generic.BulkImportView):
     queryset = CustomObjectType.objects.all()
     model_form = forms.CustomObjectTypeImportForm
     template_name = 'netbox_custom_objects/customobjecttype_bulk_import.html'
-
-    def get_extra_context(self, request):
-        return {'branch_bypass_warning': is_in_branch()}
 
 
 @register_model_view(CustomObjectType, "bulk_edit", path="edit", detail=False)
@@ -498,9 +492,6 @@ class CustomObjectTypeBulkEditView(generic.BulkEditView):
     form = forms.CustomObjectTypeBulkEditForm
     template_name = 'netbox_custom_objects/customobjecttype_bulk_edit.html'
 
-    def get_extra_context(self, request):
-        return {'branch_bypass_warning': is_in_branch()}
-
 
 @register_model_view(CustomObjectType, "bulk_delete", path="delete", detail=False)
 class CustomObjectTypeBulkDeleteView(generic.BulkDeleteView):
@@ -508,9 +499,6 @@ class CustomObjectTypeBulkDeleteView(generic.BulkDeleteView):
     filterset = filtersets.CustomObjectTypeFilterSet
     table = tables.CustomObjectTypeTable
     template_name = 'netbox_custom_objects/customobjecttype_bulk_delete.html'
-
-    def get_extra_context(self, request):
-        return {'branch_bypass_warning': is_in_branch()}
 
 
 #
@@ -932,11 +920,6 @@ class CustomObjectEditView(generic.ObjectEditView):
 
         return form_class
 
-    def get_extra_context(self, request, obj):
-        return {
-            'branch_warning': is_in_branch(),
-        }
-
 
 @register_model_view(CustomObject, "delete")
 class CustomObjectDeleteView(generic.ObjectDeleteView):
@@ -1020,7 +1003,7 @@ class CustomObjectDeleteView(generic.ObjectDeleteView):
         }
 
     def get_extra_context(self, request, instance):
-        return {'branch_warning': is_in_branch()}
+        return {'branch_warning': _is_in_branch()}
 
 
 @register_model_view(CustomObject, "bulk_edit", path="edit", detail=False)
@@ -1188,8 +1171,8 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
 
         # Apply polymorphic M2M sub-fields (union of all selected types).
         # set() replaces existing values, matching NetBox's standard bulk-edit
-        # behavior for direct M2M fields (see BulkEditView lines 718-723).
-        # Fields left blank are skipped so existing data is preserved.
+        # behavior for direct M2M fields.  Fields left blank are skipped so
+        # existing data is preserved.
         for field_name, sub_names in form._poly_m2m_field_map.items():
             combined = []
             has_any = False
@@ -1213,14 +1196,8 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
             return render(request, 'netbox_custom_objects/htmx/bulk_edit_fields.html', {
                 'form': form,
                 'return_url': self.get_return_url(request),
-                'branch_warning': is_in_branch(),
             })
         return redirect(self.get_return_url(request))
-
-    def get_extra_context(self, request):
-        return {
-            'branch_warning': is_in_branch(),
-        }
 
 
 @register_model_view(CustomObject, "bulk_delete", path="delete", detail=False)
@@ -1246,9 +1223,6 @@ class CustomObjectBulkDeleteView(CustomObjectTableMixin, generic.BulkDeleteView)
         )
         model = self.custom_object_type.get_model_with_serializer()
         return model.objects.all()
-
-    def get_extra_context(self, request):
-        return {'branch_warning': is_in_branch()}
 
 
 @register_model_view(CustomObject, "bulk_import", path="import", detail=False)
@@ -1312,11 +1286,6 @@ class CustomObjectBulkImportView(generic.BulkImportView):
         )
 
         return form
-
-    def get_extra_context(self, request):
-        return {
-            'branch_warning': is_in_branch(),
-        }
 
 
 class CustomObjectJournalView(ConditionalLoginRequiredMixin, View):

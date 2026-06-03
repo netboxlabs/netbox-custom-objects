@@ -14,10 +14,6 @@ block is duplicated here. Keep in sync with the upstream template manually.
   {# Confirmation form #}
   <div class="tab-pane show active" id="delete-form" role="tabpanel" aria-labelledby="delete-form-tab">
 
-    {% if branch_warning %}
-      {% include 'netbox_custom_objects/inc/branch_warning.html' %}
-    {% endif %}
-
     <div class="alert alert-danger bg-danger-subtle" role="alert">
       <div class="d-flex">
         <div>
@@ -53,7 +49,7 @@ block is duplicated here. Keep in sync with the upstream template manually.
         {# Form buttons #}
         <div class="text-end">
           <a href="{{ return_url }}" class="btn btn-outline-secondary">{% trans "Cancel" %}</a>
-          <button type="submit" name="_confirm" class="btn btn-danger"{% if branch_warning %} disabled{% endif %}>
+          <button type="submit" name="_confirm" class="btn btn-danger">
             {% trans "Delete" %} {{ table.rows|length }} {{ model|meta:"verbose_name_plural" }}
           </button>
         </div>

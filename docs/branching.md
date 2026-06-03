@@ -1,5 +1,12 @@
 # Using NetBox Custom Objects with NetBox Branching
 
+When using Custom Objects together with NetBox Branching, the following minimum versions are required:
+
+- NetBox >= 4.6.2
+- netbox-branching >= 1.1.0
+
+If you do not use branching, the standard compatibility matrix in `COMPATIBILITY.md` applies.
+
 As of version 0.4.0, Custom Objects is _compatible_ with [NetBox Branching](https://netboxlabs.com/docs/extensions/branching/), but not yet fully supported. Users can safely run both plugins together, but there are some caveats to be aware of. See below for how each Custom Objects model interacts with NetBox Branching.
 
 !!! note
