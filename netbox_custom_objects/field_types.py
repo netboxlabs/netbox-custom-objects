@@ -480,12 +480,19 @@ class SelectFieldType(FieldType):
 
     def get_table_column_field(self, field, **kwargs):
         choices_dict = dict(field.choices)
+        choice_set = field.choice_set
 
         class _SelectLabelColumn(tables.Column):
             def render(self, value):
                 if value is None:
                     return self.default
-                return choices_dict.get(value, value)
+                label = choices_dict.get(value, value)
+                color = choice_set.get_choice_color(value) if choice_set else None
+                if color:
+                    return mark_safe(
+                        f'<span class="badge text-bg-{escape(color)}">{escape(label)}</span>'
+                    )
+                return label
 
         return _SelectLabelColumn()
 
@@ -606,12 +613,25 @@ class MultiSelectFieldType(FieldType):
 
     def get_table_column_field(self, field, **kwargs):
         choices_dict = dict(field.choices)
+        choice_set = field.choice_set
 
         class _MultiSelectLabelColumn(tables.Column):
             def render(self, value):
                 if not value:
                     return self.default
-                return ', '.join(choices_dict.get(v, v) for v in value)
+                pairs = [
+                    (choices_dict.get(v, v), choice_set.get_choice_color(v) if choice_set else None)
+                    for v in value
+                ]
+                if any(color for _, color in pairs):
+                    badges = ''.join(
+                        f'<span class="badge text-bg-{escape(color)}">{escape(label)}</span>'
+                        if color else
+                        f'<span class="badge">{escape(label)}</span>'
+                        for label, color in pairs
+                    )
+                    return mark_safe(f'<div class="d-flex flex-wrap gap-1">{badges}</div>')
+                return ', '.join(label for label, _ in pairs)
 
         return _MultiSelectLabelColumn()
 

@@ -1396,6 +1396,16 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             return self.choice_set.choices
         return []
 
+    def get_choice_label(self, value):
+        if not hasattr(self, '_choice_map'):
+            self._choice_map = dict(self.choices)
+        return self._choice_map.get(value, value)
+
+    def get_choice_color(self, value):
+        if self.choice_set:
+            return self.choice_set.get_choice_color(value)
+        return None
+
     @property
     def related_object_type_label(self):
         if self.is_polymorphic:
