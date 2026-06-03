@@ -598,7 +598,7 @@ class SelectFieldTypeTestCase(FieldTypeTestCase):
         field.choice_set.get_choice_color.return_value = 'green'
         column = SelectFieldType().get_table_column_field(field)
         result = column.render(value='choice1')
-        self.assertIn('badge', result)
+        self.assertIn('class="badge', result)
         self.assertIn('text-bg-green', result)
         self.assertIn('Choice 1', result)
 
@@ -782,6 +782,23 @@ class MultiSelectFieldTypeTestCase(FieldTypeTestCase):
         self.assertIn('text-bg-red', result)
         self.assertIn('Choice 1', result)
         self.assertIn('Choice 3', result)
+
+    def test_multiselect_column_render_mixed_colors(self):
+        """Colorless values get a plain badge when at least one sibling has a color."""
+        field = Mock()
+        field.choices = [('choice1', 'Choice 1'), ('choice2', 'Choice 2')]
+        field.choice_set = Mock()
+        # choice1 has a color; choice2 does not
+        field.choice_set.get_choice_color.side_effect = lambda v: 'blue' if v == 'choice1' else None
+        column = MultiSelectFieldType().get_table_column_field(field)
+        result = column.render(value=['choice1', 'choice2'])
+        self.assertIn('text-bg-blue', result)
+        self.assertIn('Choice 1', result)
+        # choice2 should still be a badge (no color class), not plain text
+        self.assertIn('class="badge"', result)
+        self.assertIn('Choice 2', result)
+        # result is HTML, not a comma-joined string
+        self.assertNotIn('Choice 1, Choice 2', result)
 
     def test_get_field_value_returns_raw_list_for_multiselect(self):
         """get_field_value template filter returns the raw stored list for multiselect fields."""
