@@ -1731,3 +1731,111 @@ class PolymorphicReverseDescriptorTest(
         qs = manager.all()
         self.assertEqual(qs.count(), 0, ".all() must return empty queryset for deleted COT")
         self.assertFalse(manager.exists())
+
+    def test_inbound_reverse_descriptor_wired_when_target_cot_generated_after_source(self):
+        """Regression for startup ordering: if COT A is generated before COT B,
+        COT A's _wire skips COT B (model_class() is None at that point).  When
+        COT B is later generated its _after_model_generation must wire the
+        inbound descriptor from COT A onto the new class."""
+        # COT B is the target; its ObjectType must be registered before we
+        # create the source field so related_object_types.set() can find it.
+        cot_b = CustomObjectType.objects.create(
+            name="InboundTarget", slug="inbound-target",
+            verbose_name_plural="Inbound Targets",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cot_b, name="name", type="text", primary=True, required=True,
+        )
+        cot_b_ot = cot_b.object_type
+
+        # COT A has a polymorphic GFK field pointing at COT B with a related_name.
+        field_a = CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name="target_cot_b", type="object", is_polymorphic=True,
+            related_name="co_inbound_ref",
+        )
+        field_a.related_object_types.set([cot_b_ot])
+
+        # Simulate COT A being generated first — COT B's model class doesn't exist yet.
+        # We achieve this by generating COT A's model without COT B's model being cached.
+        cot_b_model = cot_b.get_model()
+
+        # After COT B is generated, its _after_model_generation should have wired the
+        # inbound descriptor from COT A.
+        self.assertTrue(
+            hasattr(cot_b_model, "co_inbound_ref"),
+            "_after_model_generation must wire inbound reverse descriptors from other COTs",
+        )
+
+    def test_cross_type_related_name_collision_poly_vs_nonpoly_raises(self):
+        """full_clean() must reject a polymorphic field whose related_name collides
+        with a non-polymorphic field on the same target type."""
+        from django.core.exceptions import ValidationError as DjangoValidationError
+
+        # Create a non-polymorphic Object field with related_name on Site.
+        np_field = CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name="np_site_ref",
+            type="object",
+            is_polymorphic=False,
+            related_object_type=self.site_ot,
+            related_name="co_cross_type_name",
+        )
+
+        # Create a second COT with a polymorphic field claiming the same name.
+        cot2 = CustomObjectType.objects.create(
+            name="CrossTypeTest", slug="cross-type-test",
+            verbose_name_plural="Cross Type Tests",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cot2, name="name", type="text", primary=True, required=True,
+        )
+        poly_field = CustomObjectTypeField(
+            custom_object_type=cot2,
+            name="poly_site_ref",
+            type="object",
+            is_polymorphic=True,
+            related_name="co_cross_type_name",
+        )
+        poly_field.save()
+        poly_field.related_object_types.set([self.site_ot])
+
+        with self.assertRaises(DjangoValidationError) as cm:
+            poly_field.full_clean()
+        self.assertIn("related_name", cm.exception.message_dict)
+
+    def test_cross_type_related_name_collision_nonpoly_vs_poly_raises(self):
+        """full_clean() must reject a non-polymorphic field whose related_name collides
+        with a polymorphic field on the same target type."""
+        from django.core.exceptions import ValidationError as DjangoValidationError
+
+        # Create a polymorphic field on a second COT first.
+        cot2 = CustomObjectType.objects.create(
+            name="CrossTypeTest2", slug="cross-type-test-2",
+            verbose_name_plural="Cross Type Tests 2",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cot2, name="name", type="text", primary=True, required=True,
+        )
+        poly_field = CustomObjectTypeField.objects.create(
+            custom_object_type=cot2,
+            name="poly_site_ref2",
+            type="object",
+            is_polymorphic=True,
+            related_name="co_cross_type_name2",
+        )
+        poly_field.related_object_types.set([self.site_ot])
+
+        # Now try to create a non-polymorphic field on self.cot with the same related_name.
+        np_field = CustomObjectTypeField(
+            custom_object_type=self.cot,
+            name="np_site_ref2",
+            type="object",
+            is_polymorphic=False,
+            related_object_type=self.site_ot,
+            related_name="co_cross_type_name2",
+        )
+
+        with self.assertRaises(DjangoValidationError) as cm:
+            np_field.full_clean()
+        self.assertIn("related_name", cm.exception.message_dict)

@@ -579,6 +579,18 @@ class CustomObjectType(NetBoxModel):
         # Store through models on the model for yielding in get_models()
         model._through_models = through_models
 
+        # Wire any inbound polymorphic reverse descriptors from other CO fields that
+        # point at this model.  Handles the startup ordering problem: if the source COT
+        # was generated before this target COT, _wire_polymorphic_reverse_descriptors()
+        # called during the source's generation would have found model_class() == None
+        # for this target and skipped it.  Now that the model class exists, re-wire.
+        own_ot = ObjectType.objects.get_for_model(model)
+        for inbound_field in CustomObjectTypeField.objects.filter(
+            is_polymorphic=True,
+            related_object_types=own_ot,
+        ).exclude(related_name=''):
+            _wire_polymorphic_reverse_descriptors(inbound_field)
+
     @staticmethod
     def _collect_base_columns(model, user_field_names):
         """
@@ -1687,6 +1699,27 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                         }
                     )
 
+                # Cross-check: non-polymorphic field claiming the same related_name on this target
+                conflict_np = CustomObjectTypeField.objects.filter(
+                    is_polymorphic=False,
+                    related_name=self.related_name,
+                    related_object_type=ot,
+                ).exclude(pk=self.pk).first()
+                if conflict_np:
+                    raise ValidationError(
+                        {
+                            "related_name": _(
+                                'Reverse relation name "{name}" is already used by field '
+                                '"{field}" on "{object_type}" for object type "{ot}".'
+                            ).format(
+                                name=self.related_name,
+                                field=conflict_np.name,
+                                object_type=conflict_np.custom_object_type,
+                                ot=ot,
+                            )
+                        }
+                    )
+
                 # Guard against clobbering an existing attribute on the target model class
                 # (e.g. a FK, method, or property that already uses that name).  We allow
                 # the name only if the class already carries one of our own descriptors —
@@ -1724,6 +1757,26 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                             name=self.related_name,
                             field=conflict.name,
                             object_type=conflict.custom_object_type,
+                        )
+                    }
+                )
+
+            # Cross-check: polymorphic field claiming the same related_name on this target
+            conflict_poly = CustomObjectTypeField.objects.filter(
+                is_polymorphic=True,
+                related_name=self.related_name,
+                related_object_types=self.related_object_type,
+            ).exclude(pk=self.pk).first()
+            if conflict_poly:
+                raise ValidationError(
+                    {
+                        "related_name": _(
+                            'Reverse relation name "{name}" is already used by field '
+                            '"{field}" on "{object_type}".'
+                        ).format(
+                            name=self.related_name,
+                            field=conflict_poly.name,
+                            object_type=conflict_poly.custom_object_type,
                         )
                     }
                 )
