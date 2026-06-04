@@ -481,7 +481,11 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, Test
         self.assertHttpStatus(response, status.HTTP_200_OK)
 
         instance.refresh_from_db()
-        self.assertIn(tag.name, list(instance.tags.names()), 'Existing tags must be preserved when tags not in PATCH payload')
+        self.assertIn(
+            tag.name,
+            list(instance.tags.names()),
+            'Existing tags must be preserved when tags not in PATCH payload',
+        )
 
 
 class LinkedObjectsAPITest(CustomObjectsTestCase, TestCase):
