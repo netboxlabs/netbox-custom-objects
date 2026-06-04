@@ -1773,7 +1773,7 @@ class PolymorphicReverseDescriptorTest(
         from django.core.exceptions import ValidationError as DjangoValidationError
 
         # Create a non-polymorphic Object field with related_name on Site.
-        np_field = CustomObjectTypeField.objects.create(
+        CustomObjectTypeField.objects.create(
             custom_object_type=self.cot,
             name="np_site_ref",
             type="object",

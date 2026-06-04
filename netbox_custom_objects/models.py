@@ -2709,7 +2709,11 @@ def sync_polymorphic_reverse_descriptors(sender, instance, action, pk_set, **kwa
                 continue
             existing = target_cls.__dict__.get(instance.related_name)
             if existing is not None:
-                if not isinstance(existing, (PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor)):
+                if not isinstance(
+                    existing, (
+                        PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor
+                    )
+                ):
                     logger.warning(
                         'Skipping reverse descriptor "%s" on %s: a non-CO attribute already exists '
                         'with that name. Change the related_name to avoid this conflict.',
