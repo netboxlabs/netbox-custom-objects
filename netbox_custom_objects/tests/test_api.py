@@ -449,6 +449,40 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, Test
         instance.refresh_from_db()
         self.assertIn(tag.name, list(instance.tags.names()), 'Tag must be persisted to the DB after PATCH')
 
+    def test_patch_with_empty_tags_clears_existing(self):
+        """PATCH with tags=[] must remove all existing tags from the DB."""
+        self._add_permission('view', 'View perm')
+        self._add_permission('change', 'Patch clear tags perm')
+        tag = Tag.objects.get_or_create(name='api-clear-tag', slug='api-clear-tag')[0]
+
+        instance = self._get_queryset().first()
+        instance.tags.add(tag.name)
+        self.assertIn(tag.name, list(instance.tags.names()), 'Pre-condition: tag should be set')
+
+        response = self.client.patch(self._get_detail_url(instance), {'tags': []}, format='json', **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+
+        instance.refresh_from_db()
+        self.assertEqual(list(instance.tags.names()), [], 'All tags must be cleared after PATCH with tags=[]')
+
+    def test_patch_without_tags_preserves_existing(self):
+        """PATCH that omits the tags key entirely must leave existing tags unchanged."""
+        self._add_permission('view', 'View perm')
+        self._add_permission('change', 'Patch preserve tags perm')
+        tag = Tag.objects.get_or_create(name='api-preserve-tag', slug='api-preserve-tag')[0]
+
+        instance = self._get_queryset().first()
+        instance.tags.add(tag.name)
+        self.assertIn(tag.name, list(instance.tags.names()), 'Pre-condition: tag should be set')
+
+        response = self.client.patch(
+            self._get_detail_url(instance), {'test_field': 'updated'}, format='json', **self.header
+        )
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+
+        instance.refresh_from_db()
+        self.assertIn(tag.name, list(instance.tags.names()), 'Existing tags must be preserved when tags not in PATCH payload')
+
 
 class LinkedObjectsAPITest(CustomObjectsTestCase, TestCase):
     """
