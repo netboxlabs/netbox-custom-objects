@@ -1616,3 +1616,58 @@ class PolymorphicReverseDescriptorTest(
             hasattr(Site, "co_m2m_new_name"),
             "new descriptor must be present on Site after rename",
         )
+
+    def test_related_name_colliding_with_target_model_attribute_raises(self):
+        """full_clean() must reject a related_name that clashes with a pre-existing attribute
+        on the target model class, to prevent silently clobbering it."""
+        from django.core.exceptions import ValidationError as DjangoValidationError
+
+        # Use a controlled sentinel so the test is self-contained regardless of prior
+        # test state (Site.__dict__ can be dirty after earlier tests run _wire).
+        attr_name = "_co_collision_test_attr"
+        sentinel = object()
+        setattr(Site, attr_name, sentinel)
+        try:
+            field = CustomObjectTypeField(
+                custom_object_type=self.cot,
+                name="collision_obj",
+                type="object",
+                is_polymorphic=True,
+                related_name=attr_name,
+            )
+            field.save()
+            field.related_object_types.set([self.site_ot])
+
+            with self.assertRaises(DjangoValidationError) as cm:
+                field.full_clean()
+            self.assertIn("related_name", cm.exception.message_dict)
+        finally:
+            if Site.__dict__.get(attr_name) is sentinel:
+                delattr(Site, attr_name)
+
+    def test_wire_skips_setattr_when_related_name_collides_with_target_attribute(self):
+        """_wire_polymorphic_reverse_descriptors must not overwrite a pre-existing non-CO
+        attribute on the target model class, even if clean() was not called first."""
+        attr_name = "_co_wire_collision_test_attr"
+        sentinel = object()
+        setattr(Site, attr_name, sentinel)
+        try:
+            field = CustomObjectTypeField(
+                custom_object_type=self.cot,
+                name="wire_collision_obj",
+                type="object",
+                is_polymorphic=True,
+                related_name=attr_name,
+            )
+            field.save()
+            # set() triggers the m2m_changed signal which calls _wire internally.
+            field.related_object_types.set([self.site_ot])
+
+            # The sentinel must still be intact — _wire must have skipped the setattr.
+            self.assertIs(
+                Site.__dict__.get(attr_name), sentinel,
+                "_wire must not overwrite a pre-existing non-CO attribute on the target model",
+            )
+        finally:
+            if Site.__dict__.get(attr_name) is sentinel:
+                delattr(Site, attr_name)

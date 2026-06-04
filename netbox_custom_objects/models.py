@@ -1687,6 +1687,27 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                         }
                     )
 
+                # Guard against clobbering an existing attribute on the target model class
+                # (e.g. a FK, method, or property that already uses that name).  We allow
+                # the name only if the class already carries one of our own descriptors —
+                # which means this field (or a field being renamed to/from it) is the one
+                # that set it.
+                target_cls = ot.model_class()
+                if target_cls is not None:
+                    existing = target_cls.__dict__.get(self.related_name)
+                    if existing is not None and not isinstance(
+                        existing,
+                        (PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor),
+                    ):
+                        raise ValidationError(
+                            {
+                                "related_name": _(
+                                    'Reverse relation name "{name}" conflicts with an existing '
+                                    'attribute on model "{model}". Choose a different name.'
+                                ).format(name=self.related_name, model=target_cls.__name__)
+                            }
+                        )
+
         # related_name must be unique per related_object_type (when set)
         if self.related_name and self.related_object_type_id:
             conflict = CustomObjectTypeField.objects.filter(
@@ -2513,8 +2534,20 @@ def _wire_polymorphic_reverse_descriptors(field_instance):
     related_name = field_instance.related_name
     for ot in field_instance.related_object_types.all():
         target_cls = ot.model_class()
-        if target_cls is not None:
-            setattr(target_cls, related_name, descriptor)
+        if target_cls is None:
+            continue
+        existing = target_cls.__dict__.get(related_name)
+        if existing is not None and not isinstance(
+            existing,
+            (PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor),
+        ):
+            logger.warning(
+                'Skipping reverse descriptor "%s" on %s: attribute already exists and is not '
+                'a CO reverse descriptor. Change the related_name to avoid this conflict.',
+                related_name, target_cls.__name__,
+            )
+            continue
+        setattr(target_cls, related_name, descriptor)
 
 
 def _unwire_polymorphic_reverse_descriptors(field_instance, object_types=None, related_name=None):
@@ -2600,8 +2633,20 @@ def sync_polymorphic_reverse_descriptors(sender, instance, action, pk_set, **kwa
             return
         for ot in ObjectType.objects.filter(pk__in=pk_set):
             target_cls = ot.model_class()
-            if target_cls is not None:
-                setattr(target_cls, instance.related_name, descriptor)
+            if target_cls is None:
+                continue
+            existing = target_cls.__dict__.get(instance.related_name)
+            if existing is not None and not isinstance(
+                existing,
+                (PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor),
+            ):
+                logger.warning(
+                    'Skipping reverse descriptor "%s" on %s: attribute already exists and is not '
+                    'a CO reverse descriptor. Change the related_name to avoid this conflict.',
+                    instance.related_name, target_cls.__name__,
+                )
+                continue
+            setattr(target_cls, instance.related_name, descriptor)
 
     elif action == "pre_remove" and pk_set:
         _unwire_polymorphic_reverse_descriptors(
