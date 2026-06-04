@@ -1774,11 +1774,22 @@ class PolymorphicObjectReverseManager:
 
     def _source_model(self):
         from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
-        return CustomObjectType.objects.get(pk=self._cot_pk).get_model()
+        try:
+            return CustomObjectType.objects.get(pk=self._cot_pk).get_model()
+        except CustomObjectType.DoesNotExist:
+            logger.warning(
+                'Reverse accessor: source CustomObjectType pk=%d no longer exists; '
+                'returning empty queryset.',
+                self._cot_pk,
+            )
+            return None
 
     def all(self):
+        source_model = self._source_model()
+        if source_model is None:
+            return ContentType.objects.none()
         ct = ContentType.objects.get_for_model(type(self._instance))
-        return self._source_model().objects.filter(**{
+        return source_model.objects.filter(**{
             f"{self._field_name}_content_type": ct,
             f"{self._field_name}_object_id": self._instance.pk,
         })
@@ -1821,18 +1832,29 @@ class PolymorphicMultiObjectReverseManager:
 
     def _source_model(self):
         from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
-        return CustomObjectType.objects.get(pk=self._cot_pk).get_model()
+        try:
+            return CustomObjectType.objects.get(pk=self._cot_pk).get_model()
+        except CustomObjectType.DoesNotExist:
+            logger.warning(
+                'Reverse accessor: source CustomObjectType pk=%d no longer exists; '
+                'returning empty queryset.',
+                self._cot_pk,
+            )
+            return None
 
     def _through(self):
         return apps.get_model(APP_LABEL, self._through_model_name)
 
     def all(self):
+        source_model = self._source_model()
+        if source_model is None:
+            return ContentType.objects.none()
         ct = ContentType.objects.get_for_model(type(self._instance))
         source_ids = self._through().objects.filter(
             content_type_id=ct.pk,
             object_id=self._instance.pk,
         ).values_list("source_id", flat=True)
-        return self._source_model().objects.filter(pk__in=source_ids)
+        return source_model.objects.filter(pk__in=source_ids)
 
     def count(self):
         return self.all().count()

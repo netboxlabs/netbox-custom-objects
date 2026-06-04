@@ -2517,6 +2517,20 @@ def _make_reverse_descriptor(field_instance):
     return None
 
 
+def _descriptor_matches_field(descriptor, field_instance):
+    """Return True if *descriptor* was placed by the given *field_instance*.
+
+    Used to distinguish a legitimate re-wire of the same field (e.g. during model
+    regeneration) from an attempt by a different field to overwrite an existing descriptor.
+    """
+    cot_pk = field_instance.custom_object_type_id
+    if isinstance(descriptor, PolymorphicObjectReverseDescriptor):
+        return descriptor.cot_pk == cot_pk and descriptor.field_name == field_instance.name
+    if isinstance(descriptor, PolymorphicMultiObjectReverseDescriptor):
+        return descriptor.cot_pk == cot_pk and descriptor.through_model_name == field_instance.through_model_name
+    return False
+
+
 def _wire_polymorphic_reverse_descriptors(field_instance):
     """Attach reverse descriptors on target model classes for a polymorphic field.
 
@@ -2537,16 +2551,21 @@ def _wire_polymorphic_reverse_descriptors(field_instance):
         if target_cls is None:
             continue
         existing = target_cls.__dict__.get(related_name)
-        if existing is not None and not isinstance(
-            existing,
-            (PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor),
-        ):
-            logger.warning(
-                'Skipping reverse descriptor "%s" on %s: attribute already exists and is not '
-                'a CO reverse descriptor. Change the related_name to avoid this conflict.',
-                related_name, target_cls.__name__,
-            )
-            continue
+        if existing is not None:
+            if not isinstance(existing, (PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor)):
+                logger.warning(
+                    'Skipping reverse descriptor "%s" on %s: a non-CO attribute already exists '
+                    'with that name. Change the related_name to avoid this conflict.',
+                    related_name, target_cls.__name__,
+                )
+                continue
+            if not _descriptor_matches_field(existing, field_instance):
+                logger.warning(
+                    'Skipping reverse descriptor "%s" on %s: already owned by a different CO '
+                    'field. Change the related_name to avoid this conflict.',
+                    related_name, target_cls.__name__,
+                )
+                continue
         setattr(target_cls, related_name, descriptor)
 
 
@@ -2636,16 +2655,21 @@ def sync_polymorphic_reverse_descriptors(sender, instance, action, pk_set, **kwa
             if target_cls is None:
                 continue
             existing = target_cls.__dict__.get(instance.related_name)
-            if existing is not None and not isinstance(
-                existing,
-                (PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor),
-            ):
-                logger.warning(
-                    'Skipping reverse descriptor "%s" on %s: attribute already exists and is not '
-                    'a CO reverse descriptor. Change the related_name to avoid this conflict.',
-                    instance.related_name, target_cls.__name__,
-                )
-                continue
+            if existing is not None:
+                if not isinstance(existing, (PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor)):
+                    logger.warning(
+                        'Skipping reverse descriptor "%s" on %s: a non-CO attribute already exists '
+                        'with that name. Change the related_name to avoid this conflict.',
+                        instance.related_name, target_cls.__name__,
+                    )
+                    continue
+                if not _descriptor_matches_field(existing, instance):
+                    logger.warning(
+                        'Skipping reverse descriptor "%s" on %s: already owned by a different CO '
+                        'field. Change the related_name to avoid this conflict.',
+                        instance.related_name, target_cls.__name__,
+                    )
+                    continue
             setattr(target_cls, instance.related_name, descriptor)
 
     elif action == "pre_remove" and pk_set:

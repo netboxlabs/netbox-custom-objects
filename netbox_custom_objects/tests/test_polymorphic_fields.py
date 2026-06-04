@@ -1671,3 +1671,63 @@ class PolymorphicReverseDescriptorTest(
         finally:
             if Site.__dict__.get(attr_name) is sentinel:
                 delattr(Site, attr_name)
+
+    def test_wire_skips_setattr_when_different_co_field_already_owns_name(self):
+        """_wire must not overwrite a descriptor placed by a different CO field."""
+        cot_b = CustomObjectType.objects.create(
+            name="RevTestB", slug="rev-test-b", verbose_name_plural="Rev Tests B",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cot_b, name="name", type="text", primary=True, required=True,
+        )
+
+        # Field on COT B wires co_cross_ref onto Site first.
+        field_b = CustomObjectTypeField.objects.create(
+            custom_object_type=cot_b,
+            name="target_cross", type="object", is_polymorphic=True,
+            related_name="co_cross_ref",
+        )
+        field_b.related_object_types.set([self.site_ot])
+        cot_b.get_model()
+        descriptor_b = Site.__dict__.get("co_cross_ref")
+        self.assertIsNotNone(descriptor_b, "COT B descriptor must be wired before the test")
+
+        # Field on COT A also claims co_cross_ref. _wire must skip — B owns it.
+        field_a = CustomObjectTypeField(
+            custom_object_type=self.cot,
+            name="target_cross_a", type="object", is_polymorphic=True,
+            related_name="co_cross_ref",
+        )
+        field_a.save()
+        field_a.related_object_types.set([self.site_ot])
+
+        self.assertIs(
+            Site.__dict__.get("co_cross_ref"), descriptor_b,
+            "COT A's _wire must not overwrite COT B's descriptor",
+        )
+
+    def test_source_model_deleted_returns_empty_queryset(self):
+        """Accessing .all() on a stale reverse descriptor returns an empty queryset
+        rather than raising DoesNotExist when the source COT has been deleted."""
+        from netbox_custom_objects.field_types import PolymorphicObjectReverseManager
+
+        site = Site.objects.create(name="Stale Test Site", slug="stale-test-site")
+        nonexistent_cot_pk = 999999
+        field = self._create_gfk_field(related_name="co_stale_ref")
+        manager = PolymorphicObjectReverseManager(site, nonexistent_cot_pk, field.name)
+
+        qs = manager.all()
+        self.assertEqual(qs.count(), 0, ".all() must return empty queryset for deleted COT")
+        self.assertFalse(manager.exists())
+
+    def test_source_model_deleted_multiobject_returns_empty_queryset(self):
+        """Same as above for the M2M (MultiObject) reverse manager."""
+        from netbox_custom_objects.field_types import PolymorphicMultiObjectReverseManager
+
+        site = Site.objects.create(name="Stale M2M Site", slug="stale-m2m-site")
+        nonexistent_cot_pk = 999999
+        manager = PolymorphicMultiObjectReverseManager(site, nonexistent_cot_pk, "NonExistentThrough")
+
+        qs = manager.all()
+        self.assertEqual(qs.count(), 0, ".all() must return empty queryset for deleted COT")
+        self.assertFalse(manager.exists())
