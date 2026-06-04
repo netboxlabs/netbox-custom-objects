@@ -15,6 +15,7 @@ from netbox_custom_objects.template_content import CustomObjectLink, LinkedCusto
 from .base import CustomObjectsTestCase
 from core.models import ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Rack, Site
+from extras.models import Tag
 from users.models import ObjectPermission, Token
 from virtualization.models import Cluster, ClusterType
 
@@ -413,6 +414,40 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, Test
             set(instance.devices.values_list('id', flat=True)),
             set(data['devices']),
         )
+
+    def test_create_with_tags_persists_to_db(self):
+        """Regression #371: tags submitted on POST must be saved to the DB, not just echoed."""
+        self._add_permission('add', 'Create with tags perm')
+        tag = Tag.objects.get_or_create(name='api-create-tag', slug='api-create-tag')[0]
+
+        data = {
+            'test_field': 'Tagged Object',
+            'tags': [{'id': tag.id, 'name': tag.name, 'slug': tag.slug, 'color': tag.color}],
+        }
+        response = self.client.post(self._get_list_url(), data, format='json', **self.header)
+        self.assertHttpStatus(response, status.HTTP_201_CREATED)
+        self.assertIn('tags', response.data)
+        self.assertTrue(len(response.data['tags']) > 0, 'Response should include the submitted tag')
+
+        # Fetch fresh from the DB — the critical assertion that caught #371
+        instance = self._get_queryset().get(pk=response.data['id'])
+        self.assertIn(tag.name, list(instance.tags.names()), 'Tag must be persisted to the DB')
+
+    def test_patch_with_tags_persists_to_db(self):
+        """Regression #371: tags submitted on PATCH must be saved to the DB, not just echoed."""
+        self._add_permission('view', 'View perm')
+        self._add_permission('change', 'Patch with tags perm')
+        tag = Tag.objects.get_or_create(name='api-patch-tag', slug='api-patch-tag')[0]
+
+        instance = self._get_queryset().first()
+        self.assertEqual(list(instance.tags.names()), [], 'Instance should start with no tags')
+
+        data = {'tags': [{'id': tag.id, 'name': tag.name, 'slug': tag.slug, 'color': tag.color}]}
+        response = self.client.patch(self._get_detail_url(instance), data, format='json', **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+
+        instance.refresh_from_db()
+        self.assertIn(tag.name, list(instance.tags.names()), 'Tag must be persisted to the DB after PATCH')
 
 
 class LinkedObjectsAPITest(CustomObjectsTestCase, TestCase):
