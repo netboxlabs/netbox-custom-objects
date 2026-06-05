@@ -1839,3 +1839,42 @@ class PolymorphicReverseDescriptorTest(
         with self.assertRaises(DjangoValidationError) as cm:
             np_field.full_clean()
         self.assertIn("related_name", cm.exception.message_dict)
+
+    def test_unwire_does_not_remove_descriptor_owned_by_different_field(self):
+        """Deleting a field that was blocked from wiring must not remove the descriptor
+        that a different, still-active field owns at the same related_name."""
+        from netbox_custom_objects.models import _unwire_polymorphic_reverse_descriptors
+
+        # COT B wires co_shared_ref onto Site first.
+        cot_b = CustomObjectType.objects.create(
+            name="UnwireTestB", slug="unwire-test-b",
+            verbose_name_plural="Unwire Tests B",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cot_b, name="name", type="text", primary=True, required=True,
+        )
+        field_b = CustomObjectTypeField.objects.create(
+            custom_object_type=cot_b,
+            name="target_unwire", type="object", is_polymorphic=True,
+            related_name="co_shared_ref",
+        )
+        field_b.related_object_types.set([self.site_ot])
+        cot_b.get_model()
+        descriptor_b = Site.__dict__.get("co_shared_ref")
+        self.assertIsNotNone(descriptor_b, "COT B's descriptor must be wired first")
+
+        # COT A also claims co_shared_ref — _wire blocks it, so field_a is in the DB
+        # but its descriptor was never placed on Site.
+        field_a = CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name="target_unwire_a", type="object", is_polymorphic=True,
+            related_name="co_shared_ref",
+        )
+        field_a.related_object_types.set([self.site_ot])
+
+        # Deleting field_a must not touch the descriptor owned by field_b.
+        _unwire_polymorphic_reverse_descriptors(field_a)
+        self.assertIs(
+            Site.__dict__.get("co_shared_ref"), descriptor_b,
+            "_unwire must not remove a descriptor owned by a different CO field",
+        )

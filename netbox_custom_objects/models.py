@@ -2641,7 +2641,10 @@ def _unwire_polymorphic_reverse_descriptors(field_instance, object_types=None, r
         if target_cls is None:
             continue
         attr = target_cls.__dict__.get(name)
-        if isinstance(attr, (PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor)):
+        if (
+            isinstance(attr, (PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor))
+            and _descriptor_matches_field(attr, field_instance)
+        ):
             delattr(target_cls, name)
 
 
