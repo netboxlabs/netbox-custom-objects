@@ -1672,6 +1672,45 @@ class PolymorphicReverseDescriptorTest(
             if Site.__dict__.get(attr_name) is sentinel:
                 delattr(Site, attr_name)
 
+    def test_related_name_colliding_with_inherited_method_raises(self):
+        """full_clean() must reject a related_name that shadows an inherited method on the
+        target model (e.g. 'save'), not just directly-defined attributes.
+        Regression for the __dict__.get vs getattr gap reported by Arthur."""
+        from django.core.exceptions import ValidationError as DjangoValidationError
+
+        field = CustomObjectTypeField(
+            custom_object_type=self.cot,
+            name="save_collision_obj",
+            type="object",
+            is_polymorphic=True,
+            related_name="save",  # inherited from Model, not in Site.__dict__
+        )
+        field.save()
+        field.related_object_types.set([self.site_ot])
+
+        with self.assertRaises(DjangoValidationError) as cm:
+            field.full_clean()
+        self.assertIn("related_name", cm.exception.message_dict)
+
+    def test_wire_skips_setattr_for_inherited_method(self):
+        """_wire must not overwrite an inherited method (e.g. 'save') on the target class
+        even though it doesn't appear in target_cls.__dict__."""
+        original_save = getattr(Site, "save")
+
+        field = CustomObjectTypeField(
+            custom_object_type=self.cot,
+            name="save_wire_obj",
+            type="object",
+            is_polymorphic=True,
+            related_name="save",
+        )
+        field.save()
+        field.related_object_types.set([self.site_ot])
+
+        # The inherited save method must still be accessible and unchanged.
+        self.assertIs(getattr(Site, "save"), original_save,
+                      "_wire must not overwrite an inherited method on the target model")
+
     def test_wire_skips_setattr_when_different_co_field_already_owns_name(self):
         """_wire must not overwrite a descriptor placed by a different CO field."""
         cot_b = CustomObjectType.objects.create(

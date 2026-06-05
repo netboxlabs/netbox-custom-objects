@@ -1727,7 +1727,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 # that set it.
                 target_cls = ot.model_class()
                 if target_cls is not None:
-                    existing = target_cls.__dict__.get(self.related_name)
+                    existing = getattr(target_cls, self.related_name, None)
                     if existing is not None and not isinstance(
                         existing,
                         (PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor),
@@ -2603,7 +2603,7 @@ def _wire_polymorphic_reverse_descriptors(field_instance):
         target_cls = ot.model_class()
         if target_cls is None:
             continue
-        existing = target_cls.__dict__.get(related_name)
+        existing = getattr(target_cls, related_name, None)
         if existing is not None:
             if not isinstance(existing, (PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor)):
                 logger.warning(
@@ -2640,7 +2640,7 @@ def _unwire_polymorphic_reverse_descriptors(field_instance, object_types=None, r
         target_cls = ot.model_class()
         if target_cls is None:
             continue
-        attr = target_cls.__dict__.get(name)
+        attr = getattr(target_cls, name, None)
         if (
             isinstance(attr, (PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor))
             and _descriptor_matches_field(attr, field_instance)
@@ -2710,7 +2710,7 @@ def sync_polymorphic_reverse_descriptors(sender, instance, action, pk_set, **kwa
             target_cls = ot.model_class()
             if target_cls is None:
                 continue
-            existing = target_cls.__dict__.get(instance.related_name)
+            existing = getattr(target_cls, instance.related_name, None)
             if existing is not None:
                 if not isinstance(
                     existing, (

@@ -338,7 +338,7 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
                     target_cls = ot.model_class()
                     if target_cls is None:
                         continue
-                    existing = target_cls.__dict__.get(related_name)
+                    existing = getattr(target_cls, related_name, None)
                     if existing is None:
                         continue
                     # Determine whether this exact field already owns the descriptor
