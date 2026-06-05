@@ -102,10 +102,10 @@
                   <td>
                   <span class="btn-group dropdown">
                       <a class="btn btn-sm btn-warning" href="{% url 'plugins:netbox_custom_objects:customobjecttypefield_edit' pk=field.pk %}?return_url={{ object.get_absolute_url }}" type="button"
-                         aria-label="{attrs.title}"><i class="mdi mdi-pencil"></i></a>
+                         aria-label="{% trans 'Edit' %}"><i class="mdi mdi-pencil"></i></a>
                       <a class="btn btn-sm btn-warning dropdown-toggle" type="button" data-bs-toggle="dropdown"
                       style="padding-left: 2px">
-                      <span class="visually-hidden">{toggle_text}</span></a>
+                      <span class="visually-hidden">{% trans 'Toggle Dropdown' %}</span></a>
                       <ul class="dropdown-menu">
                           <li><a class="dropdown-item" href="{% url 'plugins:netbox_custom_objects:customobjecttypefield_delete' pk=field.pk %}?return_url={{ object.get_absolute_url }}">
                           <i class="mdi mdi-trash-can-outline"></i> Delete</a></li>
