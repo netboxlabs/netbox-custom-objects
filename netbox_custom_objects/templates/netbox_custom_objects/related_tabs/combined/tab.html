@@ -1,0 +1,89 @@
+{% extends base_template %}
+{% load i18n helpers %}
+{% block content %}
+    {# Controls row (native layout): outside the #custom_objects_list swap target so search + filters persist across table swaps. #}
+    <div class="row mb-3">
+        <form class="col d-flex flex-wrap align-items-center gap-2"
+              hx-get="{{ request.path }}"
+              hx-target="#custom_objects_list"
+              hx-swap="outerHTML"
+              hx-push-url="true">
+            <div class="input-group input-group-flat quicksearch" style="max-width: 24rem;">
+                <input type="search"
+                       name="q"
+                       value="{{ q }}"
+                       class="form-control"
+                       placeholder="{% trans 'Quick search' %}"
+                       aria-label="{% trans 'Quick search' %}"
+                       hx-get="{{ request.path }}"
+                       hx-target="#custom_objects_list"
+                       hx-swap="outerHTML"
+                       hx-push-url="true"
+                       hx-include="closest form"
+                       hx-trigger="keyup changed delay:300ms, search">
+                <span class="input-group-text">
+                    <a href="?"
+                       class="text-secondary{% if not q and not type_slug and not tag_slug %} invisible{% endif %}"
+                       aria-label="{% trans 'Clear filters' %}"><i class="mdi mdi-close-circle" aria-hidden="true"></i></a>
+                </span>
+            </div>
+            {% if available_types|length > 1 %}
+                <select name="type"
+                        hx-get="{{ request.path }}"
+                        hx-target="#custom_objects_list"
+                        hx-swap="outerHTML"
+                        hx-push-url="true"
+                        hx-include="closest form"
+                        hx-trigger="change"
+                        class="form-select form-select-sm w-auto"
+                        aria-label="{% trans 'Filter by type' %}">
+                    <option value="">{% trans "All types" %}</option>
+                    {% for cot in available_types %}
+                        <option value="{{ cot.slug }}"{% if cot.slug == type_slug %} selected{% endif %}>{{ cot }}</option>
+                    {% endfor %}
+                </select>
+            {% endif %}
+            {% if available_tags %}
+                <select name="tag"
+                        hx-get="{{ request.path }}"
+                        hx-target="#custom_objects_list"
+                        hx-swap="outerHTML"
+                        hx-push-url="true"
+                        hx-include="closest form"
+                        hx-trigger="change"
+                        class="form-select form-select-sm w-auto"
+                        aria-label="{% trans 'Filter by tag' %}">
+                    <option value="">{% trans "All tags" %}</option>
+                    {% for t in available_tags %}
+                        <option value="{{ t.slug }}"{% if t.slug == tag_slug %} selected{% endif %}>{{ t.name }}</option>
+                    {% endfor %}
+                </select>
+            {% endif %}
+            {# Preserve the current sort across a search/filter submit #}
+            {% if sort %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
+            {% if request.GET.per_page %}<input type="hidden" name="per_page" value="{{ request.GET.per_page }}">{% endif %}
+        </form>
+        {% if request.user.is_authenticated %}
+            <div class="col-auto ms-auto d-print-none">
+                <div class="table-configure btn-group">
+                    <button type="button"
+                            class="btn"
+                            data-bs-toggle="modal"
+                            data-bs-target="#CustomObjectsTabTable_config"
+                            title="{% trans 'Configure Table' %}">
+                        <i class="mdi mdi-cog" aria-hidden="true"></i> {% trans "Configure Table" %}
+                    </button>
+                </div>
+            </div>
+        {% endif %}
+    </div>
+
+    <div class="card">
+        {% include 'netbox_custom_objects/related_tabs/combined/tab_partial.html' %}
+    </div>
+
+    {% block modals %}
+        {{ block.super }}
+        {% table_config_form tab_table %}
+    {% endblock modals %}
+{% endblock content %}

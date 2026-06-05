@@ -396,7 +396,18 @@ class CustomObjectsPluginConfig(PluginConfig):
         from django.apps import apps as django_apps
         django_apps.clear_cache()
 
+        # Must precede register_tabs(): super().ready() populates registry['views'],
+        # which urls.py snapshots when register_tabs() loads it — registering tabs
+        # first would break reverse() for CustomObject feature URLs.
         self._call_super_ready_once()
+
+        # Register the combined "Custom Objects" tab (see related_tabs/__init__.py),
+        # once at startup before Django freezes the root URLconf.
+        try:
+            from netbox_custom_objects.related_tabs.registry import register_tabs
+            register_tabs()
+        except Exception:
+            logger.exception("related_tabs.register_tabs() failed; continuing without tabs")
 
     def get_model(self, model_name, require_ready=True):
         self.apps.check_apps_ready()
