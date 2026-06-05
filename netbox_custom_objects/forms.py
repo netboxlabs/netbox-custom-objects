@@ -14,6 +14,10 @@ from utilities.object_types import object_type_name
 from netbox_custom_objects.choices import SearchWeightChoices
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name
 from netbox_custom_objects.constants import APP_LABEL
+from netbox_custom_objects.field_types import (
+    PolymorphicObjectReverseDescriptor,
+    PolymorphicMultiObjectReverseDescriptor,
+)
 from netbox_custom_objects.models import (CustomObjectObjectType,
                                           CustomObjectType,
                                           CustomObjectTypeField)
@@ -313,6 +317,7 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
         cleaned_data = super().clean()
         field_type = cleaned_data.get("type")
         is_polymorphic = cleaned_data.get("is_polymorphic", False)
+        related_name = cleaned_data.get("related_name", "")
 
         if field_type in (
             CustomFieldTypeChoices.TYPE_OBJECT,
@@ -324,6 +329,41 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
                     "related_object_types",
                     _("Polymorphic object fields must specify at least one related object type."),
                 )
+
+            # For new instances the model's clean() never runs the target-attribute check
+            # (it requires self.pk so it can query related_object_types rows).  Do it here
+            # instead, where cleaned_data already contains the submitted types.
+            if related_name and related_object_types:
+                for ot in related_object_types:
+                    target_cls = ot.model_class()
+                    if target_cls is None:
+                        continue
+                    existing = target_cls.__dict__.get(related_name)
+                    if existing is None:
+                        continue
+                    # Determine whether this exact field already owns the descriptor
+                    # (re-saving an existing field is allowed).
+                    is_owned_by_this_field = False
+                    inst = self.instance
+                    if inst and inst.pk:
+                        cot_pk = inst.custom_object_type_id
+                        if isinstance(existing, PolymorphicObjectReverseDescriptor):
+                            is_owned_by_this_field = (
+                                existing.cot_pk == cot_pk and existing.field_name == inst.name
+                            )
+                        elif isinstance(existing, PolymorphicMultiObjectReverseDescriptor):
+                            is_owned_by_this_field = (
+                                existing.cot_pk == cot_pk
+                                and existing.through_model_name == inst.through_model_name
+                            )
+                    if not is_owned_by_this_field:
+                        self.add_error(
+                            "related_name",
+                            _('Reverse relation name "{name}" conflicts with an existing '
+                              'attribute on model "{model}". Choose a different name.'
+                              ).format(name=related_name, model=target_cls.__name__),
+                        )
+                        break
 
         return cleaned_data
 

@@ -162,3 +162,66 @@ class PolymorphicRelatedNameVisibilityTestCase(CustomObjectsTestCase, TestCase):
             related_object_type_ids=[str(self.site_ot.pk)],
         )
         self.assertNotIn("on_delete_behavior", poly_multi.fields)
+
+
+class PolymorphicRelatedNameCollisionFormTestCase(CustomObjectsTestCase, TestCase):
+    """Form-level validation: related_name must not collide with a pre-existing attribute
+    on any target model class, even for new (unsaved) fields where the model's clean()
+    would not run the check (it requires self.pk to query related_object_types rows)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.cot = CustomObjectType.objects.create(
+            name="CollisionTester",
+            slug="collision-tester",
+            verbose_name_plural="Collision Testers",
+        )
+        cls.site_ot = ObjectType.objects.get(app_label="dcim", model="site")
+
+    def _make_polymorphic_object_form(self, related_name, related_object_type_ids=None):
+        if related_object_type_ids is None:
+            related_object_type_ids = [str(self.site_ot.pk)]
+        return CustomObjectTypeFieldForm(data={
+            "custom_object_type": self.cot.pk,
+            "name": "test_field",
+            "label": "Test",
+            "type": CustomFieldTypeChoices.TYPE_OBJECT,
+            "is_polymorphic": "1",
+            "related_object_types": related_object_type_ids,
+            "related_name": related_name,
+            "required": "",
+            "unique": "",
+            "primary": "",
+            "default": "",
+            "description": "",
+            "group_name": "",
+            "context": "default",
+            "search_weight": "1000",
+            "filter_logic": "loose",
+            "ui_visible": "hidden",
+            "ui_editable": "hidden",
+            "weight": "100",
+            "is_cloneable": "",
+        })
+
+    def test_new_field_related_name_colliding_with_target_model_attribute_invalid(self):
+        """A new polymorphic field whose related_name clashes with a native target
+        attribute must produce a form error — this is the case the model's clean()
+        cannot catch (no pk yet)."""
+        sentinel = object()
+        attr_name = "_co_form_collision_test_attr"
+        from dcim.models import Site
+        setattr(Site, attr_name, sentinel)
+        try:
+            form = self._make_polymorphic_object_form(related_name=attr_name)
+            self.assertFalse(form.is_valid())
+            self.assertIn("related_name", form.errors)
+        finally:
+            if Site.__dict__.get(attr_name) is sentinel:
+                delattr(Site, attr_name)
+
+    def test_new_field_safe_related_name_is_valid(self):
+        """A new polymorphic field with a related_name that does not conflict passes form
+        validation."""
+        form = self._make_polymorphic_object_form(related_name="co_safe_form_test_ref")
+        self.assertTrue(form.is_valid(), form.errors)
