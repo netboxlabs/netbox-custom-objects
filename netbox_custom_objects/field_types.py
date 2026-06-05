@@ -44,6 +44,30 @@ logger = logging.getLogger(__name__)
 # PostgreSQL's hard limit for identifier names is 63 bytes.
 _PG_MAX_IDENTIFIER_LEN = 63
 
+# Ordered list of field names tried when resolving the natural text identifier for a
+# model during CSV/YAML/JSON bulk import.  The first name that exists on the model
+# wins.  This handles models like ModuleType that use 'model' rather than 'name'.
+_CSV_IDENTIFIER_FIELD_PRECEDENCE = ('name', 'slug', 'model', 'identifier')
+
+
+def _csv_import_to_field_name(model_class, explicit=None):
+    """Return the field name to use as ``to_field_name`` for CSV import lookups.
+
+    If *explicit* is provided (e.g. from a stored field configuration), it is
+    returned directly.  Otherwise the target model's fields are probed in
+    ``_CSV_IDENTIFIER_FIELD_PRECEDENCE`` order and the first match is used.
+    Falls back to ``'pk'`` when none of the candidates exist.
+    """
+    if explicit:
+        return explicit
+    for candidate in _CSV_IDENTIFIER_FIELD_PRECEDENCE:
+        try:
+            model_class._meta.get_field(candidate)
+            return candidate
+        except Exception:
+            pass
+    return 'pk'
+
 
 def _safe_pg_identifier(full_name: str) -> str:
     """
@@ -721,12 +745,10 @@ class ObjectFieldType(FieldType):
 
         if for_csv_import:
             field_class = CSVModelChoiceField
-            # For CSV import, determine to_field_name from the field configuration
-            to_field_name = getattr(field, 'to_field_name', None) or 'name'
+            to_field_name = _csv_import_to_field_name(model, explicit=getattr(field, 'to_field_name', None))
             return field_class(
                 queryset=model.objects.all(),
                 required=field.required,
-                # Remove initial=field.default to allow Django to handle instance data properly
                 to_field_name=to_field_name,
             )
         else:
@@ -1239,8 +1261,7 @@ class MultiObjectFieldType(FieldType):
 
         if for_csv_import:
             field_class = CSVModelMultipleChoiceField
-            # For CSV import, determine to_field_name from the field configuration
-            to_field_name = getattr(field, 'to_field_name', None) or 'name'
+            to_field_name = _csv_import_to_field_name(model, explicit=getattr(field, 'to_field_name', None))
             return field_class(
                 queryset=model.objects.all(),
                 required=field.required,

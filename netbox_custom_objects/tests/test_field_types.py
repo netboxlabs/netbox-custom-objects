@@ -802,6 +802,37 @@ class ObjectFieldTypeTestCase(FieldTypeTestCase):
         instance = model.objects.create(name="Test", device=device)
         self.assertEqual(instance.device, device)
 
+    def test_csv_import_field_uses_name_for_models_with_name(self):
+        """get_form_field(for_csv_import=True) uses 'name' as to_field_name for models
+        that have a name field (e.g. Device)."""
+        from dcim.models import Device
+        from netbox_custom_objects.field_types import ObjectFieldType, _csv_import_to_field_name
+        self.assertEqual(_csv_import_to_field_name(Device), 'name')
+
+    def test_csv_import_field_uses_model_for_module_type(self):
+        """get_form_field(for_csv_import=True) uses 'model' as to_field_name for
+        ModuleType, which has no 'name' field — regression for issue #406."""
+        from dcim.models import ModuleType
+        from netbox_custom_objects.field_types import ObjectFieldType, _csv_import_to_field_name
+        self.assertEqual(_csv_import_to_field_name(ModuleType), 'model')
+
+    def test_csv_import_form_field_for_module_type_uses_model_field(self):
+        """get_form_field(for_csv_import=True) on an Object field referencing ModuleType
+        produces a CSVModelChoiceField with to_field_name='model', not 'name'."""
+        from core.models import ObjectType
+        from netbox_custom_objects.field_types import ObjectFieldType
+        module_type_ot = ObjectType.objects.get(app_label='dcim', model='moduletype')
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="module_type",
+            label="Module Type",
+            type="object",
+            related_object_type=module_type_ot,
+        )
+        form_field = ObjectFieldType().get_form_field(cotf, for_csv_import=True)
+        self.assertEqual(form_field.to_field_name, 'model',
+                         "ModuleType CSV import must use 'model', not 'name'")
+
 
 class MultiObjectFieldTypeTestCase(FieldTypeTestCase):
     """Test cases for multiobject field type."""
