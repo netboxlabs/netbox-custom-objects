@@ -1,4 +1,5 @@
 import logging
+from collections import defaultdict
 from types import SimpleNamespace
 from urllib.parse import urlencode
 
@@ -6,7 +7,7 @@ import django_tables2 as tables2
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.paginator import InvalidPage
-from django.db.models import Q
+from django.db.models import Q, prefetch_related_objects
 from django.shortcuts import get_object_or_404, render
 from django.utils.translation import gettext_lazy as _
 from django.views.generic import View
@@ -214,6 +215,36 @@ def _iter_linked_fields(instance):
         yield field, model, q
 
 
+# Request attribute under which _linked_fields stashes its per-instance memo.
+_LINKED_FIELDS_REQUEST_CACHE = '_co_combined_linked_fields'
+
+
+def _linked_fields(instance):
+    """
+    Request-cached materialization of ``_iter_linked_fields(instance)``.
+
+    The body render (``_get_linked_custom_objects``) and the ViewTab badge
+    (``_count_linked_custom_objects``) both need the same ``(field, model, q)``
+    triples, and building them calls ``get_model()`` per linked type — the costly
+    part. Memoizing on the request collapses those two passes into one.
+
+    Keyed by ``(model label, pk)``; the triples are user-independent (per-row
+    ``.restrict()`` happens in each caller), so the cache is shared safely. No
+    request context (shell, jobs) -> fresh build.
+    """
+    request = current_request.get()
+    if request is None:
+        return list(_iter_linked_fields(instance))
+    cache = getattr(request, _LINKED_FIELDS_REQUEST_CACHE, None)
+    if cache is None:
+        cache = {}
+        setattr(request, _LINKED_FIELDS_REQUEST_CACHE, cache)
+    key = (instance._meta.label, instance.pk)
+    if key not in cache:
+        cache[key] = list(_iter_linked_fields(instance))
+    return cache[key]
+
+
 def _get_linked_custom_objects(instance, user=None):
     """
     Return list of (custom_object_instance, CustomObjectTypeField) tuples for all
@@ -225,7 +256,7 @@ def _get_linked_custom_objects(instance, user=None):
     via ``current_request``, so the badge count and the visible rows agree.
     """
     results = []
-    for field, model, q in _iter_linked_fields(instance):
+    for field, model, q in _linked_fields(instance):
         qs = model.objects.filter(q).prefetch_related('tags')
         # A non-polymorphic OBJECT field's Value is an FK; prime it so the per-row
         # _get_field_value getattr doesn't issue one extra query per row.
@@ -255,7 +286,7 @@ def _count_linked_custom_objects(instance):
     request = current_request.get()
     user = getattr(request, 'user', None) if request is not None else None
     total = 0
-    for _field, model, q in _iter_linked_fields(instance):
+    for _field, model, q in _linked_fields(instance):
         qs = model.objects.filter(q)
         if user is not None:
             qs = _restrict_or_warn(qs, user, label=model._meta.label)
@@ -310,6 +341,43 @@ def _get_field_value(obj, field, user=None):
                 return [o for o in qs if _user_can_view(user, o)][: _MAX_MULTIOBJECT_DISPLAY + 1]
         return list(qs[: _MAX_MULTIOBJECT_DISPLAY + 1])
     return None
+
+
+def _batch_multiobject_values(pairs, user=None):
+    """
+    Bulk-resolve the Value column for the page's non-polymorphic MULTIOBJECT rows.
+
+    Per-row resolution (``_get_field_value`` -> ``manager.all()``) costs one
+    through-table + one target query per row — the N+1 that dominates the tab's
+    query count. Instead each ``(model, field)`` group is prefetched once via
+    ``CustomManyToManyManager.get_prefetch_querysets`` and read from cache.
+
+    Returns ``{(id(obj), id(field)): [targets up to _MAX_MULTIOBJECT_DISPLAY+1]}``.
+    OBJECT and polymorphic MULTIOBJECT rows are absent — they stay on the per-row
+    path (the polymorphic manager isn't prefetchable and self-batches per type).
+    Targets are permission-filtered in Python via ``_user_can_view``; prefetch
+    fetches every target per row, not just the displayed slice — fine for the cap.
+    """
+    groups = defaultdict(list)
+    field_by_key = {}
+    for obj, field in pairs:
+        if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT and not field.is_polymorphic:
+            groups[id(field)].append(obj)
+            field_by_key[id(field)] = field
+
+    resolved = {}
+    for key, objs in groups.items():
+        field = field_by_key[key]
+        # One prefetch per (model, field) group; objs are homogeneous because the
+        # same field object is reused across all of its rows (see _iter_linked_fields).
+        prefetch_related_objects(objs, field.name)
+        for obj in objs:
+            cache = getattr(obj, '_prefetched_objects_cache', {})
+            targets = list(cache.get(field.name, []))
+            if user is not None:
+                targets = [t for t in targets if _user_can_view(user, t)]
+            resolved[(id(obj), key)] = targets[: _MAX_MULTIOBJECT_DISPLAY + 1]
+    return resolved
 
 
 # Sort keys by ?sort= value.
@@ -406,7 +474,20 @@ def _render_combined_tab(request, instance, tab):
         page = paginator.page(1)
 
     # Resolve values for the current page only — avoids N+1 on the full list.
-    page_rows = [(obj, field, _get_field_value(obj, field, request.user)) for obj, field in page.object_list]
+    # Non-polymorphic MULTIOBJECT values are batch-prefetched per (model, field);
+    # everything else falls back to the per-row resolver.
+    page_pairs = list(page.object_list)
+    multiobject_values = _batch_multiobject_values(page_pairs, request.user)
+    page_rows = [
+        (
+            obj,
+            field,
+            multiobject_values[(id(obj), id(field))]
+            if (id(obj), id(field)) in multiobject_values
+            else _get_field_value(obj, field, request.user),
+        )
+        for obj, field in page_pairs
+    ]
 
     # Filters preserved on the column sort links (each link adds its own ?sort=)
     base_params = {

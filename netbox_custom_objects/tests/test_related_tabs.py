@@ -344,3 +344,58 @@ class CombinedTabQueryTests(TransactionCleanupMixin, CustomObjectsTestCase, Tran
         self._object_field_cot('badge_multi_1', 'badge-multi-1').get_model().objects.create(name='a', site=site)
         self._object_field_cot('badge_multi_2', 'badge-multi-2').get_model().objects.create(name='b', site=site)
         self.assertEqual(_count_linked_custom_objects(site), 2)
+
+    def test_batch_multiobject_values_are_correct_and_dont_scale_per_row(self):
+        # Locks in the Value-column batching fix: resolving a non-polymorphic
+        # MULTIOBJECT column must cost a constant number of queries (one prefetch
+        # per (model, field) group), not one query per row.
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        from netbox_custom_objects.related_tabs.views.combined import _batch_multiobject_values
+
+        target_a = Site.objects.create(name='MO Target A', slug='mo-target-a')
+        target_b = Site.objects.create(name='MO Target B', slug='mo-target-b')
+
+        cot = self.create_custom_object_type(name='mo_batch', slug='mo-batch')
+        self.create_custom_object_type_field(cot, name='name', label='Name', type='text', primary=True)
+        field = self.create_custom_object_type_field(
+            cot,
+            name='sites',
+            label='Sites',
+            type=CustomFieldTypeChoices.TYPE_MULTIOBJECT,
+            is_polymorphic=False,
+            related_object_type=ObjectType.objects.get_for_model(Site),
+        )
+        model = cot.get_model()
+        for i in range(6):
+            obj = model.objects.create(name=f'mo-row-{i}')
+            obj.sites.set([target_a, target_b])
+
+        # The same field object is shared across a model's rows (mirrors
+        # _iter_linked_fields), so id(field) keys the whole group. Build both pair
+        # lists up front (fresh instances => no prefetch-cache carryover) so only
+        # the _batch_multiobject_values work — not the row fetch — is measured.
+        def fresh_pairs(n):
+            return [(obj, field) for obj in model.objects.order_by('pk')[:n]]
+
+        small_pairs = fresh_pairs(2)
+        large_pairs = fresh_pairs(6)
+
+        with CaptureQueriesContext(connection) as few:
+            _batch_multiobject_values(small_pairs, user=None)
+        with CaptureQueriesContext(connection) as many:
+            resolved = _batch_multiobject_values(large_pairs, user=None)
+
+        self.assertEqual(
+            len(few.captured_queries),
+            len(many.captured_queries),
+            'multiobject Value resolution must not issue a query per row',
+        )
+
+        # ...and the batched values are still correct.
+        for obj, _field in large_pairs:
+            self.assertEqual(
+                {s.pk for s in resolved[(id(obj), id(field))]},
+                {target_a.pk, target_b.pk},
+            )
