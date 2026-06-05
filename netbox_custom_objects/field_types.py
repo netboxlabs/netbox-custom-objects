@@ -44,6 +44,58 @@ logger = logging.getLogger(__name__)
 # PostgreSQL's hard limit for identifier names is 63 bytes.
 _PG_MAX_IDENTIFIER_LEN = 63
 
+# Ordered list of field names tried when resolving the natural text identifier for a
+# model during CSV/YAML/JSON bulk import.  The first name that exists on the model
+# wins.  This handles models like ModuleType that use 'model' rather than 'name'.
+_CSV_IDENTIFIER_FIELD_PRECEDENCE = ('name', 'slug', 'model', 'identifier')
+
+
+def _csv_import_to_field_name(model_class, explicit=None):
+    """Return the field name to use as ``to_field_name`` for CSV import lookups.
+
+    If *explicit* is provided (e.g. from a stored field configuration), it is
+    validated against the model and returned if the field exists.  If the stored
+    value is stale (field was renamed on the target model), a warning is logged
+    and the function falls through to the probe loop.
+
+    The probe loop iterates ``_CSV_IDENTIFIER_FIELD_PRECEDENCE`` and returns the
+    first candidate that exists **and is unique** on the model, guaranteeing that
+    ``CSVModelChoiceField`` can resolve a single record.  If no unique match is
+    found the first existing candidate (unique or not) is used as a fallback.
+    Falls back to ``'pk'`` when none of the candidates exist at all.
+    """
+    if explicit is not None:
+        try:
+            model_class._meta.get_field(explicit)
+            return explicit
+        except FieldDoesNotExist:
+            logger.warning(
+                'Stored to_field_name %r not found on %s; probing for a natural identifier.',
+                explicit, model_class.__name__,
+            )
+
+    first_match = None  # best non-unique candidate, used only if no unique field found
+    for candidate in _CSV_IDENTIFIER_FIELD_PRECEDENCE:
+        try:
+            field_obj = model_class._meta.get_field(candidate)
+            if getattr(field_obj, 'unique', False):
+                return candidate
+            if first_match is None:
+                first_match = candidate
+        except FieldDoesNotExist:
+            pass
+
+    if first_match is not None:
+        return first_match
+
+    logger.warning(
+        'No natural identifier field found on %s for CSV import '
+        '(tried %s); falling back to pk.',
+        model_class.__name__,
+        ', '.join(_CSV_IDENTIFIER_FIELD_PRECEDENCE),
+    )
+    return 'pk'
+
 
 def _safe_pg_identifier(full_name: str) -> str:
     """
@@ -721,12 +773,10 @@ class ObjectFieldType(FieldType):
 
         if for_csv_import:
             field_class = CSVModelChoiceField
-            # For CSV import, determine to_field_name from the field configuration
-            to_field_name = getattr(field, 'to_field_name', None) or 'name'
+            to_field_name = _csv_import_to_field_name(model, explicit=getattr(field, 'to_field_name', None))
             return field_class(
                 queryset=model.objects.all(),
                 required=field.required,
-                # Remove initial=field.default to allow Django to handle instance data properly
                 to_field_name=to_field_name,
             )
         else:
@@ -1239,8 +1289,7 @@ class MultiObjectFieldType(FieldType):
 
         if for_csv_import:
             field_class = CSVModelMultipleChoiceField
-            # For CSV import, determine to_field_name from the field configuration
-            to_field_name = getattr(field, 'to_field_name', None) or 'name'
+            to_field_name = _csv_import_to_field_name(model, explicit=getattr(field, 'to_field_name', None))
             return field_class(
                 queryset=model.objects.all(),
                 required=field.required,

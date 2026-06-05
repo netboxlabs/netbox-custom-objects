@@ -5,15 +5,17 @@ from unittest import skip
 from unittest.mock import Mock
 from datetime import date, datetime
 from decimal import Decimal
-from django.core.exceptions import ValidationError
+from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.test import TestCase
 
 from core.models import ObjectType
+from dcim.models import Device, DeviceType, ModuleType
 from netbox_custom_objects.field_types import (
     MultiObjectFieldType,
     MultiSelectFieldType,
     ObjectFieldType,
     SelectFieldType,
+    _csv_import_to_field_name,
 )
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from .base import CustomObjectsTestCase
@@ -802,6 +804,61 @@ class ObjectFieldTypeTestCase(FieldTypeTestCase):
         instance = model.objects.create(name="Test", device=device)
         self.assertEqual(instance.device, device)
 
+    def test_csv_import_field_uses_name_for_models_with_name(self):
+        """get_form_field(for_csv_import=True) uses 'name' as to_field_name for models
+        that have a name field (e.g. Device)."""
+        self.assertEqual(_csv_import_to_field_name(Device), 'name')
+
+    def test_csv_import_field_uses_model_for_module_type(self):
+        """get_form_field(for_csv_import=True) uses 'model' as to_field_name for
+        ModuleType, which has no 'name' field — regression for issue #406."""
+        self.assertEqual(_csv_import_to_field_name(ModuleType), 'model')
+
+    def test_csv_import_field_uses_slug_before_model_for_device_type(self):
+        """DeviceType has both 'slug' and 'model'; slug takes precedence per the
+        _CSV_IDENTIFIER_FIELD_PRECEDENCE ordering, matching NetBox core behaviour."""
+        self.assertEqual(_csv_import_to_field_name(DeviceType), 'slug')
+
+    def test_csv_import_form_field_for_module_type_uses_model_field(self):
+        """get_form_field(for_csv_import=True) on an Object field referencing ModuleType
+        produces a CSVModelChoiceField with to_field_name='model', not 'name'."""
+        module_type_ot = ObjectType.objects.get(app_label='dcim', model='moduletype')
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="module_type",
+            label="Module Type",
+            type="object",
+            related_object_type=module_type_ot,
+        )
+        form_field = ObjectFieldType().get_form_field(cotf, for_csv_import=True)
+        self.assertEqual(form_field.to_field_name, 'model',
+                         "ModuleType CSV import must use 'model', not 'name'")
+
+    def test_csv_import_to_field_name_explicit_returned_when_valid(self):
+        """An explicit to_field_name that exists on the model is returned directly."""
+        self.assertEqual(_csv_import_to_field_name(Device, explicit='id'), 'id')
+
+    def test_csv_import_to_field_name_explicit_falls_through_when_stale(self):
+        """A stale explicit to_field_name (field no longer exists) triggers a warning
+        and falls through to the probe loop."""
+        import logging
+        with self.assertLogs('netbox_custom_objects.field_types', level=logging.WARNING):
+            result = _csv_import_to_field_name(Device, explicit='nonexistent_field_xyz')
+        # Falls through to probe loop — Device has 'name'
+        self.assertEqual(result, 'name')
+
+    def test_csv_import_to_field_name_pk_fallback_when_no_candidate_exists(self):
+        """Falls back to 'pk' and emits a warning when none of the candidate fields
+        exist on the model."""
+        import logging
+        from unittest.mock import MagicMock
+        mock_model = MagicMock()
+        mock_model.__name__ = 'FakeModel'
+        mock_model._meta.get_field.side_effect = FieldDoesNotExist
+        with self.assertLogs('netbox_custom_objects.field_types', level=logging.WARNING):
+            result = _csv_import_to_field_name(mock_model)
+        self.assertEqual(result, 'pk')
+
 
 class MultiObjectFieldTypeTestCase(FieldTypeTestCase):
     """Test cases for multiobject field type."""
@@ -880,6 +937,21 @@ class MultiObjectFieldTypeTestCase(FieldTypeTestCase):
         self.assertEqual(instance.devices.count(), 2)
         self.assertIn(device1, instance.devices.all())
         self.assertIn(device2, instance.devices.all())
+
+    def test_csv_import_form_field_for_module_type_uses_model_field(self):
+        """MultiObjectFieldType.get_form_field(for_csv_import=True) on a field
+        referencing ModuleType produces to_field_name='model', not 'name'."""
+        module_type_ot = ObjectType.objects.get(app_label='dcim', model='moduletype')
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="module_types",
+            label="Module Types",
+            type="multiobject",
+            related_object_type=module_type_ot,
+        )
+        form_field = MultiObjectFieldType().get_form_field(cotf, for_csv_import=True)
+        self.assertEqual(form_field.to_field_name, 'model',
+                         "ModuleType multi-object CSV import must use 'model', not 'name'")
 
 
 class SelfReferentialFieldTestCase(FieldTypeTestCase):
