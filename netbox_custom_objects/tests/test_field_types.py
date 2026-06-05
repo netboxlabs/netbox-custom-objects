@@ -9,11 +9,13 @@ from django.core.exceptions import ValidationError
 from django.test import TestCase
 
 from core.models import ObjectType
+from dcim.models import Device, DeviceType, ModuleType
 from netbox_custom_objects.field_types import (
     MultiObjectFieldType,
     MultiSelectFieldType,
     ObjectFieldType,
     SelectFieldType,
+    _csv_import_to_field_name,
 )
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from .base import CustomObjectsTestCase
@@ -805,22 +807,21 @@ class ObjectFieldTypeTestCase(FieldTypeTestCase):
     def test_csv_import_field_uses_name_for_models_with_name(self):
         """get_form_field(for_csv_import=True) uses 'name' as to_field_name for models
         that have a name field (e.g. Device)."""
-        from dcim.models import Device
-        from netbox_custom_objects.field_types import ObjectFieldType, _csv_import_to_field_name
         self.assertEqual(_csv_import_to_field_name(Device), 'name')
 
     def test_csv_import_field_uses_model_for_module_type(self):
         """get_form_field(for_csv_import=True) uses 'model' as to_field_name for
         ModuleType, which has no 'name' field — regression for issue #406."""
-        from dcim.models import ModuleType
-        from netbox_custom_objects.field_types import ObjectFieldType, _csv_import_to_field_name
         self.assertEqual(_csv_import_to_field_name(ModuleType), 'model')
+
+    def test_csv_import_field_uses_slug_before_model_for_device_type(self):
+        """DeviceType has both 'slug' and 'model'; slug takes precedence per the
+        _CSV_IDENTIFIER_FIELD_PRECEDENCE ordering, matching NetBox core behaviour."""
+        self.assertEqual(_csv_import_to_field_name(DeviceType), 'slug')
 
     def test_csv_import_form_field_for_module_type_uses_model_field(self):
         """get_form_field(for_csv_import=True) on an Object field referencing ModuleType
         produces a CSVModelChoiceField with to_field_name='model', not 'name'."""
-        from core.models import ObjectType
-        from netbox_custom_objects.field_types import ObjectFieldType
         module_type_ot = ObjectType.objects.get(app_label='dcim', model='moduletype')
         cotf = self.create_custom_object_type_field(
             self.custom_object_type,
@@ -911,6 +912,21 @@ class MultiObjectFieldTypeTestCase(FieldTypeTestCase):
         self.assertEqual(instance.devices.count(), 2)
         self.assertIn(device1, instance.devices.all())
         self.assertIn(device2, instance.devices.all())
+
+    def test_csv_import_form_field_for_module_type_uses_model_field(self):
+        """MultiObjectFieldType.get_form_field(for_csv_import=True) on a field
+        referencing ModuleType produces to_field_name='model', not 'name'."""
+        module_type_ot = ObjectType.objects.get(app_label='dcim', model='moduletype')
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="module_types",
+            label="Module Types",
+            type="multiobject",
+            related_object_type=module_type_ot,
+        )
+        form_field = MultiObjectFieldType().get_form_field(cotf, for_csv_import=True)
+        self.assertEqual(form_field.to_field_name, 'model',
+                         "ModuleType multi-object CSV import must use 'model', not 'name'")
 
 
 class SelfReferentialFieldTestCase(FieldTypeTestCase):

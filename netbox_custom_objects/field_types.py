@@ -56,16 +56,23 @@ def _csv_import_to_field_name(model_class, explicit=None):
     If *explicit* is provided (e.g. from a stored field configuration), it is
     returned directly.  Otherwise the target model's fields are probed in
     ``_CSV_IDENTIFIER_FIELD_PRECEDENCE`` order and the first match is used.
-    Falls back to ``'pk'`` when none of the candidates exist.
+    Falls back to ``'pk'`` when none of the candidates exist (rare; emits a
+    warning because importing by PK is user-unfriendly).
     """
-    if explicit:
+    if explicit is not None:
         return explicit
     for candidate in _CSV_IDENTIFIER_FIELD_PRECEDENCE:
         try:
             model_class._meta.get_field(candidate)
             return candidate
-        except Exception:
+        except FieldDoesNotExist:
             pass
+    logger.warning(
+        'No natural identifier field found on %s for CSV import '
+        '(tried %s); falling back to pk.',
+        model_class.__name__,
+        ', '.join(_CSV_IDENTIFIER_FIELD_PRECEDENCE),
+    )
     return 'pk'
 
 
