@@ -1827,6 +1827,136 @@ class PolymorphicM2MDescriptor:
         return False
 
 
+class PolymorphicObjectReverseManager:
+    """Returned when a polymorphic GFK reverse relation is accessed on a target instance."""
+
+    def __init__(self, instance, cot_pk, field_name):
+        self._instance = instance
+        self._cot_pk = cot_pk
+        self._field_name = field_name
+
+    def _source_model(self):
+        from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
+        # Fast path: model already in the COT cache (the common runtime case).
+        model = CustomObjectType.get_cached_model(self._cot_pk)
+        if model is not None:
+            return model
+        # Cache miss — fetch from DB and let get_model() cache the result.
+        try:
+            return CustomObjectType.objects.get(pk=self._cot_pk).get_model()
+        except CustomObjectType.DoesNotExist:
+            logger.warning(
+                'Reverse accessor: source CustomObjectType pk=%d no longer exists; '
+                'returning empty queryset.',
+                self._cot_pk,
+            )
+            return None
+
+    def all(self):
+        source_model = self._source_model()
+        if source_model is None:
+            return ContentType.objects.none()
+        ct = ContentType.objects.get_for_model(type(self._instance))
+        return source_model.objects.filter(**{
+            f"{self._field_name}_content_type": ct,
+            f"{self._field_name}_object_id": self._instance.pk,
+        })
+
+    def count(self):
+        return self.all().count()
+
+    def exists(self):
+        return self.all().exists()
+
+    def __iter__(self):
+        return iter(self.all())
+
+
+class PolymorphicObjectReverseDescriptor:
+    """Reverse descriptor for polymorphic GFK fields on CO models.
+
+    Injected onto target model classes by _wire_polymorphic_reverse_descriptors() so
+    that code can do, e.g., ``site.my_co_field.all()`` to retrieve all CO instances
+    whose polymorphic GFK points at that site.
+    """
+
+    def __init__(self, cot_pk, field_name):
+        self.cot_pk = cot_pk
+        self.field_name = field_name
+
+    def __get__(self, instance, owner=None):
+        if instance is None:
+            return self
+        return PolymorphicObjectReverseManager(instance, self.cot_pk, self.field_name)
+
+
+class PolymorphicMultiObjectReverseManager:
+    """Returned when a polymorphic M2M reverse relation is accessed on a target instance."""
+
+    def __init__(self, instance, cot_pk, through_model_name):
+        self._instance = instance
+        self._cot_pk = cot_pk
+        self._through_model_name = through_model_name
+
+    def _source_model(self):
+        from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
+        # Fast path: model already in the COT cache (the common runtime case).
+        model = CustomObjectType.get_cached_model(self._cot_pk)
+        if model is not None:
+            return model
+        # Cache miss — fetch from DB and let get_model() cache the result.
+        try:
+            return CustomObjectType.objects.get(pk=self._cot_pk).get_model()
+        except CustomObjectType.DoesNotExist:
+            logger.warning(
+                'Reverse accessor: source CustomObjectType pk=%d no longer exists; '
+                'returning empty queryset.',
+                self._cot_pk,
+            )
+            return None
+
+    def _through(self):
+        return apps.get_model(APP_LABEL, self._through_model_name)
+
+    def all(self):
+        source_model = self._source_model()
+        if source_model is None:
+            return ContentType.objects.none()
+        ct = ContentType.objects.get_for_model(type(self._instance))
+        source_ids = self._through().objects.filter(
+            content_type_id=ct.pk,
+            object_id=self._instance.pk,
+        ).values_list("source_id", flat=True)
+        return source_model.objects.filter(pk__in=source_ids)
+
+    def count(self):
+        return self.all().count()
+
+    def exists(self):
+        return self.all().exists()
+
+    def __iter__(self):
+        return iter(self.all())
+
+
+class PolymorphicMultiObjectReverseDescriptor:
+    """Reverse descriptor for polymorphic M2M fields on CO models.
+
+    Injected onto target model classes by _wire_polymorphic_reverse_descriptors() so
+    that code can do, e.g., ``site.my_co_field.all()`` to retrieve all CO instances
+    whose polymorphic M2M field includes that site.
+    """
+
+    def __init__(self, cot_pk, through_model_name):
+        self.cot_pk = cot_pk
+        self.through_model_name = through_model_name
+
+    def __get__(self, instance, owner=None):
+        if instance is None:
+            return self
+        return PolymorphicMultiObjectReverseManager(instance, self.cot_pk, self.through_model_name)
+
+
 FIELD_TYPE_CLASS = {
     CustomFieldTypeChoices.TYPE_TEXT: TextFieldType,
     CustomFieldTypeChoices.TYPE_LONGTEXT: LongTextFieldType,

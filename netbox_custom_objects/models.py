@@ -62,7 +62,10 @@ from utilities.validators import validate_regex
 
 from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
 from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
-from netbox_custom_objects.field_types import FIELD_TYPE_CLASS, LazyForeignKey, safe_table_name
+from netbox_custom_objects.field_types import (
+    FIELD_TYPE_CLASS, LazyForeignKey, safe_table_name,
+    PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor,
+)
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
 from netbox_custom_objects.utilities import _suppress_clear_cache, extract_cot_id_from_model_name, generate_model
 
@@ -551,6 +554,7 @@ class CustomObjectType(NetBoxModel):
                         _apps.register_model(APP_LABEL, through_model)
                     if through_model and through_model not in through_models:
                         through_models.append(through_model)
+                _wire_polymorphic_reverse_descriptors(field_instance)
                 continue
 
             # Non-polymorphic: use safe present_fields lookup (avoids _relation_tree recursion).
@@ -574,6 +578,18 @@ class CustomObjectType(NetBoxModel):
 
         # Store through models on the model for yielding in get_models()
         model._through_models = through_models
+
+        # Wire any inbound polymorphic reverse descriptors from other CO fields that
+        # point at this model.  Handles the startup ordering problem: if the source COT
+        # was generated before this target COT, _wire_polymorphic_reverse_descriptors()
+        # called during the source's generation would have found model_class() == None
+        # for this target and skipped it.  Now that the model class exists, re-wire.
+        own_ot = ObjectType.objects.get_for_model(model)
+        for inbound_field in CustomObjectTypeField.objects.filter(
+            is_polymorphic=True,
+            related_object_types=own_ot,
+        ).exclude(related_name=''):
+            _wire_polymorphic_reverse_descriptors(inbound_field)
 
     @staticmethod
     def _collect_base_columns(model, user_field_names):
@@ -1659,17 +1675,71 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 }
             )
 
-        # related_name is not supported on polymorphic fields: GenericForeignKey ignores it
-        # and PolymorphicM2MDescriptor never consumes it, so any value set here would be silently
-        # dropped with no working reverse accessor.
-        if self.related_name and self.is_polymorphic:
-            raise ValidationError(
-                {
-                    "related_name": _(
-                        "Reverse relation names are not supported for polymorphic fields."
+        # related_name collision detection for polymorphic fields (M2M related_object_types).
+        # Only run on saved instances; unsaved ones have no M2M rows to collide with yet.
+        if self.related_name and self.is_polymorphic and self.pk:
+            for ot in self.related_object_types.all():
+                conflict = CustomObjectTypeField.objects.filter(
+                    is_polymorphic=True,
+                    related_name=self.related_name,
+                    related_object_types=ot,
+                ).exclude(pk=self.pk).first()
+                if conflict:
+                    raise ValidationError(
+                        {
+                            "related_name": _(
+                                'Reverse relation name "{name}" is already used by field '
+                                '"{field}" on "{object_type}" for object type "{ot}".'
+                            ).format(
+                                name=self.related_name,
+                                field=conflict.name,
+                                object_type=conflict.custom_object_type,
+                                ot=ot,
+                            )
+                        }
                     )
-                }
-            )
+
+                # Cross-check: non-polymorphic field claiming the same related_name on this target
+                conflict_np = CustomObjectTypeField.objects.filter(
+                    is_polymorphic=False,
+                    related_name=self.related_name,
+                    related_object_type=ot,
+                ).exclude(pk=self.pk).first()
+                if conflict_np:
+                    raise ValidationError(
+                        {
+                            "related_name": _(
+                                'Reverse relation name "{name}" is already used by field '
+                                '"{field}" on "{object_type}" for object type "{ot}".'
+                            ).format(
+                                name=self.related_name,
+                                field=conflict_np.name,
+                                object_type=conflict_np.custom_object_type,
+                                ot=ot,
+                            )
+                        }
+                    )
+
+                # Guard against clobbering an existing attribute on the target model class
+                # (e.g. a FK, method, or property that already uses that name).  We allow
+                # the name only if the class already carries one of our own descriptors —
+                # which means this field (or a field being renamed to/from it) is the one
+                # that set it.
+                target_cls = ot.model_class()
+                if target_cls is not None:
+                    existing = getattr(target_cls, self.related_name, None)
+                    if existing is not None and not isinstance(
+                        existing,
+                        (PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor),
+                    ):
+                        raise ValidationError(
+                            {
+                                "related_name": _(
+                                    'Reverse relation name "{name}" conflicts with an existing '
+                                    'attribute on model "{model}". Choose a different name.'
+                                ).format(name=self.related_name, model=target_cls.__name__)
+                            }
+                        )
 
         # related_name must be unique per related_object_type (when set)
         if self.related_name and self.related_object_type_id:
@@ -1687,6 +1757,26 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                             name=self.related_name,
                             field=conflict.name,
                             object_type=conflict.custom_object_type,
+                        )
+                    }
+                )
+
+            # Cross-check: polymorphic field claiming the same related_name on this target
+            conflict_poly = CustomObjectTypeField.objects.filter(
+                is_polymorphic=True,
+                related_name=self.related_name,
+                related_object_types=self.related_object_type,
+            ).exclude(pk=self.pk).first()
+            if conflict_poly:
+                raise ValidationError(
+                    {
+                        "related_name": _(
+                            'Reverse relation name "{name}" is already used by field '
+                            '"{field}" on "{object_type}".'
+                        ).format(
+                            name=self.related_name,
+                            field=conflict_poly.name,
+                            object_type=conflict_poly.custom_object_type,
                         )
                     }
                 )
@@ -2379,6 +2469,12 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         # Reregister SearchIndex with new set of searchable fields
         self.custom_object_type.register_custom_object_search_index(model)
 
+        # Clean up stale descriptor when related_name is renamed on an existing polymorphic field
+        if not is_new and self.is_polymorphic and hasattr(self, '_original'):
+            old_name = self.original.related_name
+            if old_name and old_name != self.related_name:
+                _unwire_polymorphic_reverse_descriptors(self, related_name=old_name)
+
         # Reindex all objects of this type if search indexing was affected
         if is_new:
             needs_reindex = self.search_weight > 0
@@ -2392,6 +2488,10 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         field_type = FIELD_TYPE_CLASS[self.type]()
         model = self.custom_object_type.get_model()
         _dropped_through_model = None
+
+        # Remove reverse descriptors before the M2M rows disappear via super().delete().
+        if self.is_polymorphic:
+            _unwire_polymorphic_reverse_descriptors(self)
 
         with connection.schema_editor() as schema_editor:
             if self.is_polymorphic:
@@ -2467,6 +2567,100 @@ class CustomObjectObjectType(ObjectType):
         proxy = True
 
 
+# ---------------------------------------------------------------------------
+# Helpers for wiring/unwiring polymorphic reverse descriptors on target models
+# ---------------------------------------------------------------------------
+
+def _make_reverse_descriptor(field_instance):
+    """Return the appropriate reverse descriptor for *field_instance*, or None."""
+    cot_pk = field_instance.custom_object_type_id
+    if field_instance.type == CustomFieldTypeChoices.TYPE_OBJECT:
+        return PolymorphicObjectReverseDescriptor(cot_pk=cot_pk, field_name=field_instance.name)
+    if field_instance.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+        return PolymorphicMultiObjectReverseDescriptor(
+            cot_pk=cot_pk, through_model_name=field_instance.through_model_name
+        )
+    return None
+
+
+def _descriptor_matches_field(descriptor, field_instance):
+    """Return True if *descriptor* was placed by the given *field_instance*.
+
+    Used to distinguish a legitimate re-wire of the same field (e.g. during model
+    regeneration) from an attempt by a different field to overwrite an existing descriptor.
+    """
+    cot_pk = field_instance.custom_object_type_id
+    if isinstance(descriptor, PolymorphicObjectReverseDescriptor):
+        return descriptor.cot_pk == cot_pk and descriptor.field_name == field_instance.name
+    if isinstance(descriptor, PolymorphicMultiObjectReverseDescriptor):
+        return descriptor.cot_pk == cot_pk and descriptor.through_model_name == field_instance.through_model_name
+    return False
+
+
+def _wire_polymorphic_reverse_descriptors(field_instance):
+    """Attach reverse descriptors on target model classes for a polymorphic field.
+
+    For each content type in ``field_instance.related_object_types``, inject a
+    descriptor on the target model class so that ``target_instance.<related_name>``
+    returns the CO instances that point at it.  Called from
+    ``CustomObjectType._after_model_generation`` for every polymorphic field that
+    has a non-empty ``related_name``.
+    """
+    if not field_instance.related_name:
+        return
+    descriptor = _make_reverse_descriptor(field_instance)
+    if descriptor is None:
+        return
+    related_name = field_instance.related_name
+    for ot in field_instance.related_object_types.all():
+        target_cls = ot.model_class()
+        if target_cls is None:
+            continue
+        existing = getattr(target_cls, related_name, None)
+        if existing is not None:
+            if not isinstance(existing, (PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor)):
+                logger.warning(
+                    'Skipping reverse descriptor "%s" on %s: a non-CO attribute already exists '
+                    'with that name. Change the related_name to avoid this conflict.',
+                    related_name, target_cls.__name__,
+                )
+                continue
+            if not _descriptor_matches_field(existing, field_instance):
+                logger.warning(
+                    'Skipping reverse descriptor "%s" on %s: already owned by a different CO '
+                    'field. Change the related_name to avoid this conflict.',
+                    related_name, target_cls.__name__,
+                )
+                continue
+        setattr(target_cls, related_name, descriptor)
+
+
+def _unwire_polymorphic_reverse_descriptors(field_instance, object_types=None, related_name=None):
+    """Remove reverse descriptors that were injected by ``_wire_polymorphic_reverse_descriptors``.
+
+    *object_types* is an optional iterable of ObjectType instances to unwire from; when
+    omitted all of ``field_instance.related_object_types`` are used.  *related_name*
+    overrides the attribute name to remove, allowing callers to clean up a stale name
+    (e.g. after a rename).  Called from ``CustomObjectTypeField.delete()`` (before the
+    M2M rows are removed), from the ``m2m_changed`` signal handler when types are removed
+    from a live field, and from ``save()`` when ``related_name`` is renamed.
+    """
+    name = related_name if related_name is not None else field_instance.related_name
+    if not name:
+        return
+    ots = object_types if object_types is not None else field_instance.related_object_types.all()
+    for ot in ots:
+        target_cls = ot.model_class()
+        if target_cls is None:
+            continue
+        attr = getattr(target_cls, name, None)
+        if (
+            isinstance(attr, (PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor))
+            and _descriptor_matches_field(attr, field_instance)
+        ):
+            delattr(target_cls, name)
+
+
 # Signal handlers to clear model cache when definitions change
 
 
@@ -2508,6 +2702,57 @@ def check_polymorphic_recursion(sender, instance, action, pk_set, **kwargs):
                     "create a circular dependency between custom object types."
                 )
             )
+
+
+@receiver(m2m_changed, sender=CustomObjectTypeField.related_object_types.through)
+def sync_polymorphic_reverse_descriptors(sender, instance, action, pk_set, **kwargs):
+    """Wire or unwire reverse descriptors when a polymorphic field's allowed types change.
+
+    Complements _wire_polymorphic_reverse_descriptors() in _after_model_generation: that
+    path handles initial wiring at model-generation time; this handler keeps descriptors
+    current when types are added or removed from a live field without a full regeneration.
+    """
+    if not instance.is_polymorphic or not instance.related_name:
+        return
+
+    if action == "post_add" and pk_set:
+        descriptor = _make_reverse_descriptor(instance)
+        if descriptor is None:
+            return
+        for ot in ObjectType.objects.filter(pk__in=pk_set):
+            target_cls = ot.model_class()
+            if target_cls is None:
+                continue
+            existing = getattr(target_cls, instance.related_name, None)
+            if existing is not None:
+                if not isinstance(
+                    existing, (
+                        PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor
+                    )
+                ):
+                    logger.warning(
+                        'Skipping reverse descriptor "%s" on %s: a non-CO attribute already exists '
+                        'with that name. Change the related_name to avoid this conflict.',
+                        instance.related_name, target_cls.__name__,
+                    )
+                    continue
+                if not _descriptor_matches_field(existing, instance):
+                    logger.warning(
+                        'Skipping reverse descriptor "%s" on %s: already owned by a different CO '
+                        'field. Change the related_name to avoid this conflict.',
+                        instance.related_name, target_cls.__name__,
+                    )
+                    continue
+            setattr(target_cls, instance.related_name, descriptor)
+
+    elif action == "pre_remove" and pk_set:
+        _unwire_polymorphic_reverse_descriptors(
+            instance, object_types=ObjectType.objects.filter(pk__in=pk_set)
+        )
+
+    elif action == "pre_clear":
+        # pk_set is None for pre_clear; query current set before it disappears.
+        _unwire_polymorphic_reverse_descriptors(instance)
 
 
 @receiver(post_save, sender=CustomObjectTypeField)
