@@ -1774,6 +1774,11 @@ class PolymorphicObjectReverseManager:
 
     def _source_model(self):
         from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
+        # Fast path: model already in the COT cache (the common runtime case).
+        model = CustomObjectType.get_cached_model(self._cot_pk)
+        if model is not None:
+            return model
+        # Cache miss — fetch from DB and let get_model() cache the result.
         try:
             return CustomObjectType.objects.get(pk=self._cot_pk).get_model()
         except CustomObjectType.DoesNotExist:
@@ -1832,6 +1837,11 @@ class PolymorphicMultiObjectReverseManager:
 
     def _source_model(self):
         from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
+        # Fast path: model already in the COT cache (the common runtime case).
+        model = CustomObjectType.get_cached_model(self._cot_pk)
+        if model is not None:
+            return model
+        # Cache miss — fetch from DB and let get_model() cache the result.
         try:
             return CustomObjectType.objects.get(pk=self._cot_pk).get_model()
         except CustomObjectType.DoesNotExist:
