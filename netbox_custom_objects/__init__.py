@@ -234,13 +234,21 @@ class CustomObjectsPluginConfig(PluginConfig):
         # Patch ObjectSelectorView to support dynamically-generated custom object models
         _patch_object_selector_view()
 
-        # Suppress warnings about database calls during app initialization
+        # Suppress warnings about database calls during app initialization.
+        # Filter by source module rather than message content — message-pattern
+        # matching proved unreliable on Python 3.13 (the filter silently failed
+        # to suppress the warning in some environments).  Module-based filtering
+        # is stable across Python versions: the branching warning always comes
+        # from netbox_branching.database and Django's own warning from
+        # django.db.backends.utils.
         with warnings.catch_warnings():
             warnings.filterwarnings(
-                "ignore", category=RuntimeWarning, message=".*database.*"
+                "ignore", category=RuntimeWarning,
+                module=r"django\.db\.backends\..*",
             )
             warnings.filterwarnings(
-                "ignore", category=UserWarning, message=".*database.*"
+                "ignore", category=UserWarning,
+                module=r"netbox_branching\..*",
             )
 
             # Skip database calls if dynamic models can't be created yet
@@ -344,13 +352,17 @@ class CustomObjectsPluginConfig(PluginConfig):
         for model in super().get_models(include_auto_created, include_swapped):
             yield model
 
-        # Suppress warnings about database calls during model loading
+        # Suppress warnings about database calls during model loading.
+        # See the corresponding block in ready() for the rationale for using
+        # module-based filtering instead of message-content matching.
         with warnings.catch_warnings():
             warnings.filterwarnings(
-                "ignore", category=RuntimeWarning, message=".*database.*"
+                "ignore", category=RuntimeWarning,
+                module=r"django\.db\.backends\..*",
             )
             warnings.filterwarnings(
-                "ignore", category=UserWarning, message=".*database.*"
+                "ignore", category=UserWarning,
+                module=r"netbox_branching\..*",
             )
 
             # Skip dynamic model generation until ready() has completed.
