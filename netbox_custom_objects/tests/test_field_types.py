@@ -5,7 +5,7 @@ from unittest import skip
 from unittest.mock import Mock
 from datetime import date, datetime
 from decimal import Decimal
-from django.core.exceptions import ValidationError
+from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.test import TestCase
 
 from core.models import ObjectType
@@ -833,6 +833,31 @@ class ObjectFieldTypeTestCase(FieldTypeTestCase):
         form_field = ObjectFieldType().get_form_field(cotf, for_csv_import=True)
         self.assertEqual(form_field.to_field_name, 'model',
                          "ModuleType CSV import must use 'model', not 'name'")
+
+    def test_csv_import_to_field_name_explicit_returned_when_valid(self):
+        """An explicit to_field_name that exists on the model is returned directly."""
+        self.assertEqual(_csv_import_to_field_name(Device, explicit='id'), 'id')
+
+    def test_csv_import_to_field_name_explicit_falls_through_when_stale(self):
+        """A stale explicit to_field_name (field no longer exists) triggers a warning
+        and falls through to the probe loop."""
+        import logging
+        with self.assertLogs('netbox_custom_objects.field_types', level=logging.WARNING):
+            result = _csv_import_to_field_name(Device, explicit='nonexistent_field_xyz')
+        # Falls through to probe loop — Device has 'name'
+        self.assertEqual(result, 'name')
+
+    def test_csv_import_to_field_name_pk_fallback_when_no_candidate_exists(self):
+        """Falls back to 'pk' and emits a warning when none of the candidate fields
+        exist on the model."""
+        import logging
+        from unittest.mock import MagicMock
+        mock_model = MagicMock()
+        mock_model.__name__ = 'FakeModel'
+        mock_model._meta.get_field.side_effect = FieldDoesNotExist
+        with self.assertLogs('netbox_custom_objects.field_types', level=logging.WARNING):
+            result = _csv_import_to_field_name(mock_model)
+        self.assertEqual(result, 'pk')
 
 
 class MultiObjectFieldTypeTestCase(FieldTypeTestCase):

@@ -54,19 +54,40 @@ def _csv_import_to_field_name(model_class, explicit=None):
     """Return the field name to use as ``to_field_name`` for CSV import lookups.
 
     If *explicit* is provided (e.g. from a stored field configuration), it is
-    returned directly.  Otherwise the target model's fields are probed in
-    ``_CSV_IDENTIFIER_FIELD_PRECEDENCE`` order and the first match is used.
-    Falls back to ``'pk'`` when none of the candidates exist (rare; emits a
-    warning because importing by PK is user-unfriendly).
+    validated against the model and returned if the field exists.  If the stored
+    value is stale (field was renamed on the target model), a warning is logged
+    and the function falls through to the probe loop.
+
+    The probe loop iterates ``_CSV_IDENTIFIER_FIELD_PRECEDENCE`` and returns the
+    first candidate that exists **and is unique** on the model, guaranteeing that
+    ``CSVModelChoiceField`` can resolve a single record.  If no unique match is
+    found the first existing candidate (unique or not) is used as a fallback.
+    Falls back to ``'pk'`` when none of the candidates exist at all.
     """
     if explicit is not None:
-        return explicit
+        try:
+            model_class._meta.get_field(explicit)
+            return explicit
+        except FieldDoesNotExist:
+            logger.warning(
+                'Stored to_field_name %r not found on %s; probing for a natural identifier.',
+                explicit, model_class.__name__,
+            )
+
+    first_match = None  # best non-unique candidate, used only if no unique field found
     for candidate in _CSV_IDENTIFIER_FIELD_PRECEDENCE:
         try:
-            model_class._meta.get_field(candidate)
-            return candidate
+            field_obj = model_class._meta.get_field(candidate)
+            if getattr(field_obj, 'unique', False):
+                return candidate
+            if first_match is None:
+                first_match = candidate
         except FieldDoesNotExist:
             pass
+
+    if first_match is not None:
+        return first_match
+
     logger.warning(
         'No natural identifier field found on %s for CSV import '
         '(tried %s); falling back to pk.',
