@@ -1,5 +1,38 @@
 # Releases
 
+## 0.5.2
+
+### New Features
+
+**Polymorphic Reverse Descriptors**
+
+Polymorphic Object and MultiObject fields now support a `related_name` that exposes a working reverse accessor on the target model instance (e.g. `site.co_instances.all()`). The form bug that hid the `related_name` field when the Polymorphic checkbox was checked has also been fixed.
+
+- [#385](https://github.com/netboxlabs/netbox-custom-objects/issues/385) / [#522](https://github.com/netboxlabs/netbox-custom-objects/issues/522) - Polymorphic Object and MultiObject fields: `related_name` now wires a working reverse accessor on target model classes; form fix for the field being hidden when Polymorphic is checked
+
+### Enhancements
+
+- [#527](https://github.com/netboxlabs/netbox-custom-objects/issues/527) - Add `slug` filter to `CustomObjectTypeFilterSet` so `?slug=` API queries work correctly
+
+### Bug Fixes
+
+- [#353](https://github.com/netboxlabs/netbox-custom-objects/issues/353) - `AttributeError` in `__str__` when the primary field was missing from the generated model
+- [#369](https://github.com/netboxlabs/netbox-custom-objects/issues/369) - Selection fields displayed the raw stored key instead of the human-readable label
+- [#370](https://github.com/netboxlabs/netbox-custom-objects/issues/370) - Lazy serializer registration via module `__getattr__` fixed a `SerializerNotFound` regression; `skip_object_fields` guard prevents incomplete serializers from being cached
+- [#371](https://github.com/netboxlabs/netbox-custom-objects/issues/371) - Tags submitted via POST or PATCH were accepted and echoed in the response but never persisted to the database
+- [#384](https://github.com/netboxlabs/netbox-custom-objects/issues/384) - `AttributeError` and false-positive cycle detection caused by stale FK references in cross-COT fields after model regeneration
+- [#406](https://github.com/netboxlabs/netbox-custom-objects/issues/406) - Bulk import for Object/MultiObject fields targeting models without a `name` field (e.g. `ModuleType`) failed with "invalid accessor field name"
+- [#428](https://github.com/netboxlabs/netbox-custom-objects/issues/428) - Startup warnings from NetBox Branching and Django were not suppressed on Python 3.13 due to message-pattern filter limitations; switched to module-origin filters
+- [#491](https://github.com/netboxlabs/netbox-custom-objects/issues/491) - Cycle detection in object-field validation failed to traverse polymorphic field edges, allowing circular references that crashed model generation
+- [#523](https://github.com/netboxlabs/netbox-custom-objects/issues/523) - Deleting a Custom Object Type that had NetBox custom fields attached raised an error; NetBox CustomField references are now removed before the ObjectType is dropped
+- [#529](https://github.com/netboxlabs/netbox-custom-objects/issues/529) - Selection and multi-selection fields backed by a `CustomFieldChoiceSet` with colors rendered as plain text; colored badges are now rendered correctly in both the list table and the detail view
+- [#535](https://github.com/netboxlabs/netbox-custom-objects/issues/535) - Deleting a MultiObject field left its through-model registered in Django's app registry, causing cascade-delete errors on subsequent operations
+- [#540](https://github.com/netboxlabs/netbox-custom-objects/issues/540) - Clarified Django bootstrap for portable schema export scripts
+- [#543](https://github.com/netboxlabs/netbox-custom-objects/issues/543) - Tag filter links in the custom object list view returned 404
+- [#550](https://github.com/netboxlabs/netbox-custom-objects/issues/550) - REST API rejected `null` for optional Object and MultiObject fields (`"This field may not be null."`)
+
+---
+
 ## 0.5.1
 
 ### Bug Fixes
