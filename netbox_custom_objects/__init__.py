@@ -217,6 +217,12 @@ class CustomObjectsPluginConfig(PluginConfig):
     # Resolves dynamic CO models (table{n}model) to on-the-fly serializers —
     # they have no importable path at the conventional location.
     serializer_resolver = "api.serializers.serializer_resolver"
+    # Contributes a GraphQL Query (one field pair per custom object type) to
+    # NetBox's schema.  Built at startup from the existing types; see
+    # graphql/types.py for the restart-on-new-type caveat.  The path resolves as
+    # module ``graphql.schema`` + attribute ``schema`` (NetBox loads resources
+    # via ``import_string``, which treats the final component as an attribute).
+    graphql_schema = "graphql.schema.schema"
 
     @staticmethod
     def should_skip_dynamic_model_creation():
