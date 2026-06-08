@@ -10,6 +10,7 @@ in-process, mirroring what NetBox does at boot.
 """
 
 from typing import List
+from unittest import mock
 
 import strawberry
 import strawberry_django
@@ -18,8 +19,9 @@ from strawberry.schema.config import StrawberryConfig
 
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
 
+from netbox_custom_objects.graphql import live as live_module
 from netbox_custom_objects.graphql import schema as schema_module
-from netbox_custom_objects.graphql.schema import _build_query_classes, _query_field_name
+from netbox_custom_objects.graphql.schema import build_query_classes, _query_field_name
 from netbox_custom_objects.graphql.types import build_object_type
 
 from .base import CustomObjectsTestCase
@@ -76,7 +78,7 @@ class GraphQLSchemaGenerationTestCase(CustomObjectsTestCase, TestCase):
         # ``test`` is on sys.argv during the suite, so the startup builder
         # short-circuits to an empty list rather than touching the DB.
         self.create_simple_custom_object_type()
-        self.assertEqual(_build_query_classes(), [])
+        self.assertEqual(build_query_classes(), [])
 
     def test_module_exposes_schema_list(self):
         # The module-level ``schema`` attribute must always be a list so that
@@ -87,15 +89,13 @@ class GraphQLSchemaGenerationTestCase(CustomObjectsTestCase, TestCase):
         # Exercise the actual production builder (normally skipped during tests)
         # to confirm it yields a Query class that assembles into a valid schema
         # exposing the expected per-type fields.
-        from unittest import mock
-
         self.create_simple_custom_object_type(name="Gadget", slug="gadget")
         with mock.patch(
             "netbox_custom_objects.CustomObjectsPluginConfig."
             "should_skip_dynamic_model_creation",
             return_value=False,
         ):
-            classes = _build_query_classes()
+            classes = build_query_classes()
 
         self.assertEqual(len(classes), 1)
         # Assemble exactly as NetBox does: the contributed class as a base of the
@@ -107,6 +107,75 @@ class GraphQLSchemaGenerationTestCase(CustomObjectsTestCase, TestCase):
         sdl = str(built)
         self.assertIn("gadget", sdl)
         self.assertIn("gadget_list", sdl)
+
+
+class GraphQLLiveSchemaTestCase(CustomObjectsTestCase, TestCase):
+    """
+    The schema must reflect custom object types created/deleted at runtime
+    without a NetBox restart (issue #30 follow-up).
+
+    ``should_skip_dynamic_model_creation`` returns True during the test run, so
+    we patch it off for these tests and reset the per-process cache around each.
+    """
+
+    def setUp(self):
+        super().setUp()
+        live_module.reset_cache()
+        patcher = mock.patch(
+            "netbox_custom_objects.CustomObjectsPluginConfig."
+            "should_skip_dynamic_model_creation",
+            return_value=False,
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.addCleanup(live_module.reset_cache)
+
+    def test_signature_changes_when_type_added(self):
+        sig_before = live_module.schema_signature()
+        self.create_simple_custom_object_type(name="Sig", slug="sig")
+        sig_after = live_module.schema_signature()
+        self.assertNotEqual(sig_before, sig_after)
+
+    def test_signature_changes_when_field_added(self):
+        cot = self.create_simple_custom_object_type(name="Sig2", slug="sig2")
+        sig_before = live_module.schema_signature()
+        self.create_custom_object_type_field(cot, name="extra", label="Extra", type="text")
+        sig_after = live_module.schema_signature()
+        self.assertNotEqual(sig_before, sig_after)
+
+    def test_get_live_schema_rebuilds_on_new_type(self):
+        # A type that does not exist yet must not be in the schema...
+        first = live_module.get_live_schema()
+        self.assertIsNotNone(first)
+        self.assertNotIn("runtime_thing", str(first))
+
+        # ...and must appear after creation, with no restart and without manually
+        # clearing the cache (the signature change drives the rebuild).
+        self.create_simple_custom_object_type(name="Runtime Thing", slug="runtime_thing")
+        second = live_module.get_live_schema()
+        self.assertIsNot(first, second)
+        sdl = str(second)
+        self.assertIn("runtime_thing", sdl)
+        self.assertIn("runtime_thing_list", sdl)
+
+    def test_get_live_schema_cached_when_unchanged(self):
+        self.create_simple_custom_object_type(name="Stable", slug="stable")
+        a = live_module.get_live_schema()
+        b = live_module.get_live_schema()
+        # No DB change between calls → same cached object, no rebuild.
+        self.assertIs(a, b)
+
+    def test_live_schema_drops_deleted_type(self):
+        from netbox_custom_objects.models import CustomObjectType
+
+        cot = self.create_simple_custom_object_type(name="Temp", slug="temp_type")
+        self.assertIn("temp_type", str(live_module.get_live_schema()))
+        # Delete via the queryset rather than cot.delete(): the schema-drop
+        # behaviour only depends on the row being gone (which changes the
+        # signature and triggers a rebuild), and this avoids the unrelated COT
+        # teardown machinery.
+        CustomObjectType.objects.filter(pk=cot.pk).delete()
+        self.assertNotIn("temp_type", str(live_module.get_live_schema()))
 
 
 class GraphQLQueryTestCase(CustomObjectsTestCase, TestCase):

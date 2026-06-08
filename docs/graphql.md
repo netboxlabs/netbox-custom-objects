@@ -11,13 +11,6 @@ The `<name>` is derived from the Custom Object Type's **slug**, with any
 characters that are not valid in a GraphQL name replaced by underscores (for
 example a type with slug `dhcp-scope` becomes `dhcp_scope` and `dhcp_scope_list`).
 
-!!! note "New types require a restart"
-    Unlike the REST API — which resolves each request dynamically — NetBox builds
-    its GraphQL schema **once at startup**. A Custom Object Type created (or
-    deleted) while NetBox is running will not appear in (or disappear from) the
-    GraphQL schema until NetBox is restarted. This mirrors how adding a new Django
-    model requires a restart. Restart both the web service and the RQ workers.
-
 ## Authentication
 
 GraphQL requests use the same authentication as the REST API. Pass a token in the

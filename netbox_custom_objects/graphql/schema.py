@@ -41,7 +41,7 @@ def _query_field_name(custom_object_type, used_names):
     return name
 
 
-def _build_query_classes():
+def build_query_classes():
     """
     Build the list of Strawberry query classes contributed to NetBox's schema.
 
@@ -49,6 +49,11 @@ def _build_query_classes():
     migrations, tests, or before migrations have been applied) or when no custom
     object types are defined — extending NetBox's Query with an empty/invalid
     class is avoided.
+
+    Used both at startup (the module-level ``schema`` below) and on every live
+    rebuild (:mod:`netbox_custom_objects.graphql.live`).  The returned class
+    carries a ``_nco_query`` marker so live rebuilds can identify and replace a
+    previously contributed instance.
     """
     # Import lazily to avoid import-time side effects and circular imports.
     # The skip-check must run *before* importing models: during migrations and
@@ -98,7 +103,10 @@ def _build_query_classes():
 
     attrs["__annotations__"] = annotations
     query_cls = strawberry.type(type("CustomObjectsQuery", (), attrs))
+    # Marker so live schema rebuilds can find and replace a stale instance of
+    # this class among NetBox's Query bases.
+    query_cls._nco_query = True
     return [query_cls]
 
 
-schema = _build_query_classes()
+schema = build_query_classes()
