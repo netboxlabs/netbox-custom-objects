@@ -658,6 +658,87 @@ class ComplexCustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.Prima
         ...
 
 
+class SelectFieldColorDetailViewTestCase(CustomObjectsTestCase, TestCase):
+    """Regression tests for #529: selection field colors render correctly in the detail view."""
+
+    def setUp(self):
+        super().setUp()
+        self.colored_choice_set = CustomFieldChoiceSet.objects.create(
+            name='Colored Status Choices',
+            extra_choices=[['active', 'Active'], ['planned', 'Planned'], ['retired', 'Retired']],
+            choice_colors={'active': 'green', 'planned': 'blue', 'retired': 'red'},
+        )
+        self.cot = CustomObjectType.objects.create(
+            name='ColorTestObject',
+            verbose_name_plural='Color Test Objects',
+            slug='color-test-objects',
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name='name', label='Name', type='text', primary=True, required=True,
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name='status', label='Status', type='select',
+            choice_set=self.colored_choice_set,
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name='phases', label='Phases', type='multiselect',
+            choice_set=self.colored_choice_set,
+        )
+        self.model = self.cot.get_model()
+        self.instance = self.model.objects.create(
+            name='Test Instance', status='active', phases=['planned', 'retired'],
+        )
+        content_type = ContentType.objects.get_for_model(self.model)
+        perm = ObjectPermission(name='color-test-view', actions=['view'])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(content_type)
+
+    def _detail_url(self, instance=None):
+        return reverse(
+            'plugins:netbox_custom_objects:customobject',
+            kwargs={'pk': (instance or self.instance).pk, 'custom_object_type': self.cot.slug},
+        )
+
+    def test_detail_view_renders_select_color_badge(self):
+        """Regression #529: select field with a color renders a colored badge in the detail view."""
+        response = self.client.get(self._detail_url())
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode()
+        self.assertIn('text-bg-green', content)
+        self.assertIn('Active', content)
+
+    def test_detail_view_renders_multiselect_color_badges(self):
+        """Regression #529: multiselect field with colors renders colored badges in the detail view."""
+        response = self.client.get(self._detail_url())
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode()
+        self.assertIn('text-bg-blue', content)
+        self.assertIn('text-bg-red', content)
+        self.assertIn('Planned', content)
+        self.assertIn('Retired', content)
+
+    def test_detail_view_renders_label_for_uncolored_select_field(self):
+        """A select field with no colors configured renders the human-readable label without error."""
+        uncolored_choice_set = CustomFieldChoiceSet.objects.create(
+            name='Uncolored Choices',
+            extra_choices=[['yes', 'Yes'], ['no', 'No']],
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name='flag', label='Flag', type='select', choice_set=uncolored_choice_set,
+        )
+        model = self.cot.get_model(no_cache=True)
+        instance = model.objects.create(name='Uncolored Test', status='active', flag='yes')
+        response = self.client.get(self._detail_url(instance))
+        self.assertEqual(response.status_code, 200)
+        # The human-readable label "Yes" must appear, not the raw stored value "yes"
+        self.assertIn('Yes', response.content.decode())
+
+
 class ObjectFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase):
     """Test cases for custom objects with object and multi-object fields."""
 

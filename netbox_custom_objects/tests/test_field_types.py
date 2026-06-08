@@ -579,6 +579,7 @@ class SelectFieldTypeTestCase(FieldTypeTestCase):
         """get_table_column_field() render() translates a raw key to its human-readable label."""
         field = Mock()
         field.choices = [('choice1', 'Choice 1'), ('choice2', 'Choice 2')]
+        field.choice_set = None
         column = SelectFieldType().get_table_column_field(field)
         self.assertEqual(column.render(value='choice1'), 'Choice 1')
         self.assertEqual(column.render(value='choice2'), 'Choice 2')
@@ -587,11 +588,24 @@ class SelectFieldTypeTestCase(FieldTypeTestCase):
         """get_table_column_field() render() returns the raw key when it is not in choices."""
         field = Mock()
         field.choices = [('choice1', 'Choice 1')]
+        field.choice_set = None
         column = SelectFieldType().get_table_column_field(field)
         self.assertEqual(column.render(value='unknown'), 'unknown')
 
-    def test_get_field_value_returns_label_for_select(self):
-        """get_field_value template filter returns the human-readable label for select fields."""
+    def test_select_column_render_returns_badge_when_color_present(self):
+        """get_table_column_field() render() returns an HTML badge when the choice has a color."""
+        field = Mock()
+        field.choices = [('choice1', 'Choice 1')]
+        field.choice_set = Mock()
+        field.choice_set.get_choice_color.return_value = 'green'
+        column = SelectFieldType().get_table_column_field(field)
+        result = column.render(value='choice1')
+        self.assertIn('class="badge', result)
+        self.assertIn('text-bg-green', result)
+        self.assertIn('Choice 1', result)
+
+    def test_get_field_value_returns_raw_value_for_select(self):
+        """get_field_value template filter returns the raw stored value for select fields."""
         from netbox_custom_objects.templatetags.custom_object_utils import get_field_value
         cotf = self.create_custom_object_type_field(
             self.custom_object_type,
@@ -602,7 +616,7 @@ class SelectFieldTypeTestCase(FieldTypeTestCase):
         )
         model = self.custom_object_type.get_model(no_cache=True)
         instance = model.objects.create(name="Test", status="choice1")
-        self.assertEqual(get_field_value(instance, cotf), "Choice 1")
+        self.assertEqual(get_field_value(instance, cotf), "choice1")
 
     def test_get_field_value_returns_raw_value_when_select_is_none(self):
         """get_field_value returns None (falsy) when the select field is unset."""
@@ -617,6 +631,57 @@ class SelectFieldTypeTestCase(FieldTypeTestCase):
         model = self.custom_object_type.get_model(no_cache=True)
         instance = model.objects.create(name="Test")
         self.assertIsNone(get_field_value(instance, cotf))
+
+    def test_get_choice_label_returns_label_for_known_value(self):
+        """get_choice_label() returns the human-readable label for a stored choice value."""
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="status",
+            label="Status",
+            type="select",
+            choice_set=self.choice_set,
+        )
+        self.assertEqual(cotf.get_choice_label("choice1"), "Choice 1")
+
+    def test_get_choice_label_falls_back_to_value_when_unknown(self):
+        """get_choice_label() returns the raw value when it is not in the choice set."""
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="status",
+            label="Status",
+            type="select",
+            choice_set=self.choice_set,
+        )
+        self.assertEqual(cotf.get_choice_label("unknown"), "unknown")
+
+    def test_get_choice_color_returns_color_when_set(self):
+        """get_choice_color() returns the color configured for a choice value."""
+        from extras.models import CustomFieldChoiceSet
+        choice_set = CustomFieldChoiceSet.objects.create(
+            name="Colored Choices",
+            extra_choices=[["active", "Active"], ["inactive", "Inactive"]],
+            choice_colors={"active": "green", "inactive": "red"},
+        )
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="state",
+            label="State",
+            type="select",
+            choice_set=choice_set,
+        )
+        self.assertEqual(cotf.get_choice_color("active"), "green")
+        self.assertEqual(cotf.get_choice_color("inactive"), "red")
+
+    def test_get_choice_color_returns_none_when_no_color(self):
+        """get_choice_color() returns None for a value with no configured color."""
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="status",
+            label="Status",
+            type="select",
+            choice_set=self.choice_set,
+        )
+        self.assertIsNone(cotf.get_choice_color("choice1"))
 
 
 class MultiSelectFieldTypeTestCase(FieldTypeTestCase):
@@ -695,6 +760,7 @@ class MultiSelectFieldTypeTestCase(FieldTypeTestCase):
         """get_table_column_field() render() translates raw keys to comma-joined labels."""
         field = Mock()
         field.choices = [('choice1', 'Choice 1'), ('choice2', 'Choice 2'), ('choice3', 'Choice 3')]
+        field.choice_set = None
         column = MultiSelectFieldType().get_table_column_field(field)
         self.assertEqual(column.render(value=['choice1', 'choice3']), 'Choice 1, Choice 3')
 
@@ -702,11 +768,42 @@ class MultiSelectFieldTypeTestCase(FieldTypeTestCase):
         """get_table_column_field() render() preserves unknown keys in the joined output."""
         field = Mock()
         field.choices = [('choice1', 'Choice 1')]
+        field.choice_set = None
         column = MultiSelectFieldType().get_table_column_field(field)
         self.assertEqual(column.render(value=['choice1', 'unknown']), 'Choice 1, unknown')
 
-    def test_get_field_value_returns_label_list_for_multiselect(self):
-        """get_field_value template filter returns a list of labels for multiselect fields."""
+    def test_multiselect_column_render_returns_badges_when_colors_present(self):
+        """get_table_column_field() render() returns HTML badges when choices have colors."""
+        field = Mock()
+        field.choices = [('choice1', 'Choice 1'), ('choice3', 'Choice 3')]
+        field.choice_set = Mock()
+        field.choice_set.get_choice_color.side_effect = lambda v: 'green' if v == 'choice1' else 'red'
+        column = MultiSelectFieldType().get_table_column_field(field)
+        result = column.render(value=['choice1', 'choice3'])
+        self.assertIn('text-bg-green', result)
+        self.assertIn('text-bg-red', result)
+        self.assertIn('Choice 1', result)
+        self.assertIn('Choice 3', result)
+
+    def test_multiselect_column_render_mixed_colors(self):
+        """Colorless values get a plain badge when at least one sibling has a color."""
+        field = Mock()
+        field.choices = [('choice1', 'Choice 1'), ('choice2', 'Choice 2')]
+        field.choice_set = Mock()
+        # choice1 has a color; choice2 does not
+        field.choice_set.get_choice_color.side_effect = lambda v: 'blue' if v == 'choice1' else None
+        column = MultiSelectFieldType().get_table_column_field(field)
+        result = column.render(value=['choice1', 'choice2'])
+        self.assertIn('text-bg-blue', result)
+        self.assertIn('Choice 1', result)
+        # choice2 should still be a badge (no color class), not plain text
+        self.assertIn('class="badge"', result)
+        self.assertIn('Choice 2', result)
+        # result is HTML, not a comma-joined string
+        self.assertNotIn('Choice 1, Choice 2', result)
+
+    def test_get_field_value_returns_raw_list_for_multiselect(self):
+        """get_field_value template filter returns the raw stored list for multiselect fields."""
         from netbox_custom_objects.templatetags.custom_object_utils import get_field_value
         cotf = self.create_custom_object_type_field(
             self.custom_object_type,
@@ -717,7 +814,7 @@ class MultiSelectFieldTypeTestCase(FieldTypeTestCase):
         )
         model = self.custom_object_type.get_model(no_cache=True)
         instance = model.objects.create(name="Test", tags=["choice1", "choice3"])
-        self.assertEqual(get_field_value(instance, cotf), ["Choice 1", "Choice 3"])
+        self.assertEqual(get_field_value(instance, cotf), ["choice1", "choice3"])
 
     def test_get_field_value_returns_empty_list_when_multiselect_is_none(self):
         """get_field_value returns None (falsy) when the multiselect field is unset."""
