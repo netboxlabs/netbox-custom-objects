@@ -12,7 +12,7 @@ Polymorphic Object and MultiObject fields now support a `related_name` that expo
 
 ### Enhancements
 
-- [#527](https://github.com/netboxlabs/netbox-custom-objects/issues/527) - Add `slug` filter to `CustomObjectTypeFilterSet` so `?slug=` API queries work correctly
+- [#559](https://github.com/netboxlabs/netbox-custom-objects/issues/559) - Add `slug` filter to `CustomObjectTypeFilterSet` so `?slug=` API queries work correctly
 
 ### Bug Fixes
 
@@ -20,7 +20,7 @@ Polymorphic Object and MultiObject fields now support a `related_name` that expo
 - [#369](https://github.com/netboxlabs/netbox-custom-objects/issues/369) - Selection fields displayed the raw stored key instead of the human-readable label
 - [#370](https://github.com/netboxlabs/netbox-custom-objects/issues/370) - Lazy serializer registration via module `__getattr__` fixed a `SerializerNotFound` regression; `skip_object_fields` guard prevents incomplete serializers from being cached
 - [#371](https://github.com/netboxlabs/netbox-custom-objects/issues/371) - Tags submitted via POST or PATCH were accepted and echoed in the response but never persisted to the database
-- [#384](https://github.com/netboxlabs/netbox-custom-objects/issues/384) - `AttributeError` and false-positive cycle detection caused by stale FK references in cross-COT fields after model regeneration
+- [#384](https://github.com/netboxlabs/netbox-custom-objects/issues/384) / [#470](https://github.com/netboxlabs/netbox-custom-objects/issues/470) - `ValueError` / `AttributeError` caused by stale FK references in cross-COT fields after model regeneration; false-positive cycle detection also fixed
 - [#406](https://github.com/netboxlabs/netbox-custom-objects/issues/406) - Bulk import for Object/MultiObject fields targeting models without a `name` field (e.g. `ModuleType`) failed with "invalid accessor field name"
 - [#428](https://github.com/netboxlabs/netbox-custom-objects/issues/428) - Startup warnings from NetBox Branching and Django were not suppressed on Python 3.13 due to message-pattern filter limitations; switched to module-origin filters
 - [#491](https://github.com/netboxlabs/netbox-custom-objects/issues/491) - Cycle detection in object-field validation failed to traverse polymorphic field edges, allowing circular references that crashed model generation
