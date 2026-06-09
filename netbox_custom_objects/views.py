@@ -386,6 +386,18 @@ class CustomObjectTypeFieldEditView(generic.ObjectEditView):
     form = forms.CustomObjectTypeFieldForm
     template_name = 'netbox_custom_objects/customobjecttypefield_edit.html'
 
+    def alter_object(self, obj, request, url_args, url_kwargs):
+        # For new fields, pre-populate custom_object_type from the URL query param.
+        # custom_object_type is disabled in the form so Django reads its value from the
+        # instance rather than from POST data; setting it here ensures it is available
+        # for both GET (display) and POST (validation / save) requests.
+        if not obj.pk and request.GET.get('custom_object_type'):
+            try:
+                obj.custom_object_type_id = int(request.GET['custom_object_type'])
+            except (ValueError, TypeError):
+                pass
+        return obj
+
     def get_extra_context(self, request, instance):
         return {'branch_bypass_warning': is_in_branch()}
 
