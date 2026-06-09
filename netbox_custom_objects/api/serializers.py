@@ -326,6 +326,7 @@ class CustomObjectTypeSerializer(NetBoxModelSerializer):
         fields = [
             "id",
             "url",
+            "display",
             "name",
             "verbose_name",
             "verbose_name_plural",
