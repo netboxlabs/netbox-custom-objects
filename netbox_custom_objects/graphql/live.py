@@ -20,20 +20,19 @@ every process, without a restart:
   visible to every process on its next request — no restart, no cross-process
   messaging.
 
-By default GraphQL resolves against **main**: GraphiQL has no concept of branches,
-so an implicit UI branch (a branch cookie or ``?_branch=`` query param) must not
-leak into it.  A client may opt a single request into a branch with the
-``X-NetBox-Branch`` header (the REST/GraphQL API convention — see
-``netbox_branching.utilities.get_active_branch``); that request then gets that
-branch's schema *and* data.  :func:`graphql_branch_context` enforces this at the
-view, and the schema cache is keyed per branch so each branch's custom object types
-are reflected independently of main.
+GraphQL resolves against whatever branch netbox-branching activated for the
+request — the ``X-NetBox-Branch`` header, the ``?_branch=`` query param, or the
+``active_branch`` cookie — exactly like the REST API and the rest of the UI (the
+plugin imposes no GraphQL-specific branch policy of its own); with no branch active
+it is main.  The schema cache is keyed per branch (see :func:`_active_branch_key`)
+so each branch's custom object types are reflected independently, and
+:func:`get_live_schema` builds the schema for whichever branch is active so the
+schema and the data the query returns always agree.
 
 The view patch in ``__init__.py`` calls :func:`get_live_schema` per request and
 assigns the result to the view before it executes the operation.
 """
 
-import contextlib
 import logging
 import threading
 
@@ -45,39 +44,14 @@ logger = logging.getLogger("netbox_custom_objects.graphql")
 # stale) schema instead of blocking.
 _rebuild_lock = threading.Lock()
 # Per-branch cache of (signature, schema), keyed by branch identifier (None = main).
-# GraphQL honours a branch only when a request explicitly selects one via the
-# X-NetBox-Branch header (see graphql_branch_context); each branch gets its own
-# schema reflecting that branch's custom object types.  Each value is an atomically
-# swapped (signature, schema) tuple, so a lockless reader can never see a schema
-# that doesn't match its signature.
+# GraphQL reflects whichever branch netbox-branching activated for the request, so
+# each branch gets its own schema reflecting that branch's custom object types.  Each
+# value is an atomically swapped (signature, schema) tuple, so a lockless reader can
+# never see a schema that doesn't match its signature.
 _schema_cache = {}
 # Signature cache keys this process has populated, so reset_cache (tests) can clear
 # every per-branch entry.
 _signature_keys_seen = set()
-
-
-@contextlib.contextmanager
-def main_branch_context():
-    """
-    Run the enclosed block against the main database, ignoring any active branch.
-
-    GraphQL is main-only: both its schema and the data it returns always reflect
-    main, never a branch.  The signature check and the rebuild must not see a
-    branch's custom object types (a COT created or edited inside a branch must never
-    change the schema), and the request's data resolution must likewise read main.
-    Delegates to netbox-branching's own ``deactivate_branch`` context manager
-    (``activate_branch(None)``) so the meaning of "main" stays owned upstream
-    rather than reimplemented here.  A no-op when netbox-branching is not
-    installed.
-    """
-    try:
-        from netbox_branching.utilities import deactivate_branch
-    except ImportError:
-        yield
-        return
-
-    with deactivate_branch():
-        yield
 
 
 def _active_branch_key():
@@ -91,37 +65,6 @@ def _active_branch_key():
         return None
     branch = active_branch.get()
     return branch.pk if branch is not None else None
-
-
-@contextlib.contextmanager
-def graphql_branch_context(request):
-    """
-    Scope a GraphQL request to a branch only when one is explicitly requested via
-    the ``X-NetBox-Branch`` header (the REST/GraphQL API convention — see
-    ``netbox_branching.utilities.get_active_branch``).
-
-    Browser GraphiQL has no concept of branches, but a UI session may carry a branch
-    cookie or ``?_branch=`` query param that netbox-branching's middleware would
-    activate for the request.  Letting that leak into GraphQL would silently resolve
-    the schema and data against a branch the GraphiQL user never chose, so without
-    the header we force main.  With the header, the middleware has already activated
-    the branch and we leave it active for both the schema rebuild and the query's
-    data resolution.  A no-op when netbox-branching is not installed.
-    """
-    try:
-        from netbox_branching.constants import BRANCH_HEADER
-    except ImportError:
-        yield
-        return
-
-    headers = getattr(request, "headers", None) or {}
-    if BRANCH_HEADER in headers:
-        # Explicit branch selection — honour the active branch the middleware set.
-        yield
-    else:
-        # No explicit selection: force main so an implicit UI branch can't leak in.
-        with main_branch_context():
-            yield
 
 
 def schema_signature():
@@ -329,10 +272,10 @@ def get_live_schema():
     Return the schema for the current request's active branch, rebuilding it if the
     database has changed since this process last built it for that branch.
 
-    The caller (the view patch, via :func:`graphql_branch_context`) has already
-    scoped the active branch: main unless the request carried the X-NetBox-Branch
-    header.  The signature check, the rebuild, and the query's data resolution
-    therefore all run against that same branch.
+    netbox-branching has already scoped the active branch for the request (from the
+    X-NetBox-Branch header, the ``?_branch=`` query param, or the active_branch
+    cookie; main if none).  The signature check, the rebuild, and the query's data
+    resolution therefore all run against that same branch.
 
     Returns ``None`` when dynamic models are unavailable (migrations/tests) or if
     the very first build fails — the caller then falls back to NetBox's static

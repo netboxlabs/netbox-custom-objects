@@ -2820,11 +2820,11 @@ class ChoiceSetSearchLifecycleTestCase(BranchingTestBase, TransactionTestCase):
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
 class GraphQLBranchIsolationTestCase(BranchingTestBase, TransactionTestCase):
     """
-    GraphQL resolves against main unless a request explicitly selects a branch with
-    the X-NetBox-Branch header.  An implicit UI branch (cookie / ``?_branch=``) must
-    never leak into GraphQL, but a request that does carry the header gets that
-    branch's schema and data.  These tests cover both halves: the header-only branch
-    gating, and the schema reflecting whichever branch is active.
+    GraphQL resolves against whichever branch netbox-branching activated for the
+    request (X-NetBox-Branch header, ``?_branch=``, or the active_branch cookie),
+    exactly like the REST API and the UI; with no branch active it is main.  The
+    schema is built per-branch, so a branch's custom object types appear only for
+    requests scoped to that branch and never leak into main.
     """
 
     def setUp(self):
@@ -2843,13 +2843,13 @@ class GraphQLBranchIsolationTestCase(BranchingTestBase, TransactionTestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def test_schema_signature_ignores_branch_changes(self):
-        # The signature drives rebuilds; forced to main it must not move when a
-        # COT is created inside a branch, even though the raw branch-context
-        # signature does.
+    def test_schema_signature_is_branch_aware(self):
+        # The signature drives rebuilds; computed under a branch it must see that
+        # branch's custom object types (so the branch gets its own schema), while
+        # main — unaffected by the unmerged branch — keeps its own.
         main_sig = self.live.schema_signature()
 
-        branch = _provision_branch('GraphQL Iso Sig', user=self.user)
+        branch = _provision_branch('GraphQL Sig Branch', user=self.user)
         branch_request = _make_request(self.user)
         with activate_branch(branch), event_tracking(branch_request):
             cot = CustomObjectType.objects.create(
@@ -2859,11 +2859,10 @@ class GraphQLBranchIsolationTestCase(BranchingTestBase, TransactionTestCase):
                 custom_object_type=cot, name='name', label='Name', type='text',
                 primary=True, required=True,
             )
-            # Raw branch-context signature sees the new COT...
             self.assertNotEqual(main_sig, self.live.schema_signature())
-            # ...but forced to main (as the no-header GraphQL path does) it does not.
-            with self.live.main_branch_context():
-                self.assertEqual(main_sig, self.live.schema_signature())
+
+        # Back on main, the signature is unchanged by the unmerged branch.
+        self.assertEqual(main_sig, self.live.schema_signature())
 
     def test_live_schema_reflects_active_branch(self):
         # With a branch active (as the X-NetBox-Branch header path leaves it), the
@@ -2893,29 +2892,6 @@ class GraphQLBranchIsolationTestCase(BranchingTestBase, TransactionTestCase):
             'custom_objects_branch_only', str(self.live.get_live_schema())
         )
 
-    def test_graphql_branch_context_honors_only_header(self):
-        # A GraphQL request honours a branch only when the X-NetBox-Branch header is
-        # present; an implicit branch (e.g. a GraphiQL cookie, modelled here by an
-        # already-active branch with no header) is forced back to main.
-        from netbox_branching.constants import BRANCH_HEADER
-        from netbox_branching.contextvars import active_branch
-
-        branch = _provision_branch('GraphQL Ctx', user=self.user)
-
-        # Header present → the active branch is honoured.
-        request = _make_request(self.user)
-        request.headers = {BRANCH_HEADER: branch.schema_id}
-        with activate_branch(branch):
-            with self.live.graphql_branch_context(request):
-                self.assertEqual(active_branch.get(), branch)
-
-        # No header → forced to main even though a branch is active.
-        request_no_header = _make_request(self.user)
-        request_no_header.headers = {}
-        with activate_branch(branch):
-            with self.live.graphql_branch_context(request_no_header):
-                self.assertIsNone(active_branch.get())
-
     def test_branch_deletion_evicts_cached_schema(self):
         # Building a branch's schema caches it under the branch pk; deleting the
         # branch must evict that entry so it doesn't leak for the process lifetime.
@@ -2942,10 +2918,11 @@ class GraphQLBranchIsolationTestCase(BranchingTestBase, TransactionTestCase):
 @override_settings(LOGIN_REQUIRED=True)
 class GraphQLBranchEndpointTestCase(BranchingTestBase, TransactionTestCase):
     """
-    End-to-end against the real ``/graphql/`` endpoint: it serves main by default
-    and the branch named by the ``X-NetBox-Branch`` header otherwise — correct
-    schema AND data in each — and a schema change made inside a branch never leaks
-    into main (the branch is not merged).
+    End-to-end against the real ``/graphql/`` endpoint: it serves whichever branch
+    netbox-branching activated for the request (the ``X-NetBox-Branch`` header or the
+    ``?_branch=`` query param) and main otherwise — correct schema AND data in each —
+    and a schema change made inside a branch never leaks into main (the branch is not
+    merged).
     """
 
     def setUp(self):
@@ -2972,19 +2949,25 @@ class GraphQLBranchEndpointTestCase(BranchingTestBase, TransactionTestCase):
         self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
         self.url = reverse('graphql')
 
-    def _post(self, query, branch=None):
+    def _post(self, query, branch=None, via='header'):
         headers = dict(self.header)
+        url = self.url
         if branch is not None:
-            # Django maps HTTP_X_NETBOX_BRANCH → the X-NetBox-Branch request header
-            # netbox-branching reads to activate the branch for an API request.
-            headers['HTTP_X_NETBOX_BRANCH'] = branch.schema_id
+            if via == 'header':
+                # Django maps HTTP_X_NETBOX_BRANCH → the X-NetBox-Branch request
+                # header netbox-branching reads to activate the branch.
+                headers['HTTP_X_NETBOX_BRANCH'] = branch.schema_id
+            elif via == 'query':
+                # The ?_branch= query param the UI uses — another branch source
+                # netbox-branching honours for any request.
+                url = f'{self.url}?_branch={branch.schema_id}'
         response = self.client.post(
-            self.url, data={'query': query}, format='json', **headers
+            url, data={'query': query}, format='json', **headers
         )
         return json.loads(response.content)
 
-    def _data(self, query, branch=None):
-        payload = self._post(query, branch=branch)
+    def _data(self, query, branch=None, via='header'):
+        payload = self._post(query, branch=branch, via=via)
         self.assertNotIn('errors', payload, msg=str(payload.get('errors')))
         return payload['data']
 
@@ -3047,6 +3030,17 @@ class GraphQLBranchEndpointTestCase(BranchingTestBase, TransactionTestCase):
         self.assertEqual(servers.get('branch-server'), 'hi')
         self.assertEqual(
             [r['name'] for r in data['custom_objects_widget_list']], ['branch-widget'],
+        )
+
+        # --- BRANCH via ?_branch= query param (no header): the UI's branch source
+        # selects the same branch.  GraphQL honours every branch source NetBox does,
+        # not just the header — if it didn't, this would fall back to main and reject
+        # the branch-only 'widget' field. ---
+        via_param = self._data(
+            '{ custom_objects_widget_list { name } }', branch=branch, via='query',
+        )
+        self.assertEqual(
+            [r['name'] for r in via_param['custom_objects_widget_list']], ['branch-widget'],
         )
 
         # --- MAIN again: still unchanged by the unmerged branch ---

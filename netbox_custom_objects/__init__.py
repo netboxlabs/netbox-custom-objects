@@ -227,22 +227,20 @@ def _patch_graphql_view():
 
     @csrf_exempt
     def _patched_dispatch(self, request, *args, **kwargs):
-        from netbox_custom_objects.graphql.live import get_live_schema, graphql_branch_context
+        from netbox_custom_objects.graphql.live import get_live_schema
 
-        # GraphQL resolves against main unless the request explicitly selects a
-        # branch with the X-NetBox-Branch header (GraphiQL has no branch concept, so
-        # an implicit UI branch via cookie/query-param must not leak in).
-        # graphql_branch_context scopes the active branch accordingly, and
-        # get_live_schema builds the schema for that same branch, so the schema and
-        # the data the query returns stay consistent.
-        with graphql_branch_context(request):
-            try:
-                live_schema = get_live_schema()
-                if live_schema is not None:
-                    self.schema = live_schema
-            except Exception:  # noqa: BLE001 - fall back to the static schema
-                logger.warning("Failed to load live GraphQL schema; using static schema", exc_info=True)
-            return _original_dispatch(self, request, *args, **kwargs)
+        # netbox-branching has already activated the request's branch (from the
+        # X-NetBox-Branch header, ?_branch=, or the active_branch cookie) — the plugin
+        # imposes no GraphQL-specific branch policy.  get_live_schema builds the
+        # schema for whichever branch is active, so the schema and the data the query
+        # returns agree, and core models resolve exactly as they do without the plugin.
+        try:
+            live_schema = get_live_schema()
+            if live_schema is not None:
+                self.schema = live_schema
+        except Exception:  # noqa: BLE001 - fall back to the static schema
+            logger.warning("Failed to load live GraphQL schema; using static schema", exc_info=True)
+        return _original_dispatch(self, request, *args, **kwargs)
 
     NetBoxGraphQLView.dispatch = _patched_dispatch
     _graphql_view_patched = True
