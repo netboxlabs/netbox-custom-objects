@@ -38,10 +38,14 @@ import threading
 
 logger = logging.getLogger("netbox_custom_objects.graphql")
 
-# Single-flight rebuild lock: only one thread rebuilds at a time (across all
-# branches, so the shared per-rebuild type cache in graphql.types is never built
-# by two threads at once); concurrent requests serve the current (possibly slightly
-# stale) schema instead of blocking.
+# Single-flight rebuild lock.  Two roles:
+#   1. Correctness (required): build_query_classes() clears and repopulates the
+#      *process-global* type cache in graphql.types (clear_type_cache()).  Two
+#      rebuilds running at once — e.g. for different branches — would race on that
+#      cache, one wiping the other's freshly built entries mid-build.  This single
+#      lock (global, not per-branch) serialises ALL rebuilds so that can't happen.
+#   2. Performance: concurrent requests that find a stale schema serve it instead
+#      of blocking on the (potentially expensive) rebuild a peer is already doing.
 _rebuild_lock = threading.Lock()
 # Per-branch cache of (signature, schema), keyed by branch identifier (None = main).
 # GraphQL reflects whichever branch netbox-branching activated for the request, so
@@ -259,6 +263,16 @@ def build_full_schema():
     static_bases, config = _get_static_query_parts()
     bases = static_bases + tuple(build_query_classes())
 
+    # Every rebuild creates fresh classes with names ("Query", "Table<id>ModelType",
+    # …) that were used by previous rebuilds' schemas.  This relies on Strawberry
+    # building a *per-schema* type map at strawberry.Schema(...) time — same-named
+    # types in different Schema objects don't collide; only duplicates *within* one
+    # schema do (which build_query_classes avoids by uniquifying field/type names).
+    # That behaviour is version-dependent and Strawberry isn't pinned here (it's
+    # whatever NetBox ships); it's exercised by the multi-rebuild tests
+    # (test_live_schema_drops_deleted_type, test_get_live_schema_rebuilds_on_new_type).
+    # If a future Strawberry raised on cross-schema name reuse, get_live_schema would
+    # log the rebuild failure and keep serving the prior schema (not silently break).
     query_cls = strawberry.type(type("Query", bases, {}))
     return strawberry.Schema(
         query=query_cls,

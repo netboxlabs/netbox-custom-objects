@@ -205,6 +205,30 @@ class GraphQLSchemaGenerationTestCase(CustomObjectsTestCase, TestCase):
             f"prefetch missed an access: {[q['sql'] for q in ctx.captured_queries]}",
         )
 
+    def test_related_repr_degrades_on_broken_str(self):
+        # A referenced object whose __str__ (or get_absolute_url) raises must not
+        # propagate — that would error the whole relationship field instead of just
+        # this one object.  It degrades to a stable placeholder display.
+        from netbox_custom_objects.graphql.types import _related_repr
+
+        class Broken:
+            pk = 7
+
+            class _meta:
+                label_lower = "app.broken"
+
+            def __str__(self):
+                raise ValueError("boom")
+
+            def get_absolute_url(self):
+                raise ValueError("no url")
+
+        rep = _related_repr(Broken())
+        self.assertEqual(rep.id, 7)
+        self.assertEqual(rep.object_type, "app.broken")
+        self.assertEqual(rep.display, "app.broken:7")  # fallback, not an exception
+        self.assertIsNone(rep.url)
+
 
 class GraphQLLiveSchemaTestCase(CustomObjectsTestCase, TestCase):
     """

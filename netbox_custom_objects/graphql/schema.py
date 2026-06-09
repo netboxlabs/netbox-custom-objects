@@ -107,6 +107,9 @@ def build_query_classes():
     # Clearing here makes every type fresh per rebuild (rebuilds only happen on an
     # actual structural change), while the cache still memoizes within this single
     # rebuild pass so shared and recursive references reuse one built type.
+    # NOTE: this clear+repopulate of the process-global cache is why rebuilds must
+    # be serialised — concurrent rebuilds (e.g. different branches) would race here.
+    # live.get_live_schema holds _rebuild_lock around the whole rebuild to enforce it.
     clear_type_cache()
     # Also drop any in-progress build state (stack / cycle taint) leaked by an
     # exception during a previous rebuild on this pooled thread, so it can't

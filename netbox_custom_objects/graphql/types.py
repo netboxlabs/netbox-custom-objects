@@ -238,10 +238,17 @@ def _related_repr(obj):
         url = obj.get_absolute_url()
     except Exception:  # noqa: BLE001 - URL resolution is best-effort
         url = None
+    try:
+        display = str(obj)
+    except Exception:  # noqa: BLE001 - a broken __str__ must not fail the whole field
+        # Degrade to a stable identifier so one unrenderable object becomes a
+        # placeholder rather than erroring the entire (possibly multi-object) field;
+        # pk and _meta are safe even when __str__ raises.
+        display = f"{obj._meta.label_lower}:{obj.pk}"
     return CustomObjectRelatedObjectType(
         id=obj.pk,
         object_type=obj._meta.label_lower,
-        display=str(obj),
+        display=display,
         url=url,
     )
 
