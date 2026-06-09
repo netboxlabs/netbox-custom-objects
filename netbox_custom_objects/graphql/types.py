@@ -48,6 +48,7 @@ __all__ = (
     "build_object_type",
     "clear_type_cache",
     "graphql_safe_name",
+    "reset_build_state",
 )
 
 # Per-rebuild memoization of built GraphQL types, keyed by (cot id,
@@ -82,6 +83,21 @@ def clear_type_cache():
     """Drop all cached GraphQL types (used by tests)."""
     with _type_cache_lock:
         _type_cache.clear()
+
+
+def reset_build_state():
+    """
+    Clear this thread's in-progress build stack and cycle-taint set.
+
+    Called at the start of each schema rebuild (and by tests) so that a stack
+    frame or taint leaked by an exception during a previous rebuild on this
+    (pooled) thread cannot suppress caching or corrupt cycle detection on the
+    next one.  ``build_object_type`` only clears a type's taint on the success
+    path, so a build that raises after a cyclic edge tainted an ancestor would
+    otherwise leave that taint set on the thread indefinitely.
+    """
+    _building.cot_stack = []
+    _building.cycle_tainted = set()
 
 
 RELATIONSHIP_TYPES = (
@@ -152,32 +168,16 @@ def _request_user(info):
     return getattr(request, "user", None)
 
 
-def _user_can_view(user, obj):
-    """
-    Return whether ``user`` has NetBox 'view' permission for ``obj``.
-
-    The top-level query restricts the custom objects themselves, but the objects
-    reached through their relationship fields are *not* covered by that check, so
-    each one must be gated individually or the field would leak objects the user
-    cannot see.
-    """
-    if obj is None or user is None:
-        return False
-    if getattr(user, "is_superuser", False):
-        return True
-    manager = getattr(type(obj), "_default_manager", None)
-    if manager is None or not hasattr(manager, "restrict"):
-        # Target model isn't permission-aware; nothing to enforce.
-        return True
-    return manager.restrict(user, "view").filter(pk=obj.pk).exists()
-
-
 def _filter_viewable(user, objects):
     """
     Return the subset of ``objects`` the user may view, preserving order.
 
-    Batches the permission check to one query per distinct model rather than one
-    ``.exists()`` per object (which is an N+1 explosion on multi-object fields):
+    The top-level query restricts the custom objects themselves, but the objects
+    reached through their relationship fields are *not* covered by that check, so
+    each one must be gated here or the field would leak objects the user cannot
+    see.  Used for both single- and multi-object fields so the permission rule
+    lives in one place; batches the check to one query per distinct model rather
+    than one ``.exists()`` per object (an N+1 explosion on multi-object fields):
     the related objects are grouped by model and each model's permission-restricted
     queryset is evaluated once with ``pk__in``.
     """
@@ -292,11 +292,12 @@ def _custom_object_graphql_type(model_name):
     stack = _in_progress_stack()
     if cot_id in stack:
         # Back-reference to a type still being built — fall back to the flat stub
-        # for this edge to avoid infinite recursion, and taint the type currently
-        # under construction so it is not cached with this temporary stub frozen
-        # in (see build_object_type).
-        if stack:
-            _cycle_tainted_set().add(stack[-1])
+        # for this edge to avoid infinite recursion, and taint every type currently
+        # under construction so none of them is cached with this temporary stub
+        # frozen in (see build_object_type).  Tainting only the immediate parent
+        # (stack[-1]) would still cache the outer types of a cycle longer than two
+        # (A -> B -> C -> A), permanently freezing the stub into their subtree.
+        _cycle_tainted_set().update(stack)
         return None
     cot = CustomObjectType.objects.filter(pk=cot_id).first()
     if cot is None:
@@ -424,9 +425,12 @@ def _make_relationship_resolver(field):
                 _coerce_related(obj, native_models)
                 for obj in _filter_viewable(user, related)
             ]
-        if value is None or not _user_can_view(user, value):
+        if value is None:
             return None
-        return _coerce_related(value, native_models)
+        viewable = _filter_viewable(user, [value])
+        if not viewable:
+            return None
+        return _coerce_related(viewable[0], native_models)
 
     resolver.__annotations__ = {"info": Info, "return": annotation}
     return strawberry_django.field(description=description, **hint)(resolver)

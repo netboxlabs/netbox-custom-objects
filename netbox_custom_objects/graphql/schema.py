@@ -22,7 +22,7 @@ from typing import List
 import strawberry
 import strawberry_django
 
-from .types import build_object_type, clear_type_cache, graphql_safe_name
+from .types import build_object_type, clear_type_cache, graphql_safe_name, reset_build_state
 
 logger = logging.getLogger("netbox_custom_objects.graphql")
 
@@ -47,14 +47,27 @@ def _query_field_name(custom_object_type, used_names):
     # The prefix guarantees a valid leading character, so no digit/empty guard is
     # needed on the slug portion.
     base = f"{QUERY_FIELD_PREFIX}{slug}"
+
+    def _taken(candidate):
+        # Reserve the singular field name *and* its ``_list`` companion together.
+        # Checking both prevents one type's list field from silently colliding
+        # with another type's singular field — e.g. slug 'foo' yields foo/foo_list
+        # while slug 'foo-list' sanitises to foo_list/foo_list_list, and the bare
+        # 'foo_list' would otherwise clobber the first type's list field.
+        return candidate in used_names or f"{candidate}_list" in used_names
+
     name = base
-    # Reserve the singular field name *and* its ``_list`` companion together.
-    # Checking/recording both prevents one type's list field from silently
-    # colliding with another type's singular field — e.g. slug 'foo' yields
-    # foo/foo_list while slug 'foo-list' sanitises to foo_list/foo_list_list, and
-    # the bare 'foo_list' would otherwise clobber the first type's list field.
-    if name in used_names or f"{name}_list" in used_names:
+    if _taken(name):
+        # Disambiguate with the (unique) type id.  The disambiguated name can
+        # itself collide with one already reserved — another type whose slug
+        # happens to end in this id — so keep extending until both the singular
+        # name and its ``_list`` companion are genuinely free.  Without this loop
+        # the colliding field would silently overwrite the earlier type's field.
         name = f"{base}_{custom_object_type.id}"
+        counter = 2
+        while _taken(name):
+            name = f"{base}_{custom_object_type.id}_{counter}"
+            counter += 1
     used_names.add(name)
     used_names.add(f"{name}_list")
     return name
@@ -93,6 +106,10 @@ def build_query_classes():
     # actual structural change), while the cache still memoizes within this single
     # rebuild pass so shared and recursive references reuse one built type.
     clear_type_cache()
+    # Also drop any in-progress build state (stack / cycle taint) leaked by an
+    # exception during a previous rebuild on this pooled thread, so it can't
+    # suppress caching or corrupt cycle detection on this rebuild.
+    reset_build_state()
 
     try:
         custom_object_types = list(CustomObjectType.objects.all())

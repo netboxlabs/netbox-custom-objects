@@ -387,6 +387,12 @@ class CustomObjectsPluginConfig(PluginConfig):
         # are reflected in the schema without a NetBox restart.
         _patch_graphql_view()
 
+        # Keep the live GraphQL schema's signature cache fresh across workers
+        # event-driven, so the per-request hot path reads the cache instead of
+        # polling the database.
+        from .graphql.live import connect_signature_invalidation
+        connect_signature_invalidation()
+
         # Register netbox-branching integration hooks (deferred-data reset
         # receivers, branchable resolver, ObjectChange field-name migrator,
         # squash dependency-graph receiver).  Guarded so the plugin still
