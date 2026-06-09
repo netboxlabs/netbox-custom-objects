@@ -49,6 +49,7 @@ __all__ = (
     "clear_type_cache",
     "graphql_safe_name",
     "reset_build_state",
+    "set_cot_map",
 )
 
 # Per-rebuild memoization of built GraphQL types, keyed by (cot id,
@@ -94,10 +95,25 @@ def reset_build_state():
     (pooled) thread cannot suppress caching or corrupt cycle detection on the
     next one.  ``build_object_type`` only clears a type's taint on the success
     path, so a build that raises after a cyclic edge tainted an ancestor would
-    otherwise leave that taint set on the thread indefinitely.
+    otherwise leave that taint set on the thread indefinitely.  Also drops the
+    preloaded COT map (see :func:`set_cot_map`).
     """
     _building.cot_stack = []
     _building.cycle_tainted = set()
+    _building.cot_map = None
+
+
+def set_cot_map(cot_map):
+    """
+    Register a ``{pk: CustomObjectType}`` map for the current rebuild.
+
+    ``build_query_classes`` preloads every custom object type once with its fields
+    (and their related types) prefetched, then registers them here so a relationship
+    field pointing at another custom object resolves its target from the prefetched
+    instance — via :func:`_custom_object_graphql_type` — instead of issuing a fresh
+    query per reference.  Cleared by :func:`reset_build_state`.
+    """
+    _building.cot_map = cot_map
 
 
 RELATIONSHIP_TYPES = (
@@ -299,7 +315,13 @@ def _custom_object_graphql_type(model_name):
         # (A -> B -> C -> A), permanently freezing the stub into their subtree.
         _cycle_tainted_set().update(stack)
         return None
-    cot = CustomObjectType.objects.filter(pk=cot_id).first()
+    # Resolve from the rebuild's preloaded (prefetched) map when available, so a
+    # cross-COT reference doesn't issue a query per edge; fall back to a lookup for
+    # direct callers (e.g. tests) that didn't register a map.
+    cot_map = getattr(_building, "cot_map", None)
+    cot = cot_map.get(cot_id) if cot_map else None
+    if cot is None:
+        cot = CustomObjectType.objects.filter(pk=cot_id).first()
     if cot is None:
         return None
     try:

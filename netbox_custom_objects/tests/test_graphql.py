@@ -26,29 +26,14 @@ from rest_framework.test import APIClient
 
 from core.models import ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Region, Site
-from users.models import ObjectPermission, Token
+from users.models import ObjectPermission
 
 from netbox_custom_objects.graphql import live as live_module
 from netbox_custom_objects.graphql import schema as schema_module
 from netbox_custom_objects.graphql.schema import build_query_classes, _query_field_name
 from netbox_custom_objects.graphql.types import build_object_type
 
-from .base import CustomObjectsTestCase
-
-
-def create_token(user):
-    """Create an API token, plaintext key, across NetBox token versions."""
-    try:
-        # NetBox >= 4.5
-        from users.choices import TokenVersionChoices
-        token = Token(version=TokenVersionChoices.V1, user=user)
-        token.save()
-        return token.token
-    except ImportError:
-        # NetBox < 4.5
-        token = Token(user=user)
-        token.save()
-        return token.key
+from .base import CustomObjectsTestCase, create_token
 
 
 class GraphQLSchemaGenerationTestCase(CustomObjectsTestCase, TestCase):
@@ -171,6 +156,54 @@ class GraphQLSchemaGenerationTestCase(CustomObjectsTestCase, TestCase):
         # The cyclic build used the flat stub for the self-edge, so the type is
         # intentionally not cached — a later top-level query rebuilds it.
         self.assertIsNot(gql_type, build_object_type(cot))
+
+    def test_rebuild_prefetch_covers_field_access(self):
+        # Regression for the schema-rebuild N+1: build_query_classes preloads types
+        # with their fields and each field's related type(s).  Loading a type via
+        # that same prefetch must make the rebuild's per-field accesses
+        # (types.py: the fields iteration, the FK target, and the polymorphic M2M
+        # targets) issue zero further queries.
+        from django.db import connection
+        from django.db.models import Prefetch
+        from django.test.utils import CaptureQueriesContext
+
+        from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+
+        cot = self.create_custom_object_type(name="Pf", slug="pf")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        # Non-polymorphic object field → exercises the related_object_type FK.
+        self.create_custom_object_type_field(
+            cot, name="single", label="Single", type="object",
+            related_object_type=self.get_site_object_type(),
+        )
+        # Polymorphic object field → exercises the related_object_types M2M.
+        self.create_polymorphic_field(
+            cot, [self.get_site_object_type(), self.get_device_object_type()],
+            name="poly", type="object",
+        )
+
+        # The exact prefetch build_query_classes uses.
+        fields_qs = (
+            CustomObjectTypeField.objects
+            .select_related("related_object_type")
+            .prefetch_related("related_object_types")
+        )
+        loaded = CustomObjectType.objects.prefetch_related(
+            Prefetch("fields", queryset=fields_qs)
+        ).get(pk=cot.pk)
+
+        with CaptureQueriesContext(connection) as ctx:
+            for field in loaded.fields.all():           # fields iteration (no query)
+                if field.related_object_type_id:
+                    _ = field.related_object_type        # FK — select_related
+                if field.is_polymorphic:
+                    list(field.related_object_types.all())  # M2M — prefetch_related
+        self.assertEqual(
+            len(ctx.captured_queries), 0,
+            f"prefetch missed an access: {[q['sql'] for q in ctx.captured_queries]}",
+        )
 
 
 class GraphQLLiveSchemaTestCase(CustomObjectsTestCase, TestCase):

@@ -10,25 +10,11 @@ from rest_framework.test import APIClient
 
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.template_content import CustomObjectLink, LinkedCustomObject
-from .base import CustomObjectsTestCase
+from .base import CustomObjectsTestCase, create_token
 from core.models import ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Rack, Site
-from users.models import ObjectPermission, Token
+from users.models import ObjectPermission
 from virtualization.models import Cluster, ClusterType
-
-
-def create_token(user):
-    try:
-        # NetBox >= 4.5
-        from users.choices import TokenVersionChoices
-        token = Token(version=TokenVersionChoices.V1, user=user)
-        token.save()
-        return token.token
-    except ImportError:
-        # NetBox < 4.5
-        token = Token(user=user)
-        token.save()
-        return token.key
 
 
 class CustomObjectAPITestCaseMixin:

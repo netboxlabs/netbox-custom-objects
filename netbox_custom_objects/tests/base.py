@@ -20,6 +20,25 @@ from netbox_custom_objects.models import (
 logger = logging.getLogger(__name__)
 
 
+def create_token(user):
+    """Create an API token for ``user`` and return its plaintext key.
+
+    Handles the NetBox 4.5 token-versioning change (V1 tokens expose ``.token``;
+    older NetBox exposes ``.key``).
+    """
+    try:
+        # NetBox >= 4.5
+        from users.choices import TokenVersionChoices
+        token = Token(version=TokenVersionChoices.V1, user=user)
+        token.save()
+        return token.token
+    except ImportError:
+        # NetBox < 4.5
+        token = Token(user=user)
+        token.save()
+        return token.key
+
+
 def _recreate_contenttypes():
     """Recreate ContentType rows for all installed apps using get_or_create.
 

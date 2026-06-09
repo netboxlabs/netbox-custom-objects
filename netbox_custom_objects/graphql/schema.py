@@ -22,7 +22,7 @@ from typing import List
 import strawberry
 import strawberry_django
 
-from .types import build_object_type, clear_type_cache, graphql_safe_name, reset_build_state
+from .types import build_object_type, clear_type_cache, graphql_safe_name, reset_build_state, set_cot_map
 
 logger = logging.getLogger("netbox_custom_objects.graphql")
 
@@ -96,7 +96,9 @@ def build_query_classes():
     if CustomObjectsPluginConfig.should_skip_dynamic_model_creation():
         return []
 
-    from netbox_custom_objects.models import CustomObjectType
+    from django.db.models import Prefetch
+
+    from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 
     # Start each rebuild from an empty per-type cache.  The cache is keyed by
     # (cot id, cache_timestamp), but a type that embeds another COT's type via a
@@ -112,10 +114,26 @@ def build_query_classes():
     reset_build_state()
 
     try:
-        custom_object_types = list(CustomObjectType.objects.all())
+        # Preload every type's fields once, with each field's related type(s)
+        # joined/prefetched, so the per-type build issues no per-field queries:
+        # without this the inner loop hits the DB for each type's fields and again
+        # for each field's related object type(s) — O(N + N·M) queries per rebuild.
+        fields_qs = (
+            CustomObjectTypeField.objects
+            .select_related("related_object_type")
+            .prefetch_related("related_object_types")
+        )
+        custom_object_types = list(
+            CustomObjectType.objects.prefetch_related(Prefetch("fields", queryset=fields_qs))
+        )
     except Exception:  # noqa: BLE001 - DB may be unavailable at import time
         logger.debug("Could not load custom object types for GraphQL schema", exc_info=True)
         return []
+
+    # Register the preloaded types by pk so a relationship field pointing at another
+    # custom object resolves its target from the prefetched instance instead of
+    # re-querying it (build_object_type then reuses the per-rebuild type cache).
+    set_cot_map({cot.pk: cot for cot in custom_object_types})
 
     annotations = {}
     attrs = {}

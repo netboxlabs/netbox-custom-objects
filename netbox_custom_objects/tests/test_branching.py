@@ -28,7 +28,6 @@ from django.test import RequestFactory, TransactionTestCase, override_settings
 from django.urls import reverse
 from extras.models import CustomFieldChoiceSet
 from rest_framework.test import APIClient
-from users.models import Token
 
 try:
     from netbox.context_managers import event_tracking
@@ -40,7 +39,11 @@ except ImportError:
     HAS_BRANCHING = False
 
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
-from netbox_custom_objects.tests.base import TransactionCleanupMixin, _recreate_contenttypes
+from netbox_custom_objects.tests.base import (
+    TransactionCleanupMixin,
+    _recreate_contenttypes,
+    create_token,
+)
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -52,21 +55,6 @@ def _make_request(user):
     request.id = uuid.uuid4()
     request.user = user
     return request
-
-
-def _create_token(user):
-    """Create an API token (plaintext key) across NetBox token versions."""
-    try:
-        # NetBox >= 4.5
-        from users.choices import TokenVersionChoices
-        token = Token(version=TokenVersionChoices.V1, user=user)
-        token.save()
-        return token.token
-    except ImportError:
-        # NetBox < 4.5
-        token = Token(user=user)
-        token.save()
-        return token.key
 
 
 # Provisioning timeout for branch tests. Override via the
@@ -2945,7 +2933,7 @@ class GraphQLBranchEndpointTestCase(BranchingTestBase, TransactionTestCase):
         self.user.is_superuser = True
         self.user.save()
         self.client = APIClient()
-        token_key = _create_token(self.user)
+        token_key = create_token(self.user)
         self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
         self.url = reverse('graphql')
 
