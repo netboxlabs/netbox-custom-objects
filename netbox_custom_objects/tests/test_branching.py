@@ -16,6 +16,7 @@ import os
 import time
 import unittest
 import uuid
+from unittest import mock
 
 from core.models import ObjectType
 from dcim.models import Site
@@ -2790,4 +2791,79 @@ class ChoiceSetSearchLifecycleTestCase(BranchingTestBase, TransactionTestCase):
         self.assertEqual(
             co.label, 'edited after sync',
             'Edit made after sync must propagate to main on merge',
+        )
+
+
+@unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
+class GraphQLBranchIsolationTestCase(BranchingTestBase, TransactionTestCase):
+    """
+    GraphQL is main-only: GraphiQL has no concept of branches, so the schema
+    (and the data it returns) must always reflect the main database.  Custom
+    object type changes made inside a branch must never appear in the GraphQL
+    schema, regardless of which branch context a request happens to run in.
+    """
+
+    MERGE_STRATEGY = 'iterative'
+
+    def setUp(self):
+        super().setUp()
+        from netbox_custom_objects.graphql import live as live_module
+        self.live = live_module
+        live_module.reset_cache()
+        self.addCleanup(live_module.reset_cache)
+        # The startup guard returns True during the test run; patch it off so the
+        # live schema machinery runs exactly as it does in production.
+        patcher = mock.patch(
+            'netbox_custom_objects.CustomObjectsPluginConfig.'
+            'should_skip_dynamic_model_creation',
+            return_value=False,
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_schema_signature_ignores_branch_changes(self):
+        # The signature drives rebuilds; forced to main it must not move when a
+        # COT is created inside a branch, even though the raw branch-context
+        # signature does.
+        main_sig = self.live.schema_signature()
+
+        branch = _provision_branch('GraphQL Iso Sig', self.MERGE_STRATEGY, self.user)
+        branch_request = _make_request(self.user)
+        with activate_branch(branch), event_tracking(branch_request):
+            cot = CustomObjectType.objects.create(
+                name='branch_only_sig', slug='branch-only-sig'
+            )
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='name', label='Name', type='text',
+                primary=True, required=True,
+            )
+            # Raw branch-context signature sees the new COT...
+            self.assertNotEqual(main_sig, self.live.schema_signature())
+            # ...but forced to main (as get_live_schema does) it does not.
+            with self.live.main_branch_context():
+                self.assertEqual(main_sig, self.live.schema_signature())
+
+    def test_live_schema_excludes_cot_created_in_branch(self):
+        # The assembled schema must never gain a branch-only type — neither while
+        # the branch is active nor afterwards in main (the branch isn't merged).
+        baseline = self.live.get_live_schema()
+        self.assertIsNotNone(baseline)
+        self.assertNotIn('custom_objects_branch_only', str(baseline))
+
+        branch = _provision_branch('GraphQL Iso Schema', self.MERGE_STRATEGY, self.user)
+        branch_request = _make_request(self.user)
+        with activate_branch(branch), event_tracking(branch_request):
+            cot = CustomObjectType.objects.create(
+                name='branch only', slug='branch-only'
+            )
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='name', label='Name', type='text',
+                primary=True, required=True,
+            )
+            self.assertNotIn(
+                'custom_objects_branch_only', str(self.live.get_live_schema())
+            )
+
+        self.assertNotIn(
+            'custom_objects_branch_only', str(self.live.get_live_schema())
         )

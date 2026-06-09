@@ -33,6 +33,7 @@ import strawberry_django
 from core.graphql.mixins import ChangelogMixin
 from extras.choices import CustomFieldTypeChoices
 from extras.graphql.mixins import TagsMixin
+from netbox.graphql.scalars import BigInt
 from netbox.graphql.types import BaseObjectType
 from strawberry.types import Info
 
@@ -46,22 +47,28 @@ __all__ = (
     "CustomObjectRelatedObjectType",
     "build_object_type",
     "clear_type_cache",
+    "graphql_safe_name",
 )
 
-# Per-process cache of built GraphQL types, keyed by (cot id, cache_timestamp).
-# A COT's cache_timestamp is bumped (auto_now, plus an explicit save() on every
-# field add/edit/delete) whenever the type or any of its fields changes, so a
-# cached entry can never go stale: a structural change changes the key and forces
-# a rebuild.  This lets a schema rebuild triggered by one COT reuse the
-# already-built types of every other COT instead of re-running build_object_type
-# (and its per-COT fields query) for all of them.
+# Per-rebuild memoization of built GraphQL types, keyed by (cot id,
+# cache_timestamp).  It lets a single schema rebuild reuse one built type across
+# the many places that reference it (shared targets and recursive relationships)
+# instead of re-running build_object_type for each.  It is cleared at the start of
+# every rebuild (see schema.build_query_classes): a type that embeds another COT's
+# type does not get its own cache_timestamp bumped when that referenced COT
+# changes, so persisting entries across rebuilds could serve a stale embedded
+# type.  clear_type_cache() also lets tests reset it explicitly.
 _type_cache = {}
 _type_cache_lock = threading.RLock()
 
-# Tracks the COT ids whose GraphQL type is being built on the current thread, so
-# that a relationship between two custom objects (A -> B -> A) does not recurse
-# forever: a back-reference to a type still under construction falls back to the
-# flat stub instead of rebuilding it.
+# Per-thread build state.  ``cot_stack`` is the stack of COT ids whose GraphQL
+# type is being built on the current thread, so that a relationship between two
+# custom objects (A -> B -> A) does not recurse forever: a back-reference to a
+# type still under construction falls back to the flat stub instead of rebuilding
+# it.  ``cycle_tainted`` records the COT ids whose build had to use that stub
+# fallback for a cyclic edge — those types are intentionally not cached (see
+# build_object_type) so the next top-level query rebuilds them and resolves the
+# related type fully from that entry point.
 _building = threading.local()
 
 # Lazily-built map of Django model class -> its registered NetBox strawberry
@@ -94,7 +101,10 @@ class CustomObjectRelatedObjectType:
     field still exposes the basics rather than disappearing from the schema.
     """
 
-    id: int
+    # BigInt (not int/Int): NetBox primary keys are BigAutoField and can exceed
+    # the signed 32-bit range of GraphQL's Int.  Native relationship types already
+    # expose their id as BigInt; the fallback stub must match.
+    id: BigInt
     object_type: str
     display: str
     url: Optional[str]
@@ -115,12 +125,25 @@ class CustomObjectObjectType(ChangelogMixin, TagsMixin, BaseObjectType):
     pass
 
 
-def _in_progress_set():
-    ids = getattr(_building, "cot_ids", None)
-    if ids is None:
-        ids = set()
-        _building.cot_ids = ids
-    return ids
+def graphql_safe_name(value):
+    """Replace any character not valid in a GraphQL name with an underscore."""
+    return re.sub(r"[^0-9a-zA-Z_]", "_", value or "")
+
+
+def _in_progress_stack():
+    stack = getattr(_building, "cot_stack", None)
+    if stack is None:
+        stack = []
+        _building.cot_stack = stack
+    return stack
+
+
+def _cycle_tainted_set():
+    tainted = getattr(_building, "cycle_tainted", None)
+    if tainted is None:
+        tainted = set()
+        _building.cycle_tainted = tainted
+    return tainted
 
 
 def _request_user(info):
@@ -147,6 +170,43 @@ def _user_can_view(user, obj):
         # Target model isn't permission-aware; nothing to enforce.
         return True
     return manager.restrict(user, "view").filter(pk=obj.pk).exists()
+
+
+def _filter_viewable(user, objects):
+    """
+    Return the subset of ``objects`` the user may view, preserving order.
+
+    Batches the permission check to one query per distinct model rather than one
+    ``.exists()`` per object (which is an N+1 explosion on multi-object fields):
+    the related objects are grouped by model and each model's permission-restricted
+    queryset is evaluated once with ``pk__in``.
+    """
+    objects = [obj for obj in objects if obj is not None]
+    if user is None or not objects:
+        return []
+    if getattr(user, "is_superuser", False):
+        return objects
+
+    # sentinel meaning "model isn't permission-aware → all allowed".
+    allowed_by_model = {}
+    by_model = {}
+    for obj in objects:
+        by_model.setdefault(type(obj), []).append(obj)
+    for model, model_objs in by_model.items():
+        manager = getattr(model, "_default_manager", None)
+        if manager is None or not hasattr(manager, "restrict"):
+            allowed_by_model[model] = None
+            continue
+        pks = [obj.pk for obj in model_objs]
+        allowed_by_model[model] = set(
+            manager.restrict(user, "view").filter(pk__in=pks).values_list("pk", flat=True)
+        )
+
+    return [
+        obj
+        for obj in objects
+        if (allowed_by_model[type(obj)] is None or obj.pk in allowed_by_model[type(obj)])
+    ]
 
 
 def _related_repr(obj):
@@ -223,13 +283,20 @@ def _custom_object_graphql_type(model_name):
     """Resolve a custom-object target (``table<id>model``) to its GraphQL type."""
     from netbox_custom_objects.models import CustomObjectType
 
-    try:
-        cot_id = extract_cot_id_from_model_name(model_name)
-    except Exception:  # noqa: BLE001
+    cot_id = extract_cot_id_from_model_name(model_name)
+    if cot_id is None:
         return None
-    if cot_id is None or cot_id in _in_progress_set():
-        # No id, or a back-reference to a type still being built — fall back to
-        # the flat stub for this edge to avoid infinite recursion.
+    # extract_cot_id_from_model_name returns the id as a str; the in-progress
+    # stack holds ints, so coerce before the membership test or it never matches.
+    cot_id = int(cot_id)
+    stack = _in_progress_stack()
+    if cot_id in stack:
+        # Back-reference to a type still being built — fall back to the flat stub
+        # for this edge to avoid infinite recursion, and taint the type currently
+        # under construction so it is not cached with this temporary stub frozen
+        # in (see build_object_type).
+        if stack:
+            _cycle_tainted_set().add(stack[-1])
         return None
     cot = CustomObjectType.objects.filter(pk=cot_id).first()
     if cot is None:
@@ -292,7 +359,7 @@ def _resolve_relationship_members(field):
 
 def _relationship_union_name(field):
     """A schema-unique, GraphQL-safe name for a polymorphic field's union type."""
-    base = re.sub(r"[^0-9a-zA-Z_]", "_", field.name)
+    base = graphql_safe_name(field.name)
     return f"CustomObject{field.custom_object_type_id}_{base}_Related"
 
 
@@ -355,8 +422,7 @@ def _make_relationship_resolver(field):
                 return []
             return [
                 _coerce_related(obj, native_models)
-                for obj in related
-                if obj is not None and _user_can_view(user, obj)
+                for obj in _filter_viewable(user, related)
             ]
         if value is None or not _user_can_view(user, value):
             return None
@@ -398,12 +464,22 @@ def build_object_type(custom_object_type):
     if cached is not None:
         return cached
 
-    in_progress = _in_progress_set()
-    in_progress.add(custom_object_type.id)
+    stack = _in_progress_stack()
+    stack.append(custom_object_type.id)
     try:
         gql_type = _build_object_type(custom_object_type, model)
     finally:
-        in_progress.discard(custom_object_type.id)
+        stack.pop()
+
+    # A type whose build had to break a relationship cycle with the flat stub (a
+    # related custom object was still under construction) must not be cached: the
+    # stub edge is an artefact of *this* build order, and caching it would freeze
+    # that degraded edge forever.  Leaving it uncached lets a later top-level
+    # query rebuild it and resolve the related type fully from that entry point.
+    tainted = _cycle_tainted_set()
+    if custom_object_type.id in tainted:
+        tainted.discard(custom_object_type.id)
+        return gql_type
 
     with _type_cache_lock:
         _type_cache[cache_key] = gql_type

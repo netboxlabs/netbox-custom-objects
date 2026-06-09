@@ -17,13 +17,12 @@ query here would be immediately shadowed by that live rebuild.  ``live`` reuses
 """
 
 import logging
-import re
 from typing import List
 
 import strawberry
 import strawberry_django
 
-from .types import build_object_type
+from .types import build_object_type, clear_type_cache, graphql_safe_name
 
 logger = logging.getLogger("netbox_custom_objects.graphql")
 
@@ -44,7 +43,7 @@ def _query_field_name(custom_object_type, used_names):
     ``[_A-Za-z][_0-9A-Za-z]*``; slugs may contain hyphens.  Collisions among custom
     object types (after sanitisation) are disambiguated with the type id.
     """
-    slug = re.sub(r"[^0-9a-zA-Z_]", "_", (custom_object_type.slug or "").lower())
+    slug = graphql_safe_name((custom_object_type.slug or "").lower())
     # The prefix guarantees a valid leading character, so no digit/empty guard is
     # needed on the slug portion.
     base = f"{QUERY_FIELD_PREFIX}{slug}"
@@ -85,6 +84,15 @@ def build_query_classes():
         return []
 
     from netbox_custom_objects.models import CustomObjectType
+
+    # Start each rebuild from an empty per-type cache.  The cache is keyed by
+    # (cot id, cache_timestamp), but a type that embeds another COT's type via a
+    # relationship field does NOT get its own cache_timestamp bumped when the
+    # referenced COT changes — so a cached entry could embed a stale child type.
+    # Clearing here makes every type fresh per rebuild (rebuilds only happen on an
+    # actual structural change), while the cache still memoizes within this single
+    # rebuild pass so shared and recursive references reuse one built type.
+    clear_type_cache()
 
     try:
         custom_object_types = list(CustomObjectType.objects.all())

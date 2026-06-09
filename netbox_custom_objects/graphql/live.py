@@ -18,10 +18,17 @@ every process, without a restart:
   visible to every process on its next request — no restart, no cross-process
   messaging.
 
+The GraphQL schema is **main-only**: it is global to the process and reflects the
+main database, never a branch (netbox-branching).  GraphQL has no concept of
+branches, so custom object type changes made inside a branch must not alter the
+schema — both the signature check and the rebuild run with the active branch reset
+to main (see :func:`_main_branch_context`).
+
 The view patch in ``__init__.py`` calls :func:`get_live_schema` per request and
 assigns the result to the view before it executes the operation.
 """
 
+import contextlib
 import logging
 import threading
 
@@ -35,6 +42,32 @@ _rebuild_lock = threading.Lock()
 # signature with the schema in one tuple means a reader can never see a schema
 # that doesn't match its signature.
 _current = (None, None)
+
+
+@contextlib.contextmanager
+def main_branch_context():
+    """
+    Run the enclosed block against the main database, ignoring any active branch.
+
+    GraphQL is main-only: both its schema and the data it returns always reflect
+    main, never a branch.  The signature check and the rebuild must not see a
+    branch's custom object types (a COT created or edited inside a branch must never
+    change the schema), and the request's data resolution must likewise read main.
+    Resetting the ``active_branch`` contextvar to ``None`` (main) for the duration
+    mirrors how the model cache treats ``branch_id=None`` as main.  A no-op when
+    netbox-branching is not installed.
+    """
+    try:
+        from netbox_branching.contextvars import active_branch
+    except ImportError:
+        yield
+        return
+
+    token = active_branch.set(None)
+    try:
+        yield
+    finally:
+        active_branch.reset(token)
 
 
 def schema_signature():
@@ -107,40 +140,48 @@ def get_live_schema():
     if CustomObjectsPluginConfig.should_skip_dynamic_model_creation():
         return None
 
-    try:
-        signature = schema_signature()
-    except Exception:  # noqa: BLE001 - DB hiccup: serve whatever we already have
-        logger.debug("Could not compute GraphQL schema signature", exc_info=True)
-        return _current[1]
+    # Both the signature check and the rebuild run against main: the schema is
+    # main-only and must not be perturbed by branch-local custom object types.
+    with main_branch_context():
+        try:
+            signature = schema_signature()
+        except Exception:  # noqa: BLE001 - DB hiccup: serve whatever we already have
+            logger.warning("Could not compute GraphQL schema signature", exc_info=True)
+            return _current[1]
 
-    # Hot path: structure unchanged since this process last built — no lock, no
-    # rebuild, just return the cached schema.
-    sig, schema = _current
-    if schema is not None and sig == signature:
-        return schema
-
-    # Structure changed (or first build).  Single-flight: one thread rebuilds
-    # while concurrent requests keep serving the existing schema rather than
-    # blocking on the (potentially expensive) rebuild.
-    if not _rebuild_lock.acquire(blocking=False):
-        # Another thread is already rebuilding; serve the current schema — valid,
-        # just one signature behind — or None (→ static fallback) on first build.
-        return schema
-
-    try:
-        # Re-check: a prior holder may have just published a matching schema.
+        # Hot path: structure unchanged since this process last built — no lock, no
+        # rebuild, just return the cached schema.
         sig, schema = _current
         if schema is not None and sig == signature:
             return schema
-        try:
-            new_schema = build_full_schema()
-        except Exception:  # noqa: BLE001 - never break the endpoint
-            logger.exception("Failed to rebuild live GraphQL schema")
+
+        # Structure changed (or first build).  Single-flight: one thread rebuilds
+        # while concurrent requests keep serving the existing schema rather than
+        # blocking on the (potentially expensive) rebuild.  On the *first* build
+        # there is no schema to serve, so a loser must block until the rebuild
+        # completes — otherwise it would fall back to the custom-object-less static
+        # schema and spuriously reject custom_objects_* queries that do resolve.
+        blocking = schema is None
+        if not _rebuild_lock.acquire(blocking=blocking):
+            # Another thread is already rebuilding and we have a valid (one
+            # signature behind) schema to serve in the meantime.
             return schema
-        _current = (signature, new_schema)
-        return new_schema
-    finally:
-        _rebuild_lock.release()
+
+        try:
+            # Re-check: a prior holder may have just published a matching schema
+            # (always true for the first-build blocker that just waited).
+            sig, schema = _current
+            if schema is not None and sig == signature:
+                return schema
+            try:
+                new_schema = build_full_schema()
+            except Exception:  # noqa: BLE001 - never break the endpoint
+                logger.exception("Failed to rebuild live GraphQL schema")
+                return schema
+            _current = (signature, new_schema)
+            return new_schema
+        finally:
+            _rebuild_lock.release()
 
 
 def reset_cache():

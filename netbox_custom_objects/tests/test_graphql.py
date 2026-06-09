@@ -141,6 +141,37 @@ class GraphQLSchemaGenerationTestCase(CustomObjectsTestCase, TestCase):
         self.assertIn("custom_objects_gadget", sdl)
         self.assertIn("custom_objects_gadget_list", sdl)
 
+    def test_self_referential_object_field_does_not_recurse(self):
+        # A self-referential OBJECT field (FK to the same COT) must not send
+        # build_object_type into infinite recursion: the cycle guard breaks the
+        # back-edge with the flat stub.  Regression test for the str/int mismatch
+        # that left the guard inert (extract_cot_id returns a str, the in-progress
+        # stack holds ints), which caused a RecursionError on this configuration.
+        from netbox_custom_objects.graphql import types as types_module
+
+        types_module.clear_type_cache()
+        self.addCleanup(types_module.clear_type_cache)
+
+        cot = self.create_custom_object_type(name="Node", slug="node")
+        self.create_custom_object_type_field(
+            cot, name="label", label="Label", type="text", primary=True, required=True
+        )
+        self_ot = ObjectType.objects.get(
+            app_label="netbox_custom_objects",
+            model=cot.get_table_model_name(cot.id).lower(),
+        )
+        self.create_custom_object_type_field(
+            cot, name="parent", label="Parent", type="object", related_object_type=self_ot
+        )
+        cot.refresh_from_db()
+
+        # Completes (no RecursionError) and yields a usable type.
+        gql_type = build_object_type(cot)
+        self.assertIsNotNone(gql_type)
+        # The cyclic build used the flat stub for the self-edge, so the type is
+        # intentionally not cached — a later top-level query rebuilds it.
+        self.assertIsNot(gql_type, build_object_type(cot))
+
 
 class GraphQLLiveSchemaTestCase(CustomObjectsTestCase, TestCase):
     """
@@ -473,3 +504,37 @@ class GraphQLPermissionTestCase(CustomObjectsTestCase, TestCase):
         related = payload["data"]["custom_objects_server_list"][0]["site"]
         self.assertEqual(related["id"], str(self.site.pk))
         self.assertEqual(related["name"], "Secret")
+
+    def test_multiobject_related_filtered_by_permission(self):
+        # The multi-object resolver filters related objects through the batched
+        # permission check (_filter_viewable).  Without view permission on Device
+        # the list is empty; granting it makes the device appear.
+        manufacturer = Manufacturer.objects.create(name="Mfr", slug="mfr")
+        device_type = DeviceType.objects.create(
+            manufacturer=manufacturer, model="Model", slug="model"
+        )
+        role = DeviceRole.objects.create(name="Role", slug="role")
+        site = Site.objects.create(name="DevSite", slug="devsite")
+        device = Device.objects.create(
+            name="dev1", device_type=device_type, role=role, site=site
+        )
+        cot = self.create_multi_object_custom_object_type(name="Group", slug="group")
+        model = cot.get_model()
+        instance = model.objects.create(name="G1")
+        instance.devices.add(device)
+
+        # View on the custom object but NOT on Device → devices filtered out.
+        self._grant(model, "view-grp")
+        payload = self._post("{ custom_objects_group_list { name devices { id } } }")
+        self.assertNotIn("errors", payload, msg=str(payload.get("errors")))
+        rows = payload["data"]["custom_objects_group_list"]
+        self.assertEqual(rows[0]["name"], "G1")
+        self.assertEqual(rows[0]["devices"], [])
+
+        # Granting view on Device makes it appear (batched check lets it through).
+        self._grant(Device, "view-dev")
+        payload = self._post("{ custom_objects_group_list { name devices { id } } }")
+        self.assertNotIn("errors", payload, msg=str(payload.get("errors")))
+        devices = payload["data"]["custom_objects_group_list"][0]["devices"]
+        self.assertEqual(len(devices), 1)
+        self.assertEqual(devices[0]["id"], str(device.pk))

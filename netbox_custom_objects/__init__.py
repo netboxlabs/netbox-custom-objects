@@ -227,15 +227,20 @@ def _patch_graphql_view():
 
     @csrf_exempt
     def _patched_dispatch(self, request, *args, **kwargs):
-        from netbox_custom_objects.graphql.live import get_live_schema
+        from netbox_custom_objects.graphql.live import get_live_schema, main_branch_context
 
-        try:
-            live_schema = get_live_schema()
-            if live_schema is not None:
-                self.schema = live_schema
-        except Exception:  # noqa: BLE001 - fall back to the static schema
-            logger.warning("Failed to load live GraphQL schema; using static schema", exc_info=True)
-        return _original_dispatch(self, request, *args, **kwargs)
+        # GraphQL is main-only: GraphiQL has no concept of branches, so both the
+        # schema and the data a query returns always reflect the main database,
+        # never an active branch.  Wrapping the whole dispatch forces main for the
+        # schema rebuild and for the query's data resolution alike.
+        with main_branch_context():
+            try:
+                live_schema = get_live_schema()
+                if live_schema is not None:
+                    self.schema = live_schema
+            except Exception:  # noqa: BLE001 - fall back to the static schema
+                logger.warning("Failed to load live GraphQL schema; using static schema", exc_info=True)
+            return _original_dispatch(self, request, *args, **kwargs)
 
     NetBoxGraphQLView.dispatch = _patched_dispatch
     _graphql_view_patched = True
