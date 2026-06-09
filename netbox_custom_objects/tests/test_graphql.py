@@ -1,23 +1,32 @@
 """
 Tests for GraphQL support for custom objects.
 
-The plugin contributes its GraphQL schema at startup, which is intentionally
-skipped during the test run (``should_skip_dynamic_model_creation()`` returns
-True when ``test`` is on the command line — see ``__init__.py``).  We therefore
-exercise the schema-generation functions directly: build a Strawberry schema
-from custom object types created in each test and execute queries against it
-in-process, mirroring what NetBox does at boot.
+Two layers are exercised:
+
+* Unit tests for the schema-generation helpers (query-field naming, per-structure
+  type caching, the live-schema signature/rebuild machinery).  The plugin's
+  GraphQL schema contribution is intentionally skipped during the test run
+  (``should_skip_dynamic_model_creation()`` returns True when ``test`` is on the
+  command line), so these call the generation functions directly.
+
+* End-to-end tests that drive the real ``/graphql/`` HTTP endpoint with token
+  authentication, modelled on NetBox's own GraphQL test pattern.  These patch the
+  startup guard off so the live schema (installed via the view patch in
+  ``__init__.py``) is built and bound per request, exactly as in production.
 """
 
-from typing import List
+import json
 from unittest import mock
 
 import strawberry
-import strawberry_django
-from django.test import TestCase
-from strawberry.schema.config import StrawberryConfig
+from django.test import TestCase, override_settings
+from django.urls import reverse
+from rest_framework import status
+from rest_framework.test import APIClient
 
-from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
+from core.models import ObjectType
+from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Region, Site
+from users.models import ObjectPermission, Token
 
 from netbox_custom_objects.graphql import live as live_module
 from netbox_custom_objects.graphql import schema as schema_module
@@ -27,33 +36,19 @@ from netbox_custom_objects.graphql.types import build_object_type
 from .base import CustomObjectsTestCase
 
 
-class _Context:
-    """Minimal stand-in for Strawberry-Django's request context."""
-
-    def __init__(self, request):
-        self.request = request
-
-
-def build_test_schema(custom_object_types):
-    """Assemble a Strawberry schema from the given COTs, bypassing the startup guard."""
-    annotations = {}
-    attrs = {}
-    used_names = set()
-    for cot in custom_object_types:
-        gql_type = build_object_type(cot)
-        field_name = _query_field_name(cot, used_names)
-        list_name = f"{field_name}_list"
-        annotations[field_name] = gql_type
-        attrs[field_name] = strawberry_django.field()
-        annotations[list_name] = List[gql_type]
-        attrs[list_name] = strawberry_django.field()
-    attrs["__annotations__"] = annotations
-    # The GraphQL type name must be "Query" for strawberry-django to attach the
-    # single-object `id` lookup argument (it only does so on the root Query
-    # type).  In production our class is mixed into NetBox's real Query, which is
-    # named "Query"; here we name it directly.
-    query_cls = strawberry.type(type("Query", (), attrs))
-    return strawberry.Schema(query=query_cls, config=StrawberryConfig(auto_camel_case=False))
+def create_token(user):
+    """Create an API token, plaintext key, across NetBox token versions."""
+    try:
+        # NetBox >= 4.5
+        from users.choices import TokenVersionChoices
+        token = Token(version=TokenVersionChoices.V1, user=user)
+        token.save()
+        return token.token
+    except ImportError:
+        # NetBox < 4.5
+        token = Token(user=user)
+        token.save()
+        return token.key
 
 
 class GraphQLSchemaGenerationTestCase(CustomObjectsTestCase, TestCase):
@@ -122,6 +117,8 @@ class GraphQLSchemaGenerationTestCase(CustomObjectsTestCase, TestCase):
         # Exercise the actual production builder (normally skipped during tests)
         # to confirm it yields a Query class that assembles into a valid schema
         # exposing the expected per-type fields.
+        from strawberry.schema.config import StrawberryConfig
+
         self.create_simple_custom_object_type(name="Gadget", slug="gadget")
         with mock.patch(
             "netbox_custom_objects.CustomObjectsPluginConfig."
@@ -211,52 +208,85 @@ class GraphQLLiveSchemaTestCase(CustomObjectsTestCase, TestCase):
         self.assertNotIn("temp_type", str(live_module.get_live_schema()))
 
 
-class GraphQLQueryTestCase(CustomObjectsTestCase, TestCase):
-    """End-to-end query execution against a generated schema."""
+@override_settings(LOGIN_REQUIRED=True)
+class GraphQLEndpointTestCase(CustomObjectsTestCase, TestCase):
+    """
+    End-to-end tests against the real ``/graphql/`` HTTP endpoint.
+
+    Patches the startup guard off so the live schema is built and bound to the
+    (monkey-patched) GraphQL view per request, and authenticates with a token —
+    the same path a real client takes.  The user is a superuser so these tests
+    focus on schema/resolution correctness rather than permission wiring
+    (permissions are covered separately below).
+    """
 
     def setUp(self):
         super().setUp()
-        # restrict() returns everything for a superuser, keeping these tests
-        # focused on schema generation rather than permission wiring.
+        live_module.reset_cache()
+        self.addCleanup(live_module.reset_cache)
+        patcher = mock.patch(
+            "netbox_custom_objects.CustomObjectsPluginConfig."
+            "should_skip_dynamic_model_creation",
+            return_value=False,
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
         self.user.is_superuser = True
         self.user.save()
-        self.request = self._make_request()
+        # A fresh APIClient using token auth (not the session login set up by the
+        # base class), mirroring how an API client reaches the endpoint.
+        self.client = APIClient()
+        token_key = create_token(self.user)
+        self.header = {"HTTP_AUTHORIZATION": f"Token {token_key}"}
+        self.url = reverse("graphql")
 
-    def _make_request(self):
-        from django.test import RequestFactory
+    def _gql(self, query):
+        response = self.client.post(
+            self.url, data={"query": query}, format="json", **self.header
+        )
+        self.assertEqual(
+            response.status_code, status.HTTP_200_OK, getattr(response, "content", response)
+        )
+        payload = json.loads(response.content)
+        self.assertNotIn("errors", payload, msg=str(payload.get("errors")))
+        return payload["data"]
 
-        request = RequestFactory().post("/graphql/")
-        request.user = self.user
-        return request
-
-    def _execute(self, schema, query):
-        result = schema.execute_sync(query, context_value=_Context(self.request))
-        self.assertIsNone(result.errors, msg=str(result.errors))
-        return result.data
-
-    def _make_device(self):
-        manufacturer = Manufacturer.objects.create(name="Mfr", slug="mfr")
-        device_type = DeviceType.objects.create(
+    def _make_device(self, name="dev1"):
+        manufacturer, _ = Manufacturer.objects.get_or_create(name="Mfr", slug="mfr")
+        device_type, _ = DeviceType.objects.get_or_create(
             manufacturer=manufacturer, model="Model", slug="model"
         )
-        role = DeviceRole.objects.create(name="Role", slug="role")
-        site = Site.objects.create(name="Site", slug="site")
+        role, _ = DeviceRole.objects.get_or_create(name="Role", slug="role")
+        site = self._make_site()
         return Device.objects.create(
-            name="dev1", device_type=device_type, role=role, site=site
+            name=name, device_type=device_type, role=role, site=site
         )
+
+    def _make_site(self, name="Site", slug="site", region=None):
+        return Site.objects.create(name=name, slug=slug, region=region)
+
+    def _site_object_field_type(self, name="Server", slug="server"):
+        """A COT with a primary text field and a single-object field → Site."""
+        cot = self.create_custom_object_type(name=name, slug=slug)
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        self.create_custom_object_type_field(
+            cot, name="site", label="Site", type="object",
+            related_object_type=self.get_site_object_type(),
+        )
+        return cot
 
     def test_scalar_fields_query(self):
         cot = self.create_complex_custom_object_type(name="Asset", slug="asset")
         model = cot.get_model()
         model.objects.create(name="First", count=7, active=True, status="choice1")
 
-        schema = build_test_schema([cot])
-        data = self._execute(
-            schema,
-            "{ asset_list { id name count active status } }",
-        )
+        data = self._gql("{ asset_list { id display name count active status } }")
         rows = data["asset_list"]
         self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["display"], "First")
         self.assertEqual(rows[0]["name"], "First")
         self.assertEqual(rows[0]["count"], 7)
         self.assertTrue(rows[0]["active"])
@@ -267,58 +297,171 @@ class GraphQLQueryTestCase(CustomObjectsTestCase, TestCase):
         model = cot.get_model()
         instance = model.objects.create(name="Hello", description="world")
 
-        schema = build_test_schema([cot])
-        data = self._execute(
-            schema,
-            f'{{ note(id: {instance.pk}) {{ id name description }} }}',
+        data = self._gql(
+            f"{{ note(id: {instance.pk}) {{ id display name description }} }}"
         )
         self.assertEqual(data["note"]["name"], "Hello")
         self.assertEqual(data["note"]["description"], "world")
 
-    def test_object_relationship_field(self):
-        device = self._make_device()
-        cot = self.create_complex_custom_object_type(name="Link", slug="link")
+    def test_object_relationship_resolves_to_native_site_type(self):
+        # A single-object field pointing at a Site must resolve to NetBox's
+        # SiteType and be fully traversable (including nested relations like
+        # region) — not a flat stub.
+        region = Region.objects.create(name="West", slug="west")
+        site = self._make_site(name="HQ", slug="hq", region=region)
+        cot = self._site_object_field_type()
         model = cot.get_model()
-        model.objects.create(name="L1", device=device)
+        model.objects.create(name="S1", site=site)
 
-        schema = build_test_schema([cot])
-        data = self._execute(
-            schema,
-            "{ link_list { name device { id display object_type } } }",
+        data = self._gql(
+            "{ server_list { name site { id name slug region { name } } } }"
         )
-        related = data["link_list"][0]["device"]
-        self.assertEqual(related["id"], device.pk)
-        self.assertEqual(related["object_type"], "dcim.device")
-        self.assertEqual(related["display"], str(device))
+        related = data["server_list"][0]["site"]
+        self.assertEqual(related["id"], str(site.pk))
+        self.assertEqual(related["name"], "HQ")
+        self.assertEqual(related["slug"], "hq")
+        # Deep traversal into the related object's own relations proves it is the
+        # native SiteType, not the flat CustomObjectRelatedObjectType.
+        self.assertEqual(related["region"]["name"], "West")
 
-    def test_multiobject_relationship_field(self):
-        device = self._make_device()
-        cot = self.create_multi_object_custom_object_type(name="Group", slug="group")
+    def test_multiobject_relationship_resolves_to_native_device_type(self):
+        device = self._make_device(name="dev-a")
+        # 'devgroup' rather than 'group': a slug of 'group' would collide with
+        # NetBox's own built-in `group_list` root query field (user groups).
+        cot = self.create_multi_object_custom_object_type(name="DevGroup", slug="devgroup")
         model = cot.get_model()
         instance = model.objects.create(name="G1")
         instance.devices.add(device)
 
-        schema = build_test_schema([cot])
-        data = self._execute(
-            schema,
-            "{ group_list { name devices { id object_type } } }",
-        )
-        devices = data["group_list"][0]["devices"]
+        data = self._gql("{ devgroup_list { name devices { id name role { name } } } }")
+        devices = data["devgroup_list"][0]["devices"]
         self.assertEqual(len(devices), 1)
-        self.assertEqual(devices[0]["id"], device.pk)
-        self.assertEqual(devices[0]["object_type"], "dcim.device")
+        self.assertEqual(devices[0]["id"], str(device.pk))
+        # 'name'/'role' are Device fields → confirms native DeviceType.
+        self.assertEqual(devices[0]["name"], "dev-a")
+        self.assertEqual(devices[0]["role"]["name"], "Role")
+
+    def test_polymorphic_object_field_resolves_to_union(self):
+        # A polymorphic single-object field exposes a union of its target types;
+        # an instance pointing at a Site resolves through the SiteType arm.
+        site = self._make_site(name="PolySite", slug="polysite")
+        cot = self.create_custom_object_type(name="Binding", slug="binding")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        self.create_polymorphic_field(
+            cot,
+            [self.get_site_object_type(), self.get_device_object_type()],
+            name="target", type="object",
+        )
+        model = cot.get_model()
+        model.objects.create(name="B1", target=site)
+
+        # Alias the per-type 'name' selections: Site.name is String! while
+        # Device.name is String, and GraphQL's same-response-shape rule forbids
+        # selecting both under one response key.
+        data = self._gql(
+            "{ binding_list { name target { "
+            "... on SiteType { id siteName: name } "
+            "... on DeviceType { id deviceName: name } } } }"
+        )
+        target = data["binding_list"][0]["target"]
+        self.assertEqual(target["id"], str(site.pk))
+        self.assertEqual(target["siteName"], "PolySite")
+
+    def test_multiple_types_in_one_schema(self):
+        # Several custom object types must all be queryable from the same schema.
+        a = self.create_simple_custom_object_type(name="Alpha", slug="alpha")
+        b = self.create_simple_custom_object_type(name="Beta", slug="beta")
+        a.get_model().objects.create(name="a1")
+        b.get_model().objects.create(name="b1")
+
+        data = self._gql("{ alpha_list { name } beta_list { name } }")
+        self.assertEqual(data["alpha_list"][0]["name"], "a1")
+        self.assertEqual(data["beta_list"][0]["name"], "b1")
 
     def test_tags_and_base_fields(self):
         cot = self.create_simple_custom_object_type(name="Doc", slug="doc")
         model = cot.get_model()
         model.objects.create(name="D1")
 
-        schema = build_test_schema([cot])
-        data = self._execute(
-            schema,
-            "{ doc_list { id display created tags { name } } }",
-        )
+        data = self._gql("{ doc_list { id display created tags { name } } }")
         row = data["doc_list"][0]
         self.assertEqual(row["display"], "D1")
         self.assertIsNotNone(row["id"])
         self.assertEqual(row["tags"], [])
+
+
+@override_settings(LOGIN_REQUIRED=True)
+class GraphQLPermissionTestCase(CustomObjectsTestCase, TestCase):
+    """
+    Object-level view permissions must be enforced for objects reached through a
+    custom object's relationship fields, not just for the top-level objects.
+    """
+
+    def setUp(self):
+        super().setUp()
+        live_module.reset_cache()
+        self.addCleanup(live_module.reset_cache)
+        patcher = mock.patch(
+            "netbox_custom_objects.CustomObjectsPluginConfig."
+            "should_skip_dynamic_model_creation",
+            return_value=False,
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        # A non-superuser; permissions are granted explicitly per test.
+        self.client = APIClient()
+        token_key = create_token(self.user)
+        self.header = {"HTTP_AUTHORIZATION": f"Token {token_key}"}
+        self.url = reverse("graphql")
+
+        # COT 'Server' with a single-object field → Site, holding one Site.
+        self.site = Site.objects.create(name="Secret", slug="secret")
+        self.cot = self.create_custom_object_type(name="Server", slug="server")
+        self.create_custom_object_type_field(
+            self.cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        self.create_custom_object_type_field(
+            self.cot, name="site", label="Site", type="object",
+            related_object_type=self.get_site_object_type(),
+        )
+        self.model = self.cot.get_model()
+        self.model.objects.create(name="srv", site=self.site)
+
+    def _grant(self, model_class, name):
+        perm = ObjectPermission(name=name, actions=["view"])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(model_class))
+        return perm
+
+    def _post(self, query):
+        response = self.client.post(
+            self.url, data={"query": query}, format="json", **self.header
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.content)
+        return json.loads(response.content)
+
+    def test_related_object_hidden_without_permission(self):
+        # View permission on the custom object, but NOT on Site → the related
+        # site must be withheld (null), while the object itself is returned.
+        self._grant(self.model, "view-co")
+        payload = self._post("{ server_list { name site { id name } } }")
+        self.assertNotIn("errors", payload, msg=str(payload.get("errors")))
+        rows = payload["data"]["server_list"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["name"], "srv")
+        self.assertIsNone(rows[0]["site"])
+
+    def test_related_object_visible_with_permission(self):
+        # Granting view on Site as well makes the related object appear, proving
+        # the previous test's null was permission enforcement, not a broken field.
+        self._grant(self.model, "view-co")
+        self._grant(Site, "view-site")
+        payload = self._post("{ server_list { name site { id name } } }")
+        self.assertNotIn("errors", payload, msg=str(payload.get("errors")))
+        related = payload["data"]["server_list"][0]["site"]
+        self.assertEqual(related["id"], str(self.site.pk))
+        self.assertEqual(related["name"], "Secret")

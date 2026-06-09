@@ -20,10 +20,16 @@ GraphQL requests use the same authentication as the REST API. Pass a token in th
 Authorization: Token <your-api-token>
 ```
 
-Object-level permissions are enforced: queries only return custom objects the
-authenticated user has permission to view.
+Object-level permissions are enforced. The top-level `<name>` / `<name>_list`
+queries only return custom objects the authenticated user has permission to view,
+and objects reached through a relationship field are likewise filtered to those
+the user may view.
 
 ## Querying a list
+
+The fields you can select depend on how the Custom Object Type is defined. Every
+type exposes `id` and `display`; the examples below also assume the type defines
+custom fields named `name` and `description`.
 
 ```graphql
 query {
@@ -36,6 +42,10 @@ query {
 }
 ```
 
+> **Tip:** `display` is the only human-readable field guaranteed to exist on every
+> type — it is the value of the type's primary field. `name` exists only if the
+> type defines a custom field literally named `name`.
+
 ## Querying a single object
 
 ```graphql
@@ -43,7 +53,6 @@ query {
   dhcp_scope(id: 42) {
     id
     display
-    name
   }
 }
 ```
@@ -77,28 +86,50 @@ Scalar custom fields map to their natural GraphQL types:
 
 ### Relationship field types
 
-Object and multi-object fields (including polymorphic ones) resolve to a uniform
-`CustomObjectRelatedObjectType`, because a relationship may point at any NetBox
-model or another custom object:
+Object and multi-object fields resolve to the **native GraphQL type** of their
+target, so a related object is fully traversable exactly as it would be when
+queried directly. A field pointing at a Site resolves to NetBox's `SiteType`:
 
 ```graphql
 query {
   server_list {
     name
-    primary_site {        # an object (single) field
+    primary_site {          # an object (single) field → SiteType
       id
-      object_type         # e.g. "dcim.site"
-      display
-      url
+      name
+      region { name }       # traverse into the related object's own fields
     }
-    interfaces {          # a multi-object (list) field
+    interfaces {            # a multi-object (list) field → [InterfaceType]
       id
-      object_type
-      display
+      name
     }
   }
 }
 ```
+
+#### Polymorphic fields
+
+A polymorphic relationship field may point at several different model types. It
+resolves to a GraphQL **union** of those types; select fields per type with inline
+fragments:
+
+```graphql
+query {
+  binding_list {
+    name
+    target {                # polymorphic object field
+      ... on SiteType { id name }
+      ... on DeviceType { id name }
+    }
+  }
+}
+```
+
+#### Fallback for targets without a GraphQL type
+
+A small number of NetBox models are not exposed in GraphQL. When a relationship
+field's target has no native GraphQL type, that field falls back to a uniform
+`CustomObjectRelatedObjectType` so it is never silently dropped:
 
 | Field | Description |
 |-------|-------------|

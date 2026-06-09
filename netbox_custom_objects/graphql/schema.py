@@ -112,7 +112,12 @@ def build_query_classes():
         return []
 
     attrs["__annotations__"] = annotations
-    query_cls = strawberry.type(type("CustomObjectsQuery", (), attrs))
+    # The GraphQL type name must be "Query": strawberry-django only attaches the
+    # single-object ``id`` lookup argument to fields whose origin type is named
+    # "Query" (see strawberry_django.filters: ``is_root_query``).  NetBox names
+    # every per-app query class "Query" for the same reason; our contributed class
+    # is mixed into NetBox's real Query as a base, so it must do likewise.
+    query_cls = strawberry.type(type("CustomObjectsQuery", (), attrs), name="Query")
     # Marker so live schema rebuilds can find and replace a stale instance of
     # this class among NetBox's Query bases.
     query_cls._nco_query = True
