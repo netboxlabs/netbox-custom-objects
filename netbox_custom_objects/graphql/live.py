@@ -27,9 +27,14 @@ import threading
 
 logger = logging.getLogger("netbox_custom_objects.graphql")
 
-_lock = threading.RLock()
-# Per-process cache of the assembled schema and the signature it was built from.
-_state = {"signature": None, "schema": None}
+# Single-flight rebuild lock: only one thread rebuilds at a time; concurrent
+# requests serve the current (possibly slightly stale) schema instead of blocking.
+_rebuild_lock = threading.Lock()
+# Atomically-swapped (signature, schema) pair.  Read without a lock on the hot
+# path — a single reference read/assignment is atomic in CPython, and pairing the
+# signature with the schema in one tuple means a reader can never see a schema
+# that doesn't match its signature.
+_current = (None, None)
 
 
 def schema_signature():
@@ -95,6 +100,8 @@ def get_live_schema():
     the very first build fails — the caller then falls back to NetBox's static
     schema.
     """
+    global _current
+
     from netbox_custom_objects import CustomObjectsPluginConfig
 
     if CustomObjectsPluginConfig.should_skip_dynamic_model_creation():
@@ -104,21 +111,43 @@ def get_live_schema():
         signature = schema_signature()
     except Exception:  # noqa: BLE001 - DB hiccup: serve whatever we already have
         logger.debug("Could not compute GraphQL schema signature", exc_info=True)
-        return _state["schema"]
+        return _current[1]
 
-    with _lock:
-        if _state["schema"] is None or _state["signature"] != signature:
-            try:
-                _state["schema"] = build_full_schema()
-                _state["signature"] = signature
-            except Exception:  # noqa: BLE001 - never break the endpoint
-                logger.exception("Failed to rebuild live GraphQL schema")
-                return _state["schema"]
-        return _state["schema"]
+    # Hot path: structure unchanged since this process last built — no lock, no
+    # rebuild, just return the cached schema.
+    sig, schema = _current
+    if schema is not None and sig == signature:
+        return schema
+
+    # Structure changed (or first build).  Single-flight: one thread rebuilds
+    # while concurrent requests keep serving the existing schema rather than
+    # blocking on the (potentially expensive) rebuild.
+    if not _rebuild_lock.acquire(blocking=False):
+        # Another thread is already rebuilding; serve the current schema — valid,
+        # just one signature behind — or None (→ static fallback) on first build.
+        return schema
+
+    try:
+        # Re-check: a prior holder may have just published a matching schema.
+        sig, schema = _current
+        if schema is not None and sig == signature:
+            return schema
+        try:
+            new_schema = build_full_schema()
+        except Exception:  # noqa: BLE001 - never break the endpoint
+            logger.exception("Failed to rebuild live GraphQL schema")
+            return schema
+        _current = (signature, new_schema)
+        return new_schema
+    finally:
+        _rebuild_lock.release()
 
 
 def reset_cache():
-    """Clear the cached schema (used by tests)."""
-    with _lock:
-        _state["signature"] = None
-        _state["schema"] = None
+    """Clear the cached schema and per-type cache (used by tests)."""
+    global _current
+    _current = (None, None)
+
+    from .types import clear_type_cache
+
+    clear_type_cache()

@@ -3,13 +3,17 @@ GraphQL schema contribution for the custom-objects plugin.
 
 NetBox discovers this module via the plugin's ``graphql_schema`` resource path
 and extends its global ``Query`` with every class in the exported ``schema``
-list.  We build a single ``Query`` class exposing two fields per custom object
-type — ``<name>`` (single object by ``id``) and ``<name>_list`` (filtered,
-paginated list) — mirroring NetBox's own per-model GraphQL fields.
+list.  :func:`build_query_classes` builds a single ``Query`` class exposing two
+fields per custom object type — ``<name>`` (single object by ``id``) and
+``<name>_list`` (filtered, paginated list) — mirroring NetBox's own per-model
+GraphQL fields.
 
-The schema is assembled once, at plugin startup, from the custom object types
-that exist at that moment.  See :mod:`netbox_custom_objects.graphql.types` for
-why runtime-created types require a restart to appear.
+The module-level ``schema`` export is intentionally empty: the live schema in
+:mod:`netbox_custom_objects.graphql.live` (installed via the view patch in
+``__init__.py``) rebuilds the custom-object query per request from the current
+database, so runtime-created types appear without a restart.  A statically built
+query here would be immediately shadowed by that live rebuild.  ``live`` reuses
+:func:`build_query_classes`, so both paths share one implementation.
 """
 
 import logging
@@ -35,9 +39,15 @@ def _query_field_name(custom_object_type, used_names):
     if not base or base[0].isdigit():
         base = f"_{base}"
     name = base
-    if name in used_names:
+    # Reserve the singular field name *and* its ``_list`` companion together.
+    # Checking/recording both prevents one type's list field from silently
+    # colliding with another type's singular field — e.g. slug 'foo' yields
+    # foo/foo_list while slug 'foo-list' sanitises to foo_list/foo_list_list, and
+    # the bare 'foo_list' would otherwise clobber the first type's list field.
+    if name in used_names or f"{name}_list" in used_names:
         name = f"{base}_{custom_object_type.id}"
     used_names.add(name)
+    used_names.add(f"{name}_list")
     return name
 
 
@@ -50,10 +60,10 @@ def build_query_classes():
     object types are defined — extending NetBox's Query with an empty/invalid
     class is avoided.
 
-    Used both at startup (the module-level ``schema`` below) and on every live
-    rebuild (:mod:`netbox_custom_objects.graphql.live`).  The returned class
-    carries a ``_nco_query`` marker so live rebuilds can identify and replace a
-    previously contributed instance.
+    Called on every live rebuild (:mod:`netbox_custom_objects.graphql.live`); the
+    module-level ``schema`` export below deliberately does not call it (see the
+    module docstring).  The returned class carries a ``_nco_query`` marker so live
+    rebuilds can identify and replace a previously contributed instance.
     """
     # Import lazily to avoid import-time side effects and circular imports.
     # The skip-check must run *before* importing models: during migrations and
@@ -109,4 +119,7 @@ def build_query_classes():
     return [query_cls]
 
 
-schema = build_query_classes()
+# Empty by design — the live schema (graphql/live.py) owns per-request assembly so
+# runtime-created types appear without a restart.  Must remain a list: NetBox calls
+# ``.extend`` on it when registering plugin GraphQL schemas.
+schema = []

@@ -74,6 +74,39 @@ class GraphQLSchemaGenerationTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(first, "a_b")
         self.assertEqual(second, f"a_b_{b.id}")
 
+    def test_query_field_name_avoids_list_suffix_collision(self):
+        # A type whose slug sanitizes to '<other>_list' must not claim the same
+        # GraphQL field as another type's auto-generated '<name>_list' list field.
+        used = set()
+        a = self.create_custom_object_type(name="Foo", slug="foo")
+        b = self.create_custom_object_type(
+            name="Foo List", slug="foo-list", verbose_name_plural="Foo Lists"
+        )
+        name_a = _query_field_name(a, used)
+        name_b = _query_field_name(b, used)
+        self.assertEqual(name_a, "foo")
+        # 'foo_list' is already reserved as A's list field, so B is disambiguated.
+        self.assertNotEqual(name_b, "foo_list")
+        # All four generated names (singular + list for each type) stay distinct.
+        all_fields = {name_a, f"{name_a}_list", name_b, f"{name_b}_list"}
+        self.assertEqual(len(all_fields), 4)
+
+    def test_build_object_type_is_cached_per_structure(self):
+        # An unchanged COT reuses its built type; a structural change (which bumps
+        # cache_timestamp) forces a rebuild.
+        from netbox_custom_objects.graphql import types as types_module
+
+        types_module.clear_type_cache()
+        self.addCleanup(types_module.clear_type_cache)
+
+        cot = self.create_simple_custom_object_type(name="Cached", slug="cached")
+        first = build_object_type(cot)
+        self.assertIs(first, build_object_type(cot))
+
+        self.create_custom_object_type_field(cot, name="extra", label="Extra", type="text")
+        cot.refresh_from_db()
+        self.assertIsNot(first, build_object_type(cot))
+
     def test_build_query_classes_skipped_during_tests(self):
         # ``test`` is on sys.argv during the suite, so the startup builder
         # short-circuits to an empty list rather than touching the DB.
