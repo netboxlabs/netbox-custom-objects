@@ -32,6 +32,33 @@ queries only return custom objects the authenticated user has permission to view
 and objects reached through a relationship field are likewise filtered to those
 the user may view.
 
+## Using the GraphiQL explorer
+
+NetBox's built-in GraphiQL explorer (at `/graphql/`) loads the GraphQL schema
+**once when the page opens** and caches it for the life of the page. Because
+custom object types and their fields can change at runtime, the explorer's
+autocomplete suggestions and **Documentation** panel can go stale.
+
+If you **add, remove, or change a custom object type's fields**, or **add a new
+custom object type**, while GraphiQL is open, those changes will not appear in the
+field autocomplete or the Docs panel until GraphiQL re-reads the schema. (The
+change is already live on the server — a query using the new field works
+immediately — it is only GraphiQL's cached copy of the schema that lags.)
+
+To refresh it, click the **Re-fetch GraphQL schema** button — the circular-arrow
+icon in the GraphiQL toolbar (lower left). This re-reads the schema *without*
+reloading the page, so your current query is preserved:
+
+![The Re-fetch GraphQL schema button in the GraphiQL toolbar](media/graphql/graphiql-refresh-schema.png)
+
+Reloading the whole browser page has the same effect, but discards whatever you
+have typed in the editor.
+
+!!! note
+    This only affects the interactive explorer. Programmatic API clients fetch the
+    schema via introspection whenever they choose, and always query against the
+    current server-side schema.
+
 ## Querying a list
 
 The fields you can select depend on how the Custom Object Type is defined. Every
