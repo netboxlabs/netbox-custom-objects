@@ -54,11 +54,13 @@ def create_token(user):
 class GraphQLSchemaGenerationTestCase(CustomObjectsTestCase, TestCase):
     """Tests for the schema/query-class generation helpers."""
 
-    def test_query_field_name_sanitizes_slug(self):
+    def test_query_field_name_sanitizes_and_namespaces_slug(self):
         used = set()
         cot = self.create_custom_object_type(name="Widget", slug="my-widget")
         name = _query_field_name(cot, used)
-        self.assertEqual(name, "my_widget")
+        # Hyphens sanitised to underscores, and namespaced with the prefix so the
+        # field can never collide with a core/plugin root query field.
+        self.assertEqual(name, "custom_objects_my_widget")
 
     def test_query_field_name_dedupes_collisions(self):
         used = set()
@@ -66,8 +68,8 @@ class GraphQLSchemaGenerationTestCase(CustomObjectsTestCase, TestCase):
         b = self.create_custom_object_type(name="B", slug="a_b", verbose_name_plural="Bs")
         first = _query_field_name(a, used)
         second = _query_field_name(b, used)
-        self.assertEqual(first, "a_b")
-        self.assertEqual(second, f"a_b_{b.id}")
+        self.assertEqual(first, "custom_objects_a_b")
+        self.assertEqual(second, f"custom_objects_a_b_{b.id}")
 
     def test_query_field_name_avoids_list_suffix_collision(self):
         # A type whose slug sanitizes to '<other>_list' must not claim the same
@@ -79,9 +81,10 @@ class GraphQLSchemaGenerationTestCase(CustomObjectsTestCase, TestCase):
         )
         name_a = _query_field_name(a, used)
         name_b = _query_field_name(b, used)
-        self.assertEqual(name_a, "foo")
-        # 'foo_list' is already reserved as A's list field, so B is disambiguated.
-        self.assertNotEqual(name_b, "foo_list")
+        self.assertEqual(name_a, "custom_objects_foo")
+        # 'custom_objects_foo_list' is already reserved as A's list field, so B is
+        # disambiguated.
+        self.assertNotEqual(name_b, "custom_objects_foo_list")
         # All four generated names (singular + list for each type) stay distinct.
         all_fields = {name_a, f"{name_a}_list", name_b, f"{name_b}_list"}
         self.assertEqual(len(all_fields), 4)
@@ -135,8 +138,8 @@ class GraphQLSchemaGenerationTestCase(CustomObjectsTestCase, TestCase):
             query=query_cls, config=StrawberryConfig(auto_camel_case=False)
         )
         sdl = str(built)
-        self.assertIn("gadget", sdl)
-        self.assertIn("gadget_list", sdl)
+        self.assertIn("custom_objects_gadget", sdl)
+        self.assertIn("custom_objects_gadget_list", sdl)
 
 
 class GraphQLLiveSchemaTestCase(CustomObjectsTestCase, TestCase):
@@ -177,7 +180,7 @@ class GraphQLLiveSchemaTestCase(CustomObjectsTestCase, TestCase):
         # A type that does not exist yet must not be in the schema...
         first = live_module.get_live_schema()
         self.assertIsNotNone(first)
-        self.assertNotIn("runtime_thing", str(first))
+        self.assertNotIn("custom_objects_runtime_thing", str(first))
 
         # ...and must appear after creation, with no restart and without manually
         # clearing the cache (the signature change drives the rebuild).
@@ -185,8 +188,8 @@ class GraphQLLiveSchemaTestCase(CustomObjectsTestCase, TestCase):
         second = live_module.get_live_schema()
         self.assertIsNot(first, second)
         sdl = str(second)
-        self.assertIn("runtime_thing", sdl)
-        self.assertIn("runtime_thing_list", sdl)
+        self.assertIn("custom_objects_runtime_thing", sdl)
+        self.assertIn("custom_objects_runtime_thing_list", sdl)
 
     def test_get_live_schema_cached_when_unchanged(self):
         self.create_simple_custom_object_type(name="Stable", slug="stable")
@@ -199,13 +202,13 @@ class GraphQLLiveSchemaTestCase(CustomObjectsTestCase, TestCase):
         from netbox_custom_objects.models import CustomObjectType
 
         cot = self.create_simple_custom_object_type(name="Temp", slug="temp_type")
-        self.assertIn("temp_type", str(live_module.get_live_schema()))
+        self.assertIn("custom_objects_temp_type", str(live_module.get_live_schema()))
         # Delete via the queryset rather than cot.delete(): the schema-drop
         # behaviour only depends on the row being gone (which changes the
         # signature and triggers a rebuild), and this avoids the unrelated COT
         # teardown machinery.
         CustomObjectType.objects.filter(pk=cot.pk).delete()
-        self.assertNotIn("temp_type", str(live_module.get_live_schema()))
+        self.assertNotIn("custom_objects_temp_type", str(live_module.get_live_schema()))
 
 
 @override_settings(LOGIN_REQUIRED=True)
@@ -283,8 +286,8 @@ class GraphQLEndpointTestCase(CustomObjectsTestCase, TestCase):
         model = cot.get_model()
         model.objects.create(name="First", count=7, active=True, status="choice1")
 
-        data = self._gql("{ asset_list { id display name count active status } }")
-        rows = data["asset_list"]
+        data = self._gql("{ custom_objects_asset_list { id display name count active status } }")
+        rows = data["custom_objects_asset_list"]
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["display"], "First")
         self.assertEqual(rows[0]["name"], "First")
@@ -298,10 +301,10 @@ class GraphQLEndpointTestCase(CustomObjectsTestCase, TestCase):
         instance = model.objects.create(name="Hello", description="world")
 
         data = self._gql(
-            f"{{ note(id: {instance.pk}) {{ id display name description }} }}"
+            f"{{ custom_objects_note(id: {instance.pk}) {{ id display name description }} }}"
         )
-        self.assertEqual(data["note"]["name"], "Hello")
-        self.assertEqual(data["note"]["description"], "world")
+        self.assertEqual(data["custom_objects_note"]["name"], "Hello")
+        self.assertEqual(data["custom_objects_note"]["description"], "world")
 
     def test_object_relationship_resolves_to_native_site_type(self):
         # A single-object field pointing at a Site must resolve to NetBox's
@@ -314,9 +317,9 @@ class GraphQLEndpointTestCase(CustomObjectsTestCase, TestCase):
         model.objects.create(name="S1", site=site)
 
         data = self._gql(
-            "{ server_list { name site { id name slug region { name } } } }"
+            "{ custom_objects_server_list { name site { id name slug region { name } } } }"
         )
-        related = data["server_list"][0]["site"]
+        related = data["custom_objects_server_list"][0]["site"]
         self.assertEqual(related["id"], str(site.pk))
         self.assertEqual(related["name"], "HQ")
         self.assertEqual(related["slug"], "hq")
@@ -326,15 +329,18 @@ class GraphQLEndpointTestCase(CustomObjectsTestCase, TestCase):
 
     def test_multiobject_relationship_resolves_to_native_device_type(self):
         device = self._make_device(name="dev-a")
-        # 'devgroup' rather than 'group': a slug of 'group' would collide with
-        # NetBox's own built-in `group_list` root query field (user groups).
-        cot = self.create_multi_object_custom_object_type(name="DevGroup", slug="devgroup")
+        # Slug 'group' would collide with NetBox's built-in `group_list` root query
+        # field (user groups) — but the `custom_objects_` prefix keeps it distinct,
+        # so this exercises both native multiobject resolution and the namespacing.
+        cot = self.create_multi_object_custom_object_type(name="Group", slug="group")
         model = cot.get_model()
         instance = model.objects.create(name="G1")
         instance.devices.add(device)
 
-        data = self._gql("{ devgroup_list { name devices { id name role { name } } } }")
-        devices = data["devgroup_list"][0]["devices"]
+        data = self._gql(
+            "{ custom_objects_group_list { name devices { id name role { name } } } }"
+        )
+        devices = data["custom_objects_group_list"][0]["devices"]
         self.assertEqual(len(devices), 1)
         self.assertEqual(devices[0]["id"], str(device.pk))
         # 'name'/'role' are Device fields → confirms native DeviceType.
@@ -361,11 +367,11 @@ class GraphQLEndpointTestCase(CustomObjectsTestCase, TestCase):
         # Device.name is String, and GraphQL's same-response-shape rule forbids
         # selecting both under one response key.
         data = self._gql(
-            "{ binding_list { name target { "
+            "{ custom_objects_binding_list { name target { "
             "... on SiteType { id siteName: name } "
             "... on DeviceType { id deviceName: name } } } }"
         )
-        target = data["binding_list"][0]["target"]
+        target = data["custom_objects_binding_list"][0]["target"]
         self.assertEqual(target["id"], str(site.pk))
         self.assertEqual(target["siteName"], "PolySite")
 
@@ -376,17 +382,19 @@ class GraphQLEndpointTestCase(CustomObjectsTestCase, TestCase):
         a.get_model().objects.create(name="a1")
         b.get_model().objects.create(name="b1")
 
-        data = self._gql("{ alpha_list { name } beta_list { name } }")
-        self.assertEqual(data["alpha_list"][0]["name"], "a1")
-        self.assertEqual(data["beta_list"][0]["name"], "b1")
+        data = self._gql(
+            "{ custom_objects_alpha_list { name } custom_objects_beta_list { name } }"
+        )
+        self.assertEqual(data["custom_objects_alpha_list"][0]["name"], "a1")
+        self.assertEqual(data["custom_objects_beta_list"][0]["name"], "b1")
 
     def test_tags_and_base_fields(self):
         cot = self.create_simple_custom_object_type(name="Doc", slug="doc")
         model = cot.get_model()
         model.objects.create(name="D1")
 
-        data = self._gql("{ doc_list { id display created tags { name } } }")
-        row = data["doc_list"][0]
+        data = self._gql("{ custom_objects_doc_list { id display created tags { name } } }")
+        row = data["custom_objects_doc_list"][0]
         self.assertEqual(row["display"], "D1")
         self.assertIsNotNone(row["id"])
         self.assertEqual(row["tags"], [])
@@ -448,9 +456,9 @@ class GraphQLPermissionTestCase(CustomObjectsTestCase, TestCase):
         # View permission on the custom object, but NOT on Site → the related
         # site must be withheld (null), while the object itself is returned.
         self._grant(self.model, "view-co")
-        payload = self._post("{ server_list { name site { id name } } }")
+        payload = self._post("{ custom_objects_server_list { name site { id name } } }")
         self.assertNotIn("errors", payload, msg=str(payload.get("errors")))
-        rows = payload["data"]["server_list"]
+        rows = payload["data"]["custom_objects_server_list"]
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["name"], "srv")
         self.assertIsNone(rows[0]["site"])
@@ -460,8 +468,8 @@ class GraphQLPermissionTestCase(CustomObjectsTestCase, TestCase):
         # the previous test's null was permission enforcement, not a broken field.
         self._grant(self.model, "view-co")
         self._grant(Site, "view-site")
-        payload = self._post("{ server_list { name site { id name } } }")
+        payload = self._post("{ custom_objects_server_list { name site { id name } } }")
         self.assertNotIn("errors", payload, msg=str(payload.get("errors")))
-        related = payload["data"]["server_list"][0]["site"]
+        related = payload["data"]["custom_objects_server_list"][0]["site"]
         self.assertEqual(related["id"], str(self.site.pk))
         self.assertEqual(related["name"], "Secret")

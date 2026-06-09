@@ -7,9 +7,16 @@ each Custom Object Type you have defined, two root query fields are generated:
 - `<name>` — fetch a single custom object by `id`.
 - `<name>_list` — fetch a list of custom objects (paginated).
 
-The `<name>` is derived from the Custom Object Type's **slug**, with any
-characters that are not valid in a GraphQL name replaced by underscores (for
-example a type with slug `dhcp-scope` becomes `dhcp_scope` and `dhcp_scope_list`).
+The `<name>` is `custom_objects_<slug>`, where `<slug>` is the Custom Object
+Type's **slug** with any characters that are not valid in a GraphQL name replaced
+by underscores (for example a type with slug `dhcp-scope` becomes
+`custom_objects_dhcp_scope` and `custom_objects_dhcp_scope_list`).
+
+The `custom_objects_` prefix namespaces these fields so they can never collide
+with NetBox's own (or another plugin's) root query fields — every plugin's
+GraphQL query is merged into NetBox's single global `Query`, so a bare,
+slug-derived name like `site` or `group` would otherwise be shadowed by a core
+model's field.
 
 ## Authentication
 
@@ -33,7 +40,7 @@ custom fields named `name` and `description`.
 
 ```graphql
 query {
-  dhcp_scope_list {
+  custom_objects_dhcp_scope_list {
     id
     display
     name
@@ -50,7 +57,7 @@ query {
 
 ```graphql
 query {
-  dhcp_scope(id: 42) {
+  custom_objects_dhcp_scope(id: 42) {
     id
     display
   }
@@ -92,7 +99,7 @@ queried directly. A field pointing at a Site resolves to NetBox's `SiteType`:
 
 ```graphql
 query {
-  server_list {
+  custom_objects_server_list {
     name
     primary_site {          # an object (single) field → SiteType
       id
@@ -115,7 +122,7 @@ fragments:
 
 ```graphql
 query {
-  binding_list {
+  custom_objects_binding_list {
     name
     target {                # polymorphic object field
       ... on SiteType { id name }

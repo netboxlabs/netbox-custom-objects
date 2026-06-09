@@ -27,17 +27,27 @@ from .types import build_object_type
 
 logger = logging.getLogger("netbox_custom_objects.graphql")
 
+# All custom-object root query fields are namespaced with this prefix so they
+# cannot collide with NetBox's own (or another plugin's) root query fields — every
+# plugin's query class is mixed into the single global ``Query`` type, so bare,
+# slug-derived names like ``site``/``group`` would otherwise be shadowed by core.
+# The prefix mirrors the ``custom_objects_<id>`` table-naming convention.
+QUERY_FIELD_PREFIX = "custom_objects_"
+
 
 def _query_field_name(custom_object_type, used_names):
     """
     Derive a GraphQL-safe, unique field name from a custom object type's slug.
 
-    GraphQL names must match ``[_A-Za-z][_0-9A-Za-z]*``; slugs may contain
-    hyphens.  Collisions (after sanitisation) are disambiguated with the type id.
+    The name is namespaced with :data:`QUERY_FIELD_PREFIX` (see above) so it never
+    collides with core/plugin root query fields.  GraphQL names must match
+    ``[_A-Za-z][_0-9A-Za-z]*``; slugs may contain hyphens.  Collisions among custom
+    object types (after sanitisation) are disambiguated with the type id.
     """
-    base = re.sub(r"[^0-9a-zA-Z_]", "_", (custom_object_type.slug or "").lower())
-    if not base or base[0].isdigit():
-        base = f"_{base}"
+    slug = re.sub(r"[^0-9a-zA-Z_]", "_", (custom_object_type.slug or "").lower())
+    # The prefix guarantees a valid leading character, so no digit/empty guard is
+    # needed on the slug portion.
+    base = f"{QUERY_FIELD_PREFIX}{slug}"
     name = base
     # Reserve the singular field name *and* its ``_list`` companion together.
     # Checking/recording both prevents one type's list field from silently
