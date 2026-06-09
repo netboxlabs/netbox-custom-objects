@@ -387,15 +387,17 @@ class CustomObjectTypeFieldEditView(generic.ObjectEditView):
     template_name = 'netbox_custom_objects/customobjecttypefield_edit.html'
 
     def alter_object(self, obj, request, url_args, url_kwargs):
-        # For new fields, pre-populate custom_object_type from the URL query param.
-        # custom_object_type is disabled in the form so Django reads its value from the
-        # instance rather than from POST data; setting it here ensures it is available
-        # for both GET (display) and POST (validation / save) requests.
-        if not obj.pk and request.GET.get('custom_object_type'):
-            try:
-                obj.custom_object_type_id = int(request.GET['custom_object_type'])
-            except (ValueError, TypeError):
-                pass
+        # For new fields, pre-populate custom_object_type from the request so that the
+        # disabled field has a value for both GET (display) and POST (validation/save).
+        # The normal Add flow passes custom_object_type as a URL query param; the test
+        # harness (PrimaryObjectViewTestCase) passes it in the POST body instead.
+        if not obj.pk:
+            cot_pk = request.GET.get('custom_object_type') or request.POST.get('custom_object_type')
+            if cot_pk:
+                try:
+                    obj.custom_object_type_id = int(cot_pk)
+                except (ValueError, TypeError):
+                    pass
         return obj
 
     def get_extra_context(self, request, instance):
