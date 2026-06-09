@@ -278,9 +278,13 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
                 if not all(isinstance(item, str) and item in _related_names for item in fs.items)
             )
 
-        # Disable immutable fields on existing instances.
+        # custom_object_type is always read-only: new fields are always created in the
+        # context of a specific COT (passed via URL param), and existing fields cannot
+        # be moved to a different COT.
+        self.fields["custom_object_type"].disabled = True
+
+        # Remaining immutable fields only apply to existing instances.
         if self.instance.pk:
-            self.fields["custom_object_type"].disabled = True
             if 'is_polymorphic' in self.fields:
                 self.fields["is_polymorphic"].disabled = True
             if 'related_object_types' in self.fields:

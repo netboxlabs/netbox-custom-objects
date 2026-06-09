@@ -181,28 +181,31 @@ class PolymorphicRelatedNameCollisionFormTestCase(CustomObjectsTestCase, TestCas
     def _make_polymorphic_object_form(self, related_name, related_object_type_ids=None):
         if related_object_type_ids is None:
             related_object_type_ids = [str(self.site_ot.pk)]
-        return CustomObjectTypeFieldForm(data={
-            "custom_object_type": self.cot.pk,
-            "name": "test_field",
-            "label": "Test",
-            "type": CustomFieldTypeChoices.TYPE_OBJECT,
-            "is_polymorphic": "1",
-            "related_object_types": related_object_type_ids,
-            "related_name": related_name,
-            "required": "",
-            "unique": "",
-            "primary": "",
-            "default": "",
-            "description": "",
-            "group_name": "",
-            "context": "default",
-            "search_weight": "1000",
-            "filter_logic": "loose",
-            "ui_visible": "hidden",
-            "ui_editable": "hidden",
-            "weight": "100",
-            "is_cloneable": "",
-        })
+        # custom_object_type is always disabled; pass it via initial so Django uses it.
+        return CustomObjectTypeFieldForm(
+            initial={"custom_object_type": self.cot.pk},
+            data={
+                "name": "test_field",
+                "label": "Test",
+                "type": CustomFieldTypeChoices.TYPE_OBJECT,
+                "is_polymorphic": "1",
+                "related_object_types": related_object_type_ids,
+                "related_name": related_name,
+                "required": "",
+                "unique": "",
+                "primary": "",
+                "default": "",
+                "description": "",
+                "group_name": "",
+                "context": "default",
+                "search_weight": "1000",
+                "filter_logic": "loose",
+                "ui_visible": "hidden",
+                "ui_editable": "hidden",
+                "weight": "100",
+                "is_cloneable": "",
+            },
+        )
 
     def test_new_field_related_name_colliding_with_target_model_attribute_invalid(self):
         """A new polymorphic field whose related_name clashes with a native target
