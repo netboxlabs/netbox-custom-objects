@@ -11,6 +11,7 @@ cannot be rolled back inside a single SAVEPOINT-based transaction.
 """
 import datetime
 import decimal
+import json
 import logging
 import os
 import time
@@ -23,9 +24,11 @@ from dcim.models import Site
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection as main_conn, connections
-from django.test import RequestFactory, TransactionTestCase
+from django.test import RequestFactory, TransactionTestCase, override_settings
 from django.urls import reverse
 from extras.models import CustomFieldChoiceSet
+from rest_framework.test import APIClient
+from users.models import Token
 
 try:
     from netbox.context_managers import event_tracking
@@ -51,6 +54,21 @@ def _make_request(user):
     return request
 
 
+def _create_token(user):
+    """Create an API token (plaintext key) across NetBox token versions."""
+    try:
+        # NetBox >= 4.5
+        from users.choices import TokenVersionChoices
+        token = Token(version=TokenVersionChoices.V1, user=user)
+        token.save()
+        return token.token
+    except ImportError:
+        # NetBox < 4.5
+        token = Token(user=user)
+        token.save()
+        return token.key
+
+
 # Provisioning timeout for branch tests. Override via the
 # ``NETBOX_CO_BRANCH_PROVISION_TIMEOUT`` env var (seconds) when CI flakes.
 BRANCH_PROVISION_TIMEOUT = float(
@@ -58,8 +76,13 @@ BRANCH_PROVISION_TIMEOUT = float(
 )
 
 
-def _provision_branch(name, merge_strategy, user, timeout=None):
-    """Create and wait for a branch to reach READY status."""
+def _provision_branch(name, merge_strategy=None, user=None, timeout=None):
+    """Create and wait for a branch to reach READY status.
+
+    ``merge_strategy`` is optional (the Branch field is nullable) — only tests that
+    actually merge or revert need it; read-only tests (e.g. GraphQL, which can never
+    write, merge, or sync) leave it ``None``.
+    """
     if timeout is None:
         timeout = BRANCH_PROVISION_TIMEOUT
     branch = Branch(name=name, merge_strategy=merge_strategy)
@@ -2797,13 +2820,12 @@ class ChoiceSetSearchLifecycleTestCase(BranchingTestBase, TransactionTestCase):
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
 class GraphQLBranchIsolationTestCase(BranchingTestBase, TransactionTestCase):
     """
-    GraphQL is main-only: GraphiQL has no concept of branches, so the schema
-    (and the data it returns) must always reflect the main database.  Custom
-    object type changes made inside a branch must never appear in the GraphQL
-    schema, regardless of which branch context a request happens to run in.
+    GraphQL resolves against main unless a request explicitly selects a branch with
+    the X-NetBox-Branch header.  An implicit UI branch (cookie / ``?_branch=``) must
+    never leak into GraphQL, but a request that does carry the header gets that
+    branch's schema and data.  These tests cover both halves: the header-only branch
+    gating, and the schema reflecting whichever branch is active.
     """
-
-    MERGE_STRATEGY = 'iterative'
 
     def setUp(self):
         super().setUp()
@@ -2827,7 +2849,7 @@ class GraphQLBranchIsolationTestCase(BranchingTestBase, TransactionTestCase):
         # signature does.
         main_sig = self.live.schema_signature()
 
-        branch = _provision_branch('GraphQL Iso Sig', self.MERGE_STRATEGY, self.user)
+        branch = _provision_branch('GraphQL Iso Sig', user=self.user)
         branch_request = _make_request(self.user)
         with activate_branch(branch), event_tracking(branch_request):
             cot = CustomObjectType.objects.create(
@@ -2839,18 +2861,19 @@ class GraphQLBranchIsolationTestCase(BranchingTestBase, TransactionTestCase):
             )
             # Raw branch-context signature sees the new COT...
             self.assertNotEqual(main_sig, self.live.schema_signature())
-            # ...but forced to main (as get_live_schema does) it does not.
+            # ...but forced to main (as the no-header GraphQL path does) it does not.
             with self.live.main_branch_context():
                 self.assertEqual(main_sig, self.live.schema_signature())
 
-    def test_live_schema_excludes_cot_created_in_branch(self):
-        # The assembled schema must never gain a branch-only type — neither while
-        # the branch is active nor afterwards in main (the branch isn't merged).
+    def test_live_schema_reflects_active_branch(self):
+        # With a branch active (as the X-NetBox-Branch header path leaves it), the
+        # schema reflects that branch's custom object types; main, unaffected by the
+        # unmerged branch, does not.
         baseline = self.live.get_live_schema()
         self.assertIsNotNone(baseline)
         self.assertNotIn('custom_objects_branch_only', str(baseline))
 
-        branch = _provision_branch('GraphQL Iso Schema', self.MERGE_STRATEGY, self.user)
+        branch = _provision_branch('GraphQL Branch Schema', user=self.user)
         branch_request = _make_request(self.user)
         with activate_branch(branch), event_tracking(branch_request):
             cot = CustomObjectType.objects.create(
@@ -2860,10 +2883,174 @@ class GraphQLBranchIsolationTestCase(BranchingTestBase, TransactionTestCase):
                 custom_object_type=cot, name='name', label='Name', type='text',
                 primary=True, required=True,
             )
-            self.assertNotIn(
+            # The branch's own schema gains the branch-only type...
+            self.assertIn(
                 'custom_objects_branch_only', str(self.live.get_live_schema())
             )
 
+        # ...but main never does (the branch isn't merged).
         self.assertNotIn(
             'custom_objects_branch_only', str(self.live.get_live_schema())
+        )
+
+    def test_graphql_branch_context_honors_only_header(self):
+        # A GraphQL request honours a branch only when the X-NetBox-Branch header is
+        # present; an implicit branch (e.g. a GraphiQL cookie, modelled here by an
+        # already-active branch with no header) is forced back to main.
+        from netbox_branching.constants import BRANCH_HEADER
+        from netbox_branching.contextvars import active_branch
+
+        branch = _provision_branch('GraphQL Ctx', user=self.user)
+
+        # Header present → the active branch is honoured.
+        request = _make_request(self.user)
+        request.headers = {BRANCH_HEADER: branch.schema_id}
+        with activate_branch(branch):
+            with self.live.graphql_branch_context(request):
+                self.assertEqual(active_branch.get(), branch)
+
+        # No header → forced to main even though a branch is active.
+        request_no_header = _make_request(self.user)
+        request_no_header.headers = {}
+        with activate_branch(branch):
+            with self.live.graphql_branch_context(request_no_header):
+                self.assertIsNone(active_branch.get())
+
+    def test_branch_deletion_evicts_cached_schema(self):
+        # Building a branch's schema caches it under the branch pk; deleting the
+        # branch must evict that entry so it doesn't leak for the process lifetime.
+        branch = _provision_branch('GraphQL Evict', user=self.user)
+        branch_request = _make_request(self.user)
+        with activate_branch(branch), event_tracking(branch_request):
+            cot = CustomObjectType.objects.create(name='evict me', slug='evict-me')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='name', label='Name', type='text',
+                primary=True, required=True,
+            )
+            self.assertIsNotNone(self.live.get_live_schema())
+
+        # The branch's schema is now cached under its pk...
+        self.assertIn(branch.pk, self.live._schema_cache)
+
+        # ...and deleting the branch evicts it.
+        branch_pk = branch.pk
+        branch.delete()
+        self.assertNotIn(branch_pk, self.live._schema_cache)
+
+
+@unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
+@override_settings(LOGIN_REQUIRED=True)
+class GraphQLBranchEndpointTestCase(BranchingTestBase, TransactionTestCase):
+    """
+    End-to-end against the real ``/graphql/`` endpoint: it serves main by default
+    and the branch named by the ``X-NetBox-Branch`` header otherwise — correct
+    schema AND data in each — and a schema change made inside a branch never leaks
+    into main (the branch is not merged).
+    """
+
+    def setUp(self):
+        super().setUp()
+        from netbox_custom_objects.graphql import live as live_module
+        self.live = live_module
+        live_module.reset_cache()
+        self.addCleanup(live_module.reset_cache)
+        # The startup guard returns True during the test run; patch it off so the
+        # live schema machinery runs exactly as it does in production.
+        patcher = mock.patch(
+            'netbox_custom_objects.CustomObjectsPluginConfig.'
+            'should_skip_dynamic_model_creation',
+            return_value=False,
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        # Superuser + token auth, mirroring how an API client reaches the endpoint.
+        self.user.is_superuser = True
+        self.user.save()
+        self.client = APIClient()
+        token_key = _create_token(self.user)
+        self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
+        self.url = reverse('graphql')
+
+    def _post(self, query, branch=None):
+        headers = dict(self.header)
+        if branch is not None:
+            # Django maps HTTP_X_NETBOX_BRANCH → the X-NetBox-Branch request header
+            # netbox-branching reads to activate the branch for an API request.
+            headers['HTTP_X_NETBOX_BRANCH'] = branch.schema_id
+        response = self.client.post(
+            self.url, data={'query': query}, format='json', **headers
+        )
+        return json.loads(response.content)
+
+    def _data(self, query, branch=None):
+        payload = self._post(query, branch=branch)
+        self.assertNotIn('errors', payload, msg=str(payload.get('errors')))
+        return payload['data']
+
+    def _assert_query_rejected(self, query, branch=None):
+        # A field/type absent from the active schema is a GraphQL validation error.
+        payload = self._post(query, branch=branch)
+        self.assertIn('errors', payload, msg=f'expected schema to reject query: {payload}')
+
+    def test_main_and_branch_isolated_schema_and_data(self):
+        # --- main: COT 'server' (field 'name') with one instance ---
+        server = CustomObjectType.objects.create(name='server', slug='server')
+        CustomObjectTypeField.objects.create(
+            custom_object_type=server, name='name', label='Name', type='text',
+            primary=True, required=True,
+        )
+        server.get_model().objects.create(name='main-server')
+
+        # --- branch: a branch-only COT 'widget', plus a NEW field 'note' added to
+        # the existing 'server' COT and a branch-only server row that uses it ---
+        branch = _provision_branch('GraphQL E2E', user=self.user)
+        branch_request = _make_request(self.user)
+        with activate_branch(branch), event_tracking(branch_request):
+            widget = CustomObjectType.objects.create(name='widget', slug='widget')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=widget, name='name', label='Name', type='text',
+                primary=True, required=True,
+            )
+            widget.get_model().objects.create(name='branch-widget')
+
+            server_in_branch = CustomObjectType.objects.get(pk=server.pk)
+            CustomObjectTypeField.objects.create(
+                custom_object_type=server_in_branch, name='note', label='Note',
+                type='text',
+            )
+            server_in_branch.get_model().objects.create(name='branch-server', note='hi')
+
+        self.live.reset_cache()
+
+        # --- MAIN (no header): only main's schema and data ---
+        main = self._data('{ custom_objects_server_list { name } }')
+        self.assertEqual(
+            [r['name'] for r in main['custom_objects_server_list']], ['main-server'],
+            'main must not see the branch-only server row',
+        )
+        # The branch-added 'note' field is absent from main's schema.
+        self._assert_query_rejected('{ custom_objects_server_list { name note } }')
+        # The branch-only 'widget' COT is absent from main's schema.
+        self._assert_query_rejected('{ custom_objects_widget_list { name } }')
+
+        # --- BRANCH (header): branch schema (note + widget) and branch data ---
+        data = self._data(
+            '{ custom_objects_server_list { name note } '
+            'custom_objects_widget_list { name } }',
+            branch=branch,
+        )
+        servers = {r['name']: r['note'] for r in data['custom_objects_server_list']}
+        # The branch is a copy of main plus its own change: both rows are visible,
+        # and only the branch row carries the branch-only 'note' value.
+        self.assertIn('main-server', servers)
+        self.assertEqual(servers.get('branch-server'), 'hi')
+        self.assertEqual(
+            [r['name'] for r in data['custom_objects_widget_list']], ['branch-widget'],
+        )
+
+        # --- MAIN again: still unchanged by the unmerged branch ---
+        main_again = self._data('{ custom_objects_server_list { name } }')
+        self.assertEqual(
+            [r['name'] for r in main_again['custom_objects_server_list']], ['main-server'],
         )

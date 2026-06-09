@@ -227,13 +227,15 @@ def _patch_graphql_view():
 
     @csrf_exempt
     def _patched_dispatch(self, request, *args, **kwargs):
-        from netbox_custom_objects.graphql.live import get_live_schema, main_branch_context
+        from netbox_custom_objects.graphql.live import get_live_schema, graphql_branch_context
 
-        # GraphQL is main-only: GraphiQL has no concept of branches, so both the
-        # schema and the data a query returns always reflect the main database,
-        # never an active branch.  Wrapping the whole dispatch forces main for the
-        # schema rebuild and for the query's data resolution alike.
-        with main_branch_context():
+        # GraphQL resolves against main unless the request explicitly selects a
+        # branch with the X-NetBox-Branch header (GraphiQL has no branch concept, so
+        # an implicit UI branch via cookie/query-param must not leak in).
+        # graphql_branch_context scopes the active branch accordingly, and
+        # get_live_schema builds the schema for that same branch, so the schema and
+        # the data the query returns stay consistent.
+        with graphql_branch_context(request):
             try:
                 live_schema = get_live_schema()
                 if live_schema is not None:

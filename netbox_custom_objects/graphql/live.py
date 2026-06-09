@@ -20,11 +20,14 @@ every process, without a restart:
   visible to every process on its next request — no restart, no cross-process
   messaging.
 
-The GraphQL schema is **main-only**: it is global to the process and reflects the
-main database, never a branch (netbox-branching).  GraphQL has no concept of
-branches, so custom object type changes made inside a branch must not alter the
-schema — both the signature check and the rebuild run with the active branch reset
-to main (see :func:`_main_branch_context`).
+By default GraphQL resolves against **main**: GraphiQL has no concept of branches,
+so an implicit UI branch (a branch cookie or ``?_branch=`` query param) must not
+leak into it.  A client may opt a single request into a branch with the
+``X-NetBox-Branch`` header (the REST/GraphQL API convention — see
+``netbox_branching.utilities.get_active_branch``); that request then gets that
+branch's schema *and* data.  :func:`graphql_branch_context` enforces this at the
+view, and the schema cache is keyed per branch so each branch's custom object types
+are reflected independently of main.
 
 The view patch in ``__init__.py`` calls :func:`get_live_schema` per request and
 assigns the result to the view before it executes the operation.
@@ -36,14 +39,21 @@ import threading
 
 logger = logging.getLogger("netbox_custom_objects.graphql")
 
-# Single-flight rebuild lock: only one thread rebuilds at a time; concurrent
-# requests serve the current (possibly slightly stale) schema instead of blocking.
+# Single-flight rebuild lock: only one thread rebuilds at a time (across all
+# branches, so the shared per-rebuild type cache in graphql.types is never built
+# by two threads at once); concurrent requests serve the current (possibly slightly
+# stale) schema instead of blocking.
 _rebuild_lock = threading.Lock()
-# Atomically-swapped (signature, schema) pair.  Read without a lock on the hot
-# path — a single reference read/assignment is atomic in CPython, and pairing the
-# signature with the schema in one tuple means a reader can never see a schema
+# Per-branch cache of (signature, schema), keyed by branch identifier (None = main).
+# GraphQL honours a branch only when a request explicitly selects one via the
+# X-NetBox-Branch header (see graphql_branch_context); each branch gets its own
+# schema reflecting that branch's custom object types.  Each value is an atomically
+# swapped (signature, schema) tuple, so a lockless reader can never see a schema
 # that doesn't match its signature.
-_current = (None, None)
+_schema_cache = {}
+# Signature cache keys this process has populated, so reset_cache (tests) can clear
+# every per-branch entry.
+_signature_keys_seen = set()
 
 
 @contextlib.contextmanager
@@ -68,6 +78,50 @@ def main_branch_context():
 
     with deactivate_branch():
         yield
+
+
+def _active_branch_key():
+    """
+    Identifier for the active branch (``None`` for main), used to key the per-branch
+    schema and signature caches.  ``None`` when netbox-branching is not installed.
+    """
+    try:
+        from netbox_branching.contextvars import active_branch
+    except ImportError:
+        return None
+    branch = active_branch.get()
+    return branch.pk if branch is not None else None
+
+
+@contextlib.contextmanager
+def graphql_branch_context(request):
+    """
+    Scope a GraphQL request to a branch only when one is explicitly requested via
+    the ``X-NetBox-Branch`` header (the REST/GraphQL API convention — see
+    ``netbox_branching.utilities.get_active_branch``).
+
+    Browser GraphiQL has no concept of branches, but a UI session may carry a branch
+    cookie or ``?_branch=`` query param that netbox-branching's middleware would
+    activate for the request.  Letting that leak into GraphQL would silently resolve
+    the schema and data against a branch the GraphiQL user never chose, so without
+    the header we force main.  With the header, the middleware has already activated
+    the branch and we leave it active for both the schema rebuild and the query's
+    data resolution.  A no-op when netbox-branching is not installed.
+    """
+    try:
+        from netbox_branching.constants import BRANCH_HEADER
+    except ImportError:
+        yield
+        return
+
+    headers = getattr(request, "headers", None) or {}
+    if BRANCH_HEADER in headers:
+        # Explicit branch selection — honour the active branch the middleware set.
+        yield
+    else:
+        # No explicit selection: force main so an implicit UI branch can't leak in.
+        with main_branch_context():
+            yield
 
 
 def schema_signature():
@@ -102,22 +156,33 @@ _SIGNATURE_CACHE_KEY = "netbox_custom_objects.graphql.schema_signature"
 _SIGNATURE_CACHE_TIMEOUT = 300
 
 
-def cached_schema_signature():
+def _signature_cache_key(branch_key):
+    """Per-branch cache key for the schema signature (``None`` = main)."""
+    if branch_key is None:
+        return _SIGNATURE_CACHE_KEY
+    return f"{_SIGNATURE_CACHE_KEY}:{branch_key}"
+
+
+def cached_schema_signature(branch_key=None):
     """
-    Return the main schema signature, memoised in NetBox's shared cache.
+    Return the active branch's schema signature, memoised in NetBox's shared cache.
 
     :func:`schema_signature` is two aggregate queries; running them on every
     GraphQL request is a needless per-request DB tax when the schema almost never
     changes.  The cached value is invalidated event-driven by the receivers in
     :func:`connect_signature_invalidation`, so a change in any worker is reflected
     everywhere on the next request — the same freshness guarantee as polling, at
-    one cache read instead of two DB round-trips.  Falls back to a direct DB read
+    one cache read instead of two DB round-trips.  The key includes the branch
+    identifier so a branch's signature never shadows main's, and the aggregates run
+    under the caller's active branch context.  Falls back to a direct DB read
     whenever the cache is unavailable.
     """
     from django.core.cache import cache
 
+    key = _signature_cache_key(branch_key)
+    _signature_keys_seen.add(key)
     try:
-        cached = cache.get(_SIGNATURE_CACHE_KEY)
+        cached = cache.get(key)
     except Exception:  # noqa: BLE001 - cache down: fall back to the DB
         cached = None
     if cached is not None:
@@ -127,20 +192,46 @@ def cached_schema_signature():
 
     signature = schema_signature()
     try:
-        cache.set(_SIGNATURE_CACHE_KEY, signature, _SIGNATURE_CACHE_TIMEOUT)
+        cache.set(key, signature, _SIGNATURE_CACHE_TIMEOUT)
     except Exception:  # noqa: BLE001 - cache down: just skip memoisation
         pass
     return signature
 
 
 def _invalidate_signature_cache(**kwargs):
-    """Drop the memoised schema signature so the next request recomputes it."""
+    """
+    Drop the memoised schema signature for the branch the change occurred in, so the
+    next request for that branch recomputes it.  The receiver fires inside whatever
+    branch context performed the save/delete, so the active branch is the one to
+    invalidate.
+    """
     from django.core.cache import cache
 
     try:
-        cache.delete(_SIGNATURE_CACHE_KEY)
+        cache.delete(_signature_cache_key(_active_branch_key()))
     except Exception:  # noqa: BLE001 - cache down: the TTL backstop still bounds staleness
         logger.debug("Could not invalidate GraphQL schema signature cache", exc_info=True)
+
+
+def _evict_branch_schema(sender, instance, **kwargs):
+    """
+    Drop a deleted branch's cached schema and signature.
+
+    A branch's schema is cached under its pk in :data:`_schema_cache`; once the
+    branch is gone that entry can never be served again (a request can't reference a
+    deleted branch), so evict it rather than leak it for the life of the process.
+    """
+    branch_key = instance.pk
+    _schema_cache.pop(branch_key, None)  # atomic dict op; no lock needed
+
+    from django.core.cache import cache
+
+    key = _signature_cache_key(branch_key)
+    _signature_keys_seen.discard(key)
+    try:
+        cache.delete(key)
+    except Exception:  # noqa: BLE001 - cache down: the TTL backstop still bounds it
+        logger.debug("Could not evict deleted branch's schema signature", exc_info=True)
 
 
 def connect_signature_invalidation():
@@ -150,8 +241,9 @@ def connect_signature_invalidation():
     Called once from ``CustomObjectsPluginConfig.ready()``.  Creating, deleting,
     or editing any custom object type or field changes the signature; deleting the
     cache key on those events keeps :func:`cached_schema_signature` correct without
-    polling the database per request.  ``dispatch_uid`` makes repeat ``ready()``
-    calls idempotent.
+    polling the database per request.  Deleting a branch evicts that branch's cached
+    schema so it can't leak.  ``dispatch_uid`` makes repeat ``ready()`` calls
+    idempotent.
     """
     from django.db.models.signals import post_delete, post_save
 
@@ -165,6 +257,19 @@ def connect_signature_invalidation():
                 dispatch_uid=f"nco_graphql_sig_{label}_{model.__name__}",
                 weak=False,
             )
+
+    # Evict a branch's cached schema when the branch itself is deleted.  No-op when
+    # netbox-branching is not installed (there are then no branch-keyed entries).
+    try:
+        from netbox_branching.models import Branch
+    except ImportError:
+        return
+    post_delete.connect(
+        _evict_branch_schema,
+        sender=Branch,
+        dispatch_uid="nco_graphql_evict_branch",
+        weak=False,
+    )
 
 
 # NetBox assembles its GraphQL schema once at import and never changes it for the
@@ -221,84 +326,90 @@ def build_full_schema():
 
 def get_live_schema():
     """
-    Return the schema for the current request, rebuilding it if the database has
-    changed since this process last built it.
+    Return the schema for the current request's active branch, rebuilding it if the
+    database has changed since this process last built it for that branch.
+
+    The caller (the view patch, via :func:`graphql_branch_context`) has already
+    scoped the active branch: main unless the request carried the X-NetBox-Branch
+    header.  The signature check, the rebuild, and the query's data resolution
+    therefore all run against that same branch.
 
     Returns ``None`` when dynamic models are unavailable (migrations/tests) or if
     the very first build fails — the caller then falls back to NetBox's static
     schema.
     """
-    global _current
-
     from netbox_custom_objects import CustomObjectsPluginConfig
 
     if CustomObjectsPluginConfig.should_skip_dynamic_model_creation():
         return None
 
-    # Both the signature check and the rebuild run against main: the schema is
-    # main-only and must not be perturbed by branch-local custom object types.
-    with main_branch_context():
-        try:
-            signature = cached_schema_signature()
-        except Exception:  # noqa: BLE001 - DB hiccup
-            logger.warning("Could not compute GraphQL schema signature", exc_info=True)
-            cached_schema = _current[1]
-            if cached_schema is not None:
-                # We already have a (possibly slightly stale) schema — serve it.
-                return cached_schema
-            # First build and even the signature query failed.  Rather than fall
-            # back to NetBox's static schema (which has no custom_objects_* fields
-            # and would reject otherwise-valid queries), make a best-effort first
-            # build under a sentinel signature so the next request re-checks once
-            # the DB recovers.
-            signature = _UNKNOWN_SIGNATURE
+    branch_key = _active_branch_key()
 
-        # Hot path: structure unchanged since this process last built — no lock, no
-        # rebuild, just return the cached schema.
-        sig, schema = _current
+    try:
+        signature = cached_schema_signature(branch_key)
+    except Exception:  # noqa: BLE001 - DB hiccup
+        logger.warning("Could not compute GraphQL schema signature", exc_info=True)
+        cached = _schema_cache.get(branch_key)
+        if cached is not None and cached[1] is not None:
+            # We already have a (possibly slightly stale) schema for this branch.
+            return cached[1]
+        # First build for this branch and even the signature query failed.  Rather
+        # than fall back to NetBox's static schema (which has no custom_objects_*
+        # fields and would reject otherwise-valid queries), make a best-effort first
+        # build under a sentinel signature so the next request re-checks once the DB
+        # recovers.
+        signature = _UNKNOWN_SIGNATURE
+
+    # Hot path: structure unchanged since this process last built for this branch —
+    # no lock, no rebuild, just return the cached schema.
+    entry = _schema_cache.get(branch_key)
+    sig, schema = entry if entry is not None else (None, None)
+    if schema is not None and sig == signature:
+        return schema
+
+    # Structure changed (or first build).  Single-flight: one thread rebuilds while
+    # concurrent requests keep serving the existing schema rather than blocking on
+    # the (potentially expensive) rebuild.  On the *first* build there is no schema
+    # to serve, so a loser must block until the rebuild completes — otherwise it
+    # would fall back to the custom-object-less static schema and spuriously reject
+    # custom_objects_* queries that do resolve.
+    blocking = schema is None
+    if not _rebuild_lock.acquire(blocking=blocking):
+        # Another thread is already rebuilding and we have a valid (one signature
+        # behind) schema to serve in the meantime.
+        return schema
+
+    try:
+        # Re-check: a prior holder may have just published a matching schema for
+        # this branch (always true for the first-build blocker that just waited).
+        entry = _schema_cache.get(branch_key)
+        sig, schema = entry if entry is not None else (None, None)
         if schema is not None and sig == signature:
             return schema
-
-        # Structure changed (or first build).  Single-flight: one thread rebuilds
-        # while concurrent requests keep serving the existing schema rather than
-        # blocking on the (potentially expensive) rebuild.  On the *first* build
-        # there is no schema to serve, so a loser must block until the rebuild
-        # completes — otherwise it would fall back to the custom-object-less static
-        # schema and spuriously reject custom_objects_* queries that do resolve.
-        blocking = schema is None
-        if not _rebuild_lock.acquire(blocking=blocking):
-            # Another thread is already rebuilding and we have a valid (one
-            # signature behind) schema to serve in the meantime.
-            return schema
-
         try:
-            # Re-check: a prior holder may have just published a matching schema
-            # (always true for the first-build blocker that just waited).
-            sig, schema = _current
-            if schema is not None and sig == signature:
-                return schema
-            try:
-                new_schema = build_full_schema()
-            except Exception:  # noqa: BLE001 - never break the endpoint
-                logger.exception("Failed to rebuild live GraphQL schema")
-                return schema
-            _current = (signature, new_schema)
-            return new_schema
-        finally:
-            _rebuild_lock.release()
+            new_schema = build_full_schema()
+        except Exception:  # noqa: BLE001 - never break the endpoint
+            logger.exception("Failed to rebuild live GraphQL schema")
+            return schema
+        _schema_cache[branch_key] = (signature, new_schema)
+        return new_schema
+    finally:
+        _rebuild_lock.release()
 
 
 def reset_cache():
-    """Clear the cached schema, signature, per-type cache, and build state (tests)."""
-    global _current
-    _current = (None, None)
+    """Clear the cached schemas, signatures, per-type cache, and build state (tests)."""
+    global _schema_cache
+    _schema_cache = {}
 
     from django.core.cache import cache
 
-    try:
-        cache.delete(_SIGNATURE_CACHE_KEY)
-    except Exception:  # noqa: BLE001 - cache down: nothing to clear
-        pass
+    for key in list(_signature_keys_seen):
+        try:
+            cache.delete(key)
+        except Exception:  # noqa: BLE001 - cache down: nothing to clear
+            pass
+    _signature_keys_seen.clear()
 
     from .types import clear_type_cache, reset_build_state
 
