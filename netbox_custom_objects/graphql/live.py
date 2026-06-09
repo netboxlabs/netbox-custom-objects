@@ -263,6 +263,14 @@ def build_full_schema():
     return strawberry.Schema(
         query=query_cls,
         config=config,
+        # Built fresh per rebuild on purpose — unlike ``config`` (a read-only
+        # settings object), get_schema_extensions() returns extension *instances*
+        # that strawberry mutates per request (``extension.execution_context = …``).
+        # Each Schema must own its own set; sharing one set across our several live
+        # schemas (main + per branch, plus an old schema still serving in-flight
+        # requests during a rebuild) would let concurrent requests on different
+        # schemas clobber each other's execution context.  This mirrors what NetBox
+        # gets for its own schema, and rebuilds are rare, so the cost is irrelevant.
         extensions=ngs.get_schema_extensions(),
     )
 
