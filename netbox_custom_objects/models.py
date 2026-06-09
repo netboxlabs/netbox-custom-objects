@@ -141,6 +141,8 @@ class CustomObject(
             except AttributeError:
                 primary_field_value = None
         if not primary_field_value:
+            if self.pk is None:  # post-delete: pk is cleared by Django's Model.delete()
+                return str(self.custom_object_type.display_name)
             return f"{self.custom_object_type.display_name} {self.id}"
         return str(primary_field_value) or str(self.id)
 
