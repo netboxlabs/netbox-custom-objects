@@ -571,3 +571,26 @@ class GraphQLPermissionTestCase(CustomObjectsTestCase, TestCase):
         devices = payload["data"]["custom_objects_group_list"][0]["devices"]
         self.assertEqual(len(devices), 1)
         self.assertEqual(devices[0]["id"], str(device.pk))
+
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=["*"])
+    def test_related_anonymous_access_honors_exempt_view_permissions(self):
+        # Anonymous/None traversal must defer to restrict(), exactly like NetBox's
+        # BaseObjectType.get_queryset: when the view is exempt, related objects are
+        # visible, not silently denied.
+        from django.contrib.auth.models import AnonymousUser
+
+        from netbox_custom_objects.graphql.types import _filter_viewable
+
+        self.assertEqual(_filter_viewable(AnonymousUser(), [self.site]), [self.site])
+        self.assertEqual(_filter_viewable(None, [self.site]), [self.site])
+
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=[])
+    def test_related_anonymous_access_denied_without_exemption(self):
+        # And when the view is not exempt, an unauthenticated user sees nothing —
+        # again matching restrict()'s anonymous handling.
+        from django.contrib.auth.models import AnonymousUser
+
+        from netbox_custom_objects.graphql.types import _filter_viewable
+
+        self.assertEqual(_filter_viewable(AnonymousUser(), [self.site]), [])
+        self.assertEqual(_filter_viewable(None, [self.site]), [])

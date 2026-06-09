@@ -196,9 +196,14 @@ def _filter_viewable(user, objects):
     than one ``.exists()`` per object (an N+1 explosion on multi-object fields):
     the related objects are grouped by model and each model's permission-restricted
     queryset is evaluated once with ``pk__in``.
+
+    The user (anonymous or ``None`` included) is passed straight to the model
+    manager's ``restrict(user, "view")``, mirroring NetBox's
+    ``BaseObjectType.get_queryset`` — superuser bypass, ``EXEMPT_VIEW_PERMISSIONS``
+    and anonymous handling are all left to ``restrict``.
     """
     objects = [obj for obj in objects if obj is not None]
-    if user is None or not objects:
+    if not objects:
         return []
     if getattr(user, "is_superuser", False):
         return objects
