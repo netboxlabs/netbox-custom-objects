@@ -386,6 +386,20 @@ class CustomObjectTypeFieldEditView(generic.ObjectEditView):
     form = forms.CustomObjectTypeFieldForm
     template_name = 'netbox_custom_objects/customobjecttypefield_edit.html'
 
+    def alter_object(self, obj, request, url_args, url_kwargs):
+        # For new fields, pre-populate custom_object_type from the request so that the
+        # disabled field has a value for both GET (display) and POST (validation/save).
+        # The normal Add flow passes custom_object_type as a URL query param; the test
+        # harness (PrimaryObjectViewTestCase) passes it in the POST body instead.
+        if not obj.pk:
+            cot_pk = request.GET.get('custom_object_type') or request.POST.get('custom_object_type')
+            if cot_pk:
+                try:
+                    obj.custom_object_type_id = int(cot_pk)
+                except (ValueError, TypeError):
+                    pass
+        return obj
+
     def get_extra_context(self, request, instance):
         return {'branch_bypass_warning': is_in_branch()}
 
