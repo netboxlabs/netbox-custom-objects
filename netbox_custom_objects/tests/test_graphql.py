@@ -15,6 +15,7 @@ Two layers are exercised:
   ``__init__.py``) is built and bound per request, exactly as in production.
 """
 
+import decimal
 import json
 from unittest import mock
 
@@ -383,6 +384,47 @@ class GraphQLEndpointTestCase(CustomObjectsTestCase, TestCase):
         self.assertTrue(rows[0]["active"])
         self.assertEqual(rows[0]["status"], "choice1")
 
+    def test_decimal_field_round_trips(self):
+        # A decimal field is annotated with the stdlib ``decimal.Decimal``, which
+        # Strawberry maps to its built-in Decimal scalar.  Confirm the value
+        # survives the round trip through the GraphQL endpoint with full
+        # precision (Strawberry serializes the scalar to a string).
+        cot = self.create_custom_object_type(name="Product", slug="product")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        self.create_custom_object_type_field(
+            cot, name="price", label="Price", type="decimal"
+        )
+        model = cot.get_model()
+        model.objects.create(name="Widget", price=decimal.Decimal("19.99"))
+
+        data = self._gql("{ custom_objects_product_list { name price } }")
+        rows = data["custom_objects_product_list"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["name"], "Widget")
+        self.assertEqual(decimal.Decimal(str(rows[0]["price"])), decimal.Decimal("19.99"))
+
+    def test_json_field_round_trips(self):
+        # A JSON field is annotated with Strawberry's JSON scalar; confirm a
+        # structured value survives the round trip through the endpoint intact.
+        cot = self.create_custom_object_type(name="Config", slug="config")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        self.create_custom_object_type_field(
+            cot, name="data", label="Data", type="json"
+        )
+        model = cot.get_model()
+        payload_value = {"enabled": True, "ports": [80, 443]}
+        model.objects.create(name="web", data=payload_value)
+
+        data = self._gql("{ custom_objects_config_list { name data } }")
+        rows = data["custom_objects_config_list"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["name"], "web")
+        self.assertEqual(rows[0]["data"], payload_value)
+
     def test_single_object_query_by_id(self):
         cot = self.create_simple_custom_object_type(name="Note", slug="note")
         model = cot.get_model()
@@ -595,6 +637,44 @@ class GraphQLPermissionTestCase(CustomObjectsTestCase, TestCase):
         devices = payload["data"]["custom_objects_group_list"][0]["devices"]
         self.assertEqual(len(devices), 1)
         self.assertEqual(devices[0]["id"], str(device.pk))
+
+    def test_multiobject_related_filtered_to_permitted_subset(self):
+        # The previous tests grant view on the whole model (all-or-nothing).  This
+        # exercises the core security claim at object level: a *constrained*
+        # ObjectPermission must filter related objects to just the permitted subset.
+        manufacturer = Manufacturer.objects.create(name="Mfr", slug="mfr")
+        device_type = DeviceType.objects.create(
+            manufacturer=manufacturer, model="Model", slug="model"
+        )
+        role = DeviceRole.objects.create(name="Role", slug="role")
+        site = Site.objects.create(name="DevSite", slug="devsite")
+        allowed = Device.objects.create(
+            name="allowed", device_type=device_type, role=role, site=site
+        )
+        denied = Device.objects.create(
+            name="denied", device_type=device_type, role=role, site=site
+        )
+        cot = self.create_multi_object_custom_object_type(name="Fleet", slug="fleet")
+        model = cot.get_model()
+        instance = model.objects.create(name="F1")
+        instance.devices.add(allowed, denied)
+
+        self._grant(model, "view-fleet")
+        # View on Device constrained to only the "allowed" device.
+        perm = ObjectPermission(
+            name="view-one-device", actions=["view"], constraints={"name": "allowed"}
+        )
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(Device))
+
+        payload = self._post(
+            "{ custom_objects_fleet_list { name devices { id name } } }"
+        )
+        self.assertNotIn("errors", payload, msg=str(payload.get("errors")))
+        devices = payload["data"]["custom_objects_fleet_list"][0]["devices"]
+        self.assertEqual([d["name"] for d in devices], ["allowed"])
+        self.assertEqual(devices[0]["id"], str(allowed.pk))
 
     @override_settings(EXEMPT_VIEW_PERMISSIONS=["*"])
     def test_related_anonymous_access_honors_exempt_view_permissions(self):
