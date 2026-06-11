@@ -17,7 +17,7 @@ from importlib.metadata import PackageNotFoundError, version as _pkg_version
 
 from django.apps import apps
 from django.conf import settings
-from django.core.checks import Error, register
+from django.core.checks import Error, Warning, register
 from packaging.version import InvalidVersion, Version
 
 
@@ -56,7 +56,20 @@ def check_branching_compatibility(app_configs, **kwargs):
                 hint=f'Upgrade with: pip install "netbox-branching>={REQUIRED_BRANCHING_VERSION}"',
                 id='netbox_custom_objects.E002',
             ))
-    except (PackageNotFoundError, InvalidVersion):
-        pass  # editable install without dist-info — skip rather than warn
+    except PackageNotFoundError:
+        # netbox-branching is an installed app but its distribution metadata
+        # isn't discoverable (e.g. an editable checkout without dist-info), so
+        # the version floor can't be enforced.  Warn rather than silently pass
+        # so an incompatible checkout doesn't slip through unnoticed.
+        errors.append(Warning(
+            'netbox-branching is installed but its version could not be '
+            f'determined, so the >= {REQUIRED_BRANCHING_VERSION} requirement '
+            'cannot be verified.',
+            hint='If using an editable install, ensure its dist-info metadata '
+                 'is present (reinstall with `pip install -e`).',
+            id='netbox_custom_objects.W001',
+        ))
+    except InvalidVersion:
+        pass  # unparseable version string — skip rather than emit a confusing error
 
     return errors
