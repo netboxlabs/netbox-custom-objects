@@ -41,6 +41,7 @@ This documentation covers:
     * Full-text search
     * Change logging
     * Bookmarks
+    * Contacts
     * Custom Links
     * Cloning
     * Import/Export
