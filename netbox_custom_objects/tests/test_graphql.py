@@ -309,13 +309,35 @@ class GraphQLSignalRegistrationTestCase(TestCase):
     ImportError, when Django model classes are imported).
     """
 
+    def _assert_evict_handler_not_registered(self):
+        """
+        Assert that the branch-eviction handler is not registered, using
+        Signal.disconnect() rather than inspecting the undocumented receivers
+        list.  disconnect() is the public API and returns True only when it
+        actually removed something — so if it returns False the handler was
+        never connected (which is the desired outcome).  Calling disconnect()
+        also serves as cleanup: if a prior test or ready() left a stale
+        registration, this removes it without affecting the assertion.
+        """
+        from django.db.models.signals import post_delete
+        was_registered = post_delete.disconnect(dispatch_uid="nco_graphql_evict_branch")
+        self.assertFalse(
+            was_registered,
+            "Branch eviction handler must not be registered when branching is not enabled",
+        )
+
     def test_branching_installed_but_not_enabled_does_not_crash(self):
         # Simulate netbox-branching installed but not in INSTALLED_APPS by
         # patching apps.is_installed to return False for it, then verify that
-        # connect_signature_invalidation() returns without attempting the import.
+        # connect_signature_invalidation() returns without registering the
+        # branch-eviction handler.
         from django.db.models.signals import post_delete
 
         from netbox_custom_objects.graphql.live import connect_signature_invalidation
+
+        # Remove any pre-existing registration (e.g. from ready()) so the test
+        # is self-contained regardless of the environment.
+        post_delete.disconnect(dispatch_uid="nco_graphql_evict_branch")
 
         with mock.patch(
             "netbox_custom_objects.graphql.live.django_apps.is_installed",
@@ -323,24 +345,26 @@ class GraphQLSignalRegistrationTestCase(TestCase):
         ):
             # Must not raise — previously raised RuntimeError here.
             connect_signature_invalidation()
-            # receivers items: ((dispatch_uid, sender_id), receiver, sender_ref, is_async)
-            registered_uids = [r[0][0] for r in post_delete.receivers]
-        self.assertNotIn(
-            "nco_graphql_evict_branch",
-            registered_uids,
-            "Branch eviction handler must not be registered when branching is not enabled",
-        )
+
+        self._assert_evict_handler_not_registered()
 
     def test_branching_not_installed_does_not_crash(self):
         # When netbox-branching is entirely absent, is_installed returns False
-        # and the function must also return cleanly.
+        # for all apps and the function must return cleanly without registering
+        # the branch-eviction handler.
+        from django.db.models.signals import post_delete
+
         from netbox_custom_objects.graphql.live import connect_signature_invalidation
+
+        post_delete.disconnect(dispatch_uid="nco_graphql_evict_branch")
 
         with mock.patch(
             "netbox_custom_objects.graphql.live.django_apps.is_installed",
-            return_value=False,
+            side_effect=lambda app: app != "netbox_branching",
         ):
             connect_signature_invalidation()  # must not raise
+
+        self._assert_evict_handler_not_registered()
 
 
 @override_settings(LOGIN_REQUIRED=True)
