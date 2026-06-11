@@ -42,5 +42,6 @@ nav:
     - Field Attributes: 'field-attributes.md'
     - Branching Support: 'branching.md'
     - REST API: 'rest-api.md'
+    - GraphQL API: 'graphql.md'
     - Portable Schema: 'portable-schema.md'
     - Releases: 'releases.md'

@@ -196,6 +196,56 @@ def _patch_object_selector_view():
     ObjectSelectorView._get_filterset_class = _patched_get_filterset_class
 
 
+_graphql_view_patched = False
+
+
+def _patch_graphql_view():
+    """
+    Patch NetBox's GraphQL view so custom object types appear without a restart.
+
+    NetBox builds its GraphQL schema once at startup and binds it to the view via
+    ``as_view(schema=...)``.  Custom object types are created/deleted at runtime
+    and the app runs across multiple worker processes, so that single bound
+    schema goes stale.  This patch swaps in a per-request, per-process schema
+    that is rebuilt only when the database changes (see
+    :mod:`netbox_custom_objects.graphql.live`).
+
+    Like the ObjectSelectorView patch above, this monkey-patches NetBox because
+    the schema binding leaves no other extension point.  The wrapper is
+    re-decorated with ``csrf_exempt`` because Django copies that marker from
+    ``dispatch.__dict__`` onto the view at ``as_view()`` time (which runs after
+    this patch), and the GraphQL endpoint must accept token-authenticated POSTs.
+    """
+    global _graphql_view_patched
+    if _graphql_view_patched:
+        return
+
+    from django.views.decorators.csrf import csrf_exempt
+    from netbox.graphql.views import NetBoxGraphQLView
+
+    _original_dispatch = NetBoxGraphQLView.dispatch
+
+    @csrf_exempt
+    def _patched_dispatch(self, request, *args, **kwargs):
+        from netbox_custom_objects.graphql.live import get_live_schema
+
+        # netbox-branching has already activated the request's branch (from the
+        # X-NetBox-Branch header, ?_branch=, or the active_branch cookie) — the plugin
+        # imposes no GraphQL-specific branch policy.  get_live_schema builds the
+        # schema for whichever branch is active, so the schema and the data the query
+        # returns agree, and core models resolve exactly as they do without the plugin.
+        try:
+            live_schema = get_live_schema()
+            if live_schema is not None:
+                self.schema = live_schema
+        except Exception:  # noqa: BLE001 - fall back to the static schema
+            logger.warning("Failed to load live GraphQL schema; using static schema", exc_info=True)
+        return _original_dispatch(self, request, *args, **kwargs)
+
+    NetBoxGraphQLView.dispatch = _patched_dispatch
+    _graphql_view_patched = True
+
+
 # Plugin Configuration
 class CustomObjectsPluginConfig(PluginConfig):
     name = "netbox_custom_objects"
@@ -217,6 +267,15 @@ class CustomObjectsPluginConfig(PluginConfig):
     # Resolves dynamic CO models (table{n}model) to on-the-fly serializers —
     # they have no importable path at the conventional location.
     serializer_resolver = "api.serializers.serializer_resolver"
+    # Registers the plugin's GraphQL schema contribution with NetBox.  The export
+    # is intentionally an empty list: custom object types are created/deleted at
+    # runtime, so a query class built once at startup would be immediately stale.
+    # The live, per-request schema is served instead by the GraphQL view patch in
+    # ``_patch_graphql_view`` (see the graphql/schema.py and graphql/live.py module
+    # docstrings).  The path resolves as module ``graphql.schema`` + attribute
+    # ``schema`` (NetBox loads resources via ``import_string``, which treats the
+    # final component as an attribute).
+    graphql_schema = "graphql.schema.schema"
 
     @staticmethod
     def should_skip_dynamic_model_creation():
@@ -326,6 +385,16 @@ class CustomObjectsPluginConfig(PluginConfig):
 
         # Patch ObjectSelectorView to support dynamically-generated custom object models
         _patch_object_selector_view()
+
+        # Patch the GraphQL view so custom object types added/removed at runtime
+        # are reflected in the schema without a NetBox restart.
+        _patch_graphql_view()
+
+        # Keep the live GraphQL schema's signature cache fresh across workers
+        # event-driven, so the per-request hot path reads the cache instead of
+        # polling the database.
+        from .graphql.live import connect_signature_invalidation
+        connect_signature_invalidation()
 
         # Register netbox-branching integration hooks (deferred-data reset
         # receivers, branchable resolver, ObjectChange field-name migrator,

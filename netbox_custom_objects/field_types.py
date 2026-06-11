@@ -1,8 +1,12 @@
+import datetime
+import decimal
 import hashlib
 import json
 import logging
+from typing import List
 
 import django_tables2 as tables
+from strawberry.scalars import JSON
 from django import forms
 from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
@@ -170,6 +174,18 @@ def _make_lazy_cot_fk(cot, field, on_delete, **field_kwargs):
 
 class FieldType:
 
+    # The Python annotation Strawberry should use when exposing this field type
+    # as a scalar GraphQL field.  ``None`` means the type is not exposed as a
+    # plain scalar — relationship types (OBJECT / MULTIOBJECT) are handled by
+    # dedicated resolvers in ``graphql/types.py`` instead.  Co-locating the
+    # GraphQL mapping here (next to the model/serializer/form mappings) keeps the
+    # GraphQL schema in sync automatically: a new field type that needs a scalar
+    # annotation sets it on its own subclass.
+    graphql_annotation = None
+
+    def get_graphql_annotation(self):
+        return self.graphql_annotation
+
     def get_display_value(self, instance, field_name):
         """
         This value is used as the object title in the Custom Object detail view.
@@ -245,6 +261,7 @@ class FieldType:
 
 
 class TextFieldType(FieldType):
+    graphql_annotation = str
 
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
@@ -277,6 +294,8 @@ class TextFieldType(FieldType):
 
 
 class LongTextFieldType(FieldType):
+    graphql_annotation = str
+
     def get_filterform_field(self, field, **kwargs):
         return forms.CharField(
             label=field,
@@ -314,6 +333,7 @@ class LongTextFieldType(FieldType):
 
 
 class IntegerFieldType(FieldType):
+    graphql_annotation = int
 
     def get_model_field(self, field, **kwargs):
         # TODO: handle all args for IntegerField
@@ -337,6 +357,8 @@ class IntegerFieldType(FieldType):
 
 
 class DecimalFieldType(FieldType):
+    graphql_annotation = decimal.Decimal
+
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
@@ -368,6 +390,8 @@ class DecimalFieldType(FieldType):
 
 
 class BooleanFieldType(FieldType):
+    graphql_annotation = bool
+
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
@@ -402,6 +426,8 @@ class BooleanFieldType(FieldType):
 
 
 class DateFieldType(FieldType):
+    graphql_annotation = datetime.date
+
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
@@ -421,6 +447,8 @@ class DateFieldType(FieldType):
 
 
 class DateTimeFieldType(FieldType):
+    graphql_annotation = datetime.datetime
+
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
@@ -440,6 +468,8 @@ class DateTimeFieldType(FieldType):
 
 
 class URLFieldType(FieldType):
+    graphql_annotation = str
+
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
@@ -458,6 +488,8 @@ class URLFieldType(FieldType):
 
 
 class JSONFieldType(FieldType):
+    graphql_annotation = JSON
+
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
@@ -477,6 +509,8 @@ class JSONFieldType(FieldType):
 
 
 class SelectFieldType(FieldType):
+    graphql_annotation = str
+
     def get_display_value(self, instance, field_name):
         value = getattr(instance, field_name)
         if value is None:
@@ -546,6 +580,8 @@ class SelectFieldType(FieldType):
 
 
 class MultiSelectFieldType(FieldType):
+    graphql_annotation = List[str]
+
     def get_filterform_field(self, field, **kwargs):
         choices = field.choice_set.choices
         return DynamicMultipleChoiceField(
