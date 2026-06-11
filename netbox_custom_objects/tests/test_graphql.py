@@ -300,6 +300,49 @@ class GraphQLLiveSchemaTestCase(CustomObjectsTestCase, TestCase):
         self.assertNotIn("custom_objects_temp_type", str(live_module.get_live_schema()))
 
 
+class GraphQLSignalRegistrationTestCase(TestCase):
+    """
+    Regression tests for connect_signature_invalidation() guard logic.
+
+    The function must not crash when netbox-branching is installed in the Python
+    environment but absent from INSTALLED_APPS (which raises RuntimeError, not
+    ImportError, when Django model classes are imported).
+    """
+
+    def test_branching_installed_but_not_enabled_does_not_crash(self):
+        # Simulate netbox-branching installed but not in INSTALLED_APPS by
+        # patching apps.is_installed to return False for it, then verify that
+        # connect_signature_invalidation() returns without attempting the import.
+        from django.db.models.signals import post_delete
+
+        from netbox_custom_objects.graphql.live import connect_signature_invalidation
+
+        with mock.patch(
+            "netbox_custom_objects.graphql.live.django_apps.is_installed",
+            side_effect=lambda app: app != "netbox_branching",
+        ):
+            # Must not raise — previously raised RuntimeError here.
+            connect_signature_invalidation()
+            # receivers items: ((dispatch_uid, sender_id), receiver, sender_ref, is_async)
+            registered_uids = [r[0][0] for r in post_delete.receivers]
+        self.assertNotIn(
+            "nco_graphql_evict_branch",
+            registered_uids,
+            "Branch eviction handler must not be registered when branching is not enabled",
+        )
+
+    def test_branching_not_installed_does_not_crash(self):
+        # When netbox-branching is entirely absent, is_installed returns False
+        # and the function must also return cleanly.
+        from netbox_custom_objects.graphql.live import connect_signature_invalidation
+
+        with mock.patch(
+            "netbox_custom_objects.graphql.live.django_apps.is_installed",
+            return_value=False,
+        ):
+            connect_signature_invalidation()  # must not raise
+
+
 @override_settings(LOGIN_REQUIRED=True)
 class GraphQLEndpointTestCase(CustomObjectsTestCase, TestCase):
     """
