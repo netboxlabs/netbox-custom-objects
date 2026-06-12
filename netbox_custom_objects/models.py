@@ -1028,6 +1028,14 @@ class CustomObjectType(NetBoxModel):
         blank=True,
         help_text=_("Used to group similar custom object types in the navigation menu")
     )
+    changelog_enabled = models.BooleanField(
+        verbose_name=_('changelog enabled'),
+        default=True,
+        help_text=_(
+            "If disabled, changes to objects of this type will not be recorded in the changelog. "
+            "Useful for high-frequency updates where audit history is not required."
+        ),
+    )
     schema_document = models.JSONField(
         blank=True,
         null=True,
@@ -1542,6 +1550,13 @@ class CustomObjectType(NetBoxModel):
             "custom_object_type": self,
             "custom_object_type_id": self.id,
         }
+
+        # If changelog is disabled for this COT, override to_objectchange() so
+        # that NetBox's change-logging signal skips writing ObjectChange rows.
+        # Returning None is safe: core/signals.py guards on
+        # ``objectchange and objectchange.has_changes`` before saving.
+        if not self.changelog_enabled:
+            attrs["to_objectchange"] = lambda self, action: None
 
         # Pass the generating models set to field generation
         fields = []

@@ -331,6 +331,7 @@ class CustomObjectTypeSerializer(NetBoxModelSerializer):
             "slug",
             "version",
             "group_name",
+            "changelog_enabled",
             "description",
             "tags",
             "created",

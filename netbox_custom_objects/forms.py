@@ -61,6 +61,7 @@ class CustomObjectTypeForm(NetBoxModelForm):
             "name", "verbose_name", "verbose_name_plural", "slug",
             "version", "description", "group_name", "tags",
         ),
+        FieldSet("changelog_enabled", name=_("Options")),
     )
     comments = CommentField()
 
@@ -68,7 +69,7 @@ class CustomObjectTypeForm(NetBoxModelForm):
         model = CustomObjectType
         fields = (
             "name", "verbose_name", "verbose_name_plural", "slug", "version", "description",
-            "group_name", "comments", "tags",
+            "group_name", "changelog_enabled", "comments", "tags",
         )
 
 
