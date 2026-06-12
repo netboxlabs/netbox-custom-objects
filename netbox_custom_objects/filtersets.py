@@ -263,6 +263,7 @@ class CustomObjectTypeFilterSet(NetBoxModelFilterSet):
             "id",
             "name",
             "group_name",
+            "changelog_enabled",
         )
 
 

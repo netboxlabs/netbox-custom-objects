@@ -2345,3 +2345,46 @@ class ChangelogEnabledTestCase(CustomObjectsTestCase, TestCase):
         model = cot.get_model()
         instance = model(name="x")
         self.assertIsNone(instance.to_objectchange("create"))
+
+    def test_mid_lifecycle_toggle_disables_changelog(self):
+        """
+        Toggling changelog_enabled from True → False on an existing COT must
+        suppress ObjectChange rows for subsequent saves.  Verifies that the
+        cache_timestamp bump on save() causes get_model() to regenerate the
+        model with the updated override injected.
+        """
+        from core.models import ObjectChange
+        from netbox.context_managers import event_tracking
+
+        cot = self.create_simple_custom_object_type(
+            name="Toggle", slug="toggle", changelog_enabled=True,
+        )
+        model = cot.get_model()
+        request = self._make_request()
+        ct = ContentType.objects.get_for_model(model)
+
+        # Phase 1: changelog enabled — ObjectChange rows must be written.
+        with event_tracking(request):
+            obj_before = model.objects.create(name="before-toggle")
+        self.assertGreater(
+            ObjectChange.objects.filter(changed_object_type=ct, changed_object_id=obj_before.pk).count(),
+            0,
+            "ObjectChange must be written before the toggle",
+        )
+
+        # Toggle off — saving the COT bumps cache_timestamp, which forces
+        # the next get_model() call to regenerate with the disabled override.
+        cot.changelog_enabled = False
+        cot.save()
+
+        # Regenerate the model (as production code does on the next request).
+        model = cot.get_model()
+
+        # Phase 2: changelog disabled — no ObjectChange rows for new saves.
+        with event_tracking(request):
+            obj_after = model.objects.create(name="after-toggle")
+        self.assertEqual(
+            ObjectChange.objects.filter(changed_object_type=ct, changed_object_id=obj_after.pk).count(),
+            0,
+            "ObjectChange must not be written after toggling changelog_enabled=False",
+        )
