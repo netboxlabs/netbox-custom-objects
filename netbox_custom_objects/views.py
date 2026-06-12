@@ -914,7 +914,7 @@ class CustomObjectEditView(generic.ObjectEditView):
             # get_field_value() reads from form.data (bound) or form.initial (unbound).
             for field_name, (ct_sub, obj_sub) in self.custom_object_type_poly_obj_fields.items():
                 ct_id = _get_field_value(self, ct_sub)
-`                if ct_id:
+                if ct_id:
                     try:
                         ct = ContentType.objects.get(pk=ct_id)
                         model_class = ct.model_class()
