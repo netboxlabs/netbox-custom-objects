@@ -1556,7 +1556,7 @@ class CustomObjectType(NetBoxModel):
         # Returning None is safe: core/signals.py guards on
         # ``objectchange and objectchange.has_changes`` before saving.
         if not self.changelog_enabled:
-            attrs["to_objectchange"] = lambda self, action: None
+            attrs["to_objectchange"] = lambda _self, _action: None
 
         # Pass the generating models set to field generation
         fields = []

@@ -983,3 +983,46 @@ class QuickAddViewTestCase(CustomObjectsTestCase, TestCase):
         # No new object created.
         model = self.target_cot.get_model()
         self.assertFalse(model.objects.exists())
+
+
+class ChangelogEnabledViewTestCase(CustomObjectsTestCase, TestCase):
+    """Tests for changelog_enabled UI behaviour on custom object instances."""
+
+    def setUp(self):
+        super().setUp()
+        # Superuser so permission checks don't interfere with template-content assertions.
+        self.user.is_superuser = True
+        self.user.save()
+        self.cot_disabled = self.create_simple_custom_object_type(
+            name="NoLog", slug="nolog-view", changelog_enabled=False,
+        )
+        self.instance = self.cot_disabled.get_model().objects.create(name="obj1")
+
+    def test_changelog_view_returns_404_when_disabled(self):
+        """
+        Hitting the changelog URL for a COT with changelog_enabled=False must
+        return 404 rather than an empty page.
+        """
+        url = reverse(
+            'plugins:netbox_custom_objects:customobject_changelog',
+            kwargs={'custom_object_type': self.cot_disabled.slug, 'pk': self.instance.pk},
+        )
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 404)
+
+    def test_changelog_tab_absent_in_template_when_disabled(self):
+        """
+        The detail view for a custom object whose COT has changelog_enabled=False
+        must not render a Changelog tab link.
+        """
+        url = reverse(
+            'plugins:netbox_custom_objects:customobject',
+            kwargs={'custom_object_type': self.cot_disabled.slug, 'pk': self.instance.pk},
+        )
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(
+            response,
+            'customobject_changelog',
+            msg_prefix="Changelog tab link must be absent when changelog is disabled",
+        )

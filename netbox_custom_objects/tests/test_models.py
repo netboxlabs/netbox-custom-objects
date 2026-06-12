@@ -2262,3 +2262,86 @@ class LazySerializerRegistrationTestCase(CustomObjectsTestCase, TestCase):
                       "building child serializer must not clobber parent's full serializer")
         self.assertIn("title", registered_parent.Meta.fields,
                       "parent's full field set must be intact after child serializer is built")
+
+
+class ChangelogEnabledTestCase(CustomObjectsTestCase, TestCase):
+    """
+    Tests for the changelog_enabled flag on CustomObjectType.
+
+    Verifies that to_objectchange() is suppressed when changelog_enabled=False,
+    and that the generated model still works normally when it is True.
+    """
+
+    def _make_request(self):
+        import uuid
+        from django.test import RequestFactory
+        from django.urls import reverse
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+        return request
+
+    def test_changelog_disabled_suppresses_objectchange(self):
+        """
+        Saving a custom object instance must produce zero ObjectChange rows when
+        the parent COT has changelog_enabled=False.
+        """
+        from core.models import ObjectChange
+        from netbox.context_managers import event_tracking
+
+        cot = self.create_simple_custom_object_type(
+            name="NoLog", slug="nolog", changelog_enabled=False,
+        )
+        model = cot.get_model()
+        request = self._make_request()
+
+        with event_tracking(request):
+            instance = model.objects.create(name="nolog-obj")
+
+        ct = ContentType.objects.get_for_model(model)
+        self.assertEqual(
+            ObjectChange.objects.filter(
+                changed_object_type=ct, changed_object_id=instance.pk,
+            ).count(),
+            0,
+            "ObjectChange must not be written when changelog_enabled=False",
+        )
+
+    def test_changelog_enabled_writes_objectchange(self):
+        """
+        Sanity check: ObjectChange rows are still written when changelog_enabled=True
+        (the default), so the disabled test is not trivially passing due to a broken
+        signal setup.
+        """
+        from core.models import ObjectChange
+        from netbox.context_managers import event_tracking
+
+        cot = self.create_simple_custom_object_type(
+            name="WithLog", slug="withlog", changelog_enabled=True,
+        )
+        model = cot.get_model()
+        request = self._make_request()
+
+        with event_tracking(request):
+            instance = model.objects.create(name="withlog-obj")
+
+        ct = ContentType.objects.get_for_model(model)
+        self.assertGreater(
+            ObjectChange.objects.filter(
+                changed_object_type=ct, changed_object_id=instance.pk,
+            ).count(),
+            0,
+            "ObjectChange must be written when changelog_enabled=True",
+        )
+
+    def test_to_objectchange_returns_none_when_disabled(self):
+        """
+        The injected to_objectchange() override must return None directly,
+        independent of the signal machinery.
+        """
+        cot = self.create_simple_custom_object_type(
+            name="DirectCheck", slug="directcheck", changelog_enabled=False,
+        )
+        model = cot.get_model()
+        instance = model(name="x")
+        self.assertIsNone(instance.to_objectchange("create"))
