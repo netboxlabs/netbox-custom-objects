@@ -8,6 +8,7 @@ from django.contrib import messages
 from django.contrib.contenttypes.models import ContentType
 from django.db import router, transaction
 from django.db.models import ProtectedError, Q, RestrictedError
+from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils.html import escape
@@ -913,7 +914,7 @@ class CustomObjectEditView(generic.ObjectEditView):
             # get_field_value() reads from form.data (bound) or form.initial (unbound).
             for field_name, (ct_sub, obj_sub) in self.custom_object_type_poly_obj_fields.items():
                 ct_id = _get_field_value(self, ct_sub)
-                if ct_id:
+`                if ct_id:
                     try:
                         ct = ContentType.objects.get(pk=ct_id)
                         model_class = ct.model_class()
@@ -1453,6 +1454,11 @@ class CustomObjectChangeLogView(ConditionalLoginRequiredMixin, View):
         object_type = get_object_or_404(
             CustomObjectType, slug=custom_object_type
         )
+
+        # Changelog is disabled for this COT — return 404 rather than an empty page.
+        if not object_type.changelog_enabled:
+            raise Http404
+
         model = object_type.get_model_with_serializer()
 
         # Get the specific object
