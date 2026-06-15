@@ -79,4 +79,9 @@ urlpatterns = [
         views.CustomObjectChangeLogView.as_view(),
         name="customobject_changelog",
     ),
+    path(
+        "<str:custom_object_type>/<int:pk>/contacts/",
+        views.CustomObjectContactsView.as_view(),
+        name="customobject_contacts",
+    ),
 ]

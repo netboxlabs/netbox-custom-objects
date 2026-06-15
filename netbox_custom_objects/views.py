@@ -1412,3 +1412,45 @@ class CustomObjectChangeLogView(ConditionalLoginRequiredMixin, View):
                 "tab": "changelog",
             },
         )
+
+
+class CustomObjectContactsView(ConditionalLoginRequiredMixin, View):
+    """
+    Custom contacts view for CustomObject instances.
+    Shows all contacts assigned to a custom object.
+    """
+
+    tab = ViewTab(
+        label=_("Contacts"),
+        badge=lambda obj: obj.get_contacts().count(),
+        permission="tenancy.view_contactassignment",
+        weight=4500,
+    )
+
+    def get(self, request, custom_object_type, **kwargs):
+        from tenancy.tables import ContactAssignmentTable
+
+        object_type = get_object_or_404(CustomObjectType, slug=custom_object_type)
+        model = object_type.get_model_with_serializer()
+
+        lookup_kwargs = {k: v for k, v in kwargs.items() if k != "custom_object_type"}
+        obj = get_object_or_404(model.objects.all(), **lookup_kwargs)
+
+        contacts = (
+            obj.get_contacts()
+            .restrict(request.user, "view")
+            .order_by("priority", "contact", "role")
+        )
+        table = ContactAssignmentTable(data=contacts, orderable=False)
+        table.configure(request)
+
+        return render(
+            request,
+            "netbox_custom_objects/object_contacts.html",
+            {
+                "object": obj,
+                "table": table,
+                "base_template": "netbox_custom_objects/customobject.html",
+                "tab": "contacts",
+            },
+        )
