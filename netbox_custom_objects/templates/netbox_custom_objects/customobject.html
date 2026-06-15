@@ -10,9 +10,6 @@
 {% load i18n %}
 {% load custom_object_utils %}
 
-{% block extra_controls %}
-{% endblock %}
-
 {% block breadcrumbs %}
 <li class="breadcrumb-item"><a href="{{ object.get_list_url }}">{{ object.custom_object_type.get_verbose_name_plural }}</a></li>
 <li class="breadcrumb-item"><a href="{{ object.custom_object_type.get_absolute_url }}">{{ object.custom_object_type }}</a></li>
@@ -38,6 +35,7 @@
 {% block controls %}
 <div class="btn-list justify-content-end mb-2">
     {% block control-buttons %}
+      {% block extra_controls %}{% endblock %}
       {# Default buttons #}
       {% if perms.extras.add_bookmark and object.bookmarks %}
         {% custom_object_bookmark_button object %}
