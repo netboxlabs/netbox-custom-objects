@@ -19,6 +19,7 @@ __all__ = (
     "CustomObjectTypeFilterSet",
     "NonPolymorphicMultiObjectFilter",
     "NonPolymorphicObjectFilter",
+    "NonPolymorphicObjectIdFilter",
     "PolymorphicMultiObjectFilter",
     "PolymorphicObjectFilter",
     "get_filterset_class",
@@ -167,6 +168,35 @@ class NonPolymorphicObjectFilter(django_filters.Filter):
         if value is None:
             return qs
         return qs.filter(**{f"{self.field_name}_id": value.pk})
+
+
+class NonPolymorphicObjectIdFilter(django_filters.Filter):
+    """
+    Accepts a raw integer PK for a non-polymorphic FK Object field.
+
+    Registered as ``<field_name>_id`` alongside ``NonPolymorphicObjectFilter``
+    (which accepts a model-instance input under ``<field_name>``).  NetBox's
+    Related Objects panel links use the ``_id`` suffix form (e.g.
+    ``?tenant_id=5``), so without this entry those links would silently return
+    unfiltered results (issue #561).
+
+    Uses IntegerField (not ModelChoiceField) so the filter is applied even when
+    the submitted PK doesn't correspond to an existing object.  Inherits from
+    django_filters.Filter (not NumberFilter / ModelChoiceFilter) for the same
+    reason as NonPolymorphicObjectFilter: avoids get_additional_lookups()
+    introspecting _meta after apps.clear_cache().
+    """
+
+    field_class = django_forms.IntegerField
+
+    def __init__(self, **kwargs):
+        kwargs.setdefault("required", False)
+        super().__init__(**kwargs)
+
+    def filter(self, qs, value):
+        if value is None:
+            return qs
+        return qs.filter(**{f"{self.field_name}": value})
 
 
 class NonPolymorphicMultiObjectFilter(django_filters.Filter):
@@ -334,7 +364,7 @@ def build_filter_for_field(field) -> dict:
         for key, value in spec.extra_kwargs.items():
             extra_kwargs[key] = value(field) if callable(value) else value
 
-    return {
+    filters = {
         field.name: spec.build(
             field_name=field.name,
             label=field.label or field.name,
@@ -342,6 +372,18 @@ def build_filter_for_field(field) -> dict:
             **extra_kwargs,
         )
     }
+
+    # For FK Object fields, also register a <field_name>_id filter that accepts
+    # a raw integer PK.  NetBox's Related Objects panel links use the _id suffix
+    # form (e.g. ?tenant_id=5), so without this the links return unfiltered
+    # results even though the filter name is present in the URL (issue #561).
+    if field.type == CustomFieldTypeChoices.TYPE_OBJECT and not field.is_polymorphic:
+        filters[f"{field.name}_id"] = NonPolymorphicObjectIdFilter(
+            field_name=f"{field.name}_id",
+            label=field.label or field.name,
+        )
+
+    return filters
 
 
 def get_filterset_class(model):

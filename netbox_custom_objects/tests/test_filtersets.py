@@ -132,6 +132,19 @@ class ObjectFieldFiltersetTestCase(CustomObjectsTestCase, TestCase):
     def test_no_filter_returns_all(self):
         self.assertEqual(self._filterset({}).qs.count(), 3)
 
+    def test_filter_by_id_suffix_returns_matching_object(self):
+        # Regression for #561: NetBox's Related Objects panel generates
+        # ?<field>_id=N links; the filterset must honour the _id suffix form.
+        pks = list(self._filterset({"device_id": self.device1.pk}).qs.values_list("pk", flat=True))
+        self.assertIn(self.obj_d1.pk, pks)
+        self.assertNotIn(self.obj_d2.pk, pks)
+        self.assertNotIn(self.obj_none.pk, pks)
+
+    def test_filter_by_id_suffix_different_value(self):
+        pks = list(self._filterset({"device_id": self.device2.pk}).qs.values_list("pk", flat=True))
+        self.assertIn(self.obj_d2.pk, pks)
+        self.assertNotIn(self.obj_d1.pk, pks)
+
 
 # ---------------------------------------------------------------------------
 # MultiObjectFieldType.get_filterform_field — form field shape
