@@ -190,6 +190,9 @@ class CustomObjectTypeFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.Pri
     def test_export_objects(self):
         ...
 
+    def test_export_objects_anonymous(self):
+        ...
+
     def test_bulk_edit_objects_with_permission(self):
         ...
 
