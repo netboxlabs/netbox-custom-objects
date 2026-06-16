@@ -590,6 +590,7 @@ class CustomObjectView(generic.ObjectView):
 class CustomObjectEditView(generic.ObjectEditView):
     template_name = "netbox_custom_objects/customobject_edit.html"
     htmx_template_name = "netbox_custom_objects/htmx/edit_fields.html"
+    _CO_QUICK_ADD_TEMPLATE = 'netbox_custom_objects/htmx/co_quick_add.html'
     form = None
     queryset = None
     object = None
@@ -612,6 +613,50 @@ class CustomObjectEditView(generic.ObjectEditView):
     def get_queryset(self, request):
         model = self.object._meta.model
         return model.objects.all()
+
+    def get(self, request, *args, **kwargs):
+        if not request.GET.get('_quickadd'):
+            return super().get(request, *args, **kwargs)
+        # Quick-add GET: the core htmx/quick_add.html uses {% action_url model 'add' %}
+        # which cannot resolve custom object URLs (they require a COT slug).
+        # Use our own template that builds the form action URL from the slug instead.
+        obj = self.get_object(**kwargs)
+        form = self.form(
+            instance=obj,
+            initial=normalize_querydict(request.GET),
+            prefix='quickadd',
+        )
+        restrict_form_fields(form, request.user)
+        return render(request, self._CO_QUICK_ADD_TEMPLATE, {
+            'model': obj._meta.model,
+            'object': obj,
+            'form': form,
+        })
+
+    def post(self, request, *args, **kwargs):
+        if '_quickadd' not in request.POST:
+            return super().post(request, *args, **kwargs)
+        # Quick-add POST: handle success with the standard core template (it works
+        # fine — it only needs object.pk and str(object)), but re-render validation
+        # errors with our custom template instead of the core htmx/quick_add.html.
+        obj = self.get_object(**kwargs)
+        if obj.pk and hasattr(obj, 'snapshot'):
+            obj.snapshot()
+        form = self.form(
+            data=request.POST,
+            files=request.FILES,
+            instance=obj,
+            prefix='quickadd',
+        )
+        restrict_form_fields(form, request.user)
+        if form.is_valid():
+            saved = form.save()
+            return render(request, 'htmx/quick_add_created.html', {'object': saved})
+        return render(request, self._CO_QUICK_ADD_TEMPLATE, {
+            'model': obj._meta.model,
+            'object': obj,
+            'form': form,
+        })
 
     def get_object(self, **kwargs):
         if self.object:
