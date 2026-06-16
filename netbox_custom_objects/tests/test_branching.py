@@ -3118,7 +3118,7 @@ class ChangelogEnabledBranchingTestCase(BranchingTestBase, TransactionTestCase):
         branch = _provision_branch('FKtoNolog', merge_strategy='iterative', user=self.user)
         branch_request = _make_request(self.user)
         with activate_branch(branch), event_tracking(branch_request):
-            a_obj = model_a.objects.create(label='a-obj', ref_b=b_obj)
+            model_a.objects.create(label='a-obj', ref_b=b_obj)
 
         branch.refresh_from_db()
         branch.merge(user=self.user, commit=True)
