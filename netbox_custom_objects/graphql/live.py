@@ -206,11 +206,11 @@ def connect_signature_invalidation():
             )
 
     # Evict a branch's cached schema when the branch itself is deleted.  No-op when
-    # netbox-branching is not installed or not in INSTALLED_APPS.
-    from django.apps import apps as django_apps
-    if not django_apps.is_installed('netbox_branching'):
+    # netbox-branching is not installed (there are then no branch-keyed entries).
+    try:
+        from netbox_branching.models import Branch
+    except ImportError:
         return
-    from netbox_branching.models import Branch
     post_delete.connect(
         _evict_branch_schema,
         sender=Branch,
