@@ -1,15 +1,6 @@
 {% load form_helpers %}
 {% load helpers %}
 {% load i18n %}
-
-{#
-  Quick-add modal for Custom Object instances.
-
-  Mirrors core htmx/quick_add.html but builds the form action URL from the
-  COT slug rather than using {% action_url %}, which cannot resolve custom
-  object URLs (they require a custom_object_type slug path parameter).
-#}
-
 <div class="modal-header">
   <h2 class="modal-title">
     {% trans "Quick Add" %} {{ model|meta:"verbose_name"|bettertitle }}
