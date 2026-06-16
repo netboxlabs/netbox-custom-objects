@@ -3115,13 +3115,13 @@ class ChangelogEnabledBranchingTestCase(BranchingTestBase, TransactionTestCase):
         cot_a.refresh_from_db()
         model_a = cot_a.get_model()
 
-        branch = _provision_branch('FKtoNolog', merge_strategy='rebase', user=self.user)
+        branch = _provision_branch('FKtoNolog', merge_strategy='iterative', user=self.user)
         branch_request = _make_request(self.user)
         with activate_branch(branch), event_tracking(branch_request):
             a_obj = model_a.objects.create(label='a-obj', ref_b=b_obj)
 
         branch.refresh_from_db()
-        branch.merge(self.request)
+        branch.merge(user=self.user, commit=True)
         # Merge succeeded — assert the record exists on main.
         self.assertTrue(model_a.objects.filter(label='a-obj').exists())
 
@@ -3147,7 +3147,7 @@ class ChangelogEnabledBranchingTestCase(BranchingTestBase, TransactionTestCase):
         with event_tracking(self.request):
             model_b.objects.create(label='b-untracked', ref_a=a_obj)
 
-        branch = _provision_branch('NologFKtoRegular', merge_strategy='rebase', user=self.user)
+        branch = _provision_branch('NologFKtoRegular', merge_strategy='iterative', user=self.user)
         branch_request = _make_request(self.user)
         with activate_branch(branch), event_tracking(branch_request):
             # Edit the changelog A object inside the branch.
@@ -3156,7 +3156,7 @@ class ChangelogEnabledBranchingTestCase(BranchingTestBase, TransactionTestCase):
             branch_a.save()
 
         branch.refresh_from_db()
-        branch.merge(self.request)
+        branch.merge(user=self.user, commit=True)
         a_obj.refresh_from_db()
         self.assertEqual(a_obj.label, 'a-edited')
 
@@ -3178,14 +3178,14 @@ class ChangelogEnabledBranchingTestCase(BranchingTestBase, TransactionTestCase):
         cot_a.refresh_from_db()
         model_a = cot_a.get_model()
 
-        branch = _provision_branch('M2MtoNolog', merge_strategy='rebase', user=self.user)
+        branch = _provision_branch('M2MtoNolog', merge_strategy='iterative', user=self.user)
         branch_request = _make_request(self.user)
         with activate_branch(branch), event_tracking(branch_request):
             a_obj = model_a.objects.create(label='a-m2m')
             a_obj.refs_b.set([b1, b2])
 
         branch.refresh_from_db()
-        branch.merge(self.request)
+        branch.merge(user=self.user, commit=True)
         self.assertTrue(model_a.objects.filter(label='a-m2m').exists())
 
     def test_polymorphic_object_field_regular_cot_to_nolog_cot_merges_cleanly(self):
@@ -3210,7 +3210,7 @@ class ChangelogEnabledBranchingTestCase(BranchingTestBase, TransactionTestCase):
         cot_a.refresh_from_db()
         model_a = cot_a.get_model()
 
-        branch = _provision_branch('PolytoNolog', merge_strategy='rebase', user=self.user)
+        branch = _provision_branch('PolytoNolog', merge_strategy='iterative', user=self.user)
         branch_request = _make_request(self.user)
         with activate_branch(branch), event_tracking(branch_request):
             a_obj = model_a.objects.create(label='a-poly')
@@ -3222,5 +3222,5 @@ class ChangelogEnabledBranchingTestCase(BranchingTestBase, TransactionTestCase):
             )
 
         branch.refresh_from_db()
-        branch.merge(self.request)
+        branch.merge(user=self.user, commit=True)
         self.assertTrue(model_a.objects.filter(label='a-poly').exists())
