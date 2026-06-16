@@ -1034,7 +1034,8 @@ class CustomObjectType(NetBoxModel):
         help_text=_(
             "If disabled, changes to objects of this type will not be recorded in the changelog. "
             "Useful for high-frequency updates where audit history is not required. "
-            "Note: disabling changelog also prevents objects of this type from participating in branching."
+            "Note: disabling changelog also prevents objects of this type from participating in branching. "
+            "This setting cannot be changed after the Custom Object Type is created."
         ),
     )
     schema_document = models.JSONField(

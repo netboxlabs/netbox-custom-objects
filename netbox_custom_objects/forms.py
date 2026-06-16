@@ -72,6 +72,17 @@ class CustomObjectTypeForm(NetBoxModelForm):
             "group_name", "changelog_enabled", "comments", "tags",
         )
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        if self.instance and self.instance.pk:
+            # changelog_enabled is locked after creation to prevent mid-lifecycle
+            # branching inconsistencies (objects already in a branch, partial
+            # changelog entries, etc.).
+            self.fields['changelog_enabled'].disabled = True
+            self.fields['changelog_enabled'].help_text = _(
+                "Cannot be changed after creation."
+            )
+
 
 class CustomObjectTypeBulkEditForm(NetBoxModelBulkEditForm):
     description = forms.CharField(

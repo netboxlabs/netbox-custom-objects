@@ -2388,3 +2388,50 @@ class ChangelogEnabledTestCase(CustomObjectsTestCase, TestCase):
             0,
             "ObjectChange must not be written after toggling changelog_enabled=False",
         )
+
+
+class ChangelogEnabledImmutabilityTestCase(CustomObjectsTestCase, TestCase):
+    """
+    changelog_enabled is locked after creation. Tests verify that the API
+    serializer rejects changes and the form disables the field on edit.
+    """
+
+    def test_api_serializer_rejects_change_after_creation(self):
+        from netbox_custom_objects.api.serializers import CustomObjectTypeSerializer
+        from rest_framework.exceptions import ValidationError as DRFValidationError
+
+        cot = self.create_simple_custom_object_type(name="Locked", slug="locked", changelog_enabled=True)
+        serializer = CustomObjectTypeSerializer(instance=cot, data={'changelog_enabled': False}, partial=True)
+        with self.assertRaises(DRFValidationError):
+            serializer.is_valid(raise_exception=True)
+
+    def test_api_serializer_allows_same_value_on_update(self):
+        from netbox_custom_objects.api.serializers import CustomObjectTypeSerializer
+
+        cot = self.create_simple_custom_object_type(name="sameval", slug="sameval", changelog_enabled=True)
+        serializer = CustomObjectTypeSerializer(instance=cot, data={'changelog_enabled': True}, partial=True)
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+
+    def test_api_serializer_allows_setting_on_creation(self):
+        from netbox_custom_objects.api.serializers import CustomObjectTypeSerializer
+
+        data = {
+            'name': 'newcot',
+            'slug': 'newcot',
+            'changelog_enabled': False,
+        }
+        serializer = CustomObjectTypeSerializer(data=data)
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+
+    def test_form_disables_field_on_edit(self):
+        from netbox_custom_objects.forms import CustomObjectTypeForm
+
+        cot = self.create_simple_custom_object_type(name="FormLock", slug="formlock", changelog_enabled=True)
+        form = CustomObjectTypeForm(instance=cot)
+        self.assertTrue(form.fields['changelog_enabled'].disabled)
+
+    def test_form_field_enabled_on_create(self):
+        from netbox_custom_objects.forms import CustomObjectTypeForm
+
+        form = CustomObjectTypeForm()
+        self.assertFalse(form.fields['changelog_enabled'].disabled)

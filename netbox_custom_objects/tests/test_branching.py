@@ -3036,3 +3036,191 @@ class GraphQLBranchEndpointTestCase(BranchingTestBase, TransactionTestCase):
         self.assertEqual(
             [r['name'] for r in main_again['custom_objects_server_list']], ['main-server'],
         )
+
+
+@unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
+class ChangelogEnabledBranchingTestCase(BranchingTestBase, TransactionTestCase):
+    """
+    Verify the branching behaviour of changelog_enabled=False COTs.
+
+    Key invariants:
+    - Objects of a non-changelog COT produce no ObjectChange records, so they
+      are invisible to branching (can't be captured in a branch diff).
+    - Cross-COT object-field references between changelog and non-changelog
+      COTs don't cause errors during branch sync/merge/revert.
+    - Covered: single-object, multi-object, and polymorphic field variants.
+    """
+
+    def _make_changelog_cot(self, name, slug):
+        cot = CustomObjectType.objects.create(name=name, slug=slug, changelog_enabled=True)
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cot, name='label', label='Label',
+            type='text', primary=True, required=True,
+        )
+        return cot
+
+    def _make_nolog_cot(self, name, slug):
+        cot = CustomObjectType.objects.create(name=name, slug=slug, changelog_enabled=False)
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cot, name='label', label='Label',
+            type='text', primary=True, required=True,
+        )
+        return cot
+
+    def _object_type_for(self, cot):
+        return ObjectType.objects.get(
+            app_label='netbox_custom_objects',
+            model=cot.get_table_model_name(cot.id).lower(),
+        )
+
+    def test_nolog_cot_objects_not_captured_in_branch(self):
+        """
+        Objects created inside a branch for a changelog-disabled COT must not
+        appear in the branch's change diff (no ObjectChange rows).
+        """
+        from core.models import ObjectChange
+        nolog = self._make_nolog_cot('NoBranch', 'nobranch')
+        model = nolog.get_model()
+
+        branch = _provision_branch('NoBranch test', user=self.user)
+        branch_request = _make_request(self.user)
+        with activate_branch(branch), event_tracking(branch_request):
+            instance = model.objects.create(label='x')
+            ct = ContentType.objects.get_for_model(model)
+            changes = ObjectChange.objects.filter(
+                changed_object_type=ct,
+                changed_object_id=instance.pk,
+            )
+            self.assertEqual(
+                changes.count(), 0,
+                "Non-changelog COT must not produce ObjectChange rows inside a branch",
+            )
+
+    def test_regular_cot_with_fk_to_nolog_cot_merges_cleanly(self):
+        """
+        Regular COT (A) with an object field pointing at non-changelog COT (B).
+        Creating/editing A objects in a branch (with valid B FK) then merging
+        must not raise.
+        """
+        cot_b = self._make_nolog_cot('NL_B', 'nl-b')
+        model_b = cot_b.get_model()
+        b_obj = model_b.objects.create(label='b-target')
+
+        cot_a = self._make_changelog_cot('CL_A', 'cl-a')
+        cot_a.refresh_from_db()
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cot_a, name='ref_b', label='Ref B',
+            type='object', related_object_type=self._object_type_for(cot_b),
+        )
+        cot_a.refresh_from_db()
+        model_a = cot_a.get_model()
+
+        branch = _provision_branch('FKtoNolog', merge_strategy='rebase', user=self.user)
+        branch_request = _make_request(self.user)
+        with activate_branch(branch), event_tracking(branch_request):
+            a_obj = model_a.objects.create(label='a-obj', ref_b=b_obj)
+
+        branch.refresh_from_db()
+        branch.merge(self.request)
+        # Merge succeeded — assert the record exists on main.
+        self.assertTrue(model_a.objects.filter(label='a-obj').exists())
+
+    def test_nolog_cot_with_fk_to_regular_cot_does_not_break_branch(self):
+        """
+        Non-changelog COT (B) with an object field pointing at regular COT (A).
+        Modifications to A objects (tracked by branch) must not be disrupted by
+        untracked B objects referencing them.
+        """
+        cot_a = self._make_changelog_cot('CL_A2', 'cl-a2')
+        model_a = cot_a.get_model()
+
+        cot_b = self._make_nolog_cot('NL_B2', 'nl-b2')
+        cot_b.refresh_from_db()
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cot_b, name='ref_a', label='Ref A',
+            type='object', related_object_type=self._object_type_for(cot_a),
+        )
+        cot_b.refresh_from_db()
+        model_b = cot_b.get_model()
+
+        a_obj = model_a.objects.create(label='a-main')
+        with event_tracking(self.request):
+            model_b.objects.create(label='b-untracked', ref_a=a_obj)
+
+        branch = _provision_branch('NologFKtoRegular', merge_strategy='rebase', user=self.user)
+        branch_request = _make_request(self.user)
+        with activate_branch(branch), event_tracking(branch_request):
+            # Edit the changelog A object inside the branch.
+            branch_a = model_a.objects.get(pk=a_obj.pk)
+            branch_a.label = 'a-edited'
+            branch_a.save()
+
+        branch.refresh_from_db()
+        branch.merge(self.request)
+        a_obj.refresh_from_db()
+        self.assertEqual(a_obj.label, 'a-edited')
+
+    def test_multiobject_field_regular_cot_to_nolog_cot_merges_cleanly(self):
+        """
+        Regular COT (A) with a multi-object field → non-changelog COT (B).
+        """
+        cot_b = self._make_nolog_cot('NL_BM', 'nl-bm')
+        model_b = cot_b.get_model()
+        b1 = model_b.objects.create(label='b1')
+        b2 = model_b.objects.create(label='b2')
+
+        cot_a = self._make_changelog_cot('CL_AM', 'cl-am')
+        cot_a.refresh_from_db()
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cot_a, name='refs_b', label='Refs B',
+            type='multiobject', related_object_type=self._object_type_for(cot_b),
+        )
+        cot_a.refresh_from_db()
+        model_a = cot_a.get_model()
+
+        branch = _provision_branch('M2MtoNolog', merge_strategy='rebase', user=self.user)
+        branch_request = _make_request(self.user)
+        with activate_branch(branch), event_tracking(branch_request):
+            a_obj = model_a.objects.create(label='a-m2m')
+            a_obj.refs_b.set([b1, b2])
+
+        branch.refresh_from_db()
+        branch.merge(self.request)
+        self.assertTrue(model_a.objects.filter(label='a-m2m').exists())
+
+    def test_polymorphic_object_field_regular_cot_to_nolog_cot_merges_cleanly(self):
+        """
+        Regular COT (A) with a polymorphic object field that includes a
+        non-changelog COT (B) as one of the allowed types.
+        """
+        cot_b = self._make_nolog_cot('NL_BP', 'nl-bp')
+        model_b = cot_b.get_model()
+        b_obj = model_b.objects.create(label='bp-target')
+
+        cot_a = self._make_changelog_cot('CL_AP', 'cl-ap')
+        cot_a.refresh_from_db()
+        poly_field = CustomObjectTypeField.objects.create(
+            custom_object_type=cot_a, name='poly_ref', label='Poly Ref',
+            type='object', is_polymorphic=True,
+        )
+        poly_field.related_object_types.add(
+            self._object_type_for(cot_b),
+            ObjectType.objects.get(app_label='dcim', model='site'),
+        )
+        cot_a.refresh_from_db()
+        model_a = cot_a.get_model()
+
+        branch = _provision_branch('PolytoNolog', merge_strategy='rebase', user=self.user)
+        branch_request = _make_request(self.user)
+        with activate_branch(branch), event_tracking(branch_request):
+            a_obj = model_a.objects.create(label='a-poly')
+            # Set the polymorphic GFK to point at the non-changelog target.
+            ct = ContentType.objects.get_for_model(model_b)
+            a_obj.__class__.objects.filter(pk=a_obj.pk).update(
+                poly_ref_content_type_id=ct.pk,
+                poly_ref_object_id=b_obj.pk,
+            )
+
+        branch.refresh_from_db()
+        branch.merge(self.request)
+        self.assertTrue(model_a.objects.filter(label='a-poly').exists())

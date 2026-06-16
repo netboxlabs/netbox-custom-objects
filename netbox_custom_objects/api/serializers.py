@@ -344,6 +344,15 @@ class CustomObjectTypeSerializer(NetBoxModelSerializer):
         read_only_fields = ("schema_document",)
         brief_fields = ("id", "url", "name", "slug", "description")
 
+    def validate(self, data):
+        # changelog_enabled is locked after creation.
+        if self.instance and self.instance.pk:
+            if 'changelog_enabled' in data and data['changelog_enabled'] != self.instance.changelog_enabled:
+                raise ValidationError({
+                    'changelog_enabled': _("Cannot be changed after creation.")
+                })
+        return super().validate(data)
+
     def get_table_model_name(self, obj):
         return obj.get_table_model_name(obj.id)
 
