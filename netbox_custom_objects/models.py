@@ -1554,11 +1554,20 @@ class CustomObjectType(NetBoxModel):
         }
 
         # If changelog is disabled for this COT, override to_objectchange() so
-        # that NetBox's change-logging signal skips writing ObjectChange rows.
-        # Returning None is safe: core/signals.py guards on
-        # ``objectchange and objectchange.has_changes`` before saving.
+        # that NetBox's change-logging signal skips writing ObjectChange rows
+        # for create/update operations.
+        #
+        # Delete is intentionally allowed through: core/signals.handle_deleted_object
+        # calls objectchange.user = ... unconditionally (no None guard), so returning
+        # None for deletes would crash on deletion.  Deletes are also rare and worth
+        # preserving for audit purposes.  The high-frequency use case this flag targets
+        # is create/update (e.g. nightly fleet scans), not deletion.
         if not self.changelog_enabled:
-            attrs["to_objectchange"] = lambda _self, _action: None
+            def _no_changelog_to_objectchange(_self, _action):
+                if _action == ObjectChangeActionChoices.ACTION_DELETE:
+                    return ChangeLoggingMixin.to_objectchange(_self, _action)
+                return None
+            attrs["to_objectchange"] = _no_changelog_to_objectchange
 
         # Pass the generating models set to field generation
         fields = []

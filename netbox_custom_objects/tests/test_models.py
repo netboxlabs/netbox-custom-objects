@@ -2334,17 +2334,22 @@ class ChangelogEnabledTestCase(CustomObjectsTestCase, TestCase):
             "ObjectChange must be written when changelog_enabled=True",
         )
 
-    def test_to_objectchange_returns_none_when_disabled(self):
+    def test_to_objectchange_returns_none_for_create_update_when_disabled(self):
         """
-        The injected to_objectchange() override must return None directly,
-        independent of the signal machinery.
+        The injected to_objectchange() override must return None for create/update
+        actions but not for delete (the delete signal handler has no None guard).
         """
+        from core.choices import ObjectChangeActionChoices
         cot = self.create_simple_custom_object_type(
             name="DirectCheck", slug="directcheck", changelog_enabled=False,
         )
         model = cot.get_model()
         instance = model(name="x")
-        self.assertIsNone(instance.to_objectchange("create"))
+        self.assertIsNone(instance.to_objectchange(ObjectChangeActionChoices.ACTION_CREATE))
+        self.assertIsNone(instance.to_objectchange(ObjectChangeActionChoices.ACTION_UPDATE))
+        # DELETE must not return None — the delete signal handler calls
+        # objectchange.user = ... unconditionally and would crash.
+        self.assertIsNotNone(instance.to_objectchange(ObjectChangeActionChoices.ACTION_DELETE))
 
     def test_mid_lifecycle_toggle_disables_changelog(self):
         """
