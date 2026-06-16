@@ -626,7 +626,7 @@ class CustomObjectEditView(generic.ObjectEditView):
         # Quick-add GET: the core htmx/quick_add.html uses {% action_url model 'add' %}
         # which cannot resolve custom object URLs (they require a COT slug).
         # Use our own template that builds the form action URL from the slug instead.
-        obj = self.get_object(**kwargs)
+        obj = self.object  # already populated by setup()
         form = self.form(
             instance=obj,
             initial=normalize_querydict(request.GET),
@@ -645,8 +645,8 @@ class CustomObjectEditView(generic.ObjectEditView):
         # Quick-add POST: mirrors the parent's save logic but re-renders validation
         # errors with our custom template instead of the core htmx/quick_add.html
         # (which uses {% action_url model 'add' %} and fails for COT models).
-        logger = logging.getLogger('netbox.views.ObjectEditView')
-        obj = self.get_object(**kwargs)
+        _qa_logger = logging.getLogger('netbox.views.ObjectEditView')
+        obj = self.object  # already populated by setup()
         model = self.queryset.model
 
         if obj.pk and hasattr(obj, 'snapshot'):
@@ -674,13 +674,13 @@ class CustomObjectEditView(generic.ObjectEditView):
                     'Created' if object_created else 'Modified',
                     model._meta.verbose_name,
                 )
-                logger.info(f"{msg} {obj} (PK: {obj.pk})")
+                _qa_logger.info(f"{msg} {obj} (PK: {obj.pk})")
                 if hasattr(obj, 'get_absolute_url'):
                     msg = mark_safe(f'{msg} <a href="{obj.get_absolute_url()}">{escape(obj)}</a>')
                 messages.success(request, msg)
                 return render(request, 'htmx/quick_add_created.html', {'object': obj})
             except (AbortRequest, PermissionsViolation) as e:
-                logger.debug(e.message)
+                _qa_logger.debug(e.message)
                 form.add_error(None, e.message)
                 clear_events.send(sender=self)
 
