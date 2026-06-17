@@ -22,7 +22,7 @@ from packaging.version import InvalidVersion, Version
 
 
 # Version floors enforced only when netbox-branching is installed.
-REQUIRED_NETBOX_VERSION = '4.6.2'
+REQUIRED_NETBOX_VERSION_FOR_BRANCHING = '4.6.2'
 REQUIRED_BRANCHING_VERSION = '1.0.4'
 
 
@@ -36,9 +36,9 @@ def check_branching_compatibility(app_configs, **kwargs):
 
     try:
         netbox_version = Version(settings.RELEASE.version)
-        if netbox_version < Version(REQUIRED_NETBOX_VERSION):
+        if netbox_version < Version(REQUIRED_NETBOX_VERSION_FOR_BRANCHING):
             errors.append(Error(
-                f'netbox-custom-objects requires NetBox >= {REQUIRED_NETBOX_VERSION} '
+                f'netbox-custom-objects requires NetBox >= {REQUIRED_NETBOX_VERSION_FOR_BRANCHING} '
                 f'when netbox-branching is installed (detected {netbox_version}).',
                 hint='Upgrade NetBox, or remove netbox-branching from PLUGINS '
                      'if you do not need branching support for custom objects.',
