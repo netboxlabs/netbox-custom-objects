@@ -2307,19 +2307,33 @@ class DisplayExpressionTestCase(CustomObjectsTestCase, TestCase):
         # When an optional field is blank, the expression renders a dangling
         # separator unless the template guards it.  Verify both behaviours so
         # the documented {% if %} pattern is regression-tested.
-        cot_bare = self.create_custom_object_type(name='SepBare', slug='sep-bare', display_expression='{{ make }} / {{ model }}')
-        self.create_custom_object_type_field(cot_bare, name='make', label='Make', type='text', primary=True, required=True)
-        self.create_custom_object_type_field(cot_bare, name='model', label='Model', type='text', required=False)
+        cot_bare = self.create_custom_object_type(
+            name='SepBare', slug='sep-bare',
+            display_expression='{{ make }} / {{ model }}',
+        )
+        self.create_custom_object_type_field(
+            cot_bare, name='make', label='Make', type='text', primary=True, required=True,
+        )
+        self.create_custom_object_type_field(
+            cot_bare, name='model', label='Model', type='text', required=False,
+        )
 
-        cot_guarded = self.create_custom_object_type(name='SepGuarded', slug='sep-guarded', display_expression='{{ make }}{% if model %} / {{ model }}{% endif %}')
-        self.create_custom_object_type_field(cot_guarded, name='make', label='Make', type='text', primary=True, required=True)
-        self.create_custom_object_type_field(cot_guarded, name='model', label='Model', type='text', required=False)
+        guarded_expr = '{{ make }}{% if model %} / {{ model }}{% endif %}'
+        cot_guarded = self.create_custom_object_type(
+            name='SepGuarded', slug='sep-guarded', display_expression=guarded_expr,
+        )
+        self.create_custom_object_type_field(
+            cot_guarded, name='make', label='Make', type='text', primary=True, required=True,
+        )
+        self.create_custom_object_type_field(
+            cot_guarded, name='model', label='Model', type='text', required=False,
+        )
 
         model_bare = cot_bare.get_model()
         model_guarded = cot_guarded.get_model()
 
         bare_instance = model_bare.objects.create(make='Arista')       # model is blank
-        guarded_instance = model_guarded.objects.create(make='Arista') # model is blank
+        guarded_instance = model_guarded.objects.create(make='Arista')  # model is blank
 
         self.assertEqual(str(bare_instance), 'Arista /')       # trailing separator
         self.assertEqual(str(guarded_instance), 'Arista')      # cleaned up with {% if %}
