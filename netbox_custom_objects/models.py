@@ -1,5 +1,6 @@
 import contextvars
 import decimal
+import functools
 import logging
 import re
 import threading
@@ -79,6 +80,12 @@ from netbox_custom_objects.utilities import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@functools.lru_cache(maxsize=256)
+def _compile_display_template(expression: str):
+    """Compile a Jinja2 display expression once and cache by expression string."""
+    return _JinjaSandbox(undefined=_JinjaUndefined).from_string(expression)
 
 
 class UniquenessConstraintTestError(Exception):
@@ -800,24 +807,15 @@ class CustomObject(
         return _Deserialized()
 
     def _render_display_expression(self):
-        """
-        Render the COT's Jinja2 display_expression with this object's field
-        values as context.  Returns the stripped result, or None if the
-        expression is empty, renders to an empty string, or raises any error.
-        A sandboxed environment is used so arbitrary template code cannot escape.
-
-        Performance note: this iterates every field and calls get_display_value()
-        on each, so it runs on every str(obj) call — including list views.  The
-        cost is opt-in (only when display_expression is set), but if it becomes a
-        bottleneck a natural optimisation would be to cache the compiled template
-        and/or the context-building logic on the model class, similar to how
-        _primary_field_id is already cached there.
-        """
-        expression = getattr(self.custom_object_type, 'display_expression', '')
-        if not expression:
-            return None
+        """Render the COT display_expression; return stripped result or None."""
+        # All access inside the try so any exception (including RelatedObjectDoesNotExist
+        # from custom_object_type access) falls through to the primary-field fallback.
+        # Template compilation is cached via _compile_display_template (LRU, keyed by
+        # expression string) so list views with N rows incur only one compilation.
         try:
-            env = _JinjaSandbox(undefined=_JinjaUndefined)
+            expression = getattr(self.custom_object_type, 'display_expression', '')
+            if not expression:
+                return None
             ctx = {}
             for field_info in self._field_objects.values():
                 field_name = field_info["name"]
@@ -826,7 +824,7 @@ class CustomObject(
                     ctx[field_name] = field_type.get_display_value(self, field_name)
                 except Exception:  # noqa: BLE001
                     ctx[field_name] = ''
-            rendered = env.from_string(expression).render(**ctx).strip()
+            rendered = _compile_display_template(expression).render(**ctx).strip()
             return rendered or None
         except Exception:  # noqa: BLE001
             return None
@@ -1075,6 +1073,8 @@ class CustomObjectType(NetBoxModel):
         help_text=_(
             "Optional Jinja2 template for the object display name. "
             "Reference field values by name, e.g. <code>{{ name }} - {{ manufacturer }}</code>. "
+            "Undefined fields resolve to an empty string — use "
+            "<code>{% if field %}{{ field }}{% endif %}</code> to suppress trailing separators. "
             "Leave blank to use the field marked as primary name field, if any."
         ),
     )
