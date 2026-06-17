@@ -805,6 +805,13 @@ class CustomObject(
         values as context.  Returns the stripped result, or None if the
         expression is empty, renders to an empty string, or raises any error.
         A sandboxed environment is used so arbitrary template code cannot escape.
+
+        Performance note: this iterates every field and calls get_display_value()
+        on each, so it runs on every str(obj) call — including list views.  The
+        cost is opt-in (only when display_expression is set), but if it becomes a
+        bottleneck a natural optimisation would be to cache the compiled template
+        and/or the context-building logic on the model class, similar to how
+        _primary_field_id is already cached there.
         """
         expression = getattr(self.custom_object_type, 'display_expression', '')
         if not expression:
