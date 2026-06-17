@@ -1068,7 +1068,7 @@ class CustomObjectType(NetBoxModel):
         help_text=_(
             "Optional Jinja2 template for the object display name. "
             "Reference field values by name, e.g. <code>{{ name }} - {{ manufacturer }}</code>. "
-            "Leave blank to use the field marked as primary."
+            "Leave blank to use the field marked as primary name field, if any."
         ),
     )
     schema_document = models.JSONField(
