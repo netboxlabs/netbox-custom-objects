@@ -57,11 +57,12 @@ class CustomObjectTypeForm(NetBoxModelForm):
     )
 
     fieldsets = (
+        FieldSet("name"),
         FieldSet(
-            "name", "verbose_name", "verbose_name_plural", "slug",
-            "version", "description", "group_name", "tags",
+            "verbose_name", "verbose_name_plural", "display_expression", "group_name",
+            name=_("Display"),
         ),
-        FieldSet("display_expression", name=_("Display")),
+        FieldSet("slug", "version", "description", "tags"),
     )
     comments = CommentField()
 
