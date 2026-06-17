@@ -3073,6 +3073,39 @@ class ChangelogEnabledBranchingTestCase(BranchingTestBase, TransactionTestCase):
             model=cot.get_table_model_name(cot.id).lower(),
         )
 
+    def test_nolog_cot_objects_visible_in_main_when_created_in_branch(self):
+        """
+        Regression for Arthur's reported scenario: objects of a non-changelog COT
+        created while a branch is active must be visible in main, because the
+        supports_branching_resolver returns False for these models and the DB
+        router writes them directly to the default schema.
+
+        Steps:
+          1. Create 'aaa' in main (no branch active)
+          2. Activate a branch
+          3. Create 'bbb' while the branch is active
+          4. Switch back to main — both 'aaa' and 'bbb' must be visible
+        """
+        nolog = self._make_nolog_cot('VisMain', 'vismain')
+        model = nolog.get_model()
+
+        with event_tracking(self.request):
+            model.objects.create(label='aaa')
+
+        branch = _provision_branch('VisMain branch', user=self.user)
+        branch_request = _make_request(self.user)
+        with activate_branch(branch), event_tracking(branch_request):
+            model.objects.create(label='bbb')
+
+        # Back in main: both objects must be visible.
+        labels = set(model.objects.values_list('label', flat=True))
+        self.assertIn('aaa', labels, "Object created in main must be visible in main")
+        self.assertIn(
+            'bbb', labels,
+            "Object created in branch context for non-changelog COT must be visible "
+            "in main (branch router exempts it; writes go directly to default DB)",
+        )
+
     def test_nolog_cot_objects_not_captured_in_branch(self):
         """
         Objects created inside a branch for a changelog-disabled COT must not

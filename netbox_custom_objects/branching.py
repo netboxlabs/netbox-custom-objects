@@ -5,19 +5,36 @@ Registered from ``__init__.ready()`` only when netbox-branching is installed.
 
 
 def supports_branching_resolver(model):
-    """Mark CustomObject M2M through models as branchable.
+    """Branching support resolver for Custom Object models.
 
-    Through models are plain ``models.Model`` subclasses (no ChangeLoggingMixin),
-    so the default heuristic would route their queries to main even inside a
-    branch — and the FK to the parent CO would resolve against main's rows.
-    Returning ``True`` pulls them into the branch connection routing.
+    Two cases handled:
+
+    1. **M2M through models** — plain ``models.Model`` subclasses with no
+       ``ChangeLoggingMixin``, so the default heuristic would route their
+       queries to main even inside a branch.  Return ``True`` to pull them
+       into branch routing (their parent CO FK must resolve within the branch).
+
+    2. **Non-changelog COT models** — when ``changelog_enabled=False`` on the
+       parent ``CustomObjectType``, the model has no change tracking and must
+       not be isolated to a branch schema.  Objects created in a branch context
+       should land in main (always visible regardless of active branch), matching
+       the high-frequency / non-audited use case this flag is designed for.
+       Return ``False`` to route all reads/writes to the default DB.
     """
     meta = getattr(model, '_meta', None)
     if meta is None or meta.app_label != 'netbox_custom_objects':
         return None
     name = meta.model_name or ''
+
+    # M2M through models: opt in to branching.
     if name.startswith('through_custom_objects_'):
         return True
+
+    # Generated COT models: opt out of branching when changelog is disabled.
+    cot = getattr(model, 'custom_object_type', None)
+    if cot is not None and not getattr(cot, 'changelog_enabled', True):
+        return False
+
     return None
 
 
