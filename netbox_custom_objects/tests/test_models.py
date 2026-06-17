@@ -2262,3 +2262,43 @@ class LazySerializerRegistrationTestCase(CustomObjectsTestCase, TestCase):
                       "building child serializer must not clobber parent's full serializer")
         self.assertIn("title", registered_parent.Meta.fields,
                       "parent's full field set must be intact after child serializer is built")
+
+
+class DisplayExpressionTestCase(CustomObjectsTestCase, TestCase):
+    """Tests for CustomObjectType.display_expression Jinja2 rendering."""
+
+    def _make_cot(self, expression=''):
+        cot = self.create_custom_object_type(
+            name='ExprTest', slug='expr-test', display_expression=expression,
+        )
+        self.create_custom_object_type_field(cot, name='make', label='Make', type='text', primary=True, required=True)
+        self.create_custom_object_type_field(cot, name='model', label='Model', type='text', required=False)
+        return cot
+
+    def test_expression_renders_composite_name(self):
+        cot = self._make_cot('{{ make }} - {{ model }}')
+        instance = cot.get_model().objects.create(make='Cisco', model='ASR1001')
+        self.assertEqual(str(instance), 'Cisco - ASR1001')
+
+    def test_expression_with_missing_field_renders_empty_string(self):
+        # Fields referenced in the expression but not present render as ''
+        cot = self._make_cot('{{ make }} / {{ nonexistent }}')
+        instance = cot.get_model().objects.create(make='Juniper')
+        self.assertEqual(str(instance), 'Juniper /')
+
+    def test_empty_expression_falls_back_to_primary_field(self):
+        cot = self._make_cot('')
+        instance = cot.get_model().objects.create(make='Arista', model='7050')
+        self.assertEqual(str(instance), 'Arista')
+
+    def test_expression_rendering_error_falls_back_to_primary_field(self):
+        # Invalid Jinja2 syntax must not raise — fall back silently
+        cot = self._make_cot('{% invalid jinja %}')
+        instance = cot.get_model().objects.create(make='HP')
+        self.assertEqual(str(instance), 'HP')
+
+    def test_expression_empty_result_falls_back_to_primary_field(self):
+        # Expression that renders to empty string falls back
+        cot = self._make_cot('{{ nonexistent }}')
+        instance = cot.get_model().objects.create(make='Dell')
+        self.assertEqual(str(instance), 'Dell')

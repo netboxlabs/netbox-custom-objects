@@ -5,6 +5,9 @@ import re
 import threading
 from datetime import date, datetime
 
+from jinja2 import Undefined as _JinjaUndefined
+from jinja2.sandbox import SandboxedEnvironment as _JinjaSandbox
+
 from packaging.version import Version, InvalidVersion
 
 import django_filters
@@ -796,8 +799,38 @@ class CustomObject(
 
         return _Deserialized()
 
+    def _render_display_expression(self):
+        """
+        Render the COT's Jinja2 display_expression with this object's field
+        values as context.  Returns the stripped result, or None if the
+        expression is empty, renders to an empty string, or raises any error.
+        A sandboxed environment is used so arbitrary template code cannot escape.
+        """
+        expression = getattr(self.custom_object_type, 'display_expression', '')
+        if not expression:
+            return None
+        try:
+            env = _JinjaSandbox(undefined=_JinjaUndefined)
+            ctx = {}
+            for field_info in self._field_objects.values():
+                field_name = field_info["name"]
+                field_type = FIELD_TYPE_CLASS[field_info["field"].type]()
+                try:
+                    ctx[field_name] = field_type.get_display_value(self, field_name)
+                except Exception:  # noqa: BLE001
+                    ctx[field_name] = ''
+            rendered = env.from_string(expression).render(**ctx).strip()
+            return rendered or None
+        except Exception:  # noqa: BLE001
+            return None
+
     def __str__(self):
-        # Find the field with primary=True and return that field's "name" as the name of the object
+        # If the COT defines a Jinja2 display expression, try that first.
+        rendered = self._render_display_expression()
+        if rendered:
+            return rendered
+
+        # Fall back to single-primary-field display name.
         primary_field = self._field_objects.get(self._primary_field_id, None)
         primary_field_value = None
         if primary_field:
@@ -1027,6 +1060,16 @@ class CustomObjectType(NetBoxModel):
         db_index=True,
         blank=True,
         help_text=_("Used to group similar custom object types in the navigation menu")
+    )
+    display_expression = models.CharField(
+        max_length=500,
+        blank=True,
+        verbose_name=_('display expression'),
+        help_text=_(
+            "Optional Jinja2 template for the object display name. "
+            "Reference field values by name, e.g. <code>{{ name }} - {{ manufacturer }}</code>. "
+            "Leave blank to use the field marked as primary."
+        ),
     )
     schema_document = models.JSONField(
         blank=True,
