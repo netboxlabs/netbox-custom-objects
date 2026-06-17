@@ -821,7 +821,8 @@ class CustomObject(
                 field_name = field_info["name"]
                 field_type = FIELD_TYPE_CLASS[field_info["field"].type]()
                 try:
-                    ctx[field_name] = field_type.get_display_value(self, field_name)
+                    value = field_type.get_display_value(self, field_name)
+                    ctx[field_name] = '' if value is None else value
                 except Exception:  # noqa: BLE001
                     ctx[field_name] = ''
             rendered = _compile_display_template(expression).render(**ctx).strip()
