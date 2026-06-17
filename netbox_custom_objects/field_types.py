@@ -19,6 +19,7 @@ from django.db.utils import OperationalError, ProgrammingError
 from django.db.models.fields.related import ForeignKey, ManyToManyDescriptor
 from django.db.models.manager import Manager
 from django.db.models.signals import m2m_changed
+from django.urls import reverse
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
@@ -785,6 +786,17 @@ class ObjectFieldType(FieldType):
             )
             if has_context:
                 form_field.widget.attrs['ts-parent-field'] = '_context'
+            # Enable quick-add for custom object targets: set quick_add_context
+            # directly on the widget (bypassing DynamicModelChoiceMixin.get_bound_field
+            # which uses get_action_url, a tag that can't resolve COT URLs).
+            if content_type.app_label == APP_LABEL:
+                form_field.widget.quick_add_context = {
+                    'url': reverse(
+                        'plugins:netbox_custom_objects:customobject_add',
+                        kwargs={'custom_object_type': custom_object_type.slug},
+                    ),
+                    'params': {},
+                }
             return form_field
 
     def get_filterform_field(self, field, **kwargs):
@@ -1371,6 +1383,14 @@ class MultiObjectFieldType(FieldType):
             )
             if has_context:
                 form_field.widget.attrs['ts-parent-field'] = '_context'
+            if content_type.app_label == APP_LABEL:
+                form_field.widget.quick_add_context = {
+                    'url': reverse(
+                        'plugins:netbox_custom_objects:customobject_add',
+                        kwargs={'custom_object_type': custom_object_type.slug},
+                    ),
+                    'params': {},
+                }
             return form_field
 
     def get_display_value(self, instance, field_name):

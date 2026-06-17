@@ -1,13 +1,19 @@
 import logging
 
 from core.models import ObjectChange
+from core.signals import clear_events
 from core.tables import ObjectChangeTable
 from django.apps import apps as django_apps
+from django.contrib import messages
 from django.contrib.contenttypes.models import ContentType
+from django.db import router, transaction
 from django.db.models import ProtectedError, Q, RestrictedError
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
+from django.utils.html import escape
+from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
+from utilities.exceptions import AbortRequest, PermissionsViolation
 from django.views.generic import View
 from extras.choices import CustomFieldUIVisibleChoices
 from extras.forms import JournalEntryForm
@@ -590,6 +596,7 @@ class CustomObjectView(generic.ObjectView):
 class CustomObjectEditView(generic.ObjectEditView):
     template_name = "netbox_custom_objects/customobject_edit.html"
     htmx_template_name = "netbox_custom_objects/htmx/edit_fields.html"
+    _CO_QUICK_ADD_TEMPLATE = 'netbox_custom_objects/htmx/co_quick_add.html'
     form = None
     queryset = None
     object = None
@@ -612,6 +619,76 @@ class CustomObjectEditView(generic.ObjectEditView):
     def get_queryset(self, request):
         model = self.object._meta.model
         return model.objects.all()
+
+    def get(self, request, *args, **kwargs):
+        if not request.GET.get('_quickadd'):
+            return super().get(request, *args, **kwargs)
+        # Quick-add GET: the core htmx/quick_add.html uses {% action_url model 'add' %}
+        # which cannot resolve custom object URLs (they require a COT slug).
+        # Use our own template that builds the form action URL from the slug instead.
+        obj = self.object  # already populated by setup()
+        form = self.form(
+            instance=obj,
+            initial=normalize_querydict(request.GET),
+            prefix='quickadd',
+        )
+        restrict_form_fields(form, request.user)
+        return render(request, self._CO_QUICK_ADD_TEMPLATE, {
+            'model': obj._meta.model,
+            'object': obj,
+            'form': form,
+        })
+
+    def post(self, request, *args, **kwargs):
+        if '_quickadd' not in request.POST:
+            return super().post(request, *args, **kwargs)
+        # Quick-add POST: mirrors the parent's save logic but re-renders validation
+        # errors with our custom template instead of the core htmx/quick_add.html
+        # (which uses {% action_url model 'add' %} and fails for COT models).
+        _qa_logger = logging.getLogger('netbox.views.ObjectEditView')
+        obj = self.object  # already populated by setup()
+        model = self.queryset.model
+
+        if obj.pk and hasattr(obj, 'snapshot'):
+            obj.snapshot()
+
+        obj = self.alter_object(obj, request, args, kwargs)
+
+        form = self.form(
+            data=request.POST,
+            files=request.FILES,
+            instance=obj,
+            prefix='quickadd',
+        )
+        restrict_form_fields(form, request.user)
+
+        if form.is_valid():
+            obj._changelog_message = form.cleaned_data.pop('changelog_message', '')
+            try:
+                with transaction.atomic(using=router.db_for_write(model)):
+                    object_created = form.instance.pk is None
+                    obj = form.save()
+                    if not self.queryset.filter(pk=obj.pk).exists():
+                        raise PermissionsViolation()
+                msg = '{} {}'.format(
+                    'Created' if object_created else 'Modified',
+                    model._meta.verbose_name,
+                )
+                _qa_logger.info(f"{msg} {obj} (PK: {obj.pk})")
+                if hasattr(obj, 'get_absolute_url'):
+                    msg = mark_safe(f'{msg} <a href="{obj.get_absolute_url()}">{escape(obj)}</a>')
+                messages.success(request, msg)
+                return render(request, 'htmx/quick_add_created.html', {'object': obj})
+            except (AbortRequest, PermissionsViolation) as e:
+                _qa_logger.debug(e.message)
+                form.add_error(None, e.message)
+                clear_events.send(sender=self)
+
+        return render(request, self._CO_QUICK_ADD_TEMPLATE, {
+            'model': obj._meta.model,
+            'object': obj,
+            'form': form,
+        })
 
     def get_object(self, **kwargs):
         if self.object:
