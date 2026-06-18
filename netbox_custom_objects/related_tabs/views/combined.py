@@ -16,9 +16,9 @@ from netbox.context import current_request
 from netbox.registry import registry
 from netbox.tables import BaseTable
 from netbox_custom_objects.models import CustomObjectTypeField
+from netbox_custom_objects.utilities import restrict_to_viewable
 from utilities.htmx import htmx_partial
 from utilities.paginator import EnhancedPaginator, get_paginate_count
-from utilities.permissions import get_permission_for_model
 from utilities.views import ConditionalLoginRequiredMixin, ViewTab, register_model_view
 
 logger = logging.getLogger('netbox_custom_objects.related_tabs')
@@ -53,11 +53,6 @@ def _restrict_or_warn(qs, user, *, label):
     except AttributeError:
         logger.warning('%s lacks restrict(user, view); per-row permission filter skipped', label)
         return qs
-
-
-def _user_can_view(user, obj):
-    """Per-object 'view' permission check — works for heterogeneous polymorphic targets."""
-    return user.has_perm(get_permission_for_model(obj, 'view'), obj)
 
 
 def _unique_sorted(items, *, key, sort_key):
@@ -323,7 +318,7 @@ def _get_field_value(obj, field, user=None):
     matching the per-row ``.restrict`` applied to the linked rows themselves.
     Non-polymorphic targets are a queryset (filtered in SQL via ``.restrict``);
     polymorphic targets are a plain result list spanning several models, filtered
-    per object via ``_user_can_view``.
+    via ``restrict_to_viewable``.
     """
     if field.type == CustomFieldTypeChoices.TYPE_OBJECT:
         return getattr(obj, field.name, None)
@@ -337,8 +332,8 @@ def _get_field_value(obj, field, user=None):
                 qs = qs.restrict(user, 'view')
             except AttributeError:
                 # Polymorphic targets: not a queryset (no .restrict) — filter the
-                # heterogeneous result list per object, then truncate.
-                return [o for o in qs if _user_can_view(user, o)][: _MAX_MULTIOBJECT_DISPLAY + 1]
+                # heterogeneous result list, then truncate.
+                return restrict_to_viewable(user, list(qs))[: _MAX_MULTIOBJECT_DISPLAY + 1]
         return list(qs[: _MAX_MULTIOBJECT_DISPLAY + 1])
     return None
 
@@ -355,7 +350,7 @@ def _batch_multiobject_values(pairs, user=None):
     Returns ``{(id(obj), id(field)): [targets up to _MAX_MULTIOBJECT_DISPLAY+1]}``.
     OBJECT and polymorphic MULTIOBJECT rows are absent — they stay on the per-row
     path (the polymorphic manager isn't prefetchable and self-batches per type).
-    Targets are permission-filtered in Python via ``_user_can_view``; prefetch
+    Targets are permission-filtered via ``restrict_to_viewable``; prefetch
     fetches every target per row, not just the displayed slice — fine for the cap.
     """
     groups = defaultdict(list)
@@ -371,12 +366,21 @@ def _batch_multiobject_values(pairs, user=None):
         # One prefetch per (model, field) group; objs are homogeneous because the
         # same field object is reused across all of its rows (see _iter_linked_fields).
         prefetch_related_objects(objs, field.name)
+        per_obj_targets = {
+            id(obj): list(getattr(obj, '_prefetched_objects_cache', {}).get(field.name, []))
+            for obj in objs
+        }
+        if user is not None:
+            # All targets in the group share one model (non-polymorphic field), so a
+            # single restrict_to_viewable() resolves the whole group in one query.
+            all_targets = [t for targets in per_obj_targets.values() for t in targets]
+            viewable_pks = {t.pk for t in restrict_to_viewable(user, all_targets)}
+            per_obj_targets = {
+                oid: [t for t in targets if t.pk in viewable_pks]
+                for oid, targets in per_obj_targets.items()
+            }
         for obj in objs:
-            cache = getattr(obj, '_prefetched_objects_cache', {})
-            targets = list(cache.get(field.name, []))
-            if user is not None:
-                targets = [t for t in targets if _user_can_view(user, t)]
-            resolved[(id(obj), key)] = targets[: _MAX_MULTIOBJECT_DISPLAY + 1]
+            resolved[(id(obj), key)] = per_obj_targets[id(obj)][: _MAX_MULTIOBJECT_DISPLAY + 1]
     return resolved
 
 
