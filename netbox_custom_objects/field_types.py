@@ -1,8 +1,12 @@
+import datetime
+import decimal
 import hashlib
 import json
 import logging
+from typing import List
 
 import django_tables2 as tables
+from strawberry.scalars import JSON
 from django import forms
 from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
@@ -15,6 +19,7 @@ from django.db.utils import OperationalError, ProgrammingError
 from django.db.models.fields.related import ForeignKey, ManyToManyDescriptor
 from django.db.models.manager import Manager
 from django.db.models.signals import m2m_changed
+from django.urls import reverse
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
@@ -170,6 +175,18 @@ def _make_lazy_cot_fk(cot, field, on_delete, **field_kwargs):
 
 class FieldType:
 
+    # The Python annotation Strawberry should use when exposing this field type
+    # as a scalar GraphQL field.  ``None`` means the type is not exposed as a
+    # plain scalar — relationship types (OBJECT / MULTIOBJECT) are handled by
+    # dedicated resolvers in ``graphql/types.py`` instead.  Co-locating the
+    # GraphQL mapping here (next to the model/serializer/form mappings) keeps the
+    # GraphQL schema in sync automatically: a new field type that needs a scalar
+    # annotation sets it on its own subclass.
+    graphql_annotation = None
+
+    def get_graphql_annotation(self):
+        return self.graphql_annotation
+
     def get_display_value(self, instance, field_name):
         """
         This value is used as the object title in the Custom Object detail view.
@@ -245,6 +262,7 @@ class FieldType:
 
 
 class TextFieldType(FieldType):
+    graphql_annotation = str
 
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
@@ -277,6 +295,8 @@ class TextFieldType(FieldType):
 
 
 class LongTextFieldType(FieldType):
+    graphql_annotation = str
+
     def get_filterform_field(self, field, **kwargs):
         return forms.CharField(
             label=field,
@@ -314,6 +334,7 @@ class LongTextFieldType(FieldType):
 
 
 class IntegerFieldType(FieldType):
+    graphql_annotation = int
 
     def get_model_field(self, field, **kwargs):
         # TODO: handle all args for IntegerField
@@ -337,6 +358,8 @@ class IntegerFieldType(FieldType):
 
 
 class DecimalFieldType(FieldType):
+    graphql_annotation = decimal.Decimal
+
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
@@ -368,6 +391,8 @@ class DecimalFieldType(FieldType):
 
 
 class BooleanFieldType(FieldType):
+    graphql_annotation = bool
+
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
@@ -402,6 +427,8 @@ class BooleanFieldType(FieldType):
 
 
 class DateFieldType(FieldType):
+    graphql_annotation = datetime.date
+
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
@@ -421,6 +448,8 @@ class DateFieldType(FieldType):
 
 
 class DateTimeFieldType(FieldType):
+    graphql_annotation = datetime.datetime
+
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
@@ -440,6 +469,8 @@ class DateTimeFieldType(FieldType):
 
 
 class URLFieldType(FieldType):
+    graphql_annotation = str
+
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
@@ -458,6 +489,8 @@ class URLFieldType(FieldType):
 
 
 class JSONFieldType(FieldType):
+    graphql_annotation = JSON
+
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
@@ -477,6 +510,8 @@ class JSONFieldType(FieldType):
 
 
 class SelectFieldType(FieldType):
+    graphql_annotation = str
+
     def get_display_value(self, instance, field_name):
         value = getattr(instance, field_name)
         if value is None:
@@ -546,6 +581,8 @@ class SelectFieldType(FieldType):
 
 
 class MultiSelectFieldType(FieldType):
+    graphql_annotation = List[str]
+
     def get_filterform_field(self, field, **kwargs):
         choices = field.choice_set.choices
         return DynamicMultipleChoiceField(
@@ -749,6 +786,17 @@ class ObjectFieldType(FieldType):
             )
             if has_context:
                 form_field.widget.attrs['ts-parent-field'] = '_context'
+            # Enable quick-add for custom object targets: set quick_add_context
+            # directly on the widget (bypassing DynamicModelChoiceMixin.get_bound_field
+            # which uses get_action_url, a tag that can't resolve COT URLs).
+            if content_type.app_label == APP_LABEL:
+                form_field.widget.quick_add_context = {
+                    'url': reverse(
+                        'plugins:netbox_custom_objects:customobject_add',
+                        kwargs={'custom_object_type': custom_object_type.slug},
+                    ),
+                    'params': {},
+                }
             return form_field
 
     def get_filterform_field(self, field, **kwargs):
@@ -1335,6 +1383,14 @@ class MultiObjectFieldType(FieldType):
             )
             if has_context:
                 form_field.widget.attrs['ts-parent-field'] = '_context'
+            if content_type.app_label == APP_LABEL:
+                form_field.widget.quick_add_context = {
+                    'url': reverse(
+                        'plugins:netbox_custom_objects:customobject_add',
+                        kwargs={'custom_object_type': custom_object_type.slug},
+                    ),
+                    'params': {},
+                }
             return form_field
 
     def get_display_value(self, instance, field_name):

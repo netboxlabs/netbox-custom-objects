@@ -32,6 +32,11 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["check-manifest", "mkdocs", "mkdocs-material", "ruff"]
 test = ["coverage", "pytest", "pytest-cov"]
+# Install with `pip install "netboxlabs-netbox-custom-objects[branching]"` when
+# pairing this plugin with netbox-branching.  Note: this extra also implies a
+# stricter NetBox version requirement (>= 4.6.2), which is enforced at startup
+# by netbox_custom_objects.checks rather than declared here.
+branching = ["netbox-branching>=1.0.4"]
 
 [project.urls]
 "Homepage" = "https://netboxlabs.com/"

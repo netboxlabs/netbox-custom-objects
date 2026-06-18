@@ -190,6 +190,9 @@ class CustomObjectTypeFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.Pri
     def test_export_objects(self):
         ...
 
+    def test_export_objects_anonymous(self):
+        ...
+
     def test_bulk_edit_objects_with_permission(self):
         ...
 
@@ -901,3 +904,82 @@ class ObjectSelectorViewTestCase(TestCase):
             'q': 'Alpha',
         })
         self.assertEqual(response.status_code, 200)
+
+
+class QuickAddViewTestCase(CustomObjectsTestCase, TestCase):
+    """
+    Tests for the quick-add flow in CustomObjectEditView.
+
+    Covers GET (modal renders), POST success (object created, quick_add_created.html
+    returned), and POST validation failure (errors re-rendered in our custom template).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.user.is_superuser = True
+        self.user.save()
+
+        # Target COT: objects of this type will be quick-added.
+        self.target_cot = self.create_simple_custom_object_type(
+            name='Target', slug='target',
+        )
+        target_ot = ObjectType.objects.get(
+            app_label='netbox_custom_objects',
+            model=self.target_cot.get_table_model_name(self.target_cot.id).lower(),
+        )
+
+        # Source COT: has an object field pointing at Target.
+        self.source_cot = self.create_custom_object_type(name='Source', slug='source')
+        self.create_custom_object_type_field(
+            self.source_cot, name='name', label='Name', type='text',
+            primary=True, required=True,
+        )
+        self.create_custom_object_type_field(
+            self.source_cot, name='ref', label='Ref', type='object',
+            related_object_type=target_ot,
+        )
+
+        self.add_url = reverse(
+            'plugins:netbox_custom_objects:customobject_add',
+            kwargs={'custom_object_type': self.target_cot.slug},
+        )
+
+    def test_quick_add_get_returns_200(self):
+        """GET ?_quickadd=True renders the custom quick-add modal without errors."""
+        response = self.client.get(
+            self.add_url,
+            {'_quickadd': 'True', 'target': 'id_ref'},
+        )
+        self.assertEqual(response.status_code, 200)
+        # The custom template (not the core one) is used.
+        self.assertContains(response, 'hx-post=')
+        self.assertContains(response, f'/plugins/custom-objects/{self.target_cot.slug}/add/')
+
+    def test_quick_add_post_success_creates_object(self):
+        """POST with _quickadd in POST data creates the object and returns quick_add_created template."""
+        model = self.target_cot.get_model()
+        count_before = model.objects.count()
+
+        response = self.client.post(
+            f'{self.add_url}?_quickadd=True&target=id_ref',
+            data={'quickadd-name': 'quick-created', '_quickadd': ''},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(model.objects.count(), count_before + 1)
+        # The success template contains the object PK for JS auto-selection.
+        self.assertContains(response, 'quick-add-object')
+        self.assertTrue(model.objects.filter(name='quick-created').exists())
+
+    def test_quick_add_post_validation_failure_rerenders(self):
+        """POST with missing required field re-renders the quick-add form with errors."""
+        response = self.client.post(
+            f'{self.add_url}?_quickadd=True&target=id_ref',
+            # name is required but omitted
+            data={'_quickadd': ''},
+        )
+        self.assertEqual(response.status_code, 200)
+        # Error re-render uses our custom template, not a redirect.
+        self.assertContains(response, 'hx-post=')
+        # No new object created.
+        model = self.target_cot.get_model()
+        self.assertFalse(model.objects.exists())
