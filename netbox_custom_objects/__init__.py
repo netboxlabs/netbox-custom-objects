@@ -261,6 +261,9 @@ class CustomObjectsPluginConfig(PluginConfig):
     default_settings = {
         # The maximum number of Custom Object Types that may be created
         'max_custom_object_types': 50,
+        # Max related objects shown per row in the combined tab's Value column
+        # for a multi-object field before the rest are truncated to an ellipsis.
+        'max_multiobject_display': 3,
     }
     required_settings = []
 

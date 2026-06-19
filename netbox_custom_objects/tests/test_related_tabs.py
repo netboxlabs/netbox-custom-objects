@@ -18,6 +18,7 @@ Focused on the surfaces most likely to regress:
 """
 
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from core.models import ObjectType
 from django.db.models import Q
@@ -32,11 +33,11 @@ from netbox_custom_objects.related_tabs.registry import _public_host_model_class
 from netbox_custom_objects.related_tabs.views.combined import (
     COMBINED_LABEL,
     COMBINED_WEIGHT,
-    _MAX_MULTIOBJECT_DISPLAY,
     _count_linked_custom_objects,
     _filter_linked_objects,
     _get_field_value,
     _get_linked_custom_objects,
+    _max_multiobject_display,
     _sort_header,
     reference_q,
     register_combined_tabs,
@@ -222,16 +223,29 @@ class GetFieldValueTests(TestCase):
         self.assertIsNone(_get_field_value(SimpleNamespace(), field))
 
     def test_multiobject_truncates_to_max_plus_one(self):
-        items = [_Label(str(i)) for i in range(_MAX_MULTIOBJECT_DISPLAY + 3)]
+        limit = _max_multiobject_display()
+        items = [_Label(str(i)) for i in range(limit + 3)]
         field = SimpleNamespace(type=CustomFieldTypeChoices.TYPE_MULTIOBJECT, name='targets')
         obj = SimpleNamespace(targets=SimpleNamespace(all=lambda: items))
-        self.assertEqual(_get_field_value(obj, field), items[: _MAX_MULTIOBJECT_DISPLAY + 1])
+        self.assertEqual(_get_field_value(obj, field), items[: limit + 1])
 
     def test_multiobject_under_limit_returns_all(self):
         items = [_Label('a'), _Label('b')]
         field = SimpleNamespace(type=CustomFieldTypeChoices.TYPE_MULTIOBJECT, name='targets')
         obj = SimpleNamespace(targets=SimpleNamespace(all=lambda: items))
         self.assertEqual(_get_field_value(obj, field), items)
+
+    def test_multiobject_respects_configured_limit(self):
+        """The Value column honours the max_multiobject_display plugin setting."""
+        items = [_Label(str(i)) for i in range(10)]
+        field = SimpleNamespace(type=CustomFieldTypeChoices.TYPE_MULTIOBJECT, name='targets')
+        obj = SimpleNamespace(targets=SimpleNamespace(all=lambda: items))
+        with patch(
+            'netbox_custom_objects.related_tabs.views.combined.get_plugin_config',
+            return_value=1,
+        ):
+            # configured limit 1, plus the 1 extra item used for truncation detection
+            self.assertEqual(_get_field_value(obj, field), items[:2])
 
     def test_multiobject_unset_returns_empty_list(self):
         field = SimpleNamespace(type=CustomFieldTypeChoices.TYPE_MULTIOBJECT, name='targets')

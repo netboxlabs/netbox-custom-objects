@@ -13,6 +13,7 @@ from django.utils.translation import gettext_lazy as _
 from django.views.generic import View
 from extras.choices import CustomFieldTypeChoices
 from netbox.context import current_request
+from netbox.plugins import get_plugin_config
 from netbox.registry import registry
 from netbox.tables import BaseTable
 from netbox_custom_objects.models import CustomObjectTypeField
@@ -142,9 +143,12 @@ class CustomObjectsTabTable(BaseTable):
         default_columns = ('type', 'object', 'value', 'field', 'tags', 'actions')
 
 
-# Maximum number of related objects to show in the Value column for MULTIOBJECT fields.
-# One extra is fetched to detect truncation without a COUNT query.
-_MAX_MULTIOBJECT_DISPLAY = 3
+def _max_multiobject_display():
+    """Max related objects shown in a MULTIOBJECT Value column (PLUGINS_CONFIG, default 3)."""
+    value = get_plugin_config(_CUSTOM_OBJECTS_APP, 'max_multiobject_display')
+    # Operator-supplied: fall back to the default on a non-positive int so a
+    # misconfigured value can't crash the detail page (see checks.W003).
+    return value if isinstance(value, int) and value >= 1 else 3
 
 
 def _iter_linked_fields(instance):
@@ -309,7 +313,7 @@ def _get_field_value(obj, field, user=None):
     Return the value stored in `field` on `obj`, for display in the Value column.
 
     TYPE_OBJECT     → the related model instance (or None if unset)
-    TYPE_MULTIOBJECT → list of related instances, up to _MAX_MULTIOBJECT_DISPLAY+1
+    TYPE_MULTIOBJECT → list of related instances, up to max_multiobject_display + 1
                        (the extra item lets the template detect truncation without a
                        separate COUNT query)
 
@@ -326,6 +330,7 @@ def _get_field_value(obj, field, user=None):
         manager = getattr(obj, field.name, None)
         if manager is None:
             return []
+        limit = _max_multiobject_display() + 1
         qs = manager.all()
         if user is not None:
             try:
@@ -333,8 +338,8 @@ def _get_field_value(obj, field, user=None):
             except AttributeError:
                 # Polymorphic targets: not a queryset (no .restrict) — filter the
                 # heterogeneous result list, then truncate.
-                return restrict_to_viewable(user, list(qs))[: _MAX_MULTIOBJECT_DISPLAY + 1]
-        return list(qs[: _MAX_MULTIOBJECT_DISPLAY + 1])
+                return restrict_to_viewable(user, list(qs))[:limit]
+        return list(qs[:limit])
     return None
 
 
@@ -347,12 +352,13 @@ def _batch_multiobject_values(pairs, user=None):
     query count. Instead each ``(model, field)`` group is prefetched once via
     ``CustomManyToManyManager.get_prefetch_querysets`` and read from cache.
 
-    Returns ``{(id(obj), id(field)): [targets up to _MAX_MULTIOBJECT_DISPLAY+1]}``.
+    Returns ``{(id(obj), id(field)): [targets up to max_multiobject_display + 1]}``.
     OBJECT and polymorphic MULTIOBJECT rows are absent — they stay on the per-row
     path (the polymorphic manager isn't prefetchable and self-batches per type).
     Targets are permission-filtered via ``restrict_to_viewable``; prefetch
     fetches every target per row, not just the displayed slice — fine for the cap.
     """
+    limit = _max_multiobject_display() + 1
     groups = defaultdict(list)
     field_by_key = {}
     for obj, field in pairs:
@@ -380,7 +386,7 @@ def _batch_multiobject_values(pairs, user=None):
                 for oid, targets in per_obj_targets.items()
             }
         for obj in objs:
-            resolved[(id(obj), key)] = per_obj_targets[id(obj)][: _MAX_MULTIOBJECT_DISPLAY + 1]
+            resolved[(id(obj), key)] = per_obj_targets[id(obj)][:limit]
     return resolved
 
 
@@ -523,7 +529,7 @@ def _render_combined_tab(request, instance, tab):
         'return_url': request.get_full_path(),
         'tab_table': tab_table,
         'selected_columns': selected_columns,
-        'max_multiobject_display': _MAX_MULTIOBJECT_DISPLAY,
+        'max_multiobject_display': _max_multiobject_display(),
     }
 
     if htmx_partial(request):
