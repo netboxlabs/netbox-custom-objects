@@ -360,8 +360,19 @@ class CustomObjectsPluginConfig(PluginConfig):
             _checking_migrations = False
 
     def _call_super_ready_once(self):
-        """Call ``super().ready()`` once; subsequent calls are no-ops.
-        ``register_serializer_resolver`` rejects duplicates."""
+        """Call ``super().ready()`` synchronously, exactly once.
+
+        The first invocation always delegates to ``super().ready()`` inline
+        (never deferred, scheduled, or skipped); only repeat invocations are
+        no-ops, because ``register_serializer_resolver`` rejects duplicates.
+
+        This synchronous-on-first-call contract is load-bearing: ``ready()``
+        must run ``super().ready()`` — which populates ``registry['views']`` —
+        before ``register_tabs()``, since ``urls.py`` snapshots that registry
+        when the combined tab is registered. If this wrapper ever deferred the
+        super call, tabs would register against an empty view registry and
+        ``reverse()`` for CustomObject feature URLs would fail.
+        """
         global _super_ready_called
         if _super_ready_called:
             return
