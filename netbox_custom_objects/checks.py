@@ -73,3 +73,29 @@ def check_branching_compatibility(app_configs, **kwargs):
         pass  # unparseable version string — skip rather than emit a confusing error
 
     return errors
+
+
+@register()
+def check_related_tabs_registration(app_configs, **kwargs):
+    """Re-surface a swallowed register_tabs() failure as a startup warning.
+
+    ``CustomObjectsPluginConfig.ready`` logs and swallows any exception from
+    registering the combined "Custom Objects" related tab so it can't break
+    NetBox startup.  This check turns that otherwise-invisible failure into a
+    warning in ``manage.py check``.
+    """
+    try:
+        app_config = apps.get_app_config('netbox_custom_objects')
+    except LookupError:
+        return []
+
+    error = getattr(app_config, '_register_tabs_error', None)
+    if not error:
+        return []
+
+    return [Warning(
+        f'The combined "Custom Objects" related tab failed to register at startup '
+        f'and will not appear on object detail pages ({error}).',
+        hint='Resolve the underlying error (full traceback is in the NetBox log) and restart NetBox.',
+        id='netbox_custom_objects.W002',
+    )]

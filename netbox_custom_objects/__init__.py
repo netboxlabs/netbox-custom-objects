@@ -263,6 +263,12 @@ class CustomObjectsPluginConfig(PluginConfig):
         'max_custom_object_types': 50,
     }
     required_settings = []
+
+    # Set by ready() to a short "ExcType: message" string if registering the
+    # combined "Custom Objects" related tab fails; None means no failure.
+    # Surfaced as a system check warning (checks.check_related_tabs_registration)
+    # so the swallowed exception isn't invisible outside the logs.
+    _register_tabs_error = None
     template_extensions = "template_content.template_extensions"
     # Resolves dynamic CO models (table{n}model) to on-the-fly serializers —
     # they have no importable path at the conventional location.
@@ -491,8 +497,13 @@ class CustomObjectsPluginConfig(PluginConfig):
         try:
             from netbox_custom_objects.related_tabs.registry import register_tabs
             register_tabs()
-        except Exception:
+            self._register_tabs_error = None
+        except Exception as exc:
+            # Surface the failure both in the logs and via a system check
+            # (checks.check_related_tabs_registration) so a missing tab is
+            # diagnosable in `manage.py check`, not silently swallowed.
             logger.exception("related_tabs.register_tabs() failed; continuing without tabs")
+            self._register_tabs_error = f"{type(exc).__name__}: {exc}"
 
     def get_model(self, model_name, require_ready=True):
         self.apps.check_apps_ready()
