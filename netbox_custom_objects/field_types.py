@@ -671,8 +671,9 @@ class MultiSelectFieldType(FieldType):
             def render(self, value):
                 if not value:
                     return self.default
+                _get_color = getattr(choice_set, 'get_choice_color', None) if choice_set else None
                 pairs = [
-                    (choices_dict.get(v, v), getattr(choice_set, 'get_choice_color', lambda v: None)(v) if choice_set else None)
+                    (choices_dict.get(v, v), _get_color(v) if _get_color else None)
                     for v in value
                 ]
                 if any(color for _, color in pairs):
