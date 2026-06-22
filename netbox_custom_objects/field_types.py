@@ -534,12 +534,14 @@ class SelectFieldType(FieldType):
         choices_dict = dict(field.choices)
         choice_set = field.choice_set
 
+        _get_color = getattr(choice_set, 'get_choice_color', None) if choice_set else None
+
         class _SelectLabelColumn(tables.Column):
             def render(self, value):
                 if value is None:
                     return self.default
                 label = choices_dict.get(value, value)
-                color = getattr(choice_set, 'get_choice_color', lambda v: None)(value) if choice_set else None
+                color = _get_color(value) if _get_color else None
                 if color:
                     return mark_safe(
                         f'<span class="badge text-bg-{escape(color)}">{escape(label)}</span>'
