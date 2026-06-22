@@ -1,13 +1,9 @@
 import contextvars
 import decimal
-import functools
 import logging
 import re
 import threading
 from datetime import date, datetime
-
-from jinja2 import Undefined as _JinjaUndefined
-from jinja2.sandbox import SandboxedEnvironment as _JinjaSandbox
 
 from packaging.version import Version, InvalidVersion
 
@@ -63,6 +59,7 @@ from netbox.search import SearchIndex
 from utilities import filters
 from utilities.data import get_config_value_ci
 from utilities.datetime import datetime_from_timestamp
+from utilities.jinja2 import render_jinja2
 from utilities.object_types import object_type_name
 from utilities.querysets import RestrictedQuerySet
 from utilities.serialization import deserialize_object as _deserialize_object
@@ -80,12 +77,6 @@ from netbox_custom_objects.utilities import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-@functools.lru_cache(maxsize=256)
-def _compile_display_template(expression: str):
-    """Compile a Jinja2 display expression once and cache by expression string."""
-    return _JinjaSandbox(undefined=_JinjaUndefined).from_string(expression)
 
 
 class UniquenessConstraintTestError(Exception):
@@ -810,8 +801,6 @@ class CustomObject(
         """Render the COT display_expression; return stripped result or None."""
         # All access inside the try so any exception (including RelatedObjectDoesNotExist
         # from custom_object_type access) falls through to the primary-field fallback.
-        # Template compilation is cached via _compile_display_template (LRU, keyed by
-        # expression string) so list views with N rows incur only one compilation.
         try:
             expression = getattr(self.custom_object_type, 'display_expression', '')
             if not expression:
@@ -825,7 +814,7 @@ class CustomObject(
                     ctx[field_name] = '' if value is None else value
                 except Exception:  # noqa: BLE001
                     ctx[field_name] = ''
-            rendered = _compile_display_template(expression).render(**ctx).strip()
+            rendered = render_jinja2(expression, ctx).strip()
             return rendered or None
         except Exception:  # noqa: BLE001
             return None
