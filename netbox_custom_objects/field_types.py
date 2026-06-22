@@ -539,7 +539,7 @@ class SelectFieldType(FieldType):
                 if value is None:
                     return self.default
                 label = choices_dict.get(value, value)
-                color = choice_set.get_choice_color(value) if choice_set else None
+                color = getattr(choice_set, 'get_choice_color', lambda v: None)(value) if choice_set else None
                 if color:
                     return mark_safe(
                         f'<span class="badge text-bg-{escape(color)}">{escape(label)}</span>'
@@ -672,7 +672,7 @@ class MultiSelectFieldType(FieldType):
                 if not value:
                     return self.default
                 pairs = [
-                    (choices_dict.get(v, v), choice_set.get_choice_color(v) if choice_set else None)
+                    (choices_dict.get(v, v), getattr(choice_set, 'get_choice_color', lambda v: None)(v) if choice_set else None)
                     for v in value
                 ]
                 if any(color for _, color in pairs):
