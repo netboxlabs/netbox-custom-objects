@@ -35,10 +35,15 @@ jobs:
   tests:
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    continue-on-error: ${{ matrix.with-branching == true }}
     strategy:
       fail-fast: false
       matrix:
-        netbox-ref: [ "main", "feature" ]
+        include:
+          - netbox-ref: "main"
+          - netbox-ref: "feature"
+          - netbox-ref: "main"
+            with-branching: true
     services:
       redis:
         image: redis
@@ -80,12 +85,20 @@ jobs:
           pip install .
           pip install .[test]
       - name: Install dependencies & configure plugin
+        if: ${{ !matrix.with-branching }}
         working-directory: netbox
         run: |
           ln -s $(pwd)/../netbox-custom-objects/testing/configuration.py netbox/netbox/configuration.py
-
           python -m pip install --upgrade pip
           pip install -r requirements.txt -U
+      - name: Install dependencies & configure plugin (with branching)
+        if: ${{ matrix.with-branching == true }}
+        working-directory: netbox
+        run: |
+          ln -s $(pwd)/../netbox-custom-objects/testing/configuration_branching.py netbox/netbox/configuration.py
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -U
+          pip install 'netboxlabs-netbox-branching>=1.0.0'
       - name: Run tests
         working-directory: netbox
         run: |
