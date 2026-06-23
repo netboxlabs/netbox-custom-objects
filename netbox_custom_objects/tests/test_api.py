@@ -6,7 +6,7 @@ import uuid
 from django.test import TestCase, RequestFactory
 from django.urls import reverse
 
-from utilities.testing import create_test_user
+from utilities.testing import TestCase as NetBoxTestCase, create_test_user
 from rest_framework import status
 from rest_framework.test import APIClient
 
@@ -115,7 +115,7 @@ class CustomObjectAPITestCaseMixin:
         self.assertHttpStatus(response, 403)
 
 
-class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, TestCase):
+class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, NetBoxTestCase):
     model = None  # Will be set in setUpTestData
     bulk_update_data = {
         'test_field': 'Updated test field',
@@ -388,6 +388,7 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, Test
         obj_perm.save()
         obj_perm.users.add(self.user)
         obj_perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+        self.add_permissions('dcim.view_device')
 
         devices = Device.objects.all()
 
@@ -418,6 +419,7 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, Test
     def test_create_with_tags_persists_to_db(self):
         """Regression #371: tags submitted on POST must be saved to the DB, not just echoed."""
         self._add_permission('add', 'Create with tags perm')
+        self.add_permissions('extras.view_tag')
         tag = Tag.objects.get_or_create(name='api-create-tag', slug='api-create-tag')[0]
 
         data = {
@@ -437,6 +439,7 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, Test
         """Regression #371: tags submitted on PATCH must be saved to the DB, not just echoed."""
         self._add_permission('view', 'View perm')
         self._add_permission('change', 'Patch with tags perm')
+        self.add_permissions('extras.view_tag')
         tag = Tag.objects.get_or_create(name='api-patch-tag', slug='api-patch-tag')[0]
 
         instance = self._get_queryset().first()
@@ -1592,6 +1595,7 @@ class CrossCOTMultiObjectAPITest(CustomObjectsTestCase, TestCase):
     def test_patch_updates_cross_cot_m2m_field(self):
         """#443 – PATCH with a list of target PKs must update the M2M field."""
         self._add_perm('change', self.model_source)
+        self._add_perm('view', self.model_target)
 
         # Confirm initial state.
         self.assertSetEqual(
