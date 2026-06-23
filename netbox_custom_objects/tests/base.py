@@ -14,8 +14,12 @@ from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.models import (
     CustomObjectType,
     CustomObjectTypeField,
-    _deferred_co_field_data,
 )
+
+try:
+    from netbox_custom_objects.models import _deferred_co_field_data
+except ImportError:
+    _deferred_co_field_data = None
 
 logger = logging.getLogger(__name__)
 
@@ -222,7 +226,8 @@ class TransactionCleanupMixin:
 
     def tearDown(self):
         # Reset deferred CO field data so it doesn't bleed into the next test.
-        _deferred_co_field_data.set(None)
+        if _deferred_co_field_data is not None:
+            _deferred_co_field_data.set(None)
         # Defensive reset — see setUp for rationale.  Belt-and-braces in case a
         # test enters event_tracking but raises before super().tearDown() runs.
         _reset_netbox_request_context()
