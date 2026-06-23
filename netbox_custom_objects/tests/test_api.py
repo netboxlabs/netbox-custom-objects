@@ -4,7 +4,7 @@ Tests for API code paths.
 from django.test import TestCase, RequestFactory
 from django.urls import reverse
 
-from utilities.testing import create_test_user
+from utilities.testing import TestCase as NetBoxTestCase, create_test_user
 from rest_framework import status
 from rest_framework.test import APIClient
 
@@ -98,7 +98,7 @@ class CustomObjectAPITestCaseMixin:
         self.assertHttpStatus(response, 403)
 
 
-class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, TestCase):
+class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, NetBoxTestCase):
     model = None  # Will be set in setUpTestData
     bulk_update_data = {
         'test_field': 'Updated test field',
@@ -371,6 +371,7 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, Test
         obj_perm.save()
         obj_perm.users.add(self.user)
         obj_perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+        self.add_permissions('dcim.view_device')
 
         devices = Device.objects.all()
 
@@ -397,6 +398,81 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, Test
             set(instance.devices.values_list('id', flat=True)),
             set(data['devices']),
         )
+
+    def test_create_with_tags_persists_to_db(self):
+        """Regression #371: tags submitted on POST must be saved to the DB, not just echoed."""
+        self._add_permission('add', 'Create with tags perm')
+        self.add_permissions('extras.view_tag')
+        tag = Tag.objects.get_or_create(name='api-create-tag', slug='api-create-tag')[0]
+
+        data = {
+            'test_field': 'Tagged Object',
+            'tags': [{'id': tag.id, 'name': tag.name, 'slug': tag.slug, 'color': tag.color}],
+        }
+        response = self.client.post(self._get_list_url(), data, format='json', **self.header)
+        self.assertHttpStatus(response, status.HTTP_201_CREATED)
+        self.assertIn('tags', response.data)
+        self.assertTrue(len(response.data['tags']) > 0, 'Response should include the submitted tag')
+
+        # Fetch fresh from the DB — the critical assertion that caught #371
+        instance = self._get_queryset().get(pk=response.data['id'])
+        self.assertIn(tag.name, list(instance.tags.names()), 'Tag must be persisted to the DB')
+
+    def test_patch_with_tags_persists_to_db(self):
+        """Regression #371: tags submitted on PATCH must be saved to the DB, not just echoed."""
+        self._add_permission('view', 'View perm')
+        self._add_permission('change', 'Patch with tags perm')
+        self.add_permissions('extras.view_tag')
+        tag = Tag.objects.get_or_create(name='api-patch-tag', slug='api-patch-tag')[0]
+
+        instance = self._get_queryset().first()
+        self.assertEqual(list(instance.tags.names()), [], 'Instance should start with no tags')
+
+        data = {'tags': [{'id': tag.id, 'name': tag.name, 'slug': tag.slug, 'color': tag.color}]}
+        response = self.client.patch(self._get_detail_url(instance), data, format='json', **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+
+        instance.refresh_from_db()
+        self.assertIn(tag.name, list(instance.tags.names()), 'Tag must be persisted to the DB after PATCH')
+
+    def test_patch_with_empty_tags_clears_existing(self):
+        """PATCH with tags=[] must remove all existing tags from the DB."""
+        self._add_permission('view', 'View perm')
+        self._add_permission('change', 'Patch clear tags perm')
+        tag = Tag.objects.get_or_create(name='api-clear-tag', slug='api-clear-tag')[0]
+
+        instance = self._get_queryset().first()
+        instance.tags.add(tag.name)
+        self.assertIn(tag.name, list(instance.tags.names()), 'Pre-condition: tag should be set')
+
+        response = self.client.patch(self._get_detail_url(instance), {'tags': []}, format='json', **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+
+        instance.refresh_from_db()
+        self.assertEqual(list(instance.tags.names()), [], 'All tags must be cleared after PATCH with tags=[]')
+
+    def test_patch_without_tags_preserves_existing(self):
+        """PATCH that omits the tags key entirely must leave existing tags unchanged."""
+        self._add_permission('view', 'View perm')
+        self._add_permission('change', 'Patch preserve tags perm')
+        tag = Tag.objects.get_or_create(name='api-preserve-tag', slug='api-preserve-tag')[0]
+
+        instance = self._get_queryset().first()
+        instance.tags.add(tag.name)
+        self.assertIn(tag.name, list(instance.tags.names()), 'Pre-condition: tag should be set')
+
+        response = self.client.patch(
+            self._get_detail_url(instance), {'test_field': 'updated'}, format='json', **self.header
+        )
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+
+        instance.refresh_from_db()
+        self.assertIn(
+            tag.name,
+            list(instance.tags.names()),
+            'Existing tags must be preserved when tags not in PATCH payload',
+        )
+
 
 
 class LinkedObjectsAPITest(CustomObjectsTestCase, TestCase):
@@ -1503,6 +1579,7 @@ class CrossCOTMultiObjectAPITest(CustomObjectsTestCase, TestCase):
     def test_patch_updates_cross_cot_m2m_field(self):
         """#443 – PATCH with a list of target PKs must update the M2M field."""
         self._add_perm('change', self.model_source)
+        self._add_perm('view', self.model_target)
 
         # Confirm initial state.
         self.assertSetEqual(
