@@ -13,6 +13,7 @@ from netbox_custom_objects.template_content import CustomObjectLink, LinkedCusto
 from .base import CustomObjectsTestCase, create_token
 from core.models import ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Rack, Site
+from extras.models import Tag
 from users.models import ObjectPermission
 from virtualization.models import Cluster, ClusterType
 
@@ -472,7 +473,6 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, NetB
             list(instance.tags.names()),
             'Existing tags must be preserved when tags not in PATCH payload',
         )
-
 
 
 class LinkedObjectsAPITest(CustomObjectsTestCase, TestCase):
