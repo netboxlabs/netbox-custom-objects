@@ -3257,3 +3257,40 @@ class ChangelogEnabledBranchingTestCase(BranchingTestBase, TransactionTestCase):
         branch.refresh_from_db()
         branch.merge(user=self.user, commit=True)
         self.assertTrue(model_a.objects.filter(label='a-poly').exists())
+
+    def test_nolog_cot_created_in_branch_lands_in_main(self):
+        """
+        Regression for PR #574 review: creating a COT with changelog_enabled=False
+        while a branch is active must not crash.
+
+        Before the fix:
+          - CustomObjectType.save() stored the COT record in the branch schema.
+          - create_model() used _get_schema_connection() → CO table created in
+            the branch schema.
+          - The detail view then issued model.objects.all(), which
+            supports_branching_resolver routes to main; the table didn't exist
+            there, causing ProgrammingError: relation "custom_objects_N" does
+            not exist.
+
+        After the fix, both the COT record and the CO table land in main so
+        queries always resolve correctly regardless of the active branch.
+        """
+        branch = _provision_branch('NologInBranch', user=self.user)
+        branch_request = _make_request(self.user)
+        with activate_branch(branch), event_tracking(branch_request):
+            # Creating the COT while in the branch must not crash.
+            cot = CustomObjectType.objects.create(
+                name='NologInBranch', slug='nolog-in-branch',
+                changelog_enabled=False,
+            )
+
+        # The CO table is in main — querying it must not raise ProgrammingError.
+        model = cot.get_model()
+        count = model.objects.count()
+        self.assertEqual(count, 0, "Freshly created non-changelog COT must have no objects")
+
+        # The COT record itself is accessible from main (not hidden in the branch).
+        self.assertTrue(
+            CustomObjectType.objects.filter(pk=cot.pk).exists(),
+            "COT with changelog_enabled=False created in a branch must be visible in main",
+        )

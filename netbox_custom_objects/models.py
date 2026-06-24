@@ -1803,7 +1803,10 @@ class CustomObjectType(NetBoxModel):
         self.object_type.public = True
         self.object_type.save()
 
-        with _get_schema_connection().schema_editor() as schema_editor:
+        # Non-changelog COTs bypass branch isolation; their table must live in main
+        # so that queries (which always route to main for these models) can find it.
+        schema_conn = connection if not self.changelog_enabled else _get_schema_connection()
+        with schema_conn.schema_editor() as schema_editor:
             schema_editor.create_model(model)
 
         self._store_base_column_snapshot(model)
@@ -1871,6 +1874,12 @@ class CustomObjectType(NetBoxModel):
 
     def save(self, *args, **kwargs):
         needs_db_create = self._state.adding
+
+        # Non-changelog COTs are paired with CO tables in main (COs bypass branch
+        # isolation).  Route the COT record to main as well so the two are consistent.
+        if not self.changelog_enabled and 'using' not in kwargs:
+            if _get_schema_connection() is not connection:
+                kwargs['using'] = 'default'
 
         super().save(*args, **kwargs)
 
