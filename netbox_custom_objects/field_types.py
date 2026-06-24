@@ -1000,6 +1000,10 @@ class ObjectFieldType(FieldType):
         ct_field_name = f"{field_instance.name}_content_type"
         oid_field_name = f"{field_instance.name}_object_id"
 
+        # Flush deferred FK trigger events before ALTER TABLE; PostgreSQL rejects
+        # column removal with "pending trigger events" when a row deletion (from
+        # the revert path) has queued events on a DEFERRABLE FK column.
+        schema_editor.execute('SET CONSTRAINTS ALL IMMEDIATE')
         try:
             oid_field = model._meta.get_field(oid_field_name)
             schema_editor.remove_field(model, oid_field)
