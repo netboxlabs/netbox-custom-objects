@@ -77,9 +77,11 @@
     <li class="nav-item">
       <a class="nav-link{% if tab == 'journal' %} active{% endif %}" href="{% url 'plugins:netbox_custom_objects:customobject_journal' object.custom_object_type.slug object.pk %}">{% trans "Journal" %}</a>
     </li>
+    {% if object.custom_object_type.changelog_enabled %}
     <li class="nav-item">
       <a class="nav-link{% if tab == 'changelog' %} active{% endif %}" href="{% url 'plugins:netbox_custom_objects:customobject_changelog' object.custom_object_type.slug object.pk %}">{% trans "Changelog" %}</a>
     </li>
+    {% endif %}
   </ul>
 {% endblock tabs %}
 

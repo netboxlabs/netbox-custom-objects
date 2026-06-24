@@ -1028,6 +1028,17 @@ class CustomObjectType(NetBoxModel):
         blank=True,
         help_text=_("Used to group similar custom object types in the navigation menu")
     )
+    changelog_enabled = models.BooleanField(
+        verbose_name=_('changelog enabled'),
+        default=True,
+        help_text=_(
+            "If disabled, changes to objects of this type will not be recorded in the changelog. "
+            "Useful for high-frequency updates where audit history is not required. "
+            "Note: disabling changelog also exempts objects of this type from branch isolation — "
+            "they are always written to the main database regardless of the active branch. "
+            "This setting cannot be changed after the Custom Object Type is created."
+        ),
+    )
     schema_document = models.JSONField(
         blank=True,
         null=True,
@@ -1543,6 +1554,22 @@ class CustomObjectType(NetBoxModel):
             "custom_object_type_id": self.id,
         }
 
+        # If changelog is disabled for this COT, override to_objectchange() so
+        # that NetBox's change-logging signal skips writing ObjectChange rows
+        # for create/update operations.
+        #
+        # Delete is intentionally allowed through: core/signals.handle_deleted_object
+        # calls objectchange.user = ... unconditionally (no None guard), so returning
+        # None for deletes would crash on deletion.  Deletes are also rare and worth
+        # preserving for audit purposes.  The high-frequency use case this flag targets
+        # is create/update (e.g. nightly fleet scans), not deletion.
+        if not self.changelog_enabled:
+            def _no_changelog_to_objectchange(_self, _action):
+                if _action == ObjectChangeActionChoices.ACTION_DELETE:
+                    return ChangeLoggingMixin.to_objectchange(_self, _action)
+                return None
+            attrs["to_objectchange"] = _no_changelog_to_objectchange
+
         # Pass the generating models set to field generation
         fields = []
         field_attrs = self._fetch_and_generate_field_attrs(
@@ -1776,7 +1803,10 @@ class CustomObjectType(NetBoxModel):
         self.object_type.public = True
         self.object_type.save()
 
-        with _get_schema_connection().schema_editor() as schema_editor:
+        # Non-changelog COTs bypass branch isolation; their table must live in main
+        # so that queries (which always route to main for these models) can find it.
+        schema_conn = connection if not self.changelog_enabled else _get_schema_connection()
+        with schema_conn.schema_editor() as schema_editor:
             schema_editor.create_model(model)
 
         self._store_base_column_snapshot(model)
@@ -1844,6 +1874,12 @@ class CustomObjectType(NetBoxModel):
 
     def save(self, *args, **kwargs):
         needs_db_create = self._state.adding
+
+        # Non-changelog COTs are paired with CO tables in main (COs bypass branch
+        # isolation).  Route the COT record to main as well so the two are consistent.
+        if not self.changelog_enabled and 'using' not in kwargs:
+            if _get_schema_connection() is not connection:
+                kwargs['using'] = 'default'
 
         super().save(*args, **kwargs)
 

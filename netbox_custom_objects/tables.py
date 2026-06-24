@@ -73,6 +73,7 @@ class CustomObjectTypeTable(NetBoxTable):
             "verbose_name_plural",
             "slug",
             'description',
+            "changelog_enabled",
             'comments',
             'tags',
             "created",
