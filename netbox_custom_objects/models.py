@@ -39,6 +39,7 @@ from extras.models.customfields import SEARCH_TYPES
 from extras.utils import is_taggable, run_validators
 from netbox.config import get_config
 from netbox.models import ChangeLoggedModel, NetBoxModel
+from netbox.models.mixins import OwnerMixin
 from netbox.models.features import (
     BookmarksMixin,
     ChangeLoggingMixin,
@@ -572,6 +573,7 @@ def _set_with_collision_preference(result, key, value):
 
 
 class CustomObject(
+    OwnerMixin,
     BookmarksMixin,
     ChangeLoggingMixin,
     CloningMixin,

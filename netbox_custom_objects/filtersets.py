@@ -11,6 +11,7 @@ from django.utils.timezone import make_aware, is_aware
 
 from extras.choices import CustomFieldTypeChoices
 from netbox.filtersets import NetBoxModelFilterSet
+from users.filterset_mixins import OwnerFilterMixin
 
 from .constants import APP_LABEL
 from .models import CustomObjectType
@@ -411,6 +412,6 @@ def get_filterset_class(model):
 
     return type(
         f"{model._meta.object_name}FilterSet",
-        (NetBoxModelFilterSet,),
+        (OwnerFilterMixin, NetBoxModelFilterSet,),
         attrs,
     )

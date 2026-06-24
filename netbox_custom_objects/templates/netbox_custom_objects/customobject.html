@@ -24,6 +24,10 @@
 
 {% block subtitle %}
 <div class="text-secondary fs-5">
+  {% if object.owner %}
+    <i class="mdi mdi-account-outline" title="{% trans "Owner" %}"></i> {{ object.owner|linkify }}
+    <span class="separator">&middot;</span>
+  {% endif %}
   {% trans "Created" %} {{ object.created|isodatetime:"minutes" }}
   {% if object.last_updated %}
     <span class="separator">&middot;</span>

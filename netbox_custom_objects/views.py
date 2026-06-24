@@ -23,6 +23,7 @@ from netbox.forms import (
     NetBoxModelBulkEditForm,
     NetBoxModelImportForm,
 )
+from netbox.forms.mixins import OwnerMixin as OwnerFormMixin
 from netbox.views import generic
 from netbox.views.generic.mixins import TableMixin
 from utilities.forms import ConfirmationForm, DeleteForm, restrict_form_fields
@@ -807,7 +808,7 @@ class CustomObjectEditView(generic.ObjectEditView):
 
         form_class = type(
             f"{model._meta.object_name}Form",
-            (forms.NetBoxModelForm,),
+            (OwnerFormMixin, forms.NetBoxModelForm,),
             attrs,
         )
 

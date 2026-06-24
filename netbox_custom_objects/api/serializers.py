@@ -14,6 +14,8 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.reverse import reverse
 from rest_framework.utils import model_meta
 
+from users.api.serializers_.owners import OwnerSerializer
+
 from netbox_custom_objects import constants, field_types
 from netbox_custom_objects.models import (CustomObject, CustomObjectType,
                                           CustomObjectTypeField)
@@ -458,7 +460,7 @@ def get_serializer_class(model, skip_object_fields=False):
     )
 
     # Create field list including all necessary fields
-    base_fields = ["id", "url", "display", "created", "last_updated", "tags"]
+    base_fields = ["id", "url", "display", "owner", "created", "last_updated", "tags"]
 
     # Include _context field when the model has designated context fields
     has_context_fields = bool(getattr(model, '_context_field_ids', []))
@@ -648,6 +650,7 @@ def get_serializer_class(model, skip_object_fields=False):
         "get_url": get_url,
         "display": serializers.SerializerMethodField(),
         "get_display": get_display,
+        "owner": OwnerSerializer(nested=True, required=False, allow_null=True),
         "create": create,
         "update": update,
         "validate": validate,
