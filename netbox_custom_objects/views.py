@@ -60,7 +60,7 @@ from netbox_custom_objects.schema.executor import (
     UnknownObjectTypeError,
 )
 from netbox_custom_objects.schema.validation import schema_error_dicts
-from netbox_custom_objects.utilities import extract_cot_id_from_model_name, is_in_branch
+from netbox_custom_objects.utilities import extract_cot_id_from_model_name
 
 logger = logging.getLogger("netbox_custom_objects.views")
 
@@ -470,7 +470,7 @@ class SchemaImportMixin:
             'form': form,
             'model': CustomObjectType,
             'return_url': self.get_return_url(request, obj),
-            'branch_bypass_warning': is_in_branch(),
+            'branch_bypass_warning': _is_in_branch(),
             'prerequisite_model': get_prerequisite_model(self.queryset),
             **self._schema_tab_context_defaults(),
             **self.get_extra_context(request, obj),
@@ -581,7 +581,7 @@ class CustomObjectTypeEditView(SchemaImportMixin, generic.ObjectEditView):
         return super().post(request, *args, **kwargs)
 
     def get_extra_context(self, request, instance):
-        ctx = {'branch_bypass_warning': is_in_branch()}
+        ctx = {'branch_bypass_warning': _is_in_branch()}
         if not instance.pk:
             ctx.update(self._schema_tab_context_defaults())
             ctx['can_apply_schema'] = self._can_apply_schema(request)

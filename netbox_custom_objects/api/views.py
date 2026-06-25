@@ -37,7 +37,6 @@ from netbox_custom_objects.schema.executor import (
     UnknownObjectTypeError,
 )
 from netbox_custom_objects.schema.validation import schema_error_dicts
-from netbox_custom_objects.utilities import is_in_branch
 
 from . import serializers
 
