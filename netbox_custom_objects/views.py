@@ -1,3 +1,4 @@
+import json
 import logging
 
 from core.models import ObjectChange
@@ -8,6 +9,7 @@ from django.contrib import messages
 from django.contrib.contenttypes.models import ContentType
 from django.db import router, transaction
 from django.db.models import ProtectedError, Q, RestrictedError
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils.html import escape
@@ -23,6 +25,7 @@ from netbox.forms import (
     NetBoxModelBulkEditForm,
     NetBoxModelImportForm,
 )
+from netbox.object_actions import AddObject, BulkDelete, BulkEdit, BulkImport, BulkRename
 from netbox.views import generic
 from netbox.views.generic.mixins import TableMixin
 from utilities.forms import ConfirmationForm, DeleteForm, restrict_form_fields
@@ -34,6 +37,7 @@ from utilities.htmx import htmx_partial
 from utilities.object_types import object_type_name
 from utilities.templatetags.builtins.filters import bettertitle
 from utilities.permissions import get_permission_for_model
+from netbox.views.generic.utils import get_prerequisite_model
 from utilities.views import ConditionalLoginRequiredMixin, ViewTab, get_viewname, register_model_view
 
 from netbox_custom_objects.filtersets import get_filterset_class
@@ -43,7 +47,20 @@ from .models import CustomObject, CustomObjectType, CustomObjectTypeField
 from extras.choices import CustomFieldTypeChoices
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.dynamic_forms import build_filterset_form_class
-from netbox_custom_objects.utilities import extract_cot_id_from_model_name
+from netbox_custom_objects.object_actions import CustomObjectTypeBulkExport
+from netbox_custom_objects.schema.comparator import diff_document
+from netbox_custom_objects.schema.exporter import export_cots
+from netbox_custom_objects.schema.executor import (
+    apply_document,
+    CircularDependencyError,
+    DestructiveChangesError,
+    ObjectSeedError,
+    UnknownChoiceSetError,
+    UnknownFieldTypeError,
+    UnknownObjectTypeError,
+)
+from netbox_custom_objects.schema.validation import schema_error_dicts
+from netbox_custom_objects.utilities import extract_cot_id_from_model_name, is_in_branch
 
 logger = logging.getLogger("netbox_custom_objects.views")
 
@@ -55,6 +72,47 @@ def _is_in_branch():
         return active_branch.get() is not None
     except ImportError:
         return False
+
+
+# ---------------------------------------------------------------------------
+# Portable-schema (schema import / export) helpers
+#
+# These thin helpers serialise/parse a portable-schema *document* (the dict
+# produced by schema.exporter.export_cots and consumed by
+# schema.executor.apply_document).  They never reimplement the schema logic;
+# they only translate between text and the backend's dict form.  Import accepts
+# JSON only; import and export use the portable-schema JSON document format.
+# ---------------------------------------------------------------------------
+
+
+def _schema_document_to_json(document) -> str:
+    return json.dumps(document, indent=2, ensure_ascii=False, sort_keys=False, default=str)
+
+
+def _parse_schema_text(text):
+    """
+    Parse a pasted portable-schema document.
+
+    Accepts JSON only (see docs/portable-schema.md).  Returns the parsed
+    object.  Raises ``ValueError`` with a human-readable message on a parse
+    error or when the result isn't a mapping.
+    """
+    text = (text or '').strip()
+    if not text:
+        raise ValueError(_('No schema document was provided.'))
+
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            _('Could not parse the document as JSON: %(error)s') % {'error': exc}
+        ) from exc
+
+    if not isinstance(parsed, dict):
+        raise ValueError(
+            _("The schema document must be a mapping (object) with a 'types' list.")
+        )
+    return parsed
 
 
 # ---------------------------------------------------------------------------
@@ -303,6 +361,46 @@ class CustomObjectTypeListView(generic.ObjectListView):
     filterset = filtersets.CustomObjectTypeFilterSet
     filterset_form = forms.CustomObjectTypeFilterForm
     table = tables.CustomObjectTypeTable
+    actions = (
+        AddObject,
+        BulkImport,
+        CustomObjectTypeBulkExport,
+        BulkEdit,
+        BulkRename,
+        BulkDelete,
+    )
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).select_related('object_type')
+
+    def get_table(self, data, request, bulk_actions=True):
+        if hasattr(data, 'select_related'):
+            data = list(data)
+        else:
+            data = list(data)
+        CustomObjectType.bulk_load_list_stats(data)
+        return super().get_table(data, request, bulk_actions=bulk_actions)
+
+    def get(self, request):
+        if request.GET.get('export') == 'schema':
+            return self.export_schema(request)
+        return super().get(request)
+
+    def export_schema(self, request):
+        if not request.user.has_perm('netbox_custom_objects.view_customobjecttype'):
+            return redirect(reverse('plugins:netbox_custom_objects:customobjecttype_list'))
+
+        queryset = self.queryset
+        if self.filterset:
+            queryset = self.filterset(request.GET, queryset, request=request).qs
+
+        document = export_cots(queryset)
+        response = HttpResponse(
+            json.dumps(document, indent=2, ensure_ascii=False, default=str),
+            content_type='application/json',
+        )
+        response['Content-Disposition'] = 'attachment; filename="custom-object-types-schema.json"'
+        return response
 
 
 @register_model_view(CustomObjectType)
@@ -336,13 +434,158 @@ class CustomObjectTypeView(CustomObjectTableMixin, generic.ObjectView):
         }
 
 
+class SchemaImportMixin:
+    """Portable schema JSON import on the COT add page (JSON tab)."""
+
+    def _can_apply_schema(self, request):
+        return (
+            request.user.has_perm('netbox_custom_objects.add_customobjecttype')
+            and request.user.has_perm('netbox_custom_objects.change_customobjecttype')
+        )
+
+    def _schema_tab_context_defaults(self):
+        return {
+            'document_text': '',
+            'diffs': None,
+            'schema_errors': None,
+            'parse_error': None,
+            'apply_error': None,
+            'can_apply_schema': False,
+            'allow_destructive': False,
+            'active_tab': 'create',
+        }
+
+    def _get_add_form_context(self, request, view_kwargs):
+        obj = self.get_object(**view_kwargs)
+        obj = self.alter_object(obj, request, (), view_kwargs)
+        form = self.form(instance=obj, initial=normalize_querydict(request.GET))
+        restrict_form_fields(form, request.user)
+        return obj, form
+
+    def _render_add_page(self, request, view_kwargs=None, **extra):
+        view_kwargs = view_kwargs or {}
+        obj, form = self._get_add_form_context(request, view_kwargs)
+        context = {
+            'object': obj,
+            'form': form,
+            'model': CustomObjectType,
+            'return_url': self.get_return_url(request, obj),
+            'branch_bypass_warning': is_in_branch(),
+            'prerequisite_model': get_prerequisite_model(self.queryset),
+            **self._schema_tab_context_defaults(),
+            **self.get_extra_context(request, obj),
+            **extra,
+        }
+        return render(request, self.template_name, context)
+
+    def _process_schema_import_post(self, request, **view_kwargs):
+        document_text = request.POST.get('document_text', '')
+        action = request.POST.get('action', 'preview')
+        allow_destructive = request.POST.get('allow_destructive') in ('on', 'true', '1')
+
+        base = {
+            'document_text': document_text,
+            'allow_destructive': allow_destructive,
+            'active_tab': 'json',
+            'can_apply_schema': self._can_apply_schema(request),
+        }
+
+        try:
+            schema_doc = _parse_schema_text(document_text)
+        except ValueError as exc:
+            return self._render_add_page(request, view_kwargs=view_kwargs, parse_error=str(exc), **base)
+
+        schema_errors = schema_error_dicts(schema_doc)
+        if schema_errors:
+            return self._render_add_page(request, view_kwargs=view_kwargs, schema_errors=schema_errors, **base)
+
+        try:
+            diffs = diff_document(schema_doc)
+        except Exception as exc:
+            logger.debug('schema-import: diff failed', exc_info=True)
+            return self._render_add_page(request, view_kwargs=view_kwargs, apply_error=str(exc), **base)
+
+        if action != 'apply':
+            return self._render_add_page(request, view_kwargs=view_kwargs, diffs=diffs, **base)
+
+        if not self._can_apply_schema(request):
+            return self._render_add_page(
+                request,
+                view_kwargs=view_kwargs,
+                diffs=diffs,
+                apply_error=_(
+                    'You need both the add and change permissions on Custom '
+                    'Object Types to apply a schema document.'
+                ),
+                **base,
+            )
+
+        try:
+            applied = apply_document(schema_doc, allow_destructive=allow_destructive)
+        except DestructiveChangesError as exc:
+            return self._render_add_page(
+                request,
+                view_kwargs=view_kwargs,
+                diffs=diffs,
+                apply_error=_(
+                    "%(detail)s Re-run with 'Allow destructive changes' enabled "
+                    'to apply field removals.'
+                ) % {'detail': str(exc)},
+                **base,
+            )
+        except (
+            CircularDependencyError,
+            UnknownChoiceSetError,
+            UnknownFieldTypeError,
+            UnknownObjectTypeError,
+            ObjectSeedError,
+        ) as exc:
+            return self._render_add_page(request, view_kwargs=view_kwargs, diffs=diffs, apply_error=str(exc), **base)
+
+        changed = [d.slug for d in applied if d.is_new or d.has_changes]
+        messages.success(
+            request,
+            _('Applied schema document: %(count)s Custom Object Type(s) processed%(detail)s.') % {
+                'count': len(applied),
+                'detail': (' (' + ', '.join(changed) + ')') if changed else '',
+            },
+        )
+        return redirect(reverse('plugins:netbox_custom_objects:customobjecttype_list'))
+
+
 @register_model_view(CustomObjectType, "add", detail=False)
 @register_model_view(CustomObjectType, "edit")
-class CustomObjectTypeEditView(generic.ObjectEditView):
+class CustomObjectTypeEditView(SchemaImportMixin, generic.ObjectEditView):
     queryset = CustomObjectType.objects.all()
     form = forms.CustomObjectTypeForm
     template_name = 'netbox_custom_objects/customobjecttype_edit.html'
 
+    def _is_add(self):
+        return not self.kwargs.get('pk')
+
+    def get(self, request, *args, **kwargs):
+        if self._is_add() and request.GET.get('tab') == 'json':
+            return self._render_add_page(
+                request,
+                view_kwargs=kwargs,
+                active_tab='json',
+                can_apply_schema=self._can_apply_schema(request),
+            )
+        return super().get(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        if self._is_add() and (
+            request.POST.get('import_method') == 'schema' or 'document_text' in request.POST
+        ):
+            return self._process_schema_import_post(request, **kwargs)
+        return super().post(request, *args, **kwargs)
+
+    def get_extra_context(self, request, instance):
+        ctx = {'branch_bypass_warning': is_in_branch()}
+        if not instance.pk:
+            ctx.update(self._schema_tab_context_defaults())
+            ctx['can_apply_schema'] = self._can_apply_schema(request)
+        return ctx
 
 @register_model_view(CustomObjectType, "delete")
 class CustomObjectTypeDeleteView(generic.ObjectDeleteView):
@@ -382,6 +625,31 @@ class CustomObjectTypeFieldsView(generic.ObjectChildrenView):
 
     def get_children(self, request, parent):
         return CustomObjectTypeField.objects.restrict(request.user, 'view').filter(custom_object_type=parent)
+
+
+@register_model_view(CustomObjectType, 'export', path='export')
+class CustomObjectTypeExportView(generic.ObjectView):
+    """
+    Read-only "Export" tab on the CustomObjectType detail page.
+
+    Renders the COT's portable-schema export (a single-COT schema document) as
+    JSON with a copy affordance.  Reuses ``schema.exporter.export_cots`` so the
+    output matches the **JSON** tab on the add page.
+    """
+
+    queryset = CustomObjectType.objects.all()
+    template_name = 'netbox_custom_objects/customobjecttype_export.html'
+    tab = ViewTab(
+        label=_('Export'),
+        permission='netbox_custom_objects.view_customobjecttype',
+        weight=560,
+    )
+
+    def get_extra_context(self, request, instance):
+        document = export_cots([instance])
+        return {
+            'schema_json': _schema_document_to_json(document),
+        }
 
 
 #

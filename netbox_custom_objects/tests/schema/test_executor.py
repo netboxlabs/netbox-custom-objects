@@ -27,6 +27,7 @@ from netbox_custom_objects.schema.executor import (
     UnknownChoiceSetError,
     UnknownFieldTypeError,
     UnknownObjectTypeError,
+    ObjectSeedError,
     _build_dep_order,
     apply_document,
     apply_diffs,
@@ -379,6 +380,26 @@ class ExecutorFieldAddTestCase(_ExecutorTestBase):
         })
         with self.assertRaises(UnknownChoiceSetError):
             apply_document({"schema_version": "1", "types": [type_def]})
+
+    def test_choice_sets_in_document_provision_missing_set(self):
+        type_def = export_cot(self.cot)
+        next_id = self.cot.next_schema_id + 1
+        type_def["fields"].append({
+            "id": next_id,
+            "name": "flavour",
+            "type": "select",
+            "choice_set": "Flavours",
+        })
+        apply_document({
+            "schema_version": "1",
+            "choice_sets": [
+                {"name": "Flavours", "choices": ["sweet", "sour"]},
+            ],
+            "types": [type_def],
+        })
+        field = self.cot.fields.select_related("choice_set").get(name="flavour")
+        self.assertEqual(field.choice_set.name, "Flavours")
+        self.assertEqual(field.choice_set.extra_choices, [["sweet", "sweet"], ["sour", "sour"]])
 
     def test_unknown_object_type_raises(self):
         type_def = export_cot(self.cot)
@@ -898,3 +919,175 @@ class ExecutorPolymorphicFieldTestCase(_ExecutorTestBase):
         apply_document(schema_doc)
         self.assertTrue(CustomObjectType.objects.filter(slug="cot-poly-a").exists())
         self.assertTrue(CustomObjectType.objects.filter(slug="cot-poly-b").exists())
+
+
+# ---------------------------------------------------------------------------
+# Object seed data
+# ---------------------------------------------------------------------------
+
+class ExecutorObjectSeedTestCase(_ExecutorTestBase):
+    """Top-level ``objects`` upserts Custom Object instances after types are applied."""
+
+    def _action_service_schema(self, *, include_objects=True):
+        doc = {
+            "schema_version": "1",
+            "choice_sets": [
+                {"name": "status_choices", "choices": ["active", "reserved"]},
+                {"name": "protocol_choices", "choices": ["tcp", "udp"]},
+            ],
+            "types": [
+                {
+                    "name": "security_action",
+                    "slug": "security-action",
+                    "fields": [
+                        {"id": 1, "name": "name", "type": "text", "primary": True, "required": True},
+                        {"id": 2, "name": "status", "type": "select", "choice_set": "status_choices"},
+                        {"id": 3, "name": "color", "type": "text"},
+                    ],
+                },
+                {
+                    "name": "security_service",
+                    "slug": "security-service",
+                    "fields": [
+                        {"id": 1, "name": "name", "type": "text", "primary": True, "required": True},
+                        {"id": 2, "name": "status", "type": "select", "choice_set": "status_choices"},
+                        {"id": 3, "name": "protocol", "type": "select", "choice_set": "protocol_choices"},
+                        {"id": 4, "name": "port", "type": "integer"},
+                    ],
+                },
+            ],
+        }
+        if include_objects:
+            doc["objects"] = [
+                {
+                    "type": "security-action",
+                    "records": [
+                        {"name": "Permit", "status": "active", "color": "#28a745"},
+                        {"name": "Deny", "status": "active", "color": "#dc3545"},
+                    ],
+                },
+                {
+                    "type": "security-service",
+                    "records": [
+                        {"name": "HTTPS", "status": "active", "protocol": "tcp", "port": 443},
+                    ],
+                },
+            ]
+        return doc
+
+    def test_objects_seed_creates_instances(self):
+        apply_document(self._action_service_schema())
+        action_cot = CustomObjectType.objects.get(slug="security-action")
+        service_cot = CustomObjectType.objects.get(slug="security-service")
+        action_model = action_cot.get_model()
+        service_model = service_cot.get_model()
+        self.assertEqual(action_model.objects.count(), 2)
+        self.assertEqual(service_model.objects.count(), 1)
+        permit = action_model.objects.get(name="Permit")
+        self.assertEqual(permit.color, "#28a745")
+        https = service_model.objects.get(name="HTTPS")
+        self.assertEqual(https.protocol, "tcp")
+        self.assertEqual(https.port, 443)
+
+    def test_objects_seed_updates_existing_by_primary(self):
+        apply_document(self._action_service_schema())
+        action_model = CustomObjectType.objects.get(slug="security-action").get_model()
+        doc = self._action_service_schema()
+        doc["objects"][0]["records"][0]["color"] = "#00ff00"
+        apply_document(doc)
+        self.assertEqual(action_model.objects.get(name="Permit").color, "#00ff00")
+        self.assertEqual(action_model.objects.count(), 2)
+
+    def test_objects_unknown_type_raises(self):
+        doc = self._action_service_schema()
+        doc["objects"].append({"type": "no-such-type", "records": [{"name": "x"}]})
+        with self.assertRaises(UnknownObjectTypeError):
+            apply_document(doc)
+
+    def test_objects_missing_primary_raises(self):
+        doc = self._action_service_schema()
+        doc["objects"][0]["records"][0] = {"status": "active"}
+        with self.assertRaises(ObjectSeedError):
+            apply_document(doc)
+
+    def test_objects_resolve_cross_cot_references(self):
+        doc = self._action_service_schema()
+        doc["objects"].extend([
+            {
+                "type": "security-zone",
+                "records": [
+                    {"name": "trust", "status": "active"},
+                    {"name": "untrust", "status": "active"},
+                ],
+            },
+            {
+                "type": "security-rb-demo1",
+                "records": [
+                    {
+                        "index": 1,
+                        "status": True,
+                        "name": "demo-rule",
+                        "source": ["security-zone/trust"],
+                        "destination": ["security-zone/untrust"],
+                        "services_applications": ["security-service/HTTPS"],
+                        "actions": ["security-action/Permit"],
+                    },
+                ],
+            },
+        ])
+        doc["types"].extend([
+            {
+                "name": "security_zone",
+                "slug": "security-zone",
+                "fields": [
+                    {"id": 1, "name": "name", "type": "text", "primary": True, "required": True},
+                    {"id": 2, "name": "status", "type": "select", "choice_set": "status_choices"},
+                ],
+            },
+            {
+            "name": "security_rb_demo1",
+            "slug": "security-rb-demo1",
+            "fields": [
+                {"id": 1, "name": "index", "type": "integer", "primary": True, "required": True},
+                {"id": 2, "name": "status", "type": "boolean"},
+                {"id": 3, "name": "name", "type": "text", "required": True},
+                {
+                    "id": 4,
+                    "name": "source",
+                    "type": "multiobject",
+                    "required": True,
+                    "is_polymorphic": True,
+                    "related_object_types": ["custom-objects/security-zone"],
+                },
+                {
+                    "id": 5,
+                    "name": "destination",
+                    "type": "multiobject",
+                    "required": True,
+                    "is_polymorphic": True,
+                    "related_object_types": ["custom-objects/security-zone"],
+                },
+                {
+                    "id": 8,
+                    "name": "services_applications",
+                    "type": "multiobject",
+                    "required": True,
+                    "is_polymorphic": True,
+                    "related_object_types": ["custom-objects/security-service"],
+                },
+                {
+                    "id": 9,
+                    "name": "actions",
+                    "type": "multiobject",
+                    "required": True,
+                    "related_object_type": "custom-objects/security-action",
+                },
+            ],
+            },
+        ])
+        apply_document(doc)
+        rb_model = CustomObjectType.objects.get(slug="security-rb-demo1").get_model()
+        rule = rb_model.objects.get(index=1)
+        self.assertEqual(len(rule.source.all()), 1)
+        self.assertEqual(str(rule.source.all()[0]), "trust")
+        self.assertEqual(rule.actions.first().name, "Permit")

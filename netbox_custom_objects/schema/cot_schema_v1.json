@@ -332,6 +332,52 @@
           "description": "Tombstone records for permanently removed fields. IDs here must not appear in 'fields'."
         }
       }
+    },
+
+    "choice_set_definition": {
+      "type": "object",
+      "required": ["name", "choices"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Name of the NetBox CustomFieldChoiceSet referenced by field choice_set attributes."
+        },
+        "choices": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true,
+          "description": "Allowed stored values (import/export labels match the value)."
+        }
+      }
+    },
+
+    "object_group_definition": {
+      "type": "object",
+      "required": ["type", "records"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/slug",
+          "description": "Slug of the Custom Object Type to seed (must exist after types are applied)."
+        },
+        "records": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "minProperties": 1,
+            "additionalProperties": true,
+            "description": "Field values keyed by field name. Must include the primary field; scalar types only."
+          },
+          "description": "Instance rows upserted by primary field value on apply."
+        }
+      }
     }
   },
 
@@ -349,6 +395,16 @@
       "minItems": 1,
       "items": { "$ref": "#/$defs/cot_definition" },
       "description": "One or more Custom Object Type definitions."
+    },
+    "choice_sets": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/choice_set_definition" },
+      "description": "Optional CustomFieldChoiceSet definitions. Created or updated during apply when referenced by select/multiselect fields."
+    },
+    "objects": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/object_group_definition" },
+      "description": "Optional Custom Object instance seed data. Upserted by primary field after types are applied."
     }
   }
 }

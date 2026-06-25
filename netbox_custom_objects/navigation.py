@@ -9,6 +9,7 @@ from utilities.string import title
 
 from netbox_custom_objects.constants import APP_LABEL
 
+
 custom_object_type_plugin_menu_item = PluginMenuItem(
     link="plugins:netbox_custom_objects:customobjecttype_list",
     link_text=_("Custom Object Types"),

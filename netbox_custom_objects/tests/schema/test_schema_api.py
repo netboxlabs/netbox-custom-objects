@@ -54,6 +54,10 @@ class _SchemaAPIBase(TransactionCleanupMixin, CustomObjectsTestCase, Transaction
     def apply_url(self):
         return reverse("plugins-api:netbox_custom_objects-api:schema-apply")
 
+    @property
+    def export_url(self):
+        return reverse("plugins-api:netbox_custom_objects-api:schema-export")
+
     def _apply_body(self, schema_doc, allow_destructive=False):
         return {"schema": schema_doc, "allow_destructive": allow_destructive}
 
@@ -388,3 +392,140 @@ class SchemaApplyTestCase(_SchemaAPIBase):
         )
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("allow_destructive", resp.data)
+
+    def test_apply_with_choice_sets_and_objects(self):
+        schema_doc = {
+            "schema_version": "1",
+            "choice_sets": [
+                {"name": "ApiStatus", "choices": ["active"]},
+            ],
+            "types": [
+                {
+                    "name": "api_action",
+                    "slug": "api-action",
+                    "fields": [
+                        {"id": 1, "name": "name", "type": "text", "primary": True, "required": True},
+                        {"id": 2, "name": "status", "type": "select", "choice_set": "ApiStatus"},
+                    ],
+                },
+            ],
+            "objects": [
+                {
+                    "type": "api-action",
+                    "records": [{"name": "Permit", "status": "active"}],
+                },
+            ],
+        }
+        resp = self.client.post(self.apply_url, data=self._apply_body(schema_doc), format="json")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        cot = CustomObjectType.objects.get(slug="api-action")
+        self.assertEqual(cot.get_model().objects.filter(name="Permit").count(), 1)
+
+
+    def test_apply_security_objects_example_returns_200(self):
+        import json
+        from pathlib import Path
+
+        example = (
+            Path(__file__).resolve().parents[2]
+            / 'schema'
+            / 'examples'
+            / 'security_objects.json'
+        )
+        schema_doc = json.loads(example.read_text())
+        resp = self.client.post(self.apply_url, data=self._apply_body(schema_doc), format="json")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertTrue(resp.data['applied'])
+        self.assertEqual(len(resp.data['diffs']), len(schema_doc['types']))
+        self.assertEqual(
+            CustomObjectType.objects.filter(slug__in=[t['slug'] for t in schema_doc['types']]).count(),
+            len(schema_doc['types']),
+        )
+
+    def test_apply_security_objects_example_creates_choice_sets(self):
+        import json
+        from pathlib import Path
+
+        from extras.models import CustomFieldChoiceSet
+
+        example = (
+            Path(__file__).resolve().parents[2]
+            / 'schema'
+            / 'examples'
+            / 'security_objects.json'
+        )
+        schema_doc = json.loads(example.read_text())
+        self.client.post(self.apply_url, data=self._apply_body(schema_doc), format="json")
+        for spec in schema_doc['choice_sets']:
+            self.assertTrue(CustomFieldChoiceSet.objects.filter(name=spec['name']).exists())
+
+    def test_apply_object_seed_error_returns_object_seed(self):
+        schema_doc = {
+            "schema_version": "1",
+            "types": [
+                {
+                    "name": "api_action2",
+                    "slug": "api-action-2",
+                    "fields": [
+                        {"id": 1, "name": "name", "type": "text", "primary": True, "required": True},
+                    ],
+                },
+            ],
+            "objects": [
+                {"type": "api-action-2", "records": [{"status": "active"}]},
+            ],
+        }
+        resp = self.client.post(self.apply_url, data=self._apply_body(schema_doc), format="json")
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(resp.data["error"], "object_seed")
+
+
+# ---------------------------------------------------------------------------
+# Export endpoint
+# ---------------------------------------------------------------------------
+
+class SchemaExportTestCase(_SchemaAPIBase):
+    """GET /schema/export/ returns a portable schema document."""
+
+    def setUp(self):
+        super().setUp()
+        self.cot = self.create_custom_object_type(name='exportcot', slug='export-cot')
+        self.create_custom_object_type_field(self.cot, name='alpha', type='text')
+
+    def test_export_all_returns_200(self):
+        resp = self.client.get(self.export_url)
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data['schema_version'], '1')
+        self.assertIn('types', resp.data)
+
+    def test_export_all_includes_cot(self):
+        resp = self.client.get(self.export_url)
+        slugs = [t['slug'] for t in resp.data['types']]
+        self.assertIn('export-cot', slugs)
+
+    def test_export_filter_by_slug(self):
+        resp = self.client.get(self.export_url, {'slug': ['export-cot']})
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(resp.data['types']), 1)
+        self.assertEqual(resp.data['types'][0]['slug'], 'export-cot')
+
+    def test_export_unknown_slug_returns_400(self):
+        resp = self.client.get(self.export_url, {'slug': ['no-such-cot']})
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('slug', resp.data)
+
+    def test_export_round_trips_through_preview(self):
+        export_resp = self.client.get(self.export_url, {'slug': ['export-cot']})
+        preview_resp = self.client.post(
+            self.preview_url,
+            data=export_resp.data,
+            format='json',
+        )
+        self.assertEqual(preview_resp.status_code, status.HTTP_200_OK)
+        self.assertFalse(preview_resp.data['diffs'][0]['has_changes'])
+
+    def test_export_excludes_choice_sets_and_objects(self):
+        resp = self.client.get(self.export_url, {'slug': ['export-cot']})
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertNotIn('choice_sets', resp.data)
+        self.assertNotIn('objects', resp.data)

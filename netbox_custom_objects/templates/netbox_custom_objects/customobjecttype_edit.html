@@ -1,6 +1,91 @@
 {% extends 'generic/object_edit.html' %}
 {% load i18n %}
 
+{% block tabs %}
+  {% if not object.pk %}
+    <ul class="nav nav-tabs">
+      <li class="nav-item" role="presentation">
+        <button class="nav-link{% if active_tab != 'json' %} active{% endif %}" id="edit-form-tab" data-bs-toggle="tab" data-bs-target="#edit-form" data-href="#tab_edit-form" type="button" role="tab" aria-controls="edit-form" aria-selected="{% if active_tab != 'json' %}true{% else %}false{% endif %}">
+          {% trans "Create" %}
+        </button>
+      </li>
+      <li class="nav-item" role="presentation">
+        <button class="nav-link{% if active_tab == 'json' %} active{% endif %}" id="json-tab" data-bs-toggle="tab" data-bs-target="#json-import" data-href="#tab_json" type="button" role="tab" aria-controls="json-import" aria-selected="{% if active_tab == 'json' %}true{% else %}false{% endif %}">
+          {% trans "JSON" %}
+        </button>
+      </li>
+    </ul>
+  {% else %}
+    {{ block.super }}
+  {% endif %}
+{% endblock tabs %}
+
 {% block form %}
+  {% if object.pk and branch_bypass_warning %}
+    {% include 'netbox_custom_objects/inc/branch_bypass_warning.html' %}
+  {% endif %}
   {{ block.super }}
 {% endblock form %}
+
+{% block content %}
+  {% if not object.pk %}
+    {% if branch_bypass_warning %}
+      {% include 'netbox_custom_objects/inc/branch_bypass_warning.html' %}
+    {% endif %}
+
+    <div class="tab-pane{% if active_tab != 'json' %} show active{% endif %}" id="edit-form" role="tabpanel" aria-labelledby="edit-form-tab">
+      {% if prerequisite_model %}
+        {% include 'inc/missing_prerequisites.html' %}
+      {% endif %}
+
+      <form action="" method="post" enctype="multipart/form-data" class="object-edit object-edit--with-sticky-actions mt-5">
+        {% csrf_token %}
+
+        {% block pre_form_fields %}{% endblock pre_form_fields %}
+        <div id="form_fields" hx-disinherit="hx-select hx-swap">
+          {% include 'htmx/form.html' %}
+        </div>
+
+        <div class="sticky-actions sticky-actions-footer d-print-none" data-sticky-position="full" data-sticky-when="always">
+          <div class="btn-list">
+            {% block buttons %}
+              <a href="{{ return_url }}" class="btn btn-outline-secondary">{% trans "Cancel" %}</a>
+              <div class="btn-group" role="group" aria-label="{% trans "Actions" %}">
+                <button type="submit" name="_create" class="btn btn-primary">
+                  {% trans "Create" %}
+                </button>
+                <button type="submit" name="_addanother" class="btn btn-outline-primary">
+                  {% trans "Create & Add Another" %}
+                </button>
+              </div>
+            {% endblock buttons %}
+          </div>
+        </div>
+      </form>
+    </div>
+
+    <div class="tab-pane{% if active_tab == 'json' %} show active{% endif %}" id="json-import" role="tabpanel" aria-labelledby="json-tab">
+      <div class="col col-md-12 col-lg-10 offset-lg-1 mt-4">
+        {% include 'netbox_custom_objects/inc/schema_import_panel.html' %}
+      </div>
+    </div>
+
+    {% if diffs is not None %}
+      {% include 'netbox_custom_objects/inc/schema_import_preview.html' %}
+    {% endif %}
+
+    <script>
+      (function () {
+        var jsonTab = document.getElementById('json-tab');
+
+        {% if active_tab == 'json' %}
+        if (jsonTab) {
+          bootstrap.Tab.getOrCreateInstance(jsonTab).show();
+        }
+        {% endif %}
+      })();
+    </script>
+  {% else %}
+    {{ block.super }}
+  {% endif %}
+{% endblock content %}

@@ -1,9 +1,4 @@
-import functools
-import json
 import logging
-from pathlib import Path
-
-import jsonschema
 
 from django.apps import apps as django_apps
 from django.contrib.contenttypes.models import ContentType
@@ -31,14 +26,19 @@ from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.filtersets import get_filterset_class
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.schema.comparator import diff_document
+from netbox_custom_objects.schema.exporter import export_cots
 from netbox_custom_objects.schema.executor import (
     apply_document,
     CircularDependencyError,
     DestructiveChangesError,
+    ObjectSeedError,
     UnknownChoiceSetError,
     UnknownFieldTypeError,
     UnknownObjectTypeError,
 )
+from netbox_custom_objects.schema.validation import schema_error_dicts
+from netbox_custom_objects.utilities import is_in_branch
+
 from . import serializers
 
 logger = logging.getLogger(__name__)
@@ -47,31 +47,15 @@ logger = logging.getLogger(__name__)
 # Schema document helpers
 # ---------------------------------------------------------------------------
 
-_SCHEMA_FILE = Path(__file__).parent.parent / "schema" / "cot_schema_v1.json"
-
-
-@functools.lru_cache(maxsize=1)
-def _get_validator():
-    """Load the COT JSON Schema file and return a validator. Cached after first call."""
-    with open(_SCHEMA_FILE) as f:
-        schema = json.load(f)
-    return jsonschema.Draft202012Validator(schema)
-
 
 def _validate_schema_doc(schema_doc: dict) -> None:
     """
     Validate *schema_doc* against the COT schema v1 JSON Schema.
     Raises ``ValidationError`` (DRF 400) if validation fails.
     """
-    validator = _get_validator()
-    errors = sorted(validator.iter_errors(schema_doc), key=lambda e: list(e.path))
+    errors = schema_error_dicts(schema_doc)  # capped at 10 to avoid overwhelming responses
     if errors:
-        raise ValidationError({
-            "schema_errors": [
-                {"path": list(e.path), "message": e.message}
-                for e in errors[:10]  # cap at 10 to avoid overwhelming responses
-            ]
-        })
+        raise ValidationError({'schema_errors': errors})
 
 
 def _serialize_field_change(fc) -> dict:
@@ -311,12 +295,23 @@ class SchemaPreviewView(APIView):
     ``cot_schema_v1.json``.  Returns a structured diff for every COT in the
     document without making any DB changes.
 
+    Optional top-level keys ``choice_sets`` and ``objects`` are validated but
+    ignored by preview — only ``types`` (and tombstones therein) affect the diff.
+
     ## Request body
 
         {
             "schema_version": "1",
-            "types": [ ... ]
+            "choice_sets": [
+                {"name": "status_choices", "choices": ["active", "reserved"]}
+            ],
+            "types": [ ... ],
+            "objects": [
+                {"type": "my-cot", "records": [{"name": "Example"}]}
+            ]
         }
+
+    Recommended key order: ``schema_version``, ``choice_sets``, ``types``, ``objects``.
 
     ## Response (200)
 
@@ -361,18 +356,36 @@ class SchemaApplyView(APIView):
     current DB state and all changes are applied atomically.  The applied
     diffs are returned in the response.
 
+    Apply order inside one transaction: ``choice_sets`` → ``types`` → ``objects``.
+
     ## Request body
 
         {
             "allow_destructive": false,
             "schema": {
                 "schema_version": "1",
-                "types": [ ... ]
+                "choice_sets": [
+                    {"name": "status_choices", "choices": ["active", "reserved"]}
+                ],
+                "types": [ ... ],
+                "objects": [
+                    {
+                        "type": "security-action",
+                        "records": [
+                            {"name": "Permit", "status": "active"}
+                        ]
+                    }
+                ]
             }
         }
 
     ``allow_destructive`` defaults to ``false``.  Set it to ``true`` to
     permit ``REMOVE`` field operations (which drop DB columns).
+
+    ``objects`` upserts Custom Object instances by primary field after types
+    exist.  Scalar fields are set directly; ``object`` / ``multiobject`` columns
+    accept ``"cot-slug/primary-value"`` references (see portable-schema docs).
+    Referenced rows must appear earlier in the ``objects`` array.
 
     ## Response (200)
 
@@ -392,8 +405,23 @@ class SchemaApplyView(APIView):
             "destructive_slugs": ["my-cot"]
         }
 
-    **400 Bad Request** — circular COT dependency, unresolvable FK target,
-    or invalid schema document structure.
+    **400 Bad Request** — invalid schema document:
+
+        {"schema_errors": [{"path": [...], "message": "..."}]}
+
+    **400 Bad Request** — circular COT dependency:
+
+        {"error": "circular_dependency", "detail": "..."}
+
+    **400 Bad Request** — unresolvable schema reference (choice set, field type,
+    or related object type during type apply):
+
+        {"error": "unresolvable_reference", "detail": "..."}
+
+    **400 Bad Request** — object seed failure (missing primary, bad reference,
+    object group ordering):
+
+        {"error": "object_seed", "detail": "..."}
 
     Unexpected DB errors (e.g. ``IntegrityError`` from a constraint violation
     unrelated to the COT schema logic) are not caught and will surface as
@@ -453,5 +481,38 @@ class SchemaApplyView(APIView):
                 {"error": "unresolvable_reference", "detail": str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        except ObjectSeedError as exc:
+            return Response(
+                {"error": "object_seed", "detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         return Response({"applied": True, "diffs": [_serialize_diff(d) for d in diffs]})
+
+
+class SchemaExportView(APIView):
+    """
+    Export Custom Object Type definitions as a portable schema document.
+
+    ``GET`` with no query parameters exports all COTs.  Pass one or more
+    ``slug`` query parameters to restrict the export, e.g.
+    ``?slug=circuit&slug=device-profile``.
+
+    The response contains ``schema_version`` and ``types`` only.  It does **not**
+    include ``choice_sets`` or ``objects`` — add those manually when preparing a
+    greenfield import document (see portable-schema documentation).
+    """
+
+    permission_classes = [IsAuthenticatedOrLoginNotRequired]
+
+    def get(self, request, *args, **kwargs):
+        slugs = request.query_params.getlist('slug')
+        queryset = CustomObjectType.objects.all().order_by('slug')
+        if slugs:
+            queryset = queryset.filter(slug__in=slugs)
+            missing = sorted(set(slugs) - set(queryset.values_list('slug', flat=True)))
+            if missing:
+                raise ValidationError({
+                    'slug': _('Unknown slug(s): %(slugs)s') % {'slugs': ', '.join(missing)},
+                })
+        return Response(export_cots(queryset))

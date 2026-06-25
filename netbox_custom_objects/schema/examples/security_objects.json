@@ -1,0 +1,1035 @@
+{
+  "schema_version": "1",
+  "choice_sets": [
+  {
+    "name": "security_object_status",
+    "choices": ["active", "reserved", "deprecated"]
+  },
+  {
+    "name": "security_service_protocol",
+    "choices": ["tcp", "udp", "sctp", "icmp", "icmpv6", "gre", "esp", "ah", "ip", "any"]
+  },
+  {
+    "name": "security_label_type",
+    "choices": ["role", "application", "environment", "location", "custom"]
+  },
+  {
+    "name": "security_app_business_criticality",
+    "choices": ["low", "medium", "high", "critical"]
+  },
+  {
+    "name": "security_object_link_type",
+    "choices": ["policy", "rulebook", "enforcement_point"]
+  },
+  {
+    "name": "security_object_link_propagation",
+    "choices": ["direct", "inherit_ipam", "inherit_ipam_stop", "inherit_group", "inherit_group_stop"]
+  }
+  ],
+  "types": [
+    {
+      "name": "security_action",
+      "slug": "security-action",
+      "verbose_name": "Action",
+      "verbose_name_plural": "Actions",
+      "description": "Policy action for matching traffic in a rule (e.g. permit, deny, drop, reject). Used in rulebook Action columns.",
+      "group_name": "Security Objects",
+      "fields": [
+        {
+          "id": 1,
+          "name": "name",
+          "type": "text",
+          "label": "Name",
+          "primary": true,
+          "required": true,
+          "weight": 1
+        },
+        {
+          "id": 5,
+          "name": "status",
+          "type": "select",
+          "label": "Status",
+          "required": true,
+          "weight": 2,
+          "default": "active",
+          "choice_set": "security_object_status"
+        },
+        {
+          "id": 2,
+          "name": "color",
+          "type": "text",
+          "label": "Color",
+          "weight": 91
+        },
+        {
+          "id": 3,
+          "name": "description",
+          "type": "text",
+          "label": "Description",
+          "weight": 90
+        },
+        {
+          "id": 4,
+          "name": "comments",
+          "type": "longtext",
+          "label": "Comments",
+          "weight": 100
+        }
+      ],
+      "removed_fields": []
+    },
+    {
+      "name": "security_service",
+      "slug": "security-service",
+      "verbose_name": "Service",
+      "verbose_name_plural": "Services",
+      "description": "Represents one network service (protocol + port). Used in rulebook Service columns and Security Panel links.",
+      "group_name": "Security Objects",
+      "fields": [
+        {
+          "id": 1,
+          "name": "name",
+          "type": "text",
+          "label": "Name",
+          "primary": true,
+          "required": true,
+          "weight": 1
+        },
+        {
+          "id": 5,
+          "name": "status",
+          "type": "select",
+          "label": "Status",
+          "required": true,
+          "weight": 2,
+          "default": "active",
+          "choice_set": "security_object_status"
+        },
+        {
+          "id": 2,
+          "name": "color",
+          "type": "text",
+          "label": "Color",
+          "weight": 91
+        },
+        {
+          "id": 3,
+          "name": "description",
+          "type": "text",
+          "label": "Description",
+          "weight": 90
+        },
+        {
+          "id": 4,
+          "name": "comments",
+          "type": "longtext",
+          "label": "Comments",
+          "weight": 100
+        },
+        {
+          "id": 100,
+          "name": "protocol",
+          "type": "select",
+          "label": "Protocol",
+          "required": true,
+          "weight": 10,
+          "choice_set": "security_service_protocol"
+        },
+        {
+          "id": 101,
+          "name": "port",
+          "type": "integer",
+          "label": "Port",
+          "description": "Port 0–65535 (TCP/UDP/SCTP only).",
+          "validation_minimum": 0,
+          "validation_maximum": 65535,
+          "weight": 11
+        }
+      ],
+      "removed_fields": []
+    },
+    {
+      "name": "security_service_group",
+      "slug": "security-service-group",
+      "verbose_name": "Service Group",
+      "verbose_name_plural": "Service Groups",
+      "description": "Named collection of services. Referenced in rulebook Service columns; members are security_service objects.",
+      "group_name": "Security Objects",
+      "fields": [
+        {
+          "id": 1,
+          "name": "name",
+          "type": "text",
+          "label": "Name",
+          "primary": true,
+          "required": true,
+          "weight": 1
+        },
+        {
+          "id": 5,
+          "name": "status",
+          "type": "select",
+          "label": "Status",
+          "required": true,
+          "weight": 2,
+          "default": "active",
+          "choice_set": "security_object_status"
+        },
+        {
+          "id": 2,
+          "name": "color",
+          "type": "text",
+          "label": "Color",
+          "weight": 91
+        },
+        {
+          "id": 3,
+          "name": "description",
+          "type": "text",
+          "label": "Description",
+          "weight": 90
+        },
+        {
+          "id": 4,
+          "name": "comments",
+          "type": "longtext",
+          "label": "Comments",
+          "weight": 100
+        },
+        {
+          "id": 100,
+          "name": "group",
+          "type": "multiobject",
+          "label": "Group Members",
+          "description": "Member service objects in this group.",
+          "required": true,
+          "weight": 10,
+          "related_object_type": "custom-objects/security-service"
+        }
+      ],
+      "removed_fields": []
+    },
+    {
+      "name": "security_address",
+      "slug": "security-address",
+      "verbose_name": "Address",
+      "verbose_name_plural": "Addresses",
+      "description": "Named address object for policy rules (host, prefix, or range). Used in Source/Destination columns and Security Panel links.",
+      "group_name": "Security Objects",
+      "fields": [
+        {
+          "id": 1,
+          "name": "name",
+          "type": "text",
+          "label": "Name",
+          "primary": true,
+          "required": true,
+          "weight": 1
+        },
+        {
+          "id": 5,
+          "name": "status",
+          "type": "select",
+          "label": "Status",
+          "required": true,
+          "weight": 2,
+          "default": "active",
+          "choice_set": "security_object_status"
+        },
+        {
+          "id": 2,
+          "name": "color",
+          "type": "text",
+          "label": "Color",
+          "weight": 91
+        },
+        {
+          "id": 3,
+          "name": "description",
+          "type": "text",
+          "label": "Description",
+          "weight": 90
+        },
+        {
+          "id": 4,
+          "name": "comments",
+          "type": "longtext",
+          "label": "Comments",
+          "weight": 100
+        },
+        {
+          "id": 104,
+          "name": "address",
+          "type": "object",
+          "label": "Address",
+          "description": "NetBox IP address, range, or prefix this policy object represents.",
+          "required": false,
+          "weight": 11,
+          "is_polymorphic": true,
+          "related_object_types": [
+            "ipam/ipaddress",
+            "ipam/iprange",
+            "ipam/prefix"
+          ]
+        }
+      ],
+      "removed_fields": [
+        {
+          "id": 100,
+          "name": "ip_address",
+          "type": "object"
+        },
+        {
+          "id": 101,
+          "name": "range",
+          "type": "object"
+        },
+        {
+          "id": 102,
+          "name": "prefix",
+          "type": "object"
+        },
+        {
+          "id": 105,
+          "name": "network_literal",
+          "type": "text"
+        },
+        {
+          "id": 103,
+          "name": "group",
+          "type": "multiobject"
+        }
+      ]
+    },
+    {
+      "name": "security_address_group",
+      "slug": "security-address-group",
+      "verbose_name": "Address Group",
+      "verbose_name_plural": "Address Groups",
+      "description": "Named collection of address objects. Used in Source/Destination columns; members are security_address objects.",
+      "group_name": "Security Objects",
+      "fields": [
+        {
+          "id": 1,
+          "name": "name",
+          "type": "text",
+          "label": "Name",
+          "primary": true,
+          "required": true,
+          "weight": 1
+        },
+        {
+          "id": 5,
+          "name": "status",
+          "type": "select",
+          "label": "Status",
+          "required": true,
+          "weight": 2,
+          "default": "active",
+          "choice_set": "security_object_status"
+        },
+        {
+          "id": 2,
+          "name": "color",
+          "type": "text",
+          "label": "Color",
+          "weight": 91
+        },
+        {
+          "id": 3,
+          "name": "description",
+          "type": "text",
+          "label": "Description",
+          "weight": 90
+        },
+        {
+          "id": 4,
+          "name": "comments",
+          "type": "longtext",
+          "label": "Comments",
+          "weight": 100
+        },
+        {
+          "id": 100,
+          "name": "group",
+          "type": "multiobject",
+          "label": "Group Members",
+          "description": "Member address objects in this group.",
+          "required": true,
+          "weight": 10,
+          "related_object_type": "custom-objects/security-address"
+        }
+      ],
+      "removed_fields": []
+    },
+    {
+      "name": "security_label",
+      "slug": "security-label",
+      "verbose_name": "Label",
+      "verbose_name_plural": "Labels",
+      "description": "Classification tag for inventory or rules (e.g. compliance, tier). Used in label columns and Security Panel links.",
+      "group_name": "Security Objects",
+      "fields": [
+        {
+          "id": 1,
+          "name": "name",
+          "type": "text",
+          "label": "Name",
+          "primary": true,
+          "required": true,
+          "weight": 1
+        },
+        {
+          "id": 5,
+          "name": "status",
+          "type": "select",
+          "label": "Status",
+          "required": true,
+          "weight": 2,
+          "default": "active",
+          "choice_set": "security_object_status"
+        },
+        {
+          "id": 2,
+          "name": "color",
+          "type": "text",
+          "label": "Color",
+          "weight": 91
+        },
+        {
+          "id": 3,
+          "name": "description",
+          "type": "text",
+          "label": "Description",
+          "weight": 90
+        },
+        {
+          "id": 4,
+          "name": "comments",
+          "type": "longtext",
+          "label": "Comments",
+          "weight": 100
+        },
+        {
+          "id": 100,
+          "name": "label_type",
+          "type": "select",
+          "label": "Label Type",
+          "required": true,
+          "weight": 10,
+          "choice_set": "security_label_type"
+        }
+      ],
+      "removed_fields": [
+        {
+          "id": 101,
+          "name": "custom_type",
+          "type": "text"
+        }
+      ]
+    },
+    {
+      "name": "security_zone",
+      "slug": "security-zone",
+      "verbose_name": "Zone",
+      "verbose_name_plural": "Zones",
+      "description": "Logical security zone for segmentation. Linked to inventory via Security Panel; used in rulebook zone columns.",
+      "group_name": "Security Objects",
+      "fields": [
+        {
+          "id": 1,
+          "name": "name",
+          "type": "text",
+          "label": "Name",
+          "primary": true,
+          "required": true,
+          "weight": 1
+        },
+        {
+          "id": 5,
+          "name": "status",
+          "type": "select",
+          "label": "Status",
+          "required": true,
+          "weight": 2,
+          "default": "active",
+          "choice_set": "security_object_status"
+        },
+        {
+          "id": 2,
+          "name": "color",
+          "type": "text",
+          "label": "Color",
+          "weight": 91
+        },
+        {
+          "id": 3,
+          "name": "description",
+          "type": "text",
+          "label": "Description",
+          "weight": 90
+        },
+        {
+          "id": 4,
+          "name": "comments",
+          "type": "longtext",
+          "label": "Comments",
+          "weight": 100
+        }
+      ],
+      "removed_fields": []
+    },
+    {
+      "name": "security_app_business",
+      "slug": "security-app-business",
+      "verbose_name": "Business App",
+      "verbose_name_plural": "Business Apps",
+      "description": "Business application metadata for rule Info columns (ownership, criticality).",
+      "group_name": "Security Objects",
+      "fields": [
+        {
+          "id": 1,
+          "name": "name",
+          "type": "text",
+          "label": "Name",
+          "primary": true,
+          "required": true,
+          "weight": 1
+        },
+        {
+          "id": 5,
+          "name": "status",
+          "type": "select",
+          "label": "Status",
+          "required": true,
+          "weight": 2,
+          "default": "active",
+          "choice_set": "security_object_status"
+        },
+        {
+          "id": 2,
+          "name": "color",
+          "type": "text",
+          "label": "Color",
+          "weight": 91
+        },
+        {
+          "id": 3,
+          "name": "description",
+          "type": "text",
+          "label": "Description",
+          "weight": 90
+        },
+        {
+          "id": 4,
+          "name": "comments",
+          "type": "longtext",
+          "label": "Comments",
+          "weight": 100
+        },
+        {
+          "id": 100,
+          "name": "criticality",
+          "type": "select",
+          "label": "Criticality",
+          "weight": 10,
+          "choice_set": "security_app_business_criticality"
+        },
+        {
+          "id": 101,
+          "name": "business_owner",
+          "type": "object",
+          "label": "Business Owner",
+          "weight": 11,
+          "related_object_type": "tenancy/contactgroup"
+        },
+        {
+          "id": 102,
+          "name": "technical_owner",
+          "type": "object",
+          "label": "Technical Owner",
+          "weight": 12,
+          "related_object_type": "tenancy/contactgroup"
+        }
+      ],
+      "removed_fields": []
+    },
+    {
+      "name": "security_app_network",
+      "slug": "security-app-network",
+      "verbose_name": "Network App",
+      "verbose_name_plural": "Network Apps",
+      "description": "Network application identifier, similar to Palo Alto App-ID (e.g. ssh, onedrive, ssl).",
+      "group_name": "Security Objects",
+      "fields": [
+        {
+          "id": 1,
+          "name": "name",
+          "type": "text",
+          "label": "Name",
+          "primary": true,
+          "required": true,
+          "weight": 1
+        },
+        {
+          "id": 5,
+          "name": "status",
+          "type": "select",
+          "label": "Status",
+          "required": true,
+          "weight": 2,
+          "default": "active",
+          "choice_set": "security_object_status"
+        },
+        {
+          "id": 2,
+          "name": "color",
+          "type": "text",
+          "label": "Color",
+          "weight": 91
+        },
+        {
+          "id": 3,
+          "name": "description",
+          "type": "text",
+          "label": "Description",
+          "weight": 90
+        },
+        {
+          "id": 4,
+          "name": "comments",
+          "type": "longtext",
+          "label": "Comments",
+          "weight": 100
+        },
+        {
+          "id": 100,
+          "name": "app_category",
+          "type": "text",
+          "label": "Category",
+          "weight": 10
+        },
+        {
+          "id": 101,
+          "name": "app_risk",
+          "type": "text",
+          "label": "Risk Level",
+          "description": "Risk level 1 (lowest) to 5 (highest), matching Palo Alto App-ID convention.",
+          "weight": 11
+        },
+        {
+          "id": 102,
+          "name": "default_ports",
+          "type": "text",
+          "label": "Default Ports",
+          "description": "Comma-separated list of default ports/protocols, e.g. tcp/443,tcp/80",
+          "weight": 12
+        }
+      ],
+      "removed_fields": []
+    },
+    {
+      "name": "security_object_link",
+      "slug": "security-object-link",
+      "verbose_name": "Object Link",
+      "verbose_name_plural": "Object Links",
+      "description": "Links NetBox inventory to security policy objects or rulebooks (Security Panel source of truth).",
+      "group_name": "Security Links",
+      "fields": [
+        {
+          "id": 1,
+          "name": "name",
+          "type": "text",
+          "label": "Name",
+          "primary": true,
+          "required": true,
+          "weight": 1
+        },
+        {
+          "id": 5,
+          "name": "status",
+          "type": "select",
+          "label": "Status",
+          "required": true,
+          "weight": 2,
+          "default": "active",
+          "choice_set": "security_object_status"
+        },
+        {
+          "id": 2,
+          "name": "color",
+          "type": "text",
+          "label": "Color",
+          "weight": 91
+        },
+        {
+          "id": 3,
+          "name": "description",
+          "type": "text",
+          "label": "Description",
+          "weight": 90
+        },
+        {
+          "id": 4,
+          "name": "comments",
+          "type": "longtext",
+          "label": "Comments",
+          "weight": 100
+        },
+        {
+          "id": 99,
+          "name": "link_type",
+          "type": "select",
+          "label": "Link Type",
+          "description": "policy: inventory ↔ policy object; rulebook: device/VM/VDC ↔ rulebook (Security Panel); enforcement_point: rulebook enforcement host assignment or interface ↔ security object.",
+          "required": true,
+          "weight": 9,
+          "default": "policy",
+          "choice_set": "security_object_link_type"
+        },
+        {
+          "id": 100,
+          "name": "policy_object",
+          "type": "object",
+          "label": "Policy Object",
+          "description": "security policy object (zone, address, label, service, …). Required for policy links.",
+          "required": false,
+          "weight": 10,
+          "is_polymorphic": true,
+          "related_object_types": [
+            "custom-objects/security-zone",
+            "custom-objects/security-address",
+            "custom-objects/security-address-group",
+            "custom-objects/security-label",
+            "custom-objects/security-service",
+            "custom-objects/security-service-group",
+            "custom-objects/security-app-business",
+            "custom-objects/security-app-network"
+          ]
+        },
+        {
+          "id": 101,
+          "name": "netbox_object",
+          "type": "object",
+          "label": "NetBox Object",
+          "description": "NetBox inventory object this link is stored on (device, VM, VDC, interface, prefix, …).",
+          "required": true,
+          "weight": 11,
+          "is_polymorphic": true,
+          "related_object_types": [
+            "dcim/device",
+            "virtualization/virtualmachine",
+            "dcim/virtualdevicecontext",
+            "dcim/interface",
+            "virtualization/vminterface",
+            "ipam/prefix",
+            "ipam/ipaddress",
+            "ipam/iprange"
+          ]
+        },
+        {
+          "id": 102,
+          "name": "propagation",
+          "type": "select",
+          "label": "Propagation",
+          "description": "How the link is stored and inherited to IPAM children or group members.",
+          "required": false,
+          "weight": 12,
+          "default": "direct",
+          "choice_set": "security_object_link_propagation"
+        },
+        {
+          "id": 103,
+          "name": "comment",
+          "type": "longtext",
+          "label": "Comment",
+          "description": "Optional note shown in the Security Panel link row.",
+          "weight": 13
+        },
+        {
+          "id": 104,
+          "name": "rulebook_slug",
+          "type": "text",
+          "label": "Rulebook Slug",
+          "description": "Deployed COT rulebook slug (security_rb_*) when link_type is rulebook or enforcement_point.",
+          "required": false,
+          "weight": 14
+        }
+      ],
+      "removed_fields": []
+    },
+    {
+      "name": "security_rb_demo1",
+      "slug": "security-rb-demo1",
+      "verbose_name": "Rulebook Demo 1",
+      "verbose_name_plural": "Rulebook Demo 1",
+      "description": "Rulebook Demo 1",
+      "group_name": "Security Rulebooks",
+      "fields": [
+        {
+          "id": 1,
+          "name": "index",
+          "type": "integer",
+          "label": "Index",
+          "required": true,
+          "weight": 1,
+          "primary": true
+        },
+        {
+          "id": 2,
+          "name": "status",
+          "type": "boolean",
+          "label": "Status",
+          "required": false,
+          "weight": 2
+        },
+        {
+          "id": 3,
+          "name": "name",
+          "type": "text",
+          "label": "Name",
+          "required": true,
+          "weight": 3
+        },
+        {
+          "id": 4,
+          "name": "source",
+          "type": "multiobject",
+          "label": "Source",
+          "required": true,
+          "weight": 11,
+          "is_polymorphic": true,
+          "related_object_types": [
+            "custom-objects/security-zone",
+            "custom-objects/security-label",
+            "custom-objects/security-address",
+            "custom-objects/security-address-group"
+          ]
+        },
+        {
+          "id": 5,
+          "name": "destination",
+          "type": "multiobject",
+          "label": "Destination",
+          "required": true,
+          "weight": 21,
+          "is_polymorphic": true,
+          "related_object_types": [
+            "custom-objects/security-zone",
+            "custom-objects/security-label",
+            "custom-objects/security-address",
+            "custom-objects/security-address-group"
+          ]
+        },
+        {
+          "id": 8,
+          "name": "services_applications",
+          "type": "multiobject",
+          "label": "Services & Applications",
+          "required": true,
+          "weight": 40,
+          "is_polymorphic": true,
+          "related_object_types": [
+            "custom-objects/security-service",
+            "custom-objects/security-service-group",
+            "custom-objects/security-app-network"
+          ]
+        },
+        {
+          "id": 9,
+          "name": "actions",
+          "type": "multiobject",
+          "label": "Actions",
+          "required": true,
+          "weight": 50,
+          "related_object_type": "custom-objects/security-action"
+        },
+        {
+          "id": 10,
+          "name": "infos",
+          "type": "multiobject",
+          "label": "Infos",
+          "required": false,
+          "weight": 60,
+          "related_object_type": "custom-objects/security-app-business"
+        },
+        {
+          "id": 11,
+          "name": "description",
+          "type": "longtext",
+          "label": "Description",
+          "required": false,
+          "weight": 100
+        }
+      ],
+      "removed_fields": []
+    }
+  ],
+  "objects": [
+    {
+      "type": "security-action",
+      "records": [
+        {
+          "name": "Permit",
+          "status": "active",
+          "color": "#28a745",
+          "description": "Allow traffic"
+        },
+        {
+          "name": "Deny",
+          "status": "active",
+          "color": "#dc3545",
+          "description": "Deny traffic"
+        },
+        {
+          "name": "Drop",
+          "status": "active",
+          "color": "#6c757d",
+          "description": "Drop traffic"
+        }
+      ]
+    },
+    {
+      "type": "security-service",
+      "records": [
+        {
+          "name": "HTTP",
+          "status": "active",
+          "protocol": "tcp",
+          "port": 80
+        },
+        {
+          "name": "HTTPS",
+          "status": "active",
+          "protocol": "tcp",
+          "port": 443
+        },
+        {
+          "name": "DNS-UDP",
+          "status": "active",
+          "protocol": "tcp",
+          "port": 53
+        },
+        {
+          "name": "DNS-TCP",
+          "status": "active",
+          "protocol": "tcp",
+          "port": 53
+        },
+        {
+          "name": "NTP",
+          "status": "active",
+          "protocol": "udp",
+          "port": 123
+        }
+      ]
+    },
+    {
+      "type": "security-service-group",
+      "records": [
+        {
+          "name": "G-DNS",
+          "status": "active",
+          "group": [
+            "security-service/DNS-UDP",
+            "security-service/DNS-TCP"
+          ]
+        }
+      ]
+    },
+    {
+      "type": "security-zone",
+      "records": [
+        {
+          "name": "trust",
+          "status": "active",
+          "color": "#28a745",
+          "description": "Trusted zone"
+        },
+        {
+          "name": "untrust",
+          "status": "active",
+          "color": "#dc3545",
+          "description": "Untrusted zone"
+        }
+      ]
+    },
+    {
+      "type": "security-rb-demo1",
+      "records": [
+        {
+          "index": 1,
+          "status": true,
+          "name": "trust-to-untrust-https",
+          "source": [
+            "security-zone/trust"
+          ],
+          "destination": [
+            "security-zone/untrust"
+          ],
+          "services_applications": [
+            "security-service/HTTPS"
+          ],
+          "actions": [
+            "security-action/Permit"
+          ],
+          "description": "HTTPS trust → untrust, permit"
+        },
+        {
+          "index": 2,
+          "status": true,
+          "name": "trust-to-untrust-http",
+          "source": [
+            "security-zone/trust"
+          ],
+          "destination": [
+            "security-zone/untrust"
+          ],
+          "services_applications": [
+            "security-service/HTTP"
+          ],
+          "actions": [
+            "security-action/Permit"
+          ],
+          "description": "HTTP trust → untrust, permit"
+        },
+        {
+          "index": 3,
+          "status": true,
+          "name": "untrust-to-trust-https-deny",
+          "source": [
+            "security-zone/untrust"
+          ],
+          "destination": [
+            "security-zone/trust"
+          ],
+          "services_applications": [
+            "security-service/HTTPS"
+          ],
+          "actions": [
+            "security-action/Deny"
+          ],
+          "description": "HTTPS untrust → trust, deny"
+        },
+        {
+          "index": 4,
+          "status": true,
+          "name": "untrust-to-trust-http-deny",
+          "source": [
+            "security-zone/untrust"
+          ],
+          "destination": [
+            "security-zone/trust"
+          ],
+          "services_applications": [
+            "security-service-group/G-DNS"
+          ],
+          "actions": [
+            "security-action/Deny"
+          ],
+          "description": "DNS untrust → trust, deny"
+        }
+      ]
+    }
+  ]
+}

@@ -68,7 +68,7 @@ from utilities.validators import validate_regex
 from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
 from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS, LazyForeignKey, safe_table_name
-from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
+from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob, schedule_reindex_custom_object_type
 from netbox_custom_objects.utilities import (
     _suppress_clear_cache,
     extract_cot_id_from_model_name,
@@ -1853,7 +1853,143 @@ class CustomObjectType(NetBoxModel):
             # Clear the model cache when the CustomObjectType is modified
             self.clear_model_cache(self.id)
 
+    def get_instance_count(self):
+        """Return the number of object instances stored for this Custom Object Type."""
+        if hasattr(self, '_instance_count'):
+            return self._instance_count
+
+        schema_conn = _get_schema_connection()
+        table_name = self.get_database_table_name()
+        if not _table_exists(table_name, conn=schema_conn):
+            return 0
+
+        with schema_conn.cursor() as cursor:
+            cursor.execute(
+                f'SELECT COUNT(*) FROM {schema_conn.ops.quote_name(table_name)}'
+            )
+            return cursor.fetchone()[0]
+
+    def get_referencing_custom_object_types(self):
+        """Return other COTs whose schema references this type."""
+        if hasattr(self, '_referencing_custom_object_types'):
+            return self._referencing_custom_object_types
+
+        if not self.object_type_id:
+            return []
+
+        dependent_cots = {
+            field.custom_object_type
+            for field in CustomObjectTypeField.objects.filter(
+                related_object_type=self.object_type,
+            ).exclude(custom_object_type=self).select_related('custom_object_type')
+        }
+        dependent_cots.update(
+            field.custom_object_type
+            for field in CustomObjectTypeField.objects.filter(
+                is_polymorphic=True,
+                related_object_types=self.object_type,
+            ).exclude(custom_object_type=self).select_related('custom_object_type')
+        )
+        return sorted(dependent_cots, key=lambda cot: cot.name)
+
+    def get_referencing_custom_object_type_count(self):
+        return len(self.get_referencing_custom_object_types())
+
+    @classmethod
+    def bulk_load_list_stats(cls, cots):
+        """Prefetch instance counts and referrers for COT list columns."""
+        cots = list(cots)
+        if not cots:
+            return cots
+
+        counts = {cot.pk: 0 for cot in cots}
+        union_parts = []
+        params = []
+        for cot in cots:
+            schema_conn = _get_schema_connection()
+            table_name = cot.get_database_table_name()
+            if _table_exists(table_name, conn=schema_conn):
+                union_parts.append(
+                    f'SELECT %s AS cot_id, COUNT(*)::bigint AS cnt '
+                    f'FROM {schema_conn.ops.quote_name(table_name)}'
+                )
+                params.append(cot.pk)
+
+        if union_parts:
+            with connection.cursor() as cursor:
+                cursor.execute(' UNION ALL '.join(union_parts), params)
+                for cot_id, count in cursor.fetchall():
+                    counts[cot_id] = count
+
+        for cot in cots:
+            cot._instance_count = counts[cot.pk]
+
+        cot_by_object_type_id = {
+            cot.object_type_id: cot for cot in cots if cot.object_type_id
+        }
+        object_type_ids = list(cot_by_object_type_id)
+        referrers_by_object_type_id = {ot_id: set() for ot_id in object_type_ids}
+
+        if object_type_ids:
+            for field in CustomObjectTypeField.objects.filter(
+                related_object_type_id__in=object_type_ids,
+            ).select_related('custom_object_type'):
+                target_cot = cot_by_object_type_id.get(field.related_object_type_id)
+                if target_cot and field.custom_object_type_id != target_cot.pk:
+                    referrers_by_object_type_id[field.related_object_type_id].add(
+                        field.custom_object_type
+                    )
+
+            polymorphic_fields = CustomObjectTypeField.objects.filter(
+                is_polymorphic=True,
+                related_object_types__in=object_type_ids,
+            ).select_related('custom_object_type').prefetch_related('related_object_types')
+            for field in polymorphic_fields:
+                for related_object_type in field.related_object_types.all():
+                    target_cot = cot_by_object_type_id.get(related_object_type.pk)
+                    if target_cot and field.custom_object_type_id != target_cot.pk:
+                        referrers_by_object_type_id[related_object_type.pk].add(
+                            field.custom_object_type
+                        )
+
+        for cot in cots:
+            if cot.object_type_id:
+                cot._referencing_custom_object_types = sorted(
+                    referrers_by_object_type_id.get(cot.object_type_id, set()),
+                    key=lambda referrer: referrer.name,
+                )
+            else:
+                cot._referencing_custom_object_types = []
+
+        return cots
+
+    def get_deletion_blockers(self):
+        """Return human-readable reasons why this COT cannot be deleted yet."""
+        blockers = []
+
+        instance_count = self.get_instance_count()
+        if instance_count:
+            blockers.append(
+                _('Cannot delete: %(count)d object instance(s) still exist.')
+                % {'count': instance_count}
+            )
+
+        dependent_cots = self.get_referencing_custom_object_types()
+        if dependent_cots:
+            names = ', '.join(cot.name for cot in dependent_cots)
+            blockers.append(
+                _('Cannot delete: the following Custom Object Types still reference this type: %(names)s')
+                % {'names': names}
+            )
+        return blockers
+
     def delete(self, *args, **kwargs):
+        from utilities.exceptions import AbortRequest
+
+        blockers = self.get_deletion_blockers()
+        if blockers:
+            raise AbortRequest(' '.join(str(message) for message in blockers))
+
         # COT is going away — every branch's cached class is stale.
         self.clear_model_cache(self.id, all_branches=True)
 
@@ -3304,8 +3440,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         else:
             needs_reindex = self.search_weight != self.original.search_weight
         if needs_reindex:
-            _cot_id = self.custom_object_type_id
-            transaction.on_commit(lambda: ReindexCustomObjectTypeJob.enqueue(cot_id=_cot_id))
+            schedule_reindex_custom_object_type(self.custom_object_type_id)
 
     def delete(self, *args, **kwargs):
         field_type = FIELD_TYPE_CLASS[self.type]()
@@ -3337,8 +3472,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         self.custom_object_type.register_custom_object_search_index(updated_model)
 
         if self.search_weight > 0:
-            _cot_id = self.custom_object_type_id
-            transaction.on_commit(lambda: ReindexCustomObjectTypeJob.enqueue(cot_id=_cot_id))
+            schedule_reindex_custom_object_type(self.custom_object_type_id)
 
 
 class CustomObjectObjectTypeManager(ObjectTypeManager):

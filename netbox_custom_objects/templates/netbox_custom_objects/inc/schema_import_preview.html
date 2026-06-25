@@ -1,0 +1,77 @@
+{% load i18n %}
+
+<div class="row my-3">
+  <div class="col col-md-12">
+    <div class="card">
+      <h5 class="card-header">{% trans "Preview" %}</h5>
+      <div class="card-body">
+        {% if diffs %}
+          <table class="table table-hover">
+            <thead>
+              <tr>
+                <th>{% trans "Type" %}</th>
+                <th>{% trans "Action" %}</th>
+                <th>{% trans "Field changes" %}</th>
+                <th>{% trans "Type changes" %}</th>
+                <th>{% trans "Warnings" %}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for diff in diffs %}
+              <tr>
+                <td>
+                  <code>{{ diff.slug }}</code>
+                  <div class="text-muted small">{{ diff.name }}</div>
+                </td>
+                <td>
+                  {% if diff.is_new %}
+                    <span class="badge text-bg-success">{% trans "Create" %}</span>
+                  {% elif diff.has_changes %}
+                    <span class="badge text-bg-warning">{% trans "Update" %}</span>
+                  {% else %}
+                    <span class="badge text-bg-secondary">{% trans "No change" %}</span>
+                  {% endif %}
+                  {% if diff.has_destructive_changes %}
+                    <span class="badge text-bg-danger">{% trans "Destructive" %}</span>
+                  {% endif %}
+                </td>
+                <td>
+                  {% if diff.adds %}<span class="badge text-bg-success">+{{ diff.adds|length }}</span>{% endif %}
+                  {% if diff.alters %}<span class="badge text-bg-warning">~{{ diff.alters|length }}</span>{% endif %}
+                  {% if diff.removes %}<span class="badge text-bg-danger">-{{ diff.removes|length }}</span>{% endif %}
+                  {% if not diff.adds and not diff.alters and not diff.removes %}
+                    <span class="text-muted">—</span>
+                  {% endif %}
+                </td>
+                <td>
+                  {% if diff.cot_changes %}
+                    {% for attr, change in diff.cot_changes.items %}
+                      <div class="small"><code>{{ attr }}</code></div>
+                    {% endfor %}
+                  {% else %}
+                    <span class="text-muted">—</span>
+                  {% endif %}
+                </td>
+                <td>
+                  {% if diff.warnings %}
+                    <ul class="mb-0 small text-warning">
+                      {% for warning in diff.warnings %}<li>{{ warning }}</li>{% endfor %}
+                    </ul>
+                  {% else %}
+                    <span class="text-muted">—</span>
+                  {% endif %}
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          <p class="text-muted small mb-0">
+            {% trans "This is a read-only preview. No changes have been made yet." %}
+          </p>
+        {% else %}
+          <p class="text-muted mb-0">{% trans "The document defines no Custom Object Types." %}</p>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>

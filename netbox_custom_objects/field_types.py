@@ -14,7 +14,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import FieldDoesNotExist
 from django.core.validators import RegexValidator
-from django.db import models, router
+from django.db import connection, models, router
 from django.db.utils import OperationalError, ProgrammingError
 from django.db.models.fields.related import ForeignKey, ManyToManyDescriptor
 from django.db.models.manager import Manager
@@ -46,6 +46,16 @@ from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name, generate_model
 
 logger = logging.getLogger(__name__)
+
+
+def _through_table_exists(through_model_name):
+    """Return True when the polymorphic M2M through table exists in the DB."""
+    try:
+        through = apps.get_model(APP_LABEL, through_model_name)
+    except LookupError:
+        return False
+    return through._meta.db_table in connection.introspection.table_names()
+
 
 # PostgreSQL's hard limit for identifier names is 63 bytes.
 _PG_MAX_IDENTIFIER_LEN = 63
@@ -1760,6 +1770,8 @@ class PolymorphicManyToManyManager:
         return apps.get_model(APP_LABEL, self.through_model_name)
 
     def _get_objects(self):
+        if not _through_table_exists(self.through_model_name):
+            return iter(())
         through = self._get_through_model()
         rows = list(
             through.objects.filter(source_id=self.instance.pk)

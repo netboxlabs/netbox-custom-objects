@@ -32,6 +32,7 @@ import logging
 
 from core.models import ObjectType
 from django.db import transaction
+from extras.choices import CustomFieldTypeChoices
 from extras.models import CustomFieldChoiceSet
 
 from netbox_custom_objects import constants
@@ -79,6 +80,10 @@ class UnknownObjectTypeError(Exception):
 
 class UnknownFieldTypeError(Exception):
     """Raised when a field type string in the schema has no matching DB choice."""
+
+
+class ObjectSeedError(Exception):
+    """Raised when object seed data in a schema document cannot be applied."""
 
 
 # ---------------------------------------------------------------------------
@@ -492,6 +497,209 @@ def _phase2_fields(ordered_diffs, cot_map, *, allow_destructive: bool) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Choice set provisioning
+# ---------------------------------------------------------------------------
+
+def ensure_choice_sets(specs) -> None:
+    """
+    Create or update ``CustomFieldChoiceSet`` rows from a portable-schema document.
+
+    Each spec is ``{"name": str, "choices": [str, ...]}``.  Existing sets with
+    the same name have their ``extra_choices`` updated.  Called by
+    :func:`apply_document` when the document includes a top-level
+    ``choice_sets`` list.
+    """
+    for spec in specs or []:
+        extra_choices = [(value, value) for value in spec["choices"]]
+        CustomFieldChoiceSet.objects.update_or_create(
+            name=spec["name"],
+            defaults={"extra_choices": extra_choices},
+        )
+
+
+_SEED_RELATION_FIELD_TYPES = frozenset({
+    CustomFieldTypeChoices.TYPE_OBJECT,
+    CustomFieldTypeChoices.TYPE_MULTIOBJECT,
+})
+
+
+def _parse_object_ref(raw) -> tuple[str, str]:
+    """Return ``(cot_slug, primary_key_str)`` from a seed reference value."""
+    if isinstance(raw, dict):
+        raw = raw.get("ref")
+    if not isinstance(raw, str) or "/" not in raw:
+        raise ObjectSeedError(
+            "Object references must be strings 'cot-slug/primary-value' "
+            "or objects {\"ref\": \"cot-slug/primary-value\"}."
+        )
+    slug, _, key = raw.partition("/")
+    if not slug or not key:
+        raise ObjectSeedError(f"Invalid object reference {raw!r}.")
+    return slug, key
+
+
+def _cot_slug_for_field_target(field) -> str | None:
+    """Return the COT slug when *field* points at a single custom object type."""
+    from netbox_custom_objects.utilities import extract_cot_id_from_model_name  # noqa: PLC0415
+
+    rot = field.related_object_type
+    if rot is None or rot.app_label != constants.APP_LABEL:
+        return None
+    cot_id = extract_cot_id_from_model_name(rot.model)
+    if cot_id is None:
+        return None
+    return CustomObjectType.objects.values_list("slug", flat=True).get(pk=cot_id)
+
+
+def _allowed_cot_slugs_for_field(field) -> set[str]:
+    from netbox_custom_objects.utilities import extract_cot_id_from_model_name  # noqa: PLC0415
+
+    if field.is_polymorphic:
+        slugs = set()
+        for rot in field.related_object_types.all():
+            if rot.app_label != constants.APP_LABEL:
+                continue
+            cot_id = extract_cot_id_from_model_name(rot.model)
+            if cot_id is not None:
+                slugs.add(
+                    CustomObjectType.objects.values_list("slug", flat=True).get(pk=cot_id)
+                )
+        return slugs
+    slug = _cot_slug_for_field_target(field)
+    return {slug} if slug else set()
+
+
+def _coerce_primary_lookup(value, primary_field):
+    if primary_field.type == CustomFieldTypeChoices.TYPE_INTEGER:
+        try:
+            return int(value)
+        except (TypeError, ValueError) as exc:
+            raise ObjectSeedError(
+                f"Primary field {primary_field.name!r} expects an integer; got {value!r}."
+            ) from exc
+    return value
+
+
+def _resolve_object_ref(raw, field):
+    """Resolve one seed reference to a live custom object (or built-in) instance."""
+    slug, key = _parse_object_ref(raw)
+    allowed = _allowed_cot_slugs_for_field(field)
+    if allowed and slug not in allowed:
+        raise ObjectSeedError(
+            f"Reference {slug!r} is not allowed for field {field.name!r} "
+            f"(allowed COT slugs: {', '.join(sorted(allowed))})."
+        )
+    try:
+        target_cot = CustomObjectType.objects.get(slug=slug)
+    except CustomObjectType.DoesNotExist as exc:
+        raise ObjectSeedError(
+            f"Referenced Custom Object Type {slug!r} does not exist."
+        ) from exc
+
+    target_primary = target_cot.fields.filter(primary=True).first()
+    if target_primary is None:
+        raise ObjectSeedError(
+            f"Referenced Custom Object Type {slug!r} has no primary field."
+        )
+
+    target_model = target_cot.get_model()
+    lookup_key = _coerce_primary_lookup(key, target_primary)
+    try:
+        return target_model.objects.get(**{target_primary.name: lookup_key})
+    except target_model.DoesNotExist as exc:
+        raise ObjectSeedError(
+            f"No {slug!r} object with {target_primary.name}={lookup_key!r}; "
+            "seed referenced objects before dependents."
+        ) from exc
+
+
+def _resolve_seed_field_value(raw, field):
+    if field.type == CustomFieldTypeChoices.TYPE_OBJECT:
+        return _resolve_object_ref(raw, field)
+    if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+        if not isinstance(raw, list):
+            raise ObjectSeedError(
+                f"Field {field.name!r} expects a list of object references."
+            )
+        return [_resolve_object_ref(item, field) for item in raw]
+    return raw
+
+
+def ensure_objects(specs) -> None:
+    """
+    Create or update Custom Object instances from a portable-schema document.
+
+    Each spec is ``{"type": "<cot-slug>", "records": [{...}, ...]}``.  Records
+    are upserted by the COT primary field.  Scalar columns are set directly;
+    ``object`` / ``multiobject`` columns accept references of the form
+    ``"cot-slug/primary-value"`` or ``{"ref": "cot-slug/primary-value"}``.
+    """
+    for spec in specs or []:
+        slug = spec["type"]
+        try:
+            cot = CustomObjectType.objects.get(slug=slug)
+        except CustomObjectType.DoesNotExist as exc:
+            raise UnknownObjectTypeError(
+                f"Custom Object Type with slug {slug!r} not found. "
+                "Apply types before seeding objects."
+            ) from exc
+
+        primary_field = cot.fields.filter(primary=True).first()
+        if primary_field is None:
+            raise ObjectSeedError(
+                f"Custom Object Type {slug!r} has no primary field; cannot seed objects."
+            )
+        if primary_field.type in _SEED_RELATION_FIELD_TYPES:
+            raise ObjectSeedError(
+                f"Primary field on {slug!r} is not a scalar type; cannot seed objects."
+            )
+
+        field_map = {field.name: field for field in cot.fields.all()}
+        model = cot.get_model()
+
+        for record in spec.get("records") or []:
+            if not isinstance(record, dict):
+                raise ObjectSeedError(f"Each record for {slug!r} must be an object.")
+
+            unknown = set(record) - set(field_map)
+            if unknown:
+                raise ObjectSeedError(
+                    f"Unknown field(s) on {slug!r}: {', '.join(sorted(unknown))}"
+                )
+
+            primary_name = primary_field.name
+            if primary_name not in record:
+                raise ObjectSeedError(
+                    f"Record for {slug!r} is missing primary field {primary_name!r}."
+                )
+
+            scalar_defaults = {}
+            relation_values = {}
+            for key, value in record.items():
+                field = field_map[key]
+                if field.type in _SEED_RELATION_FIELD_TYPES:
+                    relation_values[key] = _resolve_seed_field_value(value, field)
+                elif key != primary_name:
+                    scalar_defaults[key] = value
+
+            lookup_key = _coerce_primary_lookup(record[primary_name], primary_field)
+            lookup = {primary_name: lookup_key}
+            instance, _created = model.objects.update_or_create(
+                defaults=scalar_defaults,
+                **lookup,
+            )
+
+            for key, value in relation_values.items():
+                field = field_map[key]
+                if field.type == CustomFieldTypeChoices.TYPE_OBJECT:
+                    setattr(instance, key, value)
+                else:
+                    getattr(instance, key).set(value)
+            if relation_values:
+                instance.save()
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -551,6 +759,8 @@ def apply_document(
     """
     Diff and apply a complete schema document against the live DB.
 
+    Apply order: ``choice_sets`` → ``types`` (via :func:`apply_diffs`) → ``objects``.
+
     Internally calls :func:`~netbox_custom_objects.schema.comparator.diff_document`
     to compute the diff, then delegates to :func:`apply_diffs`.
 
@@ -562,5 +772,8 @@ def apply_document(
     type_defs_by_slug = {
         td["slug"]: td for td in schema_doc.get("types", [])
     }
-    apply_diffs(diffs, type_defs_by_slug, allow_destructive=allow_destructive)
+    with transaction.atomic():
+        ensure_choice_sets(schema_doc.get("choice_sets"))
+        apply_diffs(diffs, type_defs_by_slug, allow_destructive=allow_destructive)
+        ensure_objects(schema_doc.get("objects"))
     return diffs

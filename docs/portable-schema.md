@@ -145,10 +145,15 @@ validate incoming documents before any DB access.
 
 ### Top-Level Structure
 
+Recommended key order when authoring documents by hand:
+`schema_version` → `choice_sets` → `types` → `objects`.
+
 | Key | Type | Description |
 |-----|------|-------------|
 | `schema_version` | `"1"` | Format version. Currently only `"1"` is supported. |
-| `types` | array of COT definitions | One entry per Custom Object Type. |
+| `types` | array of COT definitions | One entry per Custom Object Type. **Required.** |
+| `choice_sets` | array of choice set definitions | Optional. Created/updated on apply before types. Not exported. |
+| `objects` | array of object group definitions | Optional. Instance seed data upserted on apply after types. Not exported. |
 
 ### COT Definition
 
@@ -201,7 +206,7 @@ Attributes that match their defaults are omitted from exported documents to keep
 |------|-----------------------|
 | `text`, `longtext` | `validation_regex` |
 | `integer`, `decimal` | `validation_minimum`, `validation_maximum` |
-| `select`, `multiselect` | `choice_set` (required — **name** of a `CustomFieldChoiceSet`) |
+| `select`, `multiselect` | `choice_set` (required — **name** of a `CustomFieldChoiceSet`; the set must exist or be listed under document-level `choice_sets`) |
 | `object` | `related_object_type` (required when `is_polymorphic` is `false`), `related_object_types` (required when `is_polymorphic` is `true`), `is_polymorphic`, `related_object_filter`, `on_delete_behavior` |
 | `multiobject` | `related_object_type` (required when `is_polymorphic` is `false`), `related_object_types` (required when `is_polymorphic` is `true`), `is_polymorphic`, `related_object_filter` |
 | `boolean`, `date`, `datetime`, `url`, `json` | (none) |
@@ -209,6 +214,95 @@ Attributes that match their defaults are omitted from exported documents to keep
 `on_delete_behavior` is one of `"set_null"` (default), `"cascade"`, or `"protect"`. It applies only to single `object` fields.
 
 `is_polymorphic` defaults to `false`. When `true`, the field uses a generic foreign key and accepts references to any of the types listed in `related_object_types`. The `is_polymorphic` flag and the set of allowed types cannot be changed after the field is created.
+
+### Choice Sets (optional)
+
+Documents may include a top-level `choice_sets` array so that apply can create or update
+`CustomFieldChoiceSet` rows before COT fields are written. Export does not include this
+section — add it when sharing schemas that introduce new sets.
+
+```json
+{
+  "schema_version": "1",
+  "choice_sets": [
+    {
+      "name": "security_object_status",
+      "choices": ["active", "reserved", "deprecated"]
+    }
+  ],
+  "types": [ ... ]
+}
+```
+
+Each entry requires `name` (matches field `choice_set` references) and `choices` (non-empty
+list of unique strings). On apply, missing sets are created; existing sets get their
+`extra_choices` updated. Sets referenced by fields but absent from both the DB and
+`choice_sets` still raise `UnknownChoiceSetError`.
+
+### Object instances (optional)
+
+Documents may include a top-level `objects` array so that apply can upsert Custom Object
+**instances** after types (and choice sets) are written. Export does not include this
+section.
+
+```json
+{
+  "schema_version": "1",
+  "choice_sets": [ ... ],
+  "types": [ ... ],
+  "objects": [
+    {
+      "type": "security-action",
+      "records": [
+        {"name": "Permit", "status": "active", "color": "#28a745"},
+        {"name": "Deny", "status": "active", "color": "#dc3545"}
+      ]
+    },
+    {
+      "type": "security-zone",
+      "records": [
+        {"name": "trust", "status": "active", "color": "#28a745"},
+        {"name": "untrust", "status": "active", "color": "#dc3545"}
+      ]
+    },
+    {
+      "type": "security-rb-demo1",
+      "records": [
+        {
+          "index": 1,
+          "status": true,
+          "name": "trust-to-untrust-https",
+          "source": ["security-zone/trust"],
+          "destination": ["security-zone/untrust"],
+          "services_applications": ["security-service/HTTPS"],
+          "actions": ["security-action/Permit"]
+        }
+      ]
+    }
+  ]
+}
+```
+
+Each group requires `type` (COT slug) and `records` (non-empty list). Each record is a
+map of field names to values. The COT **primary field** must be present in every record;
+rows are matched with `update_or_create` on that value.
+
+**Scalar fields:** text, longtext, integer, decimal, boolean, date, datetime, url, json,
+select, multiselect.
+
+**Custom object references:** `object` and `multiobject` columns accept
+`"cot-slug/primary-value"` strings (or lists thereof for `multiobject`). The slug is the
+target COT slug; the value after `/` is the target row's primary field value (e.g.
+integer primary `index: 1` → `"security-rb-demo1/1"`). Referenced groups must appear
+**earlier** in the `objects` array. Alternative dict form:
+`{"ref": "security-zone/trust"}`.
+
+Built-in NetBox object references (e.g. `ipam/prefix`) are **not** supported in `objects`.
+
+Apply order: `choice_sets` → `types` → `objects` (single transaction).
+
+See also: `netbox_custom_objects/schema/examples/security_objects.json` for a full
+security demo (zones, actions, services, rulebook rules).
 
 ### Related Object Type Encoding
 
@@ -237,19 +331,128 @@ Attributes that match their defaults are omitted from exported documents to keep
 
 ### Exporting a Schema
 
-Use the Python API from `netbox_custom_objects.schema.exporter`. This is typically called
-from a management command or script:
+#### Web UI
+
+Three export paths produce the same portable-schema JSON document:
+
+**Custom Object Type detail — Export tab**
+
+Open any Custom Object Type and select the **Export** tab
+(`/plugins/custom-objects/custom-object-types/<id>/export/`). The page shows a
+read-only JSON document for that type with a **Copy** button.
+
+**Custom Object Types list — export dropdown**
+
+On the Custom Object Types list, open the export dropdown and choose **Portable
+schema (JSON)**. The download respects the current table filter and saves a
+`custom-object-types-schema.json` file.
+
+#### REST API
+
+`GET /api/plugins/custom-objects/schema/export/`
+
+Returns a portable schema document for all Custom Object Types, or restrict with
+repeated ``slug`` query parameters:
+
+```http
+GET /api/plugins/custom-objects/schema/export/?slug=circuit&slug=device-profile
+Authorization: Token <token>
+Accept: application/json
+```
+
+Response body (types only — no `choice_sets` or `objects`; add those when preparing imports):
+
+```json
+{
+  "schema_version": "1",
+  "types": [ ... ]
+}
+```
+
+#### Python API
+
+Use the Python API from `netbox_custom_objects.schema.exporter`. Before running either
+option, switch to your NetBox installation root and activate its virtualenv:
+
+```bash
+# Replace /opt/netbox with your NetBox installation root.
+export NETBOX_ROOT=/opt/netbox
+cd "$NETBOX_ROOT"
+source "$NETBOX_ROOT/venv/bin/activate"
+```
+
+#### Option 1 — NetBox shell (recommended)
+
+Run `manage.py nbshell` from the NetBox installation root. Django is fully initialised for
+you, and all models are importable immediately:
+
+```bash
+python3 netbox/manage.py nbshell
+```
+
+Then inside the shell, export specific COTs by slug:
 
 ```python
 from netbox_custom_objects.schema.exporter import export_cots
 from netbox_custom_objects.models import CustomObjectType
+import json
 
 cots = CustomObjectType.objects.filter(slug__in=["circuit", "device-profile"])
 document = export_cots(cots)
-
-import json
 print(json.dumps(document, indent=2))
 ```
+
+Or export **all** COTs at once:
+
+```python
+from netbox_custom_objects.schema.exporter import export_cots
+from netbox_custom_objects.models import CustomObjectType
+import json
+
+cots = CustomObjectType.objects.all()
+document = export_cots(cots)
+print(json.dumps(document, indent=2))
+```
+
+To run a script file non-interactively, pipe it in:
+
+```bash
+python3 netbox/manage.py nbshell < /path/to/export_cot.py
+```
+
+#### Option 2 — Standalone script
+
+If you need to run a `.py` file directly (e.g. from a cron job or CI pipeline), you must
+bootstrap Django yourself **before** importing any NetBox or plugin code:
+
+```bash
+PYTHONPATH="$NETBOX_ROOT/netbox" python3 /path/to/export_cot.py
+```
+
+Where `/path/to/export_cot.py` is your script, containing:
+
+```python
+import os
+import django
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "netbox.settings")
+django.setup()  # must be called before any model or app imports
+
+from netbox_custom_objects.schema.exporter import export_cots
+from netbox_custom_objects.models import CustomObjectType
+import json
+
+cots = CustomObjectType.objects.filter(slug__in=["circuit", "device-profile"])
+document = export_cots(cots)
+print(json.dumps(document, indent=2))
+```
+
+!!! warning "Missing `django.setup()` causes `AppRegistryNotReady`"
+    Setting `DJANGO_SETTINGS_MODULE` alone is not sufficient — Django also needs
+    `django.setup()` to populate its app registry. Without it you will see:
+    `AppRegistryNotReady: Apps aren't loaded yet.`
+
+---
 
 `export_cots` returns a dict with `schema_version` and `types`. For a single COT without the
 document wrapper, use `export_cot(cot)`.
@@ -263,7 +466,8 @@ document wrapper, use `export_cot(cot)`.
 `POST /api/plugins/custom-objects/schema/preview/`
 
 Submit a schema document and receive a structured diff showing what would change, **without
-modifying the database**:
+modifying the database**. Optional `choice_sets` and `objects` keys are validated against
+the JSON Schema but do not affect the diff (preview is type-centric only).
 
 ```http
 POST /api/plugins/custom-objects/schema/preview/
@@ -272,6 +476,9 @@ Authorization: Token <token>
 
 {
   "schema_version": "1",
+  "choice_sets": [
+    {"name": "status_choices", "choices": ["active", "reserved"]}
+  ],
   "types": [
     {
       "name": "circuit",
@@ -324,7 +531,30 @@ Response `200`:
 `has_destructive_changes: true` indicates that applying this schema would drop at least one
 column. The preview endpoint never returns `409` — it is safe to call at any time.
 
-### Applying a Schema (API)
+### Applying a Schema
+
+#### Web UI
+
+Import (and preview) portable-schema documents from the NetBox UI:
+
+1. Go to **Custom Objects → Custom Object Types → Add**.
+2. Open the **JSON** tab on
+   `/plugins/custom-objects/custom-object-types/add/`.
+3. Paste a JSON schema document (JSON only — YAML is not accepted).
+4. Click **Preview** to validate the document against `cot_schema_v1.json` and
+   see the comparator diff. No database changes are made.
+5. Click **Apply** to create or update Custom Object Types via the schema
+   executor. Requires both *add* and *change* permissions on Custom Object Types.
+
+Enable **Allow destructive changes** when the diff includes field removals that
+drop DB columns. The **Create** tab on the same page remains available for
+adding a single Custom Object Type through the standard form. CSV bulk import
+is available separately via **Import** on the list page.
+
+Schema apply is **blocked while a [NetBox Branching](branching.md) branch is
+active** — the same guard as the REST apply endpoint.
+
+#### REST API
 
 `POST /api/plugins/custom-objects/schema/apply/`
 
@@ -335,15 +565,31 @@ Authorization: Token <token>
 
 {
   "allow_destructive": false,
-  "schema": { ... }
+  "schema": {
+    "schema_version": "1",
+    "choice_sets": [
+      {"name": "status_choices", "choices": ["active", "reserved"]}
+    ],
+    "types": [ ... ],
+    "objects": [
+      {
+        "type": "security-action",
+        "records": [
+          {"name": "Permit", "status": "active", "color": "#28a745"}
+        ]
+      }
+    ]
+  }
 }
 ```
 
 - **`allow_destructive`** (default `false`): must be `true` for the apply to proceed when the
   diff contains `REMOVE` operations. If `false` and removals are present, the endpoint returns
   `409 Conflict`.
+- **`choice_sets`**: optional; `CustomFieldChoiceSet` rows are created or updated before types.
+- **`objects`**: optional; instances are upserted after types (see [Object instances](#object-instances-optional)).
 - The apply is **fully atomic** — a failure at any point rolls back all changes including newly
-  created COT tables (PostgreSQL supports transactional DDL).
+  created COT tables, choice sets, and seeded instances (PostgreSQL supports transactional DDL).
 - On success, `schema_document` is persisted on each affected COT so tombstones are available
   for future export/diff cycles.
 - Schema apply is **blocked while a [NetBox Branching](branching.md) branch is active**, since
@@ -369,7 +615,27 @@ Response `409 Conflict`:
 }
 ```
 
-Response `400 Bad Request` (invalid schema, unresolvable reference, or circular COT dependency):
+Response `400 Bad Request` (invalid JSON Schema — validation before apply):
+
+```json
+{
+  "schema_errors": [
+    {"path": ["types", 0, "fields"], "message": "..."}
+  ]
+}
+```
+
+Response `400 Bad Request` (circular COT dependency among new types):
+
+```json
+{
+  "error": "circular_dependency",
+  "detail": "..."
+}
+```
+
+Response `400 Bad Request` (missing choice set, unknown field type, or missing related type
+while applying **types**):
 
 ```json
 {
@@ -377,6 +643,30 @@ Response `400 Bad Request` (invalid schema, unresolvable reference, or circular 
   "detail": "..."
 }
 ```
+
+Response `400 Bad Request` (object seed failure — bad reference, missing primary, wrong order
+in **`objects`**):
+
+```json
+{
+  "error": "object_seed",
+  "detail": "No security-zone object with name=trust; seed referenced objects before dependents."
+}
+```
+
+
+### Deleting Custom Object Types
+
+A Custom Object Type cannot be deleted while:
+
+1. **Instances still exist** — delete or migrate all objects of that type first.
+2. **Another type's schema still references it** — for example, `security-rb-demo1` defines
+   `source`, `destination`, and `actions` fields that point at other security types. Those
+   referenced types (such as `security-action` or `security-zone`) cannot be removed until
+   `security-rb-demo1` is deleted first.
+
+The UI and API surface this as a blocking error instead of silently breaking cross-type
+references. Delete dependent types before the types they reference.
 
 ### Typical End-to-End Workflow
 
@@ -472,7 +762,8 @@ diffs = apply_document(schema_doc, allow_destructive=False)  # list[COTDiff]
 apply_diffs(diffs, type_defs_by_slug, allow_destructive=False)  # lower-level
 ```
 
-`apply_document` is the primary entry point. `apply_diffs` is available when diffs have been
+`apply_document` is the primary entry point. It runs, in order: `ensure_choice_sets()`,
+`apply_diffs()`, `ensure_objects()`. `apply_diffs` is available when diffs have been
 pre-computed by the comparator (e.g. for preview-then-apply flows).
 
 All DB writes are wrapped in a single `transaction.atomic()` block. Any exception causes a
@@ -484,9 +775,14 @@ full rollback.
 |-----------|-------------|
 | `DestructiveChangesError` | `REMOVE` operations are present and `allow_destructive=False` |
 | `CircularDependencyError` | Cross-COT `related_object_type` references form a cycle among new COTs |
-| `UnknownChoiceSetError` | A `choice_set` name cannot be resolved |
-| `UnknownObjectTypeError` | A `related_object_type` string cannot be resolved |
+| `UnknownChoiceSetError` | A `choice_set` name cannot be resolved during **type** apply |
+| `UnknownObjectTypeError` | A `related_object_type` string cannot be resolved, or an `objects` group references an unknown COT slug |
 | `UnknownFieldTypeError` | A `type` value is not one of the supported field type strings |
+| `ObjectSeedError` | An `objects` record is invalid, references a missing row, or uses an unsupported field value |
+
+REST apply maps `ObjectSeedError` to HTTP 400 with `"error": "object_seed"`; the other
+reference errors (except `DestructiveChangesError` / `CircularDependencyError`) map to
+`"error": "unresolvable_reference"`.
 
 `DestructiveChangesError` is raised **before** the transaction opens, so the DB is never
 touched. The other exceptions may be raised mid-transaction, triggering a full rollback.

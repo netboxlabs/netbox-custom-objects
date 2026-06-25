@@ -4,6 +4,7 @@ import django_tables2 as tables
 from django.contrib.auth.models import AnonymousUser
 from django.template import Context, Template
 from django.urls import reverse
+from django.utils.html import escape
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
 from netbox.tables import NetBoxTable, columns
@@ -12,7 +13,14 @@ from utilities.permissions import get_permission_for_model
 from netbox_custom_objects.models import CustomObject, CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.utilities import get_viewname
 
-__all__ = ("CustomObjectTable", "CustomObjectTypeFieldTable", "LinkedCustomObjectTable")
+__all__ = (
+    "CustomObjectTable",
+    "CustomObjectTypeFieldTable",
+    "CustomObjectTypeInstanceCountColumn",
+    "CustomObjectTypeReferencedByColumn",
+    "CustomObjectTypeTable",
+    "LinkedCustomObjectTable",
+)
 
 
 OBJECTCHANGE_FULL_NAME = """
@@ -51,6 +59,49 @@ OBJECTCHANGE_REQUEST_ID = """
 """
 
 
+class CustomObjectTypeInstanceCountColumn(tables.Column):
+    """Render the number of object instances for a Custom Object Type."""
+
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault('orderable', False)
+        kwargs.setdefault('verbose_name', _('Objects'))
+        super().__init__(*args, **kwargs)
+
+    def render(self, record):
+        count = record.get_instance_count()
+        if count:
+            url = reverse(
+                'plugins:netbox_custom_objects:customobject_list',
+                kwargs={'custom_object_type': record.slug},
+            )
+            return mark_safe(f'<a href="{url}">{count}</a>')
+        return mark_safe('<span class="text-muted">&mdash;</span>')
+
+    def value(self, record):
+        return record.get_instance_count()
+
+
+class CustomObjectTypeReferencedByColumn(tables.Column):
+    """Render the number of other Custom Object Types referencing this type."""
+
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault('orderable', False)
+        kwargs.setdefault('verbose_name', _('Referenced by'))
+        super().__init__(*args, **kwargs)
+
+    def render(self, record):
+        referrers = record.get_referencing_custom_object_types()
+        count = len(referrers)
+        if not count:
+            return mark_safe('<span class="text-muted">&mdash;</span>')
+
+        tooltip = ', '.join(f'{cot.name} ({cot.slug})' for cot in referrers)
+        return mark_safe(f'<span title="{escape(tooltip)}">{count}</span>')
+
+    def value(self, record):
+        return record.get_referencing_custom_object_type_count()
+
+
 class CustomObjectTypeTable(NetBoxTable):
     comments = columns.MarkdownColumn(
         verbose_name=_('Comments'),
@@ -62,6 +113,14 @@ class CustomObjectTypeTable(NetBoxTable):
         verbose_name=_('Name'),
         linkify=True
     )
+    object_count = CustomObjectTypeInstanceCountColumn(
+        accessor='pk',
+        verbose_name=_('Objects'),
+    )
+    referenced_by_count = CustomObjectTypeReferencedByColumn(
+        accessor='pk',
+        verbose_name=_('Referenced by'),
+    )
 
     class Meta(NetBoxTable.Meta):
         model = CustomObjectType
@@ -69,6 +128,8 @@ class CustomObjectTypeTable(NetBoxTable):
             "pk",
             "id",
             "name",
+            "object_count",
+            "referenced_by_count",
             "verbose_name",
             "verbose_name_plural",
             "slug",
@@ -82,6 +143,8 @@ class CustomObjectTypeTable(NetBoxTable):
             "pk",
             "id",
             "name",
+            "object_count",
+            "referenced_by_count",
             "created",
             "last_updated",
         )

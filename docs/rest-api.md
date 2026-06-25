@@ -13,8 +13,18 @@ The NetBox Custom Objects plugin exposes full CRUD operations through the standa
 
 The endpoint name for each Custom Object Type is its **slug** — a type with slug `dhcp_scope` is reachable at `/api/plugins/custom-objects/dhcp_scope/`.
 
-!!! tip
-    For schema management — exporting Custom Object Type definitions, previewing diffs, and applying schemas to other instances — see the [Portable Schema](portable-schema.md) documentation, which also covers the `schema/preview/` and `schema/apply/` endpoints.
+!!! tip "Portable schema endpoints"
+    In addition to per-type CRUD, the plugin exposes schema management at:
+
+    | Method | Path | Purpose |
+    |--------|------|---------|
+    | `GET` | `/api/plugins/custom-objects/schema/export/` | Export COT **type** definitions (`types` only) |
+    | `POST` | `/api/plugins/custom-objects/schema/preview/` | Diff preview (no DB writes) |
+    | `POST` | `/api/plugins/custom-objects/schema/apply/` | Apply types; optional `choice_sets` and `objects` |
+
+    Full format, examples, and error codes: [Portable Schema](portable-schema.md).
+    Reference demo document:
+    `netbox_custom_objects/schema/examples/security_objects.json`.
 
 ## Custom Object Types
 
@@ -40,6 +50,16 @@ Create a Custom Object Type with a `POST` to `/api/plugins/custom-objects/custom
 | `version` | no | [PEP 440](https://peps.python.org/pep-0440/) version string (e.g. `1.0.0`). Used by the portable schema feature. |
 | `group_name` | no | Groups similar Custom Object Types together in the navigation menu. |
 | `tags` | no | List of NetBox tag IDs to attach to this Custom Object Type. |
+
+### Deleting Custom Object Types
+
+`DELETE /api/plugins/custom-objects/custom-object-types/<id>/` is rejected while the type
+still has object instances or while another Custom Object Type's schema references it
+(`related_object_type` or polymorphic `related_object_types`). The API returns a blocking
+error instead of silently removing cross-type references. Delete or migrate all instances
+first, then remove dependent types before the types they reference. See
+[Deleting Custom Object Types](portable-schema.md#deleting-custom-object-types) in the
+portable schema guide for details and examples.
 
 ## Custom Object Type Fields
 

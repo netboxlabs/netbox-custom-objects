@@ -716,6 +716,69 @@ class COTJsonSchemaTestCase(TestCase):
             ],
         })
 
+    def test_document_with_choice_sets_is_valid(self):
+        self._assert_valid({
+            "schema_version": "1",
+            "choice_sets": [
+                {"name": "status_choices", "choices": ["active", "reserved"]},
+            ],
+            "types": [
+                {
+                    "name": "widget",
+                    "slug": "widget",
+                    "fields": [
+                        {
+                            "id": 1,
+                            "name": "status",
+                            "type": "select",
+                            "choice_set": "status_choices",
+                        }
+                    ],
+                }
+            ],
+        })
+
+    def test_choice_set_missing_choices_is_invalid(self):
+        self._assert_invalid({
+            "schema_version": "1",
+            "choice_sets": [{"name": "status_choices"}],
+            "types": [
+                {
+                    "name": "widget",
+                    "slug": "widget",
+                    "fields": [{"id": 1, "name": "name", "type": "text", "primary": True}],
+                }
+            ],
+        })
+
+    def test_document_with_objects_is_valid(self):
+        self._assert_valid({
+            "schema_version": "1",
+            "types": [
+                {
+                    "name": "widget",
+                    "slug": "widget",
+                    "fields": [{"id": 1, "name": "name", "type": "text", "primary": True}],
+                }
+            ],
+            "objects": [
+                {"type": "widget", "records": [{"name": "Example"}]},
+            ],
+        })
+
+    def test_objects_missing_records_is_invalid(self):
+        self._assert_invalid({
+            "schema_version": "1",
+            "types": [
+                {
+                    "name": "widget",
+                    "slug": "widget",
+                    "fields": [{"id": 1, "name": "name", "type": "text", "primary": True}],
+                }
+            ],
+            "objects": [{"type": "widget"}],
+        })
+
     def test_object_field_missing_related_object_type_is_invalid(self):
         self._assert_invalid({
             "schema_version": "1",

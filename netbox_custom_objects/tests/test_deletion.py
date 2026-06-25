@@ -18,6 +18,30 @@ from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 
 from .base import CustomObjectsTestCase, TransactionCleanupMixin
 
+# COTs that must be deleted before types they reference in security_objects.json.
+SECURITY_COT_DELETE_ORDER = (
+    'security-rb-demo1',
+    'security-object-link',
+    'security-address-group',
+    'security-service-group',
+)
+
+
+def purge_custom_object_instances(slugs):
+    """Delete all instances for the given Custom Object Type slugs."""
+    for slug in slugs:
+        cot = CustomObjectType.objects.get(slug=slug)
+        cot.get_model().objects.all().delete()
+
+
+def delete_custom_object_types_in_order(slugs, priority_order=()):
+    """Delete COTs after instances are gone; priority_order lists referrers first."""
+    slugs = set(slugs)
+    ordered = [slug for slug in priority_order if slug in slugs]
+    remaining = sorted(slugs - set(ordered))
+    for slug in ordered + remaining:
+        CustomObjectType.objects.get(slug=slug).delete()
+
 
 class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
     """Test deletion scenarios with cascading effects."""
@@ -57,7 +81,7 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
     # ------------------------------------------------------------------
 
     def test_delete_cot_with_instances(self):
-        """#140 – Deleting a COT must drop the backing table (and therefore all instances)."""
+        """#140 – Deleting a COT drops the backing table once all instances are removed."""
         cot = self.create_simple_custom_object_type(name='deltest', slug='del-test')
         model = cot.get_model()
         table_name = cot.get_database_table_name()
@@ -69,6 +93,7 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         self.assertTrue(self._table_exists(table_name))
         self.assertIn(model_name, django_apps.all_models.get(APP_LABEL, {}))
 
+        model.objects.all().delete()
         cot.delete()
 
         self.assertFalse(
@@ -122,7 +147,9 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         )
 
     def test_delete_cot_referenced_by_another_cot(self):
-        """#183 – Deleting a COT must also clean up object fields in other COTs that reference it."""
+        """#183 – Deleting a referenced COT is blocked while another COT's schema still points at it."""
+        from utilities.exceptions import AbortRequest
+
         cot_target = self.create_simple_custom_object_type(name='target', slug='target-type')
         cot_source = self.create_simple_custom_object_type(name='source', slug='source-type')
 
@@ -135,15 +162,20 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         )
         ref_field_id = ref_field.id
 
-        # Deleting the target COT must remove the field that references it
+        with self.assertRaises(AbortRequest):
+            cot_target.delete()
+
+        self.assertTrue(
+            CustomObjectTypeField.objects.filter(pk=ref_field_id).exists(),
+            "Referencing field must survive while the referrer COT still exists.",
+        )
+        self.assertTrue(CustomObjectType.objects.filter(pk=cot_target.pk).exists())
+
+        cot_source.delete()
         cot_target.delete()
 
-        self.assertFalse(
-            CustomObjectTypeField.objects.filter(pk=ref_field_id).exists(),
-            "Field referencing the deleted COT should have been removed.",
-        )
-        # The source COT itself must survive
-        self.assertTrue(CustomObjectType.objects.filter(pk=cot_source.pk).exists())
+        self.assertFalse(CustomObjectType.objects.filter(pk=cot_target.pk).exists())
+        self.assertFalse(CustomObjectType.objects.filter(pk=cot_source.pk).exists())
 
     def test_delete_cotf_with_data(self):
         """#367 – Deleting a field whose instances already contain data should succeed."""
@@ -798,3 +830,119 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         obj_target = target_model.objects.create(name='Target Object')
         obj_source = source_model.objects.create(name='Source Object', ref_target=obj_target)
         self.assertEqual(obj_source.ref_target, obj_target)
+
+
+class CustomObjectTypeDeleteOrphanedTablesTestCase(
+    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
+):
+    """COT deletion must succeed when polymorphic M2M through tables are missing."""
+
+    def test_delete_cot_with_missing_polymorphic_through_table(self):
+        cot = self.create_simple_custom_object_type(name='Broken M2M', slug='broken-m2m')
+        target_cot = self.create_simple_custom_object_type(name='Broken tgt', slug='broken-tgt')
+        self.create_polymorphic_field(
+            cot,
+            related_object_types=[target_cot.object_type],
+            name='source',
+            label='Source',
+            type='multiobject',
+        )
+        field = CustomObjectTypeField.objects.get(custom_object_type=cot, name='source')
+        table_name = field.through_table_name
+        cot.refresh_from_db()
+        with connection.cursor() as cursor:
+            cursor.execute(f'DROP TABLE IF EXISTS {connection.ops.quote_name(table_name)} CASCADE')
+        cot_id = cot.pk
+        cot.delete()
+        self.assertFalse(CustomObjectType.objects.filter(pk=cot_id).exists())
+        with connection.cursor() as cursor:
+            cursor.execute('SELECT to_regclass(%s)', [f'public.{table_name}'])
+            self.assertIsNone(cursor.fetchone()[0])
+
+class CustomObjectTypeDeleteReferrerMissingThroughTestCase(
+    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
+):
+    """A referenced COT cannot be deleted while another COT's schema still depends on it."""
+
+    def test_delete_referenced_cot_blocked_while_referrer_exists(self):
+        from utilities.exceptions import AbortRequest
+
+        target = self.create_simple_custom_object_type(name='Del tgt', slug='del-tgt')
+        referrer = self.create_simple_custom_object_type(name='Del ref', slug='del-ref')
+        self.create_polymorphic_field(
+            referrer,
+            related_object_types=[target.object_type],
+            name='source',
+            label='Source',
+            type='multiobject',
+        )
+        with self.assertRaises(AbortRequest):
+            target.delete()
+        self.assertTrue(CustomObjectType.objects.filter(pk=target.pk).exists())
+        referrer.delete()
+        target.delete()
+        self.assertFalse(CustomObjectType.objects.filter(pk=target.pk).exists())
+
+
+class CustomObjectTypeDeleteWithInstancesTestCase(
+    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
+):
+    def test_delete_cot_with_instances_blocked(self):
+        from utilities.exceptions import AbortRequest
+
+        cot = self.create_simple_custom_object_type(name='Has rows', slug='has-rows')
+        model = cot.get_model()
+        model.objects.create(name='one')
+        with self.assertRaises(AbortRequest):
+            cot.delete()
+        model.objects.all().delete()
+        cot.delete()
+        self.assertFalse(CustomObjectType.objects.filter(slug='has-rows').exists())
+
+class SecurityObjectsSchemaLifecycleTestCase(
+    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
+):
+    """Apply security_objects.json, export, then delete dependents before referenced types."""
+
+    def test_security_objects_apply_export_delete_in_dependency_order(self):
+        import json
+        from pathlib import Path
+
+        from extras.models import CustomFieldChoiceSet
+        from netbox_custom_objects.schema.executor import apply_document
+        from netbox_custom_objects.schema.exporter import export_cots
+        from utilities.exceptions import AbortRequest
+
+        example = (
+            Path(__file__).resolve().parents[1]
+            / 'schema'
+            / 'examples'
+            / 'security_objects.json'
+        )
+        schema_doc = json.loads(example.read_text())
+        slugs = [t['slug'] for t in schema_doc['types']]
+
+        apply_document(schema_doc, allow_destructive=False)
+        self.assertEqual(CustomObjectType.objects.filter(slug__in=slugs).count(), len(slugs))
+        self.assertGreaterEqual(
+            CustomFieldChoiceSet.objects.filter(name__startswith='security_').count(),
+            len(schema_doc['choice_sets']),
+        )
+
+        exported = export_cots(CustomObjectType.objects.filter(slug__in=slugs))
+        self.assertEqual(len(exported['types']), len(slugs))
+        self.assertNotIn('choice_sets', exported)
+        self.assertNotIn('objects', exported)
+
+        with self.assertRaises(AbortRequest):
+            CustomObjectType.objects.get(slug='security-action').delete()
+
+        seeded_slugs = {entry['type'] for entry in schema_doc.get('objects', [])}
+        purge_custom_object_instances(seeded_slugs)
+
+        with self.assertRaises(AbortRequest):
+            CustomObjectType.objects.get(slug='security-action').delete()
+
+        delete_custom_object_types_in_order(slugs, SECURITY_COT_DELETE_ORDER)
+
+        self.assertEqual(CustomObjectType.objects.filter(slug__in=slugs).count(), 0)
