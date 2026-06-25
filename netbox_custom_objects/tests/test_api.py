@@ -1615,7 +1615,6 @@ class OwnerAPITest(CustomObjectsTestCase, TestCase):
         super().setUp()
         from netbox_custom_objects.models import CustomObjectType
         self.cot = CustomObjectType.objects.create(name='OwnedThing', slug='owned-thing')
-        self.cot.register_model()
         self.model = self.cot.get_model()
         token = create_token(self.user)
         self.header = {'HTTP_AUTHORIZATION': f'Token {token}'}
