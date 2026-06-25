@@ -431,6 +431,17 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
                 )
                 field.full_clean()
 
+    def test_custom_object_type_field_reserved_name_rejected(self):
+        """Field names in RESERVED_FIELD_NAMES must be rejected with ValidationError."""
+        for reserved in ("owner", "tags", "id", "created", "last_updated"):
+            with self.assertRaises(ValidationError, msg=f"Expected ValidationError for reserved name={reserved!r}"):
+                field = CustomObjectTypeField(
+                    custom_object_type=self.custom_object_type,
+                    name=reserved,
+                    type="text",
+                )
+                field.full_clean()
+
     def test_custom_object_type_field_unique_name_per_type(self):
         """Test that field names must be unique within a custom object type."""
         self.create_custom_object_type_field(
