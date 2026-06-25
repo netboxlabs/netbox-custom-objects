@@ -1553,14 +1553,21 @@ class CustomObjectBulkDeleteView(CustomObjectTableMixin, generic.BulkDeleteView)
     form = None
     template_name = 'netbox_custom_objects/custom_object_bulk_delete.html'
 
+    def _realign_queryset_model(self, cot):
+        """Return the canonical model class and realign M2M/FK references."""
+        model = cot.get_registered_model()
+        if model is None:
+            model = cot.get_model()
+        cot.realign_inbound_references(model)
+        cot.realign_outbound_references(model)
+        return model
+
     def post(self, request, **kwargs):
         if '_confirm' in request.POST:
             slug = kwargs.get('custom_object_type')
             if slug:
                 cot = CustomObjectType.objects.get(slug=slug)
-                model = cot.get_model()
-                cot.realign_inbound_references(model)
-                cot.realign_outbound_references(model)
+                model = self._realign_queryset_model(cot)
                 self.queryset = model.objects.all()
                 self.filterset = get_filterset_class(model)
         return super().post(request, **kwargs)
@@ -1569,9 +1576,7 @@ class CustomObjectBulkDeleteView(CustomObjectTableMixin, generic.BulkDeleteView)
         super().setup(request, *args, **kwargs)
         self.queryset = self.get_queryset(request)
         if self.custom_object_type:
-            model = self.custom_object_type.get_model()
-            self.custom_object_type.realign_inbound_references(model)
-            self.custom_object_type.realign_outbound_references(model)
+            model = self._realign_queryset_model(self.custom_object_type)
             self.queryset = model.objects.all()
         self.filterset = get_filterset_class(self.queryset.model)
         self.table = self.get_table(self.queryset, request).__class__

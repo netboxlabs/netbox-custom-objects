@@ -124,6 +124,45 @@ def _resolve_m2m_through_model(owner_model, field_name, through_model_name):
     return apps.get_model(APP_LABEL, through_model_name)
 
 
+def _iter_m2m_through_copies(through_model_name, owner_model=None, field_name=None):
+    """Yield every in-process through class for *through_model_name*.
+
+    Dynamic CO models may keep several through classes alive at once: the copy
+    on the live M2M descriptor, ``apps.all_models``, and branch-scoped entries
+    in ``CustomObjectType._through_model_cache``.  The deletion collector can
+    traverse any of them, so realignment must patch them all.
+    """
+    seen = set()
+    registry_key = through_model_name.lower()
+
+    def _yield(through):
+        if through is None:
+            return
+        tid = id(through)
+        if tid in seen:
+            return
+        seen.add(tid)
+        yield through
+
+    if owner_model is not None and field_name:
+        try:
+            yield from _yield(
+                _resolve_m2m_through_model(owner_model, field_name, through_model_name)
+            )
+        except LookupError:
+            pass
+
+    yield from _yield(apps.all_models.get(APP_LABEL, {}).get(registry_key))
+
+    try:
+        yield from _yield(apps.get_model(APP_LABEL, through_model_name))
+    except LookupError:
+        pass
+
+    for bucket in CustomObjectType._through_model_cache.values():
+        yield from _yield(bucket.get(through_model_name))
+
+
 USER_TABLE_DATABASE_NAME_PREFIX = "custom_objects_"
 
 # Per-context storage for CO field values deferred during squash merge.
@@ -922,22 +961,27 @@ class CustomObject(
         # Three prep steps before super() so the deletion collector doesn't
         # raise traversing reverse FKs from through models:
         #   1. Realign inbound FK/M2M-through target FKs on other COTs to
-        #      ``type(self)`` — otherwise stale class identity raises
-        #      ValueError: "Cannot query X: Must be TableYModel instance."
+        #      the canonical registered class — otherwise stale class identity
+        #      raises ValueError: "Cannot query X: Must be TableYModel instance."
         #   2. Realign each outbound through's ``source``/``target`` FK to
-        #      ``type(self)`` when it references this model.
+        #      the canonical class when it references this model.
         #   3. Temporarily unregister throughs whose physical table is gone
         #      (squash revert drops field-CREATEs before CO-CREATEs, so the
         #      CO's collector hits ``relation does not exist`` otherwise).
         cls = type(self)
+        canonical = cls
         cot_id = getattr(self, 'custom_object_type_id', None)
         if cot_id is not None:
             try:
                 cot = CustomObjectType.objects.get(pk=cot_id)
-                cot.realign_inbound_references(cls)
-                cot.realign_outbound_references(cls)
+                canonical = cot.get_registered_model() or cls
+                cot.realign_inbound_references(canonical)
+                cot.realign_outbound_references(canonical)
             except CustomObjectType.DoesNotExist:
                 pass
+
+        if canonical is not cls:
+            return canonical.objects.get(pk=self.pk).delete(*args, **kwargs)
 
         prefix = f'through_{cls._meta.db_table}'
         registry = apps.all_models.get(APP_LABEL, {})
@@ -1713,22 +1757,20 @@ class CustomObjectType(NetBoxModel):
             is_polymorphic=False,
         ).iterator():
             owner_model = inbound_field.custom_object_type.get_registered_model()
-            try:
+            through_name = inbound_field.through_model_name
+            for through_model in _iter_m2m_through_copies(
+                through_name,
+                owner_model=owner_model,
+                field_name=inbound_field.name,
+            ):
+                try:
+                    target_field = through_model._meta.get_field('target')
+                    source_field = through_model._meta.get_field('source')
+                except FieldDoesNotExist:
+                    continue
+                _patch_fk_field(target_field, model)
                 if owner_model is not None:
-                    through_model = _resolve_m2m_through_model(
-                        owner_model,
-                        inbound_field.name,
-                        inbound_field.through_model_name,
-                    )
-                else:
-                    through_model = apps.get_model(APP_LABEL, inbound_field.through_model_name)
-                target_field = through_model._meta.get_field('target')
-                source_field = through_model._meta.get_field('source')
-            except (LookupError, FieldDoesNotExist):
-                continue
-            _patch_fk_field(target_field, model)
-            if owner_model is not None:
-                _patch_fk_field(source_field, owner_model)
+                    _patch_fk_field(source_field, owner_model)
 
         for inbound_fk_field in CustomObjectTypeField.objects.filter(
             related_object_type=self.object_type,
@@ -1748,7 +1790,6 @@ class CustomObjectType(NetBoxModel):
 
     def realign_outbound_references(self, model):
         """Realign outbound M2M through FKs and field metadata on *model*."""
-        prefix = f'through_{model._meta.db_table}'
         outbound_fields = {
             field.through_model_name: field
             for field in CustomObjectTypeField.objects.filter(
@@ -1757,21 +1798,7 @@ class CustomObjectType(NetBoxModel):
                 is_polymorphic=False,
             )
         }
-        outbound_by_registry_key = {
-            through_name.lower(): cot_field
-            for through_name, cot_field in outbound_fields.items()
-        }
         for through_name, cot_field in outbound_fields.items():
-            try:
-                through_model = _resolve_m2m_through_model(
-                    model, cot_field.name, through_name,
-                )
-                source_field = through_model._meta.get_field('source')
-                target_field = through_model._meta.get_field('target')
-                m2m_field = model._meta.get_field(cot_field.name)
-            except (LookupError, FieldDoesNotExist):
-                continue
-            _patch_fk_field(source_field, model)
             target_model = model
             if cot_field.related_object_type_id:
                 target_cot = CustomObjectType.objects.filter(
@@ -1781,35 +1808,28 @@ class CustomObjectType(NetBoxModel):
                     registered = target_cot.get_registered_model()
                     if registered is not None:
                         target_model = registered
-            _patch_fk_field(target_field, target_model)
-            if hasattr(m2m_field, 'remote_field'):
-                m2m_field.remote_field.model = target_model
-                m2m_field.remote_field.through = through_model
 
-        registry = apps.all_models.get(APP_LABEL, {})
-        for name, through in list(registry.items()):
-            if not name.startswith(prefix):
-                continue
-            cot_field = outbound_by_registry_key.get(name)
             try:
-                source_field = through._meta.get_field('source')
-                target_field = through._meta.get_field('target')
+                m2m_field = model._meta.get_field(cot_field.name)
             except FieldDoesNotExist:
-                continue
-            if source_field.remote_field.model is not model:
+                m2m_field = None
+            if m2m_field is not None and hasattr(m2m_field, 'remote_field'):
+                m2m_field.remote_field.model = target_model
+
+            for through_model in _iter_m2m_through_copies(
+                through_name,
+                owner_model=model,
+                field_name=cot_field.name,
+            ):
+                try:
+                    source_field = through_model._meta.get_field('source')
+                    target_field = through_model._meta.get_field('target')
+                except FieldDoesNotExist:
+                    continue
                 _patch_fk_field(source_field, model)
-            if cot_field is not None:
-                target_model = model
-                if cot_field.related_object_type_id:
-                    target_cot = CustomObjectType.objects.filter(
-                        object_type_id=cot_field.related_object_type_id,
-                    ).first()
-                    if target_cot is not None:
-                        registered = target_cot.get_registered_model()
-                        if registered is not None:
-                            target_model = registered
-                if target_field.remote_field.model is not target_model:
-                    _patch_fk_field(target_field, target_model)
+                _patch_fk_field(target_field, target_model)
+                if m2m_field is not None and hasattr(m2m_field, 'remote_field'):
+                    m2m_field.remote_field.through = through_model
 
     def _ensure_field_fk_constraint(self, model, field_name, on_delete_behavior=None):
         """Create the FK constraint for an OBJECT-type field at the DB level.

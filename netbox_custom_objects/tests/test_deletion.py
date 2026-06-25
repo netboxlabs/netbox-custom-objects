@@ -852,6 +852,72 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         self.assertNotIn(response.status_code, (403, 500))
         self.assertFalse(model_source_v2.objects.filter(pk=obj_source.pk).exists())
 
+    def test_bulk_delete_patches_all_through_copies(self):
+        """Bulk-delete realigns every live through class copy, not just the M2M descriptor.
+
+        Regression for security-service-group style deletes where stale through
+        classes remain in ``apps.all_models`` and ``_through_model_cache`` after
+        model regeneration (ValueError: Cannot query "G-DNS": Must be "TableNModel"
+        instance).
+        """
+        self.user.is_superuser = True
+        self.user.save()
+
+        cot_target = self.create_simple_custom_object_type(
+            name='svc2', slug='bulk-del-svc2',
+        )
+        cot_source = self.create_simple_custom_object_type(
+            name='svcgrp2', slug='bulk-del-svcgrp2',
+        )
+
+        ref_field = self.create_custom_object_type_field(
+            cot_source,
+            name='group',
+            label='Group',
+            type='multiobject',
+            related_object_type=cot_target.object_type,
+        )
+        through_name = ref_field.through_model_name
+
+        model_source_v1 = cot_source.get_model()
+        cot_target.refresh_from_db()
+        model_target = cot_target.get_model()
+
+        obj_target = model_target.objects.create(name='DNS-UDP')
+        obj_source = model_source_v1.objects.create(name='G-DNS')
+        obj_source.group.add(obj_target)
+
+        through_registry = django_apps.all_models[APP_LABEL][through_name.lower()]
+        stale_source_field = through_registry._meta.get_field('source')
+        stale_source_field.remote_field.model = model_source_v1
+
+        model_source_v2 = cot_source.get_model(no_cache=True)
+        branch_id = CustomObjectType._active_branch_id()
+        cache_bucket = CustomObjectType._through_model_cache.setdefault(
+            (cot_source.pk, branch_id), {},
+        )
+        cache_bucket[through_name] = through_registry
+
+        m2m_field = model_source_v2._meta.get_field('group')
+        live_through = m2m_field.remote_field.through
+        live_source_field = live_through._meta.get_field('source')
+        live_source_field.remote_field.model = model_source_v1
+
+        self.assertIsNot(live_through, through_registry)
+
+        url = f'/plugins/custom-objects/{cot_source.slug}/bulk-delete/'
+        pks = [obj_source.pk]
+        response = self.client.post(url, {'pk': pks})
+        self.assertEqual(response.status_code, 200)
+        response = self.client.post(
+            url,
+            {'pk': pks, 'confirm': 'on', '_confirm': '1'},
+        )
+        self.assertNotIn(response.status_code, (403, 500))
+        self.assertFalse(model_source_v2.objects.filter(pk=obj_source.pk).exists())
+        self.assertIs(live_source_field.remote_field.model, model_source_v2)
+        self.assertIs(stale_source_field.remote_field.model, model_source_v2)
+
     def test_delete_co_in_multi_hop_cross_cot_m2m_chain(self):
         """#483 – Complex cross-COT chain: A.refs→B, B.ports→C.
         Deleting a B instance must cascade-delete both A→B through rows and
