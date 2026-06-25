@@ -51,6 +51,16 @@ Create a Custom Object Type with a `POST` to `/api/plugins/custom-objects/custom
 | `group_name` | no | Groups similar Custom Object Types together in the navigation menu. |
 | `tags` | no | List of NetBox tag IDs to attach to this Custom Object Type. |
 
+The Custom Object Types **list view** (UI only) adds two columns that help plan
+deletions before calling the API:
+
+| Column | Description |
+|--------|-------------|
+| **Objects** | Count of object instances for the type. Linked to the type's object list when non-zero. |
+| **Referenced by** | Count of other Custom Object Types whose schema references this type (`related_object_type` or polymorphic `related_object_types`). Hover shows the referrer names. |
+
+These mirror the blocking checks enforced by `DELETE` (see below).
+
 ### Deleting Custom Object Types
 
 `DELETE /api/plugins/custom-objects/custom-object-types/<id>/` is rejected while the type

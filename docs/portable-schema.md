@@ -551,8 +551,9 @@ drop DB columns. The **Create** tab on the same page remains available for
 adding a single Custom Object Type through the standard form. CSV bulk import
 is available separately via **Import** on the list page.
 
-Schema apply is **blocked while a [NetBox Branching](branching.md) branch is
-active** — the same guard as the REST apply endpoint.
+When a [NetBox Branching](branching.md) branch is active, the UI shows a
+warning. Schema DDL is routed to the active branch's PostgreSQL schema; see
+[Portable Schema and Branching](branching.md#portable-schema) for details.
 
 #### REST API
 
@@ -592,9 +593,9 @@ Authorization: Token <token>
   created COT tables, choice sets, and seeded instances (PostgreSQL supports transactional DDL).
 - On success, `schema_document` is persisted on each affected COT so tombstones are available
   for future export/diff cycles.
-- Schema apply is **blocked while a [NetBox Branching](branching.md) branch is active**, since
-  the executor performs direct DDL that is not branch-aware. Run schema applies from the main
-  context.
+- When a branch is active, schema DDL targets the branch's PostgreSQL schema (not main).
+  Custom Object Type metadata remains exempt from branch tracking — see
+  [Portable Schema and Branching](branching.md#portable-schema).
 
 Response `200`:
 

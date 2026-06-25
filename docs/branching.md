@@ -47,4 +47,11 @@ Changes to Custom Objects on branches are disallowed.
 
 ## Portable Schema
 
-Applying a [portable schema document](portable-schema.md) is also blocked while a branch is active. The schema executor performs direct DDL (`ALTER`/`DROP TABLE`) operations that are not branch-aware, so schema applies must be run from the main context.
+Applying a [portable schema document](portable-schema.md) while a branch is active
+routes DDL (`CREATE`/`ALTER`/`DROP TABLE`) to the active branch's PostgreSQL schema
+via `_get_schema_connection()`. Custom Object Type and field metadata rows remain
+exempt from branch tracking (they are written to main and do not appear in the
+branch diff). The schema import UI and REST apply endpoint show a warning when a
+branch is active. For greenfield schema rollout across environments, prefer
+applying from the main context unless you intentionally want schema changes on a
+branch.
