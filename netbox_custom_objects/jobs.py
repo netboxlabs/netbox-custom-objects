@@ -29,7 +29,10 @@ def schedule_reindex_custom_object_type(cot_id):
                 except CustomObjectType.DoesNotExist:
                     continue
                 # Nothing to index until the type has at least one instance (e.g. schema import).
-                if cot.get_instance_count() == 0:
+                try:
+                    if not cot.get_model().objects.exists():
+                        continue
+                except Exception:
                     continue
                 ReindexCustomObjectTypeJob.enqueue(cot_id=pending_cot_id)
 

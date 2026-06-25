@@ -1553,18 +1553,35 @@ class CustomObjectBulkDeleteView(CustomObjectTableMixin, generic.BulkDeleteView)
     form = None
     template_name = 'netbox_custom_objects/custom_object_bulk_delete.html'
 
+    def post(self, request, **kwargs):
+        if '_confirm' in request.POST:
+            slug = kwargs.get('custom_object_type')
+            if slug:
+                cot = CustomObjectType.objects.get(slug=slug)
+                model = cot.get_model()
+                cot.realign_inbound_references(model)
+                cot.realign_outbound_references(model)
+                self.queryset = model.objects.all()
+                self.filterset = get_filterset_class(model)
+        return super().post(request, **kwargs)
+
     def setup(self, request, *args, **kwargs):
         super().setup(request, *args, **kwargs)
         self.queryset = self.get_queryset(request)
+        if self.custom_object_type:
+            model = self.custom_object_type.get_model()
+            self.custom_object_type.realign_inbound_references(model)
+            self.custom_object_type.realign_outbound_references(model)
+            self.queryset = model.objects.all()
         self.filterset = get_filterset_class(self.queryset.model)
         self.table = self.get_table(self.queryset, request).__class__
 
     def get_queryset(self, request):
         if self.queryset:
             return self.queryset
-        self.custom_object_type = self.kwargs.pop("custom_object_type", None)
+        custom_object_type = self.kwargs.get("custom_object_type")
         self.custom_object_type = CustomObjectType.objects.get(
-            slug=self.custom_object_type
+            slug=custom_object_type
         )
         model = self.custom_object_type.get_model_with_serializer()
         return model.objects.all()

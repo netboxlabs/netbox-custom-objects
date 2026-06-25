@@ -11,7 +11,7 @@ from django.db.utils import OperationalError, ProgrammingError
 from netbox.plugins import PluginConfig
 
 from .constants import APP_LABEL as APP_LABEL
-from .utilities import extract_cot_id_from_model_name, install_clear_cache_suppressor
+from .utilities import extract_cot_id_from_model_name, install_clear_cache_suppressor, is_model_generating
 
 logger = logging.getLogger(__name__)
 
@@ -539,6 +539,11 @@ class CustomObjectsPluginConfig(PluginConfig):
 
             # Skip custom object type model loading if dynamic models can't be created yet
             if self.should_skip_dynamic_model_creation():
+                return
+
+            # While get_model() is generating a class, relation-tree walks re-enter
+            # get_models() and would call get_model() for every COT → RecursionError.
+            if is_model_generating():
                 return
 
             # Add custom object type models

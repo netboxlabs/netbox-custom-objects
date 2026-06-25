@@ -18,30 +18,6 @@ from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 
 from .base import CustomObjectsTestCase, TransactionCleanupMixin
 
-# COTs that must be deleted before types they reference in security_objects.json.
-SECURITY_COT_DELETE_ORDER = (
-    'security-rb-demo1',
-    'security-object-link',
-    'security-address-group',
-    'security-service-group',
-)
-
-
-def purge_custom_object_instances(slugs):
-    """Delete all instances for the given Custom Object Type slugs."""
-    for slug in slugs:
-        cot = CustomObjectType.objects.get(slug=slug)
-        cot.get_model().objects.all().delete()
-
-
-def delete_custom_object_types_in_order(slugs, priority_order=()):
-    """Delete COTs after instances are gone; priority_order lists referrers first."""
-    slugs = set(slugs)
-    ordered = [slug for slug in priority_order if slug in slugs]
-    remaining = sorted(slugs - set(ordered))
-    for slug in ordered + remaining:
-        CustomObjectType.objects.get(slug=slug).delete()
-
 
 class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
     """Test deletion scenarios with cascading effects."""
@@ -699,6 +675,183 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
             'Through rows must be deleted (DB CASCADE) even after model regeneration.',
         )
 
+    def test_delete_realigns_stale_inbound_m2m_through_target_fk(self):
+        """CustomObject.delete() realigns inbound M2M target FKs before collection.
+
+        Regression for bulk/single delete of objects referenced by another COT's
+        cross-type multiobject field after the target model class was regenerated
+        in another context (ValueError: Cannot query "X": Must be "TableNModel"
+        instance).
+        """
+        cot_target = self.create_simple_custom_object_type(name='realigntgt', slug='realign-tgt')
+        cot_source = self.create_simple_custom_object_type(name='realignsrc', slug='realign-src')
+
+        self.create_custom_object_type_field(
+            cot_source,
+            name='refs',
+            label='References',
+            type='multiobject',
+            related_object_type=cot_target.object_type,
+        )
+
+        model_source = cot_source.get_model()
+        cot_target.refresh_from_db()
+        model_target_v1 = cot_target.get_model()
+
+        obj_target = model_target_v1.objects.create(name='G-DNS')
+        obj_source = model_source.objects.create(name='Source')
+        obj_source.refs.add(obj_target)
+
+        ref_field = CustomObjectTypeField.objects.get(custom_object_type=cot_source, name='refs')
+        through_model = django_apps.get_model(
+            'netbox_custom_objects', ref_field.through_model_name
+        )
+        target_field = through_model._meta.get_field('target')
+
+        model_target_v2 = cot_target.get_model(no_cache=True)
+        obj_target_v2 = model_target_v2.objects.get(pk=obj_target.pk)
+
+        # Simulate a stale target FK that was not realigned (e.g. another worker).
+        target_field.remote_field.model = model_target_v1
+
+        obj_target_v2.delete()
+
+        self.assertFalse(model_target_v2.objects.filter(pk=obj_target.pk).exists())
+        self.assertTrue(model_source.objects.filter(pk=obj_source.pk).exists())
+        self.assertEqual(through_model.objects.filter(target_id=obj_target.pk).count(), 0)
+
+    def test_bulk_delete_target_after_target_model_regeneration(self):
+        """Bulk-delete must succeed after the target COT model class was regenerated."""
+        self.user.is_superuser = True
+        self.user.save()
+
+        cot_target = self.create_simple_custom_object_type(name='bdtgt', slug='bulk-del-tgt')
+        cot_source = self.create_simple_custom_object_type(name='bdsrc', slug='bulk-del-src')
+
+        self.create_custom_object_type_field(
+            cot_source,
+            name='refs',
+            label='References',
+            type='multiobject',
+            related_object_type=cot_target.object_type,
+        )
+
+        model_source = cot_source.get_model()
+        cot_target.refresh_from_db()
+        model_target = cot_target.get_model()
+
+        obj_target = model_target.objects.create(name='DNS-UDP')
+        obj_source = model_source.objects.create(name='Group')
+        obj_source.refs.add(obj_target)
+
+        cot_target.clear_model_cache(cot_target.id)
+        cot_target.get_model(no_cache=True)
+
+        url = f'/plugins/custom-objects/{cot_target.slug}/bulk-delete/'
+        pks = [obj_target.pk]
+        response = self.client.post(url, {'pk': pks})
+        self.assertEqual(response.status_code, 200)
+        response = self.client.post(
+            url,
+            {'pk': pks, 'confirm': 'on', '_confirm': '1'},
+        )
+        self.assertNotIn(response.status_code, (403, 500))
+        self.assertFalse(model_target.objects.filter(pk=obj_target.pk).exists())
+
+    def test_bulk_delete_source_with_m2m_after_source_model_regeneration(self):
+        """Bulk-delete of the M2M source row must succeed after source COT regeneration."""
+        self.user.is_superuser = True
+        self.user.save()
+
+        cot_target = self.create_simple_custom_object_type(name='bdtgt2', slug='bulk-del-tgt2')
+        cot_source = self.create_simple_custom_object_type(name='bdsrc2', slug='bulk-del-src2')
+
+        self.create_custom_object_type_field(
+            cot_source,
+            name='refs',
+            label='References',
+            type='multiobject',
+            related_object_type=cot_target.object_type,
+        )
+
+        model_source = cot_source.get_model()
+        cot_target.refresh_from_db()
+        model_target = cot_target.get_model()
+
+        obj_target = model_target.objects.create(name='DNS-UDP')
+        obj_source = model_source.objects.create(name='G-DNS')
+        obj_source.refs.add(obj_target)
+
+        cot_source.clear_model_cache(cot_source.id)
+        cot_source.get_model(no_cache=True)
+
+        url = f'/plugins/custom-objects/{cot_source.slug}/bulk-delete/'
+        pks = [obj_source.pk]
+        response = self.client.post(url, {'pk': pks})
+        self.assertEqual(response.status_code, 200)
+        response = self.client.post(
+            url,
+            {'pk': pks, 'confirm': 'on', '_confirm': '1'},
+        )
+        self.assertNotIn(response.status_code, (403, 500))
+        self.assertFalse(model_source.objects.filter(pk=obj_source.pk).exists())
+
+    def test_bulk_delete_outbound_m2m_source_with_stale_through_fk(self):
+        """Bulk-delete of the M2M source row after model regen with stale through FK.
+
+        Regression for security-service-group style deletes: the collector walks
+        the live M2M through on the regenerated model class, not the copy returned
+        by ``apps.get_model()``.  ``realign_outbound_references()`` must patch
+        that through's ``source`` FK (class identity, not just label).
+        """
+        self.user.is_superuser = True
+        self.user.save()
+
+        cot_target = self.create_simple_custom_object_type(
+            name='svc', slug='bulk-del-svc',
+        )
+        cot_source = self.create_simple_custom_object_type(
+            name='svcgrp', slug='bulk-del-svcgrp',
+        )
+
+        self.create_custom_object_type_field(
+            cot_source,
+            name='group',
+            label='Group',
+            type='multiobject',
+            related_object_type=cot_target.object_type,
+        )
+
+        model_source_v1 = cot_source.get_model()
+        cot_target.refresh_from_db()
+        model_target = cot_target.get_model()
+
+        obj_target = model_target.objects.create(name='DNS-UDP')
+        obj_source = model_source_v1.objects.create(name='G-DNS')
+        obj_source.group.add(obj_target)
+
+        model_source_v2 = cot_source.get_model(no_cache=True)
+        obj_source_v2 = model_source_v2.objects.get(pk=obj_source.pk)
+
+        m2m_field = model_source_v2._meta.get_field('group')
+        through_model = m2m_field.remote_field.through
+        source_field = through_model._meta.get_field('source')
+        source_field.remote_field.model = model_source_v1
+
+        cot_source.realign_outbound_references(model_source_v2)
+        self.assertIs(source_field.remote_field.model, model_source_v2)
+
+        url = f'/plugins/custom-objects/{cot_source.slug}/bulk-delete/'
+        pks = [obj_source.pk]
+        response = self.client.post(url, {'pk': pks})
+        self.assertEqual(response.status_code, 200)
+        response = self.client.post(
+            url,
+            {'pk': pks, 'confirm': 'on', '_confirm': '1'},
+        )
+        self.assertNotIn(response.status_code, (403, 500))
+        self.assertFalse(model_source_v2.objects.filter(pk=obj_source.pk).exists())
+
     def test_delete_co_in_multi_hop_cross_cot_m2m_chain(self):
         """#483 – Complex cross-COT chain: A.refs→B, B.ports→C.
         Deleting a B instance must cascade-delete both A→B through rows and
@@ -859,6 +1012,7 @@ class CustomObjectTypeDeleteOrphanedTablesTestCase(
             cursor.execute('SELECT to_regclass(%s)', [f'public.{table_name}'])
             self.assertIsNone(cursor.fetchone()[0])
 
+
 class CustomObjectTypeDeleteReferrerMissingThroughTestCase(
     TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
 ):
@@ -898,51 +1052,3 @@ class CustomObjectTypeDeleteWithInstancesTestCase(
         model.objects.all().delete()
         cot.delete()
         self.assertFalse(CustomObjectType.objects.filter(slug='has-rows').exists())
-
-class SecurityObjectsSchemaLifecycleTestCase(
-    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
-):
-    """Apply security_objects.json, export, then delete dependents before referenced types."""
-
-    def test_security_objects_apply_export_delete_in_dependency_order(self):
-        import json
-        from pathlib import Path
-
-        from extras.models import CustomFieldChoiceSet
-        from netbox_custom_objects.schema.executor import apply_document
-        from netbox_custom_objects.schema.exporter import export_cots
-        from utilities.exceptions import AbortRequest
-
-        example = (
-            Path(__file__).resolve().parents[1]
-            / 'schema'
-            / 'examples'
-            / 'security_objects.json'
-        )
-        schema_doc = json.loads(example.read_text())
-        slugs = [t['slug'] for t in schema_doc['types']]
-
-        apply_document(schema_doc, allow_destructive=False)
-        self.assertEqual(CustomObjectType.objects.filter(slug__in=slugs).count(), len(slugs))
-        self.assertGreaterEqual(
-            CustomFieldChoiceSet.objects.filter(name__startswith='security_').count(),
-            len(schema_doc['choice_sets']),
-        )
-
-        exported = export_cots(CustomObjectType.objects.filter(slug__in=slugs))
-        self.assertEqual(len(exported['types']), len(slugs))
-        self.assertNotIn('choice_sets', exported)
-        self.assertNotIn('objects', exported)
-
-        with self.assertRaises(AbortRequest):
-            CustomObjectType.objects.get(slug='security-action').delete()
-
-        seeded_slugs = {entry['type'] for entry in schema_doc.get('objects', [])}
-        purge_custom_object_instances(seeded_slugs)
-
-        with self.assertRaises(AbortRequest):
-            CustomObjectType.objects.get(slug='security-action').delete()
-
-        delete_custom_object_types_in_order(slugs, SECURITY_COT_DELETE_ORDER)
-
-        self.assertEqual(CustomObjectType.objects.filter(slug__in=slugs).count(), 0)

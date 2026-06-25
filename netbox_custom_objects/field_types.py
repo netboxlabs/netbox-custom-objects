@@ -1524,7 +1524,12 @@ class MultiObjectFieldType(FieldType):
                 # Self-referential field - resolve to current model
                 to_model = model
             else:
-                to_model = custom_object_type.get_model()
+                # Never call get_model() here — circular cross-COT M2M fields recurse
+                # (A→B while B→A is still generating).  inbound realign on the target
+                # COT patches the through target FK once both classes are cached.
+                to_model = custom_object_type.get_registered_model()
+                if to_model is None:
+                    return
         else:
             to_ct = f"{content_type.app_label}.{content_type.model}"
             to_model = apps.get_model(to_ct)

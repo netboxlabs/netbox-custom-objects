@@ -667,7 +667,8 @@ A Custom Object Type cannot be deleted while:
    `security-rb-demo1` is deleted first.
 
 The UI and API surface this as a blocking error instead of silently breaking cross-type
-references. Delete dependent types before the types they reference.
+references. Delete dependent types before the types they reference. The Custom Object Types
+list view **Objects** and **Referenced by** columns reflect the same checks.
 
 ### Typical End-to-End Workflow
 

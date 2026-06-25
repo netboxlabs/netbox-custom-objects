@@ -13,7 +13,10 @@ __all__ = (
     "generate_model",
     "get_viewname",
     "install_clear_cache_suppressor",
+    "is_model_generating",
 )
+
+_generation_tl = threading.local()
 
 # ---------------------------------------------------------------------------
 # Thread-safe apps.clear_cache suppression
@@ -77,6 +80,26 @@ def _suppress_clear_cache():
         yield
     finally:
         _suppress_tl.depth -= 1
+
+
+@contextmanager
+def _model_generation_guard():
+    """Mark the current thread as inside CustomObjectType.get_model() generation.
+
+    ``get_models()`` skips yielding dynamic COT models while this guard is active
+    so ``_relation_tree`` / ``snapshot()`` cannot re-enter ``get_model()`` for
+    every COT and recurse (issue: polymorphic MultiObject field save).
+    """
+    _generation_tl.depth = getattr(_generation_tl, "depth", 0) + 1
+    try:
+        yield
+    finally:
+        _generation_tl.depth -= 1
+
+
+def is_model_generating():
+    """True while the current thread is generating a dynamic CO model."""
+    return getattr(_generation_tl, "depth", 0) > 0
 
 
 # Internal model names for custom object types follow the pattern "table<id>model"
