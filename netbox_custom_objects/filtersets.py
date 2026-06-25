@@ -11,7 +11,7 @@ from django.utils.timezone import make_aware, is_aware
 
 from extras.choices import CustomFieldTypeChoices
 from netbox.filtersets import NetBoxModelFilterSet
-from users.filterset_mixins import OwnerFilterMixin
+from users.models import Owner, OwnerGroup
 
 from .constants import APP_LABEL
 from .models import CustomObjectType
@@ -400,10 +400,26 @@ def get_filterset_class(model):
             return queryset.none()
         return queryset.filter(q)
 
+    def filter_owner_group_id(self, queryset, name, value):
+        if not value:
+            return queryset
+        return queryset.filter(owner__group__in=value)
+
     attrs = {
         "Meta": meta,
         "__module__": "netbox_custom_objects.filtersets",
         "search": search,
+        "filter_owner_group_id": filter_owner_group_id,
+        "owner_id": django_filters.ModelMultipleChoiceFilter(
+            field_name='owner',
+            queryset=Owner.objects.all(),
+            label='Owner (ID)',
+        ),
+        "owner_group_id": django_filters.ModelMultipleChoiceFilter(
+            queryset=OwnerGroup.objects.all(),
+            method='filter_owner_group_id',
+            label='Owner Group (ID)',
+        ),
     }
 
     # For each custom field, add a corresponding filter (dict of name → Filter).
@@ -412,6 +428,6 @@ def get_filterset_class(model):
 
     return type(
         f"{model._meta.object_name}FilterSet",
-        (OwnerFilterMixin, NetBoxModelFilterSet,),
+        (NetBoxModelFilterSet,),
         attrs,
     )
