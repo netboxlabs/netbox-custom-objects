@@ -918,6 +918,91 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         self.assertIs(live_source_field.remote_field.model, model_source_v2)
         self.assertIs(stale_source_field.remote_field.model, model_source_v2)
 
+    def test_bulk_delete_polymorphic_multiobject_after_model_regeneration(self):
+        """Bulk-delete succeeds for COTs with polymorphic multiobject fields.
+
+        Regression for security-rb-demo1 style rulebooks (source, destination,
+        services_applications) where stale polymorphic through ``source`` FKs
+        raise ValueError: Cannot query "N": Must be "TableNModel" instance.
+        """
+        self.user.is_superuser = True
+        self.user.save()
+
+        cot_target_a = self.create_simple_custom_object_type(
+            name='polytgt-a', slug='poly-tgt-a',
+        )
+        cot_target_b = self.create_simple_custom_object_type(
+            name='polytgt-b', slug='poly-tgt-b',
+        )
+        cot_rulebook = self.create_simple_custom_object_type(
+            name='polyrb', slug='poly-rb',
+        )
+
+        for name, targets in (
+            ('source', [cot_target_a.object_type, cot_target_b.object_type]),
+            ('destination', [cot_target_a.object_type]),
+            ('services_applications', [cot_target_b.object_type]),
+        ):
+            self.create_polymorphic_field(
+                cot_rulebook,
+                related_object_types=targets,
+                name=name,
+                label=name.replace('_', ' ').title(),
+                type='multiobject',
+            )
+
+        model_rb_v1 = cot_rulebook.get_model()
+        cot_target_a.refresh_from_db()
+        cot_target_b.refresh_from_db()
+        model_tgt_a = cot_target_a.get_model()
+        model_tgt_b = cot_target_b.get_model()
+
+        obj_a = model_tgt_a.objects.create(name='Host-A')
+        obj_b = model_tgt_b.objects.create(name='Svc-B')
+        obj_rb = model_rb_v1.objects.create(name='Rule-1')
+
+        from django.contrib.contenttypes.models import ContentType
+        from django.apps import apps as django_apps
+
+        ct_a = ContentType.objects.get_for_model(model_tgt_a)
+        ct_b = ContentType.objects.get_for_model(model_tgt_b)
+        for field_name, rows in (
+            ('source', [(ct_a.id, obj_a.pk), (ct_b.id, obj_b.pk)]),
+            ('destination', [(ct_a.id, obj_a.pk)]),
+            ('services_applications', [(ct_b.id, obj_b.pk)]),
+        ):
+            through = django_apps.get_model(
+                'netbox_custom_objects',
+                CustomObjectTypeField.objects.get(
+                    custom_object_type=cot_rulebook, name=field_name,
+                ).through_model_name,
+            )
+            for ct_id, obj_id in rows:
+                through.objects.create(source=obj_rb, content_type_id=ct_id, object_id=obj_id)
+
+        model_rb_v2 = cot_rulebook.get_model(no_cache=True)
+        for field_name in ('source', 'destination', 'services_applications'):
+            through = django_apps.get_model(
+                'netbox_custom_objects',
+                CustomObjectTypeField.objects.get(
+                    custom_object_type=cot_rulebook, name=field_name,
+                ).through_model_name,
+            )
+            source_field = through._meta.get_field('source')
+            source_field.remote_field.model = model_rb_v1
+            source_field.related_model = model_rb_v1
+
+        url = f'/plugins/custom-objects/{cot_rulebook.slug}/bulk-delete/'
+        pks = [obj_rb.pk]
+        response = self.client.post(url, {'pk': pks})
+        self.assertEqual(response.status_code, 200)
+        response = self.client.post(
+            url,
+            {'pk': pks, 'confirm': 'on', '_confirm': '1'},
+        )
+        self.assertNotIn(response.status_code, (403, 500))
+        self.assertFalse(model_rb_v2.objects.filter(pk=obj_rb.pk).exists())
+
     def test_delete_co_in_multi_hop_cross_cot_m2m_chain(self):
         """#483 – Complex cross-COT chain: A.refs→B, B.ports→C.
         Deleting a B instance must cascade-delete both A→B through rows and

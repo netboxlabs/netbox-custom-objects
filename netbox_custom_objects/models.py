@@ -1788,6 +1788,23 @@ class CustomObjectType(NetBoxModel):
                 continue
             _patch_fk_field(fk_field, model)
 
+        # Polymorphic multiobject referrers store targets via content_type_id +
+        # object_id; only the through ``source`` FK must match the owner class.
+        for inbound_field in CustomObjectTypeField.objects.filter(
+            related_object_types=self.object_type,
+            type=CustomFieldTypeChoices.TYPE_MULTIOBJECT,
+            is_polymorphic=True,
+        ).iterator():
+            owner_model = inbound_field.custom_object_type.get_registered_model()
+            if owner_model is None:
+                continue
+            for through_model in _iter_m2m_through_copies(inbound_field.through_model_name):
+                try:
+                    source_field = through_model._meta.get_field('source')
+                except FieldDoesNotExist:
+                    continue
+                _patch_fk_field(source_field, owner_model)
+
     def realign_outbound_references(self, model):
         """Realign outbound M2M through FKs and field metadata on *model*."""
         outbound_fields = {
@@ -1830,6 +1847,21 @@ class CustomObjectType(NetBoxModel):
                 _patch_fk_field(target_field, target_model)
                 if m2m_field is not None and hasattr(m2m_field, 'remote_field'):
                     m2m_field.remote_field.through = through_model
+
+        # Polymorphic multiobject fields have no M2M descriptor on the CO
+        # model; only through tables with a source FK back to *model*.  Patch
+        # every in-process through copy (same stale-class issue as #483).
+        for cot_field in CustomObjectTypeField.objects.filter(
+            custom_object_type_id=self.pk,
+            type=CustomFieldTypeChoices.TYPE_MULTIOBJECT,
+            is_polymorphic=True,
+        ).iterator():
+            for through_model in _iter_m2m_through_copies(cot_field.through_model_name):
+                try:
+                    source_field = through_model._meta.get_field('source')
+                except FieldDoesNotExist:
+                    continue
+                _patch_fk_field(source_field, model)
 
     def _ensure_field_fk_constraint(self, model, field_name, on_delete_behavior=None):
         """Create the FK constraint for an OBJECT-type field at the DB level.
