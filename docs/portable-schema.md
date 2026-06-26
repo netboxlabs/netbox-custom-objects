@@ -658,17 +658,31 @@ in **`objects`**):
 
 ### Deleting Custom Object Types
 
+Deletion is guarded at the **Custom Object Type (schema) level**. This is separate
+from `on_delete_behavior` on single `object` fields, which controls what happens
+when a **referenced object instance** (core NetBox or Custom Object) is deleted.
+`on_delete_behavior` does not apply to `multiobject` fields.
+
 A Custom Object Type cannot be deleted while:
 
 1. **Instances still exist** — delete or migrate all objects of that type first.
-2. **Another type's schema still references it** — for example, `security-rb-demo1` defines
-   `source`, `destination`, and `actions` fields that point at other security types. Those
-   referenced types (such as `security-action` or `security-zone`) cannot be removed until
-   `security-rb-demo1` is deleted first.
+   The list view **Objects** column links to the object list when the count is
+   greater than zero. If the dynamic backing table is already missing (orphaned
+   schema metadata), the count reads as zero and this check alone will not block
+   deletion.
+2. **Another type's schema still references it** — for example, `security-rb-demo1`
+   defines `source`, `destination`, and `actions` fields that point at other security
+   types. Those referenced types (such as `security-action` or `security-zone`) cannot
+   be removed until `security-rb-demo1` is deleted first. The list view **Referenced
+   by** column shows how many other types still depend on this one (hover for names).
 
-The UI and API surface this as a blocking error instead of silently breaking cross-type
-references. Delete dependent types before the types they reference. The Custom Object Types
-list view **Objects** and **Referenced by** columns reflect the same checks.
+These checks apply to single-type delete, bulk delete from the Custom Object Types
+list, and the REST API. The UI and API return a blocking error instead of silently
+breaking cross-type references. Delete dependent types before the types they reference.
+
+If the dynamic backing table is already absent (for example after a partial failure
+or manual `DROP TABLE`), delete still completes so orphaned COT metadata can be removed
+without a database error.
 
 ### Typical End-to-End Workflow
 

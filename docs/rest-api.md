@@ -64,11 +64,17 @@ These columns mirror the checks that block deletion (see below).
 
 `DELETE /api/plugins/custom-objects/custom-object-types/<id>/` is rejected while the type
 still has object instances or while another Custom Object Type's schema references it
-(`related_object_type` or polymorphic `related_object_types`). The API returns a blocking
-error instead of silently removing cross-type references. Delete or migrate all instances
-first, then remove dependent types before the types they reference. See
+(`related_object_type` or polymorphic `related_object_types`). Bulk delete from the list
+follows the same rules. The API returns a blocking error instead of silently removing
+cross-type references. Delete or migrate all instances first, then remove dependent types
+before the types they reference. See
 [Deleting Custom Object Types](portable-schema.md#deleting-custom-object-types) in the
-portable schema guide for details and examples.
+portable schema guide for details, list-column hints, and examples.
+
+**Instance references:** Deleting a Custom Object **instance** that another object points
+to via an `object` field is governed by that field's `on_delete_behavior` (`set_null`,
+`cascade`, or `protect`). That is separate from COT-level deletion guards above.
+`on_delete_behavior` does not apply to `multiobject` fields.
 
 ## Custom Object Type Fields
 
