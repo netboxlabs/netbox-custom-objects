@@ -151,8 +151,8 @@ Recommended key order when authoring documents by hand:
 | Key | Type | Description |
 |-----|------|-------------|
 | `schema_version` | `"1"` | Format version. Currently only `"1"` is supported. |
-| `types` | array of COT definitions | One entry per Custom Object Type. **Required.** |
 | `choice_sets` | array of choice set definitions | Optional. Created/updated on apply before types. Not exported. |
+| `types` | array of COT definitions | One entry per Custom Object Type. **Required.** |
 | `objects` | array of object group definitions | Optional. Instance seed data upserted on apply after types. Not exported. |
 
 ### COT Definition
