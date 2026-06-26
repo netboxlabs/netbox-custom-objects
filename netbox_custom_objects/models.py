@@ -60,6 +60,7 @@ from netbox.search import SearchIndex
 from utilities import filters
 from utilities.data import get_config_value_ci
 from utilities.datetime import datetime_from_timestamp
+from utilities.jinja2 import render_jinja2
 from utilities.object_types import object_type_name
 from utilities.querysets import RestrictedQuerySet
 from utilities.serialization import deserialize_object as _deserialize_object
@@ -801,8 +802,35 @@ class CustomObject(
 
         return _Deserialized()
 
+    def _render_display_expression(self):
+        """Render the COT display_expression; return stripped result or None."""
+        # All access inside the try so any exception (including RelatedObjectDoesNotExist
+        # from custom_object_type access) falls through to the primary-field fallback.
+        try:
+            expression = getattr(self.custom_object_type, 'display_expression', '')
+            if not expression:
+                return None
+            ctx = {}
+            for field_info in self._field_objects.values():
+                field_name = field_info["name"]
+                field_type = FIELD_TYPE_CLASS[field_info["field"].type]()
+                try:
+                    value = field_type.get_display_value(self, field_name)
+                    ctx[field_name] = '' if value is None else value
+                except Exception:  # noqa: BLE001
+                    ctx[field_name] = ''
+            rendered = render_jinja2(expression, ctx).strip()
+            return rendered or None
+        except Exception:  # noqa: BLE001
+            return None
+
     def __str__(self):
-        # Find the field with primary=True and return that field's "name" as the name of the object
+        # If the COT defines a Jinja2 display expression, try that first.
+        rendered = self._render_display_expression()
+        if rendered:
+            return rendered
+
+        # Fall back to single-primary-field display name.
         primary_field = self._field_objects.get(self._primary_field_id, None)
         primary_field_value = None
         if primary_field:
@@ -1032,6 +1060,18 @@ class CustomObjectType(NetBoxModel):
         db_index=True,
         blank=True,
         help_text=_("Used to group similar custom object types in the navigation menu")
+    )
+    display_expression = models.CharField(
+        max_length=500,
+        blank=True,
+        verbose_name=_('display expression'),
+        help_text=_(
+            "Optional Jinja2 template for the object display name. "
+            "Reference field values by name, e.g. <code>{{ name }} - {{ manufacturer }}</code>. "
+            "Undefined fields resolve to an empty string — use "
+            "<code>{% if field %}{{ field }}{% endif %}</code> to suppress trailing separators. "
+            "Leave blank to use the field marked as primary name field, if any."
+        ),
     )
     schema_document = models.JSONField(
         blank=True,
