@@ -14,6 +14,8 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.reverse import reverse
 from rest_framework.utils import model_meta
 
+from users.api.serializers_.owners import OwnerSerializer
+
 from netbox_custom_objects import constants, field_types
 from netbox_custom_objects.models import (CustomObject, CustomObjectType,
                                           CustomObjectTypeField)
@@ -457,8 +459,16 @@ def get_serializer_class(model, skip_object_fields=False):
         if isinstance(attr, field_types.PolymorphicM2MDescriptor)
     )
 
+    # If a COT field is named 'owner', it shadows the OwnerMixin FK on the dynamic model
+    # (Django silently lets child attrs override abstract parent fields). The serializer
+    # must skip the FK owner field to avoid OwnerSerializer.to_representation() being
+    # called on a string value and crashing on .pk.
+    has_owner_field_conflict = any(f.name == 'owner' for f in model_fields)
+
     # Create field list including all necessary fields
     base_fields = ["id", "url", "display", "created", "last_updated", "tags"]
+    if not has_owner_field_conflict:
+        base_fields.insert(3, "owner")
 
     # Include _context field when the model has designated context fields
     has_context_fields = bool(getattr(model, '_context_field_ids', []))
@@ -652,6 +662,9 @@ def get_serializer_class(model, skip_object_fields=False):
         "update": update,
         "validate": validate,
     }
+
+    if not has_owner_field_conflict:
+        attrs["owner"] = OwnerSerializer(nested=True, required=False, allow_null=True)
 
     if has_context_fields:
         attrs["_context"] = serializers.SerializerMethodField()

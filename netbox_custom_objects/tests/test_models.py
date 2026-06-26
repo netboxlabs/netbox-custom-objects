@@ -125,8 +125,8 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         custom_object_type = self.create_custom_object_type(name="TestObject")
 
         model = custom_object_type.get_model()
-        # Base fields: id, created, last_updated
-        self.assertEqual(len(model._meta.fields), 3)
+        # Base fields: id, created, last_updated, owner
+        self.assertEqual(len(model._meta.fields), 4)
 
     def test_custom_object_type_get_model_with_primary_field(self):
         """Test get_model method with a primary field."""
@@ -427,6 +427,17 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
                 field = CustomObjectTypeField(
                     custom_object_type=self.custom_object_type,
                     name=invalid_name,
+                    type="text",
+                )
+                field.full_clean()
+
+    def test_custom_object_type_field_reserved_name_rejected(self):
+        """Field names in RESERVED_FIELD_NAMES must be rejected with ValidationError."""
+        for reserved in ("owner", "tags", "id", "created", "last_updated"):
+            with self.assertRaises(ValidationError, msg=f"Expected ValidationError for reserved name={reserved!r}"):
+                field = CustomObjectTypeField(
+                    custom_object_type=self.custom_object_type,
+                    name=reserved,
                     type="text",
                 )
                 field.full_clean()

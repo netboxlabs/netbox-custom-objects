@@ -371,6 +371,10 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, Test
         obj_perm.save()
         obj_perm.users.add(self.user)
         obj_perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+        view_device_perm = ObjectPermission(name='view-device-for-nested', actions=['view'])
+        view_device_perm.save()
+        view_device_perm.users.add(self.user)
+        view_device_perm.object_types.add(ObjectType.objects.get_for_model(Device))
 
         devices = Device.objects.all()
 
@@ -850,7 +854,7 @@ class SerializerFieldCoverageTest(CustomObjectsTestCase, TestCase):
         response = self.client.get(self._detail_url(instance), **self.header)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        for field in ('id', 'url', 'display', 'created', 'last_updated', 'tags'):
+        for field in ('id', 'url', 'display', 'owner', 'created', 'last_updated', 'tags'):
             self.assertIn(field, response.data, f"Standard field '{field}' missing from response")
 
     def test_detail_response_contains_custom_fields(self):
@@ -1503,6 +1507,7 @@ class CrossCOTMultiObjectAPITest(CustomObjectsTestCase, TestCase):
     def test_patch_updates_cross_cot_m2m_field(self):
         """#443 – PATCH with a list of target PKs must update the M2M field."""
         self._add_perm('change', self.model_source)
+        self._add_perm('view', self.model_target)
 
         # Confirm initial state.
         self.assertSetEqual(
@@ -1601,3 +1606,158 @@ class CrossCOTMultiObjectAPITest(CustomObjectsTestCase, TestCase):
         self.assertIn('refs', response.data, 'Response must include the refs M2M field.')
         ref_ids = [r['id'] for r in response.data['refs']]
         self.assertIn(self.obj_target1.pk, ref_ids)
+
+
+class OwnerAPITest(CustomObjectsTestCase, TestCase):
+    """Tests for the owner field on custom object instances (#376)."""
+
+    def setUp(self):
+        super().setUp()
+        from netbox_custom_objects.models import CustomObjectType
+        self.cot = CustomObjectType.objects.create(name='OwnedThing', slug='owned-thing')
+        self.model = self.cot.get_model()
+        token = create_token(self.user)
+        self.header = {'HTTP_AUTHORIZATION': f'Token {token}'}
+        self.client = APIClient()
+
+    def _list_url(self):
+        return reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-list',
+            kwargs={'custom_object_type': self.cot.slug},
+        )
+
+    def _detail_url(self, pk):
+        return reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-detail',
+            kwargs={'pk': pk, 'custom_object_type': self.cot.slug},
+        )
+
+    def _add_perm(self, action, model):
+        perm = ObjectPermission(name=f'{action}-{model._meta.model_name}', actions=[action])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(model))
+        return perm
+
+    def _grant_owner_view(self, suffix=''):
+        from users.models import Owner
+        perm = ObjectPermission(name=f'view-owner{suffix}', actions=['view'])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(Owner))
+        return perm
+
+    def test_owner_null_by_default(self):
+        """New CO instances must have owner=None when not explicitly set."""
+        obj = self.model.objects.create()
+        self.assertIsNone(obj.owner)
+
+    def test_owner_present_in_api_response(self):
+        """GET response must contain an 'owner' key (null when unset)."""
+        obj = self.model.objects.create()
+        self._add_perm('view', self.model)
+
+        response = self.client.get(self._detail_url(obj.pk), **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('owner', response.data)
+        self.assertIsNone(response.data['owner'])
+
+    def test_create_with_owner(self):
+        """POST with owner=<pk> must persist the owner FK."""
+        from users.models import Owner
+        owner = Owner.objects.create(name='create-owner')
+        self._add_perm('add', self.model)
+        self._grant_owner_view('-create')
+
+        response = self.client.post(
+            self._list_url(),
+            {'owner': owner.pk},
+            format='json',
+            **self.header,
+        )
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED,
+            f'Expected 201; got {response.status_code}: {getattr(response, "data", response.content)}',
+        )
+        obj = self.model.objects.get(pk=response.data['id'])
+        self.assertEqual(obj.owner_id, owner.pk)
+
+    def test_patch_sets_owner(self):
+        """PATCH with owner=<pk> must update the owner FK."""
+        from users.models import Owner
+        obj = self.model.objects.create()
+        owner = Owner.objects.create(name='patch-owner')
+        self._add_perm('change', self.model)
+        self._grant_owner_view('-patch')
+
+        response = self.client.patch(
+            self._detail_url(obj.pk),
+            {'owner': owner.pk},
+            format='json',
+            **self.header,
+        )
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK,
+            f'Expected 200; got {response.status_code}: {getattr(response, "data", response.content)}',
+        )
+        obj.refresh_from_db()
+        self.assertEqual(obj.owner_id, owner.pk)
+
+    def test_patch_clears_owner(self):
+        """PATCH with owner=null must clear the owner FK."""
+        from users.models import Owner
+        owner = Owner.objects.create(name='clear-owner')
+        obj = self.model.objects.create(owner=owner)
+        self._add_perm('change', self.model)
+
+        response = self.client.patch(
+            self._detail_url(obj.pk),
+            {'owner': None},
+            format='json',
+            **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        obj.refresh_from_db()
+        self.assertIsNone(obj.owner)
+
+    def test_filter_by_owner_id(self):
+        """?owner_id=<pk> must return only instances with that owner."""
+        from users.models import Owner
+        owner_a = Owner.objects.create(name='filter-owner-a')
+        owner_b = Owner.objects.create(name='filter-owner-b')
+        obj_a = self.model.objects.create(owner=owner_a)
+        obj_b = self.model.objects.create(owner=owner_b)
+        self._add_perm('view', self.model)
+
+        response = self.client.get(
+            self._list_url(),
+            {'owner_id': owner_a.pk},
+            **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        ids = [r['id'] for r in response.data['results']]
+        self.assertIn(obj_a.pk, ids)
+        self.assertNotIn(obj_b.pk, ids)
+
+    def test_filter_by_owner_group_id(self):
+        """?owner_group_id=<pk> must return only instances whose owner belongs to that group."""
+        from users.models import Owner, OwnerGroup
+        group_x = OwnerGroup.objects.create(name='group-x')
+        group_y = OwnerGroup.objects.create(name='group-y')
+        owner_x = Owner.objects.create(name='owner-in-x', group=group_x)
+        owner_y = Owner.objects.create(name='owner-in-y', group=group_y)
+        obj_x = self.model.objects.create(owner=owner_x)
+        obj_y = self.model.objects.create(owner=owner_y)
+        self._add_perm('view', self.model)
+
+        response = self.client.get(
+            self._list_url(),
+            {'owner_group_id': group_x.pk},
+            **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        ids = [r['id'] for r in response.data['results']]
+        self.assertIn(obj_x.pk, ids)
+        self.assertNotIn(obj_y.pk, ids)

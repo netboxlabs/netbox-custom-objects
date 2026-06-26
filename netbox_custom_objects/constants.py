@@ -38,6 +38,7 @@ RESERVED_FIELD_NAMES = [
     "last_updated",
     "model",
     "objects",
+    "owner",
     "pk",
     "refresh_from_db",
     "save",
