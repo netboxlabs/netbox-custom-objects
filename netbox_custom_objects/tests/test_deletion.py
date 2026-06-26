@@ -12,6 +12,7 @@ from django.db.utils import IntegrityError
 from django.test import TransactionTestCase
 
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
+from core.models import ObjectType
 from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
@@ -1139,7 +1140,34 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
 class CustomObjectTypeDeleteOrphanedTablesTestCase(
     TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
 ):
-    """COT deletion must succeed when polymorphic M2M through tables are missing."""
+    """COT deletion must succeed when dynamic tables are missing."""
+
+    def test_delete_cot_with_missing_main_table_and_polymorphic_object_field(self):
+        """Orphaned COT metadata (main table gone) must delete without ProgrammingError.
+
+        Regression for bulk-delete of security-address style COTs whose polymorphic
+        ``address`` object field left Django's ContentType collector issuing
+        ``UPDATE custom_objects_N SET address_content_type_id = NULL`` against a
+        table that no longer exists.
+        """
+        cot = self.create_simple_custom_object_type(name='Broken Addr', slug='broken-addr')
+        self.create_polymorphic_field(
+            cot,
+            related_object_types=[
+                self.get_prefix_object_type(),
+                ObjectType.objects.get(app_label='ipam', model='ipaddress'),
+            ],
+            name='address',
+            label='Address',
+            type='object',
+        )
+        table_name = cot.get_database_table_name()
+        cot.refresh_from_db()
+        with connection.cursor() as cursor:
+            cursor.execute(f'DROP TABLE IF EXISTS {connection.ops.quote_name(table_name)} CASCADE')
+        cot_id = cot.pk
+        cot.delete()
+        self.assertFalse(CustomObjectType.objects.filter(pk=cot_id).exists())
 
     def test_delete_cot_with_missing_polymorphic_through_table(self):
         cot = self.create_simple_custom_object_type(name='Broken M2M', slug='broken-m2m')

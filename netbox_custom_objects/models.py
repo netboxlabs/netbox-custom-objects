@@ -2206,21 +2206,22 @@ class CustomObjectType(NetBoxModel):
 
         super().delete(*args, **kwargs)
 
-        if not in_branch:
-            # ChangeDiff has a PROTECT FK to ContentType/ObjectType — delete those
-            # records first so object_type.delete() is not blocked.
-            try:
-                from netbox_branching.models import ChangeDiff
-                ChangeDiff.objects.filter(object_type=object_type).delete()
-            except ImportError:
-                pass
-            # Temporarily disconnect the pre_delete handler to skip the ObjectType deletion
-            # TODO: Remove this disconnect/reconnect after ObjectType has been exempted from handle_deleted_object
-            pre_delete.disconnect(handle_deleted_object)
-            try:
-                object_type.delete()
-            finally:
-                pre_delete.connect(handle_deleted_object)
+        # Unregister dynamic models before dropping tables or deleting the
+        # ObjectType/ContentType row.  While the model stays registered Django's
+        # ContentType collector issues SET NULL against polymorphic GFK columns
+        # (e.g. address_content_type_id) on tables that are already gone or
+        # about to be dropped — ProgrammingError: relation does not exist.
+        with self._global_lock:
+            model_name = model.__name__.lower()
+            if model_name in apps.all_models.get(APP_LABEL, {}):
+                del apps.all_models[APP_LABEL][model_name]
+
+            for through_model in getattr(model, '_through_models', []):
+                through_name = through_model.__name__.lower()
+                if through_name in apps.all_models.get(APP_LABEL, {}):
+                    del apps.all_models[APP_LABEL][through_name]
+
+        apps.clear_cache()
 
         with schema_conn.schema_editor() as schema_editor:
             # Drop through tables before the main table (FKs).  Existence checks
@@ -2247,27 +2248,29 @@ class CustomObjectType(NetBoxModel):
                     cleared.append((through, through._meta.auto_created))
                     through._meta.auto_created = False
             try:
-                # Flush DEFERRABLE FK triggers so PG doesn't reject the DROP.
-                schema_editor.execute('SET CONSTRAINTS ALL IMMEDIATE')
-                schema_editor.delete_model(model)
+                if _table_exists(model._meta.db_table, conn=schema_conn):
+                    # Flush DEFERRABLE FK triggers so PG doesn't reject the DROP.
+                    schema_editor.execute('SET CONSTRAINTS ALL IMMEDIATE')
+                    schema_editor.delete_model(model)
             finally:
                 for through, original in cleared:
                     through._meta.auto_created = original
 
-        # Unregister from apps.all_models so cascade-delete doesn't query the
-        # dropped table.  _global_lock guards against a concurrent get_model()
-        # racing and re-registering mid-cleanup.
-        with self._global_lock:
-            model_name = model.__name__.lower()
-            if model_name in apps.all_models.get(APP_LABEL, {}):
-                del apps.all_models[APP_LABEL][model_name]
-
-            for through_model in getattr(model, '_through_models', []):
-                through_name = through_model.__name__.lower()
-                if through_name in apps.all_models.get(APP_LABEL, {}):
-                    del apps.all_models[APP_LABEL][through_name]
-
-        apps.clear_cache()
+        if not in_branch:
+            # ChangeDiff has a PROTECT FK to ContentType/ObjectType — delete those
+            # records first so object_type.delete() is not blocked.
+            try:
+                from netbox_branching.models import ChangeDiff
+                ChangeDiff.objects.filter(object_type=object_type).delete()
+            except ImportError:
+                pass
+            # Temporarily disconnect the pre_delete handler to skip the ObjectType deletion
+            # TODO: Remove this disconnect/reconnect after ObjectType has been exempted from handle_deleted_object
+            pre_delete.disconnect(handle_deleted_object)
+            try:
+                object_type.delete()
+            finally:
+                pre_delete.connect(handle_deleted_object)
 
         # Re-clear in case anything re-cached during cleanup.
         self.clear_model_cache(self.id, all_branches=True)
@@ -3626,14 +3629,21 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         model = self.custom_object_type.get_model()
         schema_conn = _get_schema_connection()
 
-        with schema_conn.schema_editor() as schema_editor:
-            if self.is_polymorphic:
-                if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
-                    field_type.remove_polymorphic_object_columns(self, model, schema_editor)
-                elif self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                    field_type.drop_polymorphic_m2m_table(self, model, schema_editor)
-            else:
-                _schema_remove_field(self, model, schema_editor, schema_conn=schema_conn)
+        if self.is_polymorphic and self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+            through_table = self.through_table_name
+            table_exists = _table_exists(through_table, conn=schema_conn)
+        else:
+            table_exists = _table_exists(model._meta.db_table, conn=schema_conn)
+
+        if table_exists:
+            with schema_conn.schema_editor() as schema_editor:
+                if self.is_polymorphic:
+                    if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
+                        field_type.remove_polymorphic_object_columns(self, model, schema_editor)
+                    elif self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+                        field_type.drop_polymorphic_m2m_table(self, model, schema_editor)
+                else:
+                    _schema_remove_field(self, model, schema_editor, schema_conn=schema_conn)
 
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)
 
