@@ -261,8 +261,17 @@ class CustomObjectsPluginConfig(PluginConfig):
     default_settings = {
         # The maximum number of Custom Object Types that may be created
         'max_custom_object_types': 50,
+        # Max related objects shown per row in the combined tab's Value column
+        # for a multi-object field before the rest are truncated to an ellipsis.
+        'max_multiobject_display': 3,
     }
     required_settings = []
+
+    # Set by ready() to a short "ExcType: message" string if registering the
+    # combined "Custom Objects" related tab fails; None means no failure.
+    # Surfaced as a system check warning (checks.check_related_tabs_registration)
+    # so the swallowed exception isn't invisible outside the logs.
+    _register_tabs_error = None
     template_extensions = "template_content.template_extensions"
     # Resolves dynamic CO models (table{n}model) to on-the-fly serializers —
     # they have no importable path at the conventional location.
@@ -360,8 +369,19 @@ class CustomObjectsPluginConfig(PluginConfig):
             _checking_migrations = False
 
     def _call_super_ready_once(self):
-        """Call ``super().ready()`` once; subsequent calls are no-ops.
-        ``register_serializer_resolver`` rejects duplicates."""
+        """Call ``super().ready()`` synchronously, exactly once.
+
+        The first invocation always delegates to ``super().ready()`` inline
+        (never deferred, scheduled, or skipped); only repeat invocations are
+        no-ops, because ``register_serializer_resolver`` rejects duplicates.
+
+        This synchronous-on-first-call contract is load-bearing: ``ready()``
+        must run ``super().ready()`` — which populates ``registry['views']`` —
+        before ``register_tabs()``, since ``urls.py`` snapshots that registry
+        when the combined tab is registered. If this wrapper ever deferred the
+        super call, tabs would register against an empty view registry and
+        ``reverse()`` for CustomObject feature URLs would fail.
+        """
         global _super_ready_called
         if _super_ready_called:
             return
@@ -470,7 +490,23 @@ class CustomObjectsPluginConfig(PluginConfig):
         from django.apps import apps as django_apps
         django_apps.clear_cache()
 
+        # Must precede register_tabs(): super().ready() populates registry['views'],
+        # which urls.py snapshots when register_tabs() loads it — registering tabs
+        # first would break reverse() for CustomObject feature URLs.
         self._call_super_ready_once()
+
+        # Register the combined "Custom Objects" tab (see related_tabs/__init__.py),
+        # once at startup before Django freezes the root URLconf.
+        try:
+            from netbox_custom_objects.related_tabs.registry import register_tabs
+            register_tabs()
+            self._register_tabs_error = None
+        except Exception as exc:
+            # Surface the failure both in the logs and via a system check
+            # (checks.check_related_tabs_registration) so a missing tab is
+            # diagnosable in `manage.py check`, not silently swallowed.
+            logger.exception("related_tabs.register_tabs() failed; continuing without tabs")
+            self._register_tabs_error = f"{type(exc).__name__}: {exc}"
 
     def get_model(self, model_name, require_ready=True):
         self.apps.check_apps_ready()

@@ -18,6 +18,7 @@ from importlib.metadata import PackageNotFoundError, version as _pkg_version
 from django.apps import apps
 from django.conf import settings
 from django.core.checks import Error, Warning, register
+from netbox.plugins import get_plugin_config
 from packaging.version import InvalidVersion, Version
 
 
@@ -73,3 +74,42 @@ def check_branching_compatibility(app_configs, **kwargs):
         pass  # unparseable version string — skip rather than emit a confusing error
 
     return errors
+
+
+@register()
+def check_related_tabs_registration(app_configs, **kwargs):
+    """Re-surface a swallowed register_tabs() failure as a startup warning.
+
+    ``CustomObjectsPluginConfig.ready`` logs and swallows any exception from
+    registering the combined "Custom Objects" related tab so it can't break
+    NetBox startup.  This check turns that otherwise-invisible failure into a
+    warning in ``manage.py check``.
+    """
+    try:
+        app_config = apps.get_app_config('netbox_custom_objects')
+    except LookupError:
+        return []
+
+    error = getattr(app_config, '_register_tabs_error', None)
+    if not error:
+        return []
+
+    return [Warning(
+        f'The combined "Custom Objects" related tab failed to register at startup '
+        f'and will not appear on object detail pages ({error}).',
+        hint='Resolve the underlying error (full traceback is in the NetBox log) and restart NetBox.',
+        id='netbox_custom_objects.W002',
+    )]
+
+
+@register()
+def check_multiobject_display_setting(app_configs, **kwargs):
+    """Warn if max_multiobject_display isn't a positive int (the accessor falls back to 3)."""
+    value = get_plugin_config('netbox_custom_objects', 'max_multiobject_display')
+    if isinstance(value, int) and value >= 1:
+        return []
+    return [Warning(
+        f'PLUGINS_CONFIG max_multiobject_display must be a positive integer (got {value!r}); using the default 3.',
+        hint="Set 'max_multiobject_display' to a positive integer under PLUGINS_CONFIG['netbox_custom_objects'].",
+        id='netbox_custom_objects.W003',
+    )]
