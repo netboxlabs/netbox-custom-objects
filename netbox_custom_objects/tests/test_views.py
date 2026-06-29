@@ -985,3 +985,88 @@ class ObjectSelectorViewTestCase(TestCase):
             'q': 'Alpha',
         })
         self.assertEqual(response.status_code, 200)
+
+
+class CoordinatesFieldViewTest(CustomObjectsTestCase, TestCase):
+    """UI form behaviour for the coordinates field type."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.cot = CustomObjectType.objects.create(
+            name="GeoView",
+            verbose_name_plural="Geo Views",
+            slug="geo-views",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.cot, name="name", type="text", primary=True, required=True
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.cot, name="location", type="coordinates"
+        )
+        cls.model = cls.cot.get_model()
+
+    def setUp(self):
+        super().setUp()
+        perm = ObjectPermission(
+            name="geo view all", actions=["view", "add", "change", "delete"]
+        )
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+    def _add_url(self):
+        return reverse(
+            "plugins:netbox_custom_objects:customobject_add",
+            kwargs={"custom_object_type": self.cot.slug},
+        )
+
+    def test_add_form_renders_two_inputs(self):
+        response = self.client.get(self._add_url())
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "location_latitude")
+        self.assertContains(response, "location_longitude")
+
+    def test_create_valid_coordinates(self):
+        from decimal import Decimal
+        data = {
+            "name": "Box",
+            "location_latitude": "40.712800",
+            "location_longitude": "-74.006000",
+        }
+        response = self.client.post(self._add_url(), data)
+        self.assertEqual(response.status_code, 302, getattr(response, "content", b""))
+        obj = self.model.objects.get(name="Box")
+        self.assertEqual(obj.location_latitude, Decimal("40.712800"))
+        self.assertEqual(obj.location_longitude, Decimal("-74.006000"))
+
+    def test_create_half_populated_pair_rejected(self):
+        data = {"name": "Bad", "location_latitude": "40.712800"}
+        response = self.client.post(self._add_url(), data)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(self.model.objects.filter(name="Bad").exists())
+
+    def _bulk_edit_url(self):
+        return reverse(
+            "plugins:netbox_custom_objects:customobject_bulk_edit",
+            kwargs={"custom_object_type": self.cot.slug},
+        )
+
+    def test_bulk_edit_half_populated_pair_rejected(self):
+        """Bulk-editing only one of latitude/longitude is rejected."""
+        from decimal import Decimal
+        obj = self.model.objects.create(
+            name="Existing",
+            location_latitude=Decimal("40.712800"),
+            location_longitude=Decimal("-74.006000"),
+        )
+        data = {
+            "pk": [obj.pk],
+            "_apply": "Apply",
+            "location_latitude": "10.000000",
+        }
+        response = self.client.post(self._bulk_edit_url(), data)
+        self.assertEqual(response.status_code, 200)
+        obj.refresh_from_db()
+        # Values are unchanged because the form failed validation.
+        self.assertEqual(obj.location_latitude, Decimal("40.712800"))
+        self.assertEqual(obj.location_longitude, Decimal("-74.006000"))

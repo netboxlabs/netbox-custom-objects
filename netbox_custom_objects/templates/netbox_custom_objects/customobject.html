@@ -123,7 +123,24 @@
                       {% endif %}
                     </th>
                     <td>
-                      {% customfield_value field object|get_field_value:field %}
+                      {% if field.type == 'coordinates' %}
+                        {% with coords=object|get_field_value:field %}
+                          {% if coords %}
+                            <span>{{ coords }}</span>
+                            {% with map_url=object|get_coordinate_map_url:field %}
+                              {% if map_url %}
+                                <a href="{{ map_url }}" target="_blank" class="btn btn-primary btn-sm ms-2 print-none">
+                                  <i class="mdi mdi-map-marker"></i> {% trans "Map" %}
+                                </a>
+                              {% endif %}
+                            {% endwith %}
+                          {% else %}
+                            {{ ''|placeholder }}
+                          {% endif %}
+                        {% endwith %}
+                      {% else %}
+                        {% customfield_value field object|get_field_value:field %}
+                      {% endif %}
                     </td>
                   </tr>
                 {% endif %}

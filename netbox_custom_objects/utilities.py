@@ -9,12 +9,48 @@ from netbox_custom_objects.constants import APP_LABEL
 
 __all__ = (
     "AppsProxy",
+    "build_map_url",
     "extract_cot_id_from_model_name",
     "generate_model",
     "get_viewname",
     "install_clear_cache_suppressor",
     "is_in_branch",
 )
+
+
+def build_map_url(latitude, longitude):
+    """
+    Build a map URL for a latitude/longitude pair, mirroring NetBox core's handling.
+
+    Uses NetBox's ``MAPS_URL`` configuration parameter (default Google Maps). If that
+    value contains ``{lat}``/``{lon}`` placeholders they are substituted; otherwise the
+    coordinates are appended as a comma-separated pair. Returns ``None`` when either
+    coordinate is unset or no maps URL is configured.
+
+    NetBox's own ``build_coords_url`` helper is used when available (NetBox >= 4.6.2);
+    on earlier supported versions we replicate its (simple) behaviour locally.
+    """
+    if latitude is None or longitude is None:
+        return None
+
+    try:
+        from netbox.config import get_config
+
+        maps_url = get_config().MAPS_URL
+    except (ImportError, AttributeError):
+        maps_url = "https://maps.google.com/?q="
+
+    if not maps_url:
+        return None
+
+    try:
+        from netbox.ui.utils import build_coords_url
+
+        return build_coords_url(maps_url, latitude, longitude)
+    except ImportError:
+        if "{lat}" in maps_url or "{lon}" in maps_url:
+            return maps_url.replace("{lat}", str(latitude)).replace("{lon}", str(longitude))
+        return f"{maps_url}{latitude},{longitude}"
 
 # ---------------------------------------------------------------------------
 # Thread-safe apps.clear_cache suppression
@@ -30,6 +66,7 @@ __all__ = (
 # invalidation behaviour — only the thread doing model registration is
 # suppressed, and only for the duration of the critical window.
 # ---------------------------------------------------------------------------
+
 
 _suppress_tl = threading.local()   # thread-local suppression depth counter
 _real_clear_cache = None           # set by install_clear_cache_suppressor()

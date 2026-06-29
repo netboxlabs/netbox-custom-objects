@@ -11,6 +11,7 @@ from django.utils.dateparse import parse_date, parse_datetime
 from extras.choices import CustomFieldTypeChoices
 from netbox.filtersets import NetBoxModelFilterSet
 
+from .choices import CustomObjectFieldTypeChoices
 from .constants import APP_LABEL
 from .models import CustomObjectType
 
@@ -338,6 +339,18 @@ def build_filter_for_field(field) -> dict:
         CustomFieldTypeChoices.TYPE_MULTIOBJECT,
     ):
         return _build_polymorphic_filters(field)
+
+    # Coordinates expand into two real columns; register a numeric filter for each.
+    if field.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+        base_label = field.label or field.name
+        return {
+            f"{field.name}_latitude": django_filters.NumberFilter(
+                field_name=f"{field.name}_latitude", label=f"{base_label} (latitude)"
+            ),
+            f"{field.name}_longitude": django_filters.NumberFilter(
+                field_name=f"{field.name}_longitude", label=f"{base_label} (longitude)"
+            ),
+        }
 
     spec = FIELD_TYPE_FILTERS.get(field.type)
     if not spec:
