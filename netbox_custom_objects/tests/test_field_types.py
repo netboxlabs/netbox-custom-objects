@@ -360,6 +360,58 @@ class CoordinatesFieldTypeTestCase(FieldTypeTestCase):
         field.full_clean()
         self.assertEqual(field.search_weight, 0)
 
+    def test_change_existing_field_to_coordinates_rejected(self):
+        """An existing non-coordinates field cannot be converted to coordinates."""
+        field = self.create_custom_object_type_field(
+            self.custom_object_type, name="location", label="Location", type="text",
+        )
+        field.type = "coordinates"
+        with self.assertRaises(ValidationError):
+            field.full_clean()
+
+    def test_change_coordinates_field_to_other_type_rejected(self):
+        """An existing coordinates field cannot be converted to another type."""
+        field = self.create_custom_object_type_field(
+            self.custom_object_type, name="location", label="Location", type="coordinates",
+        )
+        field.type = "text"
+        with self.assertRaises(ValidationError):
+            field.full_clean()
+
+    def test_coordinates_backing_column_collision_rejected(self):
+        """
+        Adding a coordinates field whose backing column collides with an existing
+        field's column raises a ValidationError rather than a DB error.
+        """
+        self.create_custom_object_type_field(
+            self.custom_object_type, name="location_latitude", label="Lat", type="text",
+        )
+        field = CustomObjectTypeField(
+            custom_object_type=self.custom_object_type,
+            name="location",
+            label="Location",
+            type="coordinates",
+        )
+        with self.assertRaises(ValidationError):
+            field.full_clean()
+
+    def test_field_colliding_with_coordinates_backing_column_rejected(self):
+        """
+        The reverse collision: a plain field named "<coord>_longitude" cannot be
+        added when a coordinates field "<coord>" already exists.
+        """
+        self.create_custom_object_type_field(
+            self.custom_object_type, name="location", label="Location", type="coordinates",
+        )
+        field = CustomObjectTypeField(
+            custom_object_type=self.custom_object_type,
+            name="location_longitude",
+            label="Lon",
+            type="text",
+        )
+        with self.assertRaises(ValidationError):
+            field.full_clean()
+
 
 class BooleanFieldTypeTestCase(FieldTypeTestCase):
     """Test cases for boolean field type."""

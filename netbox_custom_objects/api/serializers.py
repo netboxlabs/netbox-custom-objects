@@ -682,8 +682,11 @@ def get_serializer_class(model, skip_object_fields=False):
             latitude = data.get(lat_field)
             longitude = data.get(lon_field)
             if (latitude is None) != (longitude is None):
+                # Pin the error to the empty field rather than non_field_errors,
+                # mirroring the UI form's add_error() behaviour.
+                missing_field = lat_field if latitude is None else lon_field
                 raise serializers.ValidationError(
-                    _("Latitude and longitude must both be set or both be empty.")
+                    {missing_field: [_("Latitude and longitude must both be set or both be empty.")]}
                 )
 
         return data

@@ -1924,10 +1924,13 @@ class CoordinatesFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
         self.assertEqual(obj.location_longitude, Decimal("-75.000000"))
 
     def test_create_half_populated_pair_rejected(self):
-        """Setting only one of latitude/longitude is rejected."""
+        """Setting only one of latitude/longitude is rejected, keyed to the empty field."""
         data = {"name": "Bad box", "location_latitude": "41.000000"}
         response = self.client.post(self._list_url(), data, format="json", **self.header)
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+        # The error is pinned to the missing field, not non_field_errors.
+        self.assertIn("location_longitude", response.data)
+        self.assertNotIn("non_field_errors", response.data)
 
     def test_create_out_of_range_rejected(self):
         """Latitude beyond ±90 is rejected by the model field validators."""

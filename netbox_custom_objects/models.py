@@ -1700,6 +1700,52 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 {"name": _("Cannot rename a polymorphic field after creation.")}
             )
 
+        # Prevent converting an existing field to or from coordinates.
+        #
+        # A coordinates field occupies two concrete columns ("{name}_latitude" and
+        # "{name}_longitude") while every other field type occupies a single column
+        # named "{name}". The save() path has no logic to migrate between those two
+        # shapes, so allowing the conversion would either leave the original column
+        # orphaned (→ coordinates) or attempt to alter a column that doesn't exist
+        # (coordinates → other), raising an uncaught database error. Reject it here,
+        # mirroring the polymorphic-flag guard above.
+        is_coordinates = self.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES
+        was_coordinates = self._original_type == CustomObjectFieldTypeChoices.TYPE_COORDINATES
+        if self.pk and not self._state.adding and is_coordinates != was_coordinates:
+            raise ValidationError(
+                {"type": _("Cannot change a field's type to or from coordinates after creation.")}
+            )
+
+        # Guard against backing-column name collisions.
+        #
+        # A coordinates field expands into "{name}_latitude"/"{name}_longitude". If a
+        # sibling field already occupies one of those column names (or vice versa: a
+        # plain field named "<coord>_latitude"), the schema editor would issue a
+        # duplicate-column ALTER and PostgreSQL would raise a ProgrammingError instead
+        # of a clean validation error. Detect the overlap here.
+        if self.custom_object_type_id:
+            def _occupied_columns(name, field_type):
+                if field_type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+                    return {f"{name}_latitude", f"{name}_longitude"}
+                return {name}
+
+            # Only worth checking when coordinates columns are involved on either side.
+            own_columns = _occupied_columns(self.name, self.type)
+            siblings = self.custom_object_type.fields.all()
+            if self.pk:
+                siblings = siblings.exclude(pk=self.pk)
+            for sibling in siblings:
+                clash = own_columns & _occupied_columns(sibling.name, sibling.type)
+                if clash:
+                    raise ValidationError(
+                        {
+                            "name": _(
+                                "Field name conflicts with column '{column}' already used by field "
+                                "'{other}' on this custom object type."
+                            ).format(column=sorted(clash)[0], other=sibling.name)
+                        }
+                    )
+
         # related_name can only be set for object-type fields
         if self.related_name and self.type not in (
             CustomFieldTypeChoices.TYPE_OBJECT,
