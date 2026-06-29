@@ -48,8 +48,11 @@ def widen_integer_columns(apps, schema_editor):
                 [table_name, column_name],
             )
             if cursor.fetchone():
+                # quote_name() both identifiers (consistent with the %s-parameterised
+                # check above) so a field name containing a quote can't break out.
                 cursor.execute(
-                    f'ALTER TABLE "{table_name}" ALTER COLUMN "{column_name}" TYPE bigint'
+                    f"ALTER TABLE {schema_editor.quote_name(table_name)} "
+                    f"ALTER COLUMN {schema_editor.quote_name(column_name)} TYPE bigint"
                 )
 
 

@@ -258,6 +258,10 @@ class IntegerFieldTypeTestCase(FieldTypeTestCase):
         self.assertEqual(column_data_type(), "integer")
 
         # Run the migration's data function against the legacy column.
+        # widen_integer_columns only reads stable CustomObjectTypeField columns
+        # (type, custom_object_type_id, name), so the current app registry is
+        # equivalent to the historical one RunPython would pass. If the function
+        # ever introspects historical field structure, switch to MigrationLoader.
         migration = import_module(
             "netbox_custom_objects.migrations.0015_widen_integer_columns"
         )
