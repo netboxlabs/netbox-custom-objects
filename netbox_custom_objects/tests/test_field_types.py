@@ -6,6 +6,7 @@ from unittest.mock import Mock
 from datetime import date, datetime
 from decimal import Decimal
 from django.core.exceptions import FieldDoesNotExist, ValidationError
+from django.db import models
 from django.test import TestCase
 
 from core.models import ObjectType
@@ -188,6 +189,28 @@ class IntegerFieldTypeTestCase(FieldTypeTestCase):
         instance = model.objects.create(name="Test", count=25)
 
         self.assertEqual(instance.count, 25)
+
+    def test_integer_field_is_64_bit(self):
+        """Integer fields use a 64-bit (bigint) column, not 32-bit (issue #532)."""
+        self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="count",
+            label="Count",
+            type="integer",
+        )
+
+        model = self.custom_object_type.get_model()
+
+        # The generated model field must be a BigIntegerField.
+        self.assertIsInstance(
+            model._meta.get_field("count"), models.BigIntegerField
+        )
+
+        # A value beyond the signed 32-bit range must round-trip through the DB.
+        big_value = 9_000_000_000  # > 2**31 - 1 (2_147_483_647)
+        instance = model.objects.create(name="Test", count=big_value)
+        instance.refresh_from_db()
+        self.assertEqual(instance.count, big_value)
 
 
 class DecimalFieldTypeTestCase(FieldTypeTestCase):
