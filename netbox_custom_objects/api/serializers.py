@@ -16,6 +16,7 @@ from rest_framework.reverse import reverse
 from rest_framework.utils import model_meta
 
 from netbox_custom_objects import constants, field_types
+from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
 from netbox_custom_objects.models import (CustomObject, CustomObjectType,
                                           CustomObjectTypeField)
 
@@ -469,6 +470,11 @@ def get_serializer_class(model, skip_object_fields=False):
     # Only include custom field names that will actually be added to the serializer
     custom_field_names = []
     for field in model_fields:
+        # Coordinates fields expand into two real columns; expose them flat, mirroring
+        # NetBox core's Site/Device latitude/longitude serializer fields.
+        if field.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+            custom_field_names += [f"{field.name}_latitude", f"{field.name}_longitude"]
+            continue
         if field.name not in model_field_names:
             continue  # excluded during model generation (e.g. broken FK)
         if skip_object_fields and field.type in [
@@ -524,6 +530,12 @@ def get_serializer_class(model, skip_object_fields=False):
         f.name for f in model_fields
         if f.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT and f.is_polymorphic
     }
+    # (latitude_column, longitude_column) pairs for coordinates fields.
+    _coordinate_fields = [
+        (f"{f.name}_latitude", f"{f.name}_longitude")
+        for f in model_fields
+        if f.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES
+    ]
 
     def get__context(self, obj):
         """Return context field values as a nested display object for APISelect secondary text."""
@@ -661,6 +673,19 @@ def get_serializer_class(model, skip_object_fields=False):
                 saved[field_name] = data.pop(field_name)
         data = NetBoxModelSerializer.validate(self, data)
         data.update(saved)
+
+        # Coordinates: latitude and longitude must both be set or both be empty.
+        # On partial updates, only enforce when at least one of the pair is supplied.
+        for lat_field, lon_field in _coordinate_fields:
+            if lat_field not in data and lon_field not in data:
+                continue
+            latitude = data.get(lat_field)
+            longitude = data.get(lon_field)
+            if (latitude is None) != (longitude is None):
+                raise serializers.ValidationError(
+                    _("Latitude and longitude must both be set or both be empty.")
+                )
+
         return data
 
     # Create basic attributes for the serializer

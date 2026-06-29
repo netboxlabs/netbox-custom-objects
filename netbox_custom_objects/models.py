@@ -60,7 +60,8 @@ from utilities.querysets import RestrictedQuerySet
 from utilities.string import title
 from utilities.validators import validate_regex
 
-from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
+from netbox_custom_objects.choices import (CustomObjectFieldTypeChoices,
+                                            ObjectFieldOnDeleteChoices)
 from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
 from netbox_custom_objects.field_types import (
     FIELD_TYPE_CLASS, LazyForeignKey, safe_table_name,
@@ -172,12 +173,20 @@ class CustomObject(
         if not hasattr(self, "custom_object_type_id"):
             return ()
 
-        # Get all field names where is_cloneable=True for this custom object type
+        # Get all fields where is_cloneable=True for this custom object type
         cloneable_fields = self.custom_object_type.fields.filter(
             is_cloneable=True
-        ).values_list("name", flat=True)
+        ).values_list("name", "type")
 
-        return tuple(cloneable_fields)
+        names = []
+        for name, field_type in cloneable_fields:
+            # Coordinates fields have no single column; clone the two backing columns.
+            if field_type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+                names += [f"{name}_latitude", f"{name}_longitude"]
+            else:
+                names.append(name)
+
+        return tuple(names)
 
     def get_absolute_url(self):
         return reverse(
@@ -1090,7 +1099,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     type = models.CharField(
         verbose_name=_("type"),
         max_length=50,
-        choices=CustomFieldTypeChoices,
+        choices=CustomObjectFieldTypeChoices,
         default=CustomFieldTypeChoices.TYPE_TEXT,
         help_text=_("The type of data this custom object field holds"),
     )
@@ -1528,6 +1537,18 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             raise ValidationError(
                 {"unique": _("Uniqueness cannot be enforced for boolean or multiobject fields")}
             )
+
+        # Coordinates fields expand into two columns and have no single value, so a
+        # number of single-value options do not apply.
+        if self.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+            if self.unique:
+                raise ValidationError(
+                    {"unique": _("Uniqueness cannot be enforced for coordinates fields")}
+                )
+            if self.default is not None:
+                raise ValidationError(
+                    {"default": _("A default value cannot be set for coordinates fields")}
+                )
 
         # Check if uniqueness constraint can be applied when changing from non-unique to unique
         if (
@@ -2288,7 +2309,12 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
         with connection.schema_editor() as schema_editor:
             if self._state.adding:
-                if self.is_polymorphic:
+                if self.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+                    # Coordinates expand into two concrete columns (latitude/longitude).
+                    for column_name, model_field in field_type.get_model_field(self).items():
+                        model_field.contribute_to_class(model, column_name)
+                        schema_editor.add_field(model, model_field)
+                elif self.is_polymorphic:
                     # Polymorphic Object: add content_type + object_id columns + index
                     # Polymorphic MultiObject: create through table with content_type + object_id
                     if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
@@ -2323,11 +2349,21 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                         field_type.create_m2m_table(self, model, self.name)
             else:
+                if self.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+                    # Only a rename touches the schema; other attribute changes
+                    # (label, description, …) are persisted by super().save() below.
+                    if self.name != self._original_name:
+                        new_fields = list(field_type.get_model_field(self).items())
+                        old_fields = list(field_type.get_model_field(self.original).items())
+                        for (old_col, old_field), (new_col, new_field) in zip(old_fields, new_fields):
+                            old_field.contribute_to_class(model, old_col)
+                            new_field.contribute_to_class(model, new_col)
+                            schema_editor.alter_field(model, old_field, new_field)
                 # Polymorphic fields: renames and type changes are rejected by clean().
                 # Non-schema attributes (label, description, …) may still change here.
                 # If clean() was bypassed and a rename slipped through, raise rather
                 # than silently leaving DB columns / through table out of sync.
-                if self.is_polymorphic or self._original_is_polymorphic:
+                elif self.is_polymorphic or self._original_is_polymorphic:
                     if self.name != self._original_name:
                         raise ValidationError(
                             {"name": _("Cannot rename a polymorphic field after creation.")}
@@ -2507,7 +2543,12 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             _unwire_polymorphic_reverse_descriptors(self)
 
         with connection.schema_editor() as schema_editor:
-            if self.is_polymorphic:
+            if self.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+                # Drop both backing columns (latitude/longitude).
+                for column_name, model_field in field_type.get_model_field(self).items():
+                    model_field.contribute_to_class(model, column_name)
+                    schema_editor.remove_field(model, model_field)
+            elif self.is_polymorphic:
                 if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
                     field_type.remove_polymorphic_object_columns(self, model, schema_editor)
                 elif self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:

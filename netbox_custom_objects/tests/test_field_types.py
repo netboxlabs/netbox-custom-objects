@@ -11,6 +11,7 @@ from django.test import TestCase
 from core.models import ObjectType
 from dcim.models import Device, DeviceType, ModuleType
 from netbox_custom_objects.field_types import (
+    CoordinatesFieldType,
     MultiObjectFieldType,
     MultiSelectFieldType,
     ObjectFieldType,
@@ -250,6 +251,98 @@ class DecimalFieldTypeTestCase(FieldTypeTestCase):
         instance = model.objects.create(name="Test", price=Decimal("25.75"))
 
         self.assertEqual(instance.price, Decimal("25.75"))
+
+
+class CoordinatesFieldTypeTestCase(FieldTypeTestCase):
+    """Test cases for the coordinates field type."""
+
+    def test_coordinates_field_creation(self):
+        """A coordinates field is created with the expected type."""
+        field = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="location",
+            label="Location",
+            type="coordinates",
+        )
+        self.assertEqual(field.type, "coordinates")
+
+    def test_coordinates_field_model_generation(self):
+        """One coordinates field expands into two backing decimal columns."""
+        self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="location",
+            label="Location",
+            type="coordinates",
+        )
+
+        model = self.custom_object_type.get_model()
+        column_names = {f.name for f in model._meta.local_fields}
+        self.assertIn("location_latitude", column_names)
+        self.assertIn("location_longitude", column_names)
+        # The logical field name itself is not a real column.
+        self.assertNotIn("location", column_names)
+
+        # Verify precision/validators mirror NetBox core's Site coordinates.
+        latitude = model._meta.get_field("location_latitude")
+        longitude = model._meta.get_field("location_longitude")
+        self.assertEqual((latitude.max_digits, latitude.decimal_places), (8, 6))
+        self.assertEqual((longitude.max_digits, longitude.decimal_places), (9, 6))
+
+        instance = model.objects.create(
+            name="Test",
+            location_latitude=Decimal("40.712800"),
+            location_longitude=Decimal("-74.006000"),
+        )
+        self.assertEqual(instance.location_latitude, Decimal("40.712800"))
+        self.assertEqual(instance.location_longitude, Decimal("-74.006000"))
+
+    def test_coordinates_display_value(self):
+        """get_display_value combines both columns, or returns None when unset."""
+        self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="location",
+            label="Location",
+            type="coordinates",
+        )
+        model = self.custom_object_type.get_model()
+        field_type = CoordinatesFieldType()
+
+        populated = model.objects.create(
+            name="A",
+            location_latitude=Decimal("40.712800"),
+            location_longitude=Decimal("-74.006000"),
+        )
+        self.assertEqual(
+            field_type.get_display_value(populated, "location"),
+            "40.712800, -74.006000",
+        )
+
+        empty = model.objects.create(name="B")
+        self.assertIsNone(field_type.get_display_value(empty, "location"))
+
+    def test_coordinates_validate_pair(self):
+        """Latitude and longitude must both be set or both be empty."""
+        field_type = CoordinatesFieldType()
+        # Both set / both empty are valid.
+        field_type.validate_pair(Decimal("1.0"), Decimal("2.0"))
+        field_type.validate_pair(None, None)
+        # Half-populated pairs are rejected.
+        with self.assertRaises(ValidationError):
+            field_type.validate_pair(Decimal("1.0"), None)
+        with self.assertRaises(ValidationError):
+            field_type.validate_pair(None, Decimal("2.0"))
+
+    def test_coordinates_field_rejects_unique(self):
+        """A coordinates field cannot be marked unique."""
+        field = CustomObjectTypeField(
+            custom_object_type=self.custom_object_type,
+            name="location",
+            label="Location",
+            type="coordinates",
+            unique=True,
+        )
+        with self.assertRaises(ValidationError):
+            field.full_clean()
 
 
 class BooleanFieldTypeTestCase(FieldTypeTestCase):
