@@ -1,12 +1,14 @@
 """
 Tests for all the different field types supported by Custom Object Type Fields.
 """
+from importlib import import_module
 from unittest import skip
 from unittest.mock import Mock
 from datetime import date, datetime
 from decimal import Decimal
+from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist, ValidationError
-from django.db import models
+from django.db import connection, models
 from django.test import TestCase
 
 from core.models import ObjectType
@@ -211,6 +213,63 @@ class IntegerFieldTypeTestCase(FieldTypeTestCase):
         instance = model.objects.create(name="Test", count=big_value)
         instance.refresh_from_db()
         self.assertEqual(instance.count, big_value)
+
+    def test_integer_field_upgrade_widens_existing_32bit_column(self):
+        """The 0015 migration widens pre-#532 32-bit integer columns to bigint.
+
+        New tables already get a bigint column (test_integer_field_is_64_bit),
+        but custom_objects_* tables created before issue #532 have a 32-bit
+        ``integer`` column that the field-type change alone does not alter --
+        they are managed=False. This exercises that upgrade path: realize the
+        column, force it back to 32-bit to mimic a legacy install, run the
+        migration's data function, and confirm it is widened in place.
+        """
+        field = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="legacy_count",
+            label="Legacy Count",
+            type="integer",
+        )
+
+        # Realize the backing model/table/column.
+        model = self.custom_object_type.get_model()
+
+        table_name = f"custom_objects_{self.custom_object_type.pk}"
+        column_name = field.name
+
+        def column_data_type():
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT data_type FROM information_schema.columns
+                    WHERE table_schema = current_schema()
+                      AND table_name = %s AND column_name = %s
+                    """,
+                    [table_name, column_name],
+                )
+                row = cursor.fetchone()
+                return row[0] if row else None
+
+        # Mimic a legacy install: force the column back to a 32-bit integer.
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f'ALTER TABLE "{table_name}" ALTER COLUMN "{column_name}" TYPE integer'
+            )
+        self.assertEqual(column_data_type(), "integer")
+
+        # Run the migration's data function against the legacy column.
+        migration = import_module(
+            "netbox_custom_objects.migrations.0015_widen_integer_columns"
+        )
+        with connection.schema_editor() as schema_editor:
+            migration.widen_integer_columns(apps, schema_editor)
+
+        # Column is widened, and a value beyond the 32-bit range round-trips.
+        self.assertEqual(column_data_type(), "bigint")
+        big_value = 9_000_000_000  # > 2**31 - 1 (2_147_483_647)
+        instance = model.objects.create(name="Test", legacy_count=big_value)
+        instance.refresh_from_db()
+        self.assertEqual(instance.legacy_count, big_value)
 
 
 class DecimalFieldTypeTestCase(FieldTypeTestCase):
