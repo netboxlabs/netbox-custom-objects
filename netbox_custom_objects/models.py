@@ -1549,6 +1549,10 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 raise ValidationError(
                     {"default": _("A default value cannot be set for coordinates fields")}
                 )
+            # A coordinates field has no single column matching its name, so it can
+            # never be added to the search index. Force the weight to 0 rather than
+            # silently honouring a non-zero value that has no effect.
+            self.search_weight = 0
 
         # Check if uniqueness constraint can be applied when changing from non-unique to unique
         if (

@@ -37,7 +37,7 @@ def build_map_url(latitude, longitude):
         from netbox.config import get_config
 
         maps_url = get_config().MAPS_URL
-    except Exception:
+    except (ImportError, AttributeError):
         maps_url = "https://maps.google.com/?q="
 
     if not maps_url:

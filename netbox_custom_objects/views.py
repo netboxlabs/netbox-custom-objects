@@ -961,7 +961,7 @@ class CustomObjectEditView(generic.ObjectEditView):
                 longitude = self.cleaned_data.get(lon_name)
                 if (latitude is None) != (longitude is None):
                     self.add_error(
-                        lon_name if latitude is None else lat_name,
+                        lat_name if latitude is None else lon_name,
                         _("Latitude and longitude must both be set or both be empty."),
                     )
             return self.cleaned_data
@@ -1127,6 +1127,8 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
             "custom_object_type_poly_obj_pairs": {},
             "custom_object_type_poly_m2m_groups": {},
             "custom_object_type_rendered_names": set(),
+            # field_name → (latitude_field_name, longitude_field_name)
+            "custom_object_type_coordinates_fields": {},
         }
 
         for field in self.custom_object_type.fields.prefetch_related('related_object_types').all():
@@ -1134,11 +1136,15 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
 
             # Coordinates: two optional latitude/longitude inputs in bulk edit
             if field.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+                sub_names = []
                 for sub_name, sub_field in field_type.get_form_fields(field).items():
                     sub_field.required = False
                     sub_field.widget.is_required = False
                     sub_field.initial = None
                     attrs[sub_name] = sub_field
+                    sub_names.append(sub_name)
+                # (latitude_name, longitude_name) for cross-field validation below.
+                attrs["custom_object_type_coordinates_fields"][field.name] = tuple(sub_names)
                 continue
 
             # Polymorphic single-object: scope-style type-selector + object-picker pair
@@ -1213,6 +1219,23 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
                     self.fields[obj_sub].queryset = model_class.objects.all()
 
         attrs["__init__"] = bulk_poly_init
+
+        coordinates_fields_ref = attrs["custom_object_type_coordinates_fields"]
+
+        def bulk_clean(self):
+            cleaned_data = NetBoxModelBulkEditForm.clean(self)
+            # Coordinates: latitude and longitude must both be set or both be empty.
+            for field_name, (lat_name, lon_name) in coordinates_fields_ref.items():
+                latitude = cleaned_data.get(lat_name)
+                longitude = cleaned_data.get(lon_name)
+                if (latitude is None) != (longitude is None):
+                    self.add_error(
+                        lat_name if latitude is None else lon_name,
+                        _("Latitude and longitude must both be set or both be empty."),
+                    )
+            return cleaned_data
+
+        attrs["clean"] = bulk_clean
 
         form = type(
             f"{queryset.model._meta.object_name}BulkEditForm",

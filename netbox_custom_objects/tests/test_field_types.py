@@ -344,6 +344,22 @@ class CoordinatesFieldTypeTestCase(FieldTypeTestCase):
         with self.assertRaises(ValidationError):
             field.full_clean()
 
+    def test_coordinates_field_search_weight_forced_to_zero(self):
+        """
+        A coordinates field has no column matching its name, so it can never be
+        indexed for search; clean() forces search_weight to 0 rather than honour a
+        non-zero value that would silently have no effect.
+        """
+        field = CustomObjectTypeField(
+            custom_object_type=self.custom_object_type,
+            name="location",
+            label="Location",
+            type="coordinates",
+            search_weight=500,
+        )
+        field.full_clean()
+        self.assertEqual(field.search_weight, 0)
+
 
 class BooleanFieldTypeTestCase(FieldTypeTestCase):
     """Test cases for boolean field type."""

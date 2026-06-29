@@ -1044,3 +1044,29 @@ class CoordinatesFieldViewTest(CustomObjectsTestCase, TestCase):
         response = self.client.post(self._add_url(), data)
         self.assertEqual(response.status_code, 200)
         self.assertFalse(self.model.objects.filter(name="Bad").exists())
+
+    def _bulk_edit_url(self):
+        return reverse(
+            "plugins:netbox_custom_objects:customobject_bulk_edit",
+            kwargs={"custom_object_type": self.cot.slug},
+        )
+
+    def test_bulk_edit_half_populated_pair_rejected(self):
+        """Bulk-editing only one of latitude/longitude is rejected."""
+        from decimal import Decimal
+        obj = self.model.objects.create(
+            name="Existing",
+            location_latitude=Decimal("40.712800"),
+            location_longitude=Decimal("-74.006000"),
+        )
+        data = {
+            "pk": [obj.pk],
+            "_apply": "Apply",
+            "location_latitude": "10.000000",
+        }
+        response = self.client.post(self._bulk_edit_url(), data)
+        self.assertEqual(response.status_code, 200)
+        obj.refresh_from_db()
+        # Values are unchanged because the form failed validation.
+        self.assertEqual(obj.location_latitude, Decimal("40.712800"))
+        self.assertEqual(obj.location_longitude, Decimal("-74.006000"))
