@@ -677,10 +677,19 @@ def get_serializer_class(model, skip_object_fields=False):
         # Coordinates: latitude and longitude must both be set or both be empty.
         # On partial updates, only enforce when at least one of the pair is supplied.
         for lat_field, lon_field in _coordinate_fields:
-            if lat_field not in data and lon_field not in data:
+            lat_in_data = lat_field in data
+            lon_in_data = lon_field in data
+            if not lat_in_data and not lon_in_data:
                 continue
-            latitude = data.get(lat_field)
-            longitude = data.get(lon_field)
+            # For a PATCH that touches only one column, the other is absent from
+            # data; fall back to the instance's current DB value so clearing just
+            # one half of an already-populated pair is still rejected.
+            latitude = data.get(lat_field) if lat_in_data else (
+                getattr(self.instance, lat_field, None) if self.instance else None
+            )
+            longitude = data.get(lon_field) if lon_in_data else (
+                getattr(self.instance, lon_field, None) if self.instance else None
+            )
             if (latitude is None) != (longitude is None):
                 # Pin the error to the empty field rather than non_field_errors,
                 # mirroring the UI form's add_error() behaviour.

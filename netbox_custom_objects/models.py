@@ -1729,9 +1729,17 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     return {f"{name}_latitude", f"{name}_longitude"}
                 return {name}
 
-            # Only worth checking when coordinates columns are involved on either side.
             own_columns = _occupied_columns(self.name, self.type)
-            siblings = self.custom_object_type.fields.all()
+            # A clash can only involve a coordinates field's expanded columns. If
+            # this field isn't coordinates, only sibling coordinates fields can
+            # collide with it — so skip the full sibling scan and query just those
+            # (usually zero) to avoid an extra queryset on every field's save.
+            if self.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+                siblings = self.custom_object_type.fields.all()
+            else:
+                siblings = self.custom_object_type.fields.filter(
+                    type=CustomObjectFieldTypeChoices.TYPE_COORDINATES
+                )
             if self.pk:
                 siblings = siblings.exclude(pk=self.pk)
             for sibling in siblings:

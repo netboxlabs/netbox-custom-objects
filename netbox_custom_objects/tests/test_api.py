@@ -1941,3 +1941,41 @@ class CoordinatesFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
         }
         response = self.client.post(self._list_url(), data, format="json", **self.header)
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+
+    def test_patch_clearing_one_half_rejected(self):
+        """A PATCH that clears only one coordinate of a populated pair is rejected."""
+        obj = self.model.objects.create(
+            name="Box",
+            location_latitude=Decimal("40.712800"),
+            location_longitude=Decimal("-74.006000"),
+        )
+        response = self.client.patch(
+            self._detail_url(obj),
+            {"location_latitude": None},
+            format="json",
+            **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+        self.assertIn("location_latitude", response.data)
+        # The DB row is left untouched.
+        obj.refresh_from_db()
+        self.assertEqual(obj.location_latitude, Decimal("40.712800"))
+        self.assertEqual(obj.location_longitude, Decimal("-74.006000"))
+
+    def test_patch_clearing_both_halves_allowed(self):
+        """A PATCH clearing both coordinates at once is accepted."""
+        obj = self.model.objects.create(
+            name="Box",
+            location_latitude=Decimal("40.712800"),
+            location_longitude=Decimal("-74.006000"),
+        )
+        response = self.client.patch(
+            self._detail_url(obj),
+            {"location_latitude": None, "location_longitude": None},
+            format="json",
+            **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        obj.refresh_from_db()
+        self.assertIsNone(obj.location_latitude)
+        self.assertIsNone(obj.location_longitude)
