@@ -34,7 +34,7 @@ from extras.choices import (
     CustomFieldUIEditableChoices,
     CustomFieldUIVisibleChoices,
 )
-from extras.models import CustomField
+from extras.models import ConfigContextModel, CustomField
 from extras.models.customfields import SEARCH_TYPES
 from extras.utils import is_taggable, run_validators
 from netbox.config import get_config
@@ -971,6 +971,25 @@ class CustomObject(
         return reverse(cls._get_viewname(action, rest_api), kwargs=kwargs)
 
 
+class CustomObjectConfigContextMixin(ConfigContextModel):
+    """ConfigContextModel variant for dynamically generated custom object models.
+
+    Inherits ``local_context_data`` (a JSONField) and its ``clean()`` validator
+    from NetBox's ``ConfigContextModel``.  However, custom objects have none of
+    the site/tenant/role dimensions that ``ConfigContext`` assignment rules
+    filter on, so the parent's ``get_config_context()`` — which calls
+    ``ConfigContext.objects.get_for_object()`` and dereferences ``obj.site`` /
+    ``obj.tenant`` / ``obj.role`` — would raise ``AttributeError``.  We override
+    it to return only the locally-defined context data.
+    """
+
+    class Meta:
+        abstract = True
+
+    def get_config_context(self):
+        return self.local_context_data or {}
+
+
 def validate_pep440(value):
     """Validate that *value* is a valid PEP 440 version string."""
     if not value:
@@ -1060,6 +1079,14 @@ class CustomObjectType(NetBoxModel):
         null=True,
         blank=True,
         editable=False
+    )
+    config_context_enabled = models.BooleanField(
+        default=False,
+        verbose_name=_("config context support"),
+        help_text=_(
+            "Enable local config context data on objects of this type. "
+            "Can only be set when the type is created."
+        ),
     )
 
     class Meta:
@@ -1578,10 +1605,18 @@ class CustomObjectType(NetBoxModel):
 
             TM.post_through_setup = wrapped_post_through_setup
 
+            # Optionally mix in config context support (local_context_data) when
+            # the type opts in.  The mixin contributes a concrete column, so the
+            # flag is only honoured at creation time (the table is built once via
+            # schema_editor.create_model() and is otherwise managed=False).
+            bases = (CustomObject, models.Model)
+            if self.config_context_enabled:
+                bases = (CustomObject, CustomObjectConfigContextMixin, models.Model)
+
             try:
                 model = generate_model(
                     str(model_name),
-                    (CustomObject, models.Model),
+                    bases,
                     attrs,
                 )
             finally:

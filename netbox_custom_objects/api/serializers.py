@@ -8,6 +8,7 @@ from django.db import transaction
 from django.urls import NoReverseMatch
 from django.utils.translation import gettext_lazy as _
 from extras.choices import CustomFieldTypeChoices
+from extras.models import ConfigContextModel
 from netbox.api.serializers import NetBoxModelSerializer
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
@@ -469,6 +470,12 @@ def get_serializer_class(model, skip_object_fields=False):
     base_fields = ["id", "url", "display", "created", "last_updated", "tags"]
     if not has_owner_field_conflict:
         base_fields.insert(3, "owner")
+
+    # Expose local_context_data when the type opted in to config context support
+    # (the generated model mixes in ConfigContextModel via
+    # CustomObjectConfigContextMixin).
+    if issubclass(model, ConfigContextModel):
+        base_fields.append("local_context_data")
 
     # Include _context field when the model has designated context fields
     has_context_fields = bool(getattr(model, '_context_field_ids', []))

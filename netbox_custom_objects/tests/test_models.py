@@ -386,6 +386,82 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
             django_apps.clear_cache()
 
 
+class CustomObjectTypeConfigContextTestCase(CustomObjectsTestCase, TestCase):
+    """Config context support (issue #98) on custom object types."""
+
+    @staticmethod
+    def _table_columns(table_name):
+        with connection.cursor() as cursor:
+            return {
+                col.name
+                for col in connection.introspection.get_table_description(cursor, table_name)
+            }
+
+    def test_enabled_model_is_config_context_subclass_with_column(self):
+        """A config-context-enabled type generates a ConfigContextModel subclass
+        whose backing table has a local_context_data column."""
+        from extras.models import ConfigContextModel
+
+        cot = self.create_custom_object_type(
+            name="cc_enabled", slug="cc-enabled", config_context_enabled=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True,
+        )
+        model = cot.get_model(no_cache=True)
+        self.assertTrue(issubclass(model, ConfigContextModel))
+        self.assertIn("local_context_data", self._table_columns(cot.get_database_table_name()))
+
+    def test_disabled_model_has_no_config_context(self):
+        """The default (flag False) type is not a ConfigContextModel and has no
+        local_context_data column."""
+        from extras.models import ConfigContextModel
+
+        cot = self.create_custom_object_type(name="cc_disabled", slug="cc-disabled")
+        self.assertFalse(cot.config_context_enabled)
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True,
+        )
+        model = cot.get_model(no_cache=True)
+        self.assertFalse(issubclass(model, ConfigContextModel))
+        self.assertNotIn("local_context_data", self._table_columns(cot.get_database_table_name()))
+
+    def test_local_context_data_round_trips_and_get_config_context(self):
+        """An instance stores local_context_data and get_config_context() returns
+        it without touching the org-dimension aggregation that custom objects lack."""
+        cot = self.create_custom_object_type(
+            name="cc_roundtrip", slug="cc-roundtrip", config_context_enabled=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True,
+        )
+        model = cot.get_model(no_cache=True)
+
+        obj = model(name="obj-1", local_context_data={"ntp_servers": ["10.0.0.1"]})
+        obj.save()
+        obj.refresh_from_db()
+        self.assertEqual(obj.local_context_data, {"ntp_servers": ["10.0.0.1"]})
+        # Safe override: returns the local data, never raises on missing site/tenant/role.
+        self.assertEqual(obj.get_config_context(), {"ntp_servers": ["10.0.0.1"]})
+
+        empty = model(name="obj-2")
+        empty.save()
+        self.assertEqual(empty.get_config_context(), {})
+
+    def test_clean_rejects_non_dict_local_context_data(self):
+        """The inherited ConfigContextModel.clean() validator rejects non-object JSON."""
+        cot = self.create_custom_object_type(
+            name="cc_clean", slug="cc-clean", config_context_enabled=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True,
+        )
+        model = cot.get_model(no_cache=True)
+        obj = model(name="bad", local_context_data=["not", "a", "dict"])
+        with self.assertRaises(ValidationError):
+            obj.clean()
+
+
 class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
     """Test cases for CustomObjectTypeField model."""
 
@@ -433,7 +509,7 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
 
     def test_custom_object_type_field_reserved_name_rejected(self):
         """Field names in RESERVED_FIELD_NAMES must be rejected with ValidationError."""
-        for reserved in ("owner", "tags", "id", "created", "last_updated"):
+        for reserved in ("owner", "tags", "id", "created", "last_updated", "local_context_data"):
             with self.assertRaises(ValidationError, msg=f"Expected ValidationError for reserved name={reserved!r}"):
                 field = CustomObjectTypeField(
                     custom_object_type=self.custom_object_type,

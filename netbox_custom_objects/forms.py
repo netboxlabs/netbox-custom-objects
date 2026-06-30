@@ -59,7 +59,7 @@ class CustomObjectTypeForm(NetBoxModelForm):
     fieldsets = (
         FieldSet(
             "name", "verbose_name", "verbose_name_plural", "slug",
-            "version", "description", "group_name", "tags",
+            "version", "description", "group_name", "config_context_enabled", "tags",
         ),
     )
     comments = CommentField()
@@ -68,8 +68,19 @@ class CustomObjectTypeForm(NetBoxModelForm):
         model = CustomObjectType
         fields = (
             "name", "verbose_name", "verbose_name_plural", "slug", "version", "description",
-            "group_name", "comments", "tags",
+            "group_name", "config_context_enabled", "comments", "tags",
         )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # config_context_enabled controls whether the generated model carries a
+        # local_context_data column, which is created once at type creation. It
+        # cannot be toggled afterwards, so lock it when editing an existing type.
+        if self.instance.pk:
+            self.fields["config_context_enabled"].disabled = True
+            self.fields["config_context_enabled"].help_text = _(
+                "Config context support cannot be changed after creation."
+            )
 
 
 class CustomObjectTypeBulkEditForm(NetBoxModelBulkEditForm):

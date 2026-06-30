@@ -36,6 +36,7 @@ RESERVED_FIELD_NAMES = [
     "jobs",
     "journal_entries",
     "last_updated",
+    "local_context_data",
     "model",
     "objects",
     "owner",

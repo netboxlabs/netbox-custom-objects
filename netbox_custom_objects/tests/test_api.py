@@ -1761,3 +1761,88 @@ class OwnerAPITest(CustomObjectsTestCase, TestCase):
         ids = [r['id'] for r in response.data['results']]
         self.assertIn(obj_x.pk, ids)
         self.assertNotIn(obj_y.pk, ids)
+
+
+class ConfigContextAPITest(CustomObjectsTestCase, TestCase):
+    """REST API exposure of local_context_data for config-context-enabled types (#98)."""
+
+    def setUp(self):
+        super().setUp()
+        self.cot = CustomObjectType.objects.create(
+            name='cc_api', slug='cc-api', config_context_enabled=True,
+        )
+        self.create_custom_object_type_field(
+            self.cot, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        self.model = self.cot.get_model()
+        token = create_token(self.user)
+        self.header = {'HTTP_AUTHORIZATION': f'Token {token}'}
+        self.client = APIClient()
+
+    def _list_url(self):
+        return reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-list',
+            kwargs={'custom_object_type': self.cot.slug},
+        )
+
+    def _detail_url(self, pk):
+        return reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-detail',
+            kwargs={'pk': pk, 'custom_object_type': self.cot.slug},
+        )
+
+    def _add_perm(self, action):
+        perm = ObjectPermission(name=f'{action}-{self.model._meta.model_name}', actions=[action])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+        return perm
+
+    def test_local_context_data_present_in_response(self):
+        obj = self.model.objects.create(name='obj-1', local_context_data={'ntp': ['10.0.0.1']})
+        self._add_perm('view')
+
+        response = self.client.get(self._detail_url(obj.pk), **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('local_context_data', response.data)
+        self.assertEqual(response.data['local_context_data'], {'ntp': ['10.0.0.1']})
+
+    def test_set_local_context_data_via_patch(self):
+        obj = self.model.objects.create(name='obj-2')
+        self._add_perm('change')
+
+        response = self.client.patch(
+            self._detail_url(obj.pk),
+            {'local_context_data': {'role': 'edge'}},
+            format='json',
+            **self.header,
+        )
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK,
+            f'Expected 200; got {response.status_code}: {getattr(response, "data", response.content)}',
+        )
+        obj.refresh_from_db()
+        self.assertEqual(obj.local_context_data, {'role': 'edge'})
+
+    def test_local_context_data_absent_when_disabled(self):
+        """A type without config context support must not expose local_context_data."""
+        cot = CustomObjectType.objects.create(name='cc_off', slug='cc-off')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        model = cot.get_model()
+        obj = model.objects.create(name='x')
+
+        perm = ObjectPermission(name='view-cc-off', actions=['view'])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(model))
+
+        url = reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-detail',
+            kwargs={'pk': obj.pk, 'custom_object_type': cot.slug},
+        )
+        response = self.client.get(url, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertNotIn('local_context_data', response.data)
