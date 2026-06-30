@@ -678,6 +678,58 @@ class CustomObjectTypeAPITest(CustomObjectsTestCase, TestCase):
         self.assertIn('group_name', response.data)
         self.assertEqual(response.data['group_name'], '')
 
+    def _add_change_permission(self):
+        obj_perm = ObjectPermission(name='Change permission', actions=['change'])
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        obj_perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
+
+    def test_config_context_enabled_set_at_creation(self):
+        """config_context_enabled can be set to True when creating a type via the API."""
+        data = {'name': 'cc_create', 'slug': 'cc-create', 'config_context_enabled': True}
+        url = reverse('plugins-api:netbox_custom_objects-api:customobjecttype-list')
+        response = self.client.post(url, data, format='json', **self.header)
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertTrue(response.data['config_context_enabled'])
+        cot = CustomObjectType.objects.get(pk=response.data['id'])
+        self.assertTrue(cot.config_context_enabled)
+
+    def test_config_context_enabled_in_detail_response(self):
+        """The current value is readable via the API detail endpoint."""
+        self._add_view_permission()
+        cot = CustomObjectType.objects.create(
+            name='cc_detail', slug='cc-detail', config_context_enabled=True,
+        )
+        url = reverse(
+            'plugins-api:netbox_custom_objects-api:customobjecttype-detail',
+            kwargs={'pk': cot.pk},
+        )
+        response = self.client.get(url, **self.header)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('config_context_enabled', response.data)
+        self.assertTrue(response.data['config_context_enabled'])
+
+    def test_config_context_enabled_immutable_after_creation(self):
+        """Changing config_context_enabled via PATCH is rejected (create-only)."""
+        self._add_change_permission()
+        cot = CustomObjectType.objects.create(
+            name='cc_immut', slug='cc-immut', config_context_enabled=False,
+        )
+        url = reverse(
+            'plugins-api:netbox_custom_objects-api:customobjecttype-detail',
+            kwargs={'pk': cot.pk},
+        )
+        response = self.client.patch(
+            url, {'config_context_enabled': True}, format='json', **self.header,
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('config_context_enabled', response.data)
+        cot.refresh_from_db()
+        self.assertFalse(cot.config_context_enabled)
+
 
 class CustomObjectTypeFieldObjectResolutionTest(CustomObjectsTestCase, TestCase):
     """

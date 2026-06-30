@@ -994,6 +994,13 @@ class CustomObjectConfigContextViewTestCase(CustomObjectsTestCase, TestCase):
             kwargs={'custom_object_type': cot.slug, 'pk': instance.pk},
         )
 
+    def _grant_view(self, model):
+        perm = ObjectPermission(name=f'view-{model._meta.model_name}', actions=['view'])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(model))
+        return perm
+
     def test_tab_returns_200_and_shows_local_data_when_enabled(self):
         cot = self.create_custom_object_type(
             name='cc_view', slug='cc-view', config_context_enabled=True,
@@ -1003,11 +1010,28 @@ class CustomObjectConfigContextViewTestCase(CustomObjectsTestCase, TestCase):
         )
         model = cot.get_model()
         obj = model.objects.create(name='obj-1', local_context_data={'ntp_servers': ['10.0.0.1']})
+        self._grant_view(model)
 
         response = self.client.get(self._config_context_url(cot, obj))
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, 'ntp_servers')
         self.assertContains(response, 'Config Context')
+
+    def test_tab_403_without_view_permission(self):
+        """The tab must honour object-level RBAC, not leak local_context_data."""
+        cot = self.create_custom_object_type(
+            name='cc_rbac', slug='cc-rbac', config_context_enabled=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        model = cot.get_model()
+        obj = model.objects.create(name='secret', local_context_data={'k': 'v'})
+
+        # No ObjectPermission granted → restricted queryset yields nothing → 404.
+        response = self.client.get(self._config_context_url(cot, obj))
+        self.assertIn(response.status_code, (403, 404))
+        self.assertNotContains(response, 'secret', status_code=response.status_code)
 
     def test_tab_link_present_only_when_enabled(self):
         """The detail page shows the Config Context tab only for enabled types."""

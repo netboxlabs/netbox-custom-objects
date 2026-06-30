@@ -335,6 +335,7 @@ class CustomObjectTypeSerializer(NetBoxModelSerializer):
             "version",
             "group_name",
             "description",
+            "config_context_enabled",
             "tags",
             "created",
             "last_updated",
@@ -345,6 +346,16 @@ class CustomObjectTypeSerializer(NetBoxModelSerializer):
         ]
         read_only_fields = ("schema_document",)
         brief_fields = ("id", "url", "name", "slug", "description")
+
+    def validate_config_context_enabled(self, value):
+        # Settable only at creation: the backing local_context_data column is
+        # created once when the type's table is built, so the flag is immutable
+        # afterwards (mirrors the disable-on-edit behaviour of the web form).
+        if self.instance is not None and value != self.instance.config_context_enabled:
+            raise serializers.ValidationError(
+                _("Config context support cannot be changed after creation.")
+            )
+        return value
 
     def get_table_model_name(self, obj):
         return obj.get_table_model_name(obj.id)

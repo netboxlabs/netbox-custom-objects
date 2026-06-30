@@ -1560,7 +1560,9 @@ class CustomObjectConfigContextView(ConditionalLoginRequiredMixin, View):
         model = object_type.get_model_with_serializer()
 
         lookup_kwargs = {k: v for k, v in kwargs.items() if k != "custom_object_type"}
-        obj = get_object_or_404(model.objects.all(), **lookup_kwargs)
+        # Gate on object-level view permission so the config-context tab can't
+        # leak local_context_data past NetBox's RBAC (the detail view restricts too).
+        obj = get_object_or_404(model.objects.restrict(request.user, "view"), **lookup_kwargs)
 
         # Determine the user's preferred output format (json/yaml), persisting
         # an explicit choice the same way NetBox's ObjectConfigContextView does.
