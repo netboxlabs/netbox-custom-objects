@@ -461,6 +461,22 @@ class CustomObjectTypeConfigContextTestCase(CustomObjectsTestCase, TestCase):
         with self.assertRaises(ValidationError):
             obj.clean()
 
+    def test_config_context_enabled_immutable_in_clean(self):
+        """full_clean() rejects flipping config_context_enabled on an existing type."""
+        cot = self.create_custom_object_type(name="cc_clean_immut", slug="cc-clean-immut")
+        self.assertFalse(cot.config_context_enabled)
+        cot.config_context_enabled = True
+        with self.assertRaises(ValidationError):
+            cot.full_clean()
+
+    def test_config_context_enabled_clean_allows_unchanged(self):
+        """Re-validating without changing the flag must not raise."""
+        cot = self.create_custom_object_type(
+            name="cc_clean_ok", slug="cc-clean-ok", config_context_enabled=True,
+        )
+        cot.description = "edited"
+        cot.full_clean()  # should not raise
+
 
 class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
     """Test cases for CustomObjectTypeField model."""

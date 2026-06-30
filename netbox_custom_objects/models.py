@@ -1116,6 +1116,24 @@ class CustomObjectType(NetBoxModel):
                 {"slug": _("Slug field cannot be empty.")}
             )
 
+        # config_context_enabled is immutable after creation: the local_context_data
+        # column is created once when the type's table is built (managed=False, no
+        # migration), so flipping the flag would desync the generated model from the
+        # physical schema (False→True makes every query raise "column does not exist").
+        # Enforce on validated paths (forms, full_clean()); raw QuerySet.update()/save()
+        # bypass clean() as with any Django model. Skip when None — clean() runs during
+        # branch revert with attributes hydrated from serialized data (see custom_field_data above).
+        if self.pk and self.config_context_enabled is not None:
+            original = CustomObjectType.objects.filter(pk=self.pk).values_list(
+                "config_context_enabled", flat=True
+            ).first()
+            if original is not None and self.config_context_enabled != original:
+                raise ValidationError({
+                    "config_context_enabled": _(
+                        "Config context support cannot be changed after creation."
+                    )
+                })
+
         # Enforce max number of COTs that may be created (max_custom_object_types)
         if not self.pk:
             max_cots = get_plugin_config("netbox_custom_objects", "max_custom_object_types")
