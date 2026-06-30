@@ -721,7 +721,9 @@ class CustomObjectTypeAPITest(CustomObjectsTestCase, TestCase):
             'plugins-api:netbox_custom_objects-api:customobjecttype-detail',
             kwargs={'pk': cot.pk},
         )
-        response = self.client.patch(
+        # APIClient honours format='json' on PATCH (the plain Django client sends
+        # octet-stream → 415).
+        response = APIClient().patch(
             url, {'config_context_enabled': True}, format='json', **self.header,
         )
 
