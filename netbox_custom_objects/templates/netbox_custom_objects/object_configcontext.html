@@ -1,0 +1,19 @@
+{% extends base_template %}
+{% load helpers %}
+{% load i18n %}
+
+{% block content %}
+  <div class="row">
+    <div class="col col-12 col-md-6">
+      <div class="card">
+        {% include 'extras/inc/configcontext_data.html' with title="Local Context Data" data=object.local_context_data format=format copyid="local_context" %}
+        <div class="card-footer">
+          <span class="help-block">
+            <i class="mdi mdi-information-outline"></i>
+            {% trans "Custom objects cannot be assigned source config contexts, so the rendered context is the local context data shown here." %}
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>
+{% endblock %}

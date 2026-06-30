@@ -84,4 +84,9 @@ urlpatterns = [
         views.CustomObjectContactsView.as_view(),
         name="customobject_contacts",
     ),
+    path(
+        "<str:custom_object_type>/<int:pk>/config-context/",
+        views.CustomObjectConfigContextView.as_view(),
+        name="customobject_configcontext",
+    ),
 ]

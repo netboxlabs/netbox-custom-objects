@@ -8,6 +8,7 @@ from django.contrib import messages
 from django.contrib.contenttypes.models import ContentType
 from django.db import router, transaction
 from django.db.models import ProtectedError, Q, RestrictedError
+from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils.html import escape
@@ -1530,5 +1531,59 @@ class CustomObjectContactsView(ConditionalLoginRequiredMixin, View):
                 "table": table,
                 "base_template": "netbox_custom_objects/customobject.html",
                 "tab": "contacts",
+            },
+        )
+
+
+class CustomObjectConfigContextView(ConditionalLoginRequiredMixin, View):
+    """
+    Config context view for CustomObject instances.
+
+    Only available when the instance's CustomObjectType has
+    ``config_context_enabled=True`` (i.e. the generated model mixes in
+    ConfigContextModel).  Custom objects have no site/tenant/role dimensions,
+    so there are no source contexts to aggregate — the rendered context is the
+    object's local_context_data (see CustomObjectConfigContextMixin).
+    """
+
+    base_template = None
+    tab = ViewTab(
+        label=_("Config Context"),
+        visible=lambda obj: obj.custom_object_type.config_context_enabled,
+        weight=2000,
+    )
+
+    def get(self, request, custom_object_type, **kwargs):
+        object_type = get_object_or_404(CustomObjectType, slug=custom_object_type)
+        if not object_type.config_context_enabled:
+            raise Http404(_("Config context support is not enabled for this type."))
+        model = object_type.get_model_with_serializer()
+
+        lookup_kwargs = {k: v for k, v in kwargs.items() if k != "custom_object_type"}
+        obj = get_object_or_404(model.objects.all(), **lookup_kwargs)
+
+        # Determine the user's preferred output format (json/yaml), persisting
+        # an explicit choice the same way NetBox's ObjectConfigContextView does.
+        if request.GET.get("format") in ("json", "yaml"):
+            format = request.GET.get("format")
+            if request.user.is_authenticated:
+                request.user.config.set("data_format", format, commit=True)
+        elif request.user.is_authenticated:
+            format = request.user.config.get("data_format", "json")
+        else:
+            format = "json"
+
+        if self.base_template is None:
+            self.base_template = "netbox_custom_objects/customobject.html"
+
+        return render(
+            request,
+            "netbox_custom_objects/object_configcontext.html",
+            {
+                "object": obj,
+                "rendered_context": obj.get_config_context(),
+                "format": format,
+                "base_template": self.base_template,
+                "tab": "configcontext",
             },
         )

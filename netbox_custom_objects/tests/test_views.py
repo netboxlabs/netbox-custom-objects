@@ -983,3 +983,68 @@ class QuickAddViewTestCase(CustomObjectsTestCase, TestCase):
         # No new object created.
         model = self.target_cot.get_model()
         self.assertFalse(model.objects.exists())
+
+
+class CustomObjectConfigContextViewTestCase(CustomObjectsTestCase, TestCase):
+    """Config context tab on custom object instances (#98)."""
+
+    def _config_context_url(self, cot, instance):
+        return reverse(
+            'plugins:netbox_custom_objects:customobject_configcontext',
+            kwargs={'custom_object_type': cot.slug, 'pk': instance.pk},
+        )
+
+    def test_tab_returns_200_and_shows_local_data_when_enabled(self):
+        cot = self.create_custom_object_type(
+            name='cc_view', slug='cc-view', config_context_enabled=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        model = cot.get_model()
+        obj = model.objects.create(name='obj-1', local_context_data={'ntp_servers': ['10.0.0.1']})
+
+        response = self.client.get(self._config_context_url(cot, obj))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'ntp_servers')
+        self.assertContains(response, 'Config Context')
+
+    def test_tab_link_present_only_when_enabled(self):
+        """The detail page shows the Config Context tab only for enabled types."""
+        enabled = self.create_custom_object_type(
+            name='cc_on', slug='cc-on', config_context_enabled=True,
+        )
+        self.create_custom_object_type_field(
+            enabled, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        disabled = self.create_custom_object_type(name='cc_no', slug='cc-no')
+        self.create_custom_object_type_field(
+            disabled, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        on_model = enabled.get_model()
+        off_model = disabled.get_model()
+        on_obj = on_model.objects.create(name='on')
+        off_obj = off_model.objects.create(name='off')
+
+        # The detail view (generic.ObjectView) enforces object-level view perms.
+        perm = ObjectPermission(name='view-cc-detail', actions=['view'])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(on_model))
+        perm.object_types.add(ObjectType.objects.get_for_model(off_model))
+
+        on_detail = self.client.get(on_obj.get_absolute_url())
+        self.assertContains(on_detail, self._config_context_url(enabled, on_obj))
+
+        off_detail = self.client.get(off_obj.get_absolute_url())
+        self.assertNotContains(off_detail, 'config-context')
+
+    def test_tab_404_when_disabled(self):
+        cot = self.create_custom_object_type(name='cc_off_view', slug='cc-off-view')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        obj = cot.get_model().objects.create(name='x')
+
+        response = self.client.get(self._config_context_url(cot, obj))
+        self.assertEqual(response.status_code, 404)
