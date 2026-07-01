@@ -1017,6 +1017,37 @@ class CustomObjectConfigContextViewTestCase(CustomObjectsTestCase, TestCase):
         self.assertContains(response, 'ntp_servers')
         self.assertContains(response, 'Config Context')
 
+    def test_tab_lists_aggregated_source_contexts(self):
+        """A `site` field surfaces the referenced Site's ConfigContext in the tab."""
+        from dcim.models import Site
+        from extras.models import ConfigContext
+
+        site = Site.objects.create(name='Tab Site', slug='tab-site')
+        cc = ConfigContext.objects.create(name='tab-site-ctx', weight=1000, is_active=True, data={'a': 1})
+        cc.sites.add(site)
+
+        cot = self.create_custom_object_type(
+            name='cc_src', slug='cc-src', config_context_enabled=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name='site', label='Site', type='object',
+            related_object_type=self.get_site_object_type(),
+        )
+        model = cot.get_model()
+        obj = model.objects.create(name='o1', site=site)
+        self._grant_view(model)
+        # The Source Contexts panel restricts to ConfigContexts the user may view
+        # (matching NetBox's ObjectConfigContextView), so grant that too.
+        self._grant_view(ConfigContext)
+
+        response = self.client.get(self._config_context_url(cot, obj))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Source Contexts')
+        self.assertContains(response, 'tab-site-ctx')
+
     def test_tab_403_without_view_permission(self):
         """The tab must honour object-level RBAC, not leak local_context_data."""
         cot = self.create_custom_object_type(

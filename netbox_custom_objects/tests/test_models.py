@@ -477,6 +477,76 @@ class CustomObjectTypeConfigContextTestCase(CustomObjectsTestCase, TestCase):
         cot.description = "edited"
         cot.full_clean()  # should not raise
 
+    # --- Source-context aggregation via field-naming convention (#98 phase 2) ---
+
+    def _site_cot(self, name, slug):
+        """Config-context-enabled COT with a primary name field and a `site` object field."""
+        cot = self.create_custom_object_type(name=name, slug=slug, config_context_enabled=True)
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name="site", label="Site", type="object",
+            related_object_type=self.get_site_object_type(),
+        )
+        return cot
+
+    def test_aggregates_referenced_site_config_context(self):
+        """A `site` field pulls in ConfigContexts assigned to the referenced Site,
+        with local_context_data merged on top."""
+        from extras.models import ConfigContext
+
+        site = Site.objects.create(name="CC Site", slug="cc-site")
+        cc = ConfigContext.objects.create(name="cc-site-ctx", weight=1000, is_active=True,
+                                          data={"ntp": "10.0.0.1", "dns": "8.8.8.8"})
+        cc.sites.add(site)
+
+        cot = self._site_cot("cc_agg_site", "cc-agg-site")
+        model = cot.get_model(no_cache=True)
+        obj = model.objects.create(name="o1", site=site, local_context_data={"dns": "1.1.1.1"})
+
+        rendered = obj.get_config_context()
+        self.assertEqual(rendered["ntp"], "10.0.0.1")        # from source context
+        self.assertEqual(rendered["dns"], "1.1.1.1")         # local overrides source
+
+    def test_no_convention_field_returns_local_only(self):
+        """Without a convention-named dimension field, no source aggregation happens."""
+        from extras.models import ConfigContext
+
+        # A global (unassigned) active context that WOULD match a dimensionful object.
+        ConfigContext.objects.create(name="global-ctx", weight=1000, is_active=True, data={"g": 1})
+
+        cot = self.create_custom_object_type(name="cc_nodim", slug="cc-nodim", config_context_enabled=True)
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True,
+        )
+        model = cot.get_model(no_cache=True)
+        obj = model.objects.create(name="o1", local_context_data={"local": 2})
+
+        self.assertEqual(obj.get_config_context(), {"local": 2})
+
+    def test_misnamed_field_is_ignored(self):
+        """A `site`-named field pointing at the wrong model must not feed the site dimension."""
+        from extras.models import ConfigContext
+
+        site = Site.objects.create(name="CC Site 2", slug="cc-site-2")
+        cc = ConfigContext.objects.create(name="cc-site-ctx-2", weight=1000, is_active=True, data={"x": 1})
+        cc.sites.add(site)
+
+        # Field named `site` but pointing at Prefix (wrong model) → ignored.
+        cot = self.create_custom_object_type(name="cc_wrong", slug="cc-wrong", config_context_enabled=True)
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name="site", label="Site", type="object",
+            related_object_type=self.get_prefix_object_type(),
+        )
+        model = cot.get_model(no_cache=True)
+        obj = model.objects.create(name="o1", local_context_data={"only": "local"})
+
+        self.assertEqual(obj.get_config_context(), {"only": "local"})
+
 
 class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
     """Test cases for CustomObjectTypeField model."""

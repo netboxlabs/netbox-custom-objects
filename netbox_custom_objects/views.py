@@ -18,7 +18,7 @@ from utilities.exceptions import AbortRequest, PermissionsViolation
 from django.views.generic import View
 from extras.choices import CustomFieldUIVisibleChoices
 from extras.forms import JournalEntryForm
-from extras.models import JournalEntry
+from extras.models import ConfigContext, JournalEntry
 from extras.tables import JournalEntryTable
 from netbox.forms import (
     NetBoxModelBulkEditForm,
@@ -1541,9 +1541,9 @@ class CustomObjectConfigContextView(ConditionalLoginRequiredMixin, View):
 
     Only available when the instance's CustomObjectType has
     ``config_context_enabled=True`` (i.e. the generated model mixes in
-    ConfigContextModel).  Custom objects have no site/tenant/role dimensions,
-    so there are no source contexts to aggregate — the rendered context is the
-    object's local_context_data (see CustomObjectConfigContextMixin).
+    ConfigContextModel).  Source contexts are aggregated from NetBox objects the
+    custom object references via convention-named fields (site/tenant/role/...);
+    see CustomObjectConfigContextMixin.  local_context_data overrides them.
     """
 
     base_template = None
@@ -1578,12 +1578,21 @@ class CustomObjectConfigContextView(ConditionalLoginRequiredMixin, View):
         if self.base_template is None:
             self.base_template = "netbox_custom_objects/customobject.html"
 
+        # List the source ConfigContexts feeding the rendered context (restricted
+        # to what the user may view), via the same proxy the mixin aggregates from.
+        proxy = obj._config_context_source()
+        if proxy is not None:
+            source_contexts = ConfigContext.objects.restrict(request.user, "view").get_for_object(proxy)
+        else:
+            source_contexts = ConfigContext.objects.none()
+
         return render(
             request,
             "netbox_custom_objects/object_configcontext.html",
             {
                 "object": obj,
                 "rendered_context": obj.get_config_context(),
+                "source_contexts": source_contexts,
                 "format": format,
                 "base_template": self.base_template,
                 "tab": "configcontext",

@@ -34,7 +34,7 @@ from extras.choices import (
     CustomFieldUIEditableChoices,
     CustomFieldUIVisibleChoices,
 )
-from extras.models import ConfigContextModel, CustomField
+from extras.models import ConfigContext, ConfigContextModel, CustomField
 from extras.models.customfields import SEARCH_TYPES
 from extras.utils import is_taggable, run_validators
 from netbox.config import get_config
@@ -58,7 +58,7 @@ from netbox.plugins import get_plugin_config
 from netbox.registry import registry
 from netbox.search import SearchIndex
 from utilities import filters
-from utilities.data import get_config_value_ci
+from utilities.data import deepmerge, get_config_value_ci
 from utilities.datetime import datetime_from_timestamp
 from utilities.object_types import object_type_name
 from utilities.querysets import RestrictedQuerySet
@@ -67,7 +67,11 @@ from utilities.string import title
 from utilities.validators import validate_regex
 
 from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
-from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
+from netbox_custom_objects.constants import (
+    APP_LABEL,
+    CONFIG_CONTEXT_DIMENSION_FIELDS,
+    RESERVED_FIELD_NAMES,
+)
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS, LazyForeignKey, safe_table_name
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
 from netbox_custom_objects.utilities import (
@@ -975,19 +979,64 @@ class CustomObjectConfigContextMixin(ConfigContextModel):
     """ConfigContextModel variant for dynamically generated custom object models.
 
     Inherits ``local_context_data`` (a JSONField) and its ``clean()`` validator
-    from NetBox's ``ConfigContextModel``.  However, custom objects have none of
-    the site/tenant/role dimensions that ``ConfigContext`` assignment rules
-    filter on, so the parent's ``get_config_context()`` — which calls
-    ``ConfigContext.objects.get_for_object()`` and dereferences ``obj.site`` /
-    ``obj.tenant`` / ``obj.role`` — would raise ``AttributeError``.  We override
-    it to return only the locally-defined context data.
+    from NetBox's ``ConfigContextModel``.  Custom objects have none of the fixed
+    site/tenant/role attributes that ``ConfigContext.get_for_object()`` reads, so
+    we can't hand a custom object to it directly.  Instead, by convention (issue
+    #98), a single non-polymorphic OBJECT field named ``site`` / ``tenant`` /
+    ``role`` / ``platform`` / ``location`` / ``device_type`` / ``cluster`` and
+    pointing at the matching NetBox model feeds that assignment dimension.  We
+    build a proxy from those fields and reuse ``get_for_object`` so all of
+    NetBox's matching, hierarchy walking, and weight ordering apply.  When no
+    such field exists we fall back to local-data-only.
     """
 
     class Meta:
         abstract = True
 
+    def _config_context_source(self):
+        """Proxy populated from convention-named OBJECT fields, or None if none match.
+
+        Only honours a field whose *name* and *target model* both match the
+        convention, so a mistyped/mispointed field is silently ignored rather
+        than feeding the wrong dimension.
+        """
+        from types import SimpleNamespace
+
+        cot = self.custom_object_type
+        by_name = {
+            f.name: f
+            for f in cot.fields.filter(
+                type=CustomFieldTypeChoices.TYPE_OBJECT,
+                is_polymorphic=False,
+                name__in=CONFIG_CONTEXT_DIMENSION_FIELDS.keys(),
+            )
+        }
+        dims = {name: None for name in CONFIG_CONTEXT_DIMENSION_FIELDS}
+        used = False
+        for name, (app_label, model_name) in CONFIG_CONTEXT_DIMENSION_FIELDS.items():
+            f = by_name.get(name)
+            ct = getattr(f, "related_object_type", None)
+            if f and ct and (ct.app_label, ct.model) == (app_label, model_name):
+                dims[name] = getattr(self, name, None)
+                used = True
+        if not used:
+            return None
+        proxy = SimpleNamespace(**dims)
+        proxy.tags = self.tags  # custom objects are taggable
+        return proxy
+
     def get_config_context(self):
-        return self.local_context_data or {}
+        """Merge ConfigContexts applicable to referenced dimension objects, then
+        overlay ``local_context_data`` (which takes precedence)."""
+        data = {}
+        proxy = self._config_context_source()
+        if proxy is not None:
+            contexts = ConfigContext.objects.get_for_object(proxy, aggregate_data=True) or []
+            for context in contexts:
+                data = deepmerge(data, context)
+        if self.local_context_data:
+            data = deepmerge(data, self.local_context_data)
+        return data
 
 
 def validate_pep440(value):
