@@ -158,7 +158,7 @@ Notes:
 
 - Field **names are unique per type**, so there is never ambiguity about which field feeds a dimension.
 - A field must be an object field with both the **name and target model** above; a mis-named or mis-pointed field is simply ignored.
-- If a type defines none of these fields, its rendered context is just its Local Context Data.
+- If a type defines **none** of these fields, aggregation is skipped entirely and its rendered context is just its Local Context Data. This is a deliberate difference from Devices/VMs: **global (unassigned) ConfigContexts are not applied** to such a type — enabling config context support alone never silently pulls in every global context. Add at least one convention field (e.g. `site`) to opt the type into source aggregation; global contexts then apply too (as they do for any object with a dimension).
 
 ### Deletions
 

@@ -1028,10 +1028,18 @@ class CustomObjectConfigContextMixin(ConfigContextModel):
     def get_config_context(self):
         """Merge ConfigContexts applicable to referenced dimension objects, then
         overlay ``local_context_data`` (which takes precedence)."""
+        return self._render_config_context(self._config_context_source())
+
+    def _render_config_context(self, source):
+        """Merge the ConfigContexts for *source* (a proxy from
+        ``_config_context_source()``, or ``None``), then overlay
+        ``local_context_data``.  Takes a pre-built *source* so a caller that also
+        needs the source-context list (the detail tab) can build the proxy once
+        instead of paying for the ``cot.fields`` lookup twice.
+        """
         data = {}
-        proxy = self._config_context_source()
-        if proxy is not None:
-            contexts = ConfigContext.objects.get_for_object(proxy, aggregate_data=True) or []
+        if source is not None:
+            contexts = ConfigContext.objects.get_for_object(source, aggregate_data=True) or []
             for context in contexts:
                 data = deepmerge(data, context)
         if self.local_context_data:
@@ -1170,9 +1178,9 @@ class CustomObjectType(NetBoxModel):
         # migration), so flipping the flag would desync the generated model from the
         # physical schema (False→True makes every query raise "column does not exist").
         # Enforce on validated paths (forms, full_clean()); raw QuerySet.update()/save()
-        # bypass clean() as with any Django model. Skip when None — clean() runs during
-        # branch revert with attributes hydrated from serialized data (see custom_field_data above).
-        if self.pk and self.config_context_enabled is not None:
+        # bypass clean() as with any Django model. (original is None only if the row was
+        # deleted concurrently — nothing to compare against, so skip.)
+        if self.pk:
             original = CustomObjectType.objects.filter(pk=self.pk).values_list(
                 "config_context_enabled", flat=True
             ).first()

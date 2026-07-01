@@ -1578,8 +1578,9 @@ class CustomObjectConfigContextView(ConditionalLoginRequiredMixin, View):
         if self.base_template is None:
             self.base_template = "netbox_custom_objects/customobject.html"
 
-        # List the source ConfigContexts feeding the rendered context (restricted
-        # to what the user may view), via the same proxy the mixin aggregates from.
+        # Build the proxy once and reuse it for both the rendered context and the
+        # (RBAC-restricted) source-context list, instead of letting get_config_context()
+        # rebuild it internally.
         proxy = obj._config_context_source()
         if proxy is not None:
             source_contexts = ConfigContext.objects.restrict(request.user, "view").get_for_object(proxy)
@@ -1591,7 +1592,7 @@ class CustomObjectConfigContextView(ConditionalLoginRequiredMixin, View):
             "netbox_custom_objects/object_configcontext.html",
             {
                 "object": obj,
-                "rendered_context": obj.get_config_context(),
+                "rendered_context": obj._render_config_context(proxy),
                 "source_contexts": source_contexts,
                 "format": format,
                 "base_template": self.base_template,
