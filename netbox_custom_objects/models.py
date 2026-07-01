@@ -34,7 +34,7 @@ from extras.choices import (
     CustomFieldUIEditableChoices,
     CustomFieldUIVisibleChoices,
 )
-from extras.models import CustomField
+from extras.models import ConfigContext, ConfigContextModel, CustomField
 from extras.models.customfields import SEARCH_TYPES
 from extras.utils import is_taggable, run_validators
 from netbox.config import get_config
@@ -58,7 +58,7 @@ from netbox.plugins import get_plugin_config
 from netbox.registry import registry
 from netbox.search import SearchIndex
 from utilities import filters
-from utilities.data import get_config_value_ci
+from utilities.data import deepmerge, get_config_value_ci
 from utilities.datetime import datetime_from_timestamp
 from utilities.object_types import object_type_name
 from utilities.querysets import RestrictedQuerySet
@@ -67,7 +67,11 @@ from utilities.string import title
 from utilities.validators import validate_regex
 
 from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
-from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
+from netbox_custom_objects.constants import (
+    APP_LABEL,
+    CONFIG_CONTEXT_DIMENSION_FIELDS,
+    RESERVED_FIELD_NAMES,
+)
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS, LazyForeignKey, safe_table_name
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
 from netbox_custom_objects.utilities import (
@@ -971,6 +975,78 @@ class CustomObject(
         return reverse(cls._get_viewname(action, rest_api), kwargs=kwargs)
 
 
+class CustomObjectConfigContextMixin(ConfigContextModel):
+    """ConfigContextModel variant for dynamically generated custom object models.
+
+    Inherits ``local_context_data`` (a JSONField) and its ``clean()`` validator
+    from NetBox's ``ConfigContextModel``.  Custom objects have none of the fixed
+    site/tenant/role attributes that ``ConfigContext.get_for_object()`` reads, so
+    we can't hand a custom object to it directly.  Instead, by convention (issue
+    #98), a single non-polymorphic OBJECT field named ``site`` / ``tenant`` /
+    ``role`` / ``platform`` / ``location`` / ``device_type`` / ``cluster`` and
+    pointing at the matching NetBox model feeds that assignment dimension.  We
+    build a proxy from those fields and reuse ``get_for_object`` so all of
+    NetBox's matching, hierarchy walking, and weight ordering apply.  When no
+    such field exists we fall back to local-data-only.
+    """
+
+    class Meta:
+        abstract = True
+
+    def _config_context_source(self):
+        """Proxy populated from convention-named OBJECT fields, or None if none match.
+
+        Only honours a field whose *name* and *target model* both match the
+        convention, so a mistyped/mispointed field is silently ignored rather
+        than feeding the wrong dimension.
+        """
+        from types import SimpleNamespace
+
+        cot = self.custom_object_type
+        by_name = {
+            f.name: f
+            for f in cot.fields.filter(
+                type=CustomFieldTypeChoices.TYPE_OBJECT,
+                is_polymorphic=False,
+                name__in=CONFIG_CONTEXT_DIMENSION_FIELDS.keys(),
+            )
+        }
+        dims = {name: None for name in CONFIG_CONTEXT_DIMENSION_FIELDS}
+        used = False
+        for name, (app_label, model_name) in CONFIG_CONTEXT_DIMENSION_FIELDS.items():
+            f = by_name.get(name)
+            ct = getattr(f, "related_object_type", None)
+            if f and ct and (ct.app_label, ct.model) == (app_label, model_name):
+                dims[name] = getattr(self, name, None)
+                used = True
+        if not used:
+            return None
+        proxy = SimpleNamespace(**dims)
+        proxy.tags = self.tags  # custom objects are taggable
+        return proxy
+
+    def get_config_context(self):
+        """Merge ConfigContexts applicable to referenced dimension objects, then
+        overlay ``local_context_data`` (which takes precedence)."""
+        return self._render_config_context(self._config_context_source())
+
+    def _render_config_context(self, source):
+        """Merge the ConfigContexts for *source* (a proxy from
+        ``_config_context_source()``, or ``None``), then overlay
+        ``local_context_data``.  Takes a pre-built *source* so a caller that also
+        needs the source-context list (the detail tab) can build the proxy once
+        instead of paying for the ``cot.fields`` lookup twice.
+        """
+        data = {}
+        if source is not None:
+            contexts = ConfigContext.objects.get_for_object(source, aggregate_data=True) or []
+            for context in contexts:
+                data = deepmerge(data, context)
+        if self.local_context_data:
+            data = deepmerge(data, self.local_context_data)
+        return data
+
+
 def validate_pep440(value):
     """Validate that *value* is a valid PEP 440 version string."""
     if not value:
@@ -1061,6 +1137,14 @@ class CustomObjectType(NetBoxModel):
         blank=True,
         editable=False
     )
+    config_context_enabled = models.BooleanField(
+        default=False,
+        verbose_name=_("config context support"),
+        help_text=_(
+            "Enable local config context data on objects of this type. "
+            "Can only be set when the type is created."
+        ),
+    )
 
     class Meta:
         verbose_name = "Custom Object Type"
@@ -1088,6 +1172,24 @@ class CustomObjectType(NetBoxModel):
             raise ValidationError(
                 {"slug": _("Slug field cannot be empty.")}
             )
+
+        # config_context_enabled is immutable after creation: the local_context_data
+        # column is created once when the type's table is built (managed=False, no
+        # migration), so flipping the flag would desync the generated model from the
+        # physical schema (False→True makes every query raise "column does not exist").
+        # Enforce on validated paths (forms, full_clean()); raw QuerySet.update()/save()
+        # bypass clean() as with any Django model. (original is None only if the row was
+        # deleted concurrently — nothing to compare against, so skip.)
+        if self.pk:
+            original = CustomObjectType.objects.filter(pk=self.pk).values_list(
+                "config_context_enabled", flat=True
+            ).first()
+            if original is not None and self.config_context_enabled != original:
+                raise ValidationError({
+                    "config_context_enabled": _(
+                        "Config context support cannot be changed after creation."
+                    )
+                })
 
         # Enforce max number of COTs that may be created (max_custom_object_types)
         if not self.pk:
@@ -1578,10 +1680,18 @@ class CustomObjectType(NetBoxModel):
 
             TM.post_through_setup = wrapped_post_through_setup
 
+            # Optionally mix in config context support (local_context_data) when
+            # the type opts in.  The mixin contributes a concrete column, so the
+            # flag is only honoured at creation time (the table is built once via
+            # schema_editor.create_model() and is otherwise managed=False).
+            bases = (CustomObject, models.Model)
+            if self.config_context_enabled:
+                bases = (CustomObject, CustomObjectConfigContextMixin, models.Model)
+
             try:
                 model = generate_model(
                     str(model_name),
-                    (CustomObject, models.Model),
+                    bases,
                     attrs,
                 )
             finally:
