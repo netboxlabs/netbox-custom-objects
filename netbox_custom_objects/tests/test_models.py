@@ -547,6 +547,50 @@ class CustomObjectTypeConfigContextTestCase(CustomObjectsTestCase, TestCase):
 
         self.assertEqual(obj.get_config_context(), {"only": "local"})
 
+    def test_aggregates_referenced_tenant_config_context(self):
+        """The `tenant` dimension (a direct obj.tenant read in get_for_object) works."""
+        from extras.models import ConfigContext
+        from tenancy.models import Tenant
+
+        tenant = Tenant.objects.create(name="CC Tenant", slug="cc-tenant")
+        cc = ConfigContext.objects.create(name="cc-tenant-ctx", weight=1000, is_active=True, data={"t": 1})
+        cc.tenants.add(tenant)
+
+        cot = self.create_custom_object_type(name="cc_tenant", slug="cc-tenant", config_context_enabled=True)
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name="tenant", label="Tenant", type="object",
+            related_object_type=ObjectType.objects.get(app_label="tenancy", model="tenant"),
+        )
+        model = cot.get_model(no_cache=True)
+        obj = model.objects.create(name="o1", tenant=tenant)
+
+        self.assertEqual(obj.get_config_context(), {"t": 1})
+
+    def test_aggregates_referenced_role_config_context(self):
+        """The `role` dimension (a direct obj.role read + get_ancestors) works."""
+        from dcim.models import DeviceRole
+        from extras.models import ConfigContext
+
+        role = DeviceRole.objects.create(name="CC Role", slug="cc-role", color="ff0000")
+        cc = ConfigContext.objects.create(name="cc-role-ctx", weight=1000, is_active=True, data={"r": 1})
+        cc.roles.add(role)
+
+        cot = self.create_custom_object_type(name="cc_role", slug="cc-role", config_context_enabled=True)
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name="role", label="Role", type="object",
+            related_object_type=ObjectType.objects.get(app_label="dcim", model="devicerole"),
+        )
+        model = cot.get_model(no_cache=True)
+        obj = model.objects.create(name="o1", role=role)
+
+        self.assertEqual(obj.get_config_context(), {"r": 1})
+
 
 class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
     """Test cases for CustomObjectTypeField model."""
