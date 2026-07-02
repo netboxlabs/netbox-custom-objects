@@ -395,7 +395,7 @@ class IntegerFieldType(FieldType):
         # TODO: handle all args for IntegerField
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
-        return models.IntegerField(null=True, blank=True, **field_kwargs)
+        return models.BigIntegerField(null=True, blank=True, **field_kwargs)
 
     def get_filterform_field(self, field, **kwargs):
         return forms.IntegerField(
