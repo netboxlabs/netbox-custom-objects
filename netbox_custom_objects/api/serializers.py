@@ -5,15 +5,17 @@ import sys
 from core.models import ObjectType
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
-from django.db.utils import OperationalError, ProgrammingError
 from django.urls import NoReverseMatch
 from django.utils.translation import gettext_lazy as _
 from extras.choices import CustomFieldTypeChoices
+from extras.models import ConfigContextModel
 from netbox.api.serializers import NetBoxModelSerializer
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from rest_framework.reverse import reverse
 from rest_framework.utils import model_meta
+
+from users.api.serializers_.owners import OwnerSerializer
 
 from netbox_custom_objects import constants, field_types
 from netbox_custom_objects.models import (CustomObject, CustomObjectType,
@@ -333,6 +335,7 @@ class CustomObjectTypeSerializer(NetBoxModelSerializer):
             "version",
             "group_name",
             "description",
+            "config_context_enabled",
             "tags",
             "created",
             "last_updated",
@@ -343,6 +346,16 @@ class CustomObjectTypeSerializer(NetBoxModelSerializer):
         ]
         read_only_fields = ("schema_document",)
         brief_fields = ("id", "url", "name", "slug", "description")
+
+    def validate_config_context_enabled(self, value):
+        # Settable only at creation: the backing local_context_data column is
+        # created once when the type's table is built, so the flag is immutable
+        # afterwards (mirrors the disable-on-edit behaviour of the web form).
+        if self.instance is not None and value != self.instance.config_context_enabled:
+            raise serializers.ValidationError(
+                _("Config context support cannot be changed after creation.")
+            )
+        return value
 
     def get_table_model_name(self, obj):
         return obj.get_table_model_name(obj.id)
@@ -458,8 +471,22 @@ def get_serializer_class(model, skip_object_fields=False):
         if isinstance(attr, field_types.PolymorphicM2MDescriptor)
     )
 
+    # If a COT field is named 'owner', it shadows the OwnerMixin FK on the dynamic model
+    # (Django silently lets child attrs override abstract parent fields). The serializer
+    # must skip the FK owner field to avoid OwnerSerializer.to_representation() being
+    # called on a string value and crashing on .pk.
+    has_owner_field_conflict = any(f.name == 'owner' for f in model_fields)
+
     # Create field list including all necessary fields
     base_fields = ["id", "url", "display", "created", "last_updated", "tags"]
+    if not has_owner_field_conflict:
+        base_fields.insert(3, "owner")
+
+    # Expose local_context_data when the type opted in to config context support
+    # (the generated model mixes in ConfigContextModel via
+    # CustomObjectConfigContextMixin).
+    if issubclass(model, ConfigContextModel):
+        base_fields.append("local_context_data")
 
     # Include _context field when the model has designated context fields
     has_context_fields = bool(getattr(model, '_context_field_ids', []))
@@ -676,6 +703,9 @@ def get_serializer_class(model, skip_object_fields=False):
         "validate": validate,
     }
 
+    if not has_owner_field_conflict:
+        attrs["owner"] = OwnerSerializer(nested=True, required=False, allow_null=True)
+
     if has_context_fields:
         attrs["_context"] = serializers.SerializerMethodField()
         attrs["get__context"] = get__context
@@ -716,7 +746,8 @@ def get_serializer_class(model, skip_object_fields=False):
     )
 
     # Register the FULL serializer as a module attribute so NetBox's import_string()
-    # and the module-level __getattr__ fallback can find it.
+    # can find it (the serializer_resolver below generates on demand; this keeps
+    # any direct import-path lookups working too).
     # The partial variant (skip_object_fields=True) is used only as a nested field
     # descriptor inside another serializer class and must NOT be stored on the module
     # — doing so would silently replace the full serializer with an incomplete one
@@ -729,35 +760,23 @@ def get_serializer_class(model, skip_object_fields=False):
     return serializer
 
 
-def __getattr__(name):
-    """
-    Module-level lazy resolution for Table{N}ModelSerializer attributes (PEP 562).
+def serializer_resolver(model, prefix=''):
+    """Resolve dynamic CO models (``table{n}model``) to on-the-fly serializers.
 
-    NetBox's get_serializer_for_model() resolves serializers via
-    import_string("netbox_custom_objects.api.serializers.TableNModelSerializer"),
-    which ultimately calls getattr(module, name).  That lookup hits this hook
-    when the attribute has not yet been registered — for example in a worker
-    whose ready() ran against an empty database, or in any worker that started
-    before a given COT was created.
+    Called by ``utilities.api.get_serializer_for_model`` before its default
+    import-path lookup.  Returns ``None`` for non-CO models so the default
+    lookup runs (including this plugin's static CustomObjectType serializer).
 
-    Generating on demand here means SerializerNotFound is never raised just
-    because startup-time registration was skipped or missed (issue #370).
-    The generated serializer is stored via setattr inside get_serializer_class(),
-    so subsequent lookups return it directly from __dict__ without re-entering
-    this hook.
+    This supersedes the import-path/``__getattr__`` fallback approach: because
+    the resolver runs before any import path is built for a CO model, the
+    serializer is always generated on demand and ``SerializerNotFound`` is never
+    raised just because startup-time registration was skipped or missed
+    (issue #370).
     """
-    match = re.match(r'^Table(\d+)ModelSerializer$', name)
-    if match:
-        cot_id = int(match.group(1))
-        try:
-            obj = CustomObjectType.objects.get(pk=cot_id)
-            model = obj.get_model()
-            return get_serializer_class(model)
-        except (CustomObjectType.DoesNotExist, ProgrammingError, OperationalError, LookupError):
-            pass
-        except Exception:
-            logger.warning(
-                "Unexpected error generating serializer for %r; serializer will not be available",
-                name, exc_info=True,
-            )
-    raise AttributeError(f"module '{__name__}' has no attribute {name!r}")
+    if (
+        getattr(model, '_meta', None)
+        and model._meta.app_label == 'netbox_custom_objects'
+        and _TABLE_MODEL_PATTERN.match(model.__name__)
+    ):
+        return get_serializer_class(model)
+    return None

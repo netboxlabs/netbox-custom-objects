@@ -157,6 +157,9 @@ def heal_cot(cot, verbosity=1, dry_run=False):
 
         try:
             with connection.schema_editor() as editor:
+                # Flush pending DEFERRABLE FK trigger events before ALTER TABLE;
+                # PostgreSQL rejects ADD COLUMN when deferred triggers are pending.
+                editor.execute('SET CONSTRAINTS ALL IMMEDIATE')
                 editor.add_field(model, field)
             added.append(col_name)
             if verbosity >= 1:

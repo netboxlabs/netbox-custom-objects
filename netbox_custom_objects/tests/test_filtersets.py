@@ -770,8 +770,9 @@ class DateTimePrimaryFieldSearchTestCase(CustomObjectsTestCase, TestCase):
         )
 
         model = cls.cot.get_model()
-        cls.obj_morning = model.objects.create(ts=datetime.datetime(2025, 3, 10, 9, 0, 0))
-        cls.obj_evening = model.objects.create(ts=datetime.datetime(2025, 3, 10, 18, 30, 0))
+        utc = datetime.timezone.utc
+        cls.obj_morning = model.objects.create(ts=datetime.datetime(2025, 3, 10, 9, 0, 0, tzinfo=utc))
+        cls.obj_evening = model.objects.create(ts=datetime.datetime(2025, 3, 10, 18, 30, 0, tzinfo=utc))
 
     def _search(self, value):
         model = self.cot.get_model()

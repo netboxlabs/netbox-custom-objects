@@ -7,9 +7,6 @@
     <h5 class="modal-title">{% trans "Confirm Deletion" %}</h5>
   </div>
   <div class="modal-body">
-    {% if branch_bypass_warning %}
-      {% include 'netbox_custom_objects/inc/branch_bypass_warning.html' %}
-    {% endif %}
     <p>
       {% blocktrans trimmed %}
         Are you sure you want to <strong class="text-danger">delete</strong> {{ object_type }} <strong>{{ object }}</strong>?

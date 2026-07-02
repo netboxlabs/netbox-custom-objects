@@ -9,10 +9,6 @@
 
   {# Edit form #}
   <div class="tab-pane show active" id="edit-form" role="tabpanel" aria-labelledby="edit-form-tab">
-    {% if branch_warning %}
-    {% include 'netbox_custom_objects/inc/branch_warning.html' %}
-    {% endif %}
-
     <form action="" method="post" class="form form-horizontal mt-5">
       <div id="form_fields" hx-disinherit="hx-select hx-swap">
         {% csrf_token %}
@@ -78,7 +74,7 @@
 
         <div class="btn-float-group-right">
           <a href="{{ return_url }}" class="btn btn-outline-secondary btn-float">{% trans "Cancel" %}</a>
-          <button type="submit" name="_apply" class="btn btn-primary"{% if branch_warning %} disabled{% endif %}>{% trans "Apply" %}</button>
+          <button type="submit" name="_apply" class="btn btn-primary">{% trans "Apply" %}</button>
         </div>
       </div>
     </form>

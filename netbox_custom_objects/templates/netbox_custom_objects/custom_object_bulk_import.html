@@ -10,10 +10,6 @@
   <div class="tab-pane show active" id="import-form" role="tabpanel" aria-labelledby="import-form-tab">
     <div class="col col-md-12 col-lg-10 offset-lg-1">
 
-      {% if branch_warning %}
-      {% include 'netbox_custom_objects/inc/branch_warning.html' %}
-      {% endif %}
-
       <form action="" method="post" enctype="multipart/form-data" class="form">
         {% csrf_token %}
         <input type="hidden" name="import_method" value="direct" />
@@ -36,7 +32,7 @@
             {% if return_url %}
               <a href="{{ return_url }}" class="btn btn-outline-secondary">{% trans "Cancel" %}</a>
             {% endif %}
-            <button type="submit" name="data_submit" class="btn btn-primary"{% if branch_warning %} disabled{% endif %}>{% trans "Submit" %}</button>
+            <button type="submit" name="data_submit" class="btn btn-primary">{% trans "Submit" %}</button>
           </div>
         </div>
       </form>
@@ -68,7 +64,7 @@
             {% if return_url %}
               <a href="{{ return_url }}" class="btn btn-outline-secondary">{% trans "Cancel" %}</a>
             {% endif %}
-            <button type="submit" name="file_submit" class="btn btn-primary"{% if branch_warning %} disabled{% endif %}>{% trans "Submit" %}</button>
+            <button type="submit" name="file_submit" class="btn btn-primary">{% trans "Submit" %}</button>
           </div>
         </div>
       </form>
@@ -101,7 +97,7 @@
             {% if return_url %}
               <a href="{{ return_url }}" class="btn btn-outline-secondary">{% trans "Cancel" %}</a>
             {% endif %}
-            <button type="submit" name="file_submit" class="btn btn-primary"{% if branch_warning %} disabled{% endif %}>{% trans "Submit" %}</button>
+            <button type="submit" name="file_submit" class="btn btn-primary">{% trans "Submit" %}</button>
           </div>
         </div>
       </form>

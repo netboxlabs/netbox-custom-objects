@@ -39,8 +39,6 @@ from netbox_custom_objects.schema.executor import (
     UnknownFieldTypeError,
     UnknownObjectTypeError,
 )
-from netbox_custom_objects.utilities import is_in_branch
-
 from . import serializers
 
 logger = logging.getLogger(__name__)
@@ -102,10 +100,6 @@ def _serialize_diff(diff) -> dict:
     }
 
 
-# Constants
-BRANCH_ACTIVE_ERROR_MESSAGE = _("Please switch to the main branch to perform this operation.")
-
-
 class RootView(APIRootView):
     def get_view_name(self):
         return "CustomObjects"
@@ -158,14 +152,9 @@ class CustomObjectViewSet(ETagMixin, ModelViewSet):
         return super().list(request, *args, **kwargs)
 
     def create(self, request, *args, **kwargs):
-        if is_in_branch():
-            raise ValidationError(BRANCH_ACTIVE_ERROR_MESSAGE)
         return super().create(request, *args, **kwargs)
 
     def update(self, request, *args, **kwargs):
-        if is_in_branch():
-            raise ValidationError(BRANCH_ACTIVE_ERROR_MESSAGE)
-
         # Replicate DRF's UpdateModelMixin.update() so we can snapshot the instance
         # before the serializer is constructed.  Calling super().update() would invoke
         # get_object() a second time and return a fresh, un-snapshotted instance.
@@ -415,13 +404,14 @@ class SchemaApplyView(APIView):
     permission_classes = [IsAuthenticatedOrLoginNotRequired, TokenWritePermission]
 
     def post(self, request, *args, **kwargs):
-        # TODO: Schema apply is blocked while in a branch context because the executor
-        # performs direct DDL (ALTER/DROP TABLE) that is not branch-aware.  When branching
-        # is extended to support schema operations, remove this guard and wire up the
-        # appropriate branch-scoped apply path.
-        if is_in_branch():
-            raise ValidationError(BRANCH_ACTIVE_ERROR_MESSAGE)
-
+        # Branch context: this endpoint no longer rejects requests with an active
+        # branch.  Schema-editor calls inside ``apply_document`` route through
+        # ``_get_schema_connection()`` in models.py, which selects the active
+        # branch's connection when one is set.  The resulting DDL therefore lands
+        # in the branch's PostgreSQL schema, and the CustomObjectType /
+        # CustomObjectTypeField writes flow through netbox-branching's router.
+        # See ``_schema_add_field`` / ``_schema_remove_field`` / ``_schema_alter_field``
+        # and ``CustomObjectType.save`` for the routing details.
         if not (
             request.user.has_perm('netbox_custom_objects.add_customobjecttype') and
             request.user.has_perm('netbox_custom_objects.change_customobjecttype')

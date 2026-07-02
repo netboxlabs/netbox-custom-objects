@@ -23,21 +23,9 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
     """Test deletion scenarios with cascading effects."""
 
     def setUp(self):
-        """Purge stale dynamic models left in the app registry by earlier TestCase
-        classes whose setUpTestData transaction was rolled back (dropping the backing
-        tables).  Leaving them registered causes Django's cascade-delete collector to
-        query non-existent tables when a related core object is deleted.
-        """
+        # TransactionCleanupMixin.setUp() purges stale generated models and
+        # CustomObjectsTestCase.setUp() creates the test user and client.
         super().setUp()
-        stale = [
-            name
-            for name, model in list(django_apps.all_models.get(APP_LABEL, {}).items())
-            if getattr(model, '_generated_table_model', False)
-        ]
-        for name in stale:
-            django_apps.all_models[APP_LABEL].pop(name, None)
-        if stale:
-            django_apps.clear_cache()
 
     # ------------------------------------------------------------------
     # Helpers

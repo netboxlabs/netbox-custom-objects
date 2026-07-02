@@ -1,6 +1,7 @@
 import logging
 
 from netbox.forms import NetBoxModelFilterSetForm
+from netbox.forms.mixins import OwnerFilterMixin as OwnerFilterFormMixin
 from utilities.forms.fields import TagFilterField
 from . import field_types
 
@@ -35,6 +36,6 @@ def build_filterset_form_class(model):
 
     return type(
         f"{model._meta.object_name}FilterForm",
-        (NetBoxModelFilterSetForm,),
+        (OwnerFilterFormMixin, NetBoxModelFilterSetForm,),
         attrs,
     )

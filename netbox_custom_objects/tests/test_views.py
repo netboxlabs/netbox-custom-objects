@@ -985,3 +985,202 @@ class ObjectSelectorViewTestCase(TestCase):
             'q': 'Alpha',
         })
         self.assertEqual(response.status_code, 200)
+
+
+class QuickAddViewTestCase(CustomObjectsTestCase, TestCase):
+    """
+    Tests for the quick-add flow in CustomObjectEditView.
+
+    Covers GET (modal renders), POST success (object created, quick_add_created.html
+    returned), and POST validation failure (errors re-rendered in our custom template).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.user.is_superuser = True
+        self.user.save()
+
+        # Target COT: objects of this type will be quick-added.
+        self.target_cot = self.create_simple_custom_object_type(
+            name='Target', slug='target',
+        )
+        target_ot = ObjectType.objects.get(
+            app_label='netbox_custom_objects',
+            model=self.target_cot.get_table_model_name(self.target_cot.id).lower(),
+        )
+
+        # Source COT: has an object field pointing at Target.
+        self.source_cot = self.create_custom_object_type(name='Source', slug='source')
+        self.create_custom_object_type_field(
+            self.source_cot, name='name', label='Name', type='text',
+            primary=True, required=True,
+        )
+        self.create_custom_object_type_field(
+            self.source_cot, name='ref', label='Ref', type='object',
+            related_object_type=target_ot,
+        )
+
+        self.add_url = reverse(
+            'plugins:netbox_custom_objects:customobject_add',
+            kwargs={'custom_object_type': self.target_cot.slug},
+        )
+
+    def test_quick_add_get_returns_200(self):
+        """GET ?_quickadd=True renders the custom quick-add modal without errors."""
+        response = self.client.get(
+            self.add_url,
+            {'_quickadd': 'True', 'target': 'id_ref'},
+        )
+        self.assertEqual(response.status_code, 200)
+        # The custom template (not the core one) is used.
+        self.assertContains(response, 'hx-post=')
+        self.assertContains(response, f'/plugins/custom-objects/{self.target_cot.slug}/add/')
+
+    def test_quick_add_post_success_creates_object(self):
+        """POST with _quickadd in POST data creates the object and returns quick_add_created template."""
+        model = self.target_cot.get_model()
+        count_before = model.objects.count()
+
+        response = self.client.post(
+            f'{self.add_url}?_quickadd=True&target=id_ref',
+            data={'quickadd-name': 'quick-created', '_quickadd': ''},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(model.objects.count(), count_before + 1)
+        # The success template contains the object PK for JS auto-selection.
+        self.assertContains(response, 'quick-add-object')
+        self.assertTrue(model.objects.filter(name='quick-created').exists())
+
+    def test_quick_add_post_validation_failure_rerenders(self):
+        """POST with missing required field re-renders the quick-add form with errors."""
+        response = self.client.post(
+            f'{self.add_url}?_quickadd=True&target=id_ref',
+            # name is required but omitted
+            data={'_quickadd': ''},
+        )
+        self.assertEqual(response.status_code, 200)
+        # Error re-render uses our custom template, not a redirect.
+        self.assertContains(response, 'hx-post=')
+        # No new object created.
+        model = self.target_cot.get_model()
+        self.assertFalse(model.objects.exists())
+
+
+class CustomObjectConfigContextViewTestCase(CustomObjectsTestCase, TestCase):
+    """Config context tab on custom object instances (#98)."""
+
+    def _config_context_url(self, cot, instance):
+        return reverse(
+            'plugins:netbox_custom_objects:customobject_configcontext',
+            kwargs={'custom_object_type': cot.slug, 'pk': instance.pk},
+        )
+
+    def _grant_view(self, model):
+        perm = ObjectPermission(name=f'view-{model._meta.model_name}', actions=['view'])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(model))
+        return perm
+
+    def test_tab_returns_200_and_shows_local_data_when_enabled(self):
+        cot = self.create_custom_object_type(
+            name='cc_view', slug='cc-view', config_context_enabled=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        model = cot.get_model()
+        obj = model.objects.create(name='obj-1', local_context_data={'ntp_servers': ['10.0.0.1']})
+        self._grant_view(model)
+
+        response = self.client.get(self._config_context_url(cot, obj))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'ntp_servers')
+        self.assertContains(response, 'Config Context')
+
+    def test_tab_lists_aggregated_source_contexts(self):
+        """A `site` field surfaces the referenced Site's ConfigContext in the tab."""
+        from dcim.models import Site
+        from extras.models import ConfigContext
+
+        site = Site.objects.create(name='Tab Site', slug='tab-site')
+        cc = ConfigContext.objects.create(name='tab-site-ctx', weight=1000, is_active=True, data={'a': 1})
+        cc.sites.add(site)
+
+        cot = self.create_custom_object_type(
+            name='cc_src', slug='cc-src', config_context_enabled=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name='site', label='Site', type='object',
+            related_object_type=self.get_site_object_type(),
+        )
+        model = cot.get_model()
+        obj = model.objects.create(name='o1', site=site)
+        self._grant_view(model)
+        # The Source Contexts panel restricts to ConfigContexts the user may view
+        # (matching NetBox's ObjectConfigContextView), so grant that too.
+        self._grant_view(ConfigContext)
+
+        response = self.client.get(self._config_context_url(cot, obj))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Source Contexts')
+        self.assertContains(response, 'tab-site-ctx')
+
+    def test_tab_403_without_view_permission(self):
+        """The tab must honour object-level RBAC, not leak local_context_data."""
+        cot = self.create_custom_object_type(
+            name='cc_rbac', slug='cc-rbac', config_context_enabled=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        model = cot.get_model()
+        obj = model.objects.create(name='secret', local_context_data={'k': 'v'})
+
+        # No ObjectPermission granted → restricted queryset yields nothing → 404.
+        response = self.client.get(self._config_context_url(cot, obj))
+        self.assertIn(response.status_code, (403, 404))
+        self.assertNotContains(response, 'secret', status_code=response.status_code)
+
+    def test_tab_link_present_only_when_enabled(self):
+        """The detail page shows the Config Context tab only for enabled types."""
+        enabled = self.create_custom_object_type(
+            name='cc_on', slug='cc-on', config_context_enabled=True,
+        )
+        self.create_custom_object_type_field(
+            enabled, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        disabled = self.create_custom_object_type(name='cc_no', slug='cc-no')
+        self.create_custom_object_type_field(
+            disabled, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        on_model = enabled.get_model()
+        off_model = disabled.get_model()
+        on_obj = on_model.objects.create(name='on')
+        off_obj = off_model.objects.create(name='off')
+
+        # The detail view (generic.ObjectView) enforces object-level view perms.
+        perm = ObjectPermission(name='view-cc-detail', actions=['view'])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(on_model))
+        perm.object_types.add(ObjectType.objects.get_for_model(off_model))
+
+        on_detail = self.client.get(on_obj.get_absolute_url())
+        self.assertContains(on_detail, self._config_context_url(enabled, on_obj))
+
+        off_detail = self.client.get(off_obj.get_absolute_url())
+        self.assertNotContains(off_detail, 'config-context')
+
+    def test_tab_404_when_disabled(self):
+        cot = self.create_custom_object_type(name='cc_off_view', slug='cc-off-view')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        obj = cot.get_model().objects.create(name='x')
+
+        response = self.client.get(self._config_context_url(cot, obj))
+        self.assertEqual(response.status_code, 404)
