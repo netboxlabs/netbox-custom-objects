@@ -16,7 +16,7 @@ from .base import CustomObjectsTestCase, create_token
 from core.models import ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Rack, Site
 from extras.models import Tag
-from users.models import ObjectPermission, Token
+from users.models import ObjectPermission
 from virtualization.models import Cluster, ClusterType
 
 
