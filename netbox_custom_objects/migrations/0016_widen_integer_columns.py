@@ -59,7 +59,7 @@ def widen_integer_columns(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ("netbox_custom_objects", "0014_fix_mixed_case_field_names"),
+        ("netbox_custom_objects", "0015_customobjecttype_config_context_enabled"),
     ]
 
     operations = [

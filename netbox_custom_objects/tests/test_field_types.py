@@ -263,7 +263,7 @@ class IntegerFieldTypeTestCase(FieldTypeTestCase):
         # equivalent to the historical one RunPython would pass. If the function
         # ever introspects historical field structure, switch to MigrationLoader.
         migration = import_module(
-            "netbox_custom_objects.migrations.0015_widen_integer_columns"
+            "netbox_custom_objects.migrations.0016_widen_integer_columns"
         )
         with connection.schema_editor() as schema_editor:
             migration.widen_integer_columns(apps, schema_editor)
