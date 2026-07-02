@@ -133,9 +133,7 @@
                       {% endif %}
                     </th>
                     <td>
-                      {% with customfield=field value=object|get_field_value:field %}
-                        {% include "builtins/customfield_value.html" %}
-                      {% endwith %}
+                      {% customfield_value field object|get_field_value:field %}
                     </td>
                   </tr>
                 {% endif %}

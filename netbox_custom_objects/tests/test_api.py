@@ -1,10 +1,12 @@
 """
 Tests for API code paths.
 """
+import uuid
+
 from django.test import TestCase, RequestFactory
 from django.urls import reverse
 
-from utilities.testing import create_test_user
+from utilities.testing import TestCase as NetBoxTestCase, create_test_user
 from rest_framework import status
 from rest_framework.test import APIClient
 
@@ -13,6 +15,7 @@ from netbox_custom_objects.template_content import CustomObjectLink, LinkedCusto
 from .base import CustomObjectsTestCase, create_token
 from core.models import ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Rack, Site
+from extras.models import Tag
 from users.models import ObjectPermission
 from virtualization.models import Cluster, ClusterType
 
@@ -98,7 +101,7 @@ class CustomObjectAPITestCaseMixin:
         self.assertHttpStatus(response, 403)
 
 
-class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, TestCase):
+class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, NetBoxTestCase):
     model = None  # Will be set in setUpTestData
     bulk_update_data = {
         'test_field': 'Updated test field',
@@ -400,6 +403,80 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, Test
         self.assertSetEqual(
             set(instance.devices.values_list('id', flat=True)),
             set(data['devices']),
+        )
+
+    def test_create_with_tags_persists_to_db(self):
+        """Regression #371: tags submitted on POST must be saved to the DB, not just echoed."""
+        self._add_permission('add', 'Create with tags perm')
+        self.add_permissions('extras.view_tag')
+        tag = Tag.objects.get_or_create(name='api-create-tag', slug='api-create-tag')[0]
+
+        data = {
+            'test_field': 'Tagged Object',
+            'tags': [{'id': tag.id, 'name': tag.name, 'slug': tag.slug, 'color': tag.color}],
+        }
+        response = self.client.post(self._get_list_url(), data, format='json', **self.header)
+        self.assertHttpStatus(response, status.HTTP_201_CREATED)
+        self.assertIn('tags', response.data)
+        self.assertTrue(len(response.data['tags']) > 0, 'Response should include the submitted tag')
+
+        # Fetch fresh from the DB — the critical assertion that caught #371
+        instance = self._get_queryset().get(pk=response.data['id'])
+        self.assertIn(tag.name, list(instance.tags.names()), 'Tag must be persisted to the DB')
+
+    def test_patch_with_tags_persists_to_db(self):
+        """Regression #371: tags submitted on PATCH must be saved to the DB, not just echoed."""
+        self._add_permission('view', 'View perm')
+        self._add_permission('change', 'Patch with tags perm')
+        self.add_permissions('extras.view_tag')
+        tag = Tag.objects.get_or_create(name='api-patch-tag', slug='api-patch-tag')[0]
+
+        instance = self._get_queryset().first()
+        self.assertEqual(list(instance.tags.names()), [], 'Instance should start with no tags')
+
+        data = {'tags': [{'id': tag.id, 'name': tag.name, 'slug': tag.slug, 'color': tag.color}]}
+        response = self.client.patch(self._get_detail_url(instance), data, format='json', **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+
+        instance.refresh_from_db()
+        self.assertIn(tag.name, list(instance.tags.names()), 'Tag must be persisted to the DB after PATCH')
+
+    def test_patch_with_empty_tags_clears_existing(self):
+        """PATCH with tags=[] must remove all existing tags from the DB."""
+        self._add_permission('view', 'View perm')
+        self._add_permission('change', 'Patch clear tags perm')
+        tag = Tag.objects.get_or_create(name='api-clear-tag', slug='api-clear-tag')[0]
+
+        instance = self._get_queryset().first()
+        instance.tags.add(tag.name)
+        self.assertIn(tag.name, list(instance.tags.names()), 'Pre-condition: tag should be set')
+
+        response = self.client.patch(self._get_detail_url(instance), {'tags': []}, format='json', **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+
+        instance.refresh_from_db()
+        self.assertEqual(list(instance.tags.names()), [], 'All tags must be cleared after PATCH with tags=[]')
+
+    def test_patch_without_tags_preserves_existing(self):
+        """PATCH that omits the tags key entirely must leave existing tags unchanged."""
+        self._add_permission('view', 'View perm')
+        self._add_permission('change', 'Patch preserve tags perm')
+        tag = Tag.objects.get_or_create(name='api-preserve-tag', slug='api-preserve-tag')[0]
+
+        instance = self._get_queryset().first()
+        instance.tags.add(tag.name)
+        self.assertIn(tag.name, list(instance.tags.names()), 'Pre-condition: tag should be set')
+
+        response = self.client.patch(
+            self._get_detail_url(instance), {'test_field': 'updated'}, format='json', **self.header
+        )
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+
+        instance.refresh_from_db()
+        self.assertIn(
+            tag.name,
+            list(instance.tags.names()),
+            'Existing tags must be preserved when tags not in PATCH payload',
         )
 
 
@@ -1900,3 +1977,157 @@ class ConfigContextAPITest(CustomObjectsTestCase, TestCase):
         response = self.client.get(url, **self.header)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertNotIn('local_context_data', response.data)
+
+
+class NullOptionalObjectFieldTest(CustomObjectsTestCase, TestCase):
+    """
+    POST/PATCH with explicit null on a non-required object or multiobject field
+    must succeed (201/200).  Before the fix, the serializer lacked allow_null=True
+    so null was rejected with 400 'This field may not be null.'
+    """
+
+    def setUp(self):
+        self.user = create_test_user('nullobjuser')
+        token_key = create_token(self.user)
+        self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
+        self.client = APIClient()
+        self.client.credentials(HTTP_AUTHORIZATION=f'Token {token_key}')
+
+        self.cot = CustomObjectsTestCase.create_custom_object_type(
+            name='NullObjTest', slug='null-obj-test'
+        )
+        CustomObjectsTestCase.create_custom_object_type_field(
+            self.cot, name='name', type='text', primary=True, required=True,
+        )
+        device_ct = CustomObjectsTestCase.get_device_object_type()
+        CustomObjectsTestCase.create_custom_object_type_field(
+            self.cot, name='device', type='object',
+            related_object_type=device_ct, required=False,
+        )
+        CustomObjectsTestCase.create_custom_object_type_field(
+            self.cot, name='devices', type='multiobject',
+            related_object_type=device_ct, required=False,
+        )
+        self.model = self.cot.get_model()
+
+        uid = uuid.uuid4().hex[:8]
+        for action in ('add', 'change', 'view'):
+            perm = ObjectPermission(name=f'null-obj-{action}-{uid}', actions=[action])
+            perm.save()
+            perm.users.add(self.user)
+            perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+    def tearDown(self):
+        CustomObjectType.clear_model_cache()
+        super().tearDown()
+
+    def _list_url(self):
+        return reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-list',
+            kwargs={'custom_object_type': self.cot.slug},
+        )
+
+    def _detail_url(self, pk):
+        return reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-detail',
+            kwargs={'pk': pk, 'custom_object_type': self.cot.slug},
+        )
+
+    def test_post_null_object_field_accepted(self):
+        """POST with explicit null on an optional object field must return 201."""
+        response = self.client.post(
+            self._list_url(),
+            {'name': 'obj-null-post', 'device': None},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertIsNone(response.data['device'])
+
+    def test_post_null_multiobject_field_accepted(self):
+        """POST with explicit null on an optional multiobject field must return 201."""
+        response = self.client.post(
+            self._list_url(),
+            {'name': 'multiobj-null-post', 'devices': None},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(response.data['devices'], [])
+
+    def test_patch_null_object_field_clears_value(self):
+        """PATCH with null on an optional object field must clear it and return 200."""
+        site = Site.objects.create(name='null-test-site', slug='null-test-site')
+        manufacturer = Manufacturer.objects.create(name='null-mfr', slug='null-mfr')
+        device_type = DeviceType.objects.create(
+            manufacturer=manufacturer, model='null-dt', slug='null-dt'
+        )
+        device_role = DeviceRole.objects.create(name='null-role', slug='null-role')
+        device = Device.objects.create(
+            name='null-dev', site=site, device_type=device_type, role=device_role
+        )
+        obj = self.model.objects.create(name='patch-null-obj', device=device)
+        self.assertIsNotNone(obj.device)
+
+        response = self.client.patch(
+            self._detail_url(obj.pk),
+            {'device': None},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        obj.refresh_from_db()
+        self.assertIsNone(obj.device)
+
+    def test_patch_null_multiobject_field_clears_value(self):
+        """PATCH with null on an optional multiobject field must clear it and return 200."""
+        site = Site.objects.create(name='null-multi-site', slug='null-multi-site')
+        manufacturer = Manufacturer.objects.create(name='null-multi-mfr', slug='null-multi-mfr')
+        device_type = DeviceType.objects.create(
+            manufacturer=manufacturer, model='null-multi-dt', slug='null-multi-dt'
+        )
+        device_role = DeviceRole.objects.create(name='null-multi-role', slug='null-multi-role')
+        device = Device.objects.create(
+            name='null-multi-dev', site=site, device_type=device_type, role=device_role
+        )
+        obj = self.model.objects.create(name='patch-null-multi-obj')
+        obj.devices.add(device)
+        self.assertEqual(obj.devices.count(), 1)
+
+        response = self.client.patch(
+            self._detail_url(obj.pk),
+            {'devices': None},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        obj.refresh_from_db()
+        self.assertEqual(obj.devices.count(), 0)
+
+    def test_post_null_required_object_field_rejected(self):
+        """POST with null on a required object field must still return 400."""
+        device_ct = CustomObjectsTestCase.get_device_object_type()
+        uid = uuid.uuid4().hex[:8]
+        cot = CustomObjectsTestCase.create_custom_object_type(
+            name=f'NullReqTest-{uid}', slug=f'null-req-test-{uid}'
+        )
+        CustomObjectsTestCase.create_custom_object_type_field(
+            cot, name='name', type='text', primary=True, required=True,
+        )
+        CustomObjectsTestCase.create_custom_object_type_field(
+            cot, name='req_device', type='object',
+            related_object_type=device_ct, required=True,
+        )
+        model = cot.get_model()
+        for action in ('add', 'view'):
+            perm = ObjectPermission(name=f'null-req-{action}-{uid}', actions=[action])
+            perm.save()
+            perm.users.add(self.user)
+            perm.object_types.add(ObjectType.objects.get_for_model(model))
+
+        list_url = reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-list',
+            kwargs={'custom_object_type': cot.slug},
+        )
+        response = self.client.post(
+            list_url,
+            {'name': 'req-null-post', 'req_device': None},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
