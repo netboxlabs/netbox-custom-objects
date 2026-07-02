@@ -1,5 +1,30 @@
 # Releases
 
+## 0.6.0
+
+### Enhancements
+
+- [#30](https://github.com/netboxlabs/netbox-custom-objects/issues/30) - GraphQL support for Custom Objects
+- [#98](https://github.com/netboxlabs/netbox-custom-objects/issues/98) - Config context support for Custom Objects
+- [#254](https://github.com/netboxlabs/netbox-custom-objects/issues/254) - Quick Add support for object/multiobject fields
+- [#286](https://github.com/netboxlabs/netbox-custom-objects/issues/286) - Contacts support for Custom Objects
+- [#376](https://github.com/netboxlabs/netbox-custom-objects/issues/376) - Ownership field for Custom Object instances
+- [#404](https://github.com/netboxlabs/netbox-custom-objects/issues/404) - Full branching support for Custom Object Types and instances
+- [#532](https://github.com/netboxlabs/netbox-custom-objects/issues/532) - Integer fields now use 64-bit `BigIntegerField` to support values exceeding the 32-bit range
+- [#551](https://github.com/netboxlabs/netbox-custom-objects/issues/551) - Add `location` field type for latitude/longitude coordinate pairs
+- [#569](https://github.com/netboxlabs/netbox-custom-objects/issues/569) - Add version check to gate branching features on required NetBox / netbox-branching versions
+
+### Bug Fixes
+
+- [#558](https://github.com/netboxlabs/netbox-custom-objects/issues/558) - `CustomObject.__str__` rendered `"<type> None"` after deletion when the type had no primary field
+- [#561](https://github.com/netboxlabs/netbox-custom-objects/issues/561) - Related Objects link used `?<field>_id=` but the filterset only registered `?<field>=`; both variants are now supported
+- [#567](https://github.com/netboxlabs/netbox-custom-objects/issues/567) - Custom object type field changed to `undefined` in the Add Field page
+- [#572](https://github.com/netboxlabs/netbox-custom-objects/issues/572) - Crash on startup when netbox-branching is installed but not listed in `PLUGINS`
+- [#587](https://github.com/netboxlabs/netbox-custom-objects/issues/587) - Migration `0011_non_deferrable_fk_constraints` failed on multi-table-inheritance COTs due to incorrect FK target column
+- [#588](https://github.com/netboxlabs/netbox-custom-objects/issues/588) - `AttributeError: 'CustomFieldChoiceSet' object has no attribute 'get_choice_color'` on NetBox < 4.6
+
+---
+
 ## 0.5.2
 
 ### New Features
