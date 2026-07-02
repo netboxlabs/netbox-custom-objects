@@ -8,6 +8,7 @@ from django.db import transaction
 from django.urls import NoReverseMatch
 from django.utils.translation import gettext_lazy as _
 from extras.choices import CustomFieldTypeChoices
+from extras.models import ConfigContextModel
 from netbox.api.serializers import NetBoxModelSerializer
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
@@ -334,6 +335,7 @@ class CustomObjectTypeSerializer(NetBoxModelSerializer):
             "version",
             "group_name",
             "description",
+            "config_context_enabled",
             "tags",
             "created",
             "last_updated",
@@ -344,6 +346,16 @@ class CustomObjectTypeSerializer(NetBoxModelSerializer):
         ]
         read_only_fields = ("schema_document",)
         brief_fields = ("id", "url", "name", "slug", "description")
+
+    def validate_config_context_enabled(self, value):
+        # Settable only at creation: the backing local_context_data column is
+        # created once when the type's table is built, so the flag is immutable
+        # afterwards (mirrors the disable-on-edit behaviour of the web form).
+        if self.instance is not None and value != self.instance.config_context_enabled:
+            raise serializers.ValidationError(
+                _("Config context support cannot be changed after creation.")
+            )
+        return value
 
     def get_table_model_name(self, obj):
         return obj.get_table_model_name(obj.id)
@@ -469,6 +481,12 @@ def get_serializer_class(model, skip_object_fields=False):
     base_fields = ["id", "url", "display", "created", "last_updated", "tags"]
     if not has_owner_field_conflict:
         base_fields.insert(3, "owner")
+
+    # Expose local_context_data when the type opted in to config context support
+    # (the generated model mixes in ConfigContextModel via
+    # CustomObjectConfigContextMixin).
+    if issubclass(model, ConfigContextModel):
+        base_fields.append("local_context_data")
 
     # Include _context field when the model has designated context fields
     has_context_fields = bool(getattr(model, '_context_field_ids', []))

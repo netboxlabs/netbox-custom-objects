@@ -13,6 +13,21 @@ INCLUDE_MODELS = (
 
 APP_LABEL = "netbox_custom_objects"
 
+# Convention for config-context aggregation (issue #98): a single, non-polymorphic
+# OBJECT field named as the key and pointing at the given (app_label, model) feeds the
+# matching ConfigContext assignment dimension read by
+# ConfigContextQuerySet.get_for_object(). Region / site-group / tenant-group /
+# cluster-type / cluster-group are derived from site/tenant/cluster and need no field.
+CONFIG_CONTEXT_DIMENSION_FIELDS = {
+    "site": ("dcim", "site"),
+    "tenant": ("tenancy", "tenant"),
+    "role": ("dcim", "devicerole"),
+    "platform": ("dcim", "platform"),
+    "location": ("dcim", "location"),
+    "device_type": ("dcim", "devicetype"),
+    "cluster": ("virtualization", "cluster"),
+}
+
 # Field names that are reserved and cannot be used for custom object fields.
 # Keep in alphabetical order for ease of reading error message.
 RESERVED_FIELD_NAMES = [
@@ -36,6 +51,7 @@ RESERVED_FIELD_NAMES = [
     "jobs",
     "journal_entries",
     "last_updated",
+    "local_context_data",
     "model",
     "objects",
     "owner",

@@ -8,6 +8,7 @@ from django.contrib import messages
 from django.contrib.contenttypes.models import ContentType
 from django.db import router, transaction
 from django.db.models import ProtectedError, Q, RestrictedError
+from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils.html import escape
@@ -17,7 +18,7 @@ from utilities.exceptions import AbortRequest, PermissionsViolation
 from django.views.generic import View
 from extras.choices import CustomFieldUIVisibleChoices
 from extras.forms import JournalEntryForm
-from extras.models import JournalEntry
+from extras.models import ConfigContext, JournalEntry
 from extras.tables import JournalEntryTable
 from netbox.forms import (
     NetBoxModelBulkEditForm,
@@ -1530,5 +1531,71 @@ class CustomObjectContactsView(ConditionalLoginRequiredMixin, View):
                 "table": table,
                 "base_template": "netbox_custom_objects/customobject.html",
                 "tab": "contacts",
+            },
+        )
+
+
+class CustomObjectConfigContextView(ConditionalLoginRequiredMixin, View):
+    """
+    Config context view for CustomObject instances.
+
+    Only available when the instance's CustomObjectType has
+    ``config_context_enabled=True`` (i.e. the generated model mixes in
+    ConfigContextModel).  Source contexts are aggregated from NetBox objects the
+    custom object references via convention-named fields (site/tenant/role/...);
+    see CustomObjectConfigContextMixin.  local_context_data overrides them.
+    """
+
+    base_template = None
+    tab = ViewTab(
+        label=_("Config Context"),
+        visible=lambda obj: obj.custom_object_type.config_context_enabled,
+        weight=2000,
+    )
+
+    def get(self, request, custom_object_type, **kwargs):
+        object_type = get_object_or_404(CustomObjectType, slug=custom_object_type)
+        if not object_type.config_context_enabled:
+            raise Http404(_("Config context support is not enabled for this type."))
+        model = object_type.get_model_with_serializer()
+
+        lookup_kwargs = {k: v for k, v in kwargs.items() if k != "custom_object_type"}
+        # Gate on object-level view permission so the config-context tab can't
+        # leak local_context_data past NetBox's RBAC (the detail view restricts too).
+        obj = get_object_or_404(model.objects.restrict(request.user, "view"), **lookup_kwargs)
+
+        # Determine the user's preferred output format (json/yaml), persisting
+        # an explicit choice the same way NetBox's ObjectConfigContextView does.
+        if request.GET.get("format") in ("json", "yaml"):
+            format = request.GET.get("format")
+            if request.user.is_authenticated:
+                request.user.config.set("data_format", format, commit=True)
+        elif request.user.is_authenticated:
+            format = request.user.config.get("data_format", "json")
+        else:
+            format = "json"
+
+        if self.base_template is None:
+            self.base_template = "netbox_custom_objects/customobject.html"
+
+        # Build the proxy once and reuse it for both the rendered context and the
+        # (RBAC-restricted) source-context list, instead of letting get_config_context()
+        # rebuild it internally.
+        proxy = obj._config_context_source()
+        if proxy is not None:
+            source_contexts = ConfigContext.objects.restrict(request.user, "view").get_for_object(proxy)
+        else:
+            source_contexts = ConfigContext.objects.none()
+
+        return render(
+            request,
+            "netbox_custom_objects/object_configcontext.html",
+            {
+                "object": obj,
+                "rendered_context": obj._render_config_context(proxy),
+                "source_contexts": source_contexts,
+                "format": format,
+                "base_template": self.base_template,
+                "tab": "configcontext",
             },
         )
