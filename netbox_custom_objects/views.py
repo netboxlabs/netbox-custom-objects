@@ -43,6 +43,7 @@ from netbox_custom_objects.tables import CustomObjectTable, CustomObjectTypeFiel
 from . import field_types, filtersets, forms, tables
 from .models import CustomObject, CustomObjectType, CustomObjectTypeField
 from extras.choices import CustomFieldTypeChoices
+from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.dynamic_forms import build_filterset_form_class
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name
@@ -762,6 +763,8 @@ class CustomObjectEditView(generic.ObjectEditView):
             "custom_object_type_poly_obj_ct_names": set(),
             # Maps ct_sub → (obj_sub, field_label) for poly object pair rendering in the template
             "custom_object_type_poly_obj_pairs": {},
+            # Maps coordinates field name → (latitude_field_name, longitude_field_name)
+            "custom_object_type_coordinates_fields": {},
         }
 
         # Process custom object type fields (with grouping)
@@ -770,6 +773,19 @@ class CustomObjectEditView(generic.ObjectEditView):
         ).order_by("group_name", "weight", "name"):
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
             group_name = field.group_name or None
+
+            # Coordinates: one logical field rendered as two grouped latitude/longitude inputs
+            if field.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+                sub_fields = field_type.get_form_fields(field)
+                sub_names = list(sub_fields.keys())
+                for sub_name, sub_field in sub_fields.items():
+                    attrs[sub_name] = sub_field
+                    attrs["custom_object_type_rendered_names"].add(sub_name)
+                if group_name not in attrs["custom_object_type_field_groups"]:
+                    attrs["custom_object_type_field_groups"][group_name] = []
+                attrs["custom_object_type_field_groups"][group_name].extend(sub_names)
+                attrs["custom_object_type_coordinates_fields"][field.name] = tuple(sub_names)
+                continue
 
             # Polymorphic single-object: type-selector + object-picker pair
             if field.is_polymorphic and field.type == CustomFieldTypeChoices.TYPE_OBJECT:
@@ -841,6 +857,7 @@ class CustomObjectEditView(generic.ObjectEditView):
             self.custom_object_type_poly_obj_fields = attrs["custom_object_type_poly_obj_fields"]
             self.custom_object_type_poly_obj_ct_names = attrs["custom_object_type_poly_obj_ct_names"]
             self.custom_object_type_poly_obj_pairs = attrs["custom_object_type_poly_obj_pairs"]
+            self.custom_object_type_coordinates_fields = attrs["custom_object_type_coordinates_fields"]
 
             instance = kwargs.get('instance', None)
 
@@ -1008,6 +1025,15 @@ class CustomObjectEditView(generic.ObjectEditView):
                         obj_sub,
                         _("Please select an object of the chosen type."),
                     )
+            # Coordinates: latitude and longitude must both be set or both be empty.
+            for field_name, (lat_name, lon_name) in self.custom_object_type_coordinates_fields.items():
+                latitude = self.cleaned_data.get(lat_name)
+                longitude = self.cleaned_data.get(lon_name)
+                if (latitude is None) != (longitude is None):
+                    self.add_error(
+                        lat_name if latitude is None else lon_name,
+                        _("Latitude and longitude must both be set or both be empty."),
+                    )
             return self.cleaned_data
 
         form_class.__init__ = custom_init
@@ -1166,10 +1192,25 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
             "custom_object_type_poly_obj_pairs": {},
             "custom_object_type_poly_m2m_groups": {},
             "custom_object_type_rendered_names": set(),
+            # field_name → (latitude_field_name, longitude_field_name)
+            "custom_object_type_coordinates_fields": {},
         }
 
         for field in self.custom_object_type.fields.prefetch_related('related_object_types').all():
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
+
+            # Coordinates: two optional latitude/longitude inputs in bulk edit
+            if field.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+                sub_names = []
+                for sub_name, sub_field in field_type.get_form_fields(field).items():
+                    sub_field.required = False
+                    sub_field.widget.is_required = False
+                    sub_field.initial = None
+                    attrs[sub_name] = sub_field
+                    sub_names.append(sub_name)
+                # (latitude_name, longitude_name) for cross-field validation below.
+                attrs["custom_object_type_coordinates_fields"][field.name] = tuple(sub_names)
+                continue
 
             # Polymorphic single-object: scope-style type-selector + object-picker pair
             if field.is_polymorphic and field.type == CustomFieldTypeChoices.TYPE_OBJECT:
@@ -1243,6 +1284,23 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
                     self.fields[obj_sub].queryset = model_class.objects.all()
 
         attrs["__init__"] = bulk_poly_init
+
+        coordinates_fields_ref = attrs["custom_object_type_coordinates_fields"]
+
+        def bulk_clean(self):
+            cleaned_data = NetBoxModelBulkEditForm.clean(self)
+            # Coordinates: latitude and longitude must both be set or both be empty.
+            for field_name, (lat_name, lon_name) in coordinates_fields_ref.items():
+                latitude = cleaned_data.get(lat_name)
+                longitude = cleaned_data.get(lon_name)
+                if (latitude is None) != (longitude is None):
+                    self.add_error(
+                        lat_name if latitude is None else lon_name,
+                        _("Latitude and longitude must both be set or both be empty."),
+                    )
+            return cleaned_data
+
+        attrs["clean"] = bulk_clean
 
         form = type(
             f"{queryset.model._meta.object_name}BulkEditForm",

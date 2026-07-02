@@ -2,6 +2,7 @@
 Tests for API code paths.
 """
 import uuid
+from decimal import Decimal
 
 from django.test import TestCase, RequestFactory
 from django.urls import reverse
@@ -2131,3 +2132,128 @@ class NullOptionalObjectFieldTest(CustomObjectsTestCase, TestCase):
             format='json',
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+
+
+class CoordinatesFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
+    """REST API behaviour for the coordinates field type."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.cot = CustomObjectType.objects.create(
+            name="GeoObject",
+            verbose_name_plural="Geo Objects",
+            slug="geo-objects",
+        )
+        cls.create_custom_object_type_field(
+            cls.cot, name="name", type="text", primary=True, required=True
+        )
+        cls.create_custom_object_type_field(cls.cot, name="location", type="coordinates")
+        cls.model = cls.cot.get_model()
+
+    def setUp(self):
+        super().setUp()
+        self.user = create_test_user("geouser")
+        self.client = APIClient()
+        token_key = create_token(self.user)
+        self.header = {"HTTP_AUTHORIZATION": f"Token {token_key}"}
+        perm = ObjectPermission(
+            name="geo all", actions=["view", "add", "change", "delete"]
+        )
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+    def _list_url(self):
+        return reverse(
+            "plugins-api:netbox_custom_objects-api:customobject-list",
+            kwargs={"custom_object_type": self.cot.slug},
+        )
+
+    def _detail_url(self, instance):
+        return reverse(
+            "plugins-api:netbox_custom_objects-api:customobject-detail",
+            kwargs={"pk": instance.pk, "custom_object_type": self.cot.slug},
+        )
+
+    def test_serializer_exposes_flat_latitude_longitude(self):
+        """The coordinate columns are serialized as two flat fields (NetBox convention)."""
+        obj = self.model.objects.create(
+            name="Box",
+            location_latitude=Decimal("40.712800"),
+            location_longitude=Decimal("-74.006000"),
+        )
+        response = self.client.get(self._detail_url(obj), **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(Decimal(response.data["location_latitude"]), Decimal("40.712800"))
+        self.assertEqual(Decimal(response.data["location_longitude"]), Decimal("-74.006000"))
+        self.assertNotIn("location", response.data)
+
+    def test_create_with_coordinates(self):
+        """Creating an object via the API persists both coordinate columns."""
+        data = {
+            "name": "Created box",
+            "location_latitude": "41.000000",
+            "location_longitude": "-75.000000",
+        }
+        response = self.client.post(self._list_url(), data, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        obj = self.model.objects.get(pk=response.data["id"])
+        self.assertEqual(obj.location_latitude, Decimal("41.000000"))
+        self.assertEqual(obj.location_longitude, Decimal("-75.000000"))
+
+    def test_create_half_populated_pair_rejected(self):
+        """Setting only one of latitude/longitude is rejected, keyed to the empty field."""
+        data = {"name": "Bad box", "location_latitude": "41.000000"}
+        response = self.client.post(self._list_url(), data, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+        # The error is pinned to the missing field, not non_field_errors.
+        self.assertIn("location_longitude", response.data)
+        self.assertNotIn("non_field_errors", response.data)
+
+    def test_create_out_of_range_rejected(self):
+        """Latitude beyond ±90 is rejected by the model field validators."""
+        data = {
+            "name": "Out of range",
+            "location_latitude": "120.000000",
+            "location_longitude": "10.000000",
+        }
+        response = self.client.post(self._list_url(), data, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+
+    def test_patch_clearing_one_half_rejected(self):
+        """A PATCH that clears only one coordinate of a populated pair is rejected."""
+        obj = self.model.objects.create(
+            name="Box",
+            location_latitude=Decimal("40.712800"),
+            location_longitude=Decimal("-74.006000"),
+        )
+        response = self.client.patch(
+            self._detail_url(obj),
+            {"location_latitude": None},
+            format="json",
+            **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+        self.assertIn("location_latitude", response.data)
+        # The DB row is left untouched.
+        obj.refresh_from_db()
+        self.assertEqual(obj.location_latitude, Decimal("40.712800"))
+        self.assertEqual(obj.location_longitude, Decimal("-74.006000"))
+
+    def test_patch_clearing_both_halves_allowed(self):
+        """A PATCH clearing both coordinates at once is accepted."""
+        obj = self.model.objects.create(
+            name="Box",
+            location_latitude=Decimal("40.712800"),
+            location_longitude=Decimal("-74.006000"),
+        )
+        response = self.client.patch(
+            self._detail_url(obj),
+            {"location_latitude": None, "location_longitude": None},
+            format="json",
+            **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        obj.refresh_from_db()
+        self.assertIsNone(obj.location_latitude)
+        self.assertIsNone(obj.location_longitude)

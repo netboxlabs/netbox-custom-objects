@@ -3,6 +3,7 @@ import decimal
 import hashlib
 import json
 import logging
+from decimal import Decimal
 from typing import List
 
 import django_tables2 as tables
@@ -12,8 +13,9 @@ from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
-from django.core.exceptions import FieldDoesNotExist
-from django.core.validators import RegexValidator
+from django.core.exceptions import FieldDoesNotExist, ValidationError
+from django.core.validators import (MaxValueValidator, MinValueValidator,
+                                     RegexValidator)
 from django.db import models, router
 from django.db.utils import OperationalError, ProgrammingError
 from django.db.models.fields.related import ForeignKey, ManyToManyDescriptor
@@ -41,7 +43,8 @@ from utilities.forms.widgets import (
 from utilities.templatetags.builtins.filters import linkify, render_markdown
 from netbox.tables.columns import BooleanColumn
 
-from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
+from netbox_custom_objects.choices import (CustomObjectFieldTypeChoices,
+                                           ObjectFieldOnDeleteChoices)
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name, generate_model
 
@@ -2178,6 +2181,147 @@ class PolymorphicMultiObjectReverseDescriptor:
         return PolymorphicMultiObjectReverseManager(instance, self.cot_pk, self.through_model_name)
 
 
+class CoordinatesColumn(tables.Column):
+    """
+    Table column for a coordinates field. Renders the latitude/longitude pair stored
+    in the two backing columns as ``"<lat>, <lon>"`` (or a placeholder when unset).
+    """
+
+    def __init__(self, latitude_accessor, longitude_accessor, *args, **kwargs):
+        kwargs.setdefault("accessor", latitude_accessor)
+        kwargs.setdefault("orderable", True)
+        super().__init__(*args, **kwargs)
+        self.latitude_accessor = latitude_accessor
+        self.longitude_accessor = longitude_accessor
+
+    def render(self, record):
+        latitude = getattr(record, self.latitude_accessor, None)
+        longitude = getattr(record, self.longitude_accessor, None)
+        if latitude is None or longitude is None:
+            return self.default
+        return f"{latitude}, {longitude}"
+
+
+class CoordinatesFieldType(FieldType):
+    """
+    A geographic coordinates field. A single field of this type expands into two real
+    DB columns, ``<name>_latitude`` and ``<name>_longitude``, mirroring NetBox's native
+    Site/Device coordinate handling (plain ``DecimalField``s; no PostGIS dependency).
+    """
+
+    @staticmethod
+    def latitude_field_name(field):
+        return f"{field.name}_latitude"
+
+    @staticmethod
+    def longitude_field_name(field):
+        return f"{field.name}_longitude"
+
+    def get_model_field(self, field, **kwargs):
+        return {
+            self.latitude_field_name(field): models.DecimalField(
+                verbose_name=_("latitude"),
+                null=True,
+                blank=True,
+                max_digits=8,
+                decimal_places=6,
+                validators=[
+                    MinValueValidator(Decimal("-90.0")),
+                    MaxValueValidator(Decimal("90.0")),
+                ],
+                help_text=_("GPS coordinate in decimal format (xx.yyyyyy)"),
+            ),
+            self.longitude_field_name(field): models.DecimalField(
+                verbose_name=_("longitude"),
+                null=True,
+                blank=True,
+                max_digits=9,
+                decimal_places=6,
+                validators=[
+                    MinValueValidator(Decimal("-180.0")),
+                    MaxValueValidator(Decimal("180.0")),
+                ],
+                help_text=_("GPS coordinate in decimal format (xx.yyyyyy)"),
+            ),
+        }
+
+    def get_coordinate_values(self, instance, field):
+        """Return the (latitude, longitude) tuple stored on an instance."""
+        return (
+            getattr(instance, self.latitude_field_name(field), None),
+            getattr(instance, self.longitude_field_name(field), None),
+        )
+
+    def get_display_value(self, instance, field_name):
+        latitude = getattr(instance, f"{field_name}_latitude", None)
+        longitude = getattr(instance, f"{field_name}_longitude", None)
+        if latitude is None or longitude is None:
+            return None
+        return f"{latitude}, {longitude}"
+
+    def get_form_fields(self, field):
+        """
+        Return the two annotated form fields (latitude, longitude) keyed by their
+        backing column names. The keys match real model columns, so the generated
+        ModelForm binds and persists them natively.
+        """
+        base_label = field.label or field.name.replace("_", " ").title()
+        latitude = forms.DecimalField(
+            label=f"{base_label} ({_('latitude')})",
+            required=field.required,
+            max_digits=8,
+            decimal_places=6,
+            min_value=Decimal("-90.0"),
+            max_value=Decimal("90.0"),
+            help_text=_("GPS coordinate in decimal format (xx.yyyyyy)"),
+        )
+        longitude = forms.DecimalField(
+            label=f"{base_label} ({_('longitude')})",
+            required=field.required,
+            max_digits=9,
+            decimal_places=6,
+            min_value=Decimal("-180.0"),
+            max_value=Decimal("180.0"),
+            help_text=_("GPS coordinate in decimal format (xx.yyyyyy)"),
+        )
+        if field.ui_editable != CustomFieldUIEditableChoices.YES:
+            latitude.disabled = True
+            longitude.disabled = True
+        return {
+            self.latitude_field_name(field): latitude,
+            self.longitude_field_name(field): longitude,
+        }
+
+    def get_filterform_field(self, field, **kwargs):
+        base_label = field.label or field.name.replace("_", " ").title()
+        return {
+            self.latitude_field_name(field): forms.DecimalField(
+                label=f"{base_label} ({_('latitude')})", required=False
+            ),
+            self.longitude_field_name(field): forms.DecimalField(
+                label=f"{base_label} ({_('longitude')})", required=False
+            ),
+        }
+
+    def get_table_column_field(self, field, **kwargs):
+        return CoordinatesColumn(
+            self.latitude_field_name(field),
+            self.longitude_field_name(field),
+            verbose_name=str(field),
+        )
+
+    @staticmethod
+    def validate_pair(latitude, longitude):
+        """
+        Enforce that latitude and longitude are either both set or both empty.
+        Raises ``django.core.exceptions.ValidationError`` on a half-populated pair.
+        """
+        if (latitude is None) != (longitude is None):
+            raise ValidationError(
+                _("Latitude and longitude must both be set or both be empty.")
+            )
+
+
 FIELD_TYPE_CLASS = {
     CustomFieldTypeChoices.TYPE_TEXT: TextFieldType,
     CustomFieldTypeChoices.TYPE_LONGTEXT: LongTextFieldType,
@@ -2192,4 +2336,5 @@ FIELD_TYPE_CLASS = {
     CustomFieldTypeChoices.TYPE_MULTISELECT: MultiSelectFieldType,
     CustomFieldTypeChoices.TYPE_OBJECT: ObjectFieldType,
     CustomFieldTypeChoices.TYPE_MULTIOBJECT: MultiObjectFieldType,
+    CustomObjectFieldTypeChoices.TYPE_COORDINATES: CoordinatesFieldType,
 }
