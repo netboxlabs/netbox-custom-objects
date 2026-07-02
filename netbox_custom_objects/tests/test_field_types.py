@@ -3,7 +3,7 @@ Tests for all the different field types supported by Custom Object Type Fields.
 """
 from unittest import skip
 from unittest.mock import Mock
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.test import TestCase
@@ -525,11 +525,11 @@ class DateTimeFieldTypeTestCase(FieldTypeTestCase):
             name="created_datetime",
             label="Created DateTime",
             type="datetime",
-            default="2023-01-01T12:00:00"
+            default="2023-01-01T12:00:00+00:00"
         )
 
         self.assertEqual(field.type, "datetime")
-        self.assertEqual(field.default, "2023-01-01T12:00:00")
+        self.assertEqual(field.default, "2023-01-01T12:00:00+00:00")
 
     def test_datetime_field_validation(self):
         """Test datetime field validation."""
@@ -560,7 +560,7 @@ class DateTimeFieldTypeTestCase(FieldTypeTestCase):
         )
 
         model = self.custom_object_type.get_model()
-        test_datetime = datetime(2023, 1, 1, 12, 0, 0)
+        test_datetime = datetime(2023, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
         instance = model.objects.create(name="Test", created_datetime=test_datetime)
 
         self.assertEqual(instance.created_datetime, test_datetime)

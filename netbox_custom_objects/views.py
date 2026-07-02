@@ -1,22 +1,30 @@
 import logging
 
 from core.models import ObjectChange
+from core.signals import clear_events
 from core.tables import ObjectChangeTable
 from django.apps import apps as django_apps
+from django.contrib import messages
 from django.contrib.contenttypes.models import ContentType
+from django.db import router, transaction
 from django.db.models import ProtectedError, Q, RestrictedError
+from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
+from django.utils.html import escape
+from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
+from utilities.exceptions import AbortRequest, PermissionsViolation
 from django.views.generic import View
 from extras.choices import CustomFieldUIVisibleChoices
 from extras.forms import JournalEntryForm
-from extras.models import JournalEntry
+from extras.models import ConfigContext, JournalEntry
 from extras.tables import JournalEntryTable
 from netbox.forms import (
     NetBoxModelBulkEditForm,
     NetBoxModelImportForm,
 )
+from netbox.forms.mixins import OwnerMixin as OwnerFormMixin
 from netbox.views import generic
 from netbox.views.generic.mixins import TableMixin
 from utilities.forms import ConfirmationForm, DeleteForm, restrict_form_fields
@@ -38,9 +46,18 @@ from extras.choices import CustomFieldTypeChoices
 from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.dynamic_forms import build_filterset_form_class
-from netbox_custom_objects.utilities import extract_cot_id_from_model_name, is_in_branch
+from netbox_custom_objects.utilities import extract_cot_id_from_model_name
 
 logger = logging.getLogger("netbox_custom_objects.views")
+
+
+def _is_in_branch():
+    """True if a netbox-branching branch is active in this context."""
+    try:
+        from netbox_branching.contextvars import active_branch
+        return active_branch.get() is not None
+    except ImportError:
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -329,18 +346,12 @@ class CustomObjectTypeEditView(generic.ObjectEditView):
     form = forms.CustomObjectTypeForm
     template_name = 'netbox_custom_objects/customobjecttype_edit.html'
 
-    def get_extra_context(self, request, instance):
-        return {'branch_bypass_warning': is_in_branch()}
-
 
 @register_model_view(CustomObjectType, "delete")
 class CustomObjectTypeDeleteView(generic.ObjectDeleteView):
     queryset = CustomObjectType.objects.all()
     default_return_url = "plugins:netbox_custom_objects:customobjecttype_list"
     template_name = 'netbox_custom_objects/customobjecttype_delete.html'
-
-    def get_extra_context(self, request, instance):
-        return {'branch_bypass_warning': is_in_branch()}
 
     def _get_dependent_objects(self, obj):
         dependent_objects = super()._get_dependent_objects(obj)
@@ -402,7 +413,7 @@ class CustomObjectTypeFieldEditView(generic.ObjectEditView):
         return obj
 
     def get_extra_context(self, request, instance):
-        return {'branch_bypass_warning': is_in_branch()}
+        return {'branch_bypass_warning': _is_in_branch()}
 
 
 @register_model_view(CustomObjectTypeField, "delete")
@@ -491,18 +502,12 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
 
         return dependent_objects
 
-    def get_extra_context(self, request, instance):
-        return {'branch_bypass_warning': is_in_branch()}
-
 
 @register_model_view(CustomObjectType, "bulk_import", path="import", detail=False)
 class CustomObjectTypeBulkImportView(generic.BulkImportView):
     queryset = CustomObjectType.objects.all()
     model_form = forms.CustomObjectTypeImportForm
     template_name = 'netbox_custom_objects/customobjecttype_bulk_import.html'
-
-    def get_extra_context(self, request):
-        return {'branch_bypass_warning': is_in_branch()}
 
 
 @register_model_view(CustomObjectType, "bulk_edit", path="edit", detail=False)
@@ -513,9 +518,6 @@ class CustomObjectTypeBulkEditView(generic.BulkEditView):
     form = forms.CustomObjectTypeBulkEditForm
     template_name = 'netbox_custom_objects/customobjecttype_bulk_edit.html'
 
-    def get_extra_context(self, request):
-        return {'branch_bypass_warning': is_in_branch()}
-
 
 @register_model_view(CustomObjectType, "bulk_delete", path="delete", detail=False)
 class CustomObjectTypeBulkDeleteView(generic.BulkDeleteView):
@@ -523,9 +525,6 @@ class CustomObjectTypeBulkDeleteView(generic.BulkDeleteView):
     filterset = filtersets.CustomObjectTypeFilterSet
     table = tables.CustomObjectTypeTable
     template_name = 'netbox_custom_objects/customobjecttype_bulk_delete.html'
-
-    def get_extra_context(self, request):
-        return {'branch_bypass_warning': is_in_branch()}
 
 
 #
@@ -617,6 +616,7 @@ class CustomObjectView(generic.ObjectView):
 class CustomObjectEditView(generic.ObjectEditView):
     template_name = "netbox_custom_objects/customobject_edit.html"
     htmx_template_name = "netbox_custom_objects/htmx/edit_fields.html"
+    _CO_QUICK_ADD_TEMPLATE = 'netbox_custom_objects/htmx/co_quick_add.html'
     form = None
     queryset = None
     object = None
@@ -639,6 +639,76 @@ class CustomObjectEditView(generic.ObjectEditView):
     def get_queryset(self, request):
         model = self.object._meta.model
         return model.objects.all()
+
+    def get(self, request, *args, **kwargs):
+        if not request.GET.get('_quickadd'):
+            return super().get(request, *args, **kwargs)
+        # Quick-add GET: the core htmx/quick_add.html uses {% action_url model 'add' %}
+        # which cannot resolve custom object URLs (they require a COT slug).
+        # Use our own template that builds the form action URL from the slug instead.
+        obj = self.object  # already populated by setup()
+        form = self.form(
+            instance=obj,
+            initial=normalize_querydict(request.GET),
+            prefix='quickadd',
+        )
+        restrict_form_fields(form, request.user)
+        return render(request, self._CO_QUICK_ADD_TEMPLATE, {
+            'model': obj._meta.model,
+            'object': obj,
+            'form': form,
+        })
+
+    def post(self, request, *args, **kwargs):
+        if '_quickadd' not in request.POST:
+            return super().post(request, *args, **kwargs)
+        # Quick-add POST: mirrors the parent's save logic but re-renders validation
+        # errors with our custom template instead of the core htmx/quick_add.html
+        # (which uses {% action_url model 'add' %} and fails for COT models).
+        _qa_logger = logging.getLogger('netbox.views.ObjectEditView')
+        obj = self.object  # already populated by setup()
+        model = self.queryset.model
+
+        if obj.pk and hasattr(obj, 'snapshot'):
+            obj.snapshot()
+
+        obj = self.alter_object(obj, request, args, kwargs)
+
+        form = self.form(
+            data=request.POST,
+            files=request.FILES,
+            instance=obj,
+            prefix='quickadd',
+        )
+        restrict_form_fields(form, request.user)
+
+        if form.is_valid():
+            obj._changelog_message = form.cleaned_data.pop('changelog_message', '')
+            try:
+                with transaction.atomic(using=router.db_for_write(model)):
+                    object_created = form.instance.pk is None
+                    obj = form.save()
+                    if not self.queryset.filter(pk=obj.pk).exists():
+                        raise PermissionsViolation()
+                msg = '{} {}'.format(
+                    'Created' if object_created else 'Modified',
+                    model._meta.verbose_name,
+                )
+                _qa_logger.info(f"{msg} {obj} (PK: {obj.pk})")
+                if hasattr(obj, 'get_absolute_url'):
+                    msg = mark_safe(f'{msg} <a href="{obj.get_absolute_url()}">{escape(obj)}</a>')
+                messages.success(request, msg)
+                return render(request, 'htmx/quick_add_created.html', {'object': obj})
+            except (AbortRequest, PermissionsViolation) as e:
+                _qa_logger.debug(e.message)
+                form.add_error(None, e.message)
+                clear_events.send(sender=self)
+
+        return render(request, self._CO_QUICK_ADD_TEMPLATE, {
+            'model': obj._meta.model,
+            'object': obj,
+            'form': form,
+        })
 
     def get_object(self, **kwargs):
         if self.object:
@@ -772,7 +842,7 @@ class CustomObjectEditView(generic.ObjectEditView):
 
         form_class = type(
             f"{model._meta.object_name}Form",
-            (forms.NetBoxModelForm,),
+            (OwnerFormMixin, forms.NetBoxModelForm,),
             attrs,
         )
 
@@ -972,11 +1042,6 @@ class CustomObjectEditView(generic.ObjectEditView):
 
         return form_class
 
-    def get_extra_context(self, request, obj):
-        return {
-            'branch_warning': is_in_branch(),
-        }
-
 
 @register_model_view(CustomObject, "delete")
 class CustomObjectDeleteView(generic.ObjectDeleteView):
@@ -1060,7 +1125,7 @@ class CustomObjectDeleteView(generic.ObjectDeleteView):
         }
 
     def get_extra_context(self, request, instance):
-        return {'branch_warning': is_in_branch()}
+        return {'branch_warning': _is_in_branch()}
 
 
 @register_model_view(CustomObject, "bulk_edit", path="edit", detail=False)
@@ -1260,8 +1325,8 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
 
         # Apply polymorphic M2M sub-fields (union of all selected types).
         # set() replaces existing values, matching NetBox's standard bulk-edit
-        # behavior for direct M2M fields (see BulkEditView lines 718-723).
-        # Fields left blank are skipped so existing data is preserved.
+        # behavior for direct M2M fields.  Fields left blank are skipped so
+        # existing data is preserved.
         for field_name, sub_names in form._poly_m2m_field_map.items():
             combined = []
             has_any = False
@@ -1285,14 +1350,8 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
             return render(request, 'netbox_custom_objects/htmx/bulk_edit_fields.html', {
                 'form': form,
                 'return_url': self.get_return_url(request),
-                'branch_warning': is_in_branch(),
             })
         return redirect(self.get_return_url(request))
-
-    def get_extra_context(self, request):
-        return {
-            'branch_warning': is_in_branch(),
-        }
 
 
 @register_model_view(CustomObject, "bulk_delete", path="delete", detail=False)
@@ -1318,9 +1377,6 @@ class CustomObjectBulkDeleteView(CustomObjectTableMixin, generic.BulkDeleteView)
         )
         model = self.custom_object_type.get_model_with_serializer()
         return model.objects.all()
-
-    def get_extra_context(self, request):
-        return {'branch_warning': is_in_branch()}
 
 
 @register_model_view(CustomObject, "bulk_import", path="import", detail=False)
@@ -1384,11 +1440,6 @@ class CustomObjectBulkImportView(generic.BulkImportView):
         )
 
         return form
-
-    def get_extra_context(self, request):
-        return {
-            'branch_warning': is_in_branch(),
-        }
 
 
 class CustomObjectJournalView(ConditionalLoginRequiredMixin, View):
@@ -1513,5 +1564,113 @@ class CustomObjectChangeLogView(ConditionalLoginRequiredMixin, View):
                 "table": objectchanges_table,
                 "base_template": self.base_template,
                 "tab": "changelog",
+            },
+        )
+
+
+class CustomObjectContactsView(ConditionalLoginRequiredMixin, View):
+    """
+    Custom contacts view for CustomObject instances.
+    Shows all contacts assigned to a custom object.
+    """
+
+    tab = ViewTab(
+        label=_("Contacts"),
+        badge=lambda obj: obj.get_contacts().count(),
+        permission="tenancy.view_contactassignment",
+        weight=4500,
+    )
+
+    def get(self, request, custom_object_type, **kwargs):
+        from tenancy.tables import ContactAssignmentTable
+
+        object_type = get_object_or_404(CustomObjectType, slug=custom_object_type)
+        model = object_type.get_model_with_serializer()
+
+        lookup_kwargs = {k: v for k, v in kwargs.items() if k != "custom_object_type"}
+        obj = get_object_or_404(model.objects.all(), **lookup_kwargs)
+
+        contacts = (
+            obj.get_contacts()
+            .restrict(request.user, "view")
+            .order_by("priority", "contact", "role")
+        )
+        table = ContactAssignmentTable(data=contacts, orderable=False)
+        table.configure(request)
+
+        return render(
+            request,
+            "netbox_custom_objects/object_contacts.html",
+            {
+                "object": obj,
+                "table": table,
+                "base_template": "netbox_custom_objects/customobject.html",
+                "tab": "contacts",
+            },
+        )
+
+
+class CustomObjectConfigContextView(ConditionalLoginRequiredMixin, View):
+    """
+    Config context view for CustomObject instances.
+
+    Only available when the instance's CustomObjectType has
+    ``config_context_enabled=True`` (i.e. the generated model mixes in
+    ConfigContextModel).  Source contexts are aggregated from NetBox objects the
+    custom object references via convention-named fields (site/tenant/role/...);
+    see CustomObjectConfigContextMixin.  local_context_data overrides them.
+    """
+
+    base_template = None
+    tab = ViewTab(
+        label=_("Config Context"),
+        visible=lambda obj: obj.custom_object_type.config_context_enabled,
+        weight=2000,
+    )
+
+    def get(self, request, custom_object_type, **kwargs):
+        object_type = get_object_or_404(CustomObjectType, slug=custom_object_type)
+        if not object_type.config_context_enabled:
+            raise Http404(_("Config context support is not enabled for this type."))
+        model = object_type.get_model_with_serializer()
+
+        lookup_kwargs = {k: v for k, v in kwargs.items() if k != "custom_object_type"}
+        # Gate on object-level view permission so the config-context tab can't
+        # leak local_context_data past NetBox's RBAC (the detail view restricts too).
+        obj = get_object_or_404(model.objects.restrict(request.user, "view"), **lookup_kwargs)
+
+        # Determine the user's preferred output format (json/yaml), persisting
+        # an explicit choice the same way NetBox's ObjectConfigContextView does.
+        if request.GET.get("format") in ("json", "yaml"):
+            format = request.GET.get("format")
+            if request.user.is_authenticated:
+                request.user.config.set("data_format", format, commit=True)
+        elif request.user.is_authenticated:
+            format = request.user.config.get("data_format", "json")
+        else:
+            format = "json"
+
+        if self.base_template is None:
+            self.base_template = "netbox_custom_objects/customobject.html"
+
+        # Build the proxy once and reuse it for both the rendered context and the
+        # (RBAC-restricted) source-context list, instead of letting get_config_context()
+        # rebuild it internally.
+        proxy = obj._config_context_source()
+        if proxy is not None:
+            source_contexts = ConfigContext.objects.restrict(request.user, "view").get_for_object(proxy)
+        else:
+            source_contexts = ConfigContext.objects.none()
+
+        return render(
+            request,
+            "netbox_custom_objects/object_configcontext.html",
+            {
+                "object": obj,
+                "rendered_context": obj._render_config_context(proxy),
+                "source_contexts": source_contexts,
+                "format": format,
+                "base_template": self.base_template,
+                "tab": "configcontext",
             },
         )

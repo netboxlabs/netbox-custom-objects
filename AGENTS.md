@@ -37,7 +37,7 @@ Defer all version pins to `pyproject.toml` and `netbox_custom_objects/__init__.p
 │   ├── tables.py                   — django-tables2 tables for list views.
 │   ├── template_content.py         — PluginTemplateExtension registrations.
 │   ├── urls.py                     — Web UI URL routing (80+ routes).
-│   ├── utilities.py                — AppsProxy, generate_model(), get_viewname(), is_in_branch().
+│   ├── utilities.py                — AppsProxy, generate_model(), get_viewname().
 │   ├── views.py                    — All UI views.
 │   ├── api/
 │   │   ├── serializers.py          — get_serializer_class() + static serializers.
@@ -134,7 +134,7 @@ Multi-object fields create a separate through table (`custom_objects_<cot_id>_<f
 | `netbox_custom_objects/__init__.py` | PluginConfig, migration detection, ObjectSelectorView patch, dynamic model registration on startup |
 | `netbox_custom_objects/models.py` | `CustomObject` (abstract base), `CustomObjectType`, `CustomObjectTypeField`, signal handlers |
 | `netbox_custom_objects/field_types.py` | Pluggable field type system |
-| `netbox_custom_objects/utilities.py` | `generate_model()`, `AppsProxy`, `is_in_branch()` |
+| `netbox_custom_objects/utilities.py` | `generate_model()`, `AppsProxy` |
 | `netbox_custom_objects/jobs.py` | `ReindexCustomObjectTypeJob` |
 | `netbox_custom_objects/api/views.py` | Dynamic ViewSet generation, `LinkedObjectsView` |
 | `netbox_custom_objects/api/serializers.py` | `get_serializer_class()` for dynamic models |

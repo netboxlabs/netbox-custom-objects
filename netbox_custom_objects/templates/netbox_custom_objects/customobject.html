@@ -10,9 +10,6 @@
 {% load i18n %}
 {% load custom_object_utils %}
 
-{% block extra_controls %}
-{% endblock %}
-
 {% block breadcrumbs %}
 <li class="breadcrumb-item"><a href="{{ object.get_list_url }}">{{ object.custom_object_type.get_verbose_name_plural }}</a></li>
 <li class="breadcrumb-item"><a href="{{ object.custom_object_type.get_absolute_url }}">{{ object.custom_object_type }}</a></li>
@@ -27,6 +24,10 @@
 
 {% block subtitle %}
 <div class="text-secondary fs-5">
+  {% if object.owner %}
+    <i class="mdi mdi-account-outline" title="{% trans "Owner" %}"></i> {{ object.owner|linkify }}
+    <span class="separator">&middot;</span>
+  {% endif %}
   {% trans "Created" %} {{ object.created|isodatetime:"minutes" }}
   {% if object.last_updated %}
     <span class="separator">&middot;</span>
@@ -38,6 +39,7 @@
 {% block controls %}
 <div class="btn-list justify-content-end mb-2">
     {% block control-buttons %}
+      {% block extra_controls %}{% endblock %}
       {# Default buttons #}
       {% if perms.extras.add_bookmark and object.bookmarks %}
         {% custom_object_bookmark_button object %}
@@ -72,6 +74,14 @@
     {# Primary tab #}
     <li class="nav-item">
       <a class="nav-link{% if not tab %} active{% endif %}" href="{{ object.get_absolute_url }}">{{ object.custom_object_type.get_verbose_name }}</a>
+    </li>
+    {% if object.custom_object_type.config_context_enabled %}
+    <li class="nav-item">
+      <a class="nav-link{% if tab == 'configcontext' %} active{% endif %}" href="{% url 'plugins:netbox_custom_objects:customobject_configcontext' object.custom_object_type.slug object.pk %}">{% trans "Config Context" %}</a>
+    </li>
+    {% endif %}
+    <li class="nav-item">
+      <a class="nav-link{% if tab == 'contacts' %} active{% endif %}" href="{% url 'plugins:netbox_custom_objects:customobject_contacts' object.custom_object_type.slug object.pk %}">{% trans "Contacts" %}</a>
     </li>
     <li class="nav-item">
       <a class="nav-link{% if tab == 'journal' %} active{% endif %}" href="{% url 'plugins:netbox_custom_objects:customobject_journal' object.custom_object_type.slug object.pk %}">{% trans "Journal" %}</a>

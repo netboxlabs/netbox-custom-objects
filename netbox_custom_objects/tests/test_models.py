@@ -125,8 +125,8 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         custom_object_type = self.create_custom_object_type(name="TestObject")
 
         model = custom_object_type.get_model()
-        # Base fields: id, created, last_updated
-        self.assertEqual(len(model._meta.fields), 3)
+        # Base fields: id, created, last_updated, owner
+        self.assertEqual(len(model._meta.fields), 4)
 
     def test_custom_object_type_get_model_with_primary_field(self):
         """Test get_model method with a primary field."""
@@ -232,6 +232,10 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
             related_object_type=self.get_site_object_type(),
             search_weight=500,
         )
+        # CustomObjectTypeField.save() now caches a full model after each field
+        # save (to defend against a rename/post_save race), so the cache holds a
+        # full model here.  Clear it to force generation of a fresh stub.
+        cot.clear_model_cache(cot.id)
         stub_model = cot.get_model(skip_object_fields=True)
         model_field_names = (
             {f.name for f in stub_model._meta.local_fields}
@@ -382,6 +386,212 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
             django_apps.clear_cache()
 
 
+class CustomObjectTypeConfigContextTestCase(CustomObjectsTestCase, TestCase):
+    """Config context support (issue #98) on custom object types."""
+
+    @staticmethod
+    def _table_columns(table_name):
+        with connection.cursor() as cursor:
+            return {
+                col.name
+                for col in connection.introspection.get_table_description(cursor, table_name)
+            }
+
+    def test_enabled_model_is_config_context_subclass_with_column(self):
+        """A config-context-enabled type generates a ConfigContextModel subclass
+        whose backing table has a local_context_data column."""
+        from extras.models import ConfigContextModel
+
+        cot = self.create_custom_object_type(
+            name="cc_enabled", slug="cc-enabled", config_context_enabled=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True,
+        )
+        model = cot.get_model(no_cache=True)
+        self.assertTrue(issubclass(model, ConfigContextModel))
+        self.assertIn("local_context_data", self._table_columns(cot.get_database_table_name()))
+
+    def test_disabled_model_has_no_config_context(self):
+        """The default (flag False) type is not a ConfigContextModel and has no
+        local_context_data column."""
+        from extras.models import ConfigContextModel
+
+        cot = self.create_custom_object_type(name="cc_disabled", slug="cc-disabled")
+        self.assertFalse(cot.config_context_enabled)
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True,
+        )
+        model = cot.get_model(no_cache=True)
+        self.assertFalse(issubclass(model, ConfigContextModel))
+        self.assertNotIn("local_context_data", self._table_columns(cot.get_database_table_name()))
+
+    def test_local_context_data_round_trips_and_get_config_context(self):
+        """An instance stores local_context_data and get_config_context() returns
+        it without touching the org-dimension aggregation that custom objects lack."""
+        cot = self.create_custom_object_type(
+            name="cc_roundtrip", slug="cc-roundtrip", config_context_enabled=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True,
+        )
+        model = cot.get_model(no_cache=True)
+
+        obj = model(name="obj-1", local_context_data={"ntp_servers": ["10.0.0.1"]})
+        obj.save()
+        obj.refresh_from_db()
+        self.assertEqual(obj.local_context_data, {"ntp_servers": ["10.0.0.1"]})
+        # Safe override: returns the local data, never raises on missing site/tenant/role.
+        self.assertEqual(obj.get_config_context(), {"ntp_servers": ["10.0.0.1"]})
+
+        empty = model(name="obj-2")
+        empty.save()
+        self.assertEqual(empty.get_config_context(), {})
+
+    def test_clean_rejects_non_dict_local_context_data(self):
+        """The inherited ConfigContextModel.clean() validator rejects non-object JSON."""
+        cot = self.create_custom_object_type(
+            name="cc_clean", slug="cc-clean", config_context_enabled=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True,
+        )
+        model = cot.get_model(no_cache=True)
+        obj = model(name="bad", local_context_data=["not", "a", "dict"])
+        with self.assertRaises(ValidationError):
+            obj.clean()
+
+    def test_config_context_enabled_immutable_in_clean(self):
+        """full_clean() rejects flipping config_context_enabled on an existing type."""
+        cot = self.create_custom_object_type(name="cc_clean_immut", slug="cc-clean-immut")
+        self.assertFalse(cot.config_context_enabled)
+        cot.config_context_enabled = True
+        with self.assertRaises(ValidationError):
+            cot.full_clean()
+
+    def test_config_context_enabled_clean_allows_unchanged(self):
+        """Re-validating without changing the flag must not raise."""
+        cot = self.create_custom_object_type(
+            name="cc_clean_ok", slug="cc-clean-ok", config_context_enabled=True,
+        )
+        cot.description = "edited"
+        cot.full_clean()  # should not raise
+
+    # --- Source-context aggregation via field-naming convention (#98 phase 2) ---
+
+    def _site_cot(self, name, slug):
+        """Config-context-enabled COT with a primary name field and a `site` object field."""
+        cot = self.create_custom_object_type(name=name, slug=slug, config_context_enabled=True)
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name="site", label="Site", type="object",
+            related_object_type=self.get_site_object_type(),
+        )
+        return cot
+
+    def test_aggregates_referenced_site_config_context(self):
+        """A `site` field pulls in ConfigContexts assigned to the referenced Site,
+        with local_context_data merged on top."""
+        from extras.models import ConfigContext
+
+        site = Site.objects.create(name="CC Site", slug="cc-site")
+        cc = ConfigContext.objects.create(name="cc-site-ctx", weight=1000, is_active=True,
+                                          data={"ntp": "10.0.0.1", "dns": "8.8.8.8"})
+        cc.sites.add(site)
+
+        cot = self._site_cot("cc_agg_site", "cc-agg-site")
+        model = cot.get_model(no_cache=True)
+        obj = model.objects.create(name="o1", site=site, local_context_data={"dns": "1.1.1.1"})
+
+        rendered = obj.get_config_context()
+        self.assertEqual(rendered["ntp"], "10.0.0.1")        # from source context
+        self.assertEqual(rendered["dns"], "1.1.1.1")         # local overrides source
+
+    def test_no_convention_field_returns_local_only(self):
+        """Without a convention-named dimension field, no source aggregation happens."""
+        from extras.models import ConfigContext
+
+        # A global (unassigned) active context that WOULD match a dimensionful object.
+        ConfigContext.objects.create(name="global-ctx", weight=1000, is_active=True, data={"g": 1})
+
+        cot = self.create_custom_object_type(name="cc_nodim", slug="cc-nodim", config_context_enabled=True)
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True,
+        )
+        model = cot.get_model(no_cache=True)
+        obj = model.objects.create(name="o1", local_context_data={"local": 2})
+
+        self.assertEqual(obj.get_config_context(), {"local": 2})
+
+    def test_misnamed_field_is_ignored(self):
+        """A `site`-named field pointing at the wrong model must not feed the site dimension."""
+        from extras.models import ConfigContext
+
+        site = Site.objects.create(name="CC Site 2", slug="cc-site-2")
+        cc = ConfigContext.objects.create(name="cc-site-ctx-2", weight=1000, is_active=True, data={"x": 1})
+        cc.sites.add(site)
+
+        # Field named `site` but pointing at Prefix (wrong model) → ignored.
+        cot = self.create_custom_object_type(name="cc_wrong", slug="cc-wrong", config_context_enabled=True)
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name="site", label="Site", type="object",
+            related_object_type=self.get_prefix_object_type(),
+        )
+        model = cot.get_model(no_cache=True)
+        obj = model.objects.create(name="o1", local_context_data={"only": "local"})
+
+        self.assertEqual(obj.get_config_context(), {"only": "local"})
+
+    def test_aggregates_referenced_tenant_config_context(self):
+        """The `tenant` dimension (a direct obj.tenant read in get_for_object) works."""
+        from extras.models import ConfigContext
+        from tenancy.models import Tenant
+
+        tenant = Tenant.objects.create(name="CC Tenant", slug="cc-tenant")
+        cc = ConfigContext.objects.create(name="cc-tenant-ctx", weight=1000, is_active=True, data={"t": 1})
+        cc.tenants.add(tenant)
+
+        cot = self.create_custom_object_type(name="cc_tenant", slug="cc-tenant", config_context_enabled=True)
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name="tenant", label="Tenant", type="object",
+            related_object_type=ObjectType.objects.get(app_label="tenancy", model="tenant"),
+        )
+        model = cot.get_model(no_cache=True)
+        obj = model.objects.create(name="o1", tenant=tenant)
+
+        self.assertEqual(obj.get_config_context(), {"t": 1})
+
+    def test_aggregates_referenced_role_config_context(self):
+        """The `role` dimension (a direct obj.role read + get_ancestors) works."""
+        from dcim.models import DeviceRole
+        from extras.models import ConfigContext
+
+        role = DeviceRole.objects.create(name="CC Role", slug="cc-role", color="ff0000")
+        cc = ConfigContext.objects.create(name="cc-role-ctx", weight=1000, is_active=True, data={"r": 1})
+        cc.roles.add(role)
+
+        cot = self.create_custom_object_type(name="cc_role", slug="cc-role", config_context_enabled=True)
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name="role", label="Role", type="object",
+            related_object_type=ObjectType.objects.get(app_label="dcim", model="devicerole"),
+        )
+        model = cot.get_model(no_cache=True)
+        obj = model.objects.create(name="o1", role=role)
+
+        self.assertEqual(obj.get_config_context(), {"r": 1})
+
+
 class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
     """Test cases for CustomObjectTypeField model."""
 
@@ -423,6 +633,17 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
                 field = CustomObjectTypeField(
                     custom_object_type=self.custom_object_type,
                     name=invalid_name,
+                    type="text",
+                )
+                field.full_clean()
+
+    def test_custom_object_type_field_reserved_name_rejected(self):
+        """Field names in RESERVED_FIELD_NAMES must be rejected with ValidationError."""
+        for reserved in ("owner", "tags", "id", "created", "last_updated", "local_context_data"):
+            with self.assertRaises(ValidationError, msg=f"Expected ValidationError for reserved name={reserved!r}"):
+                field = CustomObjectTypeField(
+                    custom_object_type=self.custom_object_type,
+                    name=reserved,
                     type="text",
                 )
                 field.full_clean()
@@ -930,6 +1151,35 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
             result = str(instance)
         expected = f"{self.custom_object_type.display_name} {instance.id}"
         self.assertEqual(result, expected)
+
+
+class M2MSerializationRegressionTestCase(CustomObjectsTestCase, TestCase):
+    """Guards the ``through._meta.auto_created = model`` opt-in in
+    ``MultiObjectFieldType.after_model_generation`` — without it, Django's
+    JSON serializer skips the M2M and merge replay zeroes through-table rows.
+    """
+
+    def test_serialize_object_includes_m2m_values(self):
+        cot = self.create_custom_object_type(name="M2MSerialize", slug="m2m-serialize")
+        site_ct = self.get_site_object_type()
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name="sites", label="Sites", type="multiobject",
+            related_object_type=site_ct,
+        )
+        model = cot.get_model()
+        site_model = site_ct.model_class()
+        site_a = site_model.objects.create(name="A", slug="a")
+        site_b = site_model.objects.create(name="B", slug="b")
+
+        obj = model.objects.create(name="obj")
+        obj.sites.set([site_a, site_b])
+
+        data = obj.serialize_object()
+        self.assertIn("sites", data)
+        self.assertEqual(set(data["sites"]), {site_a.pk, site_b.pk})
 
 
 class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
@@ -1604,12 +1854,16 @@ class CrossCOTStubSearchIndexRegressionTestCase(CustomObjectsTestCase, TestCase)
         fields are excluded from the model class.  The search index must only contain
         fields that are actually present.
         """
-        # Refresh so cache_timestamp matches the DB value bumped by the signal during setUp,
-        # then explicitly generate the stub to re-register its search index (which excludes
-        # object-type fields).  Without refresh_from_db the timestamps mismatch → full model
-        # is generated instead, which includes 'device' and makes assertNotIn fail.
-        self.target_cot.refresh_from_db()
-        self.target_cot.get_model(skip_object_fields=True)
+        # Force stub semantics: clear any cached full model and re-register the
+        # search index against a fresh stub.  This mirrors the cross-COT scenario
+        # the regression covers — B's stub gets cached before any caller asks for
+        # the full model, so register_custom_object_search_index sees only the
+        # stub fields.  Without this, CustomObjectTypeField.save() would have
+        # already cached a full model with the OBJECT field.
+        self.target_cot.clear_model_cache(self.target_cot.id)
+        stub_model = self.target_cot.get_model(skip_object_fields=True)
+        self.target_cot.register_custom_object_search_index(stub_model)
+
         label = f"netbox_custom_objects.{self.target_cot.get_table_model_name(self.target_cot.id).lower()}"
         search_index = registry["search"].get(label)
 
@@ -2143,10 +2397,11 @@ class LazySerializerRegistrationTestCase(CustomObjectsTestCase, TestCase):
     1. get_serializer_class(model, skip_object_fields=True) used to overwrite the
        full module-level serializer with a partial one, causing subsequent requests
        to fail or return incomplete data.
-    2. import_string("netbox_custom_objects.api.serializers.Table{N}ModelSerializer")
-       raised SerializerNotFound in workers whose ready() ran before the COT existed.
-       The module-level __getattr__ hook (PEP 562) fixes this by generating the
-       serializer on demand.
+    2. get_serializer_for_model() raised SerializerNotFound for a Table{N}Model in
+       workers whose ready() ran before the COT existed.
+       The serializer_resolver() hook (registered via PluginConfig.serializer_resolver)
+       fixes this by generating the serializer on demand, ahead of any import-path
+       lookup.
     """
 
     @classmethod
@@ -2173,8 +2428,8 @@ class LazySerializerRegistrationTestCase(CustomObjectsTestCase, TestCase):
 
     def _clear_serializer_registrations(self):
         """Remove any previously registered serializers for parent and child COTs
-        from the module so that __getattr__ and get_serializer_class() behave as
-        they would in a fresh worker process."""
+        from the module so that serializer_resolver() and get_serializer_class()
+        behave as they would in a fresh worker process."""
         import netbox_custom_objects.api.serializers as ser_module
         parent_model = self.parent_cot.get_model()
         child_model = self.child_cot.get_model()
@@ -2182,10 +2437,14 @@ class LazySerializerRegistrationTestCase(CustomObjectsTestCase, TestCase):
             attr = f"{model._meta.object_name}Serializer"
             ser_module.__dict__.pop(attr, None)
 
-    def test_module_getattr_generates_serializer_on_demand(self):
-        """__getattr__ must generate and return a serializer for any Table{N}Model
-        whose serializer was never pre-registered (simulates a worker that started
-        before the COT was created — issue #370 Scenario A)."""
+    def test_resolver_generates_serializer_on_demand(self):
+        """serializer_resolver() must generate and return a serializer for any
+        Table{N}Model whose serializer was never pre-registered (simulates a worker
+        that started before the COT was created — issue #370 Scenario A).
+
+        NetBox calls this resolver from get_serializer_for_model() before falling
+        back to an import-path lookup, so a missing startup-time registration can
+        never raise SerializerNotFound."""
         import netbox_custom_objects.api.serializers as ser_module
         self._clear_serializer_registrations()
 
@@ -2196,14 +2455,15 @@ class LazySerializerRegistrationTestCase(CustomObjectsTestCase, TestCase):
         self.assertNotIn(serializer_name, ser_module.__dict__,
                          "precondition: serializer must not be pre-registered")
 
-        # getattr() must trigger __getattr__ and return a valid class
-        serializer_cls = getattr(ser_module, serializer_name)
+        # The resolver must generate and return a valid serializer class on demand
+        serializer_cls = ser_module.serializer_resolver(parent_model)
         self.assertIsNotNone(serializer_cls)
         self.assertIn("title", serializer_cls.Meta.fields)
 
-        # After __getattr__ fires, the serializer is cached in __dict__
+        # After the resolver fires, the full serializer is cached in __dict__
+        # (get_serializer_class registers it via setattr)
         self.assertIn(serializer_name, ser_module.__dict__,
-                      "serializer must be cached in module __dict__ after first access")
+                      "serializer must be cached in module __dict__ after first resolution")
 
     def test_skip_object_fields_does_not_overwrite_full_serializer(self):
         """get_serializer_class(model, skip_object_fields=True) must not overwrite
