@@ -3552,11 +3552,18 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                         pass
                     field_type.drop_polymorphic_m2m_table(self, model, schema_editor)
             else:
+                # _schema_remove_field drops the through table (for MULTIOBJECT) but
+                # leaves the real through model in apps.all_models; capture it so the
+                # deregistration below removes it (issue #535).
+                if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+                    try:
+                        _dropped_through_model = model._meta.apps.get_model(APP_LABEL, self.through_model_name)
+                    except LookupError:
+                        pass
                 _schema_remove_field(self, model, schema_editor, schema_conn=schema_conn)
 
-        # Deregister the dropped through model (polymorphic MULTIOBJECT case) so the
-        # cascade-delete collector no longer queries the missing table.  Non-polymorphic
-        # fields are handled inside _schema_remove_field, which self-cleans its registry.
+        # Deregister the dropped through model (both polymorphic and plain MULTIOBJECT)
+        # so the cascade-delete collector no longer queries the now-missing table.
         if _dropped_through_model is not None:
             through_name = _dropped_through_model.__name__.lower()
             with CustomObjectType._global_lock:
