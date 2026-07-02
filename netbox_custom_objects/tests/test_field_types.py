@@ -5,15 +5,17 @@ from unittest import skip
 from unittest.mock import Mock
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from django.core.exceptions import ValidationError
+from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.test import TestCase
 
 from core.models import ObjectType
+from dcim.models import Device, DeviceType, ModuleType
 from netbox_custom_objects.field_types import (
     MultiObjectFieldType,
     MultiSelectFieldType,
     ObjectFieldType,
     SelectFieldType,
+    _csv_import_to_field_name,
 )
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from .base import CustomObjectsTestCase
@@ -577,6 +579,7 @@ class SelectFieldTypeTestCase(FieldTypeTestCase):
         """get_table_column_field() render() translates a raw key to its human-readable label."""
         field = Mock()
         field.choices = [('choice1', 'Choice 1'), ('choice2', 'Choice 2')]
+        field.choice_set = None
         column = SelectFieldType().get_table_column_field(field)
         self.assertEqual(column.render(value='choice1'), 'Choice 1')
         self.assertEqual(column.render(value='choice2'), 'Choice 2')
@@ -585,11 +588,24 @@ class SelectFieldTypeTestCase(FieldTypeTestCase):
         """get_table_column_field() render() returns the raw key when it is not in choices."""
         field = Mock()
         field.choices = [('choice1', 'Choice 1')]
+        field.choice_set = None
         column = SelectFieldType().get_table_column_field(field)
         self.assertEqual(column.render(value='unknown'), 'unknown')
 
-    def test_get_field_value_returns_label_for_select(self):
-        """get_field_value template filter returns the human-readable label for select fields."""
+    def test_select_column_render_returns_badge_when_color_present(self):
+        """get_table_column_field() render() returns an HTML badge when the choice has a color."""
+        field = Mock()
+        field.choices = [('choice1', 'Choice 1')]
+        field.choice_set = Mock()
+        field.choice_set.get_choice_color.return_value = 'green'
+        column = SelectFieldType().get_table_column_field(field)
+        result = column.render(value='choice1')
+        self.assertIn('class="badge', result)
+        self.assertIn('text-bg-green', result)
+        self.assertIn('Choice 1', result)
+
+    def test_get_field_value_returns_raw_value_for_select(self):
+        """get_field_value template filter returns the raw stored value for select fields."""
         from netbox_custom_objects.templatetags.custom_object_utils import get_field_value
         cotf = self.create_custom_object_type_field(
             self.custom_object_type,
@@ -600,7 +616,7 @@ class SelectFieldTypeTestCase(FieldTypeTestCase):
         )
         model = self.custom_object_type.get_model(no_cache=True)
         instance = model.objects.create(name="Test", status="choice1")
-        self.assertEqual(get_field_value(instance, cotf), "Choice 1")
+        self.assertEqual(get_field_value(instance, cotf), "choice1")
 
     def test_get_field_value_returns_raw_value_when_select_is_none(self):
         """get_field_value returns None (falsy) when the select field is unset."""
@@ -615,6 +631,57 @@ class SelectFieldTypeTestCase(FieldTypeTestCase):
         model = self.custom_object_type.get_model(no_cache=True)
         instance = model.objects.create(name="Test")
         self.assertIsNone(get_field_value(instance, cotf))
+
+    def test_get_choice_label_returns_label_for_known_value(self):
+        """get_choice_label() returns the human-readable label for a stored choice value."""
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="status",
+            label="Status",
+            type="select",
+            choice_set=self.choice_set,
+        )
+        self.assertEqual(cotf.get_choice_label("choice1"), "Choice 1")
+
+    def test_get_choice_label_falls_back_to_value_when_unknown(self):
+        """get_choice_label() returns the raw value when it is not in the choice set."""
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="status",
+            label="Status",
+            type="select",
+            choice_set=self.choice_set,
+        )
+        self.assertEqual(cotf.get_choice_label("unknown"), "unknown")
+
+    def test_get_choice_color_returns_color_when_set(self):
+        """get_choice_color() returns the color configured for a choice value."""
+        from extras.models import CustomFieldChoiceSet
+        choice_set = CustomFieldChoiceSet.objects.create(
+            name="Colored Choices",
+            extra_choices=[["active", "Active"], ["inactive", "Inactive"]],
+            choice_colors={"active": "green", "inactive": "red"},
+        )
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="state",
+            label="State",
+            type="select",
+            choice_set=choice_set,
+        )
+        self.assertEqual(cotf.get_choice_color("active"), "green")
+        self.assertEqual(cotf.get_choice_color("inactive"), "red")
+
+    def test_get_choice_color_returns_none_when_no_color(self):
+        """get_choice_color() returns None for a value with no configured color."""
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="status",
+            label="Status",
+            type="select",
+            choice_set=self.choice_set,
+        )
+        self.assertIsNone(cotf.get_choice_color("choice1"))
 
 
 class MultiSelectFieldTypeTestCase(FieldTypeTestCase):
@@ -693,6 +760,7 @@ class MultiSelectFieldTypeTestCase(FieldTypeTestCase):
         """get_table_column_field() render() translates raw keys to comma-joined labels."""
         field = Mock()
         field.choices = [('choice1', 'Choice 1'), ('choice2', 'Choice 2'), ('choice3', 'Choice 3')]
+        field.choice_set = None
         column = MultiSelectFieldType().get_table_column_field(field)
         self.assertEqual(column.render(value=['choice1', 'choice3']), 'Choice 1, Choice 3')
 
@@ -700,11 +768,42 @@ class MultiSelectFieldTypeTestCase(FieldTypeTestCase):
         """get_table_column_field() render() preserves unknown keys in the joined output."""
         field = Mock()
         field.choices = [('choice1', 'Choice 1')]
+        field.choice_set = None
         column = MultiSelectFieldType().get_table_column_field(field)
         self.assertEqual(column.render(value=['choice1', 'unknown']), 'Choice 1, unknown')
 
-    def test_get_field_value_returns_label_list_for_multiselect(self):
-        """get_field_value template filter returns a list of labels for multiselect fields."""
+    def test_multiselect_column_render_returns_badges_when_colors_present(self):
+        """get_table_column_field() render() returns HTML badges when choices have colors."""
+        field = Mock()
+        field.choices = [('choice1', 'Choice 1'), ('choice3', 'Choice 3')]
+        field.choice_set = Mock()
+        field.choice_set.get_choice_color.side_effect = lambda v: 'green' if v == 'choice1' else 'red'
+        column = MultiSelectFieldType().get_table_column_field(field)
+        result = column.render(value=['choice1', 'choice3'])
+        self.assertIn('text-bg-green', result)
+        self.assertIn('text-bg-red', result)
+        self.assertIn('Choice 1', result)
+        self.assertIn('Choice 3', result)
+
+    def test_multiselect_column_render_mixed_colors(self):
+        """Colorless values get a plain badge when at least one sibling has a color."""
+        field = Mock()
+        field.choices = [('choice1', 'Choice 1'), ('choice2', 'Choice 2')]
+        field.choice_set = Mock()
+        # choice1 has a color; choice2 does not
+        field.choice_set.get_choice_color.side_effect = lambda v: 'blue' if v == 'choice1' else None
+        column = MultiSelectFieldType().get_table_column_field(field)
+        result = column.render(value=['choice1', 'choice2'])
+        self.assertIn('text-bg-blue', result)
+        self.assertIn('Choice 1', result)
+        # choice2 should still be a badge (no color class), not plain text
+        self.assertIn('class="badge"', result)
+        self.assertIn('Choice 2', result)
+        # result is HTML, not a comma-joined string
+        self.assertNotIn('Choice 1, Choice 2', result)
+
+    def test_get_field_value_returns_raw_list_for_multiselect(self):
+        """get_field_value template filter returns the raw stored list for multiselect fields."""
         from netbox_custom_objects.templatetags.custom_object_utils import get_field_value
         cotf = self.create_custom_object_type_field(
             self.custom_object_type,
@@ -715,7 +814,7 @@ class MultiSelectFieldTypeTestCase(FieldTypeTestCase):
         )
         model = self.custom_object_type.get_model(no_cache=True)
         instance = model.objects.create(name="Test", tags=["choice1", "choice3"])
-        self.assertEqual(get_field_value(instance, cotf), ["Choice 1", "Choice 3"])
+        self.assertEqual(get_field_value(instance, cotf), ["choice1", "choice3"])
 
     def test_get_field_value_returns_empty_list_when_multiselect_is_none(self):
         """get_field_value returns None (falsy) when the multiselect field is unset."""
@@ -802,6 +901,61 @@ class ObjectFieldTypeTestCase(FieldTypeTestCase):
         instance = model.objects.create(name="Test", device=device)
         self.assertEqual(instance.device, device)
 
+    def test_csv_import_field_uses_name_for_models_with_name(self):
+        """get_form_field(for_csv_import=True) uses 'name' as to_field_name for models
+        that have a name field (e.g. Device)."""
+        self.assertEqual(_csv_import_to_field_name(Device), 'name')
+
+    def test_csv_import_field_uses_model_for_module_type(self):
+        """get_form_field(for_csv_import=True) uses 'model' as to_field_name for
+        ModuleType, which has no 'name' field — regression for issue #406."""
+        self.assertEqual(_csv_import_to_field_name(ModuleType), 'model')
+
+    def test_csv_import_field_uses_slug_before_model_for_device_type(self):
+        """DeviceType has both 'slug' and 'model'; slug takes precedence per the
+        _CSV_IDENTIFIER_FIELD_PRECEDENCE ordering, matching NetBox core behaviour."""
+        self.assertEqual(_csv_import_to_field_name(DeviceType), 'slug')
+
+    def test_csv_import_form_field_for_module_type_uses_model_field(self):
+        """get_form_field(for_csv_import=True) on an Object field referencing ModuleType
+        produces a CSVModelChoiceField with to_field_name='model', not 'name'."""
+        module_type_ot = ObjectType.objects.get(app_label='dcim', model='moduletype')
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="module_type",
+            label="Module Type",
+            type="object",
+            related_object_type=module_type_ot,
+        )
+        form_field = ObjectFieldType().get_form_field(cotf, for_csv_import=True)
+        self.assertEqual(form_field.to_field_name, 'model',
+                         "ModuleType CSV import must use 'model', not 'name'")
+
+    def test_csv_import_to_field_name_explicit_returned_when_valid(self):
+        """An explicit to_field_name that exists on the model is returned directly."""
+        self.assertEqual(_csv_import_to_field_name(Device, explicit='id'), 'id')
+
+    def test_csv_import_to_field_name_explicit_falls_through_when_stale(self):
+        """A stale explicit to_field_name (field no longer exists) triggers a warning
+        and falls through to the probe loop."""
+        import logging
+        with self.assertLogs('netbox_custom_objects.field_types', level=logging.WARNING):
+            result = _csv_import_to_field_name(Device, explicit='nonexistent_field_xyz')
+        # Falls through to probe loop — Device has 'name'
+        self.assertEqual(result, 'name')
+
+    def test_csv_import_to_field_name_pk_fallback_when_no_candidate_exists(self):
+        """Falls back to 'pk' and emits a warning when none of the candidate fields
+        exist on the model."""
+        import logging
+        from unittest.mock import MagicMock
+        mock_model = MagicMock()
+        mock_model.__name__ = 'FakeModel'
+        mock_model._meta.get_field.side_effect = FieldDoesNotExist
+        with self.assertLogs('netbox_custom_objects.field_types', level=logging.WARNING):
+            result = _csv_import_to_field_name(mock_model)
+        self.assertEqual(result, 'pk')
+
 
 class MultiObjectFieldTypeTestCase(FieldTypeTestCase):
     """Test cases for multiobject field type."""
@@ -880,6 +1034,21 @@ class MultiObjectFieldTypeTestCase(FieldTypeTestCase):
         self.assertEqual(instance.devices.count(), 2)
         self.assertIn(device1, instance.devices.all())
         self.assertIn(device2, instance.devices.all())
+
+    def test_csv_import_form_field_for_module_type_uses_model_field(self):
+        """MultiObjectFieldType.get_form_field(for_csv_import=True) on a field
+        referencing ModuleType produces to_field_name='model', not 'name'."""
+        module_type_ot = ObjectType.objects.get(app_label='dcim', model='moduletype')
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="module_types",
+            label="Module Types",
+            type="multiobject",
+            related_object_type=module_type_ot,
+        )
+        form_field = MultiObjectFieldType().get_form_field(cotf, for_csv_import=True)
+        self.assertEqual(form_field.to_field_name, 'model',
+                         "ModuleType multi-object CSV import must use 'model', not 'name'")
 
 
 class SelfReferentialFieldTestCase(FieldTypeTestCase):
@@ -1253,6 +1422,23 @@ class PrimaryFieldChangeTestCase(FieldTypeTestCase):
         # __str__ on the referenced target must reflect the new primary field ('code')
         refreshed_target = new_target_model.objects.get(pk=target_instance.pk)
         self.assertIn("T-001", str(refreshed_target))
+
+    def test_str_post_delete_no_primary_field_does_not_contain_none(self):
+        """Regression #558: str() on a post-delete instance (pk=None, no primary
+        field value) must return the COT display name, not '<type> None'."""
+        cot = self.create_custom_object_type(
+            name="DeleteStrTest", slug="delete-str-test",
+            verbose_name_plural="Delete Str Tests",
+        )
+        # No primary field — falls through to the pk fallback path in __str__.
+        model = cot.get_model()
+        instance = model.objects.create()
+
+        instance.delete()  # sets instance.pk = None
+
+        result = str(instance)
+        self.assertNotIn("None", result)
+        self.assertEqual(result, cot.display_name)
 
 
 # ---------------------------------------------------------------------------

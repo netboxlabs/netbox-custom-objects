@@ -42,7 +42,8 @@ def fix_deferrable_fk_constraints(apps, schema_editor):
                 tc.table_name,
                 tc.constraint_name,
                 kcu.column_name,
-                ccu.table_name AS foreign_table_name
+                ccu.table_name AS foreign_table_name,
+                ccu.column_name AS foreign_column_name
             FROM information_schema.table_constraints AS tc
             JOIN information_schema.key_column_usage AS kcu
                 ON tc.constraint_name = kcu.constraint_name
@@ -60,7 +61,7 @@ def fix_deferrable_fk_constraints(apps, schema_editor):
         """)
         rows = cursor.fetchall()
 
-        for table_name, constraint_name, column_name, foreign_table in rows:
+        for table_name, constraint_name, column_name, foreign_table, foreign_column in rows:
             new_constraint_name = _safe_constraint_name(table_name, column_name)
             # IF EXISTS on the old name handles partial re-runs where the old constraint
             # was already dropped in a previous (failed) attempt.
@@ -77,7 +78,7 @@ def fix_deferrable_fk_constraints(apps, schema_editor):
                 ALTER TABLE "{table_name}"
                 ADD CONSTRAINT "{new_constraint_name}"
                 FOREIGN KEY ("{column_name}")
-                REFERENCES "{foreign_table}" ("id")
+                REFERENCES "{foreign_table}" ("{foreign_column}")
                 ON DELETE CASCADE
             """)
 

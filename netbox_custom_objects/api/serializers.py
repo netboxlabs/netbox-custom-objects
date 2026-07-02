@@ -570,6 +570,13 @@ def get_serializer_class(model, skip_object_fields=False):
     def create(self, validated_data):
         ModelClass = self.Meta.model
 
+        # taggit's TaggableManager is not detected by model_meta.get_field_info() as a
+        # standard M2M relation.  If left in validated_data it gets passed to
+        # Model._default_manager.create(), where Django's __init__ sets it as a plain
+        # instance attribute (shadowing the manager), giving the illusion of success but
+        # never persisting to the DB.  Pop it here and save via taggit's own API.
+        tags = validated_data.pop('tags', None)
+
         info = model_meta.get_field_info(ModelClass)
         many_to_many = {}
         for field_name, relation_info in info.relations.items():
@@ -590,10 +597,16 @@ def get_serializer_class(model, skip_object_fields=False):
 
         instance = ModelClass._default_manager.create(**validated_data)
 
+        if tags is not None:
+            instance._tags = tags
+            instance.tags.set([t.name for t in tags])
+        else:
+            instance._tags = []
+
         if many_to_many:
             for field_name, value in many_to_many.items():
                 field = getattr(instance, field_name)
-                field.set(value)
+                field.set(value if value is not None else [])
 
         for field_name, value in poly_gfk.items():
             setattr(instance, field_name, value)
@@ -608,6 +621,11 @@ def get_serializer_class(model, skip_object_fields=False):
 
     # Stock DRF update() with custom field.set() for M2M
     def update(self, instance, validated_data):
+        # Pop tags before the setattr loop — taggit's manager has no __set__, so
+        # leaving tags in validated_data would shadow the manager with a plain list.
+        tags = validated_data.pop('tags', None)
+        instance._tags = tags or []
+
         info = model_meta.get_field_info(instance)
 
         # Pop polymorphic GFK fields
@@ -634,9 +652,13 @@ def get_serializer_class(model, skip_object_fields=False):
 
         instance.save()
 
+        if tags is not None:
+            instance._tags = tags
+            instance.tags.set([t.name for t in tags])
+
         for attr, value in m2m_fields:
             field = getattr(instance, attr)
-            field.set(value, clear=True)
+            field.set(value if value is not None else [], clear=True)
 
         for field_name, value in poly_m2m.items():
             mgr = getattr(instance, field_name)
