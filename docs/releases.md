@@ -7,9 +7,10 @@
 - [#558](https://github.com/netboxlabs/netbox-custom-objects/issues/558) - `CustomObject.__str__` rendered `"<type> None"` after deletion when the type had no primary field
 - [#561](https://github.com/netboxlabs/netbox-custom-objects/issues/561) - Related Objects link used `?<field>_id=` but the filterset only registered `?<field>=`; both variants are now supported
 - [#567](https://github.com/netboxlabs/netbox-custom-objects/issues/567) - Custom object type field changed to `undefined` in the Add Field page
-- [#572](https://github.com/netboxlabs/netbox-custom-objects/issues/572) - Crash on startup when netbox-branching is installed but not listed in `PLUGINS`
+- [#581](https://github.com/netboxlabs/netbox-custom-objects/issues/581) - Skip inherited anonymous export test for CustomObjectTypeField views
 - [#587](https://github.com/netboxlabs/netbox-custom-objects/issues/587) - Migration `0011_non_deferrable_fk_constraints` failed on multi-table-inheritance COTs due to incorrect FK target column
 - [#588](https://github.com/netboxlabs/netbox-custom-objects/issues/588) - `AttributeError: 'CustomFieldChoiceSet' object has no attribute 'get_choice_color'` on NetBox < 4.6
+- [#592](https://github.com/netboxlabs/netbox-custom-objects/issues/592) - Fix Custom Objects API tests for stricter nested related object permissions
 
 ---
 
