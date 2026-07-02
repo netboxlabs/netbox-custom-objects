@@ -2,17 +2,29 @@
 
 ## 0.6.0
 
-### Enhancements
+### New Features
+
+**NetBox Branching Support**
+
+Custom Object Types and their instances now participate fully in NetBox branching workflows. COT schema changes (adding/removing fields, modifying field definitions) and instance creates/updates/deletes are all branch-aware. A version check ensures the minimum required NetBox and netbox-branching versions are present before enabling branching features.
+
+- [#404](https://github.com/netboxlabs/netbox-custom-objects/issues/404) - Full branching support for Custom Object Types and instances
+- [#569](https://github.com/netboxlabs/netbox-custom-objects/issues/569) - Add version check to gate branching features on required NetBox / netbox-branching versions
+
+**GraphQL Support**
+
+Custom Object Types and their instances are now queryable and mutable via the NetBox GraphQL API. Queries, mutations, and filtering are supported for all field types.
 
 - [#30](https://github.com/netboxlabs/netbox-custom-objects/issues/30) - GraphQL support for Custom Objects
+
+### Enhancements
+
 - [#98](https://github.com/netboxlabs/netbox-custom-objects/issues/98) - Config context support for Custom Objects
 - [#254](https://github.com/netboxlabs/netbox-custom-objects/issues/254) - Quick Add support for object/multiobject fields
 - [#286](https://github.com/netboxlabs/netbox-custom-objects/issues/286) - Contacts support for Custom Objects
 - [#376](https://github.com/netboxlabs/netbox-custom-objects/issues/376) - Ownership field for Custom Object instances
-- [#404](https://github.com/netboxlabs/netbox-custom-objects/issues/404) - Full branching support for Custom Object Types and instances
 - [#532](https://github.com/netboxlabs/netbox-custom-objects/issues/532) - Integer fields now use 64-bit `BigIntegerField` to support values exceeding the 32-bit range
 - [#551](https://github.com/netboxlabs/netbox-custom-objects/issues/551) - Add `location` field type for latitude/longitude coordinate pairs
-- [#569](https://github.com/netboxlabs/netbox-custom-objects/issues/569) - Add version check to gate branching features on required NetBox / netbox-branching versions
 
 ### Bug Fixes
 
