@@ -10,7 +10,7 @@
 - [#286](https://github.com/netboxlabs/netbox-custom-objects/issues/286) - Contacts support for Custom Objects
 - [#376](https://github.com/netboxlabs/netbox-custom-objects/issues/376) - Ownership field for Custom Object instances
 - [#404](https://github.com/netboxlabs/netbox-custom-objects/issues/404) - Full branching support for Custom Object Types and instances
-- [#532](https://github.com/netboxlabs/netbox-custom-objects/issues/532) - Add `biginteger` field type for 64-bit integer values
+- [#532](https://github.com/netboxlabs/netbox-custom-objects/issues/532) - Integer fields now use 64-bit `BigIntegerField` to support values exceeding the 32-bit range
 - [#551](https://github.com/netboxlabs/netbox-custom-objects/issues/551) - Add `location` field type for latitude/longitude coordinate pairs
 - [#569](https://github.com/netboxlabs/netbox-custom-objects/issues/569) - Add version check to gate branching features on required NetBox / netbox-branching versions
 
