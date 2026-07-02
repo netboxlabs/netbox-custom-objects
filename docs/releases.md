@@ -2,58 +2,24 @@
 
 ## 0.6.0
 
-### New Features
-
-**NetBox Branching Support**
-
-Custom Object Types and their instances now participate fully in NetBox branching workflows. COT schema changes (adding/removing fields, modifying field definitions) and instance creates/updates/deletes are all branch-aware. A version check ensures the minimum required NetBox and netbox-branching versions are present before enabling branching features.
-
-- [#404](https://github.com/netboxlabs/netbox-custom-objects/issues/404) - Full branching support for Custom Object Types and instances
-- [#569](https://github.com/netboxlabs/netbox-custom-objects/issues/569) - Add check framework to gate branching support on required NetBox / netbox-branching versions
-
-**GraphQL Support**
-
-Custom Object Types and their instances are now queryable and mutable via the NetBox GraphQL API. Queries, mutations, and filtering are supported for all field types.
+### Enhancements
 
 - [#30](https://github.com/netboxlabs/netbox-custom-objects/issues/30) - GraphQL support for Custom Objects
-
-**First-Class Ownership**
-
-Custom Object instances now support a native `owner` field, allowing instances to be associated with a NetBox user or group. Ownership is displayed in the UI and exposed in the REST API.
-
-- [#376](https://github.com/netboxlabs/netbox-custom-objects/issues/376) - Ownership of Custom Object instances
-
-**Config Context**
-
-Custom Object Types can now opt in to NetBox's config context system, allowing context data to be rendered and consumed per instance in the same way as devices and virtual machines.
-
 - [#98](https://github.com/netboxlabs/netbox-custom-objects/issues/98) - Config context support for Custom Objects
-
-**Contacts**
-
-Custom Object Types can now enable the ContactsMixin, attaching NetBox contacts and contact assignments to instances.
-
-- [#286](https://github.com/netboxlabs/netbox-custom-objects/issues/286) - Toggleable contacts for Custom Objects
-
-**New Field Types**
-
-Two new field types expand the range of data that Custom Object Types can model:
-
-- [#532](https://github.com/netboxlabs/netbox-custom-objects/issues/532) - 64-bit integer field (`biginteger`) for values exceeding the 32-bit range
-- [#551](https://github.com/netboxlabs/netbox-custom-objects/issues/551) - Location field storing latitude and longitude coordinate pairs
-
-**Quick Add**
-
-Object and MultiObject fields on Custom Object instance forms now include a Quick Add button, allowing new related objects to be created inline without navigating away.
-
 - [#254](https://github.com/netboxlabs/netbox-custom-objects/issues/254) - Quick Add support for object/multiobject fields
+- [#286](https://github.com/netboxlabs/netbox-custom-objects/issues/286) - Contacts support for Custom Objects
+- [#376](https://github.com/netboxlabs/netbox-custom-objects/issues/376) - Ownership field for Custom Object instances
+- [#404](https://github.com/netboxlabs/netbox-custom-objects/issues/404) - Full branching support for Custom Object Types and instances
+- [#532](https://github.com/netboxlabs/netbox-custom-objects/issues/532) - Add `biginteger` field type for 64-bit integer values
+- [#551](https://github.com/netboxlabs/netbox-custom-objects/issues/551) - Add `location` field type for latitude/longitude coordinate pairs
+- [#569](https://github.com/netboxlabs/netbox-custom-objects/issues/569) - Add version check to gate branching features on required NetBox / netbox-branching versions
 
 ### Bug Fixes
 
-- [#572](https://github.com/netboxlabs/netbox-custom-objects/issues/572) - Crash on startup when netbox-branching is installed but not listed in `PLUGINS`
 - [#558](https://github.com/netboxlabs/netbox-custom-objects/issues/558) - `CustomObject.__str__` rendered `"<type> None"` after deletion when the type had no primary field
 - [#561](https://github.com/netboxlabs/netbox-custom-objects/issues/561) - Related Objects link used `?<field>_id=` but the filterset only registered `?<field>=`; both variants are now supported
 - [#567](https://github.com/netboxlabs/netbox-custom-objects/issues/567) - Custom object type field changed to `undefined` in the Add Field page
+- [#572](https://github.com/netboxlabs/netbox-custom-objects/issues/572) - Crash on startup when netbox-branching is installed but not listed in `PLUGINS`
 - [#587](https://github.com/netboxlabs/netbox-custom-objects/issues/587) - Migration `0011_non_deferrable_fk_constraints` failed on multi-table-inheritance COTs due to incorrect FK target column
 - [#588](https://github.com/netboxlabs/netbox-custom-objects/issues/588) - `AttributeError: 'CustomFieldChoiceSet' object has no attribute 'get_choice_color'` on NetBox < 4.6
 
