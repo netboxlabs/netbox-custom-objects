@@ -11,7 +11,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import connection, transaction
 from django.db.utils import OperationalError, ProgrammingError
-from django.test import TestCase, override_settings
+from django.test import TestCase, override_settings, tag
 from django.urls import reverse
 from django.utils import timezone
 
@@ -125,8 +125,8 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         custom_object_type = self.create_custom_object_type(name="TestObject")
 
         model = custom_object_type.get_model()
-        # Base fields: id, created, last_updated
-        self.assertEqual(len(model._meta.fields), 3)
+        # Base fields: id, created, last_updated, owner
+        self.assertEqual(len(model._meta.fields), 4)
 
     def test_custom_object_type_get_model_with_primary_field(self):
         """Test get_model method with a primary field."""
@@ -386,6 +386,212 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
             django_apps.clear_cache()
 
 
+class CustomObjectTypeConfigContextTestCase(CustomObjectsTestCase, TestCase):
+    """Config context support (issue #98) on custom object types."""
+
+    @staticmethod
+    def _table_columns(table_name):
+        with connection.cursor() as cursor:
+            return {
+                col.name
+                for col in connection.introspection.get_table_description(cursor, table_name)
+            }
+
+    def test_enabled_model_is_config_context_subclass_with_column(self):
+        """A config-context-enabled type generates a ConfigContextModel subclass
+        whose backing table has a local_context_data column."""
+        from extras.models import ConfigContextModel
+
+        cot = self.create_custom_object_type(
+            name="cc_enabled", slug="cc-enabled", config_context_enabled=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True,
+        )
+        model = cot.get_model(no_cache=True)
+        self.assertTrue(issubclass(model, ConfigContextModel))
+        self.assertIn("local_context_data", self._table_columns(cot.get_database_table_name()))
+
+    def test_disabled_model_has_no_config_context(self):
+        """The default (flag False) type is not a ConfigContextModel and has no
+        local_context_data column."""
+        from extras.models import ConfigContextModel
+
+        cot = self.create_custom_object_type(name="cc_disabled", slug="cc-disabled")
+        self.assertFalse(cot.config_context_enabled)
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True,
+        )
+        model = cot.get_model(no_cache=True)
+        self.assertFalse(issubclass(model, ConfigContextModel))
+        self.assertNotIn("local_context_data", self._table_columns(cot.get_database_table_name()))
+
+    def test_local_context_data_round_trips_and_get_config_context(self):
+        """An instance stores local_context_data and get_config_context() returns
+        it without touching the org-dimension aggregation that custom objects lack."""
+        cot = self.create_custom_object_type(
+            name="cc_roundtrip", slug="cc-roundtrip", config_context_enabled=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True,
+        )
+        model = cot.get_model(no_cache=True)
+
+        obj = model(name="obj-1", local_context_data={"ntp_servers": ["10.0.0.1"]})
+        obj.save()
+        obj.refresh_from_db()
+        self.assertEqual(obj.local_context_data, {"ntp_servers": ["10.0.0.1"]})
+        # Safe override: returns the local data, never raises on missing site/tenant/role.
+        self.assertEqual(obj.get_config_context(), {"ntp_servers": ["10.0.0.1"]})
+
+        empty = model(name="obj-2")
+        empty.save()
+        self.assertEqual(empty.get_config_context(), {})
+
+    def test_clean_rejects_non_dict_local_context_data(self):
+        """The inherited ConfigContextModel.clean() validator rejects non-object JSON."""
+        cot = self.create_custom_object_type(
+            name="cc_clean", slug="cc-clean", config_context_enabled=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True,
+        )
+        model = cot.get_model(no_cache=True)
+        obj = model(name="bad", local_context_data=["not", "a", "dict"])
+        with self.assertRaises(ValidationError):
+            obj.clean()
+
+    def test_config_context_enabled_immutable_in_clean(self):
+        """full_clean() rejects flipping config_context_enabled on an existing type."""
+        cot = self.create_custom_object_type(name="cc_clean_immut", slug="cc-clean-immut")
+        self.assertFalse(cot.config_context_enabled)
+        cot.config_context_enabled = True
+        with self.assertRaises(ValidationError):
+            cot.full_clean()
+
+    def test_config_context_enabled_clean_allows_unchanged(self):
+        """Re-validating without changing the flag must not raise."""
+        cot = self.create_custom_object_type(
+            name="cc_clean_ok", slug="cc-clean-ok", config_context_enabled=True,
+        )
+        cot.description = "edited"
+        cot.full_clean()  # should not raise
+
+    # --- Source-context aggregation via field-naming convention (#98 phase 2) ---
+
+    def _site_cot(self, name, slug):
+        """Config-context-enabled COT with a primary name field and a `site` object field."""
+        cot = self.create_custom_object_type(name=name, slug=slug, config_context_enabled=True)
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name="site", label="Site", type="object",
+            related_object_type=self.get_site_object_type(),
+        )
+        return cot
+
+    def test_aggregates_referenced_site_config_context(self):
+        """A `site` field pulls in ConfigContexts assigned to the referenced Site,
+        with local_context_data merged on top."""
+        from extras.models import ConfigContext
+
+        site = Site.objects.create(name="CC Site", slug="cc-site")
+        cc = ConfigContext.objects.create(name="cc-site-ctx", weight=1000, is_active=True,
+                                          data={"ntp": "10.0.0.1", "dns": "8.8.8.8"})
+        cc.sites.add(site)
+
+        cot = self._site_cot("cc_agg_site", "cc-agg-site")
+        model = cot.get_model(no_cache=True)
+        obj = model.objects.create(name="o1", site=site, local_context_data={"dns": "1.1.1.1"})
+
+        rendered = obj.get_config_context()
+        self.assertEqual(rendered["ntp"], "10.0.0.1")        # from source context
+        self.assertEqual(rendered["dns"], "1.1.1.1")         # local overrides source
+
+    def test_no_convention_field_returns_local_only(self):
+        """Without a convention-named dimension field, no source aggregation happens."""
+        from extras.models import ConfigContext
+
+        # A global (unassigned) active context that WOULD match a dimensionful object.
+        ConfigContext.objects.create(name="global-ctx", weight=1000, is_active=True, data={"g": 1})
+
+        cot = self.create_custom_object_type(name="cc_nodim", slug="cc-nodim", config_context_enabled=True)
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True,
+        )
+        model = cot.get_model(no_cache=True)
+        obj = model.objects.create(name="o1", local_context_data={"local": 2})
+
+        self.assertEqual(obj.get_config_context(), {"local": 2})
+
+    def test_misnamed_field_is_ignored(self):
+        """A `site`-named field pointing at the wrong model must not feed the site dimension."""
+        from extras.models import ConfigContext
+
+        site = Site.objects.create(name="CC Site 2", slug="cc-site-2")
+        cc = ConfigContext.objects.create(name="cc-site-ctx-2", weight=1000, is_active=True, data={"x": 1})
+        cc.sites.add(site)
+
+        # Field named `site` but pointing at Prefix (wrong model) → ignored.
+        cot = self.create_custom_object_type(name="cc_wrong", slug="cc-wrong", config_context_enabled=True)
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name="site", label="Site", type="object",
+            related_object_type=self.get_prefix_object_type(),
+        )
+        model = cot.get_model(no_cache=True)
+        obj = model.objects.create(name="o1", local_context_data={"only": "local"})
+
+        self.assertEqual(obj.get_config_context(), {"only": "local"})
+
+    def test_aggregates_referenced_tenant_config_context(self):
+        """The `tenant` dimension (a direct obj.tenant read in get_for_object) works."""
+        from extras.models import ConfigContext
+        from tenancy.models import Tenant
+
+        tenant = Tenant.objects.create(name="CC Tenant", slug="cc-tenant")
+        cc = ConfigContext.objects.create(name="cc-tenant-ctx", weight=1000, is_active=True, data={"t": 1})
+        cc.tenants.add(tenant)
+
+        cot = self.create_custom_object_type(name="cc_tenant", slug="cc-tenant", config_context_enabled=True)
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name="tenant", label="Tenant", type="object",
+            related_object_type=ObjectType.objects.get(app_label="tenancy", model="tenant"),
+        )
+        model = cot.get_model(no_cache=True)
+        obj = model.objects.create(name="o1", tenant=tenant)
+
+        self.assertEqual(obj.get_config_context(), {"t": 1})
+
+    def test_aggregates_referenced_role_config_context(self):
+        """The `role` dimension (a direct obj.role read + get_ancestors) works."""
+        from dcim.models import DeviceRole
+        from extras.models import ConfigContext
+
+        role = DeviceRole.objects.create(name="CC Role", slug="cc-role", color="ff0000")
+        cc = ConfigContext.objects.create(name="cc-role-ctx", weight=1000, is_active=True, data={"r": 1})
+        cc.roles.add(role)
+
+        cot = self.create_custom_object_type(name="cc_role", slug="cc-role", config_context_enabled=True)
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name="role", label="Role", type="object",
+            related_object_type=ObjectType.objects.get(app_label="dcim", model="devicerole"),
+        )
+        model = cot.get_model(no_cache=True)
+        obj = model.objects.create(name="o1", role=role)
+
+        self.assertEqual(obj.get_config_context(), {"r": 1})
+
+
 class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
     """Test cases for CustomObjectTypeField model."""
 
@@ -427,6 +633,17 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
                 field = CustomObjectTypeField(
                     custom_object_type=self.custom_object_type,
                     name=invalid_name,
+                    type="text",
+                )
+                field.full_clean()
+
+    def test_custom_object_type_field_reserved_name_rejected(self):
+        """Field names in RESERVED_FIELD_NAMES must be rejected with ValidationError."""
+        for reserved in ("owner", "tags", "id", "created", "last_updated", "local_context_data"):
+            with self.assertRaises(ValidationError, msg=f"Expected ValidationError for reserved name={reserved!r}"):
+                field = CustomObjectTypeField(
+                    custom_object_type=self.custom_object_type,
+                    name=reserved,
                     type="text",
                 )
                 field.full_clean()
@@ -1208,6 +1425,41 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
             hasattr(slb_model, f"{table_model_name}_slbs_set"),
             "MultiObject field without related_name should not create an auto-generated reverse accessor.",
         )
+
+    @tag('regression')  # #535
+    def test_deleting_multiobject_field_deregisters_through_model(self):
+        """
+        After a multiobject field is deleted its through model must be removed
+        from Django's app registry. Without the fix the cascade-delete collector
+        still finds the model, queries the dropped table, and raises
+        ProgrammingError when deleting any object that was a relation target
+        of the field (issue #535).
+        """
+        field = self.create_custom_object_type_field(
+            self.cert_cot,
+            name="related_slbs",
+            type="multiobject",
+            related_object_type=self.slb_object_type,
+        )
+        through_model_name = field.through_model_name.lower()
+        self.assertIn(through_model_name, django_apps.all_models.get(APP_LABEL, {}))
+
+        slb_model = self.slb_cot.get_model()
+        slb_instance = slb_model.objects.create(name="SLB-To-Delete")
+
+        field.delete()
+
+        # Primary assertion: deleting a relation target must not raise ProgrammingError.
+        # Without the fix this line raises:
+        #   ProgrammingError: relation "custom_objects_<id>_related_slbs" does not exist
+        # because the stale through model is still in apps.all_models and the
+        # cascade-delete collector queries the already-dropped table.
+        try:
+            slb_instance.delete()
+        except ProgrammingError as exc:
+            self.fail(f"Deleting a related object raised ProgrammingError after field deletion: {exc}")
+
+        self.assertNotIn(through_model_name, django_apps.all_models.get(APP_LABEL, {}))
 
 
 class SearchReindexTestCase(CustomObjectsTestCase, TestCase):

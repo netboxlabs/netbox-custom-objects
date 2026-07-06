@@ -15,6 +15,10 @@ from utilities.object_types import object_type_name
 from netbox_custom_objects.choices import SearchWeightChoices
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name
 from netbox_custom_objects.constants import APP_LABEL
+from netbox_custom_objects.field_types import (
+    PolymorphicObjectReverseDescriptor,
+    PolymorphicMultiObjectReverseDescriptor,
+)
 from netbox_custom_objects.models import (CustomObjectObjectType,
                                           CustomObjectType,
                                           CustomObjectTypeField)
@@ -63,7 +67,7 @@ class CustomObjectTypeForm(NetBoxModelForm):
             "verbose_name", "verbose_name_plural", "display_expression", "group_name",
             name=_("Display"),
         ),
-        FieldSet("slug", "version", "description", "tags"),
+        FieldSet("slug", "version", "description", "config_context_enabled", "tags"),
     )
     comments = CommentField()
 
@@ -71,8 +75,19 @@ class CustomObjectTypeForm(NetBoxModelForm):
         model = CustomObjectType
         fields = (
             "name", "verbose_name", "verbose_name_plural", "slug", "version", "description",
-            "group_name", "display_expression", "comments", "tags",
+            "group_name", "display_expression", "config_context_enabled", "comments", "tags",
         )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # config_context_enabled controls whether the generated model carries a
+        # local_context_data column, which is created once at type creation. It
+        # cannot be toggled afterwards, so lock it when editing an existing type.
+        if self.instance.pk:
+            self.fields["config_context_enabled"].disabled = True
+            self.fields["config_context_enabled"].help_text = _(
+                "Config context support cannot be changed after creation."
+            )
 
     def clean_display_expression(self):
         expression = self.cleaned_data.get('display_expression', '')
@@ -293,9 +308,13 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
                 if not all(isinstance(item, str) and item in _related_names for item in fs.items)
             )
 
-        # Disable immutable fields on existing instances.
+        # custom_object_type is always read-only: new fields are always created in the
+        # context of a specific COT (passed via URL param), and existing fields cannot
+        # be moved to a different COT.
+        self.fields["custom_object_type"].disabled = True
+
+        # Remaining immutable fields only apply to existing instances.
         if self.instance.pk:
-            self.fields["custom_object_type"].disabled = True
             if 'is_polymorphic' in self.fields:
                 self.fields["is_polymorphic"].disabled = True
             if 'related_object_types' in self.fields:
@@ -307,17 +326,18 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
         if get_field_value(self, 'type') == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
             self.fields["unique"].disabled = True
 
-        # Add related_name (and on_delete_behavior for single-object fields) to the
-        # Related Object fieldset.  The parent CustomFieldForm.__init__ removes
-        # related_object_type from self.fields for non-object types, so we use its
-        # presence as a signal.
-        if "related_object_type" in self.fields:
+        # Add related_name (and on_delete_behavior for non-polymorphic single-object
+        # fields) to the Related Object fieldset.  Polymorphic mode removes
+        # related_object_type from self.fields and substitutes related_object_types,
+        # so check for either to detect object/multiobject fields (issue #522).
+        is_object_field = "related_object_type" in self.fields or "related_object_types" in self.fields
+        if is_object_field:
             field_type = get_field_value(self, 'type')
-            is_single_object = field_type == CustomFieldTypeChoices.TYPE_OBJECT
+            is_single_object = field_type == CustomFieldTypeChoices.TYPE_OBJECT and not is_polymorphic
             extra = ("related_name", "on_delete_behavior") if is_single_object else ("related_name",)
             self.fieldsets = tuple(
                 FieldSet(*fs.items, *extra, name=fs.name)
-                if "related_object_type" in fs.items
+                if ("related_object_type" in fs.items or "related_object_types" in fs.items)
                 else fs
                 for fs in self.fieldsets
             )
@@ -331,6 +351,7 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
         cleaned_data = super().clean()
         field_type = cleaned_data.get("type")
         is_polymorphic = cleaned_data.get("is_polymorphic", False)
+        related_name = cleaned_data.get("related_name", "")
 
         if field_type in (
             CustomFieldTypeChoices.TYPE_OBJECT,
@@ -342,6 +363,41 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
                     "related_object_types",
                     _("Polymorphic object fields must specify at least one related object type."),
                 )
+
+            # For new instances the model's clean() never runs the target-attribute check
+            # (it requires self.pk so it can query related_object_types rows).  Do it here
+            # instead, where cleaned_data already contains the submitted types.
+            if related_name and related_object_types:
+                for ot in related_object_types:
+                    target_cls = ot.model_class()
+                    if target_cls is None:
+                        continue
+                    existing = getattr(target_cls, related_name, None)
+                    if existing is None:
+                        continue
+                    # Determine whether this exact field already owns the descriptor
+                    # (re-saving an existing field is allowed).
+                    is_owned_by_this_field = False
+                    inst = self.instance
+                    if inst and inst.pk:
+                        cot_pk = inst.custom_object_type_id
+                        if isinstance(existing, PolymorphicObjectReverseDescriptor):
+                            is_owned_by_this_field = (
+                                existing.cot_pk == cot_pk and existing.field_name == inst.name
+                            )
+                        elif isinstance(existing, PolymorphicMultiObjectReverseDescriptor):
+                            is_owned_by_this_field = (
+                                existing.cot_pk == cot_pk
+                                and existing.through_model_name == inst.through_model_name
+                            )
+                    if not is_owned_by_this_field:
+                        self.add_error(
+                            "related_name",
+                            _('Reverse relation name "{name}" conflicts with an existing '
+                              'attribute on model "{model}". Choose a different name.'
+                              ).format(name=related_name, model=target_cls.__name__),
+                        )
+                        break
 
         return cleaned_data
 

@@ -1,22 +1,30 @@
 import logging
 
 from core.models import ObjectChange
+from core.signals import clear_events
 from core.tables import ObjectChangeTable
 from django.apps import apps as django_apps
+from django.contrib import messages
 from django.contrib.contenttypes.models import ContentType
+from django.db import router, transaction
 from django.db.models import ProtectedError, Q, RestrictedError
+from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
+from django.utils.html import escape
+from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
+from utilities.exceptions import AbortRequest, PermissionsViolation
 from django.views.generic import View
 from extras.choices import CustomFieldUIVisibleChoices
 from extras.forms import JournalEntryForm
-from extras.models import JournalEntry
+from extras.models import ConfigContext, JournalEntry
 from extras.tables import JournalEntryTable
 from netbox.forms import (
     NetBoxModelBulkEditForm,
     NetBoxModelImportForm,
 )
+from netbox.forms.mixins import OwnerMixin as OwnerFormMixin
 from netbox.views import generic
 from netbox.views.generic.mixins import TableMixin
 from utilities.forms import ConfirmationForm, DeleteForm, restrict_form_fields
@@ -35,6 +43,7 @@ from netbox_custom_objects.tables import CustomObjectTable, CustomObjectTypeFiel
 from . import field_types, filtersets, forms, tables
 from .models import CustomObject, CustomObjectType, CustomObjectTypeField
 from extras.choices import CustomFieldTypeChoices
+from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.dynamic_forms import build_filterset_form_class
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name
@@ -389,6 +398,23 @@ class CustomObjectTypeFieldEditView(generic.ObjectEditView):
     form = forms.CustomObjectTypeFieldForm
     template_name = 'netbox_custom_objects/customobjecttypefield_edit.html'
 
+    def alter_object(self, obj, request, url_args, url_kwargs):
+        # For new fields, pre-populate custom_object_type from the request so that the
+        # disabled field has a value for both GET (display) and POST (validation/save).
+        # The normal Add flow passes custom_object_type as a URL query param; the test
+        # harness (PrimaryObjectViewTestCase) passes it in the POST body instead.
+        if not obj.pk:
+            cot_pk = request.GET.get('custom_object_type') or request.POST.get('custom_object_type')
+            if cot_pk:
+                try:
+                    obj.custom_object_type_id = int(cot_pk)
+                except (ValueError, TypeError):
+                    pass
+        return obj
+
+    def get_extra_context(self, request, instance):
+        return {'branch_bypass_warning': _is_in_branch()}
+
 
 @register_model_view(CustomObjectTypeField, "delete")
 class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
@@ -590,6 +616,7 @@ class CustomObjectView(generic.ObjectView):
 class CustomObjectEditView(generic.ObjectEditView):
     template_name = "netbox_custom_objects/customobject_edit.html"
     htmx_template_name = "netbox_custom_objects/htmx/edit_fields.html"
+    _CO_QUICK_ADD_TEMPLATE = 'netbox_custom_objects/htmx/co_quick_add.html'
     form = None
     queryset = None
     object = None
@@ -612,6 +639,76 @@ class CustomObjectEditView(generic.ObjectEditView):
     def get_queryset(self, request):
         model = self.object._meta.model
         return model.objects.all()
+
+    def get(self, request, *args, **kwargs):
+        if not request.GET.get('_quickadd'):
+            return super().get(request, *args, **kwargs)
+        # Quick-add GET: the core htmx/quick_add.html uses {% action_url model 'add' %}
+        # which cannot resolve custom object URLs (they require a COT slug).
+        # Use our own template that builds the form action URL from the slug instead.
+        obj = self.object  # already populated by setup()
+        form = self.form(
+            instance=obj,
+            initial=normalize_querydict(request.GET),
+            prefix='quickadd',
+        )
+        restrict_form_fields(form, request.user)
+        return render(request, self._CO_QUICK_ADD_TEMPLATE, {
+            'model': obj._meta.model,
+            'object': obj,
+            'form': form,
+        })
+
+    def post(self, request, *args, **kwargs):
+        if '_quickadd' not in request.POST:
+            return super().post(request, *args, **kwargs)
+        # Quick-add POST: mirrors the parent's save logic but re-renders validation
+        # errors with our custom template instead of the core htmx/quick_add.html
+        # (which uses {% action_url model 'add' %} and fails for COT models).
+        _qa_logger = logging.getLogger('netbox.views.ObjectEditView')
+        obj = self.object  # already populated by setup()
+        model = self.queryset.model
+
+        if obj.pk and hasattr(obj, 'snapshot'):
+            obj.snapshot()
+
+        obj = self.alter_object(obj, request, args, kwargs)
+
+        form = self.form(
+            data=request.POST,
+            files=request.FILES,
+            instance=obj,
+            prefix='quickadd',
+        )
+        restrict_form_fields(form, request.user)
+
+        if form.is_valid():
+            obj._changelog_message = form.cleaned_data.pop('changelog_message', '')
+            try:
+                with transaction.atomic(using=router.db_for_write(model)):
+                    object_created = form.instance.pk is None
+                    obj = form.save()
+                    if not self.queryset.filter(pk=obj.pk).exists():
+                        raise PermissionsViolation()
+                msg = '{} {}'.format(
+                    'Created' if object_created else 'Modified',
+                    model._meta.verbose_name,
+                )
+                _qa_logger.info(f"{msg} {obj} (PK: {obj.pk})")
+                if hasattr(obj, 'get_absolute_url'):
+                    msg = mark_safe(f'{msg} <a href="{obj.get_absolute_url()}">{escape(obj)}</a>')
+                messages.success(request, msg)
+                return render(request, 'htmx/quick_add_created.html', {'object': obj})
+            except (AbortRequest, PermissionsViolation) as e:
+                _qa_logger.debug(e.message)
+                form.add_error(None, e.message)
+                clear_events.send(sender=self)
+
+        return render(request, self._CO_QUICK_ADD_TEMPLATE, {
+            'model': obj._meta.model,
+            'object': obj,
+            'form': form,
+        })
 
     def get_object(self, **kwargs):
         if self.object:
@@ -666,6 +763,8 @@ class CustomObjectEditView(generic.ObjectEditView):
             "custom_object_type_poly_obj_ct_names": set(),
             # Maps ct_sub → (obj_sub, field_label) for poly object pair rendering in the template
             "custom_object_type_poly_obj_pairs": {},
+            # Maps coordinates field name → (latitude_field_name, longitude_field_name)
+            "custom_object_type_coordinates_fields": {},
         }
 
         # Process custom object type fields (with grouping)
@@ -674,6 +773,19 @@ class CustomObjectEditView(generic.ObjectEditView):
         ).order_by("group_name", "weight", "name"):
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
             group_name = field.group_name or None
+
+            # Coordinates: one logical field rendered as two grouped latitude/longitude inputs
+            if field.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+                sub_fields = field_type.get_form_fields(field)
+                sub_names = list(sub_fields.keys())
+                for sub_name, sub_field in sub_fields.items():
+                    attrs[sub_name] = sub_field
+                    attrs["custom_object_type_rendered_names"].add(sub_name)
+                if group_name not in attrs["custom_object_type_field_groups"]:
+                    attrs["custom_object_type_field_groups"][group_name] = []
+                attrs["custom_object_type_field_groups"][group_name].extend(sub_names)
+                attrs["custom_object_type_coordinates_fields"][field.name] = tuple(sub_names)
+                continue
 
             # Polymorphic single-object: type-selector + object-picker pair
             if field.is_polymorphic and field.type == CustomFieldTypeChoices.TYPE_OBJECT:
@@ -730,7 +842,7 @@ class CustomObjectEditView(generic.ObjectEditView):
 
         form_class = type(
             f"{model._meta.object_name}Form",
-            (forms.NetBoxModelForm,),
+            (OwnerFormMixin, forms.NetBoxModelForm,),
             attrs,
         )
 
@@ -745,6 +857,7 @@ class CustomObjectEditView(generic.ObjectEditView):
             self.custom_object_type_poly_obj_fields = attrs["custom_object_type_poly_obj_fields"]
             self.custom_object_type_poly_obj_ct_names = attrs["custom_object_type_poly_obj_ct_names"]
             self.custom_object_type_poly_obj_pairs = attrs["custom_object_type_poly_obj_pairs"]
+            self.custom_object_type_coordinates_fields = attrs["custom_object_type_coordinates_fields"]
 
             instance = kwargs.get('instance', None)
 
@@ -912,6 +1025,15 @@ class CustomObjectEditView(generic.ObjectEditView):
                         obj_sub,
                         _("Please select an object of the chosen type."),
                     )
+            # Coordinates: latitude and longitude must both be set or both be empty.
+            for field_name, (lat_name, lon_name) in self.custom_object_type_coordinates_fields.items():
+                latitude = self.cleaned_data.get(lat_name)
+                longitude = self.cleaned_data.get(lon_name)
+                if (latitude is None) != (longitude is None):
+                    self.add_error(
+                        lat_name if latitude is None else lon_name,
+                        _("Latitude and longitude must both be set or both be empty."),
+                    )
             return self.cleaned_data
 
         form_class.__init__ = custom_init
@@ -1070,10 +1192,25 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
             "custom_object_type_poly_obj_pairs": {},
             "custom_object_type_poly_m2m_groups": {},
             "custom_object_type_rendered_names": set(),
+            # field_name → (latitude_field_name, longitude_field_name)
+            "custom_object_type_coordinates_fields": {},
         }
 
         for field in self.custom_object_type.fields.prefetch_related('related_object_types').all():
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
+
+            # Coordinates: two optional latitude/longitude inputs in bulk edit
+            if field.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+                sub_names = []
+                for sub_name, sub_field in field_type.get_form_fields(field).items():
+                    sub_field.required = False
+                    sub_field.widget.is_required = False
+                    sub_field.initial = None
+                    attrs[sub_name] = sub_field
+                    sub_names.append(sub_name)
+                # (latitude_name, longitude_name) for cross-field validation below.
+                attrs["custom_object_type_coordinates_fields"][field.name] = tuple(sub_names)
+                continue
 
             # Polymorphic single-object: scope-style type-selector + object-picker pair
             if field.is_polymorphic and field.type == CustomFieldTypeChoices.TYPE_OBJECT:
@@ -1147,6 +1284,23 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
                     self.fields[obj_sub].queryset = model_class.objects.all()
 
         attrs["__init__"] = bulk_poly_init
+
+        coordinates_fields_ref = attrs["custom_object_type_coordinates_fields"]
+
+        def bulk_clean(self):
+            cleaned_data = NetBoxModelBulkEditForm.clean(self)
+            # Coordinates: latitude and longitude must both be set or both be empty.
+            for field_name, (lat_name, lon_name) in coordinates_fields_ref.items():
+                latitude = cleaned_data.get(lat_name)
+                longitude = cleaned_data.get(lon_name)
+                if (latitude is None) != (longitude is None):
+                    self.add_error(
+                        lat_name if latitude is None else lon_name,
+                        _("Latitude and longitude must both be set or both be empty."),
+                    )
+            return cleaned_data
+
+        attrs["clean"] = bulk_clean
 
         form = type(
             f"{queryset.model._meta.object_name}BulkEditForm",
@@ -1452,5 +1606,71 @@ class CustomObjectContactsView(ConditionalLoginRequiredMixin, View):
                 "table": table,
                 "base_template": "netbox_custom_objects/customobject.html",
                 "tab": "contacts",
+            },
+        )
+
+
+class CustomObjectConfigContextView(ConditionalLoginRequiredMixin, View):
+    """
+    Config context view for CustomObject instances.
+
+    Only available when the instance's CustomObjectType has
+    ``config_context_enabled=True`` (i.e. the generated model mixes in
+    ConfigContextModel).  Source contexts are aggregated from NetBox objects the
+    custom object references via convention-named fields (site/tenant/role/...);
+    see CustomObjectConfigContextMixin.  local_context_data overrides them.
+    """
+
+    base_template = None
+    tab = ViewTab(
+        label=_("Config Context"),
+        visible=lambda obj: obj.custom_object_type.config_context_enabled,
+        weight=2000,
+    )
+
+    def get(self, request, custom_object_type, **kwargs):
+        object_type = get_object_or_404(CustomObjectType, slug=custom_object_type)
+        if not object_type.config_context_enabled:
+            raise Http404(_("Config context support is not enabled for this type."))
+        model = object_type.get_model_with_serializer()
+
+        lookup_kwargs = {k: v for k, v in kwargs.items() if k != "custom_object_type"}
+        # Gate on object-level view permission so the config-context tab can't
+        # leak local_context_data past NetBox's RBAC (the detail view restricts too).
+        obj = get_object_or_404(model.objects.restrict(request.user, "view"), **lookup_kwargs)
+
+        # Determine the user's preferred output format (json/yaml), persisting
+        # an explicit choice the same way NetBox's ObjectConfigContextView does.
+        if request.GET.get("format") in ("json", "yaml"):
+            format = request.GET.get("format")
+            if request.user.is_authenticated:
+                request.user.config.set("data_format", format, commit=True)
+        elif request.user.is_authenticated:
+            format = request.user.config.get("data_format", "json")
+        else:
+            format = "json"
+
+        if self.base_template is None:
+            self.base_template = "netbox_custom_objects/customobject.html"
+
+        # Build the proxy once and reuse it for both the rendered context and the
+        # (RBAC-restricted) source-context list, instead of letting get_config_context()
+        # rebuild it internally.
+        proxy = obj._config_context_source()
+        if proxy is not None:
+            source_contexts = ConfigContext.objects.restrict(request.user, "view").get_for_object(proxy)
+        else:
+            source_contexts = ConfigContext.objects.none()
+
+        return render(
+            request,
+            "netbox_custom_objects/object_configcontext.html",
+            {
+                "object": obj,
+                "rendered_context": obj._render_config_context(proxy),
+                "source_contexts": source_contexts,
+                "format": format,
+                "base_template": self.base_template,
+                "tab": "configcontext",
             },
         )

@@ -1,0 +1,51 @@
+{% extends base_template %}
+{% load helpers %}
+{% load i18n %}
+
+{% block content %}
+  <div class="row">
+    <div class="col col-12 col-md-6">
+      <div class="card">
+        {% include 'extras/inc/configcontext_data.html' with title="Rendered Context" data=rendered_context format=format copyid="rendered_context" %}
+      </div>
+    </div>
+    <div class="col col-12 col-md-6">
+      <div class="card">
+        {% include 'extras/inc/configcontext_data.html' with title="Local Context" data=object.local_context_data format=format copyid="local_context" %}
+        <div class="card-footer">
+          <span class="help-block">
+            <i class="mdi mdi-information-outline"></i>
+            {% trans "The local config context overwrites all source contexts" %}.
+          </span>
+        </div>
+      </div>
+      <div class="card">
+        <h2 class="card-header d-flex justify-content-between">
+          {% trans "Source Contexts" %}
+          <div>
+            {% include 'extras/inc/format_toggle.html' %}
+          </div>
+        </h2>
+        {% for context in source_contexts %}
+          <div class="card-body">
+            <div class="float-end">
+              <span class="text-muted">{{ context.weight }}</span>
+            </div>
+            <strong>{{ context|linkify:"name" }}</strong>
+            {% if context.description %}
+              <br /><small>{{ context.description }}</small>
+            {% endif %}
+            {% include 'extras/inc/configcontext_data.html' with data=context.data format=format %}
+          </div>
+        {% empty %}
+          <div class="card-body">
+            <span class="text-muted">{% trans "None found" %}</span>
+            <div class="small text-muted mt-1">
+              {% trans "Config contexts are aggregated from objects this type references via fields named site, tenant, role, platform, location, device_type, or cluster." %}
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+{% endblock %}
