@@ -33,7 +33,9 @@ class _SkipQueryCountsWhenBranching:
         super().test_list_objects_with_permission()
 
 
-class CustomObjectTypeViewTestCase(_SkipQueryCountsWhenBranching, CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase):
+class CustomObjectTypeViewTestCase(
+    _SkipQueryCountsWhenBranching, CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase
+):
     """Test cases for CustomObjectType views."""
 
     model = CustomObjectType
@@ -244,7 +246,9 @@ class CustomObjectTypeFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.Pri
         ...
 
 
-class CustomObjectViewTestCase(_SkipQueryCountsWhenBranching, CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase):
+class CustomObjectViewTestCase(
+    _SkipQueryCountsWhenBranching, CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase
+):
     """Test cases for dynamic CustomObject views."""
 
     query_count_model_label = 'customobject-simple'
@@ -469,7 +473,9 @@ class CustomObjectViewTestCase(_SkipQueryCountsWhenBranching, CustomObjectsTestC
         self.assertHttpStatus(self.client.get(edit_url), 200)
 
 
-class ComplexCustomObjectViewTestCase(_SkipQueryCountsWhenBranching, CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase):
+class ComplexCustomObjectViewTestCase(
+    _SkipQueryCountsWhenBranching, CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase
+):
     """Test cases for complex custom objects with various field types."""
 
     query_count_model_label = 'customobject-complex'
@@ -762,7 +768,9 @@ class SelectFieldColorDetailViewTestCase(CustomObjectsTestCase, TestCase):
         self.assertIn('Yes', response.content.decode())
 
 
-class ObjectFieldViewTestCase(_SkipQueryCountsWhenBranching, CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase):
+class ObjectFieldViewTestCase(
+    _SkipQueryCountsWhenBranching, CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase
+):
     """Test cases for custom objects with object and multi-object fields."""
 
     query_count_model_label = 'customobject-objectfields'
