@@ -1,4 +1,5 @@
 import contextvars
+import logging
 import sys
 import warnings
 
@@ -11,6 +12,8 @@ from netbox.plugins import PluginConfig
 
 from .constants import APP_LABEL as APP_LABEL
 from .utilities import extract_cot_id_from_model_name, install_clear_cache_suppressor
+
+logger = logging.getLogger(__name__)
 
 # Context variable to track if we're currently running migrations
 _is_migrating = contextvars.ContextVar('is_migrating', default=False)
@@ -27,6 +30,11 @@ _checking_migrations = False
 # access recomputes with the full set of COT models.
 _app_ready = False
 
+# Guards ``super().ready()`` against the duplicate-registration check in
+# NetBox's ``register_serializer_resolver`` (triggered by ``serializer_resolver``
+# on this PluginConfig).
+_super_ready_called = False
+
 
 def _migration_started(sender, **kwargs):
     """Signal handler for pre_migrate - sets the migration flag."""
@@ -38,6 +46,78 @@ def _migration_finished(sender, **kwargs):
     global _migrations_checked
     _is_migrating.set(False)
     _migrations_checked = None
+
+
+# Guards the netbox-branching hook setup against duplicate registration if
+# ``ready()`` runs more than once (e.g. test isolation paths that reset the
+# app registry).  Covers signal connects and the netbox-branching
+# ``register_*`` functions, which do not all dedupe internally.
+_branching_hooks_registered = False
+
+
+def _reset_deferred_co_field_data(sender, **kwargs):
+    """Module-level receiver so Django's ``Signal.connect`` dedupes it across
+    repeat ``ready()`` invocations (a closure would have a fresh id each call).
+    """
+    from netbox_custom_objects.models import _deferred_co_field_data
+    _deferred_co_field_data.set(None)
+
+
+def _register_branching_hooks_once():
+    """Register netbox-branching integration hooks at most once per process.
+
+    Wraps the branching-resolver, objectchange-field-migrator, deferred-data
+    reset receivers, and squash-dependency-graph receiver.  Connect both pre-
+    and post- merge/sync/revert so the deferred-data reset runs even when the
+    operation raises (post-signals only fire on success).  ``weak=False`` keeps
+    the receivers alive past the end of ``ready()``.
+    """
+    global _branching_hooks_registered
+    if _branching_hooks_registered:
+        return
+
+    try:
+        from netbox_branching.signals import (
+            pre_merge, post_merge,
+            pre_sync, post_sync,
+            pre_revert, post_revert,
+        )
+    except ImportError:
+        return
+
+    for sig in (pre_merge, post_merge, pre_sync, post_sync, pre_revert, post_revert):
+        sig.connect(_reset_deferred_co_field_data, weak=False)
+
+    try:
+        from netbox_branching.utilities import (
+            register_branching_resolver,
+            register_objectchange_field_migrator,
+        )
+        from .branching import (
+            objectchange_field_migrator,
+            supports_branching_resolver,
+        )
+        register_branching_resolver(supports_branching_resolver)
+        register_objectchange_field_migrator(objectchange_field_migrator)
+        # Subscribe to the squash dependency-graph signal so CO-specific
+        # edges (M2M targets, polymorphic-M2M sidecar) get added before
+        # topological ordering.  Skipped silently on older netbox-branching
+        # that doesn't expose the signal yet.
+        try:
+            from netbox_branching.signals import (
+                squash_dependency_graph_built,
+            )
+            from .branching import add_custom_object_dependencies
+            squash_dependency_graph_built.connect(
+                add_custom_object_dependencies,
+                weak=False,
+            )
+        except ImportError:
+            pass
+    except ImportError:
+        pass
+
+    _branching_hooks_registered = True
 
 
 # Module-level flag so the heal runs at most once per process invocation even
@@ -64,12 +144,6 @@ def _heal_mixin_columns(sender, **kwargs):
     if any(cmd in sys.argv for cmd in ("makemigrations", "collectstatic")):
         return
 
-    # Set the flag *before* running so that subsequent post_migrate firings
-    # (one per installed app) are no-ops even if the first attempt raises.
-    # A failure here will not be retried in the same process; operators can
-    # run 'manage.py upgrade_custom_objects' manually if needed.
-    _heal_ran = True
-
     try:
         from netbox_custom_objects.mixin_migration import heal_all_cots  # noqa: PLC0415
         heal_all_cots(verbosity=kwargs.get("verbosity", 1))
@@ -78,6 +152,13 @@ def _heal_mixin_columns(sender, **kwargs):
         logging.getLogger(__name__).exception(
             "upgrade_custom_objects: unexpected error during mixin drift check"
         )
+        # Leave _heal_ran False so a subsequent post_migrate firing (or a
+        # manual 'manage.py upgrade_custom_objects') gets another attempt.
+        return
+
+    # Only mark complete on success so a transient failure can be retried by
+    # the next post_migrate firing in this process.
+    _heal_ran = True
 
 
 def _patch_object_selector_view():
@@ -115,12 +196,62 @@ def _patch_object_selector_view():
     ObjectSelectorView._get_filterset_class = _patched_get_filterset_class
 
 
+_graphql_view_patched = False
+
+
+def _patch_graphql_view():
+    """
+    Patch NetBox's GraphQL view so custom object types appear without a restart.
+
+    NetBox builds its GraphQL schema once at startup and binds it to the view via
+    ``as_view(schema=...)``.  Custom object types are created/deleted at runtime
+    and the app runs across multiple worker processes, so that single bound
+    schema goes stale.  This patch swaps in a per-request, per-process schema
+    that is rebuilt only when the database changes (see
+    :mod:`netbox_custom_objects.graphql.live`).
+
+    Like the ObjectSelectorView patch above, this monkey-patches NetBox because
+    the schema binding leaves no other extension point.  The wrapper is
+    re-decorated with ``csrf_exempt`` because Django copies that marker from
+    ``dispatch.__dict__`` onto the view at ``as_view()`` time (which runs after
+    this patch), and the GraphQL endpoint must accept token-authenticated POSTs.
+    """
+    global _graphql_view_patched
+    if _graphql_view_patched:
+        return
+
+    from django.views.decorators.csrf import csrf_exempt
+    from netbox.graphql.views import NetBoxGraphQLView
+
+    _original_dispatch = NetBoxGraphQLView.dispatch
+
+    @csrf_exempt
+    def _patched_dispatch(self, request, *args, **kwargs):
+        from netbox_custom_objects.graphql.live import get_live_schema
+
+        # netbox-branching has already activated the request's branch (from the
+        # X-NetBox-Branch header, ?_branch=, or the active_branch cookie) — the plugin
+        # imposes no GraphQL-specific branch policy.  get_live_schema builds the
+        # schema for whichever branch is active, so the schema and the data the query
+        # returns agree, and core models resolve exactly as they do without the plugin.
+        try:
+            live_schema = get_live_schema()
+            if live_schema is not None:
+                self.schema = live_schema
+        except Exception:  # noqa: BLE001 - fall back to the static schema
+            logger.warning("Failed to load live GraphQL schema; using static schema", exc_info=True)
+        return _original_dispatch(self, request, *args, **kwargs)
+
+    NetBoxGraphQLView.dispatch = _patched_dispatch
+    _graphql_view_patched = True
+
+
 # Plugin Configuration
 class CustomObjectsPluginConfig(PluginConfig):
     name = "netbox_custom_objects"
     verbose_name = "Custom Objects"
     description = "A plugin to manage custom objects in NetBox"
-    version = "0.5.3"
+    version = "0.6.0"
     author = 'Netbox Labs'
     author_email = 'support@netboxlabs.com'
     base_url = "custom-objects"
@@ -133,6 +264,18 @@ class CustomObjectsPluginConfig(PluginConfig):
     }
     required_settings = []
     template_extensions = "template_content.template_extensions"
+    # Resolves dynamic CO models (table{n}model) to on-the-fly serializers —
+    # they have no importable path at the conventional location.
+    serializer_resolver = "api.serializers.serializer_resolver"
+    # Registers the plugin's GraphQL schema contribution with NetBox.  The export
+    # is intentionally an empty list: custom object types are created/deleted at
+    # runtime, so a query class built once at startup would be immediately stale.
+    # The live, per-request schema is served instead by the GraphQL view patch in
+    # ``_patch_graphql_view`` (see the graphql/schema.py and graphql/live.py module
+    # docstrings).  The path resolves as module ``graphql.schema`` + attribute
+    # ``schema`` (NetBox loads resources via ``import_string``, which treats the
+    # final component as an attribute).
+    graphql_schema = "graphql.schema.schema"
 
     @staticmethod
     def should_skip_dynamic_model_creation():
@@ -216,10 +359,24 @@ class CustomObjectsPluginConfig(PluginConfig):
             # Always clear the recursion flag
             _checking_migrations = False
 
+    def _call_super_ready_once(self):
+        """Call ``super().ready()`` once; subsequent calls are no-ops.
+        ``register_serializer_resolver`` rejects duplicates."""
+        global _super_ready_called
+        if _super_ready_called:
+            return
+        super().ready()
+        _super_ready_called = True
+
     def ready(self):
         # Install the thread-safe apps.clear_cache wrapper before any dynamic
         # model is registered (must happen exactly once, before get_model() runs).
         install_clear_cache_suppressor()
+
+        # Register Django system checks (import triggers @register).  These
+        # enforce the conditional NetBox/netbox-branching version floors that
+        # PluginConfig's static min_version/max_version can't express.
+        from . import checks  # noqa: F401
 
         from .models import CustomObjectType
         from netbox_custom_objects.api.serializers import get_serializer_class
@@ -233,6 +390,23 @@ class CustomObjectsPluginConfig(PluginConfig):
 
         # Patch ObjectSelectorView to support dynamically-generated custom object models
         _patch_object_selector_view()
+
+        # Patch the GraphQL view so custom object types added/removed at runtime
+        # are reflected in the schema without a NetBox restart.
+        _patch_graphql_view()
+
+        # Keep the live GraphQL schema's signature cache fresh across workers
+        # event-driven, so the per-request hot path reads the cache instead of
+        # polling the database.
+        from .graphql.live import connect_signature_invalidation
+        connect_signature_invalidation()
+
+        # Register netbox-branching integration hooks (deferred-data reset
+        # receivers, branchable resolver, ObjectChange field-name migrator,
+        # squash dependency-graph receiver).  Guarded so the plugin still
+        # works without netbox-branching, and so repeat ready() invocations
+        # don't accumulate duplicate handlers.
+        _register_branching_hooks_once()
 
         # Suppress warnings about database calls during app initialization.
         # Filter by source module rather than message content — message-pattern
@@ -253,7 +427,7 @@ class CustomObjectsPluginConfig(PluginConfig):
 
             # Skip database calls if dynamic models can't be created yet
             if self.should_skip_dynamic_model_creation():
-                super().ready()
+                self._call_super_ready_once()
                 return
 
             try:
@@ -290,7 +464,7 @@ class CustomObjectsPluginConfig(PluginConfig):
             except (ProgrammingError, OperationalError):
                 # DB schema is incomplete (unapplied migrations). Skip dynamic
                 # model registration — it will happen after migrations finish.
-                super().ready()
+                self._call_super_ready_once()
                 return
 
         # Signal that ready() has fully completed.  get_models() checks this flag
@@ -304,7 +478,7 @@ class CustomObjectsPluginConfig(PluginConfig):
         from django.apps import apps as django_apps
         django_apps.clear_cache()
 
-        super().ready()
+        self._call_super_ready_once()
 
     def get_model(self, model_name, require_ready=True):
         self.apps.check_apps_ready()

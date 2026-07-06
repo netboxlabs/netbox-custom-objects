@@ -11,9 +11,6 @@
     <h5 class="modal-title">{% trans "Confirm Deletion" %}</h5>
   </div>
   <div class="modal-body">
-    {% if branch_warning %}
-      {% include 'netbox_custom_objects/inc/branch_warning.html' %}
-    {% endif %}
     <p>
       {% blocktrans trimmed %}
         Are you sure you want to <strong class="text-danger">delete</strong> {{ object_type }} <strong>{{ object }}</strong>?
@@ -65,6 +62,6 @@
     {% else %}
       <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">{% trans "Cancel" %}</button>
     {% endif %}
-    <button type="submit" class="btn btn-danger"{% if branch_warning %} disabled{% endif %}>{% trans "Delete" %}</button>
+    <button type="submit" class="btn btn-danger">{% trans "Delete" %}</button>
   </div>
 </form>

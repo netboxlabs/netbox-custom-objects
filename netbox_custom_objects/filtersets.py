@@ -7,10 +7,13 @@ from django import forms as django_forms
 from django.apps import apps as django_apps
 from django.db.models import QuerySet, Q
 from django.utils.dateparse import parse_date, parse_datetime
+from django.utils.timezone import make_aware, is_aware
 
 from extras.choices import CustomFieldTypeChoices
 from netbox.filtersets import NetBoxModelFilterSet
+from users.models import Owner, OwnerGroup
 
+from .choices import CustomObjectFieldTypeChoices
 from .constants import APP_LABEL
 from .models import CustomObjectType
 
@@ -339,6 +342,18 @@ def build_filter_for_field(field) -> dict:
     ):
         return _build_polymorphic_filters(field)
 
+    # Coordinates expand into two real columns; register a numeric filter for each.
+    if field.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+        base_label = field.label or field.name
+        return {
+            f"{field.name}_latitude": django_filters.NumberFilter(
+                field_name=f"{field.name}_latitude", label=f"{base_label} (latitude)"
+            ),
+            f"{field.name}_longitude": django_filters.NumberFilter(
+                field_name=f"{field.name}_longitude", label=f"{base_label} (longitude)"
+            ),
+        }
+
     spec = FIELD_TYPE_FILTERS.get(field.type)
     if not spec:
         return {}
@@ -434,15 +449,33 @@ def get_filterset_class(model):
             elif field.type == CustomFieldTypeChoices.TYPE_DATETIME:
                 parsed = parse_datetime(value)
                 if parsed is not None:
+                    if not is_aware(parsed):
+                        parsed = make_aware(parsed)
                     q |= Q(**{f"{field.name}__exact": parsed})
         if not q:
             return queryset.none()
         return queryset.filter(q)
 
+    def filter_owner_group_id(self, queryset, name, value):
+        if not value:
+            return queryset
+        return queryset.filter(owner__group__in=value)
+
     attrs = {
         "Meta": meta,
         "__module__": "netbox_custom_objects.filtersets",
         "search": search,
+        "filter_owner_group_id": filter_owner_group_id,
+        "owner_id": django_filters.ModelMultipleChoiceFilter(
+            field_name='owner',
+            queryset=Owner.objects.all(),
+            label='Owner (ID)',
+        ),
+        "owner_group_id": django_filters.ModelMultipleChoiceFilter(
+            queryset=OwnerGroup.objects.all(),
+            method='filter_owner_group_id',
+            label='Owner Group (ID)',
+        ),
     }
 
     # For each custom field, add a corresponding filter (dict of name → Filter).

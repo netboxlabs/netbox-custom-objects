@@ -16,23 +16,20 @@ from core.models import ObjectType
 from dcim.models import Site
 from ipam.models import Prefix, IPAddress
 from ipam.choices import PrefixStatusChoices
-from users.models import ObjectPermission, Token
+from users.models import ObjectPermission
 
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
-from netbox_custom_objects.tests.base import CustomObjectsTestCase, TransactionCleanupMixin
+from netbox_custom_objects.tests.base import (
+    CustomObjectsTestCase,
+    TransactionCleanupMixin,
+    create_token,
+)
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _create_token(user):
-    from users.choices import TokenVersionChoices
-    t = Token(version=TokenVersionChoices.V1, user=user)
-    t.save()
-    return t.token  # plaintext for V1 tokens
-
 
 def _grant_perm(user, action, model_class, name=None):
     perm = ObjectPermission(name=name or f"poly-test-{action}", actions=[action])
@@ -57,7 +54,7 @@ class PolymorphicFieldAPITest(TransactionCleanupMixin, CustomObjectsTestCase, Tr
         from django.test import Client as DjangoClient
         from utilities.testing import create_test_user
         self.user = create_test_user("poly-api-user")
-        token_key = _create_token(self.user)
+        token_key = create_token(self.user)
         self.header = {"HTTP_AUTHORIZATION": f"Token {token_key}"}
         # Reset client to clear the session cookie set by CustomObjectsTestCase.setUp()
         # (force_login causes SessionAuthentication to take priority over TokenAuthentication)

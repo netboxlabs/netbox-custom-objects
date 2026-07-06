@@ -1,16 +1,20 @@
 """
 Tests for all the different field types supported by Custom Object Type Fields.
 """
+from importlib import import_module
 from unittest import skip
 from unittest.mock import Mock
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
+from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist, ValidationError
+from django.db import connection, models
 from django.test import TestCase
 
 from core.models import ObjectType
 from dcim.models import Device, DeviceType, ModuleType
 from netbox_custom_objects.field_types import (
+    CoordinatesFieldType,
     MultiObjectFieldType,
     MultiSelectFieldType,
     ObjectFieldType,
@@ -189,6 +193,89 @@ class IntegerFieldTypeTestCase(FieldTypeTestCase):
 
         self.assertEqual(instance.count, 25)
 
+    def test_integer_field_is_64_bit(self):
+        """Integer fields use a 64-bit (bigint) column, not 32-bit (issue #532)."""
+        self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="count",
+            label="Count",
+            type="integer",
+        )
+
+        model = self.custom_object_type.get_model()
+
+        # The generated model field must be a BigIntegerField.
+        self.assertIsInstance(
+            model._meta.get_field("count"), models.BigIntegerField
+        )
+
+        # A value beyond the signed 32-bit range must round-trip through the DB.
+        big_value = 9_000_000_000  # > 2**31 - 1 (2_147_483_647)
+        instance = model.objects.create(name="Test", count=big_value)
+        instance.refresh_from_db()
+        self.assertEqual(instance.count, big_value)
+
+    def test_integer_field_upgrade_widens_existing_32bit_column(self):
+        """The 0015 migration widens pre-#532 32-bit integer columns to bigint.
+
+        New tables already get a bigint column (test_integer_field_is_64_bit),
+        but custom_objects_* tables created before issue #532 have a 32-bit
+        ``integer`` column that the field-type change alone does not alter --
+        they are managed=False. This exercises that upgrade path: realize the
+        column, force it back to 32-bit to mimic a legacy install, run the
+        migration's data function, and confirm it is widened in place.
+        """
+        field = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="legacy_count",
+            label="Legacy Count",
+            type="integer",
+        )
+
+        # Realize the backing model/table/column.
+        model = self.custom_object_type.get_model()
+
+        table_name = f"custom_objects_{self.custom_object_type.pk}"
+        column_name = field.name
+
+        def column_data_type():
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT data_type FROM information_schema.columns
+                    WHERE table_schema = current_schema()
+                      AND table_name = %s AND column_name = %s
+                    """,
+                    [table_name, column_name],
+                )
+                row = cursor.fetchone()
+                return row[0] if row else None
+
+        # Mimic a legacy install: force the column back to a 32-bit integer.
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f'ALTER TABLE "{table_name}" ALTER COLUMN "{column_name}" TYPE integer'
+            )
+        self.assertEqual(column_data_type(), "integer")
+
+        # Run the migration's data function against the legacy column.
+        # widen_integer_columns only reads stable CustomObjectTypeField columns
+        # (type, custom_object_type_id, name), so the current app registry is
+        # equivalent to the historical one RunPython would pass. If the function
+        # ever introspects historical field structure, switch to MigrationLoader.
+        migration = import_module(
+            "netbox_custom_objects.migrations.0016_widen_integer_columns"
+        )
+        with connection.schema_editor() as schema_editor:
+            migration.widen_integer_columns(apps, schema_editor)
+
+        # Column is widened, and a value beyond the 32-bit range round-trips.
+        self.assertEqual(column_data_type(), "bigint")
+        big_value = 9_000_000_000  # > 2**31 - 1 (2_147_483_647)
+        instance = model.objects.create(name="Test", legacy_count=big_value)
+        instance.refresh_from_db()
+        self.assertEqual(instance.legacy_count, big_value)
+
 
 class DecimalFieldTypeTestCase(FieldTypeTestCase):
     """Test cases for decimal field type."""
@@ -250,6 +337,166 @@ class DecimalFieldTypeTestCase(FieldTypeTestCase):
         instance = model.objects.create(name="Test", price=Decimal("25.75"))
 
         self.assertEqual(instance.price, Decimal("25.75"))
+
+
+class CoordinatesFieldTypeTestCase(FieldTypeTestCase):
+    """Test cases for the coordinates field type."""
+
+    def test_coordinates_field_creation(self):
+        """A coordinates field is created with the expected type."""
+        field = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="location",
+            label="Location",
+            type="coordinates",
+        )
+        self.assertEqual(field.type, "coordinates")
+
+    def test_coordinates_field_model_generation(self):
+        """One coordinates field expands into two backing decimal columns."""
+        self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="location",
+            label="Location",
+            type="coordinates",
+        )
+
+        model = self.custom_object_type.get_model()
+        column_names = {f.name for f in model._meta.local_fields}
+        self.assertIn("location_latitude", column_names)
+        self.assertIn("location_longitude", column_names)
+        # The logical field name itself is not a real column.
+        self.assertNotIn("location", column_names)
+
+        # Verify precision/validators mirror NetBox core's Site coordinates.
+        latitude = model._meta.get_field("location_latitude")
+        longitude = model._meta.get_field("location_longitude")
+        self.assertEqual((latitude.max_digits, latitude.decimal_places), (8, 6))
+        self.assertEqual((longitude.max_digits, longitude.decimal_places), (9, 6))
+
+        instance = model.objects.create(
+            name="Test",
+            location_latitude=Decimal("40.712800"),
+            location_longitude=Decimal("-74.006000"),
+        )
+        self.assertEqual(instance.location_latitude, Decimal("40.712800"))
+        self.assertEqual(instance.location_longitude, Decimal("-74.006000"))
+
+    def test_coordinates_display_value(self):
+        """get_display_value combines both columns, or returns None when unset."""
+        self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="location",
+            label="Location",
+            type="coordinates",
+        )
+        model = self.custom_object_type.get_model()
+        field_type = CoordinatesFieldType()
+
+        populated = model.objects.create(
+            name="A",
+            location_latitude=Decimal("40.712800"),
+            location_longitude=Decimal("-74.006000"),
+        )
+        self.assertEqual(
+            field_type.get_display_value(populated, "location"),
+            "40.712800, -74.006000",
+        )
+
+        empty = model.objects.create(name="B")
+        self.assertIsNone(field_type.get_display_value(empty, "location"))
+
+    def test_coordinates_validate_pair(self):
+        """Latitude and longitude must both be set or both be empty."""
+        field_type = CoordinatesFieldType()
+        # Both set / both empty are valid.
+        field_type.validate_pair(Decimal("1.0"), Decimal("2.0"))
+        field_type.validate_pair(None, None)
+        # Half-populated pairs are rejected.
+        with self.assertRaises(ValidationError):
+            field_type.validate_pair(Decimal("1.0"), None)
+        with self.assertRaises(ValidationError):
+            field_type.validate_pair(None, Decimal("2.0"))
+
+    def test_coordinates_field_rejects_unique(self):
+        """A coordinates field cannot be marked unique."""
+        field = CustomObjectTypeField(
+            custom_object_type=self.custom_object_type,
+            name="location",
+            label="Location",
+            type="coordinates",
+            unique=True,
+        )
+        with self.assertRaises(ValidationError):
+            field.full_clean()
+
+    def test_coordinates_field_search_weight_forced_to_zero(self):
+        """
+        A coordinates field has no column matching its name, so it can never be
+        indexed for search; clean() forces search_weight to 0 rather than honour a
+        non-zero value that would silently have no effect.
+        """
+        field = CustomObjectTypeField(
+            custom_object_type=self.custom_object_type,
+            name="location",
+            label="Location",
+            type="coordinates",
+            search_weight=500,
+        )
+        field.full_clean()
+        self.assertEqual(field.search_weight, 0)
+
+    def test_change_existing_field_to_coordinates_rejected(self):
+        """An existing non-coordinates field cannot be converted to coordinates."""
+        field = self.create_custom_object_type_field(
+            self.custom_object_type, name="location", label="Location", type="text",
+        )
+        field.type = "coordinates"
+        with self.assertRaises(ValidationError):
+            field.full_clean()
+
+    def test_change_coordinates_field_to_other_type_rejected(self):
+        """An existing coordinates field cannot be converted to another type."""
+        field = self.create_custom_object_type_field(
+            self.custom_object_type, name="location", label="Location", type="coordinates",
+        )
+        field.type = "text"
+        with self.assertRaises(ValidationError):
+            field.full_clean()
+
+    def test_coordinates_backing_column_collision_rejected(self):
+        """
+        Adding a coordinates field whose backing column collides with an existing
+        field's column raises a ValidationError rather than a DB error.
+        """
+        self.create_custom_object_type_field(
+            self.custom_object_type, name="location_latitude", label="Lat", type="text",
+        )
+        field = CustomObjectTypeField(
+            custom_object_type=self.custom_object_type,
+            name="location",
+            label="Location",
+            type="coordinates",
+        )
+        with self.assertRaises(ValidationError):
+            field.full_clean()
+
+    def test_field_colliding_with_coordinates_backing_column_rejected(self):
+        """
+        The reverse collision: a plain field named "<coord>_longitude" cannot be
+        added when a coordinates field "<coord>" already exists.
+        """
+        self.create_custom_object_type_field(
+            self.custom_object_type, name="location", label="Location", type="coordinates",
+        )
+        field = CustomObjectTypeField(
+            custom_object_type=self.custom_object_type,
+            name="location_longitude",
+            label="Lon",
+            type="text",
+        )
+        with self.assertRaises(ValidationError):
+            field.full_clean()
 
 
 class BooleanFieldTypeTestCase(FieldTypeTestCase):
@@ -364,11 +611,11 @@ class DateTimeFieldTypeTestCase(FieldTypeTestCase):
             name="created_datetime",
             label="Created DateTime",
             type="datetime",
-            default="2023-01-01T12:00:00"
+            default="2023-01-01T12:00:00+00:00"
         )
 
         self.assertEqual(field.type, "datetime")
-        self.assertEqual(field.default, "2023-01-01T12:00:00")
+        self.assertEqual(field.default, "2023-01-01T12:00:00+00:00")
 
     def test_datetime_field_validation(self):
         """Test datetime field validation."""
@@ -399,7 +646,7 @@ class DateTimeFieldTypeTestCase(FieldTypeTestCase):
         )
 
         model = self.custom_object_type.get_model()
-        test_datetime = datetime(2023, 1, 1, 12, 0, 0)
+        test_datetime = datetime(2023, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
         instance = model.objects.create(name="Test", created_datetime=test_datetime)
 
         self.assertEqual(instance.created_datetime, test_datetime)

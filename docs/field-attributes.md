@@ -19,6 +19,7 @@ The following attributes are available when creating or editing a Custom Object 
 | `multiselect` | Multiple selections from a choice set |
 | `object` | Reference to a single object (built-in NetBox object or Custom Object) |
 | `multiobject` | Reference to multiple objects of the same type |
+| `coordinates` | A geographic latitude/longitude pair (with a map link) |
 
 ## Common Attributes
 
@@ -85,3 +86,24 @@ Field types: `object`, `multiobject`
 
 !!! note
     To reference another Custom Object Type, choose `Custom Objects > <Custom Object Type name>` in the **Related object type** dropdown. To create a polymorphic field that may reference objects of multiple types, enable **Polymorphic** and select the allowed types under **Related object types**.
+
+## Coordinates Fields
+
+Field type: `coordinates`
+
+A single `coordinates` field stores a geographic latitude/longitude pair, mirroring NetBox's
+native Site/Device coordinates (plain decimal columns — PostGIS is not required). Adding one
+`coordinates` field named `location` creates two backing columns and two form inputs:
+
+- `location_latitude` — decimal, range −90 to 90, up to 6 decimal places
+- `location_longitude` — decimal, range −180 to 180, up to 6 decimal places
+
+Behaviour:
+
+- **Both-or-neither.** Latitude and longitude must either both be set or both be empty; setting
+  only one is rejected in forms and via the REST API.
+- **REST API.** The pair is exposed as two flat fields, `<name>_latitude` and `<name>_longitude`
+  (matching NetBox core's serializers), not as a nested object.
+- **Map link.** Detail views render the coordinates with a **Map** button that opens the location
+  using NetBox's `MAPS_URL` configuration parameter (Google Maps by default).
+- `Must be unique` and `Default` are not supported for `coordinates` fields.

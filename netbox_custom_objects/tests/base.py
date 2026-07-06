@@ -1,12 +1,94 @@
 # Test utilities for netbox_custom_objects plugin
+import logging
+
+from django.apps import apps as django_apps
+from django.contrib.contenttypes.management import create_contenttypes
 from django.db import connection
 from django.test import Client
-from core.models import ObjectType
+from core.models import ObjectChange, ObjectType
 from extras.models import CustomFieldChoiceSet
 from users.models import Token
 from utilities.testing import create_test_user
 
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.constants import APP_LABEL
+from netbox_custom_objects.models import (
+    CustomObjectType,
+    CustomObjectTypeField,
+    _deferred_co_field_data,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def create_token(user):
+    """Create an API token for ``user`` and return its plaintext key.
+
+    Handles the NetBox 4.5 token-versioning change (V1 tokens expose ``.token``;
+    older NetBox exposes ``.key``).
+    """
+    try:
+        # NetBox >= 4.5
+        from users.choices import TokenVersionChoices
+        token = Token(version=TokenVersionChoices.V1, user=user)
+        token.save()
+        return token.token
+    except ImportError:
+        # NetBox < 4.5
+        token = Token(user=user)
+        token.save()
+        return token.key
+
+
+def _recreate_contenttypes():
+    """Recreate ContentType rows for all installed apps using get_or_create.
+
+    Called after a TransactionTestCase flush so that subsequent test classes —
+    whether TransactionTestCase or regular TestCase — can look up ContentTypes.
+    Using create_contenttypes (get_or_create) avoids the duplicate-key
+    violations that serialized_rollback causes in the parallel test runner.
+    """
+    for app_config in django_apps.get_app_configs():
+        create_contenttypes(app_config, verbosity=0)
+
+
+def _purge_stale_generated_models():
+    """Remove dynamically generated CustomObject models from the app registry.
+
+    Regular TestCase subclasses wrap each test in a transaction that is rolled
+    back at the end.  Rolling back the transaction drops any tables created by
+    DDL inside the test (e.g. CREATE TABLE custom_objects_1), but Django's
+    in-memory model registry is NOT rolled back.  The stale model entry then
+    causes problems for subsequent TransactionTestCase tests:
+
+    - netbox-branching's get_tables_to_replicate() iterates over registered
+      models to build the list of tables to clone into the branch schema.
+      A stale model entry makes it try to COPY a table that no longer exists.
+    - Django's cascade-delete collector queries non-existent tables.
+
+    Calling this in setUp() of every TransactionTestCase prevents both failure
+    modes.
+    """
+    stale = [
+        name
+        for name, model in list(django_apps.all_models.get(APP_LABEL, {}).items())
+        if getattr(model, '_generated_table_model', False)
+    ]
+    for name in stale:
+        django_apps.all_models[APP_LABEL].pop(name, None)
+    if stale:
+        # Expire reverse-relation caches so any other app whose
+        # ``related_objects`` already pointed at the now-removed dynamic
+        # models gets rebuilt on next access.  ``apps.clear_cache()`` alone
+        # clears the apps registry's own cache, but per-model
+        # ``_meta._relation_tree`` snapshots taken by Django outside this
+        # plugin survive — they need explicit expiry.
+        from django.contrib.contenttypes.models import ContentType  # noqa: PLC0415
+        ContentType._meta._expire_cache(forward=False)
+        for app_models in django_apps.all_models.values():
+            for model in app_models.values():
+                model._meta._expire_cache(forward=False)
+        django_apps.clear_cache()
+
 
 _DYNAMIC_TABLE_PREFIX = "custom_objects_"
 
@@ -67,9 +149,10 @@ def _drop_dynamic_tables():
     all_tables = connection.introspection.table_names()
     dynamic = [t for t in all_tables if t.startswith(_DYNAMIC_TABLE_PREFIX)]
     if dynamic:
+        quote = connection.ops.quote_name
         with connection.cursor() as cursor:
             for table in dynamic:
-                cursor.execute(f'DROP TABLE IF EXISTS "{table}" CASCADE')
+                cursor.execute(f'DROP TABLE IF EXISTS {quote(table)} CASCADE')
 
     # Step 5 — rebuild the app registry cache now that both the stale model
     # entries (step 2) and the stale COT rows (step 3) are gone.  get_models()
@@ -77,6 +160,32 @@ def _drop_dynamic_tables():
     # Site._meta.related_objects (etc.) is rebuilt without phantom FK pointers.
     if stale_names:
         django_apps.clear_cache()
+
+
+def _reset_netbox_request_context():
+    """Clear ``netbox.context.current_request`` and ``events_queue``.
+
+    netbox.context_managers.event_tracking() yields without try/finally, so an
+    exception inside the ``with`` block leaves current_request set to the
+    previous request.  In test runs that means the next test's pre_save signal
+    handler attributes ObjectChange to the previous test's user (whose row has
+    since been truncated by _fixture_teardown), producing
+    ``IntegrityError: insert or update on table "core_objectchange" violates
+    foreign key constraint`` on user_id.
+    """
+    try:
+        from netbox.context import current_request, events_queue, query_cache
+    except ImportError:
+        return
+    current_request.set(None)
+    events_queue.set({})
+    # ``query_cache`` is a ContextVar in current NetBox; in older releases it
+    # was a thread-local without ``.set()``.  Catch AttributeError narrowly so
+    # an unrelated bug surfaces instead of being swallowed silently.
+    try:
+        query_cache.set(None)
+    except AttributeError:
+        logger.debug('netbox.context.query_cache has no .set(); skipping reset')
 
 
 def create_api_token(user):
@@ -114,20 +223,62 @@ class TransactionCleanupMixin:
         _drop_dynamic_tables()
         super()._pre_setup()
 
+    def setUp(self):
+        # Purge stale in-memory model registrations left by earlier TestCase
+        # classes whose rolled-back transactions dropped the backing tables.
+        # Must run before any code that iterates the model registry (e.g.
+        # netbox-branching's get_tables_to_replicate() during provisioning).
+        _purge_stale_generated_models()
+        # Clear netbox's request-scoped ContextVars.  netbox.context_managers
+        # event_tracking() sets current_request on entry but only clears it
+        # *after* yield — if a test raises inside the with block, the cleanup
+        # never runs and the next test's branch.save() (which reads
+        # current_request to attribute ObjectChange) still sees the previous
+        # test's user, whose row was truncated by _fixture_teardown → FK
+        # violation on core_objectchange.user_id.
+        _reset_netbox_request_context()
+        super().setUp()
+
+    def tearDown(self):
+        # Reset deferred CO field data so it doesn't bleed into the next test.
+        _deferred_co_field_data.set(None)
+        # Defensive reset — see setUp for rationale.  Belt-and-braces in case a
+        # test enters event_tracking but raises before super().tearDown() runs.
+        _reset_netbox_request_context()
+        # Delete COTs and their backing tables before the DB flush.  Cleanup
+        # is best-effort — if a previous test left the schema in a weird
+        # state, log and continue rather than failing tearDown (which would
+        # mask the real failure that put us here).
+        for cot in CustomObjectType.objects.all():
+            try:
+                cot.delete()
+            except Exception:
+                logger.warning(
+                    'tearDown could not delete COT %s', cot.pk, exc_info=True,
+                )
+        # Remove any ObjectChange records created during the test (merge/revert creates
+        # them in main with the test user's ID).  If left in place, the serialized_rollback
+        # snapshot accumulates them and restoring it after the next flush produces FK
+        # violations (user referenced by ObjectChange no longer exists).
+        ObjectChange.objects.all().delete()
+        super().tearDown()
+
     def _fixture_teardown(self):
+        """Flush tables and restore ContentTypes for the next test class.
+
+        TransactionTestCase._fixture_teardown() TRUNCATEs all tables after each
+        test.  Any TestCase class that follows on the same worker then finds no
+        ContentTypes and fails trying to look up ObjectType rows.  Recreating
+        them here (idempotently, via get_or_create) avoids that without the
+        duplicate-key violations that serialized_rollback=True causes when the
+        parallel runner tries to INSERT rows that already exist.
+        """
         # Drop dynamic tables before Django's flush; without this, the flush
         # command's TRUNCATE of django_content_type fails because our through
         # tables have FK references to it.
         _drop_dynamic_tables()
         super()._fixture_teardown()
-
-    def tearDown(self):
-        for cot in CustomObjectType.objects.all():
-            try:
-                cot.delete()
-            except Exception as exc:
-                print(f"WARNING: tearDown could not delete COT {cot.pk}: {exc}")
-        super().tearDown()
+        _recreate_contenttypes()
 
 
 class CustomObjectsTestCase:
