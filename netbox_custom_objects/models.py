@@ -60,7 +60,8 @@ from netbox.search import SearchIndex
 from utilities import filters
 from utilities.data import deepmerge, get_config_value_ci
 from utilities.datetime import datetime_from_timestamp
-from utilities.jinja2 import render_jinja2
+from jinja2 import Undefined as _JinjaUndefined
+from jinja2.sandbox import SandboxedEnvironment as _JinjaSandbox
 from utilities.object_types import object_type_name
 from utilities.querysets import RestrictedQuerySet
 from utilities.serialization import deserialize_object as _deserialize_object
@@ -827,7 +828,7 @@ class CustomObject(
                     ctx[field_name] = '' if value is None else value
                 except Exception:  # noqa: BLE001
                     ctx[field_name] = ''
-            rendered = render_jinja2(expression, ctx).strip()
+            rendered = _JinjaSandbox(undefined=_JinjaUndefined).from_string(expression).render(**ctx).strip()
             return rendered or None
         except Exception:  # noqa: BLE001
             return None
