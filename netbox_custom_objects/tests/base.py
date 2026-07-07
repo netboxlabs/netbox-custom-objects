@@ -1,5 +1,6 @@
 # Test utilities for netbox_custom_objects plugin
 import logging
+import time
 
 from django.apps import apps as django_apps
 from django.contrib.contenttypes.management import create_contenttypes
@@ -130,9 +131,7 @@ def _drop_branch_schemas():
         # Forcefully terminate all other backend connections to this database.
         # Closing Django's connection objects is not always enough — netbox-branching
         # may open psycopg connections outside Django's registry, and Django's close()
-        # may not flush immediately.  pg_terminate_backend() guarantees the backend
-        # processes are gone before we issue DROP SCHEMA, so no lock contention.
-        # The CI postgres user is a superuser, so this call succeeds.
+        # may not flush immediately.  The CI postgres user is a superuser.
         with connection.cursor() as cursor:
             cursor.execute("""
                 SELECT pg_terminate_backend(pid)
@@ -140,7 +139,25 @@ def _drop_branch_schemas():
                 WHERE datname = current_database()
                 AND pid <> pg_backend_pid()
             """)
+        # pg_terminate_backend() sends a signal; the backend needs time to roll
+        # back any open transaction and release all locks before DROP SCHEMA can
+        # acquire the lock it needs.  Poll until all client backends are gone,
+        # up to a 10-second deadline, then fall through (lock_timeout is the
+        # final backstop).
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            with connection.cursor() as cursor:
+                cursor.execute("""
+                    SELECT count(*) FROM pg_stat_activity
+                    WHERE datname = current_database()
+                    AND pid <> pg_backend_pid()
+                    AND backend_type = 'client backend'
+                """)
+                if cursor.fetchone()[0] == 0:
+                    break
+            time.sleep(0.2)
         with connection.cursor() as cursor:
+            cursor.execute("SET lock_timeout = '10s'")
             for schema in schemas:
                 try:
                     cursor.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')

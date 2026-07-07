@@ -106,4 +106,4 @@ jobs:
       - name: Run tests
         working-directory: netbox
         run: |
-          python netbox/manage.py test netbox_custom_objects.tests --keepdb --verbosity=2
+          python netbox/manage.py test ${{ matrix.with-branching == true && 'netbox_custom_objects.tests.test_branching' || 'netbox_custom_objects.tests' }} --keepdb --verbosity=2
