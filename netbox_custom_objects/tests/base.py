@@ -3,7 +3,7 @@ import logging
 
 from django.apps import apps as django_apps
 from django.contrib.contenttypes.management import create_contenttypes
-from django.db import connection
+from django.db import connection, connections
 from django.test import Client
 from core.models import ObjectChange, ObjectType
 from extras.models import CustomFieldChoiceSet
