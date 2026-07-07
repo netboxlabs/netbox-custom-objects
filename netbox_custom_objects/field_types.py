@@ -1680,6 +1680,37 @@ class MultiObjectFieldType(FieldType):
                 tables = connection.introspection.table_names(cursor)
                 if table_name not in tables:
                     schema_editor.create_model(through)
+                    # Make the target FK DEFERRABLE INITIALLY DEFERRED so that
+                    # iterative branch merges (time-ordered) can insert
+                    # through-table rows before the referenced target CO object
+                    # exists in main — the FK check is deferred to transaction
+                    # commit, by which point all CO CREATEs have been applied.
+                    cursor.execute(
+                        """
+                        SELECT c.conname
+                        FROM pg_constraint c
+                        JOIN pg_class t ON t.oid = c.conrelid
+                        JOIN pg_namespace n ON n.oid = t.relnamespace
+                        WHERE t.relname = %s
+                          AND n.nspname = current_schema()
+                          AND c.contype = 'f'
+                          AND EXISTS (
+                            SELECT 1 FROM pg_attribute a
+                            WHERE a.attrelid = t.oid
+                              AND a.attname = 'target_id'
+                              AND a.attnum = ANY(c.conkey)
+                          )
+                        """,
+                        [table_name],
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        cursor.execute(
+                            'ALTER TABLE {} ALTER CONSTRAINT {} DEFERRABLE INITIALLY DEFERRED'.format(
+                                connection.ops.quote_name(table_name),
+                                connection.ops.quote_name(row[0]),
+                            )
+                        )
 
     def get_polymorphic_through_model(self, field_instance, source_model_string):
         """
