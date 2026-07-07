@@ -1122,6 +1122,12 @@ class CustomManyToManyManager(Manager):
         )
 
     def get_queryset(self):
+        # Serve prefetched results when present, like Django's ManyRelatedManager.
+        try:
+            return self.instance._prefetched_objects_cache[self.prefetch_cache_name]
+        except (AttributeError, KeyError):
+            pass
+
         # Create a base queryset for the target model
         base_qs = self.model.objects.all()
 
