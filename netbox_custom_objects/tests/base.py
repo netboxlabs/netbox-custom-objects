@@ -128,16 +128,20 @@ def _drop_branch_schemas():
             schemas = [row[0] for row in cursor.fetchall()]
         if not schemas:
             return
-        # Forcefully terminate all other backend connections to this database.
+        # Forcefully terminate client backend connections to this database.
         # Closing Django's connection objects is not always enough — netbox-branching
         # may open psycopg connections outside Django's registry, and Django's close()
         # may not flush immediately.  The CI postgres user is a superuser.
+        # NOTE: this terminates ALL client backends (e.g. an IDE db explorer) on
+        # the test database when run locally — intentionally limited to
+        # backend_type = 'client backend' to leave background workers alone.
         with connection.cursor() as cursor:
             cursor.execute("""
                 SELECT pg_terminate_backend(pid)
                 FROM pg_stat_activity
                 WHERE datname = current_database()
                 AND pid <> pg_backend_pid()
+                AND backend_type = 'client backend'
             """)
         # pg_terminate_backend() sends a signal; the backend needs time to roll
         # back any open transaction and release all locks before DROP SCHEMA can
