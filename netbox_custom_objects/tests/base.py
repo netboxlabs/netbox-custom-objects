@@ -102,7 +102,21 @@ def _drop_branch_schemas():
     Django's TRUNCATE then fails with "cannot truncate a table referenced in a
     foreign key constraint".  In the test database, the only non-system schemas
     are branch schemas, so dropping all of them is safe.
+
+    DROP SCHEMA blocks if any connection is still open to that schema.  We close
+    all non-default Django connections first, then set a PostgreSQL lock_timeout
+    as a backstop so a stale connection outside Django's registry can't cause an
+    indefinite hang.
     """
+    # Close all non-default connections — branch connections may still be open
+    # if tearDown didn't track every connection that was opened during the test.
+    for alias in list(connections):
+        if alias != 'default':
+            try:
+                connections[alias].close()
+            except Exception:
+                pass
+
     try:
         with connection.cursor() as cursor:
             cursor.execute("""
@@ -111,10 +125,17 @@ def _drop_branch_schemas():
                 AND schema_name NOT LIKE 'pg_%%'
             """)
             schemas = [row[0] for row in cursor.fetchall()]
-        if schemas:
-            with connection.cursor() as cursor:
-                for schema in schemas:
+        if not schemas:
+            return
+        with connection.cursor() as cursor:
+            # lock_timeout prevents DROP SCHEMA from blocking indefinitely if a
+            # connection outside Django's registry still holds a schema lock.
+            cursor.execute("SET lock_timeout = '5s'")
+            for schema in schemas:
+                try:
                     cursor.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+                except Exception:
+                    logger.warning('Could not drop branch schema %r', schema, exc_info=True)
     except Exception:
         logger.warning('_drop_branch_schemas failed', exc_info=True)
 
