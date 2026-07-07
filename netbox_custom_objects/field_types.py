@@ -1705,10 +1705,24 @@ class MultiObjectFieldType(FieldType):
                     )
                     row = cursor.fetchone()
                     if row:
+                        conname = row[0]
                         cursor.execute(
                             'ALTER TABLE {} ALTER CONSTRAINT {} DEFERRABLE INITIALLY DEFERRED'.format(
                                 connection.ops.quote_name(table_name),
-                                connection.ops.quote_name(row[0]),
+                                connection.ops.quote_name(conname),
+                            )
+                        )
+                        # _schema_add_field calls SET CONSTRAINTS ALL IMMEDIATE
+                        # before invoking create_m2m_table, which forces all
+                        # constraints — including newly-created DEFERRABLE ones
+                        # — to be checked immediately for the rest of the
+                        # transaction.  Re-defer this specific constraint so
+                        # that iterative merge CREATEs can insert through-table
+                        # rows before the target CO exists (all within the same
+                        # transaction.atomic() merge).
+                        cursor.execute(
+                            'SET CONSTRAINTS {} DEFERRED'.format(
+                                connection.ops.quote_name(conname),
                             )
                         )
 
