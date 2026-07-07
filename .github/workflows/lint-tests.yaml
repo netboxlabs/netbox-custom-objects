@@ -111,6 +111,7 @@ jobs:
             -c "ALTER SYSTEM SET checkpoint_timeout = '30min'" \
             -c "ALTER SYSTEM SET max_wal_size = '2GB'" \
             -c "ALTER SYSTEM SET synchronous_commit = off" \
+            -c "ALTER SYSTEM SET lock_timeout = '60s'" \
             -c "SELECT pg_reload_conf()"
       - name: Run tests
         working-directory: netbox
