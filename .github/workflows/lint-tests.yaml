@@ -33,6 +33,7 @@ jobs:
       - name: Run ruff
         run: ruff check
   tests:
+    name: tests (${{ matrix.name }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
     continue-on-error: ${{ matrix.with-branching == true }}
@@ -41,8 +42,11 @@ jobs:
       matrix:
         include:
           - netbox-ref: "main"
+            name: "main"
           - netbox-ref: "feature"
+            name: "feature"
           - netbox-ref: "main"
+            name: "main, branching"
             with-branching: true
     services:
       redis:
