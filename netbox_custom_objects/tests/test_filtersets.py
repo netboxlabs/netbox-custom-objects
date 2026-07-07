@@ -132,6 +132,19 @@ class ObjectFieldFiltersetTestCase(CustomObjectsTestCase, TestCase):
     def test_no_filter_returns_all(self):
         self.assertEqual(self._filterset({}).qs.count(), 3)
 
+    def test_filter_by_id_suffix_returns_matching_object(self):
+        # Regression for #561: NetBox's Related Objects panel generates
+        # ?<field>_id=N links; the filterset must honour the _id suffix form.
+        pks = list(self._filterset({"device_id": self.device1.pk}).qs.values_list("pk", flat=True))
+        self.assertIn(self.obj_d1.pk, pks)
+        self.assertNotIn(self.obj_d2.pk, pks)
+        self.assertNotIn(self.obj_none.pk, pks)
+
+    def test_filter_by_id_suffix_different_value(self):
+        pks = list(self._filterset({"device_id": self.device2.pk}).qs.values_list("pk", flat=True))
+        self.assertIn(self.obj_d2.pk, pks)
+        self.assertNotIn(self.obj_d1.pk, pks)
+
 
 # ---------------------------------------------------------------------------
 # MultiObjectFieldType.get_filterform_field — form field shape
@@ -1374,3 +1387,63 @@ class PolymorphicMultiObjectFiltersetTestCase(CustomObjectsTestCase, TestCase):
         self.assertIsInstance(result, dict)
         for form_field in result.values():
             self.assertIsInstance(form_field, DynamicModelMultipleChoiceField)
+
+
+# ---------------------------------------------------------------------------
+# CoordinatesFieldType — filter form fields and queryset filtering
+# ---------------------------------------------------------------------------
+
+
+class CoordinatesFieldFiltersetTestCase(CustomObjectsTestCase, TestCase):
+    """A coordinates field yields two numeric filters on its backing columns."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(name="CoordFSTest", slug="coord-fs-test")
+        cls.create_custom_object_type_field(
+            cls.cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        cls.field = cls.create_custom_object_type_field(
+            cls.cot, name="location", label="Location", type="coordinates"
+        )
+
+        model = cls.cot.get_model()
+        cls.obj1 = model.objects.create(
+            name="Box1",
+            location_latitude=Decimal("40.712800"),
+            location_longitude=Decimal("-74.006000"),
+        )
+        cls.obj2 = model.objects.create(
+            name="Box2",
+            location_latitude=Decimal("51.507400"),
+            location_longitude=Decimal("-0.127800"),
+        )
+
+    def _filterset(self, params):
+        model = self.cot.get_model()
+        return get_filterset_class(model)(params, model.objects.all())
+
+    def test_build_filter_for_field_returns_two_filters(self):
+        filters = build_filter_for_field(self.field)
+        self.assertEqual(
+            set(filters), {"location_latitude", "location_longitude"}
+        )
+        self.assertIsInstance(filters["location_latitude"], django_filters.NumberFilter)
+
+    def test_filter_by_latitude(self):
+        pks = list(
+            self._filterset({"location_latitude": "40.712800"}).qs.values_list("pk", flat=True)
+        )
+        self.assertIn(self.obj1.pk, pks)
+        self.assertNotIn(self.obj2.pk, pks)
+
+    def test_filter_by_longitude(self):
+        pks = list(
+            self._filterset({"location_longitude": "-0.127800"}).qs.values_list("pk", flat=True)
+        )
+        self.assertIn(self.obj2.pk, pks)
+        self.assertNotIn(self.obj1.pk, pks)
+
+    def test_no_filter_returns_all(self):
+        self.assertEqual(self._filterset({}).qs.count(), 2)

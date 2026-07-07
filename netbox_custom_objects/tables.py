@@ -50,6 +50,25 @@ OBJECTCHANGE_REQUEST_ID = """
 <a href="?request_id={{ value }}">{{ value }}</a>
 """
 
+# The {% url %} tag must stay on a single line: Django's template lexer does not parse a {% %}
+# tag whose delimiters span a newline. {% with %} shortens the slug accessor to keep it under 120.
+CUSTOM_OBJECT_TAGS = """
+{% load helpers %}
+{% with slug=record.custom_object_type.slug %}
+{% for tag in value.all %}
+    <a href="{% url 'plugins:netbox_custom_objects:customobject_list' custom_object_type=slug %}?tag={{ tag.slug }}">
+        <span {% if tag.description %}title="{{ tag.description }}"{% endif %}
+              class="badge"
+              style="color: {{ tag.color|fgcolor }}; background-color: #{{ tag.color }}">
+            {{ tag }}
+        </span>
+    </a>
+{% empty %}
+    <span class="text-muted">&mdash;</span>
+{% endfor %}
+{% endwith %}
+"""
+
 
 class CustomObjectTypeTable(NetBoxTable):
     comments = columns.MarkdownColumn(
@@ -91,21 +110,7 @@ class CustomObjectTagColumn(columns.TagColumn):
     """
     Custom TagColumn that generates tag filter URLs with the custom_object_type slug.
     """
-    template_code = """
-    {% load helpers %}
-    {% for tag in value.all %}
-        <a href="{% url 'plugins:netbox_custom_objects:customobject_list'
-                  custom_object_type=record.custom_object_type.slug %}?tag={{ tag.slug }}">
-            <span {% if tag.description %}title="{{ tag.description }}"{% endif %}
-                  class="badge"
-                  style="color: {{ tag.color|fgcolor }}; background-color: #{{ tag.color }}">
-                {{ tag }}
-            </span>
-        </a>
-    {% empty %}
-        <span class="text-muted">&mdash;</span>
-    {% endfor %}
-    """
+    template_code = CUSTOM_OBJECT_TAGS
 
     def __init__(self):
         # Override parent __init__ to use our custom template

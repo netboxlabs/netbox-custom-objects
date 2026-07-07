@@ -661,6 +661,87 @@ class ComplexCustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.Prima
         ...
 
 
+class SelectFieldColorDetailViewTestCase(CustomObjectsTestCase, TestCase):
+    """Regression tests for #529: selection field colors render correctly in the detail view."""
+
+    def setUp(self):
+        super().setUp()
+        self.colored_choice_set = CustomFieldChoiceSet.objects.create(
+            name='Colored Status Choices',
+            extra_choices=[['active', 'Active'], ['planned', 'Planned'], ['retired', 'Retired']],
+            choice_colors={'active': 'green', 'planned': 'blue', 'retired': 'red'},
+        )
+        self.cot = CustomObjectType.objects.create(
+            name='ColorTestObject',
+            verbose_name_plural='Color Test Objects',
+            slug='color-test-objects',
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name='name', label='Name', type='text', primary=True, required=True,
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name='status', label='Status', type='select',
+            choice_set=self.colored_choice_set,
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name='phases', label='Phases', type='multiselect',
+            choice_set=self.colored_choice_set,
+        )
+        self.model = self.cot.get_model()
+        self.instance = self.model.objects.create(
+            name='Test Instance', status='active', phases=['planned', 'retired'],
+        )
+        content_type = ContentType.objects.get_for_model(self.model)
+        perm = ObjectPermission(name='color-test-view', actions=['view'])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(content_type)
+
+    def _detail_url(self, instance=None):
+        return reverse(
+            'plugins:netbox_custom_objects:customobject',
+            kwargs={'pk': (instance or self.instance).pk, 'custom_object_type': self.cot.slug},
+        )
+
+    def test_detail_view_renders_select_color_badge(self):
+        """Regression #529: select field with a color renders a colored badge in the detail view."""
+        response = self.client.get(self._detail_url())
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode()
+        self.assertIn('text-bg-green', content)
+        self.assertIn('Active', content)
+
+    def test_detail_view_renders_multiselect_color_badges(self):
+        """Regression #529: multiselect field with colors renders colored badges in the detail view."""
+        response = self.client.get(self._detail_url())
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode()
+        self.assertIn('text-bg-blue', content)
+        self.assertIn('text-bg-red', content)
+        self.assertIn('Planned', content)
+        self.assertIn('Retired', content)
+
+    def test_detail_view_renders_label_for_uncolored_select_field(self):
+        """A select field with no colors configured renders the human-readable label without error."""
+        uncolored_choice_set = CustomFieldChoiceSet.objects.create(
+            name='Uncolored Choices',
+            extra_choices=[['yes', 'Yes'], ['no', 'No']],
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name='flag', label='Flag', type='select', choice_set=uncolored_choice_set,
+        )
+        model = self.cot.get_model(no_cache=True)
+        instance = model.objects.create(name='Uncolored Test', status='active', flag='yes')
+        response = self.client.get(self._detail_url(instance))
+        self.assertEqual(response.status_code, 200)
+        # The human-readable label "Yes" must appear, not the raw stored value "yes"
+        self.assertIn('Yes', response.content.decode())
+
+
 class ObjectFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase):
     """Test cases for custom objects with object and multi-object fields."""
 
@@ -906,6 +987,91 @@ class ObjectSelectorViewTestCase(TestCase):
         self.assertEqual(response.status_code, 200)
 
 
+class CoordinatesFieldViewTest(CustomObjectsTestCase, TestCase):
+    """UI form behaviour for the coordinates field type."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.cot = CustomObjectType.objects.create(
+            name="GeoView",
+            verbose_name_plural="Geo Views",
+            slug="geo-views",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.cot, name="name", type="text", primary=True, required=True
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.cot, name="location", type="coordinates"
+        )
+        cls.model = cls.cot.get_model()
+
+    def setUp(self):
+        super().setUp()
+        perm = ObjectPermission(
+            name="geo view all", actions=["view", "add", "change", "delete"]
+        )
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+    def _add_url(self):
+        return reverse(
+            "plugins:netbox_custom_objects:customobject_add",
+            kwargs={"custom_object_type": self.cot.slug},
+        )
+
+    def test_add_form_renders_two_inputs(self):
+        response = self.client.get(self._add_url())
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "location_latitude")
+        self.assertContains(response, "location_longitude")
+
+    def test_create_valid_coordinates(self):
+        from decimal import Decimal
+        data = {
+            "name": "Box",
+            "location_latitude": "40.712800",
+            "location_longitude": "-74.006000",
+        }
+        response = self.client.post(self._add_url(), data)
+        self.assertEqual(response.status_code, 302, getattr(response, "content", b""))
+        obj = self.model.objects.get(name="Box")
+        self.assertEqual(obj.location_latitude, Decimal("40.712800"))
+        self.assertEqual(obj.location_longitude, Decimal("-74.006000"))
+
+    def test_create_half_populated_pair_rejected(self):
+        data = {"name": "Bad", "location_latitude": "40.712800"}
+        response = self.client.post(self._add_url(), data)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(self.model.objects.filter(name="Bad").exists())
+
+    def _bulk_edit_url(self):
+        return reverse(
+            "plugins:netbox_custom_objects:customobject_bulk_edit",
+            kwargs={"custom_object_type": self.cot.slug},
+        )
+
+    def test_bulk_edit_half_populated_pair_rejected(self):
+        """Bulk-editing only one of latitude/longitude is rejected."""
+        from decimal import Decimal
+        obj = self.model.objects.create(
+            name="Existing",
+            location_latitude=Decimal("40.712800"),
+            location_longitude=Decimal("-74.006000"),
+        )
+        data = {
+            "pk": [obj.pk],
+            "_apply": "Apply",
+            "location_latitude": "10.000000",
+        }
+        response = self.client.post(self._bulk_edit_url(), data)
+        self.assertEqual(response.status_code, 200)
+        obj.refresh_from_db()
+        # Values are unchanged because the form failed validation.
+        self.assertEqual(obj.location_latitude, Decimal("40.712800"))
+        self.assertEqual(obj.location_longitude, Decimal("-74.006000"))
+
+
 class QuickAddViewTestCase(CustomObjectsTestCase, TestCase):
     """
     Tests for the quick-add flow in CustomObjectEditView.
@@ -983,3 +1149,123 @@ class QuickAddViewTestCase(CustomObjectsTestCase, TestCase):
         # No new object created.
         model = self.target_cot.get_model()
         self.assertFalse(model.objects.exists())
+
+
+class CustomObjectConfigContextViewTestCase(CustomObjectsTestCase, TestCase):
+    """Config context tab on custom object instances (#98)."""
+
+    def _config_context_url(self, cot, instance):
+        return reverse(
+            'plugins:netbox_custom_objects:customobject_configcontext',
+            kwargs={'custom_object_type': cot.slug, 'pk': instance.pk},
+        )
+
+    def _grant_view(self, model):
+        perm = ObjectPermission(name=f'view-{model._meta.model_name}', actions=['view'])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(model))
+        return perm
+
+    def test_tab_returns_200_and_shows_local_data_when_enabled(self):
+        cot = self.create_custom_object_type(
+            name='cc_view', slug='cc-view', config_context_enabled=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        model = cot.get_model()
+        obj = model.objects.create(name='obj-1', local_context_data={'ntp_servers': ['10.0.0.1']})
+        self._grant_view(model)
+
+        response = self.client.get(self._config_context_url(cot, obj))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'ntp_servers')
+        self.assertContains(response, 'Config Context')
+
+    def test_tab_lists_aggregated_source_contexts(self):
+        """A `site` field surfaces the referenced Site's ConfigContext in the tab."""
+        from dcim.models import Site
+        from extras.models import ConfigContext
+
+        site = Site.objects.create(name='Tab Site', slug='tab-site')
+        cc = ConfigContext.objects.create(name='tab-site-ctx', weight=1000, is_active=True, data={'a': 1})
+        cc.sites.add(site)
+
+        cot = self.create_custom_object_type(
+            name='cc_src', slug='cc-src', config_context_enabled=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name='site', label='Site', type='object',
+            related_object_type=self.get_site_object_type(),
+        )
+        model = cot.get_model()
+        obj = model.objects.create(name='o1', site=site)
+        self._grant_view(model)
+        # The Source Contexts panel restricts to ConfigContexts the user may view
+        # (matching NetBox's ObjectConfigContextView), so grant that too.
+        self._grant_view(ConfigContext)
+
+        response = self.client.get(self._config_context_url(cot, obj))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Source Contexts')
+        self.assertContains(response, 'tab-site-ctx')
+
+    def test_tab_403_without_view_permission(self):
+        """The tab must honour object-level RBAC, not leak local_context_data."""
+        cot = self.create_custom_object_type(
+            name='cc_rbac', slug='cc-rbac', config_context_enabled=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        model = cot.get_model()
+        obj = model.objects.create(name='secret', local_context_data={'k': 'v'})
+
+        # No ObjectPermission granted → restricted queryset yields nothing → 404.
+        response = self.client.get(self._config_context_url(cot, obj))
+        self.assertIn(response.status_code, (403, 404))
+        self.assertNotContains(response, 'secret', status_code=response.status_code)
+
+    def test_tab_link_present_only_when_enabled(self):
+        """The detail page shows the Config Context tab only for enabled types."""
+        enabled = self.create_custom_object_type(
+            name='cc_on', slug='cc-on', config_context_enabled=True,
+        )
+        self.create_custom_object_type_field(
+            enabled, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        disabled = self.create_custom_object_type(name='cc_no', slug='cc-no')
+        self.create_custom_object_type_field(
+            disabled, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        on_model = enabled.get_model()
+        off_model = disabled.get_model()
+        on_obj = on_model.objects.create(name='on')
+        off_obj = off_model.objects.create(name='off')
+
+        # The detail view (generic.ObjectView) enforces object-level view perms.
+        perm = ObjectPermission(name='view-cc-detail', actions=['view'])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(on_model))
+        perm.object_types.add(ObjectType.objects.get_for_model(off_model))
+
+        on_detail = self.client.get(on_obj.get_absolute_url())
+        self.assertContains(on_detail, self._config_context_url(enabled, on_obj))
+
+        off_detail = self.client.get(off_obj.get_absolute_url())
+        self.assertNotContains(off_detail, 'config-context')
+
+    def test_tab_404_when_disabled(self):
+        cot = self.create_custom_object_type(name='cc_off_view', slug='cc-off-view')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        obj = cot.get_model().objects.create(name='x')
+
+        response = self.client.get(self._config_context_url(cot, obj))
+        self.assertEqual(response.status_code, 404)

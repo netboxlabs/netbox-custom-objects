@@ -8,13 +8,17 @@ from django.db import transaction
 from django.urls import NoReverseMatch
 from django.utils.translation import gettext_lazy as _
 from extras.choices import CustomFieldTypeChoices
+from extras.models import ConfigContextModel
 from netbox.api.serializers import NetBoxModelSerializer
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from rest_framework.reverse import reverse
 from rest_framework.utils import model_meta
 
+from users.api.serializers_.owners import OwnerSerializer
+
 from netbox_custom_objects import constants, field_types
+from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
 from netbox_custom_objects.models import (CustomObject, CustomObjectType,
                                           CustomObjectTypeField)
 
@@ -332,6 +336,7 @@ class CustomObjectTypeSerializer(NetBoxModelSerializer):
             "version",
             "group_name",
             "description",
+            "config_context_enabled",
             "tags",
             "created",
             "last_updated",
@@ -342,6 +347,16 @@ class CustomObjectTypeSerializer(NetBoxModelSerializer):
         ]
         read_only_fields = ("schema_document",)
         brief_fields = ("id", "url", "name", "slug", "description")
+
+    def validate_config_context_enabled(self, value):
+        # Settable only at creation: the backing local_context_data column is
+        # created once when the type's table is built, so the flag is immutable
+        # afterwards (mirrors the disable-on-edit behaviour of the web form).
+        if self.instance is not None and value != self.instance.config_context_enabled:
+            raise serializers.ValidationError(
+                _("Config context support cannot be changed after creation.")
+            )
+        return value
 
     def get_table_model_name(self, obj):
         return obj.get_table_model_name(obj.id)
@@ -457,8 +472,22 @@ def get_serializer_class(model, skip_object_fields=False):
         if isinstance(attr, field_types.PolymorphicM2MDescriptor)
     )
 
+    # If a COT field is named 'owner', it shadows the OwnerMixin FK on the dynamic model
+    # (Django silently lets child attrs override abstract parent fields). The serializer
+    # must skip the FK owner field to avoid OwnerSerializer.to_representation() being
+    # called on a string value and crashing on .pk.
+    has_owner_field_conflict = any(f.name == 'owner' for f in model_fields)
+
     # Create field list including all necessary fields
     base_fields = ["id", "url", "display", "created", "last_updated", "tags"]
+    if not has_owner_field_conflict:
+        base_fields.insert(3, "owner")
+
+    # Expose local_context_data when the type opted in to config context support
+    # (the generated model mixes in ConfigContextModel via
+    # CustomObjectConfigContextMixin).
+    if issubclass(model, ConfigContextModel):
+        base_fields.append("local_context_data")
 
     # Include _context field when the model has designated context fields
     has_context_fields = bool(getattr(model, '_context_field_ids', []))
@@ -468,6 +497,11 @@ def get_serializer_class(model, skip_object_fields=False):
     # Only include custom field names that will actually be added to the serializer
     custom_field_names = []
     for field in model_fields:
+        # Coordinates fields expand into two real columns; expose them flat, mirroring
+        # NetBox core's Site/Device latitude/longitude serializer fields.
+        if field.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+            custom_field_names += [f"{field.name}_latitude", f"{field.name}_longitude"]
+            continue
         if field.name not in model_field_names:
             continue  # excluded during model generation (e.g. broken FK)
         if skip_object_fields and field.type in [
@@ -523,6 +557,12 @@ def get_serializer_class(model, skip_object_fields=False):
         f.name for f in model_fields
         if f.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT and f.is_polymorphic
     }
+    # (latitude_column, longitude_column) pairs for coordinates fields.
+    _coordinate_fields = [
+        (f"{f.name}_latitude", f"{f.name}_longitude")
+        for f in model_fields
+        if f.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES
+    ]
 
     def get__context(self, obj):
         """Return context field values as a nested display object for APISelect secondary text."""
@@ -541,6 +581,13 @@ def get_serializer_class(model, skip_object_fields=False):
     # Stock DRF create() without raise_errors_on_nested_writes guard
     def create(self, validated_data):
         ModelClass = self.Meta.model
+
+        # taggit's TaggableManager is not detected by model_meta.get_field_info() as a
+        # standard M2M relation.  If left in validated_data it gets passed to
+        # Model._default_manager.create(), where Django's __init__ sets it as a plain
+        # instance attribute (shadowing the manager), giving the illusion of success but
+        # never persisting to the DB.  Pop it here and save via taggit's own API.
+        tags = validated_data.pop('tags', None)
 
         info = model_meta.get_field_info(ModelClass)
         many_to_many = {}
@@ -562,10 +609,16 @@ def get_serializer_class(model, skip_object_fields=False):
 
         instance = ModelClass._default_manager.create(**validated_data)
 
+        if tags is not None:
+            instance._tags = tags
+            instance.tags.set([t.name for t in tags])
+        else:
+            instance._tags = []
+
         if many_to_many:
             for field_name, value in many_to_many.items():
                 field = getattr(instance, field_name)
-                field.set(value)
+                field.set(value if value is not None else [])
 
         for field_name, value in poly_gfk.items():
             setattr(instance, field_name, value)
@@ -580,6 +633,11 @@ def get_serializer_class(model, skip_object_fields=False):
 
     # Stock DRF update() with custom field.set() for M2M
     def update(self, instance, validated_data):
+        # Pop tags before the setattr loop — taggit's manager has no __set__, so
+        # leaving tags in validated_data would shadow the manager with a plain list.
+        tags = validated_data.pop('tags', None)
+        instance._tags = tags or []
+
         info = model_meta.get_field_info(instance)
 
         # Pop polymorphic GFK fields
@@ -606,9 +664,13 @@ def get_serializer_class(model, skip_object_fields=False):
 
         instance.save()
 
+        if tags is not None:
+            instance._tags = tags
+            instance.tags.set([t.name for t in tags])
+
         for attr, value in m2m_fields:
             field = getattr(instance, attr)
-            field.set(value, clear=True)
+            field.set(value if value is not None else [], clear=True)
 
         for field_name, value in poly_m2m.items():
             mgr = getattr(instance, field_name)
@@ -638,6 +700,31 @@ def get_serializer_class(model, skip_object_fields=False):
                 saved[field_name] = data.pop(field_name)
         data = NetBoxModelSerializer.validate(self, data)
         data.update(saved)
+
+        # Coordinates: latitude and longitude must both be set or both be empty.
+        # On partial updates, only enforce when at least one of the pair is supplied.
+        for lat_field, lon_field in _coordinate_fields:
+            lat_in_data = lat_field in data
+            lon_in_data = lon_field in data
+            if not lat_in_data and not lon_in_data:
+                continue
+            # For a PATCH that touches only one column, the other is absent from
+            # data; fall back to the instance's current DB value so clearing just
+            # one half of an already-populated pair is still rejected.
+            latitude = data.get(lat_field) if lat_in_data else (
+                getattr(self.instance, lat_field, None) if self.instance else None
+            )
+            longitude = data.get(lon_field) if lon_in_data else (
+                getattr(self.instance, lon_field, None) if self.instance else None
+            )
+            if (latitude is None) != (longitude is None):
+                # Pin the error to the empty field rather than non_field_errors,
+                # mirroring the UI form's add_error() behaviour.
+                missing_field = lat_field if latitude is None else lon_field
+                raise serializers.ValidationError(
+                    {missing_field: [_("Latitude and longitude must both be set or both be empty.")]}
+                )
+
         return data
 
     # Create basic attributes for the serializer
@@ -652,6 +739,9 @@ def get_serializer_class(model, skip_object_fields=False):
         "update": update,
         "validate": validate,
     }
+
+    if not has_owner_field_conflict:
+        attrs["owner"] = OwnerSerializer(nested=True, required=False, allow_null=True)
 
     if has_context_fields:
         attrs["_context"] = serializers.SerializerMethodField()

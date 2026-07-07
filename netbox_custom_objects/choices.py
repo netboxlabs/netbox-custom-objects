@@ -1,5 +1,19 @@
 from django.utils.translation import gettext_lazy as _
+from extras.choices import CustomFieldTypeChoices
 from utilities.choices import ChoiceSet
+
+
+class CustomObjectFieldTypeChoices(CustomFieldTypeChoices):
+    """
+    Extends NetBox's CustomFieldTypeChoices with field types specific to custom
+    objects. All existing ``CustomFieldTypeChoices.TYPE_*`` members remain valid.
+    """
+
+    TYPE_COORDINATES = "coordinates"
+
+    CHOICES = CustomFieldTypeChoices.CHOICES + (
+        (TYPE_COORDINATES, _("Coordinates")),
+    )
 
 
 class ObjectFieldOnDeleteChoices(ChoiceSet):

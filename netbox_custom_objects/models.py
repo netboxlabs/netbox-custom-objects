@@ -34,11 +34,12 @@ from extras.choices import (
     CustomFieldUIEditableChoices,
     CustomFieldUIVisibleChoices,
 )
-from extras.models import CustomField
+from extras.models import ConfigContext, ConfigContextModel, CustomField
 from extras.models.customfields import SEARCH_TYPES
 from extras.utils import is_taggable, run_validators
 from netbox.config import get_config
 from netbox.models import ChangeLoggedModel, NetBoxModel
+from netbox.models.mixins import OwnerMixin
 from netbox.models.features import (
     BookmarksMixin,
     ChangeLoggingMixin,
@@ -57,7 +58,7 @@ from netbox.plugins import get_plugin_config
 from netbox.registry import registry
 from netbox.search import SearchIndex
 from utilities import filters
-from utilities.data import get_config_value_ci
+from utilities.data import deepmerge, get_config_value_ci
 from utilities.datetime import datetime_from_timestamp
 from utilities.object_types import object_type_name
 from utilities.querysets import RestrictedQuerySet
@@ -65,9 +66,17 @@ from utilities.serialization import deserialize_object as _deserialize_object
 from utilities.string import title
 from utilities.validators import validate_regex
 
-from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
-from netbox_custom_objects.constants import APP_LABEL, RESERVED_FIELD_NAMES
-from netbox_custom_objects.field_types import FIELD_TYPE_CLASS, LazyForeignKey, safe_table_name
+from netbox_custom_objects.choices import (CustomObjectFieldTypeChoices,
+                                            ObjectFieldOnDeleteChoices)
+from netbox_custom_objects.constants import (
+    APP_LABEL,
+    CONFIG_CONTEXT_DIMENSION_FIELDS,
+    RESERVED_FIELD_NAMES,
+)
+from netbox_custom_objects.field_types import (
+    FIELD_TYPE_CLASS, LazyForeignKey, safe_table_name,
+    PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor,
+)
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
 from netbox_custom_objects.utilities import (
     _suppress_clear_cache,
@@ -317,6 +326,9 @@ def _schema_add_field(fi, model, schema_editor, schema_conn):
                     mf._to_model_name,
                 )
 
+    # Flush any pending DEFERRABLE FK trigger events (e.g. owner_id from OwnerMixin)
+    # before ALTER TABLE; PostgreSQL rejects ADD COLUMN when deferred triggers are pending.
+    schema_editor.execute('SET CONSTRAINTS ALL IMMEDIATE')
     schema_editor.add_field(model, mf)
     if fi.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
         ft.create_m2m_table(fi, model, fi.name, schema_conn=schema_conn)
@@ -572,6 +584,7 @@ def _set_with_collision_preference(result, key, value):
 
 
 class CustomObject(
+    OwnerMixin,
     BookmarksMixin,
     ChangeLoggingMixin,
     CloningMixin,
@@ -809,6 +822,8 @@ class CustomObject(
             except AttributeError:
                 primary_field_value = None
         if not primary_field_value:
+            if self.pk is None:  # post-delete: pk is cleared by Django's Model.delete()
+                return str(self.custom_object_type.display_name)
             return f"{self.custom_object_type.display_name} {self.id}"
         return str(primary_field_value) or str(self.id)
 
@@ -930,12 +945,20 @@ class CustomObject(
         if not hasattr(self, "custom_object_type_id"):
             return ()
 
-        # Get all field names where is_cloneable=True for this custom object type
+        # Get all fields where is_cloneable=True for this custom object type
         cloneable_fields = self.custom_object_type.fields.filter(
             is_cloneable=True
-        ).values_list("name", flat=True)
+        ).values_list("name", "type")
 
-        return tuple(cloneable_fields)
+        names = []
+        for name, field_type in cloneable_fields:
+            # Coordinates fields have no single column; clone the two backing columns.
+            if field_type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+                names += [f"{name}_latitude", f"{name}_longitude"]
+            else:
+                names.append(name)
+
+        return tuple(names)
 
     def get_absolute_url(self):
         return reverse(
@@ -964,6 +987,78 @@ class CustomObject(
             kwargs = {}
         kwargs["custom_object_type"] = cls.custom_object_type.slug
         return reverse(cls._get_viewname(action, rest_api), kwargs=kwargs)
+
+
+class CustomObjectConfigContextMixin(ConfigContextModel):
+    """ConfigContextModel variant for dynamically generated custom object models.
+
+    Inherits ``local_context_data`` (a JSONField) and its ``clean()`` validator
+    from NetBox's ``ConfigContextModel``.  Custom objects have none of the fixed
+    site/tenant/role attributes that ``ConfigContext.get_for_object()`` reads, so
+    we can't hand a custom object to it directly.  Instead, by convention (issue
+    #98), a single non-polymorphic OBJECT field named ``site`` / ``tenant`` /
+    ``role`` / ``platform`` / ``location`` / ``device_type`` / ``cluster`` and
+    pointing at the matching NetBox model feeds that assignment dimension.  We
+    build a proxy from those fields and reuse ``get_for_object`` so all of
+    NetBox's matching, hierarchy walking, and weight ordering apply.  When no
+    such field exists we fall back to local-data-only.
+    """
+
+    class Meta:
+        abstract = True
+
+    def _config_context_source(self):
+        """Proxy populated from convention-named OBJECT fields, or None if none match.
+
+        Only honours a field whose *name* and *target model* both match the
+        convention, so a mistyped/mispointed field is silently ignored rather
+        than feeding the wrong dimension.
+        """
+        from types import SimpleNamespace
+
+        cot = self.custom_object_type
+        by_name = {
+            f.name: f
+            for f in cot.fields.filter(
+                type=CustomFieldTypeChoices.TYPE_OBJECT,
+                is_polymorphic=False,
+                name__in=CONFIG_CONTEXT_DIMENSION_FIELDS.keys(),
+            )
+        }
+        dims = {name: None for name in CONFIG_CONTEXT_DIMENSION_FIELDS}
+        used = False
+        for name, (app_label, model_name) in CONFIG_CONTEXT_DIMENSION_FIELDS.items():
+            f = by_name.get(name)
+            ct = getattr(f, "related_object_type", None)
+            if f and ct and (ct.app_label, ct.model) == (app_label, model_name):
+                dims[name] = getattr(self, name, None)
+                used = True
+        if not used:
+            return None
+        proxy = SimpleNamespace(**dims)
+        proxy.tags = self.tags  # custom objects are taggable
+        return proxy
+
+    def get_config_context(self):
+        """Merge ConfigContexts applicable to referenced dimension objects, then
+        overlay ``local_context_data`` (which takes precedence)."""
+        return self._render_config_context(self._config_context_source())
+
+    def _render_config_context(self, source):
+        """Merge the ConfigContexts for *source* (a proxy from
+        ``_config_context_source()``, or ``None``), then overlay
+        ``local_context_data``.  Takes a pre-built *source* so a caller that also
+        needs the source-context list (the detail tab) can build the proxy once
+        instead of paying for the ``cot.fields`` lookup twice.
+        """
+        data = {}
+        if source is not None:
+            contexts = ConfigContext.objects.get_for_object(source, aggregate_data=True) or []
+            for context in contexts:
+                data = deepmerge(data, context)
+        if self.local_context_data:
+            data = deepmerge(data, self.local_context_data)
+        return data
 
 
 def validate_pep440(value):
@@ -1056,6 +1151,14 @@ class CustomObjectType(NetBoxModel):
         blank=True,
         editable=False
     )
+    config_context_enabled = models.BooleanField(
+        default=False,
+        verbose_name=_("config context support"),
+        help_text=_(
+            "Enable local config context data on objects of this type. "
+            "Can only be set when the type is created."
+        ),
+    )
 
     class Meta:
         verbose_name = "Custom Object Type"
@@ -1083,6 +1186,24 @@ class CustomObjectType(NetBoxModel):
             raise ValidationError(
                 {"slug": _("Slug field cannot be empty.")}
             )
+
+        # config_context_enabled is immutable after creation: the local_context_data
+        # column is created once when the type's table is built (managed=False, no
+        # migration), so flipping the flag would desync the generated model from the
+        # physical schema (False→True makes every query raise "column does not exist").
+        # Enforce on validated paths (forms, full_clean()); raw QuerySet.update()/save()
+        # bypass clean() as with any Django model. (original is None only if the row was
+        # deleted concurrently — nothing to compare against, so skip.)
+        if self.pk:
+            original = CustomObjectType.objects.filter(pk=self.pk).values_list(
+                "config_context_enabled", flat=True
+            ).first()
+            if original is not None and self.config_context_enabled != original:
+                raise ValidationError({
+                    "config_context_enabled": _(
+                        "Config context support cannot be changed after creation."
+                    )
+                })
 
         # Enforce max number of COTs that may be created (max_custom_object_types)
         if not self.pk:
@@ -1335,6 +1456,7 @@ class CustomObjectType(NetBoxModel):
                     self._register_context_through(branch_id, through_model)
                     if through_model and through_model not in through_models:
                         through_models.append(through_model)
+                _wire_polymorphic_reverse_descriptors(field_instance)
                 continue
 
             # Non-polymorphic: use safe present_fields lookup (avoids _relation_tree recursion).
@@ -1359,6 +1481,18 @@ class CustomObjectType(NetBoxModel):
 
         # Store through models on the model for yielding in get_models()
         model._through_models = through_models
+
+        # Wire any inbound polymorphic reverse descriptors from other CO fields that
+        # point at this model.  Handles the startup ordering problem: if the source COT
+        # was generated before this target COT, _wire_polymorphic_reverse_descriptors()
+        # called during the source's generation would have found model_class() == None
+        # for this target and skipped it.  Now that the model class exists, re-wire.
+        own_ot = ObjectType.objects.get_for_model(model)
+        for inbound_field in CustomObjectTypeField.objects.filter(
+            is_polymorphic=True,
+            related_object_types=own_ot,
+        ).exclude(related_name=''):
+            _wire_polymorphic_reverse_descriptors(inbound_field)
 
     def _register_context_through(self, branch_id, through_model):
         """Cache *through_model* under (self.pk, branch_id) and, for branch
@@ -1573,10 +1707,18 @@ class CustomObjectType(NetBoxModel):
 
             TM.post_through_setup = wrapped_post_through_setup
 
+            # Optionally mix in config context support (local_context_data) when
+            # the type opts in.  The mixin contributes a concrete column, so the
+            # flag is only honoured at creation time (the table is built once via
+            # schema_editor.create_model() and is otherwise managed=False).
+            bases = (CustomObject, models.Model)
+            if self.config_context_enabled:
+                bases = (CustomObject, CustomObjectConfigContextMixin, models.Model)
+
             try:
                 model = generate_model(
                     str(model_name),
-                    (CustomObject, models.Model),
+                    bases,
                     attrs,
                 )
             finally:
@@ -2053,7 +2195,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     type = models.CharField(
         verbose_name=_("type"),
         max_length=50,
-        choices=CustomFieldTypeChoices,
+        choices=CustomObjectFieldTypeChoices,
         default=CustomFieldTypeChoices.TYPE_TEXT,
         help_text=_("The type of data this custom object field holds"),
     )
@@ -2384,6 +2526,17 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             return self.choice_set.choices
         return []
 
+    def get_choice_label(self, value):
+        if not hasattr(self, '_choice_map'):
+            self._choice_map = dict(self.choices)
+        return self._choice_map.get(value, value)
+
+    def get_choice_color(self, value):
+        if self.choice_set:
+            getter = getattr(self.choice_set, 'get_choice_color', None)
+            return getter(value) if getter else None
+        return None
+
     @property
     def related_object_type_label(self):
         if self.is_polymorphic:
@@ -2487,6 +2640,22 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             raise ValidationError(
                 {"unique": _("Uniqueness cannot be enforced for boolean or multiobject fields")}
             )
+
+        # Coordinates fields expand into two columns and have no single value, so a
+        # number of single-value options do not apply.
+        if self.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+            if self.unique:
+                raise ValidationError(
+                    {"unique": _("Uniqueness cannot be enforced for coordinates fields")}
+                )
+            if self.default is not None:
+                raise ValidationError(
+                    {"default": _("A default value cannot be set for coordinates fields")}
+                )
+            # A coordinates field has no single column matching its name, so it can
+            # never be added to the search index. Force the weight to 0 rather than
+            # silently honouring a non-zero value that has no effect.
+            self.search_weight = 0
 
         # Check if uniqueness constraint can be applied when changing from non-unique to unique.
         # _original is set by from_db only; deserialized objects (branch merge/revert)
@@ -2642,6 +2811,60 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 {"name": _("Cannot rename a polymorphic field after creation.")}
             )
 
+        # Prevent converting an existing field to or from coordinates.
+        #
+        # A coordinates field occupies two concrete columns ("{name}_latitude" and
+        # "{name}_longitude") while every other field type occupies a single column
+        # named "{name}". The save() path has no logic to migrate between those two
+        # shapes, so allowing the conversion would either leave the original column
+        # orphaned (→ coordinates) or attempt to alter a column that doesn't exist
+        # (coordinates → other), raising an uncaught database error. Reject it here,
+        # mirroring the polymorphic-flag guard above.
+        is_coordinates = self.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES
+        was_coordinates = self._original_type == CustomObjectFieldTypeChoices.TYPE_COORDINATES
+        if self.pk and not self._state.adding and is_coordinates != was_coordinates:
+            raise ValidationError(
+                {"type": _("Cannot change a field's type to or from coordinates after creation.")}
+            )
+
+        # Guard against backing-column name collisions.
+        #
+        # A coordinates field expands into "{name}_latitude"/"{name}_longitude". If a
+        # sibling field already occupies one of those column names (or vice versa: a
+        # plain field named "<coord>_latitude"), the schema editor would issue a
+        # duplicate-column ALTER and PostgreSQL would raise a ProgrammingError instead
+        # of a clean validation error. Detect the overlap here.
+        if self.custom_object_type_id:
+            def _occupied_columns(name, field_type):
+                if field_type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+                    return {f"{name}_latitude", f"{name}_longitude"}
+                return {name}
+
+            own_columns = _occupied_columns(self.name, self.type)
+            # A clash can only involve a coordinates field's expanded columns. If
+            # this field isn't coordinates, only sibling coordinates fields can
+            # collide with it — so skip the full sibling scan and query just those
+            # (usually zero) to avoid an extra queryset on every field's save.
+            if self.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+                siblings = self.custom_object_type.fields.all()
+            else:
+                siblings = self.custom_object_type.fields.filter(
+                    type=CustomObjectFieldTypeChoices.TYPE_COORDINATES
+                )
+            if self.pk:
+                siblings = siblings.exclude(pk=self.pk)
+            for sibling in siblings:
+                clash = own_columns & _occupied_columns(sibling.name, sibling.type)
+                if clash:
+                    raise ValidationError(
+                        {
+                            "name": _(
+                                "Field name conflicts with column '{column}' already used by field "
+                                "'{other}' on this custom object type."
+                            ).format(column=sorted(clash)[0], other=sibling.name)
+                        }
+                    )
+
         # related_name can only be set for object-type fields
         if self.related_name and self.type not in (
             CustomFieldTypeChoices.TYPE_OBJECT,
@@ -2655,17 +2878,71 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 }
             )
 
-        # related_name is not supported on polymorphic fields: GenericForeignKey ignores it
-        # and PolymorphicM2MDescriptor never consumes it, so any value set here would be silently
-        # dropped with no working reverse accessor.
-        if self.related_name and self.is_polymorphic:
-            raise ValidationError(
-                {
-                    "related_name": _(
-                        "Reverse relation names are not supported for polymorphic fields."
+        # related_name collision detection for polymorphic fields (M2M related_object_types).
+        # Only run on saved instances; unsaved ones have no M2M rows to collide with yet.
+        if self.related_name and self.is_polymorphic and self.pk:
+            for ot in self.related_object_types.all():
+                conflict = CustomObjectTypeField.objects.filter(
+                    is_polymorphic=True,
+                    related_name=self.related_name,
+                    related_object_types=ot,
+                ).exclude(pk=self.pk).first()
+                if conflict:
+                    raise ValidationError(
+                        {
+                            "related_name": _(
+                                'Reverse relation name "{name}" is already used by field '
+                                '"{field}" on "{object_type}" for object type "{ot}".'
+                            ).format(
+                                name=self.related_name,
+                                field=conflict.name,
+                                object_type=conflict.custom_object_type,
+                                ot=ot,
+                            )
+                        }
                     )
-                }
-            )
+
+                # Cross-check: non-polymorphic field claiming the same related_name on this target
+                conflict_np = CustomObjectTypeField.objects.filter(
+                    is_polymorphic=False,
+                    related_name=self.related_name,
+                    related_object_type=ot,
+                ).exclude(pk=self.pk).first()
+                if conflict_np:
+                    raise ValidationError(
+                        {
+                            "related_name": _(
+                                'Reverse relation name "{name}" is already used by field '
+                                '"{field}" on "{object_type}" for object type "{ot}".'
+                            ).format(
+                                name=self.related_name,
+                                field=conflict_np.name,
+                                object_type=conflict_np.custom_object_type,
+                                ot=ot,
+                            )
+                        }
+                    )
+
+                # Guard against clobbering an existing attribute on the target model class
+                # (e.g. a FK, method, or property that already uses that name).  We allow
+                # the name only if the class already carries one of our own descriptors —
+                # which means this field (or a field being renamed to/from it) is the one
+                # that set it.
+                target_cls = ot.model_class()
+                if target_cls is not None:
+                    existing = getattr(target_cls, self.related_name, None)
+                    if existing is not None and not isinstance(
+                        existing,
+                        (PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor),
+                    ):
+                        raise ValidationError(
+                            {
+                                "related_name": _(
+                                    'Reverse relation name "{name}" conflicts with an existing '
+                                    'attribute on model "{model}". Choose a different name.'
+                                ).format(name=self.related_name, model=target_cls.__name__)
+                            }
+                        )
 
         # related_name must be unique per related_object_type (when set)
         if self.related_name and self.related_object_type_id:
@@ -2683,6 +2960,26 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                             name=self.related_name,
                             field=conflict.name,
                             object_type=conflict.custom_object_type,
+                        )
+                    }
+                )
+
+            # Cross-check: polymorphic field claiming the same related_name on this target
+            conflict_poly = CustomObjectTypeField.objects.filter(
+                is_polymorphic=True,
+                related_name=self.related_name,
+                related_object_types=self.related_object_type,
+            ).exclude(pk=self.pk).first()
+            if conflict_poly:
+                raise ValidationError(
+                    {
+                        "related_name": _(
+                            'Reverse relation name "{name}" is already used by field '
+                            '"{field}" on "{object_type}".'
+                        ).format(
+                            name=self.related_name,
+                            field=conflict_poly.name,
+                            object_type=conflict_poly.custom_object_type,
                         )
                     }
                 )
@@ -3206,7 +3503,12 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         with transaction.atomic(using=schema_conn.alias):
             with schema_conn.schema_editor() as schema_editor:
                 if self._state.adding:
-                    if self.is_polymorphic:
+                    if self.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+                        # Coordinates expand into two concrete columns (latitude/longitude).
+                        for column_name, model_field in field_type.get_model_field(self).items():
+                            model_field.contribute_to_class(model, column_name)
+                            schema_editor.add_field(model, model_field)
+                    elif self.is_polymorphic:
                         if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
                             field_type.add_polymorphic_object_columns(self, model, schema_editor)
                         elif self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
@@ -3215,9 +3517,19 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                         _schema_add_field(self, model, schema_editor, schema_conn)
                         _apply_deferred_co_field(self)
                 else:
+                    if self.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+                        # Only a rename touches the schema; other attribute changes
+                        # (label, description, …) are persisted by super().save() below.
+                        if self.name != self._original_name:
+                            new_fields = list(field_type.get_model_field(self).items())
+                            old_fields = list(field_type.get_model_field(self.original).items())
+                            for (old_col, old_field), (new_col, new_field) in zip(old_fields, new_fields):
+                                old_field.contribute_to_class(model, old_col)
+                                new_field.contribute_to_class(model, new_col)
+                                schema_editor.alter_field(model, old_field, new_field)
                     # Polymorphic renames/type changes are rejected in clean();
                     # raise here if one slipped through to avoid silent column drift.
-                    if self.is_polymorphic or self._original_is_polymorphic:
+                    elif self.is_polymorphic or self._original_is_polymorphic:
                         if self.name != self._original_name:
                             raise ValidationError(
                                 {"name": _("Cannot rename a polymorphic field after creation.")}
@@ -3295,6 +3607,12 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             updated_model = self.custom_object_type.get_model(no_cache=True)
             self.custom_object_type.register_custom_object_search_index(updated_model)
 
+        # Clean up stale descriptor when related_name is renamed on an existing polymorphic field
+        if not is_new and self.is_polymorphic and hasattr(self, '_original'):
+            old_name = self.original.related_name
+            if old_name and old_name != self.related_name:
+                _unwire_polymorphic_reverse_descriptors(self, related_name=old_name)
+
         # Reindex all objects of this type if search indexing was affected.
         # self.original (backed by _original) is only set by from_db; the
         # `not is_new` branch implies _state.adding is False, which implies
@@ -3311,16 +3629,48 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         field_type = FIELD_TYPE_CLASS[self.type]()
         model = self.custom_object_type.get_model()
         schema_conn = _get_schema_connection()
+        _dropped_through_model = None
+
+        # Remove reverse descriptors before the M2M rows disappear via super().delete().
+        if self.is_polymorphic:
+            _unwire_polymorphic_reverse_descriptors(self)
 
         with schema_conn.schema_editor() as schema_editor:
-            if self.is_polymorphic:
+            if self.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+                # Drop both backing columns (latitude/longitude).
+                for column_name, model_field in field_type.get_model_field(self).items():
+                    model_field.contribute_to_class(model, column_name)
+                    schema_editor.remove_field(model, model_field)
+            elif self.is_polymorphic:
                 if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
                     field_type.remove_polymorphic_object_columns(self, model, schema_editor)
                 elif self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+                    try:
+                        _dropped_through_model = model._meta.apps.get_model(APP_LABEL, self.through_model_name)
+                    except LookupError:
+                        pass
                     field_type.drop_polymorphic_m2m_table(self, model, schema_editor)
             else:
+                # _schema_remove_field drops the through table (for MULTIOBJECT) but
+                # leaves the real through model in apps.all_models; capture it so the
+                # deregistration below removes it (issue #535).
+                if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+                    try:
+                        _dropped_through_model = model._meta.apps.get_model(APP_LABEL, self.through_model_name)
+                    except LookupError:
+                        pass
                 _schema_remove_field(self, model, schema_editor, schema_conn=schema_conn)
 
+        # Deregister the dropped through model (both polymorphic and plain MULTIOBJECT)
+        # so the cascade-delete collector no longer queries the now-missing table.
+        if _dropped_through_model is not None:
+            through_name = _dropped_through_model.__name__.lower()
+            with CustomObjectType._global_lock:
+                if through_name in apps.all_models.get(APP_LABEL, {}):
+                    del apps.all_models[APP_LABEL][through_name]
+            apps.clear_cache()
+
+        # Clear the model cache for this CustomObjectType when a field is deleted
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)
 
         # snapshot() first so change logging records a correct pre-state.
@@ -3370,6 +3720,100 @@ class CustomObjectObjectType(ObjectType):
         proxy = True
 
 
+# ---------------------------------------------------------------------------
+# Helpers for wiring/unwiring polymorphic reverse descriptors on target models
+# ---------------------------------------------------------------------------
+
+def _make_reverse_descriptor(field_instance):
+    """Return the appropriate reverse descriptor for *field_instance*, or None."""
+    cot_pk = field_instance.custom_object_type_id
+    if field_instance.type == CustomFieldTypeChoices.TYPE_OBJECT:
+        return PolymorphicObjectReverseDescriptor(cot_pk=cot_pk, field_name=field_instance.name)
+    if field_instance.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+        return PolymorphicMultiObjectReverseDescriptor(
+            cot_pk=cot_pk, through_model_name=field_instance.through_model_name
+        )
+    return None
+
+
+def _descriptor_matches_field(descriptor, field_instance):
+    """Return True if *descriptor* was placed by the given *field_instance*.
+
+    Used to distinguish a legitimate re-wire of the same field (e.g. during model
+    regeneration) from an attempt by a different field to overwrite an existing descriptor.
+    """
+    cot_pk = field_instance.custom_object_type_id
+    if isinstance(descriptor, PolymorphicObjectReverseDescriptor):
+        return descriptor.cot_pk == cot_pk and descriptor.field_name == field_instance.name
+    if isinstance(descriptor, PolymorphicMultiObjectReverseDescriptor):
+        return descriptor.cot_pk == cot_pk and descriptor.through_model_name == field_instance.through_model_name
+    return False
+
+
+def _wire_polymorphic_reverse_descriptors(field_instance):
+    """Attach reverse descriptors on target model classes for a polymorphic field.
+
+    For each content type in ``field_instance.related_object_types``, inject a
+    descriptor on the target model class so that ``target_instance.<related_name>``
+    returns the CO instances that point at it.  Called from
+    ``CustomObjectType._after_model_generation`` for every polymorphic field that
+    has a non-empty ``related_name``.
+    """
+    if not field_instance.related_name:
+        return
+    descriptor = _make_reverse_descriptor(field_instance)
+    if descriptor is None:
+        return
+    related_name = field_instance.related_name
+    for ot in field_instance.related_object_types.all():
+        target_cls = ot.model_class()
+        if target_cls is None:
+            continue
+        existing = getattr(target_cls, related_name, None)
+        if existing is not None:
+            if not isinstance(existing, (PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor)):
+                logger.warning(
+                    'Skipping reverse descriptor "%s" on %s: a non-CO attribute already exists '
+                    'with that name. Change the related_name to avoid this conflict.',
+                    related_name, target_cls.__name__,
+                )
+                continue
+            if not _descriptor_matches_field(existing, field_instance):
+                logger.warning(
+                    'Skipping reverse descriptor "%s" on %s: already owned by a different CO '
+                    'field. Change the related_name to avoid this conflict.',
+                    related_name, target_cls.__name__,
+                )
+                continue
+        setattr(target_cls, related_name, descriptor)
+
+
+def _unwire_polymorphic_reverse_descriptors(field_instance, object_types=None, related_name=None):
+    """Remove reverse descriptors that were injected by ``_wire_polymorphic_reverse_descriptors``.
+
+    *object_types* is an optional iterable of ObjectType instances to unwire from; when
+    omitted all of ``field_instance.related_object_types`` are used.  *related_name*
+    overrides the attribute name to remove, allowing callers to clean up a stale name
+    (e.g. after a rename).  Called from ``CustomObjectTypeField.delete()`` (before the
+    M2M rows are removed), from the ``m2m_changed`` signal handler when types are removed
+    from a live field, and from ``save()`` when ``related_name`` is renamed.
+    """
+    name = related_name if related_name is not None else field_instance.related_name
+    if not name:
+        return
+    ots = object_types if object_types is not None else field_instance.related_object_types.all()
+    for ot in ots:
+        target_cls = ot.model_class()
+        if target_cls is None:
+            continue
+        attr = getattr(target_cls, name, None)
+        if (
+            isinstance(attr, (PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor))
+            and _descriptor_matches_field(attr, field_instance)
+        ):
+            delattr(target_cls, name)
+
+
 # Signal handlers to clear model cache when definitions change
 
 
@@ -3411,6 +3855,57 @@ def check_polymorphic_recursion(sender, instance, action, pk_set, **kwargs):
                     "create a circular dependency between custom object types."
                 )
             )
+
+
+@receiver(m2m_changed, sender=CustomObjectTypeField.related_object_types.through)
+def sync_polymorphic_reverse_descriptors(sender, instance, action, pk_set, **kwargs):
+    """Wire or unwire reverse descriptors when a polymorphic field's allowed types change.
+
+    Complements _wire_polymorphic_reverse_descriptors() in _after_model_generation: that
+    path handles initial wiring at model-generation time; this handler keeps descriptors
+    current when types are added or removed from a live field without a full regeneration.
+    """
+    if not instance.is_polymorphic or not instance.related_name:
+        return
+
+    if action == "post_add" and pk_set:
+        descriptor = _make_reverse_descriptor(instance)
+        if descriptor is None:
+            return
+        for ot in ObjectType.objects.filter(pk__in=pk_set):
+            target_cls = ot.model_class()
+            if target_cls is None:
+                continue
+            existing = getattr(target_cls, instance.related_name, None)
+            if existing is not None:
+                if not isinstance(
+                    existing, (
+                        PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor
+                    )
+                ):
+                    logger.warning(
+                        'Skipping reverse descriptor "%s" on %s: a non-CO attribute already exists '
+                        'with that name. Change the related_name to avoid this conflict.',
+                        instance.related_name, target_cls.__name__,
+                    )
+                    continue
+                if not _descriptor_matches_field(existing, instance):
+                    logger.warning(
+                        'Skipping reverse descriptor "%s" on %s: already owned by a different CO '
+                        'field. Change the related_name to avoid this conflict.',
+                        instance.related_name, target_cls.__name__,
+                    )
+                    continue
+            setattr(target_cls, instance.related_name, descriptor)
+
+    elif action == "pre_remove" and pk_set:
+        _unwire_polymorphic_reverse_descriptors(
+            instance, object_types=ObjectType.objects.filter(pk__in=pk_set)
+        )
+
+    elif action == "pre_clear":
+        # pk_set is None for pre_clear; query current set before it disappears.
+        _unwire_polymorphic_reverse_descriptors(instance)
 
 
 @receiver(post_save, sender=CustomObjectTypeField)

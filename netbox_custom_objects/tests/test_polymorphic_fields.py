@@ -1265,3 +1265,652 @@ class PolymorphicCycleDetectionTest(
         )
         with self.assertRaises(ValidationError):
             field_b.related_object_types.set([self.ot_a])  # closes A→B→A cycle
+
+
+# ---------------------------------------------------------------------------
+# Polymorphic reverse descriptor tests (issue #385 / PR #548)
+# ---------------------------------------------------------------------------
+
+class PolymorphicReverseDescriptorTest(
+    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
+):
+    """Verify that polymorphic GFK and M2M fields with a related_name expose a working
+    reverse accessor on target model instances."""
+
+    def setUp(self):
+        super().setUp()
+        self.site_ot = ObjectType.objects.get(app_label="dcim", model="site")
+        self.prefix_ot = ObjectType.objects.get(app_label="ipam", model="prefix")
+
+        self.cot = CustomObjectType.objects.create(
+            name="RevTest", slug="rev-test",
+            verbose_name_plural="Rev Tests",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name="name", type="text", primary=True, required=True,
+        )
+
+    # --- GFK reverse descriptor ---
+
+    def _create_gfk_field(self, related_name="rev_co_gfk"):
+        field = CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name="target_obj", label="Target", type="object",
+            is_polymorphic=True,
+            related_name=related_name,
+        )
+        field.related_object_types.set([self.site_ot, self.prefix_ot])
+        return field
+
+    def test_gfk_reverse_descriptor_set_on_target_class(self):
+        """After get_model(), the related_name descriptor must exist on the target class."""
+        self._create_gfk_field(related_name="co_gfk_reverse")
+        self.cot.get_model()
+        self.assertTrue(
+            hasattr(Site, "co_gfk_reverse"),
+            "Reverse descriptor must be set on Site after get_model()",
+        )
+
+    def test_gfk_reverse_descriptor_returns_matching_instances(self):
+        """site.related_name.all() returns CO instances whose GFK points at that site."""
+        from ipam.models import Prefix
+        from ipam.choices import PrefixStatusChoices
+
+        self._create_gfk_field(related_name="co_gfk_rev")
+        model = self.cot.get_model()
+
+        site = Site.objects.create(name="RevSite", slug="rev-site")
+        prefix = Prefix.objects.create(
+            prefix="192.168.0.0/24", status=PrefixStatusChoices.STATUS_ACTIVE
+        )
+
+        co_a = model.objects.create(name="co-a")
+        co_a.target_obj = site
+        co_a.save()
+
+        co_b = model.objects.create(name="co-b")
+        co_b.target_obj = prefix
+        co_b.save()
+
+        site_results = list(site.co_gfk_rev.all())
+        self.assertEqual(len(site_results), 1)
+        self.assertEqual(site_results[0].pk, co_a.pk)
+
+        prefix_results = list(prefix.co_gfk_rev.all())
+        self.assertEqual(len(prefix_results), 1)
+        self.assertEqual(prefix_results[0].pk, co_b.pk)
+
+    def test_gfk_reverse_descriptor_count_and_exists(self):
+        """count() and exists() work correctly on the reverse manager."""
+        self._create_gfk_field(related_name="co_gfk_ce")
+        model = self.cot.get_model()
+
+        site = Site.objects.create(name="CeSite", slug="ce-site")
+        self.assertEqual(site.co_gfk_ce.count(), 0)
+        self.assertFalse(site.co_gfk_ce.exists())
+
+        co = model.objects.create(name="co-ce")
+        co.target_obj = site
+        co.save()
+
+        self.assertEqual(site.co_gfk_ce.count(), 1)
+        self.assertTrue(site.co_gfk_ce.exists())
+
+    def test_gfk_no_reverse_descriptor_when_related_name_blank(self):
+        """When related_name is blank, neither m2m_changed nor get_model() injects anything."""
+        field = CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name="anon_obj", type="object", is_polymorphic=True,
+        )
+        before = set(Site.__dict__.keys())
+        field.related_object_types.set([self.site_ot])  # fires m2m_changed
+        self.cot.get_model()                             # fires _after_model_generation
+        after = set(Site.__dict__.keys())
+        self.assertEqual(before, after, "No new attribute should be injected on Site for blank related_name")
+
+    def test_gfk_reverse_descriptor_wired_when_type_added(self):
+        """Adding a type to related_object_types after initial wiring injects the descriptor via m2m_changed."""
+        from dcim.models import Device
+        device_ot = ObjectType.objects.get(app_label="dcim", model="device")
+
+        field = CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name="target_obj", label="Target", type="object",
+            is_polymorphic=True,
+            related_name="co_gfk_added",
+        )
+        field.related_object_types.set([self.site_ot])
+        self.cot.get_model()
+        self.assertFalse(hasattr(Device, "co_gfk_added"), "Device not yet in allowed types")
+
+        field.related_object_types.add(device_ot)  # fires m2m_changed post_add
+
+        self.assertTrue(
+            hasattr(Device, "co_gfk_added"),
+            "Descriptor must be wired on Device after adding it to related_object_types",
+        )
+
+    def test_gfk_reverse_descriptor_unwired_when_type_removed(self):
+        """Removing a type from related_object_types removes the descriptor from that class."""
+        field = self._create_gfk_field(related_name="co_gfk_removed")
+        self.cot.get_model()
+        self.assertTrue(hasattr(Site, "co_gfk_removed"), "Descriptor must be present before removal")
+
+        field.related_object_types.remove(self.site_ot)  # fires m2m_changed pre_remove
+
+        self.assertFalse(
+            hasattr(Site, "co_gfk_removed"),
+            "Descriptor must be removed from Site after removing it from related_object_types",
+        )
+
+    def test_gfk_reverse_descriptor_removed_on_field_delete(self):
+        """Deleting the field removes the reverse descriptor from target models."""
+        field = self._create_gfk_field(related_name="co_gfk_del")
+        self.cot.get_model()
+        self.assertTrue(hasattr(Site, "co_gfk_del"), "Descriptor must be present before delete")
+
+        field.delete()
+
+        self.assertFalse(
+            hasattr(Site, "co_gfk_del"),
+            "Reverse descriptor must be removed after field delete",
+        )
+
+    # --- M2M reverse descriptor ---
+
+    def _create_m2m_field(self, related_name="rev_co_m2m"):
+        field = CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name="target_multi", label="Targets", type="multiobject",
+            is_polymorphic=True,
+            related_name=related_name,
+        )
+        field.related_object_types.set([self.site_ot, self.prefix_ot])
+        return field
+
+    def test_m2m_reverse_descriptor_set_on_target_class(self):
+        """After get_model(), the related_name descriptor must exist on the target class."""
+        self._create_m2m_field(related_name="co_m2m_reverse")
+        self.cot.get_model()
+        self.assertTrue(
+            hasattr(Site, "co_m2m_reverse"),
+            "Reverse descriptor must be set on Site after get_model()",
+        )
+
+    def test_m2m_reverse_descriptor_returns_matching_instances(self):
+        """site.related_name.all() returns CO instances whose M2M includes that site."""
+        from ipam.models import Prefix
+        from ipam.choices import PrefixStatusChoices
+
+        self._create_m2m_field(related_name="co_m2m_rev")
+        model = self.cot.get_model()
+
+        site = Site.objects.create(name="M2MSite", slug="m2m-site")
+        prefix = Prefix.objects.create(
+            prefix="10.1.0.0/24", status=PrefixStatusChoices.STATUS_ACTIVE
+        )
+
+        co_a = model.objects.create(name="m2m-a")
+        co_a.target_multi.add(site)
+
+        co_b = model.objects.create(name="m2m-b")
+        co_b.target_multi.add(prefix)
+
+        co_both = model.objects.create(name="m2m-both")
+        co_both.target_multi.add(site, prefix)
+
+        site_results = {obj.pk for obj in site.co_m2m_rev.all()}
+        self.assertEqual(site_results, {co_a.pk, co_both.pk})
+
+        prefix_results = {obj.pk for obj in prefix.co_m2m_rev.all()}
+        self.assertEqual(prefix_results, {co_b.pk, co_both.pk})
+
+    def test_m2m_reverse_descriptor_count_and_exists(self):
+        """count() and exists() work correctly on the M2M reverse manager."""
+        self._create_m2m_field(related_name="co_m2m_ce")
+        model = self.cot.get_model()
+
+        site = Site.objects.create(name="M2MCeSite", slug="m2m-ce-site")
+        self.assertEqual(site.co_m2m_ce.count(), 0)
+        self.assertFalse(site.co_m2m_ce.exists())
+
+        co = model.objects.create(name="m2m-ce")
+        co.target_multi.add(site)
+
+        self.assertEqual(site.co_m2m_ce.count(), 1)
+        self.assertTrue(site.co_m2m_ce.exists())
+
+    def test_m2m_reverse_descriptor_removed_on_field_delete(self):
+        """Deleting the field removes the reverse descriptor from target models."""
+        field = self._create_m2m_field(related_name="co_m2m_del")
+        self.cot.get_model()
+        self.assertTrue(hasattr(Site, "co_m2m_del"), "Descriptor must be present before delete")
+
+        field.delete()
+
+        self.assertFalse(
+            hasattr(Site, "co_m2m_del"),
+            "Reverse descriptor must be removed after field delete",
+        )
+
+    def test_m2m_reverse_descriptor_wired_when_type_added(self):
+        """Adding a type via m2m_changed post_add wires the M2M reverse descriptor."""
+        from dcim.models import Device
+        device_ot = ObjectType.objects.get(app_label="dcim", model="device")
+
+        field = CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name="target_multi2", label="Targets", type="multiobject",
+            is_polymorphic=True,
+            related_name="co_m2m_added",
+        )
+        field.related_object_types.set([self.site_ot])
+        self.cot.get_model()
+        self.assertFalse(hasattr(Device, "co_m2m_added"), "Device not yet in allowed types")
+
+        field.related_object_types.add(device_ot)  # fires m2m_changed post_add
+
+        self.assertTrue(
+            hasattr(Device, "co_m2m_added"),
+            "Descriptor must be wired on Device after adding it to related_object_types",
+        )
+
+    def test_gfk_reverse_descriptor_unwired_on_clear(self):
+        """Clearing related_object_types via pre_clear removes descriptors from all target classes."""
+        field = self._create_gfk_field(related_name="co_gfk_cleared")
+        self.cot.get_model()
+        self.assertTrue(hasattr(Site, "co_gfk_cleared"))
+
+        field.related_object_types.clear()  # fires m2m_changed pre_clear
+
+        self.assertFalse(
+            hasattr(Site, "co_gfk_cleared"),
+            "Descriptor must be removed from Site after clear()",
+        )
+
+    def test_m2m_reverse_descriptor_unwired_on_clear(self):
+        """Clearing related_object_types via pre_clear removes M2M descriptors from all target classes."""
+        field = self._create_m2m_field(related_name="co_m2m_cleared")
+        self.cot.get_model()
+        self.assertTrue(hasattr(Site, "co_m2m_cleared"))
+
+        field.related_object_types.clear()  # fires m2m_changed pre_clear
+
+        self.assertFalse(
+            hasattr(Site, "co_m2m_cleared"),
+            "Descriptor must be removed from Site after clear()",
+        )
+
+    def test_polymorphic_field_full_clean_accepts_related_name(self):
+        """full_clean() must not raise when related_name is set on a polymorphic field."""
+        field = CustomObjectTypeField(
+            custom_object_type=self.cot,
+            name="clean_test_obj",
+            type="object",
+            is_polymorphic=True,
+            related_name="co_full_clean_check",
+        )
+        # Must not raise ValidationError (old guard would reject any related_name here)
+        field.full_clean()
+
+    def test_polymorphic_related_name_collision_raises(self):
+        """full_clean() must raise when two polymorphic fields share a related_name on the same target type."""
+        self._create_gfk_field(related_name="co_collision_name")
+
+        duplicate = CustomObjectTypeField(
+            custom_object_type=self.cot,
+            name="dup_obj",
+            type="object",
+            is_polymorphic=True,
+            related_name="co_collision_name",
+        )
+        duplicate.save()
+        duplicate.related_object_types.set([self.site_ot])
+
+        from django.core.exceptions import ValidationError as DjangoValidationError
+        with self.assertRaises(DjangoValidationError):
+            duplicate.full_clean()
+
+    def test_gfk_reverse_descriptor_cleaned_up_on_related_name_rename(self):
+        """Renaming related_name removes the old descriptor and leaves the new one wired."""
+        field = self._create_gfk_field(related_name="co_gfk_old_name")
+        self.cot.get_model()
+        self.assertTrue(hasattr(Site, "co_gfk_old_name"), "old descriptor must be present before rename")
+
+        # Re-fetch so from_db() sets _original (mirrors real save-from-UI flow)
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.related_name = "co_gfk_new_name"
+        field.save()
+        self.cot.get_model()  # regenerate model so new descriptor is injected
+
+        self.assertFalse(
+            hasattr(Site, "co_gfk_old_name"),
+            "old descriptor must be removed from Site after rename",
+        )
+        self.assertTrue(
+            hasattr(Site, "co_gfk_new_name"),
+            "new descriptor must be present on Site after rename",
+        )
+
+    def test_m2m_reverse_descriptor_cleaned_up_on_related_name_rename(self):
+        """Renaming related_name removes the old M2M descriptor and leaves the new one wired."""
+        field = self._create_m2m_field(related_name="co_m2m_old_name")
+        self.cot.get_model()
+        self.assertTrue(hasattr(Site, "co_m2m_old_name"), "old descriptor must be present before rename")
+
+        # Re-fetch so from_db() sets _original (mirrors real save-from-UI flow)
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.related_name = "co_m2m_new_name"
+        field.save()
+        self.cot.get_model()  # regenerate model so new descriptor is injected
+
+        self.assertFalse(
+            hasattr(Site, "co_m2m_old_name"),
+            "old descriptor must be removed from Site after rename",
+        )
+        self.assertTrue(
+            hasattr(Site, "co_m2m_new_name"),
+            "new descriptor must be present on Site after rename",
+        )
+
+    def test_related_name_colliding_with_target_model_attribute_raises(self):
+        """full_clean() must reject a related_name that clashes with a pre-existing attribute
+        on the target model class, to prevent silently clobbering it."""
+        from django.core.exceptions import ValidationError as DjangoValidationError
+
+        # Use a controlled sentinel so the test is self-contained regardless of prior
+        # test state (Site.__dict__ can be dirty after earlier tests run _wire).
+        attr_name = "_co_collision_test_attr"
+        sentinel = object()
+        setattr(Site, attr_name, sentinel)
+        try:
+            field = CustomObjectTypeField(
+                custom_object_type=self.cot,
+                name="collision_obj",
+                type="object",
+                is_polymorphic=True,
+                related_name=attr_name,
+            )
+            field.save()
+            field.related_object_types.set([self.site_ot])
+
+            with self.assertRaises(DjangoValidationError) as cm:
+                field.full_clean()
+            self.assertIn("related_name", cm.exception.message_dict)
+        finally:
+            if Site.__dict__.get(attr_name) is sentinel:
+                delattr(Site, attr_name)
+
+    def test_wire_skips_setattr_when_related_name_collides_with_target_attribute(self):
+        """_wire_polymorphic_reverse_descriptors must not overwrite a pre-existing non-CO
+        attribute on the target model class, even if clean() was not called first."""
+        attr_name = "_co_wire_collision_test_attr"
+        sentinel = object()
+        setattr(Site, attr_name, sentinel)
+        try:
+            field = CustomObjectTypeField(
+                custom_object_type=self.cot,
+                name="wire_collision_obj",
+                type="object",
+                is_polymorphic=True,
+                related_name=attr_name,
+            )
+            field.save()
+            # set() triggers the m2m_changed signal which calls _wire internally.
+            field.related_object_types.set([self.site_ot])
+
+            # The sentinel must still be intact — _wire must have skipped the setattr.
+            self.assertIs(
+                Site.__dict__.get(attr_name), sentinel,
+                "_wire must not overwrite a pre-existing non-CO attribute on the target model",
+            )
+        finally:
+            if Site.__dict__.get(attr_name) is sentinel:
+                delattr(Site, attr_name)
+
+    def test_related_name_colliding_with_inherited_method_raises(self):
+        """full_clean() must reject a related_name that shadows an inherited method on the
+        target model (e.g. 'save'), not just directly-defined attributes.
+        Regression for the __dict__.get vs getattr gap reported by Arthur."""
+        from django.core.exceptions import ValidationError as DjangoValidationError
+
+        field = CustomObjectTypeField(
+            custom_object_type=self.cot,
+            name="save_collision_obj",
+            type="object",
+            is_polymorphic=True,
+            related_name="save",  # inherited from Model, not in Site.__dict__
+        )
+        field.save()
+        field.related_object_types.set([self.site_ot])
+
+        with self.assertRaises(DjangoValidationError) as cm:
+            field.full_clean()
+        self.assertIn("related_name", cm.exception.message_dict)
+
+    def test_wire_skips_setattr_for_inherited_method(self):
+        """_wire must not overwrite an inherited method (e.g. 'save') on the target class
+        even though it doesn't appear in target_cls.__dict__."""
+        original_save = getattr(Site, "save")
+
+        field = CustomObjectTypeField(
+            custom_object_type=self.cot,
+            name="save_wire_obj",
+            type="object",
+            is_polymorphic=True,
+            related_name="save",
+        )
+        field.save()
+        field.related_object_types.set([self.site_ot])
+
+        # The inherited save method must still be accessible and unchanged.
+        self.assertIs(getattr(Site, "save"), original_save,
+                      "_wire must not overwrite an inherited method on the target model")
+
+    def test_wire_skips_setattr_when_different_co_field_already_owns_name(self):
+        """_wire must not overwrite a descriptor placed by a different CO field."""
+        cot_b = CustomObjectType.objects.create(
+            name="RevTestB", slug="rev-test-b", verbose_name_plural="Rev Tests B",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cot_b, name="name", type="text", primary=True, required=True,
+        )
+
+        # Field on COT B wires co_cross_ref onto Site first.
+        field_b = CustomObjectTypeField.objects.create(
+            custom_object_type=cot_b,
+            name="target_cross", type="object", is_polymorphic=True,
+            related_name="co_cross_ref",
+        )
+        field_b.related_object_types.set([self.site_ot])
+        cot_b.get_model()
+        descriptor_b = Site.__dict__.get("co_cross_ref")
+        self.assertIsNotNone(descriptor_b, "COT B descriptor must be wired before the test")
+
+        # Field on COT A also claims co_cross_ref. _wire must skip — B owns it.
+        field_a = CustomObjectTypeField(
+            custom_object_type=self.cot,
+            name="target_cross_a", type="object", is_polymorphic=True,
+            related_name="co_cross_ref",
+        )
+        field_a.save()
+        field_a.related_object_types.set([self.site_ot])
+
+        self.assertIs(
+            Site.__dict__.get("co_cross_ref"), descriptor_b,
+            "COT A's _wire must not overwrite COT B's descriptor",
+        )
+
+    def test_source_model_deleted_returns_empty_queryset(self):
+        """Accessing .all() on a stale reverse descriptor returns an empty queryset
+        rather than raising DoesNotExist when the source COT has been deleted."""
+        from netbox_custom_objects.field_types import PolymorphicObjectReverseManager
+
+        site = Site.objects.create(name="Stale Test Site", slug="stale-test-site")
+        nonexistent_cot_pk = 999999
+        field = self._create_gfk_field(related_name="co_stale_ref")
+        manager = PolymorphicObjectReverseManager(site, nonexistent_cot_pk, field.name)
+
+        qs = manager.all()
+        self.assertEqual(qs.count(), 0, ".all() must return empty queryset for deleted COT")
+        self.assertFalse(manager.exists())
+
+    def test_source_model_deleted_multiobject_returns_empty_queryset(self):
+        """Same as above for the M2M (MultiObject) reverse manager."""
+        from netbox_custom_objects.field_types import PolymorphicMultiObjectReverseManager
+
+        site = Site.objects.create(name="Stale M2M Site", slug="stale-m2m-site")
+        nonexistent_cot_pk = 999999
+        manager = PolymorphicMultiObjectReverseManager(site, nonexistent_cot_pk, "NonExistentThrough")
+
+        qs = manager.all()
+        self.assertEqual(qs.count(), 0, ".all() must return empty queryset for deleted COT")
+        self.assertFalse(manager.exists())
+
+    def test_inbound_reverse_descriptor_wired_when_target_cot_generated_after_source(self):
+        """Regression for startup ordering: if COT A is generated before COT B,
+        COT A's _wire skips COT B (model_class() is None at that point).  When
+        COT B is later generated its _after_model_generation must wire the
+        inbound descriptor from COT A onto the new class."""
+        # COT B is the target; its ObjectType must be registered before we
+        # create the source field so related_object_types.set() can find it.
+        cot_b = CustomObjectType.objects.create(
+            name="InboundTarget", slug="inbound-target",
+            verbose_name_plural="Inbound Targets",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cot_b, name="name", type="text", primary=True, required=True,
+        )
+        cot_b_ot = cot_b.object_type
+
+        # COT A has a polymorphic GFK field pointing at COT B with a related_name.
+        field_a = CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name="target_cot_b", type="object", is_polymorphic=True,
+            related_name="co_inbound_ref",
+        )
+        field_a.related_object_types.set([cot_b_ot])
+
+        # Simulate COT A being generated first — COT B's model class doesn't exist yet.
+        # We achieve this by generating COT A's model without COT B's model being cached.
+        cot_b_model = cot_b.get_model()
+
+        # After COT B is generated, its _after_model_generation should have wired the
+        # inbound descriptor from COT A.
+        self.assertTrue(
+            hasattr(cot_b_model, "co_inbound_ref"),
+            "_after_model_generation must wire inbound reverse descriptors from other COTs",
+        )
+
+    def test_cross_type_related_name_collision_poly_vs_nonpoly_raises(self):
+        """full_clean() must reject a polymorphic field whose related_name collides
+        with a non-polymorphic field on the same target type."""
+        from django.core.exceptions import ValidationError as DjangoValidationError
+
+        # Create a non-polymorphic Object field with related_name on Site.
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name="np_site_ref",
+            type="object",
+            is_polymorphic=False,
+            related_object_type=self.site_ot,
+            related_name="co_cross_type_name",
+        )
+
+        # Create a second COT with a polymorphic field claiming the same name.
+        cot2 = CustomObjectType.objects.create(
+            name="CrossTypeTest", slug="cross-type-test",
+            verbose_name_plural="Cross Type Tests",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cot2, name="name", type="text", primary=True, required=True,
+        )
+        poly_field = CustomObjectTypeField(
+            custom_object_type=cot2,
+            name="poly_site_ref",
+            type="object",
+            is_polymorphic=True,
+            related_name="co_cross_type_name",
+        )
+        poly_field.save()
+        poly_field.related_object_types.set([self.site_ot])
+
+        with self.assertRaises(DjangoValidationError) as cm:
+            poly_field.full_clean()
+        self.assertIn("related_name", cm.exception.message_dict)
+
+    def test_cross_type_related_name_collision_nonpoly_vs_poly_raises(self):
+        """full_clean() must reject a non-polymorphic field whose related_name collides
+        with a polymorphic field on the same target type."""
+        from django.core.exceptions import ValidationError as DjangoValidationError
+
+        # Create a polymorphic field on a second COT first.
+        cot2 = CustomObjectType.objects.create(
+            name="CrossTypeTest2", slug="cross-type-test-2",
+            verbose_name_plural="Cross Type Tests 2",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cot2, name="name", type="text", primary=True, required=True,
+        )
+        poly_field = CustomObjectTypeField.objects.create(
+            custom_object_type=cot2,
+            name="poly_site_ref2",
+            type="object",
+            is_polymorphic=True,
+            related_name="co_cross_type_name2",
+        )
+        poly_field.related_object_types.set([self.site_ot])
+
+        # Now try to create a non-polymorphic field on self.cot with the same related_name.
+        np_field = CustomObjectTypeField(
+            custom_object_type=self.cot,
+            name="np_site_ref2",
+            type="object",
+            is_polymorphic=False,
+            related_object_type=self.site_ot,
+            related_name="co_cross_type_name2",
+        )
+
+        with self.assertRaises(DjangoValidationError) as cm:
+            np_field.full_clean()
+        self.assertIn("related_name", cm.exception.message_dict)
+
+    def test_unwire_does_not_remove_descriptor_owned_by_different_field(self):
+        """Deleting a field that was blocked from wiring must not remove the descriptor
+        that a different, still-active field owns at the same related_name."""
+        from netbox_custom_objects.models import _unwire_polymorphic_reverse_descriptors
+
+        # COT B wires co_shared_ref onto Site first.
+        cot_b = CustomObjectType.objects.create(
+            name="UnwireTestB", slug="unwire-test-b",
+            verbose_name_plural="Unwire Tests B",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cot_b, name="name", type="text", primary=True, required=True,
+        )
+        field_b = CustomObjectTypeField.objects.create(
+            custom_object_type=cot_b,
+            name="target_unwire", type="object", is_polymorphic=True,
+            related_name="co_shared_ref",
+        )
+        field_b.related_object_types.set([self.site_ot])
+        cot_b.get_model()
+        descriptor_b = Site.__dict__.get("co_shared_ref")
+        self.assertIsNotNone(descriptor_b, "COT B's descriptor must be wired first")
+
+        # COT A also claims co_shared_ref — _wire blocks it, so field_a is in the DB
+        # but its descriptor was never placed on Site.
+        field_a = CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name="target_unwire_a", type="object", is_polymorphic=True,
+            related_name="co_shared_ref",
+        )
+        field_a.related_object_types.set([self.site_ot])
+
+        # Deleting field_a must not touch the descriptor owned by field_b.
+        _unwire_polymorphic_reverse_descriptors(field_a)
+        self.assertIs(
+            Site.__dict__.get("co_shared_ref"), descriptor_b,
+            "_unwire must not remove a descriptor owned by a different CO field",
+        )

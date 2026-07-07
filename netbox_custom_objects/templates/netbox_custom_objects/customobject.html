@@ -25,6 +25,10 @@
 
 {% block subtitle %}
 <div class="text-secondary fs-5">
+  {% if object.owner %}
+    <i class="mdi mdi-account-outline" title="{% trans "Owner" %}"></i> {{ object.owner|linkify }}
+    <span class="separator">&middot;</span>
+  {% endif %}
   {% trans "Created" %} {{ object.created|isodatetime:"minutes" }}
   {% if object.last_updated %}
     <span class="separator">&middot;</span>
@@ -72,6 +76,11 @@
     <li class="nav-item">
       <a class="nav-link{% if not tab %} active{% endif %}" href="{{ object.get_absolute_url }}">{{ object.custom_object_type.get_verbose_name }}</a>
     </li>
+    {% if object.custom_object_type.config_context_enabled %}
+    <li class="nav-item">
+      <a class="nav-link{% if tab == 'configcontext' %} active{% endif %}" href="{% url 'plugins:netbox_custom_objects:customobject_configcontext' object.custom_object_type.slug object.pk %}">{% trans "Config Context" %}</a>
+    </li>
+    {% endif %}
     {# Combined "Custom Objects" tab — rendered live from the DB so a CO→CO reference gets a tab with no restart. #}
     {% custom_objects_tab_link object %}
     {# Other registered model-view tabs (journal/changelog/custom_objects are excluded by the tag, rendered by hand). #}
@@ -129,9 +138,24 @@
                       {% endif %}
                     </th>
                     <td>
-                      {% with customfield=field value=object|get_field_value:field %}
-                        {% include "builtins/customfield_value.html" %}
-                      {% endwith %}
+                      {% if field.type == 'coordinates' %}
+                        {% with coords=object|get_field_value:field %}
+                          {% if coords %}
+                            <span>{{ coords }}</span>
+                            {% with map_url=object|get_coordinate_map_url:field %}
+                              {% if map_url %}
+                                <a href="{{ map_url }}" target="_blank" class="btn btn-primary btn-sm ms-2 print-none">
+                                  <i class="mdi mdi-map-marker"></i> {% trans "Map" %}
+                                </a>
+                              {% endif %}
+                            {% endwith %}
+                          {% else %}
+                            {{ ''|placeholder }}
+                          {% endif %}
+                        {% endwith %}
+                      {% else %}
+                        {% customfield_value field object|get_field_value:field %}
+                      {% endif %}
                     </td>
                   </tr>
                 {% endif %}

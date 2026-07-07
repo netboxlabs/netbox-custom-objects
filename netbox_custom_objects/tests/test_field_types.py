@@ -1,19 +1,25 @@
 """
 Tests for all the different field types supported by Custom Object Type Fields.
 """
+from importlib import import_module
 from unittest import skip
 from unittest.mock import Mock
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from django.core.exceptions import ValidationError
+from django.apps import apps
+from django.core.exceptions import FieldDoesNotExist, ValidationError
+from django.db import connection, models
 from django.test import TestCase
 
 from core.models import ObjectType
+from dcim.models import Device, DeviceType, ModuleType
 from netbox_custom_objects.field_types import (
+    CoordinatesFieldType,
     MultiObjectFieldType,
     MultiSelectFieldType,
     ObjectFieldType,
     SelectFieldType,
+    _csv_import_to_field_name,
 )
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from .base import CustomObjectsTestCase
@@ -187,6 +193,89 @@ class IntegerFieldTypeTestCase(FieldTypeTestCase):
 
         self.assertEqual(instance.count, 25)
 
+    def test_integer_field_is_64_bit(self):
+        """Integer fields use a 64-bit (bigint) column, not 32-bit (issue #532)."""
+        self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="count",
+            label="Count",
+            type="integer",
+        )
+
+        model = self.custom_object_type.get_model()
+
+        # The generated model field must be a BigIntegerField.
+        self.assertIsInstance(
+            model._meta.get_field("count"), models.BigIntegerField
+        )
+
+        # A value beyond the signed 32-bit range must round-trip through the DB.
+        big_value = 9_000_000_000  # > 2**31 - 1 (2_147_483_647)
+        instance = model.objects.create(name="Test", count=big_value)
+        instance.refresh_from_db()
+        self.assertEqual(instance.count, big_value)
+
+    def test_integer_field_upgrade_widens_existing_32bit_column(self):
+        """The 0015 migration widens pre-#532 32-bit integer columns to bigint.
+
+        New tables already get a bigint column (test_integer_field_is_64_bit),
+        but custom_objects_* tables created before issue #532 have a 32-bit
+        ``integer`` column that the field-type change alone does not alter --
+        they are managed=False. This exercises that upgrade path: realize the
+        column, force it back to 32-bit to mimic a legacy install, run the
+        migration's data function, and confirm it is widened in place.
+        """
+        field = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="legacy_count",
+            label="Legacy Count",
+            type="integer",
+        )
+
+        # Realize the backing model/table/column.
+        model = self.custom_object_type.get_model()
+
+        table_name = f"custom_objects_{self.custom_object_type.pk}"
+        column_name = field.name
+
+        def column_data_type():
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT data_type FROM information_schema.columns
+                    WHERE table_schema = current_schema()
+                      AND table_name = %s AND column_name = %s
+                    """,
+                    [table_name, column_name],
+                )
+                row = cursor.fetchone()
+                return row[0] if row else None
+
+        # Mimic a legacy install: force the column back to a 32-bit integer.
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f'ALTER TABLE "{table_name}" ALTER COLUMN "{column_name}" TYPE integer'
+            )
+        self.assertEqual(column_data_type(), "integer")
+
+        # Run the migration's data function against the legacy column.
+        # widen_integer_columns only reads stable CustomObjectTypeField columns
+        # (type, custom_object_type_id, name), so the current app registry is
+        # equivalent to the historical one RunPython would pass. If the function
+        # ever introspects historical field structure, switch to MigrationLoader.
+        migration = import_module(
+            "netbox_custom_objects.migrations.0016_widen_integer_columns"
+        )
+        with connection.schema_editor() as schema_editor:
+            migration.widen_integer_columns(apps, schema_editor)
+
+        # Column is widened, and a value beyond the 32-bit range round-trips.
+        self.assertEqual(column_data_type(), "bigint")
+        big_value = 9_000_000_000  # > 2**31 - 1 (2_147_483_647)
+        instance = model.objects.create(name="Test", legacy_count=big_value)
+        instance.refresh_from_db()
+        self.assertEqual(instance.legacy_count, big_value)
+
 
 class DecimalFieldTypeTestCase(FieldTypeTestCase):
     """Test cases for decimal field type."""
@@ -248,6 +337,166 @@ class DecimalFieldTypeTestCase(FieldTypeTestCase):
         instance = model.objects.create(name="Test", price=Decimal("25.75"))
 
         self.assertEqual(instance.price, Decimal("25.75"))
+
+
+class CoordinatesFieldTypeTestCase(FieldTypeTestCase):
+    """Test cases for the coordinates field type."""
+
+    def test_coordinates_field_creation(self):
+        """A coordinates field is created with the expected type."""
+        field = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="location",
+            label="Location",
+            type="coordinates",
+        )
+        self.assertEqual(field.type, "coordinates")
+
+    def test_coordinates_field_model_generation(self):
+        """One coordinates field expands into two backing decimal columns."""
+        self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="location",
+            label="Location",
+            type="coordinates",
+        )
+
+        model = self.custom_object_type.get_model()
+        column_names = {f.name for f in model._meta.local_fields}
+        self.assertIn("location_latitude", column_names)
+        self.assertIn("location_longitude", column_names)
+        # The logical field name itself is not a real column.
+        self.assertNotIn("location", column_names)
+
+        # Verify precision/validators mirror NetBox core's Site coordinates.
+        latitude = model._meta.get_field("location_latitude")
+        longitude = model._meta.get_field("location_longitude")
+        self.assertEqual((latitude.max_digits, latitude.decimal_places), (8, 6))
+        self.assertEqual((longitude.max_digits, longitude.decimal_places), (9, 6))
+
+        instance = model.objects.create(
+            name="Test",
+            location_latitude=Decimal("40.712800"),
+            location_longitude=Decimal("-74.006000"),
+        )
+        self.assertEqual(instance.location_latitude, Decimal("40.712800"))
+        self.assertEqual(instance.location_longitude, Decimal("-74.006000"))
+
+    def test_coordinates_display_value(self):
+        """get_display_value combines both columns, or returns None when unset."""
+        self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="location",
+            label="Location",
+            type="coordinates",
+        )
+        model = self.custom_object_type.get_model()
+        field_type = CoordinatesFieldType()
+
+        populated = model.objects.create(
+            name="A",
+            location_latitude=Decimal("40.712800"),
+            location_longitude=Decimal("-74.006000"),
+        )
+        self.assertEqual(
+            field_type.get_display_value(populated, "location"),
+            "40.712800, -74.006000",
+        )
+
+        empty = model.objects.create(name="B")
+        self.assertIsNone(field_type.get_display_value(empty, "location"))
+
+    def test_coordinates_validate_pair(self):
+        """Latitude and longitude must both be set or both be empty."""
+        field_type = CoordinatesFieldType()
+        # Both set / both empty are valid.
+        field_type.validate_pair(Decimal("1.0"), Decimal("2.0"))
+        field_type.validate_pair(None, None)
+        # Half-populated pairs are rejected.
+        with self.assertRaises(ValidationError):
+            field_type.validate_pair(Decimal("1.0"), None)
+        with self.assertRaises(ValidationError):
+            field_type.validate_pair(None, Decimal("2.0"))
+
+    def test_coordinates_field_rejects_unique(self):
+        """A coordinates field cannot be marked unique."""
+        field = CustomObjectTypeField(
+            custom_object_type=self.custom_object_type,
+            name="location",
+            label="Location",
+            type="coordinates",
+            unique=True,
+        )
+        with self.assertRaises(ValidationError):
+            field.full_clean()
+
+    def test_coordinates_field_search_weight_forced_to_zero(self):
+        """
+        A coordinates field has no column matching its name, so it can never be
+        indexed for search; clean() forces search_weight to 0 rather than honour a
+        non-zero value that would silently have no effect.
+        """
+        field = CustomObjectTypeField(
+            custom_object_type=self.custom_object_type,
+            name="location",
+            label="Location",
+            type="coordinates",
+            search_weight=500,
+        )
+        field.full_clean()
+        self.assertEqual(field.search_weight, 0)
+
+    def test_change_existing_field_to_coordinates_rejected(self):
+        """An existing non-coordinates field cannot be converted to coordinates."""
+        field = self.create_custom_object_type_field(
+            self.custom_object_type, name="location", label="Location", type="text",
+        )
+        field.type = "coordinates"
+        with self.assertRaises(ValidationError):
+            field.full_clean()
+
+    def test_change_coordinates_field_to_other_type_rejected(self):
+        """An existing coordinates field cannot be converted to another type."""
+        field = self.create_custom_object_type_field(
+            self.custom_object_type, name="location", label="Location", type="coordinates",
+        )
+        field.type = "text"
+        with self.assertRaises(ValidationError):
+            field.full_clean()
+
+    def test_coordinates_backing_column_collision_rejected(self):
+        """
+        Adding a coordinates field whose backing column collides with an existing
+        field's column raises a ValidationError rather than a DB error.
+        """
+        self.create_custom_object_type_field(
+            self.custom_object_type, name="location_latitude", label="Lat", type="text",
+        )
+        field = CustomObjectTypeField(
+            custom_object_type=self.custom_object_type,
+            name="location",
+            label="Location",
+            type="coordinates",
+        )
+        with self.assertRaises(ValidationError):
+            field.full_clean()
+
+    def test_field_colliding_with_coordinates_backing_column_rejected(self):
+        """
+        The reverse collision: a plain field named "<coord>_longitude" cannot be
+        added when a coordinates field "<coord>" already exists.
+        """
+        self.create_custom_object_type_field(
+            self.custom_object_type, name="location", label="Location", type="coordinates",
+        )
+        field = CustomObjectTypeField(
+            custom_object_type=self.custom_object_type,
+            name="location_longitude",
+            label="Lon",
+            type="text",
+        )
+        with self.assertRaises(ValidationError):
+            field.full_clean()
 
 
 class BooleanFieldTypeTestCase(FieldTypeTestCase):
@@ -577,6 +826,7 @@ class SelectFieldTypeTestCase(FieldTypeTestCase):
         """get_table_column_field() render() translates a raw key to its human-readable label."""
         field = Mock()
         field.choices = [('choice1', 'Choice 1'), ('choice2', 'Choice 2')]
+        field.choice_set = None
         column = SelectFieldType().get_table_column_field(field)
         self.assertEqual(column.render(value='choice1'), 'Choice 1')
         self.assertEqual(column.render(value='choice2'), 'Choice 2')
@@ -585,11 +835,24 @@ class SelectFieldTypeTestCase(FieldTypeTestCase):
         """get_table_column_field() render() returns the raw key when it is not in choices."""
         field = Mock()
         field.choices = [('choice1', 'Choice 1')]
+        field.choice_set = None
         column = SelectFieldType().get_table_column_field(field)
         self.assertEqual(column.render(value='unknown'), 'unknown')
 
-    def test_get_field_value_returns_label_for_select(self):
-        """get_field_value template filter returns the human-readable label for select fields."""
+    def test_select_column_render_returns_badge_when_color_present(self):
+        """get_table_column_field() render() returns an HTML badge when the choice has a color."""
+        field = Mock()
+        field.choices = [('choice1', 'Choice 1')]
+        field.choice_set = Mock()
+        field.choice_set.get_choice_color.return_value = 'green'
+        column = SelectFieldType().get_table_column_field(field)
+        result = column.render(value='choice1')
+        self.assertIn('class="badge', result)
+        self.assertIn('text-bg-green', result)
+        self.assertIn('Choice 1', result)
+
+    def test_get_field_value_returns_raw_value_for_select(self):
+        """get_field_value template filter returns the raw stored value for select fields."""
         from netbox_custom_objects.templatetags.custom_object_utils import get_field_value
         cotf = self.create_custom_object_type_field(
             self.custom_object_type,
@@ -600,7 +863,7 @@ class SelectFieldTypeTestCase(FieldTypeTestCase):
         )
         model = self.custom_object_type.get_model(no_cache=True)
         instance = model.objects.create(name="Test", status="choice1")
-        self.assertEqual(get_field_value(instance, cotf), "Choice 1")
+        self.assertEqual(get_field_value(instance, cotf), "choice1")
 
     def test_get_field_value_returns_raw_value_when_select_is_none(self):
         """get_field_value returns None (falsy) when the select field is unset."""
@@ -615,6 +878,57 @@ class SelectFieldTypeTestCase(FieldTypeTestCase):
         model = self.custom_object_type.get_model(no_cache=True)
         instance = model.objects.create(name="Test")
         self.assertIsNone(get_field_value(instance, cotf))
+
+    def test_get_choice_label_returns_label_for_known_value(self):
+        """get_choice_label() returns the human-readable label for a stored choice value."""
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="status",
+            label="Status",
+            type="select",
+            choice_set=self.choice_set,
+        )
+        self.assertEqual(cotf.get_choice_label("choice1"), "Choice 1")
+
+    def test_get_choice_label_falls_back_to_value_when_unknown(self):
+        """get_choice_label() returns the raw value when it is not in the choice set."""
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="status",
+            label="Status",
+            type="select",
+            choice_set=self.choice_set,
+        )
+        self.assertEqual(cotf.get_choice_label("unknown"), "unknown")
+
+    def test_get_choice_color_returns_color_when_set(self):
+        """get_choice_color() returns the color configured for a choice value."""
+        from extras.models import CustomFieldChoiceSet
+        choice_set = CustomFieldChoiceSet.objects.create(
+            name="Colored Choices",
+            extra_choices=[["active", "Active"], ["inactive", "Inactive"]],
+            choice_colors={"active": "green", "inactive": "red"},
+        )
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="state",
+            label="State",
+            type="select",
+            choice_set=choice_set,
+        )
+        self.assertEqual(cotf.get_choice_color("active"), "green")
+        self.assertEqual(cotf.get_choice_color("inactive"), "red")
+
+    def test_get_choice_color_returns_none_when_no_color(self):
+        """get_choice_color() returns None for a value with no configured color."""
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="status",
+            label="Status",
+            type="select",
+            choice_set=self.choice_set,
+        )
+        self.assertIsNone(cotf.get_choice_color("choice1"))
 
 
 class MultiSelectFieldTypeTestCase(FieldTypeTestCase):
@@ -693,6 +1007,7 @@ class MultiSelectFieldTypeTestCase(FieldTypeTestCase):
         """get_table_column_field() render() translates raw keys to comma-joined labels."""
         field = Mock()
         field.choices = [('choice1', 'Choice 1'), ('choice2', 'Choice 2'), ('choice3', 'Choice 3')]
+        field.choice_set = None
         column = MultiSelectFieldType().get_table_column_field(field)
         self.assertEqual(column.render(value=['choice1', 'choice3']), 'Choice 1, Choice 3')
 
@@ -700,11 +1015,42 @@ class MultiSelectFieldTypeTestCase(FieldTypeTestCase):
         """get_table_column_field() render() preserves unknown keys in the joined output."""
         field = Mock()
         field.choices = [('choice1', 'Choice 1')]
+        field.choice_set = None
         column = MultiSelectFieldType().get_table_column_field(field)
         self.assertEqual(column.render(value=['choice1', 'unknown']), 'Choice 1, unknown')
 
-    def test_get_field_value_returns_label_list_for_multiselect(self):
-        """get_field_value template filter returns a list of labels for multiselect fields."""
+    def test_multiselect_column_render_returns_badges_when_colors_present(self):
+        """get_table_column_field() render() returns HTML badges when choices have colors."""
+        field = Mock()
+        field.choices = [('choice1', 'Choice 1'), ('choice3', 'Choice 3')]
+        field.choice_set = Mock()
+        field.choice_set.get_choice_color.side_effect = lambda v: 'green' if v == 'choice1' else 'red'
+        column = MultiSelectFieldType().get_table_column_field(field)
+        result = column.render(value=['choice1', 'choice3'])
+        self.assertIn('text-bg-green', result)
+        self.assertIn('text-bg-red', result)
+        self.assertIn('Choice 1', result)
+        self.assertIn('Choice 3', result)
+
+    def test_multiselect_column_render_mixed_colors(self):
+        """Colorless values get a plain badge when at least one sibling has a color."""
+        field = Mock()
+        field.choices = [('choice1', 'Choice 1'), ('choice2', 'Choice 2')]
+        field.choice_set = Mock()
+        # choice1 has a color; choice2 does not
+        field.choice_set.get_choice_color.side_effect = lambda v: 'blue' if v == 'choice1' else None
+        column = MultiSelectFieldType().get_table_column_field(field)
+        result = column.render(value=['choice1', 'choice2'])
+        self.assertIn('text-bg-blue', result)
+        self.assertIn('Choice 1', result)
+        # choice2 should still be a badge (no color class), not plain text
+        self.assertIn('class="badge"', result)
+        self.assertIn('Choice 2', result)
+        # result is HTML, not a comma-joined string
+        self.assertNotIn('Choice 1, Choice 2', result)
+
+    def test_get_field_value_returns_raw_list_for_multiselect(self):
+        """get_field_value template filter returns the raw stored list for multiselect fields."""
         from netbox_custom_objects.templatetags.custom_object_utils import get_field_value
         cotf = self.create_custom_object_type_field(
             self.custom_object_type,
@@ -715,7 +1061,7 @@ class MultiSelectFieldTypeTestCase(FieldTypeTestCase):
         )
         model = self.custom_object_type.get_model(no_cache=True)
         instance = model.objects.create(name="Test", tags=["choice1", "choice3"])
-        self.assertEqual(get_field_value(instance, cotf), ["Choice 1", "Choice 3"])
+        self.assertEqual(get_field_value(instance, cotf), ["choice1", "choice3"])
 
     def test_get_field_value_returns_empty_list_when_multiselect_is_none(self):
         """get_field_value returns None (falsy) when the multiselect field is unset."""
@@ -802,6 +1148,61 @@ class ObjectFieldTypeTestCase(FieldTypeTestCase):
         instance = model.objects.create(name="Test", device=device)
         self.assertEqual(instance.device, device)
 
+    def test_csv_import_field_uses_name_for_models_with_name(self):
+        """get_form_field(for_csv_import=True) uses 'name' as to_field_name for models
+        that have a name field (e.g. Device)."""
+        self.assertEqual(_csv_import_to_field_name(Device), 'name')
+
+    def test_csv_import_field_uses_model_for_module_type(self):
+        """get_form_field(for_csv_import=True) uses 'model' as to_field_name for
+        ModuleType, which has no 'name' field — regression for issue #406."""
+        self.assertEqual(_csv_import_to_field_name(ModuleType), 'model')
+
+    def test_csv_import_field_uses_slug_before_model_for_device_type(self):
+        """DeviceType has both 'slug' and 'model'; slug takes precedence per the
+        _CSV_IDENTIFIER_FIELD_PRECEDENCE ordering, matching NetBox core behaviour."""
+        self.assertEqual(_csv_import_to_field_name(DeviceType), 'slug')
+
+    def test_csv_import_form_field_for_module_type_uses_model_field(self):
+        """get_form_field(for_csv_import=True) on an Object field referencing ModuleType
+        produces a CSVModelChoiceField with to_field_name='model', not 'name'."""
+        module_type_ot = ObjectType.objects.get(app_label='dcim', model='moduletype')
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="module_type",
+            label="Module Type",
+            type="object",
+            related_object_type=module_type_ot,
+        )
+        form_field = ObjectFieldType().get_form_field(cotf, for_csv_import=True)
+        self.assertEqual(form_field.to_field_name, 'model',
+                         "ModuleType CSV import must use 'model', not 'name'")
+
+    def test_csv_import_to_field_name_explicit_returned_when_valid(self):
+        """An explicit to_field_name that exists on the model is returned directly."""
+        self.assertEqual(_csv_import_to_field_name(Device, explicit='id'), 'id')
+
+    def test_csv_import_to_field_name_explicit_falls_through_when_stale(self):
+        """A stale explicit to_field_name (field no longer exists) triggers a warning
+        and falls through to the probe loop."""
+        import logging
+        with self.assertLogs('netbox_custom_objects.field_types', level=logging.WARNING):
+            result = _csv_import_to_field_name(Device, explicit='nonexistent_field_xyz')
+        # Falls through to probe loop — Device has 'name'
+        self.assertEqual(result, 'name')
+
+    def test_csv_import_to_field_name_pk_fallback_when_no_candidate_exists(self):
+        """Falls back to 'pk' and emits a warning when none of the candidate fields
+        exist on the model."""
+        import logging
+        from unittest.mock import MagicMock
+        mock_model = MagicMock()
+        mock_model.__name__ = 'FakeModel'
+        mock_model._meta.get_field.side_effect = FieldDoesNotExist
+        with self.assertLogs('netbox_custom_objects.field_types', level=logging.WARNING):
+            result = _csv_import_to_field_name(mock_model)
+        self.assertEqual(result, 'pk')
+
 
 class MultiObjectFieldTypeTestCase(FieldTypeTestCase):
     """Test cases for multiobject field type."""
@@ -880,6 +1281,21 @@ class MultiObjectFieldTypeTestCase(FieldTypeTestCase):
         self.assertEqual(instance.devices.count(), 2)
         self.assertIn(device1, instance.devices.all())
         self.assertIn(device2, instance.devices.all())
+
+    def test_csv_import_form_field_for_module_type_uses_model_field(self):
+        """MultiObjectFieldType.get_form_field(for_csv_import=True) on a field
+        referencing ModuleType produces to_field_name='model', not 'name'."""
+        module_type_ot = ObjectType.objects.get(app_label='dcim', model='moduletype')
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="module_types",
+            label="Module Types",
+            type="multiobject",
+            related_object_type=module_type_ot,
+        )
+        form_field = MultiObjectFieldType().get_form_field(cotf, for_csv_import=True)
+        self.assertEqual(form_field.to_field_name, 'model',
+                         "ModuleType multi-object CSV import must use 'model', not 'name'")
 
 
 class SelfReferentialFieldTestCase(FieldTypeTestCase):
@@ -1253,6 +1669,23 @@ class PrimaryFieldChangeTestCase(FieldTypeTestCase):
         # __str__ on the referenced target must reflect the new primary field ('code')
         refreshed_target = new_target_model.objects.get(pk=target_instance.pk)
         self.assertIn("T-001", str(refreshed_target))
+
+    def test_str_post_delete_no_primary_field_does_not_contain_none(self):
+        """Regression #558: str() on a post-delete instance (pk=None, no primary
+        field value) must return the COT display name, not '<type> None'."""
+        cot = self.create_custom_object_type(
+            name="DeleteStrTest", slug="delete-str-test",
+            verbose_name_plural="Delete Str Tests",
+        )
+        # No primary field — falls through to the pk fallback path in __str__.
+        model = cot.get_model()
+        instance = model.objects.create()
+
+        instance.delete()  # sets instance.pk = None
+
+        result = str(instance)
+        self.assertNotIn("None", result)
+        self.assertEqual(result, cot.display_name)
 
 
 # ---------------------------------------------------------------------------

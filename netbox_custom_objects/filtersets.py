@@ -11,7 +11,9 @@ from django.utils.timezone import make_aware, is_aware
 
 from extras.choices import CustomFieldTypeChoices
 from netbox.filtersets import NetBoxModelFilterSet
+from users.models import Owner, OwnerGroup
 
+from .choices import CustomObjectFieldTypeChoices
 from .constants import APP_LABEL
 from .models import CustomObjectType
 
@@ -20,6 +22,7 @@ __all__ = (
     "CustomObjectTypeFilterSet",
     "NonPolymorphicMultiObjectFilter",
     "NonPolymorphicObjectFilter",
+    "NonPolymorphicObjectIdFilter",
     "PolymorphicMultiObjectFilter",
     "PolymorphicObjectFilter",
     "get_filterset_class",
@@ -170,6 +173,35 @@ class NonPolymorphicObjectFilter(django_filters.Filter):
         return qs.filter(**{f"{self.field_name}_id": value.pk})
 
 
+class NonPolymorphicObjectIdFilter(django_filters.Filter):
+    """
+    Accepts a raw integer PK for a non-polymorphic FK Object field.
+
+    Registered as ``<field_name>_id`` alongside ``NonPolymorphicObjectFilter``
+    (which accepts a model-instance input under ``<field_name>``).  NetBox's
+    Related Objects panel links use the ``_id`` suffix form (e.g.
+    ``?tenant_id=5``), so without this entry those links would silently return
+    unfiltered results (issue #561).
+
+    Uses IntegerField (not ModelChoiceField) so the filter is applied even when
+    the submitted PK doesn't correspond to an existing object.  Inherits from
+    django_filters.Filter (not NumberFilter / ModelChoiceFilter) for the same
+    reason as NonPolymorphicObjectFilter: avoids get_additional_lookups()
+    introspecting _meta after apps.clear_cache().
+    """
+
+    field_class = django_forms.IntegerField
+
+    def __init__(self, **kwargs):
+        kwargs.setdefault("required", False)
+        super().__init__(**kwargs)
+
+    def filter(self, qs, value):
+        if value is None:
+            return qs
+        return qs.filter(**{f"{self.field_name}": value})
+
+
 class NonPolymorphicMultiObjectFilter(django_filters.Filter):
     """
     Filter for non-polymorphic M2M MultiObject fields on dynamically-generated
@@ -262,6 +294,7 @@ class CustomObjectTypeFilterSet(NetBoxModelFilterSet):
         fields = (
             "id",
             "name",
+            "slug",
             "group_name",
         )
 
@@ -309,6 +342,18 @@ def build_filter_for_field(field) -> dict:
     ):
         return _build_polymorphic_filters(field)
 
+    # Coordinates expand into two real columns; register a numeric filter for each.
+    if field.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+        base_label = field.label or field.name
+        return {
+            f"{field.name}_latitude": django_filters.NumberFilter(
+                field_name=f"{field.name}_latitude", label=f"{base_label} (latitude)"
+            ),
+            f"{field.name}_longitude": django_filters.NumberFilter(
+                field_name=f"{field.name}_longitude", label=f"{base_label} (longitude)"
+            ),
+        }
+
     spec = FIELD_TYPE_FILTERS.get(field.type)
     if not spec:
         return {}
@@ -334,7 +379,7 @@ def build_filter_for_field(field) -> dict:
         for key, value in spec.extra_kwargs.items():
             extra_kwargs[key] = value(field) if callable(value) else value
 
-    return {
+    filters = {
         field.name: spec.build(
             field_name=field.name,
             label=field.label or field.name,
@@ -342,6 +387,18 @@ def build_filter_for_field(field) -> dict:
             **extra_kwargs,
         )
     }
+
+    # For FK Object fields, also register a <field_name>_id filter that accepts
+    # a raw integer PK.  NetBox's Related Objects panel links use the _id suffix
+    # form (e.g. ?tenant_id=5), so without this the links return unfiltered
+    # results even though the filter name is present in the URL (issue #561).
+    if field.type == CustomFieldTypeChoices.TYPE_OBJECT and not field.is_polymorphic:
+        filters[f"{field.name}_id"] = NonPolymorphicObjectIdFilter(
+            field_name=f"{field.name}_id",
+            label=field.label or field.name,
+        )
+
+    return filters
 
 
 def get_filterset_class(model):
@@ -399,10 +456,26 @@ def get_filterset_class(model):
             return queryset.none()
         return queryset.filter(q)
 
+    def filter_owner_group_id(self, queryset, name, value):
+        if not value:
+            return queryset
+        return queryset.filter(owner__group__in=value)
+
     attrs = {
         "Meta": meta,
         "__module__": "netbox_custom_objects.filtersets",
         "search": search,
+        "filter_owner_group_id": filter_owner_group_id,
+        "owner_id": django_filters.ModelMultipleChoiceFilter(
+            field_name='owner',
+            queryset=Owner.objects.all(),
+            label='Owner (ID)',
+        ),
+        "owner_group_id": django_filters.ModelMultipleChoiceFilter(
+            queryset=OwnerGroup.objects.all(),
+            method='filter_owner_group_id',
+            label='Owner Group (ID)',
+        ),
     }
 
     # For each custom field, add a corresponding filter (dict of name → Filter).

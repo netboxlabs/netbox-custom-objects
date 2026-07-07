@@ -3,6 +3,7 @@ import decimal
 import hashlib
 import json
 import logging
+from decimal import Decimal
 from typing import List
 
 import django_tables2 as tables
@@ -12,8 +13,9 @@ from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
-from django.core.exceptions import FieldDoesNotExist
-from django.core.validators import RegexValidator
+from django.core.exceptions import FieldDoesNotExist, ValidationError
+from django.core.validators import (MaxValueValidator, MinValueValidator,
+                                     RegexValidator)
 from django.db import models, router
 from django.db.utils import OperationalError, ProgrammingError
 from django.db.models.fields.related import ForeignKey, ManyToManyDescriptor
@@ -41,7 +43,8 @@ from utilities.forms.widgets import (
 from utilities.templatetags.builtins.filters import linkify, render_markdown
 from netbox.tables.columns import BooleanColumn
 
-from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
+from netbox_custom_objects.choices import (CustomObjectFieldTypeChoices,
+                                           ObjectFieldOnDeleteChoices)
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name, generate_model
 
@@ -49,6 +52,58 @@ logger = logging.getLogger(__name__)
 
 # PostgreSQL's hard limit for identifier names is 63 bytes.
 _PG_MAX_IDENTIFIER_LEN = 63
+
+# Ordered list of field names tried when resolving the natural text identifier for a
+# model during CSV/YAML/JSON bulk import.  The first name that exists on the model
+# wins.  This handles models like ModuleType that use 'model' rather than 'name'.
+_CSV_IDENTIFIER_FIELD_PRECEDENCE = ('name', 'slug', 'model', 'identifier')
+
+
+def _csv_import_to_field_name(model_class, explicit=None):
+    """Return the field name to use as ``to_field_name`` for CSV import lookups.
+
+    If *explicit* is provided (e.g. from a stored field configuration), it is
+    validated against the model and returned if the field exists.  If the stored
+    value is stale (field was renamed on the target model), a warning is logged
+    and the function falls through to the probe loop.
+
+    The probe loop iterates ``_CSV_IDENTIFIER_FIELD_PRECEDENCE`` and returns the
+    first candidate that exists **and is unique** on the model, guaranteeing that
+    ``CSVModelChoiceField`` can resolve a single record.  If no unique match is
+    found the first existing candidate (unique or not) is used as a fallback.
+    Falls back to ``'pk'`` when none of the candidates exist at all.
+    """
+    if explicit is not None:
+        try:
+            model_class._meta.get_field(explicit)
+            return explicit
+        except FieldDoesNotExist:
+            logger.warning(
+                'Stored to_field_name %r not found on %s; probing for a natural identifier.',
+                explicit, model_class.__name__,
+            )
+
+    first_match = None  # best non-unique candidate, used only if no unique field found
+    for candidate in _CSV_IDENTIFIER_FIELD_PRECEDENCE:
+        try:
+            field_obj = model_class._meta.get_field(candidate)
+            if getattr(field_obj, 'unique', False):
+                return candidate
+            if first_match is None:
+                first_match = candidate
+        except FieldDoesNotExist:
+            pass
+
+    if first_match is not None:
+        return first_match
+
+    logger.warning(
+        'No natural identifier field found on %s for CSV import '
+        '(tried %s); falling back to pk.',
+        model_class.__name__,
+        ', '.join(_CSV_IDENTIFIER_FIELD_PRECEDENCE),
+    )
+    return 'pk'
 
 
 def _safe_pg_identifier(full_name: str) -> str:
@@ -340,7 +395,7 @@ class IntegerFieldType(FieldType):
         # TODO: handle all args for IntegerField
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
-        return models.IntegerField(null=True, blank=True, **field_kwargs)
+        return models.BigIntegerField(null=True, blank=True, **field_kwargs)
 
     def get_filterform_field(self, field, **kwargs):
         return forms.IntegerField(
@@ -520,12 +575,21 @@ class SelectFieldType(FieldType):
 
     def get_table_column_field(self, field, **kwargs):
         choices_dict = dict(field.choices)
+        choice_set = field.choice_set
+
+        _get_color = getattr(choice_set, 'get_choice_color', None) if choice_set else None
 
         class _SelectLabelColumn(tables.Column):
             def render(self, value):
                 if value is None:
                     return self.default
-                return choices_dict.get(value, value)
+                label = choices_dict.get(value, value)
+                color = _get_color(value) if _get_color else None
+                if color:
+                    return mark_safe(
+                        f'<span class="badge text-bg-{escape(color)}">{escape(label)}</span>'
+                    )
+                return label
 
         return _SelectLabelColumn()
 
@@ -648,12 +712,26 @@ class MultiSelectFieldType(FieldType):
 
     def get_table_column_field(self, field, **kwargs):
         choices_dict = dict(field.choices)
+        choice_set = field.choice_set
 
         class _MultiSelectLabelColumn(tables.Column):
             def render(self, value):
                 if not value:
                     return self.default
-                return ', '.join(choices_dict.get(v, v) for v in value)
+                _get_color = getattr(choice_set, 'get_choice_color', None) if choice_set else None
+                pairs = [
+                    (choices_dict.get(v, v), _get_color(v) if _get_color else None)
+                    for v in value
+                ]
+                if any(color for _, color in pairs):
+                    badges = ''.join(
+                        f'<span class="badge text-bg-{escape(color)}">{escape(label)}</span>'
+                        if color else
+                        f'<span class="badge">{escape(label)}</span>'
+                        for label, color in pairs
+                    )
+                    return mark_safe(f'<div class="d-flex flex-wrap gap-1">{badges}</div>')
+                return ', '.join(label for label, _ in pairs)
 
         return _MultiSelectLabelColumn()
 
@@ -763,12 +841,10 @@ class ObjectFieldType(FieldType):
 
         if for_csv_import:
             field_class = CSVModelChoiceField
-            # For CSV import, determine to_field_name from the field configuration
-            to_field_name = getattr(field, 'to_field_name', None) or 'name'
+            to_field_name = _csv_import_to_field_name(model, explicit=getattr(field, 'to_field_name', None))
             return field_class(
                 queryset=model.objects.all(),
                 required=field.required,
-                # Remove initial=field.default to allow Django to handle instance data properly
                 to_field_name=to_field_name,
             )
         else:
@@ -857,7 +933,7 @@ class ObjectFieldType(FieldType):
             serializer = get_serializer_class(related_model_class, skip_object_fields=True)
         else:
             serializer = get_serializer_for_model(related_model_class)
-        return serializer(required=field.required, nested=True)
+        return serializer(required=field.required, allow_null=not field.required, nested=True)
 
     def after_model_generation(self, instance, model, field_name):
         """
@@ -1362,8 +1438,7 @@ class MultiObjectFieldType(FieldType):
 
         if for_csv_import:
             field_class = CSVModelMultipleChoiceField
-            # For CSV import, determine to_field_name from the field configuration
-            to_field_name = getattr(field, 'to_field_name', None) or 'name'
+            to_field_name = _csv_import_to_field_name(model, explicit=getattr(field, 'to_field_name', None))
             return field_class(
                 queryset=model.objects.all(),
                 required=field.required,
@@ -1417,7 +1492,21 @@ class MultiObjectFieldType(FieldType):
             serializer = get_serializer_class(related_model_class, skip_object_fields=True)
         else:
             serializer = get_serializer_for_model(related_model_class)
-        return serializer(required=field.required, nested=True, many=True)
+        # Construct the ListSerializer explicitly so that allow_null is set only on
+        # the outer list (permitting null to clear the whole field) and NOT on the
+        # child (preventing individual null items like [null, 3] from slipping
+        # through).  Using many=True would forward allow_null to the child via
+        # many_init(), widening null acceptance unintentionally.
+        from rest_framework import serializers as drf_serializers
+        child = serializer(required=False, nested=True)
+        meta = getattr(serializer, 'Meta', None)
+        list_serializer_class = getattr(meta, 'list_serializer_class', drf_serializers.ListSerializer)
+        return list_serializer_class(
+            child=child,
+            required=field.required,
+            allow_null=not field.required,
+            allow_empty=True,
+        )
 
     def get_filterform_field(self, field, **kwargs):
         if field.is_polymorphic:
@@ -1962,6 +2051,277 @@ class PolymorphicM2MDescriptor:
         return False
 
 
+class PolymorphicObjectReverseManager:
+    """Returned when a polymorphic GFK reverse relation is accessed on a target instance."""
+
+    def __init__(self, instance, cot_pk, field_name):
+        self._instance = instance
+        self._cot_pk = cot_pk
+        self._field_name = field_name
+
+    def _source_model(self):
+        from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
+        # Fast path: model already in the COT cache (the common runtime case).
+        model = CustomObjectType.get_cached_model(self._cot_pk)
+        if model is not None:
+            return model
+        # Cache miss — fetch from DB and let get_model() cache the result.
+        try:
+            return CustomObjectType.objects.get(pk=self._cot_pk).get_model()
+        except CustomObjectType.DoesNotExist:
+            logger.warning(
+                'Reverse accessor: source CustomObjectType pk=%d no longer exists; '
+                'returning empty queryset.',
+                self._cot_pk,
+            )
+            return None
+
+    def all(self):
+        source_model = self._source_model()
+        if source_model is None:
+            return ContentType.objects.none()
+        ct = ContentType.objects.get_for_model(type(self._instance))
+        return source_model.objects.filter(**{
+            f"{self._field_name}_content_type": ct,
+            f"{self._field_name}_object_id": self._instance.pk,
+        })
+
+    def count(self):
+        return self.all().count()
+
+    def exists(self):
+        return self.all().exists()
+
+    def __iter__(self):
+        return iter(self.all())
+
+
+class PolymorphicObjectReverseDescriptor:
+    """Reverse descriptor for polymorphic GFK fields on CO models.
+
+    Injected onto target model classes by _wire_polymorphic_reverse_descriptors() so
+    that code can do, e.g., ``site.my_co_field.all()`` to retrieve all CO instances
+    whose polymorphic GFK points at that site.
+    """
+
+    def __init__(self, cot_pk, field_name):
+        self.cot_pk = cot_pk
+        self.field_name = field_name
+
+    def __get__(self, instance, owner=None):
+        if instance is None:
+            return self
+        return PolymorphicObjectReverseManager(instance, self.cot_pk, self.field_name)
+
+
+class PolymorphicMultiObjectReverseManager:
+    """Returned when a polymorphic M2M reverse relation is accessed on a target instance."""
+
+    def __init__(self, instance, cot_pk, through_model_name):
+        self._instance = instance
+        self._cot_pk = cot_pk
+        self._through_model_name = through_model_name
+
+    def _source_model(self):
+        from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
+        # Fast path: model already in the COT cache (the common runtime case).
+        model = CustomObjectType.get_cached_model(self._cot_pk)
+        if model is not None:
+            return model
+        # Cache miss — fetch from DB and let get_model() cache the result.
+        try:
+            return CustomObjectType.objects.get(pk=self._cot_pk).get_model()
+        except CustomObjectType.DoesNotExist:
+            logger.warning(
+                'Reverse accessor: source CustomObjectType pk=%d no longer exists; '
+                'returning empty queryset.',
+                self._cot_pk,
+            )
+            return None
+
+    def _through(self):
+        return apps.get_model(APP_LABEL, self._through_model_name)
+
+    def all(self):
+        source_model = self._source_model()
+        if source_model is None:
+            return ContentType.objects.none()
+        ct = ContentType.objects.get_for_model(type(self._instance))
+        source_ids = self._through().objects.filter(
+            content_type_id=ct.pk,
+            object_id=self._instance.pk,
+        ).values_list("source_id", flat=True)
+        return source_model.objects.filter(pk__in=source_ids)
+
+    def count(self):
+        return self.all().count()
+
+    def exists(self):
+        return self.all().exists()
+
+    def __iter__(self):
+        return iter(self.all())
+
+
+class PolymorphicMultiObjectReverseDescriptor:
+    """Reverse descriptor for polymorphic M2M fields on CO models.
+
+    Injected onto target model classes by _wire_polymorphic_reverse_descriptors() so
+    that code can do, e.g., ``site.my_co_field.all()`` to retrieve all CO instances
+    whose polymorphic M2M field includes that site.
+    """
+
+    def __init__(self, cot_pk, through_model_name):
+        self.cot_pk = cot_pk
+        self.through_model_name = through_model_name
+
+    def __get__(self, instance, owner=None):
+        if instance is None:
+            return self
+        return PolymorphicMultiObjectReverseManager(instance, self.cot_pk, self.through_model_name)
+
+
+class CoordinatesColumn(tables.Column):
+    """
+    Table column for a coordinates field. Renders the latitude/longitude pair stored
+    in the two backing columns as ``"<lat>, <lon>"`` (or a placeholder when unset).
+    """
+
+    def __init__(self, latitude_accessor, longitude_accessor, *args, **kwargs):
+        kwargs.setdefault("accessor", latitude_accessor)
+        kwargs.setdefault("orderable", True)
+        super().__init__(*args, **kwargs)
+        self.latitude_accessor = latitude_accessor
+        self.longitude_accessor = longitude_accessor
+
+    def render(self, record):
+        latitude = getattr(record, self.latitude_accessor, None)
+        longitude = getattr(record, self.longitude_accessor, None)
+        if latitude is None or longitude is None:
+            return self.default
+        return f"{latitude}, {longitude}"
+
+
+class CoordinatesFieldType(FieldType):
+    """
+    A geographic coordinates field. A single field of this type expands into two real
+    DB columns, ``<name>_latitude`` and ``<name>_longitude``, mirroring NetBox's native
+    Site/Device coordinate handling (plain ``DecimalField``s; no PostGIS dependency).
+    """
+
+    @staticmethod
+    def latitude_field_name(field):
+        return f"{field.name}_latitude"
+
+    @staticmethod
+    def longitude_field_name(field):
+        return f"{field.name}_longitude"
+
+    def get_model_field(self, field, **kwargs):
+        return {
+            self.latitude_field_name(field): models.DecimalField(
+                verbose_name=_("latitude"),
+                null=True,
+                blank=True,
+                max_digits=8,
+                decimal_places=6,
+                validators=[
+                    MinValueValidator(Decimal("-90.0")),
+                    MaxValueValidator(Decimal("90.0")),
+                ],
+                help_text=_("GPS coordinate in decimal format (xx.yyyyyy)"),
+            ),
+            self.longitude_field_name(field): models.DecimalField(
+                verbose_name=_("longitude"),
+                null=True,
+                blank=True,
+                max_digits=9,
+                decimal_places=6,
+                validators=[
+                    MinValueValidator(Decimal("-180.0")),
+                    MaxValueValidator(Decimal("180.0")),
+                ],
+                help_text=_("GPS coordinate in decimal format (xx.yyyyyy)"),
+            ),
+        }
+
+    def get_coordinate_values(self, instance, field):
+        """Return the (latitude, longitude) tuple stored on an instance."""
+        return (
+            getattr(instance, self.latitude_field_name(field), None),
+            getattr(instance, self.longitude_field_name(field), None),
+        )
+
+    def get_display_value(self, instance, field_name):
+        latitude = getattr(instance, f"{field_name}_latitude", None)
+        longitude = getattr(instance, f"{field_name}_longitude", None)
+        if latitude is None or longitude is None:
+            return None
+        return f"{latitude}, {longitude}"
+
+    def get_form_fields(self, field):
+        """
+        Return the two annotated form fields (latitude, longitude) keyed by their
+        backing column names. The keys match real model columns, so the generated
+        ModelForm binds and persists them natively.
+        """
+        base_label = field.label or field.name.replace("_", " ").title()
+        latitude = forms.DecimalField(
+            label=f"{base_label} ({_('latitude')})",
+            required=field.required,
+            max_digits=8,
+            decimal_places=6,
+            min_value=Decimal("-90.0"),
+            max_value=Decimal("90.0"),
+            help_text=_("GPS coordinate in decimal format (xx.yyyyyy)"),
+        )
+        longitude = forms.DecimalField(
+            label=f"{base_label} ({_('longitude')})",
+            required=field.required,
+            max_digits=9,
+            decimal_places=6,
+            min_value=Decimal("-180.0"),
+            max_value=Decimal("180.0"),
+            help_text=_("GPS coordinate in decimal format (xx.yyyyyy)"),
+        )
+        if field.ui_editable != CustomFieldUIEditableChoices.YES:
+            latitude.disabled = True
+            longitude.disabled = True
+        return {
+            self.latitude_field_name(field): latitude,
+            self.longitude_field_name(field): longitude,
+        }
+
+    def get_filterform_field(self, field, **kwargs):
+        base_label = field.label or field.name.replace("_", " ").title()
+        return {
+            self.latitude_field_name(field): forms.DecimalField(
+                label=f"{base_label} ({_('latitude')})", required=False
+            ),
+            self.longitude_field_name(field): forms.DecimalField(
+                label=f"{base_label} ({_('longitude')})", required=False
+            ),
+        }
+
+    def get_table_column_field(self, field, **kwargs):
+        return CoordinatesColumn(
+            self.latitude_field_name(field),
+            self.longitude_field_name(field),
+            verbose_name=str(field),
+        )
+
+    @staticmethod
+    def validate_pair(latitude, longitude):
+        """
+        Enforce that latitude and longitude are either both set or both empty.
+        Raises ``django.core.exceptions.ValidationError`` on a half-populated pair.
+        """
+        if (latitude is None) != (longitude is None):
+            raise ValidationError(
+                _("Latitude and longitude must both be set or both be empty.")
+            )
+
+
 FIELD_TYPE_CLASS = {
     CustomFieldTypeChoices.TYPE_TEXT: TextFieldType,
     CustomFieldTypeChoices.TYPE_LONGTEXT: LongTextFieldType,
@@ -1976,4 +2336,5 @@ FIELD_TYPE_CLASS = {
     CustomFieldTypeChoices.TYPE_MULTISELECT: MultiSelectFieldType,
     CustomFieldTypeChoices.TYPE_OBJECT: ObjectFieldType,
     CustomFieldTypeChoices.TYPE_MULTIOBJECT: MultiObjectFieldType,
+    CustomObjectFieldTypeChoices.TYPE_COORDINATES: CoordinatesFieldType,
 }

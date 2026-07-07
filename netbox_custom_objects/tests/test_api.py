@@ -1,10 +1,13 @@
 """
 Tests for API code paths.
 """
+import uuid
+from decimal import Decimal
+
 from django.test import TestCase
 from django.urls import reverse
 
-from utilities.testing import create_test_user
+from utilities.testing import TestCase as NetBoxTestCase, create_test_user
 from rest_framework import status
 from rest_framework.test import APIClient
 
@@ -12,6 +15,7 @@ from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from .base import CustomObjectsTestCase, create_token
 from core.models import ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Rack, Site
+from extras.models import Tag
 from users.models import ObjectPermission
 from virtualization.models import Cluster, ClusterType
 
@@ -97,7 +101,7 @@ class CustomObjectAPITestCaseMixin:
         self.assertHttpStatus(response, 403)
 
 
-class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, TestCase):
+class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, NetBoxTestCase):
     model = None  # Will be set in setUpTestData
     bulk_update_data = {
         'test_field': 'Updated test field',
@@ -370,6 +374,10 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, Test
         obj_perm.save()
         obj_perm.users.add(self.user)
         obj_perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+        view_device_perm = ObjectPermission(name='view-device-for-nested', actions=['view'])
+        view_device_perm.save()
+        view_device_perm.users.add(self.user)
+        view_device_perm.object_types.add(ObjectType.objects.get_for_model(Device))
 
         devices = Device.objects.all()
 
@@ -395,6 +403,80 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, Test
         self.assertSetEqual(
             set(instance.devices.values_list('id', flat=True)),
             set(data['devices']),
+        )
+
+    def test_create_with_tags_persists_to_db(self):
+        """Regression #371: tags submitted on POST must be saved to the DB, not just echoed."""
+        self._add_permission('add', 'Create with tags perm')
+        self.add_permissions('extras.view_tag')
+        tag = Tag.objects.get_or_create(name='api-create-tag', slug='api-create-tag')[0]
+
+        data = {
+            'test_field': 'Tagged Object',
+            'tags': [{'id': tag.id, 'name': tag.name, 'slug': tag.slug, 'color': tag.color}],
+        }
+        response = self.client.post(self._get_list_url(), data, format='json', **self.header)
+        self.assertHttpStatus(response, status.HTTP_201_CREATED)
+        self.assertIn('tags', response.data)
+        self.assertTrue(len(response.data['tags']) > 0, 'Response should include the submitted tag')
+
+        # Fetch fresh from the DB — the critical assertion that caught #371
+        instance = self._get_queryset().get(pk=response.data['id'])
+        self.assertIn(tag.name, list(instance.tags.names()), 'Tag must be persisted to the DB')
+
+    def test_patch_with_tags_persists_to_db(self):
+        """Regression #371: tags submitted on PATCH must be saved to the DB, not just echoed."""
+        self._add_permission('view', 'View perm')
+        self._add_permission('change', 'Patch with tags perm')
+        self.add_permissions('extras.view_tag')
+        tag = Tag.objects.get_or_create(name='api-patch-tag', slug='api-patch-tag')[0]
+
+        instance = self._get_queryset().first()
+        self.assertEqual(list(instance.tags.names()), [], 'Instance should start with no tags')
+
+        data = {'tags': [{'id': tag.id, 'name': tag.name, 'slug': tag.slug, 'color': tag.color}]}
+        response = self.client.patch(self._get_detail_url(instance), data, format='json', **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+
+        instance.refresh_from_db()
+        self.assertIn(tag.name, list(instance.tags.names()), 'Tag must be persisted to the DB after PATCH')
+
+    def test_patch_with_empty_tags_clears_existing(self):
+        """PATCH with tags=[] must remove all existing tags from the DB."""
+        self._add_permission('view', 'View perm')
+        self._add_permission('change', 'Patch clear tags perm')
+        tag = Tag.objects.get_or_create(name='api-clear-tag', slug='api-clear-tag')[0]
+
+        instance = self._get_queryset().first()
+        instance.tags.add(tag.name)
+        self.assertIn(tag.name, list(instance.tags.names()), 'Pre-condition: tag should be set')
+
+        response = self.client.patch(self._get_detail_url(instance), {'tags': []}, format='json', **self.header)
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+
+        instance.refresh_from_db()
+        self.assertEqual(list(instance.tags.names()), [], 'All tags must be cleared after PATCH with tags=[]')
+
+    def test_patch_without_tags_preserves_existing(self):
+        """PATCH that omits the tags key entirely must leave existing tags unchanged."""
+        self._add_permission('view', 'View perm')
+        self._add_permission('change', 'Patch preserve tags perm')
+        tag = Tag.objects.get_or_create(name='api-preserve-tag', slug='api-preserve-tag')[0]
+
+        instance = self._get_queryset().first()
+        instance.tags.add(tag.name)
+        self.assertIn(tag.name, list(instance.tags.names()), 'Pre-condition: tag should be set')
+
+        response = self.client.patch(
+            self._get_detail_url(instance), {'test_field': 'updated'}, format='json', **self.header
+        )
+        self.assertHttpStatus(response, status.HTTP_200_OK)
+
+        instance.refresh_from_db()
+        self.assertIn(
+            tag.name,
+            list(instance.tags.names()),
+            'Existing tags must be preserved when tags not in PATCH payload',
         )
 
 
@@ -673,6 +755,60 @@ class CustomObjectTypeAPITest(CustomObjectsTestCase, TestCase):
         self.assertIn('group_name', response.data)
         self.assertEqual(response.data['group_name'], '')
 
+    def _add_change_permission(self):
+        obj_perm = ObjectPermission(name='Change permission', actions=['change'])
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        obj_perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
+
+    def test_config_context_enabled_set_at_creation(self):
+        """config_context_enabled can be set to True when creating a type via the API."""
+        data = {'name': 'cc_create', 'slug': 'cc-create', 'config_context_enabled': True}
+        url = reverse('plugins-api:netbox_custom_objects-api:customobjecttype-list')
+        response = self.client.post(url, data, format='json', **self.header)
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertTrue(response.data['config_context_enabled'])
+        cot = CustomObjectType.objects.get(pk=response.data['id'])
+        self.assertTrue(cot.config_context_enabled)
+
+    def test_config_context_enabled_in_detail_response(self):
+        """The current value is readable via the API detail endpoint."""
+        self._add_view_permission()
+        cot = CustomObjectType.objects.create(
+            name='cc_detail', slug='cc-detail', config_context_enabled=True,
+        )
+        url = reverse(
+            'plugins-api:netbox_custom_objects-api:customobjecttype-detail',
+            kwargs={'pk': cot.pk},
+        )
+        response = self.client.get(url, **self.header)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('config_context_enabled', response.data)
+        self.assertTrue(response.data['config_context_enabled'])
+
+    def test_config_context_enabled_immutable_after_creation(self):
+        """Changing config_context_enabled via PATCH is rejected (create-only)."""
+        self._add_change_permission()
+        cot = CustomObjectType.objects.create(
+            name='cc_immut', slug='cc-immut', config_context_enabled=False,
+        )
+        url = reverse(
+            'plugins-api:netbox_custom_objects-api:customobjecttype-detail',
+            kwargs={'pk': cot.pk},
+        )
+        # APIClient honours format='json' on PATCH (the plain Django client sends
+        # octet-stream → 415).
+        response = APIClient().patch(
+            url, {'config_context_enabled': True}, format='json', **self.header,
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('config_context_enabled', response.data)
+        cot.refresh_from_db()
+        self.assertFalse(cot.config_context_enabled)
+
 
 class CustomObjectTypeFieldObjectResolutionTest(CustomObjectsTestCase, TestCase):
     """
@@ -849,7 +985,7 @@ class SerializerFieldCoverageTest(CustomObjectsTestCase, TestCase):
         response = self.client.get(self._detail_url(instance), **self.header)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        for field in ('id', 'url', 'display', 'created', 'last_updated', 'tags'):
+        for field in ('id', 'url', 'display', 'owner', 'created', 'last_updated', 'tags'):
             self.assertIn(field, response.data, f"Standard field '{field}' missing from response")
 
     def test_detail_response_contains_custom_fields(self):
@@ -1313,6 +1449,7 @@ class CrossCOTMultiObjectAPITest(CustomObjectsTestCase, TestCase):
     def test_patch_updates_cross_cot_m2m_field(self):
         """#443 – PATCH with a list of target PKs must update the M2M field."""
         self._add_perm('change', self.model_source)
+        self._add_perm('view', self.model_target)
 
         # Confirm initial state.
         self.assertSetEqual(
@@ -1411,3 +1548,522 @@ class CrossCOTMultiObjectAPITest(CustomObjectsTestCase, TestCase):
         self.assertIn('refs', response.data, 'Response must include the refs M2M field.')
         ref_ids = [r['id'] for r in response.data['refs']]
         self.assertIn(self.obj_target1.pk, ref_ids)
+
+
+class OwnerAPITest(CustomObjectsTestCase, TestCase):
+    """Tests for the owner field on custom object instances (#376)."""
+
+    def setUp(self):
+        super().setUp()
+        from netbox_custom_objects.models import CustomObjectType
+        self.cot = CustomObjectType.objects.create(name='OwnedThing', slug='owned-thing')
+        self.model = self.cot.get_model()
+        token = create_token(self.user)
+        self.header = {'HTTP_AUTHORIZATION': f'Token {token}'}
+        self.client = APIClient()
+
+    def _list_url(self):
+        return reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-list',
+            kwargs={'custom_object_type': self.cot.slug},
+        )
+
+    def _detail_url(self, pk):
+        return reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-detail',
+            kwargs={'pk': pk, 'custom_object_type': self.cot.slug},
+        )
+
+    def _add_perm(self, action, model):
+        perm = ObjectPermission(name=f'{action}-{model._meta.model_name}', actions=[action])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(model))
+        return perm
+
+    def _grant_owner_view(self, suffix=''):
+        from users.models import Owner
+        perm = ObjectPermission(name=f'view-owner{suffix}', actions=['view'])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(Owner))
+        return perm
+
+    def test_owner_null_by_default(self):
+        """New CO instances must have owner=None when not explicitly set."""
+        obj = self.model.objects.create()
+        self.assertIsNone(obj.owner)
+
+    def test_owner_present_in_api_response(self):
+        """GET response must contain an 'owner' key (null when unset)."""
+        obj = self.model.objects.create()
+        self._add_perm('view', self.model)
+
+        response = self.client.get(self._detail_url(obj.pk), **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('owner', response.data)
+        self.assertIsNone(response.data['owner'])
+
+    def test_create_with_owner(self):
+        """POST with owner=<pk> must persist the owner FK."""
+        from users.models import Owner
+        owner = Owner.objects.create(name='create-owner')
+        self._add_perm('add', self.model)
+        self._grant_owner_view('-create')
+
+        response = self.client.post(
+            self._list_url(),
+            {'owner': owner.pk},
+            format='json',
+            **self.header,
+        )
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_201_CREATED,
+            f'Expected 201; got {response.status_code}: {getattr(response, "data", response.content)}',
+        )
+        obj = self.model.objects.get(pk=response.data['id'])
+        self.assertEqual(obj.owner_id, owner.pk)
+
+    def test_patch_sets_owner(self):
+        """PATCH with owner=<pk> must update the owner FK."""
+        from users.models import Owner
+        obj = self.model.objects.create()
+        owner = Owner.objects.create(name='patch-owner')
+        self._add_perm('change', self.model)
+        self._grant_owner_view('-patch')
+
+        response = self.client.patch(
+            self._detail_url(obj.pk),
+            {'owner': owner.pk},
+            format='json',
+            **self.header,
+        )
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK,
+            f'Expected 200; got {response.status_code}: {getattr(response, "data", response.content)}',
+        )
+        obj.refresh_from_db()
+        self.assertEqual(obj.owner_id, owner.pk)
+
+    def test_patch_clears_owner(self):
+        """PATCH with owner=null must clear the owner FK."""
+        from users.models import Owner
+        owner = Owner.objects.create(name='clear-owner')
+        obj = self.model.objects.create(owner=owner)
+        self._add_perm('change', self.model)
+
+        response = self.client.patch(
+            self._detail_url(obj.pk),
+            {'owner': None},
+            format='json',
+            **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        obj.refresh_from_db()
+        self.assertIsNone(obj.owner)
+
+    def test_filter_by_owner_id(self):
+        """?owner_id=<pk> must return only instances with that owner."""
+        from users.models import Owner
+        owner_a = Owner.objects.create(name='filter-owner-a')
+        owner_b = Owner.objects.create(name='filter-owner-b')
+        obj_a = self.model.objects.create(owner=owner_a)
+        obj_b = self.model.objects.create(owner=owner_b)
+        self._add_perm('view', self.model)
+
+        response = self.client.get(
+            self._list_url(),
+            {'owner_id': owner_a.pk},
+            **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        ids = [r['id'] for r in response.data['results']]
+        self.assertIn(obj_a.pk, ids)
+        self.assertNotIn(obj_b.pk, ids)
+
+    def test_filter_by_owner_group_id(self):
+        """?owner_group_id=<pk> must return only instances whose owner belongs to that group."""
+        from users.models import Owner, OwnerGroup
+        group_x = OwnerGroup.objects.create(name='group-x')
+        group_y = OwnerGroup.objects.create(name='group-y')
+        owner_x = Owner.objects.create(name='owner-in-x', group=group_x)
+        owner_y = Owner.objects.create(name='owner-in-y', group=group_y)
+        obj_x = self.model.objects.create(owner=owner_x)
+        obj_y = self.model.objects.create(owner=owner_y)
+        self._add_perm('view', self.model)
+
+        response = self.client.get(
+            self._list_url(),
+            {'owner_group_id': group_x.pk},
+            **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        ids = [r['id'] for r in response.data['results']]
+        self.assertIn(obj_x.pk, ids)
+        self.assertNotIn(obj_y.pk, ids)
+
+
+class ConfigContextAPITest(CustomObjectsTestCase, TestCase):
+    """REST API exposure of local_context_data for config-context-enabled types (#98)."""
+
+    def setUp(self):
+        super().setUp()
+        self.cot = CustomObjectType.objects.create(
+            name='cc_api', slug='cc-api', config_context_enabled=True,
+        )
+        self.create_custom_object_type_field(
+            self.cot, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        self.model = self.cot.get_model()
+        token = create_token(self.user)
+        self.header = {'HTTP_AUTHORIZATION': f'Token {token}'}
+        self.client = APIClient()
+
+    def _list_url(self):
+        return reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-list',
+            kwargs={'custom_object_type': self.cot.slug},
+        )
+
+    def _detail_url(self, pk):
+        return reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-detail',
+            kwargs={'pk': pk, 'custom_object_type': self.cot.slug},
+        )
+
+    def _add_perm(self, action):
+        perm = ObjectPermission(name=f'{action}-{self.model._meta.model_name}', actions=[action])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+        return perm
+
+    def test_local_context_data_present_in_response(self):
+        obj = self.model.objects.create(name='obj-1', local_context_data={'ntp': ['10.0.0.1']})
+        self._add_perm('view')
+
+        response = self.client.get(self._detail_url(obj.pk), **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('local_context_data', response.data)
+        self.assertEqual(response.data['local_context_data'], {'ntp': ['10.0.0.1']})
+
+    def test_set_local_context_data_via_patch(self):
+        obj = self.model.objects.create(name='obj-2')
+        self._add_perm('change')
+
+        response = self.client.patch(
+            self._detail_url(obj.pk),
+            {'local_context_data': {'role': 'edge'}},
+            format='json',
+            **self.header,
+        )
+        self.assertEqual(
+            response.status_code,
+            status.HTTP_200_OK,
+            f'Expected 200; got {response.status_code}: {getattr(response, "data", response.content)}',
+        )
+        obj.refresh_from_db()
+        self.assertEqual(obj.local_context_data, {'role': 'edge'})
+
+    def test_local_context_data_absent_when_disabled(self):
+        """A type without config context support must not expose local_context_data."""
+        cot = CustomObjectType.objects.create(name='cc_off', slug='cc-off')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        model = cot.get_model()
+        obj = model.objects.create(name='x')
+
+        perm = ObjectPermission(name='view-cc-off', actions=['view'])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(model))
+
+        url = reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-detail',
+            kwargs={'pk': obj.pk, 'custom_object_type': cot.slug},
+        )
+        response = self.client.get(url, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertNotIn('local_context_data', response.data)
+
+
+class NullOptionalObjectFieldTest(CustomObjectsTestCase, TestCase):
+    """
+    POST/PATCH with explicit null on a non-required object or multiobject field
+    must succeed (201/200).  Before the fix, the serializer lacked allow_null=True
+    so null was rejected with 400 'This field may not be null.'
+    """
+
+    def setUp(self):
+        self.user = create_test_user('nullobjuser')
+        token_key = create_token(self.user)
+        self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
+        self.client = APIClient()
+        self.client.credentials(HTTP_AUTHORIZATION=f'Token {token_key}')
+
+        self.cot = CustomObjectsTestCase.create_custom_object_type(
+            name='NullObjTest', slug='null-obj-test'
+        )
+        CustomObjectsTestCase.create_custom_object_type_field(
+            self.cot, name='name', type='text', primary=True, required=True,
+        )
+        device_ct = CustomObjectsTestCase.get_device_object_type()
+        CustomObjectsTestCase.create_custom_object_type_field(
+            self.cot, name='device', type='object',
+            related_object_type=device_ct, required=False,
+        )
+        CustomObjectsTestCase.create_custom_object_type_field(
+            self.cot, name='devices', type='multiobject',
+            related_object_type=device_ct, required=False,
+        )
+        self.model = self.cot.get_model()
+
+        uid = uuid.uuid4().hex[:8]
+        for action in ('add', 'change', 'view'):
+            perm = ObjectPermission(name=f'null-obj-{action}-{uid}', actions=[action])
+            perm.save()
+            perm.users.add(self.user)
+            perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+    def tearDown(self):
+        CustomObjectType.clear_model_cache()
+        super().tearDown()
+
+    def _list_url(self):
+        return reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-list',
+            kwargs={'custom_object_type': self.cot.slug},
+        )
+
+    def _detail_url(self, pk):
+        return reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-detail',
+            kwargs={'pk': pk, 'custom_object_type': self.cot.slug},
+        )
+
+    def test_post_null_object_field_accepted(self):
+        """POST with explicit null on an optional object field must return 201."""
+        response = self.client.post(
+            self._list_url(),
+            {'name': 'obj-null-post', 'device': None},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertIsNone(response.data['device'])
+
+    def test_post_null_multiobject_field_accepted(self):
+        """POST with explicit null on an optional multiobject field must return 201."""
+        response = self.client.post(
+            self._list_url(),
+            {'name': 'multiobj-null-post', 'devices': None},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(response.data['devices'], [])
+
+    def test_patch_null_object_field_clears_value(self):
+        """PATCH with null on an optional object field must clear it and return 200."""
+        site = Site.objects.create(name='null-test-site', slug='null-test-site')
+        manufacturer = Manufacturer.objects.create(name='null-mfr', slug='null-mfr')
+        device_type = DeviceType.objects.create(
+            manufacturer=manufacturer, model='null-dt', slug='null-dt'
+        )
+        device_role = DeviceRole.objects.create(name='null-role', slug='null-role')
+        device = Device.objects.create(
+            name='null-dev', site=site, device_type=device_type, role=device_role
+        )
+        obj = self.model.objects.create(name='patch-null-obj', device=device)
+        self.assertIsNotNone(obj.device)
+
+        response = self.client.patch(
+            self._detail_url(obj.pk),
+            {'device': None},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        obj.refresh_from_db()
+        self.assertIsNone(obj.device)
+
+    def test_patch_null_multiobject_field_clears_value(self):
+        """PATCH with null on an optional multiobject field must clear it and return 200."""
+        site = Site.objects.create(name='null-multi-site', slug='null-multi-site')
+        manufacturer = Manufacturer.objects.create(name='null-multi-mfr', slug='null-multi-mfr')
+        device_type = DeviceType.objects.create(
+            manufacturer=manufacturer, model='null-multi-dt', slug='null-multi-dt'
+        )
+        device_role = DeviceRole.objects.create(name='null-multi-role', slug='null-multi-role')
+        device = Device.objects.create(
+            name='null-multi-dev', site=site, device_type=device_type, role=device_role
+        )
+        obj = self.model.objects.create(name='patch-null-multi-obj')
+        obj.devices.add(device)
+        self.assertEqual(obj.devices.count(), 1)
+
+        response = self.client.patch(
+            self._detail_url(obj.pk),
+            {'devices': None},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        obj.refresh_from_db()
+        self.assertEqual(obj.devices.count(), 0)
+
+    def test_post_null_required_object_field_rejected(self):
+        """POST with null on a required object field must still return 400."""
+        device_ct = CustomObjectsTestCase.get_device_object_type()
+        uid = uuid.uuid4().hex[:8]
+        cot = CustomObjectsTestCase.create_custom_object_type(
+            name=f'NullReqTest-{uid}', slug=f'null-req-test-{uid}'
+        )
+        CustomObjectsTestCase.create_custom_object_type_field(
+            cot, name='name', type='text', primary=True, required=True,
+        )
+        CustomObjectsTestCase.create_custom_object_type_field(
+            cot, name='req_device', type='object',
+            related_object_type=device_ct, required=True,
+        )
+        model = cot.get_model()
+        for action in ('add', 'view'):
+            perm = ObjectPermission(name=f'null-req-{action}-{uid}', actions=[action])
+            perm.save()
+            perm.users.add(self.user)
+            perm.object_types.add(ObjectType.objects.get_for_model(model))
+
+        list_url = reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-list',
+            kwargs={'custom_object_type': cot.slug},
+        )
+        response = self.client.post(
+            list_url,
+            {'name': 'req-null-post', 'req_device': None},
+            format='json',
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+
+
+class CoordinatesFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
+    """REST API behaviour for the coordinates field type."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.cot = CustomObjectType.objects.create(
+            name="GeoObject",
+            verbose_name_plural="Geo Objects",
+            slug="geo-objects",
+        )
+        cls.create_custom_object_type_field(
+            cls.cot, name="name", type="text", primary=True, required=True
+        )
+        cls.create_custom_object_type_field(cls.cot, name="location", type="coordinates")
+        cls.model = cls.cot.get_model()
+
+    def setUp(self):
+        super().setUp()
+        self.user = create_test_user("geouser")
+        self.client = APIClient()
+        token_key = create_token(self.user)
+        self.header = {"HTTP_AUTHORIZATION": f"Token {token_key}"}
+        perm = ObjectPermission(
+            name="geo all", actions=["view", "add", "change", "delete"]
+        )
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+    def _list_url(self):
+        return reverse(
+            "plugins-api:netbox_custom_objects-api:customobject-list",
+            kwargs={"custom_object_type": self.cot.slug},
+        )
+
+    def _detail_url(self, instance):
+        return reverse(
+            "plugins-api:netbox_custom_objects-api:customobject-detail",
+            kwargs={"pk": instance.pk, "custom_object_type": self.cot.slug},
+        )
+
+    def test_serializer_exposes_flat_latitude_longitude(self):
+        """The coordinate columns are serialized as two flat fields (NetBox convention)."""
+        obj = self.model.objects.create(
+            name="Box",
+            location_latitude=Decimal("40.712800"),
+            location_longitude=Decimal("-74.006000"),
+        )
+        response = self.client.get(self._detail_url(obj), **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(Decimal(response.data["location_latitude"]), Decimal("40.712800"))
+        self.assertEqual(Decimal(response.data["location_longitude"]), Decimal("-74.006000"))
+        self.assertNotIn("location", response.data)
+
+    def test_create_with_coordinates(self):
+        """Creating an object via the API persists both coordinate columns."""
+        data = {
+            "name": "Created box",
+            "location_latitude": "41.000000",
+            "location_longitude": "-75.000000",
+        }
+        response = self.client.post(self._list_url(), data, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        obj = self.model.objects.get(pk=response.data["id"])
+        self.assertEqual(obj.location_latitude, Decimal("41.000000"))
+        self.assertEqual(obj.location_longitude, Decimal("-75.000000"))
+
+    def test_create_half_populated_pair_rejected(self):
+        """Setting only one of latitude/longitude is rejected, keyed to the empty field."""
+        data = {"name": "Bad box", "location_latitude": "41.000000"}
+        response = self.client.post(self._list_url(), data, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+        # The error is pinned to the missing field, not non_field_errors.
+        self.assertIn("location_longitude", response.data)
+        self.assertNotIn("non_field_errors", response.data)
+
+    def test_create_out_of_range_rejected(self):
+        """Latitude beyond ±90 is rejected by the model field validators."""
+        data = {
+            "name": "Out of range",
+            "location_latitude": "120.000000",
+            "location_longitude": "10.000000",
+        }
+        response = self.client.post(self._list_url(), data, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+
+    def test_patch_clearing_one_half_rejected(self):
+        """A PATCH that clears only one coordinate of a populated pair is rejected."""
+        obj = self.model.objects.create(
+            name="Box",
+            location_latitude=Decimal("40.712800"),
+            location_longitude=Decimal("-74.006000"),
+        )
+        response = self.client.patch(
+            self._detail_url(obj),
+            {"location_latitude": None},
+            format="json",
+            **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+        self.assertIn("location_latitude", response.data)
+        # The DB row is left untouched.
+        obj.refresh_from_db()
+        self.assertEqual(obj.location_latitude, Decimal("40.712800"))
+        self.assertEqual(obj.location_longitude, Decimal("-74.006000"))
+
+    def test_patch_clearing_both_halves_allowed(self):
+        """A PATCH clearing both coordinates at once is accepted."""
+        obj = self.model.objects.create(
+            name="Box",
+            location_latitude=Decimal("40.712800"),
+            location_longitude=Decimal("-74.006000"),
+        )
+        response = self.client.patch(
+            self._detail_url(obj),
+            {"location_latitude": None, "location_longitude": None},
+            format="json",
+            **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        obj.refresh_from_db()
+        self.assertIsNone(obj.location_latitude)
+        self.assertIsNone(obj.location_longitude)
