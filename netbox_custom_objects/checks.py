@@ -78,8 +78,8 @@ def check_branching_compatibility(app_configs, **kwargs):
             'netbox-branching is installed but its version could not be '
             f'determined, so the >= {REQUIRED_BRANCHING_VERSION} requirement '
             'cannot be verified.',
-            hint='If using an editable install, ensure its dist-info metadata '
-                 'is present (reinstall with `pip install -e`).',
+            hint='If using an editable install, reinstall with: '
+                 'pip install -e . (package: netboxlabs-netbox-branching).',
             id='netbox_custom_objects.W001',
         ))
     except InvalidVersion:
