@@ -103,6 +103,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt -U
           pip install 'netboxlabs-netbox-branching>=1.0.0'
+      - name: Tune PostgreSQL for branching test performance
+        if: ${{ matrix.with-branching == true }}
+        run: |
+          sudo apt-get install -y -q postgresql-client
+          PGPASSWORD=netbox psql -h localhost -U netbox \
+            -c "ALTER SYSTEM SET checkpoint_timeout = '30min'" \
+            -c "ALTER SYSTEM SET max_wal_size = '2GB'" \
+            -c "ALTER SYSTEM SET synchronous_commit = off" \
+            -c "SELECT pg_reload_conf()"
       - name: Run tests
         working-directory: netbox
         run: |
