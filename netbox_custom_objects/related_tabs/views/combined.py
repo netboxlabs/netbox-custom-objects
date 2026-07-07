@@ -372,10 +372,8 @@ def _batch_multiobject_values(pairs, user=None):
         # One prefetch per (model, field) group; objs are homogeneous because the
         # same field object is reused across all of its rows (see _iter_linked_fields).
         prefetch_related_objects(objs, field.name)
-        per_obj_targets = {
-            id(obj): list(getattr(obj, '_prefetched_objects_cache', {}).get(field.name, []))
-            for obj in objs
-        }
+        # The manager serves the prefetched result from cache, so .all() is query-free here.
+        per_obj_targets = {id(obj): list(getattr(obj, field.name).all()) for obj in objs}
         if user is not None:
             # All targets in the group share one model (non-polymorphic field), so a
             # single restrict_to_viewable() resolves the whole group in one query.
