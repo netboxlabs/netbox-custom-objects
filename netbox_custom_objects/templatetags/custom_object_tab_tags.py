@@ -8,8 +8,9 @@ __all__ = ('plugin_extra_tabs', 'custom_objects_tab_link')
 
 register = template.Library()
 
-# journal/changelog/contacts/custom_objects are rendered as hardcoded <li>s, not
-# from the registry, so they're excluded here to avoid duplicate, never-active tabs:
+# journal/changelog/contacts/custom_objects are rendered as hardcoded <li>s in
+# templates/netbox_custom_objects/customobject.html (keep this set in sync with it),
+# not from the registry, so they're excluded here to avoid duplicate, never-active tabs:
 # upstream's journal/changelog/contacts views set the active-tab marker as a string
 # that ``model_view_tabs`` can't match (contacts is wired to the slug-based
 # ``customobject_contacts`` route via NetBox's ContactsMixin), and custom_objects is
