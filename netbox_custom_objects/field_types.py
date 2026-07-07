@@ -1689,16 +1689,18 @@ class MultiObjectFieldType(FieldType):
                     schema_editor.create_model(through)
                     # Add the target FK as DEFERRABLE INITIALLY DEFERRED.
                     # get_through_model uses db_constraint=False so Django
-                    # doesn't create a non-deferrable FK automatically.  We
-                    # add it here as a *new* constraint so it is not affected
-                    # by any earlier SET CONSTRAINTS ALL IMMEDIATE call in the
-                    # same transaction — a freshly-created DEFERRABLE constraint
-                    # starts in its INITIALLY mode regardless of prior
-                    # SET CONSTRAINTS ALL IMMEDIATE commands.  This lets
-                    # iterative branch merges (time-ordered) insert through rows
-                    # before the referenced target CO exists; the FK check is
-                    # deferred to transaction commit, by which point all CO
-                    # CREATEs have been applied.
+                    # doesn't create a non-deferrable FK automatically.
+                    # _schema_add_field calls SET CONSTRAINTS ALL IMMEDIATE
+                    # before invoking create_m2m_table; in PostgreSQL this
+                    # applies to the entire transaction including constraints
+                    # created afterward.  We therefore:
+                    #   1. Add the constraint as DEFERRABLE INITIALLY DEFERRED
+                    #   2. Immediately re-defer it by name so it is DEFERRED
+                    #      for the rest of the merge transaction
+                    # This lets iterative branch merges (time-ordered) insert
+                    # through rows before the referenced target CO exists; the
+                    # FK check is deferred to transaction commit, by which
+                    # point all CO CREATEs have been applied.
                     to_table = to_model._meta.db_table
                     to_pk = to_model._meta.pk.column
                     fk_conname = (table_name[:53] + '_target_fk').lower()
@@ -1710,6 +1712,11 @@ class MultiObjectFieldType(FieldType):
                             con=connection.ops.quote_name(fk_conname),
                             ref=connection.ops.quote_name(to_table),
                             pk=connection.ops.quote_name(to_pk),
+                        )
+                    )
+                    cursor.execute(
+                        'SET CONSTRAINTS {} DEFERRED'.format(
+                            connection.ops.quote_name(fk_conname),
                         )
                     )
 
