@@ -2514,3 +2514,118 @@ class LazySerializerRegistrationTestCase(CustomObjectsTestCase, TestCase):
                       "building child serializer must not clobber parent's full serializer")
         self.assertIn("title", registered_parent.Meta.fields,
                       "parent's full field set must be intact after child serializer is built")
+
+
+class DisplayExpressionTestCase(CustomObjectsTestCase, TestCase):
+    """Tests for CustomObjectType.display_expression Jinja2 rendering."""
+
+    def _make_cot(self, expression=''):
+        cot = self.create_custom_object_type(
+            name='ExprTest', slug='expr-test', display_expression=expression,
+        )
+        self.create_custom_object_type_field(cot, name='make', label='Make', type='text', primary=True, required=True)
+        self.create_custom_object_type_field(cot, name='model', label='Model', type='text', required=False)
+        return cot
+
+    def test_expression_renders_composite_name(self):
+        cot = self._make_cot('{{ make }} - {{ model }}')
+        instance = cot.get_model().objects.create(make='Cisco', model='ASR1001')
+        self.assertEqual(str(instance), 'Cisco - ASR1001')
+
+    def test_expression_with_missing_field_renders_empty_string(self):
+        # Fields referenced in the expression but not present render as ''
+        cot = self._make_cot('{{ make }} / {{ nonexistent }}')
+        instance = cot.get_model().objects.create(make='Juniper')
+        self.assertEqual(str(instance), 'Juniper /')
+
+    def test_empty_expression_falls_back_to_primary_field(self):
+        cot = self._make_cot('')
+        instance = cot.get_model().objects.create(make='Arista', model='7050')
+        self.assertEqual(str(instance), 'Arista')
+
+    def test_expression_rendering_error_falls_back_to_primary_field(self):
+        # Invalid Jinja2 syntax must not raise — fall back silently
+        cot = self._make_cot('{% invalid jinja %}')
+        instance = cot.get_model().objects.create(make='HP')
+        self.assertEqual(str(instance), 'HP')
+
+    def test_expression_empty_result_falls_back_to_primary_field(self):
+        # Expression that renders to empty string falls back
+        cot = self._make_cot('{{ nonexistent }}')
+        instance = cot.get_model().objects.create(make='Dell')
+        self.assertEqual(str(instance), 'Dell')
+
+    def test_trailing_separator_with_blank_optional_field(self):
+        # When an optional field is blank, the expression renders a dangling
+        # separator unless the template guards it.  Verify both behaviours so
+        # the documented {% if %} pattern is regression-tested.
+        cot_bare = self.create_custom_object_type(
+            name='SepBare', slug='sep-bare',
+            display_expression='{{ make }} / {{ model }}',
+        )
+        self.create_custom_object_type_field(
+            cot_bare, name='make', label='Make', type='text', primary=True, required=True,
+        )
+        self.create_custom_object_type_field(
+            cot_bare, name='model', label='Model', type='text', required=False,
+        )
+
+        guarded_expr = '{{ make }}{% if model %} / {{ model }}{% endif %}'
+        cot_guarded = self.create_custom_object_type(
+            name='SepGuarded', slug='sep-guarded', display_expression=guarded_expr,
+        )
+        self.create_custom_object_type_field(
+            cot_guarded, name='make', label='Make', type='text', primary=True, required=True,
+        )
+        self.create_custom_object_type_field(
+            cot_guarded, name='model', label='Model', type='text', required=False,
+        )
+
+        model_bare = cot_bare.get_model()
+        model_guarded = cot_guarded.get_model()
+
+        bare_instance = model_bare.objects.create(make='Arista')       # model is blank
+        guarded_instance = model_guarded.objects.create(make='Arista')  # model is blank
+
+        self.assertEqual(str(bare_instance), 'Arista /')       # trailing separator
+        self.assertEqual(str(guarded_instance), 'Arista')      # cleaned up with {% if %}
+
+        # With model populated, both render identically.
+        bare_full = model_bare.objects.create(make='Cisco', model='ASR')
+        guarded_full = model_guarded.objects.create(make='Cisco', model='ASR')
+        self.assertEqual(str(bare_full), 'Cisco / ASR')
+        self.assertEqual(str(guarded_full), 'Cisco / ASR')
+
+
+class DisplayExpressionFormValidationTestCase(CustomObjectsTestCase, TestCase):
+    """Tests for CustomObjectTypeForm.clean_display_expression()."""
+
+    def _form(self, expression):
+        from netbox_custom_objects.forms import CustomObjectTypeForm
+        data = {
+            'name': 'validtest',
+            'slug': 'validtest',
+            'display_expression': expression,
+        }
+        return CustomObjectTypeForm(data=data)
+
+    def test_valid_expression_passes(self):
+        form = self._form('{{ make }} - {{ model }}')
+        # display_expression itself should not produce a validation error
+        form.is_valid()
+        self.assertNotIn('display_expression', form.errors)
+
+    def test_blank_expression_passes(self):
+        form = self._form('')
+        form.is_valid()
+        self.assertNotIn('display_expression', form.errors)
+
+    def test_invalid_jinja2_syntax_raises_validation_error(self):
+        form = self._form('{% invalid jinja %}')
+        form.is_valid()
+        self.assertIn('display_expression', form.errors)
+
+    def test_unclosed_block_raises_validation_error(self):
+        form = self._form('{% if make %}{{ make }}')  # missing {% endif %}
+        form.is_valid()
+        self.assertIn('display_expression', form.errors)

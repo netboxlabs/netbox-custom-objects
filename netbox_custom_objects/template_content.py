@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Any
 from django.apps import apps as django_apps
 from django.contrib.contenttypes.models import ContentType
-from django.template import Template, Context
+from django.template import Template, RequestContext
 from netbox.plugins import PluginTemplateExtension
 from extras.choices import CustomFieldTypeChoices
 from utilities.paginator import EnhancedPaginator
@@ -109,7 +109,7 @@ class CustomObjectLink(PluginTemplateExtension):
             </div>
         """
         template = Template(template_str)
-        context = Context({'table': linked_objects_table, "request": request})
+        context = RequestContext(request, {'table': linked_objects_table})
         rendered_content = template.render(context)
         return rendered_content
 

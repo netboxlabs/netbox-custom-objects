@@ -1,5 +1,6 @@
 from django import forms
 from django.utils.translation import gettext_lazy as _
+from jinja2.sandbox import SandboxedEnvironment as _JinjaSandbox
 from extras.choices import CustomFieldTypeChoices
 from extras.forms import CustomFieldForm
 from netbox.forms import (NetBoxModelBulkEditForm, NetBoxModelFilterSetForm,
@@ -61,10 +62,12 @@ class CustomObjectTypeForm(NetBoxModelForm):
     )
 
     fieldsets = (
+        FieldSet("name"),
         FieldSet(
-            "name", "verbose_name", "verbose_name_plural", "slug",
-            "version", "description", "group_name", "config_context_enabled", "tags",
+            "verbose_name", "verbose_name_plural", "display_expression", "group_name",
+            name=_("Display"),
         ),
+        FieldSet("slug", "version", "description", "config_context_enabled", "tags"),
     )
     comments = CommentField()
 
@@ -72,7 +75,7 @@ class CustomObjectTypeForm(NetBoxModelForm):
         model = CustomObjectType
         fields = (
             "name", "verbose_name", "verbose_name_plural", "slug", "version", "description",
-            "group_name", "config_context_enabled", "comments", "tags",
+            "group_name", "display_expression", "config_context_enabled", "comments", "tags",
         )
 
     def __init__(self, *args, **kwargs):
@@ -85,6 +88,18 @@ class CustomObjectTypeForm(NetBoxModelForm):
             self.fields["config_context_enabled"].help_text = _(
                 "Config context support cannot be changed after creation."
             )
+
+    def clean_display_expression(self):
+        expression = self.cleaned_data.get('display_expression', '')
+        if expression:
+            try:
+                _JinjaSandbox().parse(expression)
+            except Exception as e:
+                raise forms.ValidationError(
+                    _("Invalid Jinja2 syntax: %(error)s"),
+                    params={'error': str(e)},
+                ) from e
+        return expression
 
 
 class CustomObjectTypeBulkEditForm(NetBoxModelBulkEditForm):
@@ -108,6 +123,10 @@ class CustomObjectTypeImportForm(NetBoxModelImportForm):
         fields = (
             "name",
             "slug",
+            "verbose_name",
+            "verbose_name_plural",
+            "display_expression",
+            "group_name",
             "description",
             "comments",
             "tags",
