@@ -336,9 +336,10 @@ def _get_field_value(obj, field, user=None):
             try:
                 qs = qs.restrict(user, 'view')
             except AttributeError:
-                # Polymorphic targets: not a queryset (no .restrict) — filter the
-                # heterogeneous result list, then truncate.
-                return restrict_to_viewable(user, list(qs))[:limit]
+                # Polymorphic targets: not a queryset (no .restrict) — cap first so
+                # permission filtering handles at most ``limit`` objects (viewable
+                # targets past the cap are dropped, not backfilled).
+                return restrict_to_viewable(user, list(qs[:limit]))
         return list(qs[:limit])
     return None
 
