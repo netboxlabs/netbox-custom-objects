@@ -7,7 +7,7 @@ the branching integration relies on APIs that only landed in those releases:
 
 - ``serializer_resolver`` / ``register_serializer_resolver`` — NetBox 4.6.2
 - ``register_branching_resolver``, ``register_objectchange_field_migrator``,
-  and the ``squash_dependency_graph_built`` signal — netbox-branching 1.0.4
+  and the ``squash_dependency_graph_built`` signal — netbox-branching 1.1.0
 
 Users who never install netbox-branching keep the broader compatibility
 window declared by PluginConfig.
@@ -23,7 +23,20 @@ from packaging.version import InvalidVersion, Version
 
 # Version floors enforced only when netbox-branching is installed.
 REQUIRED_NETBOX_VERSION_FOR_BRANCHING = '4.6.2'
-REQUIRED_BRANCHING_VERSION = '1.0.4'
+REQUIRED_BRANCHING_VERSION = '1.1.0'
+
+# The package is published under two distribution names depending on the
+# release channel; try both before concluding the version is unknowable.
+_BRANCHING_DIST_NAMES = ('netboxlabs-netbox-branching', 'netbox-branching')
+
+
+def _get_branching_version():
+    for dist_name in _BRANCHING_DIST_NAMES:
+        try:
+            return _pkg_version(dist_name)
+        except PackageNotFoundError:
+            continue
+    raise PackageNotFoundError('netbox-branching')
 
 
 @register()
@@ -48,12 +61,12 @@ def check_branching_compatibility(app_configs, **kwargs):
         pass  # settings.RELEASE missing/unparseable — other checks surface it
 
     try:
-        branching_version = Version(_pkg_version('netbox-branching'))
+        branching_version = Version(_get_branching_version())
         if branching_version < Version(REQUIRED_BRANCHING_VERSION):
             errors.append(Error(
                 f'netbox-custom-objects requires netbox-branching >= '
                 f'{REQUIRED_BRANCHING_VERSION} (detected {branching_version}).',
-                hint=f'Upgrade with: pip install "netbox-branching>={REQUIRED_BRANCHING_VERSION}"',
+                hint=f'Upgrade with: pip install "netboxlabs-netbox-branching>={REQUIRED_BRANCHING_VERSION}"',
                 id='netbox_custom_objects.E002',
             ))
     except PackageNotFoundError:
