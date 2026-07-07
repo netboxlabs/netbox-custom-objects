@@ -127,10 +127,20 @@ def _drop_branch_schemas():
             schemas = [row[0] for row in cursor.fetchall()]
         if not schemas:
             return
+        # Forcefully terminate all other backend connections to this database.
+        # Closing Django's connection objects is not always enough — netbox-branching
+        # may open psycopg connections outside Django's registry, and Django's close()
+        # may not flush immediately.  pg_terminate_backend() guarantees the backend
+        # processes are gone before we issue DROP SCHEMA, so no lock contention.
+        # The CI postgres user is a superuser, so this call succeeds.
         with connection.cursor() as cursor:
-            # lock_timeout prevents DROP SCHEMA from blocking indefinitely if a
-            # connection outside Django's registry still holds a schema lock.
-            cursor.execute("SET lock_timeout = '5s'")
+            cursor.execute("""
+                SELECT pg_terminate_backend(pid)
+                FROM pg_stat_activity
+                WHERE datname = current_database()
+                AND pid <> pg_backend_pid()
+            """)
+        with connection.cursor() as cursor:
             for schema in schemas:
                 try:
                     cursor.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
