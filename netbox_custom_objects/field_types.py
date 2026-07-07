@@ -1344,6 +1344,13 @@ class MultiObjectFieldType(FieldType):
                 on_delete=models.CASCADE,
                 related_name="+",
                 db_column="target_id",
+                # The real DB-level FK is added separately in create_m2m_table
+                # as DEFERRABLE INITIALLY DEFERRED so iterative branch merges
+                # (time-ordered) can insert through rows before the target CO
+                # exists.  A new constraint created after SET CONSTRAINTS ALL
+                # IMMEDIATE is not affected by that earlier call; db_constraint=False
+                # prevents Django from creating a non-deferrable FK here.
+                db_constraint=False,
             ),
         }
 
@@ -1680,51 +1687,31 @@ class MultiObjectFieldType(FieldType):
                 tables = connection.introspection.table_names(cursor)
                 if table_name not in tables:
                     schema_editor.create_model(through)
-                    # Make the target FK DEFERRABLE INITIALLY DEFERRED so that
-                    # iterative branch merges (time-ordered) can insert
-                    # through-table rows before the referenced target CO object
-                    # exists in main — the FK check is deferred to transaction
-                    # commit, by which point all CO CREATEs have been applied.
+                    # Add the target FK as DEFERRABLE INITIALLY DEFERRED.
+                    # get_through_model uses db_constraint=False so Django
+                    # doesn't create a non-deferrable FK automatically.  We
+                    # add it here as a *new* constraint so it is not affected
+                    # by any earlier SET CONSTRAINTS ALL IMMEDIATE call in the
+                    # same transaction — a freshly-created DEFERRABLE constraint
+                    # starts in its INITIALLY mode regardless of prior
+                    # SET CONSTRAINTS ALL IMMEDIATE commands.  This lets
+                    # iterative branch merges (time-ordered) insert through rows
+                    # before the referenced target CO exists; the FK check is
+                    # deferred to transaction commit, by which point all CO
+                    # CREATEs have been applied.
+                    to_table = to_model._meta.db_table
+                    to_pk = to_model._meta.pk.column
+                    fk_conname = (table_name[:53] + '_target_fk').lower()
                     cursor.execute(
-                        """
-                        SELECT c.conname
-                        FROM pg_constraint c
-                        JOIN pg_class t ON t.oid = c.conrelid
-                        JOIN pg_namespace n ON n.oid = t.relnamespace
-                        WHERE t.relname = %s
-                          AND n.nspname = current_schema()
-                          AND c.contype = 'f'
-                          AND EXISTS (
-                            SELECT 1 FROM pg_attribute a
-                            WHERE a.attrelid = t.oid
-                              AND a.attname = 'target_id'
-                              AND a.attnum = ANY(c.conkey)
-                          )
-                        """,
-                        [table_name],
+                        'ALTER TABLE {tbl} ADD CONSTRAINT {con} '
+                        'FOREIGN KEY (target_id) REFERENCES {ref} ({pk}) '
+                        'ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED'.format(
+                            tbl=connection.ops.quote_name(table_name),
+                            con=connection.ops.quote_name(fk_conname),
+                            ref=connection.ops.quote_name(to_table),
+                            pk=connection.ops.quote_name(to_pk),
+                        )
                     )
-                    row = cursor.fetchone()
-                    if row:
-                        conname = row[0]
-                        cursor.execute(
-                            'ALTER TABLE {} ALTER CONSTRAINT {} DEFERRABLE INITIALLY DEFERRED'.format(
-                                connection.ops.quote_name(table_name),
-                                connection.ops.quote_name(conname),
-                            )
-                        )
-                        # _schema_add_field calls SET CONSTRAINTS ALL IMMEDIATE
-                        # before invoking create_m2m_table, which forces all
-                        # constraints — including newly-created DEFERRABLE ones
-                        # — to be checked immediately for the rest of the
-                        # transaction.  Re-defer this specific constraint so
-                        # that iterative merge CREATEs can insert through-table
-                        # rows before the target CO exists (all within the same
-                        # transaction.atomic() merge).
-                        cursor.execute(
-                            'SET CONSTRAINTS {} DEFERRED'.format(
-                                connection.ops.quote_name(conname),
-                            )
-                        )
 
     def get_polymorphic_through_model(self, field_instance, source_model_string):
         """
