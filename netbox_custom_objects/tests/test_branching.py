@@ -2918,6 +2918,9 @@ class GraphQLBranchIsolationTestCase(BranchingTestBase, _TestBase):
 
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
+# override_settings cannot be applied unconditionally: when HAS_BRANCHING is
+# False, _TestBase is ``object`` (not TransactionTestCase), so the decorator
+# would try to wrap _pre_setup/_post_teardown methods that don't exist.
 @(override_settings(LOGIN_REQUIRED=True) if HAS_BRANCHING else lambda cls: cls)
 class GraphQLBranchEndpointTestCase(BranchingTestBase, _TestBase):
     """

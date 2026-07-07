@@ -35,8 +35,7 @@ jobs:
   tests:
     name: tests (${{ matrix.name }})
     runs-on: ubuntu-latest
-    timeout-minutes: ${{ matrix.with-branching == true && 45 || 20 }}
-    continue-on-error: ${{ matrix.with-branching == true }}
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -102,7 +101,7 @@ jobs:
           ln -s $(pwd)/../netbox-custom-objects/testing/configuration_branching.py netbox/netbox/configuration.py
           python -m pip install --upgrade pip
           pip install -r requirements.txt -U
-          pip install 'netboxlabs-netbox-branching>=1.0.0'
+          pip install 'netboxlabs-netbox-branching>=1.1.0,<2.0.0'
       - name: Tune PostgreSQL for branching test performance
         if: ${{ matrix.with-branching == true }}
         run: |

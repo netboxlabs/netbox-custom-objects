@@ -10,6 +10,7 @@ ALLOWED_HOSTS = ["*"]
 # netbox-branching requires DATABASES (not DATABASE) to be a DynamicSchemaDict.
 DATABASES = DynamicSchemaDict({
     'default': {
+        'ENGINE': 'django.db.backends.postgresql',
         'NAME': 'netbox',
         'USER': 'netbox',
         'PASSWORD': 'netbox',
