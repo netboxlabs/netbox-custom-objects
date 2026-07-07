@@ -2909,7 +2909,7 @@ class GraphQLBranchIsolationTestCase(BranchingTestBase, _TestBase):
 
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
-@override_settings(LOGIN_REQUIRED=True)
+@(override_settings(LOGIN_REQUIRED=True) if HAS_BRANCHING else lambda cls: cls)
 class GraphQLBranchEndpointTestCase(BranchingTestBase, _TestBase):
     """
     End-to-end against the real ``/graphql/`` endpoint: it serves whichever branch
