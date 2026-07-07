@@ -93,6 +93,32 @@ def _purge_stale_generated_models():
 _DYNAMIC_TABLE_PREFIX = "custom_objects_"
 
 
+def _drop_branch_schemas():
+    """Drop leftover netbox-branching branch schemas before the DB flush.
+
+    Each Branch provisioned by netbox-branching gets its own PostgreSQL schema.
+    If a test errors before deleting its branch, that schema persists with copies
+    of CO tables that hold FK references to main-schema tables (e.g. users_owner).
+    Django's TRUNCATE then fails with "cannot truncate a table referenced in a
+    foreign key constraint".  In the test database, the only non-system schemas
+    are branch schemas, so dropping all of them is safe.
+    """
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT schema_name FROM information_schema.schemata
+                WHERE schema_name NOT IN ('public', 'pg_catalog', 'information_schema', 'pg_toast')
+                AND schema_name NOT LIKE 'pg_%%'
+            """)
+            schemas = [row[0] for row in cursor.fetchall()]
+        if schemas:
+            with connection.cursor() as cursor:
+                for schema in schemas:
+                    cursor.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+    except Exception:
+        logger.warning('_drop_branch_schemas failed', exc_info=True)
+
+
 def _drop_dynamic_tables():
     """Drop leftover dynamic custom-object tables and purge stale app-registry state.
 
@@ -277,6 +303,11 @@ class TransactionCleanupMixin:
         # command's TRUNCATE of django_content_type fails because our through
         # tables have FK references to it.
         _drop_dynamic_tables()
+        # Drop any lingering branch schemas (netbox-branching creates a separate
+        # PostgreSQL schema per branch).  If a test errors before deleting its
+        # branch, the schema persists with CO table copies that hold FKs to
+        # main-schema tables — PostgreSQL refuses to TRUNCATE those tables.
+        _drop_branch_schemas()
         super()._fixture_teardown()
         _recreate_contenttypes()
 
