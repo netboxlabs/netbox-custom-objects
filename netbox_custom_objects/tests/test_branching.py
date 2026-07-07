@@ -2242,6 +2242,11 @@ class SequentialRenameTestCase(BranchingTestBase, _TestBase):
             co_m.save()
             MM.objects.create(delta='main new')
 
+        # Close the idle branch connection before sync so the DDL inside
+        # sync() (ALTER TABLE RENAME COLUMN) can acquire ACCESS EXCLUSIVE
+        # without being blocked by the CONN_MAX_AGE-alive idle connection
+        # left open by the activate_branch blocks above.
+        _close_branch_connections()
         # ── sync — let any failure propagate with its original traceback ───
         branch.sync(user=self.user, commit=True)
 
