@@ -2504,7 +2504,7 @@ class FieldAttributeChangesTestCase(BranchingTestBase, _TestBase):
         field_main = CustomObjectTypeField.objects.get(pk=field_pk)
         self.assertEqual(field_main.type, 'integer')
 
-        # PostgreSQL column type must be integer.
+        # PostgreSQL column type must be bigint (CO integer fields use BigIntegerField).
         cot_main = CustomObjectType.objects.get(pk=cot_pk)
         co_table = cot_main.get_database_table_name()
         with main_conn.cursor() as cursor:
@@ -2514,7 +2514,7 @@ class FieldAttributeChangesTestCase(BranchingTestBase, _TestBase):
                 [co_table, 'value'],
             )
             data_type = cursor.fetchone()[0]
-        self.assertEqual(data_type, 'integer')
+        self.assertEqual(data_type, 'bigint')
 
         # CO value survived the cast.
         co_main = cot_main.get_model().objects.get(pk=co_pk)

@@ -37,7 +37,7 @@ def objectchange_field_migrator(model, data):
     return resolve(data)
 
 
-def _collect_co_refs(model_class, data):
+def _collect_co_refs(model_class, data, model_label=None):
     """Return ``(app.model, pk)`` refs from CO-specific shapes in *data*.
 
     Covers:
@@ -50,6 +50,12 @@ def _collect_co_refs(model_class, data):
         CREATEs.  Pulled from the model class's ``_field_objects`` plus the
         polymorphic ``POLY_M2M_SIDECAR_KEY`` (which carries field PKs in the
         ObjectChange payload even when ``_field_objects`` isn't available).
+
+    ``model_label`` — the ``"{app_label}.{model_name}"`` key from
+    ``CollapsedChange.key``.  Provided when ``model_class`` is ``None``
+    (dynamic CO models that aren't yet registered in ``apps.all_models``
+    during the squash dep-graph phase).  Used as the ref label for the
+    self-referential M2M fallback (see below).
     """
     from .constants import APP_LABEL
     from .models import POLY_M2M_SIDECAR_KEY
@@ -58,7 +64,11 @@ def _collect_co_refs(model_class, data):
     if not data:
         return refs
 
-    for field in model_class._meta.local_many_to_many:
+    # Primary pass: walk M2M fields declared on the model class.
+    m2m_field_names = set()
+    meta = getattr(model_class, '_meta', None)
+    for field in getattr(meta, 'local_many_to_many', ()):
+        m2m_field_names.add(field.name)
         values = data.get(field.name)
         if not values:
             continue
@@ -67,6 +77,22 @@ def _collect_co_refs(model_class, data):
         for pk in values:
             if isinstance(pk, int):
                 refs.add((label, pk))
+
+    # Fallback for dynamically-generated CO models whose class isn't yet
+    # registered in apps.all_models at dep-graph time (model_class is None).
+    # The only CO field type that stores a plain list of integers in
+    # postchange_data is a direct (non-polymorphic) M2M.  When such a field
+    # is self-referential the refs point to the same model label, so we can
+    # add the dep edge without knowing the concrete model class.
+    # Cross-COT M2M would produce a wrong label, but those refs won't appear
+    # in creates_map for the source model and are silently ignored.
+    if model_label and model_label.startswith(f'{APP_LABEL}.'):
+        for key, value in data.items():
+            if key in (POLY_M2M_SIDECAR_KEY, 'tags') or key in m2m_field_names:
+                continue
+            if isinstance(value, list) and value and all(isinstance(v, int) for v in value):
+                for pk in value:
+                    refs.add((model_label, pk))
 
     field_label = f'{APP_LABEL}.customobjecttypefield'
     for fo in (getattr(model_class, '_field_objects', None) or {}).values():
@@ -110,26 +136,39 @@ def add_custom_object_dependencies(sender, collapsed_changes, **kwargs):
 
     for cc in collapsed_changes.values():
         meta = getattr(cc.model_class, '_meta', None)
-        if meta is None or meta.app_label != APP_LABEL:
+        # Detect CO models even when model_class is None (dynamically-generated
+        # CO models aren't registered in apps.all_models until their COT CREATE
+        # is applied, so ContentType.model_class() returns None during the
+        # squash dep-graph phase — the meta is None guard would silently skip
+        # them).  Fall back to inspecting cc.key[0] which is always set.
+        model_label = cc.key[0] if isinstance(cc.key, tuple) else None
+        is_co_model = (
+            meta is not None and meta.app_label == APP_LABEL
+        ) or (
+            meta is None
+            and model_label is not None
+            and model_label.startswith(f'{APP_LABEL}.')
+        )
+        if not is_co_model:
             continue
         action = cc.final_action.value if cc.final_action else None
 
         if action == 'update':
-            for ref in _collect_co_refs(cc.model_class, cc.prechange_data):
+            for ref in _collect_co_refs(cc.model_class, cc.prechange_data, model_label=model_label):
                 if ref in deletes_map:
                     deletes_map[ref].depends_on.add(cc.key)
                     cc.depended_by.add(ref)
-            for ref in _collect_co_refs(cc.model_class, cc.postchange_data):
+            for ref in _collect_co_refs(cc.model_class, cc.postchange_data, model_label=model_label):
                 if ref in creates_map:
                     cc.depends_on.add(ref)
                     creates_map[ref].depended_by.add(cc.key)
         elif action == 'create':
-            for ref in _collect_co_refs(cc.model_class, cc.postchange_data):
+            for ref in _collect_co_refs(cc.model_class, cc.postchange_data, model_label=model_label):
                 if ref != cc.key and ref in creates_map:
                     cc.depends_on.add(ref)
                     creates_map[ref].depended_by.add(cc.key)
         elif action == 'delete':
-            for ref in _collect_co_refs(cc.model_class, cc.prechange_data):
+            for ref in _collect_co_refs(cc.model_class, cc.prechange_data, model_label=model_label):
                 if ref != cc.key and ref in deletes_map:
                     deletes_map[ref].depends_on.add(cc.key)
                     cc.depended_by.add(ref)
