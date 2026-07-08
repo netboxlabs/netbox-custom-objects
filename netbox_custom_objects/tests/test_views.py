@@ -105,6 +105,9 @@ class CustomObjectTypeViewTestCase(
     def test_bulk_update_objects_with_permission(self):
         ...
 
+    def test_bulk_update_objects_without_change_permission(self):
+        ...
+
     def test_bulk_import_objects_with_permission(self):
         ...
 
@@ -225,6 +228,9 @@ class CustomObjectTypeFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.Pri
         ...
 
     def test_bulk_update_objects_with_permission(self):
+        ...
+
+    def test_bulk_update_objects_without_change_permission(self):
         ...
 
     def test_bulk_import_objects_with_permission(self):
@@ -361,6 +367,9 @@ class CustomObjectViewTestCase(
         ...
 
     def test_bulk_update_objects_with_permission(self):
+        ...
+
+    def test_bulk_update_objects_without_change_permission(self):
         ...
 
     def test_bulk_import_objects_with_permission(self):
@@ -665,6 +674,9 @@ class ComplexCustomObjectViewTestCase(
     def test_bulk_update_objects_with_permission(self):
         ...
 
+    def test_bulk_update_objects_without_change_permission(self):
+        ...
+
     def test_bulk_import_objects_with_permission(self):
         ...
 
@@ -916,6 +928,9 @@ class ObjectFieldViewTestCase(
         ...
 
     def test_bulk_update_objects_with_permission(self):
+        ...
+
+    def test_bulk_update_objects_without_change_permission(self):
         ...
 
     def test_bulk_import_objects_with_permission(self):
