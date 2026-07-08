@@ -1703,7 +1703,8 @@ class MultiObjectFieldType(FieldType):
                     # point all CO CREATEs have been applied.
                     to_table = to_model._meta.db_table
                     to_pk = to_model._meta.pk.column
-                    fk_conname = (table_name[:53] + '_target_fk').lower()
+                    digest = hashlib.sha1(table_name.encode()).hexdigest()[:8]
+                    fk_conname = (table_name[:44] + '_' + digest + '_target_fk').lower()
                     cursor.execute(
                         'ALTER TABLE {tbl} ADD CONSTRAINT {con} '
                         'FOREIGN KEY (target_id) REFERENCES {ref} ({pk}) '

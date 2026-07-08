@@ -93,14 +93,14 @@ jobs:
         run: |
           ln -s $(pwd)/../netbox-custom-objects/testing/configuration.py netbox/netbox/configuration.py
           python -m pip install --upgrade pip
-          pip install -r requirements.txt -U
+          pip install -r requirements.txt
       - name: Install dependencies & configure plugin (with branching)
         if: ${{ matrix.with-branching == true }}
         working-directory: netbox
         run: |
           ln -s $(pwd)/../netbox-custom-objects/testing/configuration_branching.py netbox/netbox/configuration.py
           python -m pip install --upgrade pip
-          pip install -r requirements.txt -U
+          pip install -r requirements.txt
           pip install 'netboxlabs-netbox-branching>=1.0.4,<2.0.0'
       - name: Tune PostgreSQL for branching test performance
         if: ${{ matrix.with-branching == true }}
@@ -113,6 +113,13 @@ jobs:
             -c "ALTER SYSTEM SET lock_timeout = '60s'" \
             -c "SELECT pg_reload_conf()"
       - name: Run tests
+        if: ${{ matrix.with-branching != true }}
         working-directory: netbox
         run: |
-          python netbox/manage.py test ${{ matrix.with-branching == true && 'netbox_custom_objects.tests.test_branching' || 'netbox_custom_objects.tests' }} --keepdb --verbosity=2
+          python netbox/manage.py test netbox_custom_objects.tests --keepdb --verbosity=2
+
+      - name: Run tests (with branching)
+        if: ${{ matrix.with-branching == true }}
+        working-directory: netbox
+        run: |
+          python netbox/manage.py test netbox_custom_objects.tests.test_branching --keepdb --verbosity=2
