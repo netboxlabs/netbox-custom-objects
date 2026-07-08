@@ -1148,6 +1148,65 @@ class ReferencedObjectDeletionTest(
             through_model_name.lower(), django_apps.all_models.get(APP_LABEL, {})
         )
 
+    def test_remove_poly_obj_columns_succeeds_with_pending_deferred_triggers(self):
+        """
+        remove_polymorphic_object_columns() must not raise
+        "cannot ALTER TABLE because it has pending trigger events" when the
+        source row was deleted inside the same transaction (issue #595 regression).
+
+        The through-table created by the MULTIOBJECT field has a source_id FK:
+            custom_objects_<id>_poly_multi.source_id → custom_objects_<id>.id
+            DEFERRABLE INITIALLY DEFERRED (Django's PostgreSQL backend default)
+
+        When a row in custom_objects_<id> is deleted inside a transaction,
+        PostgreSQL queues a deferred trigger event associated with the REFERENCED
+        table (custom_objects_<id>), not the referencing through-table.  A
+        subsequent ALTER TABLE on that same table then fails with:
+            "cannot ALTER TABLE … because it has pending trigger events"
+        unless SET CONSTRAINTS ALL IMMEDIATE is issued first to flush the queue.
+
+        The fix in remove_polymorphic_object_columns() issues SET CONSTRAINTS ALL
+        IMMEDIATE before the first ALTER TABLE, firing the deferred check against
+        the through-table.  If the through-table rows were already deleted (as the
+        branching revert path does before removing the COT instance), the check
+        finds no FK violation and clears the pending event, allowing the ALTER
+        TABLE to proceed.
+        """
+        from django.db import connection, transaction as db_transaction
+        from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
+
+        # Create an instance with the MULTIOBJECT populated so the through-table
+        # has a row referencing the source.
+        obj = self.model.objects.create(name="revert-repro")
+        obj.poly_multi.add(self.site)
+
+        main_table = self.model._meta.db_table
+        through_table = self.m2m_field.through_table_name
+
+        with db_transaction.atomic():
+            with connection.cursor() as cursor:
+                # Step 1: delete through-table rows first (mirrors the branching
+                # revert path, which cascades child rows before removing the COT
+                # instance).
+                cursor.execute(
+                    f'DELETE FROM "{through_table}" WHERE source_id = %s', [obj.pk]
+                )
+                # Step 2: delete the COT instance via raw SQL.  Django's FK
+                # constraints are DEFERRABLE INITIALLY DEFERRED, so PostgreSQL
+                # queues a deferred trigger on custom_objects_X (the referenced
+                # table) instead of checking the constraint immediately.
+                cursor.execute(f'DELETE FROM "{main_table}" WHERE id = %s', [obj.pk])
+            # Step 3: remove the polymorphic OBJECT field columns.  Without the
+            # fix, the ALTER TABLE inside remove_polymorphic_object_columns()
+            # fails with "cannot ALTER TABLE … because it has pending trigger
+            # events".  The fix calls SET CONSTRAINTS ALL IMMEDIATE first, which
+            # fires the deferred check (no FK violation since step 1 already
+            # deleted the through-table row) and clears the pending event.
+            with connection.schema_editor() as editor:
+                field_type = FIELD_TYPE_CLASS[self.gfk_field.type]()
+                field_type.remove_polymorphic_object_columns(self.gfk_field, self.model, editor)
+        # Reaching here without a database exception confirms the fix is effective.
+
 
 # ---------------------------------------------------------------------------
 # Cycle-detection: multi-hop polymorphic cycles

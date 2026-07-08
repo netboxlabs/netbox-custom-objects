@@ -3677,6 +3677,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             _unwire_polymorphic_reverse_descriptors(self)
 
         with schema_conn.schema_editor() as schema_editor:
+            # Flush deferred FK trigger events before any ALTER TABLE or DROP TABLE.
+            # PostgreSQL rejects DDL with "pending trigger events" when a row
+            # deletion (e.g. from the branching revert path) has queued events on
+            # a DEFERRABLE FK column.  Guards all removal paths below.
+            schema_editor.execute('SET CONSTRAINTS ALL IMMEDIATE')
             if self.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
                 # Drop both backing columns (latitude/longitude).
                 for column_name, model_field in field_type.get_model_field(self).items():
