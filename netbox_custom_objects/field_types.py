@@ -1350,6 +1350,13 @@ class MultiObjectFieldType(FieldType):
                 on_delete=models.CASCADE,
                 related_name="+",
                 db_column="target_id",
+                # The real DB-level FK is added separately in create_m2m_table
+                # as DEFERRABLE INITIALLY DEFERRED so iterative branch merges
+                # (time-ordered) can insert through rows before the target CO
+                # exists.  A new constraint created after SET CONSTRAINTS ALL
+                # IMMEDIATE is not affected by that earlier call; db_constraint=False
+                # prevents Django from creating a non-deferrable FK here.
+                db_constraint=False,
             ),
         }
 
@@ -1686,6 +1693,39 @@ class MultiObjectFieldType(FieldType):
                 tables = connection.introspection.table_names(cursor)
                 if table_name not in tables:
                     schema_editor.create_model(through)
+                    # Add the target FK as DEFERRABLE INITIALLY DEFERRED.
+                    # get_through_model uses db_constraint=False so Django
+                    # doesn't create a non-deferrable FK automatically.
+                    # _schema_add_field calls SET CONSTRAINTS ALL IMMEDIATE
+                    # before invoking create_m2m_table; in PostgreSQL this
+                    # applies to the entire transaction including constraints
+                    # created afterward.  We therefore:
+                    #   1. Add the constraint as DEFERRABLE INITIALLY DEFERRED
+                    #   2. Immediately re-defer it by name so it is DEFERRED
+                    #      for the rest of the merge transaction
+                    # This lets iterative branch merges (time-ordered) insert
+                    # through rows before the referenced target CO exists; the
+                    # FK check is deferred to transaction commit, by which
+                    # point all CO CREATEs have been applied.
+                    to_table = to_model._meta.db_table
+                    to_pk = to_model._meta.pk.column
+                    digest = hashlib.sha1(table_name.encode()).hexdigest()[:8]
+                    fk_conname = (table_name[:44] + '_' + digest + '_target_fk').lower()
+                    cursor.execute(
+                        'ALTER TABLE {tbl} ADD CONSTRAINT {con} '
+                        'FOREIGN KEY (target_id) REFERENCES {ref} ({pk}) '
+                        'ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED'.format(
+                            tbl=connection.ops.quote_name(table_name),
+                            con=connection.ops.quote_name(fk_conname),
+                            ref=connection.ops.quote_name(to_table),
+                            pk=connection.ops.quote_name(to_pk),
+                        )
+                    )
+                    cursor.execute(
+                        'SET CONSTRAINTS {} DEFERRED'.format(
+                            connection.ops.quote_name(fk_conname),
+                        )
+                    )
 
     def get_polymorphic_through_model(self, field_instance, source_model_string):
         """

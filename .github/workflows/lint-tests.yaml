@@ -33,12 +33,20 @@ jobs:
       - name: Run ruff
         run: ruff check
   tests:
+    name: tests (${{ matrix.name }})
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        netbox-ref: [ "main", "feature" ]
+        include:
+          - netbox-ref: "main"
+            name: "main"
+          - netbox-ref: "feature"
+            name: "feature"
+          - netbox-ref: "main"
+            name: "main, branching"
+            with-branching: true
     services:
       redis:
         image: redis
@@ -80,13 +88,38 @@ jobs:
           pip install .
           pip install .[test]
       - name: Install dependencies & configure plugin
+        if: ${{ !matrix.with-branching }}
         working-directory: netbox
         run: |
           ln -s $(pwd)/../netbox-custom-objects/testing/configuration.py netbox/netbox/configuration.py
-
           python -m pip install --upgrade pip
-          pip install -r requirements.txt -U
-      - name: Run tests
+          pip install -r requirements.txt
+      - name: Install dependencies & configure plugin (with branching)
+        if: ${{ matrix.with-branching == true }}
         working-directory: netbox
         run: |
-          python netbox/manage.py test netbox_custom_objects.tests --keepdb
+          ln -s $(pwd)/../netbox-custom-objects/testing/configuration_branching.py netbox/netbox/configuration.py
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install 'netboxlabs-netbox-branching>=1.0.4,<2.0.0'
+      - name: Tune PostgreSQL for branching test performance
+        if: ${{ matrix.with-branching == true }}
+        run: |
+          sudo apt-get install -y -q postgresql-client
+          PGPASSWORD=netbox psql -h localhost -U netbox \
+            -c "ALTER SYSTEM SET checkpoint_timeout = '30min'" \
+            -c "ALTER SYSTEM SET max_wal_size = '2GB'" \
+            -c "ALTER SYSTEM SET synchronous_commit = off" \
+            -c "ALTER SYSTEM SET lock_timeout = '60s'" \
+            -c "SELECT pg_reload_conf()"
+      - name: Run tests
+        if: ${{ matrix.with-branching != true }}
+        working-directory: netbox
+        run: |
+          python netbox/manage.py test netbox_custom_objects.tests --keepdb --verbosity=2
+
+      - name: Run tests (with branching)
+        if: ${{ matrix.with-branching == true }}
+        working-directory: netbox
+        run: |
+          python netbox/manage.py test netbox_custom_objects.tests.test_branching --keepdb --verbosity=2

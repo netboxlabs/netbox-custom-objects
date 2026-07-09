@@ -1,9 +1,10 @@
 # Test utilities for netbox_custom_objects plugin
 import logging
+import time
 
 from django.apps import apps as django_apps
 from django.contrib.contenttypes.management import create_contenttypes
-from django.db import connection
+from django.db import connection, connections
 from django.test import Client
 from core.models import ObjectChange, ObjectType
 from extras.models import CustomFieldChoiceSet
@@ -91,6 +92,83 @@ def _purge_stale_generated_models():
 
 
 _DYNAMIC_TABLE_PREFIX = "custom_objects_"
+
+
+def _drop_branch_schemas():
+    """Drop leftover netbox-branching branch schemas before the DB flush.
+
+    Each Branch provisioned by netbox-branching gets its own PostgreSQL schema.
+    If a test errors before deleting its branch, that schema persists with copies
+    of CO tables that hold FK references to main-schema tables (e.g. users_owner).
+    Django's TRUNCATE then fails with "cannot truncate a table referenced in a
+    foreign key constraint".  In the test database, the only non-system schemas
+    are branch schemas, so dropping all of them is safe.
+
+    DROP SCHEMA blocks if any connection is still open to that schema.  We close
+    all non-default Django connections first, then set a PostgreSQL lock_timeout
+    as a backstop so a stale connection outside Django's registry can't cause an
+    indefinite hang.
+    """
+    # Close all non-default connections — branch connections may still be open
+    # if tearDown didn't track every connection that was opened during the test.
+    for alias in list(connections):
+        if alias != 'default':
+            try:
+                connections[alias].close()
+            except Exception:
+                pass
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT schema_name FROM information_schema.schemata
+                WHERE schema_name NOT IN ('public', 'pg_catalog', 'information_schema', 'pg_toast')
+                AND schema_name NOT LIKE 'pg_%%'
+            """)
+            schemas = [row[0] for row in cursor.fetchall()]
+        if not schemas:
+            return
+        # Forcefully terminate client backend connections to this database.
+        # Closing Django's connection objects is not always enough — netbox-branching
+        # may open psycopg connections outside Django's registry, and Django's close()
+        # may not flush immediately.  The CI postgres user is a superuser.
+        # NOTE: this terminates ALL client backends (e.g. an IDE db explorer) on
+        # the test database when run locally — intentionally limited to
+        # backend_type = 'client backend' to leave background workers alone.
+        with connection.cursor() as cursor:
+            cursor.execute("""
+                SELECT pg_terminate_backend(pid)
+                FROM pg_stat_activity
+                WHERE datname = current_database()
+                AND pid <> pg_backend_pid()
+                AND backend_type = 'client backend'
+            """)
+        # pg_terminate_backend() sends a signal; the backend needs time to roll
+        # back any open transaction and release all locks before DROP SCHEMA can
+        # acquire the lock it needs.  Poll until all client backends are gone,
+        # up to a 10-second deadline, then fall through (lock_timeout is the
+        # final backstop).
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            with connection.cursor() as cursor:
+                cursor.execute("""
+                    SELECT count(*) FROM pg_stat_activity
+                    WHERE datname = current_database()
+                    AND pid <> pg_backend_pid()
+                    AND backend_type = 'client backend'
+                """)
+                if cursor.fetchone()[0] == 0:
+                    break
+            time.sleep(0.2)
+        with connection.cursor() as cursor:
+            cursor.execute("SET lock_timeout = '10s'")
+            for schema in schemas:
+                try:
+                    cursor.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+                except Exception:
+                    logger.warning('Could not drop branch schema %r', schema, exc_info=True)
+    except Exception:
+        logger.warning('_drop_branch_schemas failed', exc_info=True)
 
 
 def _drop_dynamic_tables():
@@ -277,6 +355,11 @@ class TransactionCleanupMixin:
         # command's TRUNCATE of django_content_type fails because our through
         # tables have FK references to it.
         _drop_dynamic_tables()
+        # Drop any lingering branch schemas (netbox-branching creates a separate
+        # PostgreSQL schema per branch).  If a test errors before deleting its
+        # branch, the schema persists with CO table copies that hold FKs to
+        # main-schema tables — PostgreSQL refuses to TRUNCATE those tables.
+        _drop_branch_schemas()
         super()._fixture_teardown()
         _recreate_contenttypes()
 

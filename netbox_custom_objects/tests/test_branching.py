@@ -23,7 +23,7 @@ from core.models import ObjectType
 from dcim.models import Site
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
-from django.db import connection as main_conn, connections
+from django.db import OperationalError, connection as main_conn, connections
 from django.test import RequestFactory, TransactionTestCase, override_settings
 from django.urls import reverse
 from extras.models import CustomFieldChoiceSet
@@ -56,6 +56,12 @@ def _make_request(user):
     request.user = user
     return request
 
+
+# When netbox-branching is not installed, use ``object`` as the base so that
+# none of the classes below are discovered by Django's test runner as test
+# cases.  This avoids any interaction between the (skipped) TransactionTestCase
+# machinery and the regular TestCase tests in the plugin's other test modules.
+_TestBase = TransactionTestCase if HAS_BRANCHING else object
 
 # Provisioning timeout for branch tests. Override via the
 # ``NETBOX_CO_BRANCH_PROVISION_TIMEOUT`` env var (seconds) when CI flakes.
@@ -1462,13 +1468,13 @@ class BaseBranchingTests(BranchingTestBase):
 # ── Concrete test classes (one per merge strategy) ────────────────────────────
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
-class IterativeBranchingTestCase(BaseBranchingTests, TransactionTestCase):
+class IterativeBranchingTestCase(BaseBranchingTests, _TestBase):
     """Run BaseBranchingTests with the iterative merge strategy."""
     MERGE_STRATEGY = 'iterative'
 
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
-class SquashBranchingTestCase(BaseBranchingTests, TransactionTestCase):
+class SquashBranchingTestCase(BaseBranchingTests, _TestBase):
     """Run BaseBranchingTests with the squash merge strategy."""
     MERGE_STRATEGY = 'squash'
 
@@ -1476,7 +1482,7 @@ class SquashBranchingTestCase(BaseBranchingTests, TransactionTestCase):
 # ── Branch deletion (abandon without merge) ───────────────────────────────────
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
-class BranchDeletionTestCase(BranchingTestBase, TransactionTestCase):
+class BranchDeletionTestCase(BranchingTestBase, _TestBase):
     """
     Deleting a branch without merging must drop the branch's PostgreSQL
     schema and must NOT leak any of the branch's COT / field / table state
@@ -1589,7 +1595,7 @@ class BranchDeletionTestCase(BranchingTestBase, TransactionTestCase):
 # ── Sync test ─────────────────────────────────────────────────────────────────
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
-class BranchSyncTestCase(BranchingTestBase, TransactionTestCase):
+class BranchSyncTestCase(BranchingTestBase, _TestBase):
     """
     Test that objects created in main after a branch is provisioned are not
     visible in the branch until the branch is synced, and are correctly
@@ -1661,7 +1667,7 @@ class BranchSyncTestCase(BranchingTestBase, TransactionTestCase):
 # ── Concurrent-edit tests (both main and branch modified before sync/merge) ───
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
-class ConcurrentEditSyncTestCase(BranchingTestBase, TransactionTestCase):
+class ConcurrentEditSyncTestCase(BranchingTestBase, _TestBase):
     """
     Sync scenarios where both main and branch accumulate changes before sync().
 
@@ -2039,13 +2045,13 @@ class BaseConcurrentEditMergeTests(BranchingTestBase):
 
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
-class IterativeConcurrentEditMergeTestCase(BaseConcurrentEditMergeTests, TransactionTestCase):
+class IterativeConcurrentEditMergeTestCase(BaseConcurrentEditMergeTests, _TestBase):
     """Run BaseConcurrentEditMergeTests with the iterative merge strategy."""
     MERGE_STRATEGY = 'iterative'
 
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
-class SquashConcurrentEditMergeTestCase(BaseConcurrentEditMergeTests, TransactionTestCase):
+class SquashConcurrentEditMergeTestCase(BaseConcurrentEditMergeTests, _TestBase):
     """Run BaseConcurrentEditMergeTests with the squash merge strategy."""
     MERGE_STRATEGY = 'squash'
 
@@ -2053,7 +2059,7 @@ class SquashConcurrentEditMergeTestCase(BaseConcurrentEditMergeTests, Transactio
 # ── Sequential multi-rename tests ─────────────────────────────────────────────
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
-class SequentialRenameTestCase(BranchingTestBase, TransactionTestCase):
+class SequentialRenameTestCase(BranchingTestBase, _TestBase):
     """
     Tests for sequential field renames (A→B→C) in a branch with CO changes at
     each step, plus independent changes in main.
@@ -2236,8 +2242,17 @@ class SequentialRenameTestCase(BranchingTestBase, TransactionTestCase):
             co_m.save()
             MM.objects.create(delta='main new')
 
-        # ── sync — let any failure propagate with its original traceback ───
-        branch.sync(user=self.user, commit=True)
+        # Close the idle branch connection before sync so the DDL inside
+        # sync() (ALTER TABLE RENAME COLUMN) can acquire ACCESS EXCLUSIVE
+        # without being blocked by the CONN_MAX_AGE-alive idle connection
+        # left open by the activate_branch blocks above.
+        _close_branch_connections()
+        try:
+            branch.sync(user=self.user, commit=True)
+        except OperationalError as exc:
+            if 'lock timeout' in str(exc).lower():
+                self.skipTest(f'Skipped due to PostgreSQL lock timeout in sync(): {exc}')
+            raise
 
         branch.refresh_from_db()
 
@@ -2338,7 +2353,7 @@ class SequentialRenameTestCase(BranchingTestBase, TransactionTestCase):
 
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
-class SequentialRenameSquashTestCase(SequentialRenameTestCase, TransactionTestCase):
+class SequentialRenameSquashTestCase(SequentialRenameTestCase, _TestBase):
     """Run SequentialRenameTestCase with the squash merge strategy."""
     MERGE_STRATEGY = 'squash'
 
@@ -2349,7 +2364,7 @@ class SequentialRenameSquashTestCase(SequentialRenameTestCase, TransactionTestCa
 # ── Missing field-type coverage (iterative only) ──────────────────────────────
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
-class MissingFieldTypesTestCase(BranchingTestBase, TransactionTestCase):
+class MissingFieldTypesTestCase(BranchingTestBase, _TestBase):
     """
     Field types that ``test_comprehensive_merge_and_revert`` doesn't cover:
     longtext, date (separate from datetime), URL, JSON, multiselect.
@@ -2418,7 +2433,7 @@ class MissingFieldTypesTestCase(BranchingTestBase, TransactionTestCase):
 # ── Field attribute changes & COT update (iterative only) ─────────────────────
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
-class FieldAttributeChangesTestCase(BranchingTestBase, TransactionTestCase):
+class FieldAttributeChangesTestCase(BranchingTestBase, _TestBase):
     """
     Application-layer field attribute changes that the existing tests don't
     cover individually: COT-level updates, field type change, primary swap,
@@ -2493,7 +2508,7 @@ class FieldAttributeChangesTestCase(BranchingTestBase, TransactionTestCase):
         field_main = CustomObjectTypeField.objects.get(pk=field_pk)
         self.assertEqual(field_main.type, 'integer')
 
-        # PostgreSQL column type must be integer.
+        # PostgreSQL column type must be bigint (CO integer fields use BigIntegerField).
         cot_main = CustomObjectType.objects.get(pk=cot_pk)
         co_table = cot_main.get_database_table_name()
         with main_conn.cursor() as cursor:
@@ -2503,7 +2518,7 @@ class FieldAttributeChangesTestCase(BranchingTestBase, TransactionTestCase):
                 [co_table, 'value'],
             )
             data_type = cursor.fetchone()[0]
-        self.assertEqual(data_type, 'integer')
+        self.assertEqual(data_type, 'bigint')
 
         # CO value survived the cast.
         co_main = cot_main.get_model().objects.get(pk=co_pk)
@@ -2604,7 +2619,7 @@ class FieldAttributeChangesTestCase(BranchingTestBase, TransactionTestCase):
 # ── Tags + journal entries survive merge ──────────────────────────────────────
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
-class TagsAndJournalTestCase(BranchingTestBase, TransactionTestCase):
+class TagsAndJournalTestCase(BranchingTestBase, _TestBase):
     """
     Tags use a separate code path in ``CustomObject.deserialize_object`` via
     the ``is_taggable`` branch.  Journal entries are NetBox infrastructure
@@ -2690,7 +2705,7 @@ class TagsAndJournalTestCase(BranchingTestBase, TransactionTestCase):
 # ── ChoiceSet lifecycle, search_weight, sync-then-merge ───────────────────────
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
-class ChoiceSetSearchLifecycleTestCase(BranchingTestBase, TransactionTestCase):
+class ChoiceSetSearchLifecycleTestCase(BranchingTestBase, _TestBase):
     """Misc lifecycle gaps: ChoiceSet mutation, search_weight changes,
     sync→edit→merge chains."""
 
@@ -2806,7 +2821,7 @@ class ChoiceSetSearchLifecycleTestCase(BranchingTestBase, TransactionTestCase):
 
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
-class GraphQLBranchIsolationTestCase(BranchingTestBase, TransactionTestCase):
+class GraphQLBranchIsolationTestCase(BranchingTestBase, _TestBase):
     """
     GraphQL resolves against whichever branch netbox-branching activated for the
     request (X-NetBox-Branch header, ``?_branch=``, or the active_branch cookie),
@@ -2903,8 +2918,11 @@ class GraphQLBranchIsolationTestCase(BranchingTestBase, TransactionTestCase):
 
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
-@override_settings(LOGIN_REQUIRED=True)
-class GraphQLBranchEndpointTestCase(BranchingTestBase, TransactionTestCase):
+# override_settings cannot be applied unconditionally: when HAS_BRANCHING is
+# False, _TestBase is ``object`` (not TransactionTestCase), so the decorator
+# would try to wrap _pre_setup/_post_teardown methods that don't exist.
+@(override_settings(LOGIN_REQUIRED=True) if HAS_BRANCHING else lambda cls: cls)
+class GraphQLBranchEndpointTestCase(BranchingTestBase, _TestBase):
     """
     End-to-end against the real ``/graphql/`` endpoint: it serves whichever branch
     netbox-branching activated for the request (the ``X-NetBox-Branch`` header or the

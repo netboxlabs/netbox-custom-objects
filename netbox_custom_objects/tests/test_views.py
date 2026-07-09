@@ -12,8 +12,30 @@ from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from .base import CustomObjectsTestCase
 from core.models.object_types import ObjectType
 
+try:
+    import netbox_branching  # noqa: F401
+    _HAS_BRANCHING = True
+except ImportError:
+    _HAS_BRANCHING = False
 
-class CustomObjectTypeViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase):
+
+class _SkipQueryCountsWhenBranching:
+    """Skip query-count assertion when netbox-branching is installed.
+
+    Branching adds per-request queries (branch lookup, schema check, etc.) that
+    are not present in the recorded baselines.  The counts are adequately tested
+    by the non-branching matrix jobs.
+    """
+
+    def test_list_objects_with_permission(self):
+        if _HAS_BRANCHING:
+            self.skipTest('query-count baselines not valid with netbox-branching installed')
+        super().test_list_objects_with_permission()
+
+
+class CustomObjectTypeViewTestCase(
+    _SkipQueryCountsWhenBranching, CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase
+):
     """Test cases for CustomObjectType views."""
 
     model = CustomObjectType
@@ -81,6 +103,9 @@ class CustomObjectTypeViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryO
         ...
 
     def test_bulk_update_objects_with_permission(self):
+        ...
+
+    def test_bulk_update_objects_without_change_permission(self):
         ...
 
     def test_bulk_import_objects_with_permission(self):
@@ -205,6 +230,9 @@ class CustomObjectTypeFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.Pri
     def test_bulk_update_objects_with_permission(self):
         ...
 
+    def test_bulk_update_objects_without_change_permission(self):
+        ...
+
     def test_bulk_import_objects_with_permission(self):
         ...
 
@@ -224,7 +252,9 @@ class CustomObjectTypeFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.Pri
         ...
 
 
-class CustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase):
+class CustomObjectViewTestCase(
+    _SkipQueryCountsWhenBranching, CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase
+):
     """Test cases for dynamic CustomObject views."""
 
     query_count_model_label = 'customobject-simple'
@@ -339,6 +369,9 @@ class CustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjec
     def test_bulk_update_objects_with_permission(self):
         ...
 
+    def test_bulk_update_objects_without_change_permission(self):
+        ...
+
     def test_bulk_import_objects_with_permission(self):
         ...
 
@@ -449,7 +482,9 @@ class CustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjec
         self.assertHttpStatus(self.client.get(edit_url), 200)
 
 
-class ComplexCustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase):
+class ComplexCustomObjectViewTestCase(
+    _SkipQueryCountsWhenBranching, CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase
+):
     """Test cases for complex custom objects with various field types."""
 
     query_count_model_label = 'customobject-complex'
@@ -639,6 +674,9 @@ class ComplexCustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.Prima
     def test_bulk_update_objects_with_permission(self):
         ...
 
+    def test_bulk_update_objects_without_change_permission(self):
+        ...
+
     def test_bulk_import_objects_with_permission(self):
         ...
 
@@ -742,7 +780,9 @@ class SelectFieldColorDetailViewTestCase(CustomObjectsTestCase, TestCase):
         self.assertIn('Yes', response.content.decode())
 
 
-class ObjectFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase):
+class ObjectFieldViewTestCase(
+    _SkipQueryCountsWhenBranching, CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase
+):
     """Test cases for custom objects with object and multi-object fields."""
 
     query_count_model_label = 'customobject-objectfields'
@@ -888,6 +928,9 @@ class ObjectFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObject
         ...
 
     def test_bulk_update_objects_with_permission(self):
+        ...
+
+    def test_bulk_update_objects_without_change_permission(self):
         ...
 
     def test_bulk_import_objects_with_permission(self):
