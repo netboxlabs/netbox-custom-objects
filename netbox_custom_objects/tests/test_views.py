@@ -3,12 +3,13 @@ Tests for all UI views.
 """
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection
-from django.test import TestCase
+from django.test import RequestFactory, TestCase
 from django.urls import reverse
 from extras.models import CustomFieldChoiceSet
 from users.models import ObjectPermission
 from utilities.testing import ViewTestCases, create_test_user
 
+from netbox_custom_objects import views
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from .base import CustomObjectsTestCase
 from core.models.object_types import ObjectType
@@ -394,20 +395,27 @@ class CustomObjectViewTestCase(
     def test_bulk_delete_objects_with_constrained_permission(self):
         ...
 
-    def test_bulk_import_page_does_not_full_scan_table(self):
-        """Regression #620: opening the bulk-import page must not load the whole
-        table into memory.
+    def _assert_get_queryset_does_not_full_scan(self, view_class):
+        """Regression #620 helper.
 
-        ``get_queryset()`` previously did ``if self.queryset:``, whose
-        ``QuerySet.__bool__`` fetches every row. On a type with millions of
-        records this spiked server memory and hung the request. Assert the page
-        issues no unbounded SELECT against the type's own table.
+        All three bulk views (import/edit/delete) previously did
+        ``if self.queryset:`` in ``get_queryset()``, whose ``QuerySet.__bool__``
+        calls ``_fetch_all()`` — pulling every row into memory. On a type with
+        millions of records this spiked server memory and hung the request.
+
+        ``get_queryset()`` is invoked a second time by ``BaseMultiObjectView.
+        dispatch()`` after ``setup()`` has assigned the (lazy) queryset, which is
+        when the truthiness check evaluated it. We reproduce that state directly
+        so the assertion targets the exact regression regardless of each view's
+        HTTP method handling.
         """
-        content_type = ContentType.objects.get_for_model(self.model)
-        obj_perm = ObjectPermission(name='bulk-import-view', actions=['view', 'add'])
-        obj_perm.save()
-        obj_perm.users.add(self.user)
-        obj_perm.object_types.add(content_type)
+        request = RequestFactory().get('/')
+        request.user = self.user
+
+        view = view_class()
+        view.kwargs = {'custom_object_type': self.model.custom_object_type.slug}
+        # Post-setup state: dispatch() will have left a lazy, unevaluated queryset.
+        view.queryset = self.model.objects.all()
 
         db_table = self.model._meta.db_table
         full_scans = []
@@ -423,16 +431,27 @@ class CustomObjectViewTestCase(
                 full_scans.append(sql)
             return execute(sql, params, many, context)
 
-        url = self._get_url('bulk_import')
         with connection.execute_wrapper(tracer):
-            response = self.client.get(url)
+            view.get_queryset(request)
 
-        self.assertHttpStatus(response, 200)
         self.assertEqual(
             full_scans, [],
-            f"Import page issued an unbounded SELECT against {db_table}; the "
-            "whole table is being loaded into memory:\n" + "\n".join(full_scans),
+            f"{view_class.__name__}.get_queryset() issued an unbounded SELECT "
+            f"against {db_table}; the whole table is being loaded into memory:\n"
+            + "\n".join(full_scans),
         )
+
+    def test_bulk_import_get_queryset_does_not_full_scan(self):
+        """Regression #620: CustomObjectBulkImportView.get_queryset()."""
+        self._assert_get_queryset_does_not_full_scan(views.CustomObjectBulkImportView)
+
+    def test_bulk_edit_get_queryset_does_not_full_scan(self):
+        """Regression #620: CustomObjectBulkEditView.get_queryset()."""
+        self._assert_get_queryset_does_not_full_scan(views.CustomObjectBulkEditView)
+
+    def test_bulk_delete_get_queryset_does_not_full_scan(self):
+        """Regression #620: CustomObjectBulkDeleteView.get_queryset()."""
+        self._assert_get_queryset_does_not_full_scan(views.CustomObjectBulkDeleteView)
 
     def test_bulk_edit_select_all_respects_full_queryset(self):
         """Regression #380: 'select all matching query' must edit all objects, not just the current page.
