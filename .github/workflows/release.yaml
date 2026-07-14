@@ -21,6 +21,12 @@ jobs:
     - name: Install pypa/build
       run: |
         python3 -m pip install build
+    - name: Install mkdocs
+      run: |
+        python3 -m pip install mkdocs mkdocs-material
+    - name: Build in-app model documentation
+      run: |
+        mkdocs build -f mkdocs.models.yml
     - name: Build distribution package
       run: |
         python3 -m build
