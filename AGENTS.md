@@ -219,7 +219,7 @@ GitHub Actions workflows in `.github/workflows/`:
 3. Wire up the rest of the surface area: `filtersets.py`, `forms.py`, `tables.py`, `api/serializers.py`, `api/urls.py`, `urls.py`, `navigation.py`, and a template under `templates/netbox_custom_objects/`.
 4. Register a `SearchIndex` in `search.py` if the model should appear in NetBox's global search.
 5. Add tests covering model logic, API, filtersets, and views.
-6. If the model is a `NetBoxModel` (it has a "Help" link on its edit page via `docs_url`), add `docs/models/netbox_custom_objects/<model_name>.md` and a nav entry in `mkdocs.models.yml`, or the Help link will 404.
+6. If the model is a `NetBoxModel` (it has a "Help" link on its edit page via `docs_url`), add `docs_models/netbox_custom_objects/<model_name>.md` and a nav entry in `mkdocs.models.yml`, or the Help link will 404.
 
 ### Add a REST API endpoint
 

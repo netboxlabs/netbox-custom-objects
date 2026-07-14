@@ -23,7 +23,7 @@ jobs:
         python3 -m pip install build
     - name: Install mkdocs
       run: |
-        python3 -m pip install mkdocs mkdocs-material
+        python3 -m pip install 'mkdocs>=1.6,<2' 'mkdocs-material>=9.7,<10'
     - name: Build in-app model documentation
       run: |
         mkdocs build -f mkdocs.models.yml
