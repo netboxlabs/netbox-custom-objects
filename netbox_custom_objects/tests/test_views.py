@@ -2,6 +2,7 @@
 Tests for all UI views.
 """
 from django.contrib.contenttypes.models import ContentType
+from django.db import connection
 from django.test import TestCase
 from django.urls import reverse
 from extras.models import CustomFieldChoiceSet
@@ -392,6 +393,46 @@ class CustomObjectViewTestCase(
 
     def test_bulk_delete_objects_with_constrained_permission(self):
         ...
+
+    def test_bulk_import_page_does_not_full_scan_table(self):
+        """Regression #620: opening the bulk-import page must not load the whole
+        table into memory.
+
+        ``get_queryset()`` previously did ``if self.queryset:``, whose
+        ``QuerySet.__bool__`` fetches every row. On a type with millions of
+        records this spiked server memory and hung the request. Assert the page
+        issues no unbounded SELECT against the type's own table.
+        """
+        content_type = ContentType.objects.get_for_model(self.model)
+        obj_perm = ObjectPermission(name='bulk-import-view', actions=['view', 'add'])
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        obj_perm.object_types.add(content_type)
+
+        db_table = self.model._meta.db_table
+        full_scans = []
+
+        def tracer(execute, sql, params, many, context):
+            normalized = sql.lstrip().upper()
+            if (
+                db_table in sql
+                and normalized.startswith('SELECT')
+                and 'LIMIT' not in normalized
+                and 'COUNT(' not in normalized
+            ):
+                full_scans.append(sql)
+            return execute(sql, params, many, context)
+
+        url = self._get_url('bulk_import')
+        with connection.execute_wrapper(tracer):
+            response = self.client.get(url)
+
+        self.assertHttpStatus(response, 200)
+        self.assertEqual(
+            full_scans, [],
+            f"Import page issued an unbounded SELECT against {db_table}; the "
+            "whole table is being loaded into memory:\n" + "\n".join(full_scans),
+        )
 
     def test_bulk_edit_select_all_respects_full_queryset(self):
         """Regression #380: 'select all matching query' must edit all objects, not just the current page.

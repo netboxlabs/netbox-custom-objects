@@ -1144,7 +1144,7 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
         self.table = self.get_table(self.queryset, request).__class__
 
     def get_queryset(self, request):
-        if self.queryset:
+        if self.queryset is not None:
             return self.queryset
         custom_object_type = self.kwargs.get("custom_object_type", None)
         self.custom_object_type = CustomObjectType.objects.get(
@@ -1369,7 +1369,7 @@ class CustomObjectBulkDeleteView(CustomObjectTableMixin, generic.BulkDeleteView)
         self.table = self.get_table(self.queryset, request).__class__
 
     def get_queryset(self, request):
-        if self.queryset:
+        if self.queryset is not None:
             return self.queryset
         self.custom_object_type = self.kwargs.pop("custom_object_type", None)
         self.custom_object_type = CustomObjectType.objects.get(
@@ -1400,7 +1400,7 @@ class CustomObjectBulkImportView(generic.BulkImportView):
         self.model_form = self.get_model_form(self.queryset)
 
     def get_queryset(self, request):
-        if self.queryset:
+        if self.queryset is not None:
             return self.queryset
         custom_object_type = self.kwargs.get("custom_object_type", None)
         self.custom_object_type = CustomObjectType.objects.get(
