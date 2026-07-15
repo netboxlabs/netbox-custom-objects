@@ -163,7 +163,7 @@ Notes:
 ### Jinja Config Templates
 
 !!! note
-    Requires NetBox 4.7 or later. On earlier NetBox versions, `custom_objects` is simply unavailable in config templates — a single informational message is logged when the plugin starts, and nothing else changes.
+    Requires NetBox 4.7 or later. On earlier NetBox versions, `custom_objects` is simply unavailable in config templates and nothing else changes — no error, no crash. A `DEBUG`-level log message noting this is emitted at plugin startup; enable debug logging if you need to confirm why `custom_objects` isn't resolving.
 
 Custom Objects can be referenced directly from NetBox [config templates](https://netboxlabs.com/docs/netbox/models/extras/configtemplate/), so device configuration can pull in data modelled with Custom Object Types (e.g. OSPF interface parameters, BGP peer groups, MPLS label ranges) alongside built-in NetBox models.
 

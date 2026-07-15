@@ -375,11 +375,13 @@ class CustomObjectsPluginConfig(PluginConfig):
         # On NetBox < 4.7 the jinja_filters resource and get_jinja_context() hook
         # don't exist, so super().ready() never calls _load_resource('jinja_filters')
         # and get_jinja_context() is never invoked by RenderTemplateMixin.get_context().
-        # Emit a single INFO message so operators have an actionable explanation if
-        # 'custom_objects' is absent from config/export template renders.
+        # This is every currently-supported NetBox version (4.7 isn't released yet), so
+        # log at DEBUG rather than INFO: it's an explanation to reach for when actively
+        # troubleshooting why 'custom_objects' isn't resolving, not a startup notice
+        # every install should see by default.
         from netbox.registry import registry
         if 'custom_objects' not in registry.get('plugins', {}).get('jinja_filters', {}):
-            logger.info(
+            logger.debug(
                 "NetBox Jinja config template hooks (jinja_filters / get_jinja_context) "
                 "are not available in this version of NetBox. The 'custom_objects' filter "
                 "and context variable will not be active in config templates. Upgrade to "
