@@ -8,11 +8,14 @@ netbox-community/netbox#22363, later renamed by #22436) are skipped on older
 NetBox, detected via the same registry check performed by
 CustomObjectsPluginConfig.ready().
 """
-from django.apps import apps as django_apps
-from django.test import TestCase
+from unittest.mock import patch
 
-from netbox_custom_objects import CustomObjectsPluginConfig
+from django.apps import apps as django_apps
+from django.test import SimpleTestCase, TestCase
+
+from netbox_custom_objects import CustomObjectsPluginConfig, jinja_env
 from netbox_custom_objects.jinja_env import CustomObjectsNamespace, EmptyCustomObjectsQuerySet, custom_objects_filter
+from netbox_custom_objects.models import CustomObjectType
 
 from .base import CustomObjectsTestCase
 
@@ -26,6 +29,49 @@ def _jinja_hooks_available():
     """
     from netbox.registry import registry
     return 'custom_objects' in registry.get('plugins', {}).get('jinja_filters', {})
+
+
+class EmptyCustomObjectsQuerySetTestCase(SimpleTestCase):
+    """Tests for EmptyCustomObjectsQuerySet's chainable no-op interface directly."""
+
+    def test_read_methods_are_chainable_and_stay_empty(self):
+        qs = EmptyCustomObjectsQuerySet()
+        chained = (
+            qs.filter(x=1).exclude(y=2).all().none().order_by('x')
+            .values('x').values_list('x').select_related('x')
+            .prefetch_related('x').distinct().annotate(x=1)
+        )
+        self.assertIsInstance(chained, EmptyCustomObjectsQuerySet)
+        self.assertEqual(list(chained), [])
+
+    def test_slicing_returns_self(self):
+        qs = EmptyCustomObjectsQuerySet()
+        self.assertIsInstance(qs[:5], EmptyCustomObjectsQuerySet)
+
+    def test_integer_index_raises_index_error(self):
+        qs = EmptyCustomObjectsQuerySet()
+        with self.assertRaises(IndexError):
+            _ = qs[0]
+
+    def test_get_raises_lookup_error(self):
+        qs = EmptyCustomObjectsQuerySet()
+        with self.assertRaises(LookupError):
+            qs.get(x=1)
+
+    def test_first_and_last_return_none(self):
+        qs = EmptyCustomObjectsQuerySet()
+        self.assertIsNone(qs.first())
+        self.assertIsNone(qs.last())
+
+    def test_count_and_exists(self):
+        qs = EmptyCustomObjectsQuerySet()
+        self.assertEqual(qs.count(), 0)
+        self.assertFalse(qs.exists())
+
+    def test_len_and_bool(self):
+        qs = EmptyCustomObjectsQuerySet()
+        self.assertEqual(len(qs), 0)
+        self.assertFalse(qs)
 
 
 class CustomObjectsFilterTestCase(CustomObjectsTestCase, TestCase):
@@ -54,6 +100,21 @@ class CustomObjectsFilterTestCase(CustomObjectsTestCase, TestCase):
         """A template that chains .filter()/.all() onto an unresolved name must not crash."""
         result = custom_objects_filter('nonexistent_type')
         self.assertEqual(list(result.filter(label='x').all().exclude(label='y')), [])
+
+    def test_unknown_name_warning_logged_once_per_process(self):
+        """
+        A typo'd type name rendered repeatedly (e.g. across a bulk device config
+        export) must log its warning once, not once per lookup.
+        """
+        unique_name = 'warn_once_filter_type'
+        jinja_env._warned_unknown_names.discard(unique_name)
+        self.addCleanup(jinja_env._warned_unknown_names.discard, unique_name)
+
+        with patch.object(jinja_env.logger, 'warning') as mock_warning:
+            custom_objects_filter(unique_name)
+            custom_objects_filter(unique_name)
+            custom_objects_filter(unique_name)
+        self.assertEqual(mock_warning.call_count, 1)
 
 
 class CustomObjectsNamespaceTestCase(CustomObjectsTestCase, TestCase):
@@ -95,6 +156,38 @@ class CustomObjectsNamespaceTestCase(CustomObjectsTestCase, TestCase):
         ns = CustomObjectsNamespace()
         with self.assertRaises(AttributeError):
             _ = ns.__deepcopy__
+
+    def test_repeated_access_to_same_name_is_cached_within_a_render(self):
+        """
+        A template referencing custom_objects.j2widget multiple times in one render
+        must resolve the Custom Object Type once, not once per reference.
+        """
+        ns = CustomObjectsNamespace()
+        with patch.object(CustomObjectType.objects, 'get', wraps=CustomObjectType.objects.get) as mock_get:
+            ns.j2widget
+            ns.j2widget
+            ns.j2widget
+        self.assertEqual(mock_get.call_count, 1)
+
+    def test_cache_is_not_shared_across_namespace_instances(self):
+        """Caching is per-render (per CustomObjectsNamespace instance), not global."""
+        CustomObjectsNamespace().j2widget
+        with patch.object(CustomObjectType.objects, 'get', wraps=CustomObjectType.objects.get) as mock_get:
+            CustomObjectsNamespace().j2widget
+        self.assertEqual(mock_get.call_count, 1)
+
+    def test_unknown_name_warning_logged_once_per_process(self):
+        """Repeated access to the same unresolved name must log its warning once."""
+        unique_name = 'warn_once_namespace_type'
+        jinja_env._warned_unknown_names.discard(unique_name)
+        self.addCleanup(jinja_env._warned_unknown_names.discard, unique_name)
+
+        ns = CustomObjectsNamespace()
+        with patch.object(jinja_env.logger, 'warning') as mock_warning:
+            getattr(ns, unique_name)
+            # A fresh namespace (new render) still shares the process-level warned set.
+            getattr(CustomObjectsNamespace(), unique_name)
+        self.assertEqual(mock_warning.call_count, 1)
 
 
 class PluginConfigJinjaHooksTestCase(CustomObjectsTestCase, TestCase):
