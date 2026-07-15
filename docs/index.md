@@ -189,7 +189,7 @@ interface {{ iface.name }}
 Notes:
 
 - The attribute-style form returns the model's manager (`.filter(...)`, `.all()`, etc.); the filter form returns a queryset of all instances of that type.
-- An unknown type name is handled differently by design: the attribute form raises `AttributeError` (which Jinja treats as `Undefined`), while the filter form logs a warning and returns an empty list. Both fail quietly rather than crashing the render — check the type's internal name (shown on its detail page) if a template renders no data.
+- An unknown type name is handled the same way by both forms: a warning is logged, and the reference resolves to an empty, chainable stand-in — further calls like `.filter(...)` or `.all()` continue to render no rows rather than raising. Check the type's internal name (shown on its detail page) if a template renders no data.
 
 ### Deletions
 

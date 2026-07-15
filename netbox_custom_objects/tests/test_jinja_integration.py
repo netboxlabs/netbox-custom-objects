@@ -12,7 +12,7 @@ from django.apps import apps as django_apps
 from django.test import TestCase
 
 from netbox_custom_objects import CustomObjectsPluginConfig
-from netbox_custom_objects.jinja_env import CustomObjectsNamespace, custom_objects_filter
+from netbox_custom_objects.jinja_env import CustomObjectsNamespace, EmptyCustomObjectsQuerySet, custom_objects_filter
 
 from .base import CustomObjectsTestCase
 
@@ -47,7 +47,13 @@ class CustomObjectsFilterTestCase(CustomObjectsTestCase, TestCase):
 
     def test_returns_empty_for_unknown_type(self):
         result = custom_objects_filter('nonexistent_type')
+        self.assertIsInstance(result, EmptyCustomObjectsQuerySet)
         self.assertEqual(list(result), [])
+
+    def test_unknown_type_result_tolerates_further_chaining(self):
+        """A template that chains .filter()/.all() onto an unresolved name must not crash."""
+        result = custom_objects_filter('nonexistent_type')
+        self.assertEqual(list(result.filter(label='x').all().exclude(label='y')), [])
 
 
 class CustomObjectsNamespaceTestCase(CustomObjectsTestCase, TestCase):
@@ -72,10 +78,17 @@ class CustomObjectsNamespaceTestCase(CustomObjectsTestCase, TestCase):
         ns = CustomObjectsNamespace()
         self.assertEqual(ns.j2widget.filter(label='alpha').count(), 1)
 
-    def test_raises_attribute_error_for_unknown_name(self):
+    def test_unknown_name_returns_empty_queryset_stand_in(self):
+        """An unresolved name must not raise -- matches custom_objects_filter()'s behavior."""
         ns = CustomObjectsNamespace()
-        with self.assertRaises(AttributeError):
-            _ = ns.no_such_type
+        result = ns.no_such_type
+        self.assertIsInstance(result, EmptyCustomObjectsQuerySet)
+        self.assertEqual(list(result), [])
+
+    def test_unknown_name_result_tolerates_further_chaining(self):
+        """A template that chains .filter(device=device) onto an unresolved name must not crash."""
+        ns = CustomObjectsNamespace()
+        self.assertEqual(list(ns.no_such_type.filter(device='anything')), [])
 
     def test_does_not_intercept_dunder_attributes(self):
         """Internal/dunder lookups (e.g. by copy.deepcopy) must not trigger a DB query."""
@@ -151,3 +164,15 @@ class JinjaHookIntegrationTestCase(CustomObjectsTestCase, TestCase):
         from utilities.jinja2 import render_jinja2
         result = render_jinja2("{{ 'no_such_type' | custom_objects | list | length }}", {})
         self.assertEqual(result, '0')
+
+    def test_unknown_type_name_in_attribute_syntax_renders_empty(self):
+        """
+        A template chaining .filter() onto an unresolved attribute-style name (as in
+        every documented example) must render no rows, not raise UndefinedError.
+        """
+        from extras.models import ConfigTemplate
+        tmpl = ConfigTemplate(
+            name='test-j2-unknown',
+            template_code='{{ custom_objects.no_such_type.filter(label="x") | list | length }}',
+        )
+        self.assertEqual(tmpl.render(), '0')
