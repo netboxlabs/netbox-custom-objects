@@ -21,6 +21,13 @@ jobs:
     - name: Install pypa/build
       run: |
         python3 -m pip install build
+    - name: Install mkdocs
+      run: |
+        python3 -m pip install 'mkdocs>=1.6,<2' 'mkdocs-material>=9.7,<10'
+    - name: Build in-app model documentation
+      run: |
+        mkdocs build -f mkdocs.models.yml
+        test -f netbox_custom_objects/static/docs/models/netbox_custom_objects/customobjecttype/index.html
     - name: Build distribution package
       run: |
         python3 -m build

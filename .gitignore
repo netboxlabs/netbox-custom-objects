@@ -3,3 +3,4 @@
 .claude/settings.local.json
 .idea/
 .DS_Store
+netbox_custom_objects/static/
