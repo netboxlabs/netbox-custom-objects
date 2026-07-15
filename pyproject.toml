@@ -30,7 +30,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["check-manifest", "mkdocs", "mkdocs-material", "ruff"]
+dev = ["check-manifest", "mkdocs>=1.6,<2", "mkdocs-material>=9.7,<10", "ruff"]
 test = ["coverage", "pytest", "pytest-cov"]
 # Install with `pip install "netboxlabs-netbox-custom-objects[branching]"` when
 # pairing this plugin with netbox-branching.  Note: this extra also implies a
