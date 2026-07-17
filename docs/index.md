@@ -190,6 +190,11 @@ Notes:
 
 - The attribute-style form returns the model's manager (`.filter(...)`, `.all()`, etc.); the filter form returns a queryset of all instances of that type.
 - An unknown type name is handled the same way by both forms: a warning is logged, and the reference resolves to an empty, chainable stand-in — further calls like `.filter(...)` or `.all()` continue to render no rows rather than raising. Check the type's internal name (shown on its detail page) if a template renders no data.
+- A type's internal name may begin with a digit (e.g. `123foo`), which isn't valid Jinja dot-notation. Use bracket notation with the attribute-style form instead:
+
+```jinja2
+{% for obj in custom_objects['123foo'].filter(device=device) %}
+```
 
 ### Deletions
 

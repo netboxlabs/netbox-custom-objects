@@ -37,6 +37,8 @@ this module is simply never consulted by core, so it degrades to a no-op
 """
 import logging
 
+from jinja2 import pass_context
+
 logger = logging.getLogger(__name__)
 
 # Names for which the "no Custom Object Type named ..." warning has already been
@@ -62,7 +64,8 @@ class EmptyCustomObjectsQuerySet:
 
     This lets a template written against a Custom Object Type that was
     renamed or deleted keep rendering (with no data) instead of raising, for
-    either access pattern, regardless of how the result is chained.
+    either access pattern, as long as only the queryset methods listed above
+    are chained onto the result.
     """
 
     def filter(self, *args, **kwargs):
@@ -180,7 +183,8 @@ class CustomObjectsNamespace:
         return 'custom_objects'
 
 
-def custom_objects_filter(type_name):
+@pass_context
+def custom_objects_filter(_context, type_name):
     """
     Jinja filter: resolve a Custom Object Type by name and return a queryset
     of all its instances.
@@ -188,6 +192,12 @@ def custom_objects_filter(type_name):
     Example::
 
         {% for iface in 'ospf_interface' | custom_objects %}
+
+    Marked with @pass_context (unused beyond the signature) so Jinja treats
+    this as context-dependent and never constant-folds a call whose argument
+    is a string literal -- which would otherwise resolve the Custom Object
+    Type (and run a database query) once at template compile time instead of
+    at render time.
     """
     cot = _resolve_custom_object_type(type_name)
     if cot is None:

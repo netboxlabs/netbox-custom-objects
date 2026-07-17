@@ -10,6 +10,7 @@ CustomObjectsPluginConfig.ready().
 """
 from unittest.mock import patch
 
+import jinja2
 from django.apps import apps as django_apps
 from django.test import SimpleTestCase, TestCase
 
@@ -88,17 +89,19 @@ class CustomObjectsFilterTestCase(CustomObjectsTestCase, TestCase):
         model = self.cot.get_model()
         model.objects.create(label='alpha')
         model.objects.create(label='beta')
-        result = custom_objects_filter('j2widget')
+        # custom_objects_filter is @pass_context; the context argument is unused, so any
+        # value (None, here) is fine when calling it directly rather than through Jinja.
+        result = custom_objects_filter(None, 'j2widget')
         self.assertEqual(result.count(), 2)
 
     def test_returns_empty_for_unknown_type(self):
-        result = custom_objects_filter('nonexistent_type')
+        result = custom_objects_filter(None, 'nonexistent_type')
         self.assertIsInstance(result, EmptyCustomObjectsQuerySet)
         self.assertEqual(list(result), [])
 
     def test_unknown_type_result_tolerates_further_chaining(self):
         """A template that chains .filter()/.all() onto an unresolved name must not crash."""
-        result = custom_objects_filter('nonexistent_type')
+        result = custom_objects_filter(None, 'nonexistent_type')
         self.assertEqual(list(result.filter(label='x').all().exclude(label='y')), [])
 
     def test_unknown_name_warning_logged_once_per_process(self):
@@ -111,9 +114,9 @@ class CustomObjectsFilterTestCase(CustomObjectsTestCase, TestCase):
         self.addCleanup(jinja_env._warned_unknown_names.discard, unique_name)
 
         with patch.object(jinja_env.logger, 'warning') as mock_warning:
-            custom_objects_filter(unique_name)
-            custom_objects_filter(unique_name)
-            custom_objects_filter(unique_name)
+            custom_objects_filter(None, unique_name)
+            custom_objects_filter(None, unique_name)
+            custom_objects_filter(None, unique_name)
         self.assertEqual(mock_warning.call_count, 1)
 
 
@@ -138,6 +141,25 @@ class CustomObjectsNamespaceTestCase(CustomObjectsTestCase, TestCase):
         model.objects.create(label='beta')
         ns = CustomObjectsNamespace()
         self.assertEqual(ns.j2widget.filter(label='alpha').count(), 1)
+
+    def test_bracket_notation_resolves_leading_digit_type_name(self):
+        """
+        A type name may begin with a digit, which isn't valid Jinja dot-notation
+        (custom_objects.123widget). Bracket notation compiles to Jinja's own
+        getitem-then-getattr fallback (not Python's __getitem__, which
+        CustomObjectsNamespace doesn't implement), so it must be exercised
+        through an actual Jinja render rather than by subscripting the
+        namespace object directly in Python.
+        """
+        cot = self.create_custom_object_type(name='123widget', slug='123-widget')
+        self.create_custom_object_type_field(
+            cot, name='label', label='Label', type='text', primary=True, required=True,
+        )
+        model = cot.get_model()
+        model.objects.create(label='alpha')
+        ns = CustomObjectsNamespace()
+        template = jinja2.Environment().from_string("{{ custom_objects['123widget'].filter(label='alpha').count() }}")
+        self.assertEqual(template.render(custom_objects=ns), '1')
 
     def test_unknown_name_returns_empty_queryset_stand_in(self):
         """An unresolved name must not raise -- matches custom_objects_filter()'s behavior."""
@@ -243,6 +265,22 @@ class JinjaHookIntegrationTestCase(CustomObjectsTestCase, TestCase):
         result = render_jinja2("{{ 'j2widget' | custom_objects | list | length }}", {})
         self.assertEqual(result, '1')
 
+    def test_filter_syntax_resolves_only_once_when_compiled_and_rendered(self):
+        """
+        Regression test: a bare string literal argument (as in the documented loop
+        syntax) is a compile-time constant. Without @pass_context, Jinja's optimizer
+        can constant-fold the filter call, resolving the Custom Object Type (and
+        querying the database) at template compile time in addition to render time.
+        """
+        from utilities.jinja2 import render_jinja2
+        model = self.cot.get_model()
+        model.objects.create(label='alpha')
+        template_code = "{% for obj in 'j2widget' | custom_objects %}{{ obj.label }}{% endfor %}"
+        with patch.object(CustomObjectType.objects, 'get', wraps=CustomObjectType.objects.get) as mock_get:
+            result = render_jinja2(template_code, {})
+        self.assertEqual(result, 'alpha')
+        self.assertEqual(mock_get.call_count, 1)
+
     def test_context_namespace_available_in_config_template_render(self):
         from extras.models import ConfigTemplate
         model = self.cot.get_model()
@@ -269,3 +307,22 @@ class JinjaHookIntegrationTestCase(CustomObjectsTestCase, TestCase):
             template_code='{{ custom_objects.no_such_type.filter(label="x") | list | length }}',
         )
         self.assertEqual(tmpl.render(), '0')
+
+    def test_bracket_notation_in_config_template_render(self):
+        """
+        A type name beginning with a digit can't be accessed via dot-notation
+        (custom_objects.123widget is not valid Jinja syntax); the documented
+        workaround is bracket notation.
+        """
+        from extras.models import ConfigTemplate
+        cot = self.create_custom_object_type(name='123widget', slug='123-widget')
+        self.create_custom_object_type_field(
+            cot, name='label', label='Label', type='text', primary=True, required=True,
+        )
+        model = cot.get_model()
+        model.objects.create(label='alpha')
+        tmpl = ConfigTemplate(
+            name='test-j2-leading-digit',
+            template_code="{{ custom_objects['123widget'].filter(label='alpha') | list | length }}",
+        )
+        self.assertEqual(tmpl.render(), '1')
