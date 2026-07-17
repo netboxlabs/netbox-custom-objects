@@ -144,12 +144,8 @@ class CustomObjectsNamespaceTestCase(CustomObjectsTestCase, TestCase):
 
     def test_bracket_notation_resolves_leading_digit_type_name(self):
         """
-        A type name may begin with a digit, which isn't valid Jinja dot-notation
-        (custom_objects.123widget). Bracket notation compiles to Jinja's own
-        getitem-then-getattr fallback (not Python's __getitem__, which
-        CustomObjectsNamespace doesn't implement), so it must be exercised
-        through an actual Jinja render rather than by subscripting the
-        namespace object directly in Python.
+        Bracket notation is Jinja's own getitem-then-getattr fallback, not
+        Python's __getitem__, so it must go through an actual Jinja render.
         """
         cot = self.create_custom_object_type(name='123widget', slug='123-widget')
         self.create_custom_object_type_field(
@@ -267,10 +263,8 @@ class JinjaHookIntegrationTestCase(CustomObjectsTestCase, TestCase):
 
     def test_filter_syntax_resolves_only_once_when_compiled_and_rendered(self):
         """
-        Regression test: a bare string literal argument (as in the documented loop
-        syntax) is a compile-time constant. Without @pass_context, Jinja's optimizer
-        can constant-fold the filter call, resolving the Custom Object Type (and
-        querying the database) at template compile time in addition to render time.
+        Without @pass_context, Jinja can constant-fold the filter call at
+        compile time, resolving the type an extra time before render.
         """
         from utilities.jinja2 import render_jinja2
         model = self.cot.get_model()
@@ -309,11 +303,7 @@ class JinjaHookIntegrationTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(tmpl.render(), '0')
 
     def test_bracket_notation_in_config_template_render(self):
-        """
-        A type name beginning with a digit can't be accessed via dot-notation
-        (custom_objects.123widget is not valid Jinja syntax); the documented
-        workaround is bracket notation.
-        """
+        """A leading-digit type name isn't valid dot-notation; use bracket notation."""
         from extras.models import ConfigTemplate
         cot = self.create_custom_object_type(name='123widget', slug='123-widget')
         self.create_custom_object_type_field(
