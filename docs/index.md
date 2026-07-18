@@ -160,6 +160,42 @@ Notes:
 - A field must be an object field with both the **name and target model** above; a mis-named or mis-pointed field is simply ignored.
 - If a type defines **none** of these fields, aggregation is skipped entirely and its rendered context is just its Local Context Data. This is a deliberate difference from Devices/VMs: **global (unassigned) ConfigContexts are not applied** to such a type — enabling config context support alone never silently pulls in every global context. Add at least one convention field (e.g. `site`) to opt the type into source aggregation; global contexts then apply too (as they do for any object with a dimension).
 
+### Jinja Config Templates
+
+!!! note
+    Requires NetBox 4.7 or later. On earlier NetBox versions, `custom_objects` is simply unavailable in config templates and nothing else changes — no error, no crash. A `DEBUG`-level log message noting this is emitted at plugin startup; enable debug logging if you need to confirm why `custom_objects` isn't resolving.
+
+Custom Objects can be referenced directly from NetBox [config templates](https://netboxlabs.com/docs/netbox/models/extras/configtemplate/), so device configuration can pull in data modelled with Custom Object Types (e.g. OSPF interface parameters, BGP peer groups, MPLS label ranges) alongside built-in NetBox models.
+
+Two equivalent access patterns are available, both resolving the Custom Object Type by its **internal name** at render time (so templates keep working even if the type's slug or internal table ID changes):
+
+Attribute-style, via the `custom_objects` context variable:
+
+```jinja2
+{% for iface in custom_objects.ospf_interface.filter(device=device) %}
+interface {{ iface.name }}
+    ip ospf area {{ iface.area }}
+{% endfor %}
+```
+
+Filter syntax, via the `custom_objects` Jinja filter:
+
+```jinja2
+{% for iface in 'ospf_interface' | custom_objects %}
+interface {{ iface.name }}
+{% endfor %}
+```
+
+Notes:
+
+- The attribute-style form returns the model's manager (`.filter(...)`, `.all()`, etc.); the filter form returns a queryset of all instances of that type.
+- An unknown type name is handled the same way by both forms: a warning is logged, and the reference resolves to an empty, chainable stand-in — further calls like `.filter(...)` or `.all()` continue to render no rows rather than raising. Check the type's internal name (shown on its detail page) if a template renders no data.
+- A type's internal name may begin with a digit (e.g. `123foo`), which isn't valid Jinja dot-notation. Use bracket notation with the attribute-style form instead:
+
+```jinja2
+{% for obj in custom_objects['123foo'].filter(device=device) %}
+```
+
 ### Deletions
 
 #### Deleting Custom Object Types
