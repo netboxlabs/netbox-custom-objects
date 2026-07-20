@@ -1386,6 +1386,30 @@ class SchemaIdReadOnlyTest(CustomObjectsTestCase, TestCase):
         field.refresh_from_db()
         self.assertEqual(field.schema_id, original_id)
 
+    def test_deprecation_fields_writable_on_patch(self):
+        """
+        Regression #625: deprecated/deprecated_since/scheduled_removal are excluded
+        from CustomObjectTypeFieldForm (the web edit form) but must remain writable
+        via the REST API -- this is how the portable-schema import mechanism applies
+        them. Unlike schema_id, they must NOT be silently ignored here.
+        """
+        import json
+        field = self.create_custom_object_type_field(self.cot, name='delta', type='text')
+        self.assertFalse(field.deprecated)
+
+        response = self.client.patch(
+            self._field_detail_url(field.pk),
+            json.dumps({'deprecated': True, 'deprecated_since': '1.0.0', 'scheduled_removal': '2.0.0'}),
+            content_type='application/json',
+            **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        field.refresh_from_db()
+        self.assertTrue(field.deprecated)
+        self.assertEqual(field.deprecated_since, '1.0.0')
+        self.assertEqual(field.scheduled_removal, '2.0.0')
+
 
 # ---------------------------------------------------------------------------
 # CustomObjectLink UI panel — linked_custom_objects population
