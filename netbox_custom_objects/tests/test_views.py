@@ -453,6 +453,49 @@ class CustomObjectViewTestCase(
         """Regression #620: CustomObjectBulkDeleteView.get_queryset()."""
         self._assert_get_queryset_does_not_full_scan(views.CustomObjectBulkDeleteView)
 
+    def test_bulk_import_omits_hidden_required_field_from_form(self):
+        """Regression #626: a Required + Hidden field must not break bulk import.
+
+        Before the fix, CustomObjectBulkImportView.get_model_form() included every
+        field in the import form and disabled the ones with ui_editable != YES
+        (mirroring the regular edit form). A disabled Django form field ignores
+        submitted data, so a required-but-hidden field always failed validation
+        with "This field is required" even though the imported row supplied a
+        value. The fix omits such fields from the import form entirely, matching
+        core NetBox's own CSV import precedent (NetBoxModelImportForm._get_custom_fields).
+
+        Uses its own dedicated Custom Object Type rather than the class-level
+        self.custom_object_type: adding a field bumps that type's model-generation
+        cache, and reusing the shared fixture here was observed to leak a stale
+        dynamic-model registry entry into other tests in this class.
+        """
+        cot = self.create_custom_object_type(name='HiddenFieldImportTest', slug='hidden-field-import-test')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True,
+        )
+        self.create_custom_object_type_field(
+            cot,
+            name='identifier',
+            label='Identifier',
+            type='text',
+            required=True,
+            ui_editable='hidden',
+        )
+
+        request = RequestFactory().post('/')
+        request.user = self.user
+
+        view = views.CustomObjectBulkImportView()
+        view.setup(request, custom_object_type=cot.slug)
+
+        # The hidden required field must not appear in the import form at all...
+        self.assertNotIn('identifier', view.model_form.base_fields)
+
+        # ...so a row that omits it (as any importer must, since it can't be set) is valid.
+        model = view.queryset.model
+        form = view.model_form(data={'name': 'Imported Instance'}, instance=model())
+        self.assertTrue(form.is_valid(), form.errors)
+
     def test_bulk_edit_select_all_respects_full_queryset(self):
         """Regression #380: 'select all matching query' must edit all objects, not just the current page.
 
