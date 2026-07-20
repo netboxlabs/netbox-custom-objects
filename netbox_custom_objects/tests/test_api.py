@@ -1,6 +1,7 @@
 """
 Tests for API code paths.
 """
+import json
 import uuid
 from decimal import Decimal
 
@@ -1371,7 +1372,6 @@ class SchemaIdReadOnlyTest(CustomObjectsTestCase, TestCase):
 
     def test_schema_id_ignored_on_patch(self):
         """PATCHing schema_id must not change the stored value."""
-        import json
         field = self.create_custom_object_type_field(self.cot, name='gamma', type='text')
         original_id = field.schema_id
 
@@ -1393,7 +1393,6 @@ class SchemaIdReadOnlyTest(CustomObjectsTestCase, TestCase):
         via the REST API -- this is how the portable-schema import mechanism applies
         them. Unlike schema_id, they must NOT be silently ignored here.
         """
-        import json
         field = self.create_custom_object_type_field(self.cot, name='delta', type='text')
         self.assertFalse(field.deprecated)
 
