@@ -1413,8 +1413,9 @@ class CustomObjectBulkImportView(generic.BulkImportView):
         # Match core's CSV import (NetBoxModelImportForm._get_custom_fields): a
         # non-editable field is omitted from the import form, not disabled. Must
         # also go in Meta.exclude, since fields="__all__" auto-generates one otherwise.
+        fields = list(self.custom_object_type.fields.all())
         non_editable_field_names = tuple(
-            field.name for field in self.custom_object_type.fields.all()
+            field.name for field in fields
             if field.ui_editable != CustomFieldUIEditableChoices.YES
         )
 
@@ -1433,7 +1434,7 @@ class CustomObjectBulkImportView(generic.BulkImportView):
             "__module__": "database.forms",
         }
 
-        for field in self.custom_object_type.fields.all():
+        for field in fields:
             if field.name in non_editable_field_names:
                 continue
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
