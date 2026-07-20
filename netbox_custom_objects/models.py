@@ -2450,6 +2450,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     schema_id = models.PositiveIntegerField(
         blank=True,
         null=True,
+        editable=False,
         verbose_name=_("schema ID"),
         help_text=_(
             "Stable numeric identifier for this field used during schema diffing. "
