@@ -1410,13 +1410,9 @@ class CustomObjectBulkImportView(generic.BulkImportView):
         return model.objects.all()
 
     def get_model_form(self, queryset):
-        # Match core NetBox's CSV import behavior (NetBoxModelImportForm._get_custom_fields):
-        # a field that isn't editable in the UI (hidden or read-only) is omitted from the
-        # import form entirely, rather than included and disabled, so it doesn't spuriously
-        # fail "this field is required" for a value the form never accepts in the first place.
-        # Since Custom Object fields are real model fields (unlike core's JSON-stored custom
-        # fields), fields="__all__" alone would still auto-generate a field for any name left
-        # out of attrs -- they must also be listed in Meta.exclude to actually drop them.
+        # Match core's CSV import (NetBoxModelImportForm._get_custom_fields): a
+        # non-editable field is omitted from the import form, not disabled. Must
+        # also go in Meta.exclude, since fields="__all__" auto-generates one otherwise.
         non_editable_field_names = tuple(
             field.name for field in self.custom_object_type.fields.all()
             if field.ui_editable != CustomFieldUIEditableChoices.YES

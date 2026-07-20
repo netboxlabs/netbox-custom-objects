@@ -454,20 +454,10 @@ class CustomObjectViewTestCase(
         self._assert_get_queryset_does_not_full_scan(views.CustomObjectBulkDeleteView)
 
     def test_bulk_import_omits_hidden_required_field_from_form(self):
-        """Regression #626: a Required + Hidden field must not break bulk import.
-
-        Before the fix, CustomObjectBulkImportView.get_model_form() included every
-        field in the import form and disabled the ones with ui_editable != YES
-        (mirroring the regular edit form). A disabled Django form field ignores
-        submitted data, so a required-but-hidden field always failed validation
-        with "This field is required" even though the imported row supplied a
-        value. The fix omits such fields from the import form entirely, matching
-        core NetBox's own CSV import precedent (NetBoxModelImportForm._get_custom_fields).
-
-        Uses its own dedicated Custom Object Type rather than the class-level
-        self.custom_object_type: adding a field bumps that type's model-generation
-        cache, and reusing the shared fixture here was observed to leak a stale
-        dynamic-model registry entry into other tests in this class.
+        """
+        Regression #626: a Required+Hidden field must be omitted from the bulk import
+        form (not disabled, which ignores submitted data and always fails "This field
+        is required"). Own COT used to avoid leaking model-cache state into other tests.
         """
         cot = self.create_custom_object_type(name='HiddenFieldImportTest', slug='hidden-field-import-test')
         self.create_custom_object_type_field(
