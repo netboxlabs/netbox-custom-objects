@@ -23,7 +23,9 @@
         <h3 class="col-9 offset-3 mb-3 h4">{{ group_info.1 }}</h3>
       </div>
       {% for sub_name in group_info.0 %}
-        {% render_field form|getfield:sub_name bulk_nullable=True %}
+        {# Not nullable: these sub-fields aren't in form.nullable_fields (see get_form()),
+           so a "Set null" control here would silently do nothing when checked. #}
+        {% render_field form|getfield:sub_name %}
       {% endfor %}
     {% endwith %}
   {% elif field.name in form.custom_object_type_rendered_names %}

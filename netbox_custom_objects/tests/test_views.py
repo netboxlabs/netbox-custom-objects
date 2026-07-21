@@ -449,6 +449,38 @@ class CustomObjectViewTestCase(
         """Regression #620: CustomObjectBulkEditView.get_queryset()."""
         self._assert_get_queryset_does_not_full_scan(views.CustomObjectBulkEditView)
 
+    def test_bulk_edit_form_nullable_fields_includes_scalar_fields(self):
+        """Regression #621: bulk edit must offer 'Set null' for real, nullable fields."""
+        request = RequestFactory().get('/')
+        request.user = self.user
+
+        view = views.CustomObjectBulkEditView()
+        view.setup(request, custom_object_type=self.custom_object_type.slug)
+
+        self.assertIn('description', view.form.nullable_fields)
+        self.assertIn('count', view.form.nullable_fields)
+
+    def test_bulk_edit_set_null_clears_field(self):
+        """Regression #621: checking 'Set null' for a field must clear it across selected objects."""
+        content_type = ContentType.objects.get_for_model(self.model)
+        obj_perm = ObjectPermission(name='bulk-edit-set-null', actions=['view', 'change'])
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        obj_perm.object_types.add(content_type)
+
+        bulk_edit_url = self._get_url('bulk_edit')
+        response = self.client.post(bulk_edit_url, data={
+            '_apply': 'Apply',
+            'pk': [self.instance1.pk, self.instance2.pk],
+            '_nullify': ['description'],
+            'description': '',
+        })
+        self.assertHttpStatus(response, 302)
+        self.instance1.refresh_from_db()
+        self.instance2.refresh_from_db()
+        self.assertIsNone(self.instance1.description)
+        self.assertIsNone(self.instance2.description)
+
     def test_bulk_delete_get_queryset_does_not_full_scan(self):
         """Regression #620: CustomObjectBulkDeleteView.get_queryset()."""
         self._assert_get_queryset_does_not_full_scan(views.CustomObjectBulkDeleteView)

@@ -1196,6 +1196,14 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
             "custom_object_type_coordinates_fields": {},
         }
 
+        # Names added here get a "Set null" checkbox in bulk edit (core's nullable_fields
+        # mechanism). Only fields backed by a single real, nullable model column/relation
+        # are included: scalar types, non-polymorphic object/multiobject, and coordinates'
+        # two sub-columns. Polymorphic object/multiobject fields are excluded -- their form
+        # sub-fields (e.g. "<name>__ct") don't correspond 1:1 to a real model field name, so
+        # core's generic nullify lookup (via _meta.get_field()) can't resolve them safely.
+        nullable_field_names = []
+
         for field in self.custom_object_type.fields.prefetch_related('related_object_types').all():
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
 
@@ -1210,6 +1218,7 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
                     sub_names.append(sub_name)
                 # (latitude_name, longitude_name) for cross-field validation below.
                 attrs["custom_object_type_coordinates_fields"][field.name] = tuple(sub_names)
+                nullable_field_names.extend(sub_names)
                 continue
 
             # Polymorphic single-object: scope-style type-selector + object-picker pair
@@ -1248,10 +1257,13 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
                 form_field.widget.is_required = False
                 form_field.initial = None
                 attrs[field.name] = form_field
+                nullable_field_names.append(field.name)
             except NotImplementedError:
                 logger.debug(
                     "bulk edit form: {} field is not supported".format(field.name)
                 )
+
+        attrs["nullable_fields"] = tuple(nullable_field_names)
 
         poly_obj_field_map_ref = attrs["_poly_obj_field_map"]
 
