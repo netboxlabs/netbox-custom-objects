@@ -453,6 +453,73 @@ class CustomObjectViewTestCase(
         """Regression #620: CustomObjectBulkDeleteView.get_queryset()."""
         self._assert_get_queryset_does_not_full_scan(views.CustomObjectBulkDeleteView)
 
+    def test_bulk_import_omits_hidden_required_field_from_form(self):
+        """
+        Regression #626: a Required+Hidden field must be omitted from the bulk import
+        form (not disabled, which ignores submitted data and always fails "This field
+        is required"). Own COT used to avoid leaking model-cache state into other tests.
+        """
+        cot = self.create_custom_object_type(name='HiddenFieldImportTest', slug='hidden-field-import-test')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True,
+        )
+        self.create_custom_object_type_field(
+            cot,
+            name='identifier',
+            label='Identifier',
+            type='text',
+            required=True,
+            ui_editable='hidden',
+        )
+
+        request = RequestFactory().post('/')
+        request.user = self.user
+
+        view = views.CustomObjectBulkImportView()
+        view.setup(request, custom_object_type=cot.slug)
+
+        # The hidden required field must not appear in the import form at all...
+        self.assertNotIn('identifier', view.model_form.base_fields)
+
+        # ...so a row that omits it (as any importer must, since it can't be set) is valid.
+        model = view.queryset.model
+        form = view.model_form(data={'name': 'Imported Instance'}, instance=model())
+        self.assertTrue(form.is_valid(), form.errors)
+
+    def test_bulk_import_silently_ignores_value_for_hidden_field(self):
+        """
+        Regression #626: matches the original bug report's payload (a value supplied
+        for the hidden field). It must not error, and the value must be silently
+        dropped rather than written, matching core NetBox's own CSV import behavior.
+        """
+        cot = self.create_custom_object_type(name='HiddenFieldImportTest2', slug='hidden-field-import-test-2')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True,
+        )
+        self.create_custom_object_type_field(
+            cot,
+            name='identifier',
+            label='Identifier',
+            type='text',
+            required=True,
+            ui_editable='hidden',
+        )
+
+        request = RequestFactory().post('/')
+        request.user = self.user
+
+        view = views.CustomObjectBulkImportView()
+        view.setup(request, custom_object_type=cot.slug)
+
+        model = view.queryset.model
+        form = view.model_form(
+            data={'name': 'Imported Instance', 'identifier': '12345'}, instance=model(),
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+
+        instance = form.save()
+        self.assertIsNone(instance.identifier)
+
     def test_bulk_edit_select_all_respects_full_queryset(self):
         """Regression #380: 'select all matching query' must edit all objects, not just the current page.
 
