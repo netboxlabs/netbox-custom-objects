@@ -1196,12 +1196,9 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
             "custom_object_type_coordinates_fields": {},
         }
 
-        # Names added here get a "Set null" checkbox in bulk edit (core's nullable_fields
-        # mechanism). Only fields backed by a single real, nullable model column/relation
-        # are included: scalar types, non-polymorphic object/multiobject, and coordinates'
-        # two sub-columns. Polymorphic object/multiobject fields are excluded -- their form
-        # sub-fields (e.g. "<name>__ct") don't correspond 1:1 to a real model field name, so
-        # core's generic nullify lookup (via _meta.get_field()) can't resolve them safely.
+        # Names added here get a "Set null" checkbox (nullable_fields). Polymorphic fields
+        # are excluded: their sub-field names (e.g. "<name>__ct") aren't real model fields,
+        # so core's generic nullify lookup can't resolve them.
         nullable_field_names = []
 
         for field in self.custom_object_type.fields.prefetch_related('related_object_types').all():
