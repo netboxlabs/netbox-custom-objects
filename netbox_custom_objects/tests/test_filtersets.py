@@ -875,6 +875,11 @@ class ScalarFieldFiltersetTestCase(CustomObjectsTestCase):
     def test_no_filter_returns_all(self):
         self.assertEqual(self._filterset({}).qs.count(), self.total_count)
 
+    def test_filter_by_id_returns_only_matching_object(self):
+        """Regression #628: ?id=<pk> was silently ignored, returning every row."""
+        pks = list(self._filterset({'id': [str(self.obj_match.pk)]}).qs.values_list('pk', flat=True))
+        self.assertEqual(pks, [self.obj_match.pk])
+
 
 class TextFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
     """CharFilter with icontains is generated for TYPE_TEXT fields."""
@@ -1444,44 +1449,6 @@ class CoordinatesFieldFiltersetTestCase(CustomObjectsTestCase, TestCase):
         )
         self.assertIn(self.obj2.pk, pks)
         self.assertNotIn(self.obj1.pk, pks)
-
-    def test_no_filter_returns_all(self):
-        self.assertEqual(self._filterset({}).qs.count(), 2)
-
-
-# ---------------------------------------------------------------------------
-# id filter -- regression #628
-# ---------------------------------------------------------------------------
-
-
-class IdFilterTestCase(CustomObjectsTestCase, TestCase):
-    """
-    Regression #628: ?id=<pk> was silently ignored on a Custom Object's REST API list
-    endpoint, returning every row instead of the matching one. The dynamic FilterSet
-    disables django-filter's Meta.fields auto-generation (fields=[]) and adds every
-    other filter explicitly by iterating CustomObjectTypeField records -- which never
-    include the base `id` column, so no filter was ever registered for it.
-
-    Uses a Custom Object Type with no fields at all, matching the exact reproduction
-    steps in the reported bug (a plain COT with two instances).
-    """
-
-    @classmethod
-    def setUpTestData(cls):
-        super().setUpTestData()
-        cls.cot = cls.create_custom_object_type(name='IdFilterFS', slug='id-filter-fs')
-
-        model = cls.cot.get_model()
-        cls.obj1 = model.objects.create()
-        cls.obj2 = model.objects.create()
-
-    def _filterset(self, params):
-        model = self.cot.get_model()
-        return get_filterset_class(model)(params, model.objects.all())
-
-    def test_filter_by_id_returns_only_matching_object(self):
-        pks = list(self._filterset({'id': [str(self.obj1.pk)]}).qs.values_list('pk', flat=True))
-        self.assertEqual(pks, [self.obj1.pk])
 
     def test_no_filter_returns_all(self):
         self.assertEqual(self._filterset({}).qs.count(), 2)
