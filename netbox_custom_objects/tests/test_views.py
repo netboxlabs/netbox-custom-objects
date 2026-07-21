@@ -481,6 +481,58 @@ class CustomObjectViewTestCase(
         self.assertIsNone(self.instance1.description)
         self.assertIsNone(self.instance2.description)
 
+    def test_bulk_edit_set_null_clears_object_and_multiobject_fields(self):
+        """
+        Regression #621: non-polymorphic object/multiobject fields must also support
+        'Set null' in bulk edit -- they map to a real, nullable FK column / M2M relation
+        (like core's Site.asns), unlike polymorphic fields which are excluded.
+        """
+        from dcim.models import Site
+
+        cot = self.create_custom_object_type(name='ObjNullTest', slug='obj-null-test')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name='site', label='Site', type='object',
+            related_object_type=self.get_site_object_type(),
+        )
+        self.create_custom_object_type_field(
+            cot, name='sites', label='Sites', type='multiobject',
+            related_object_type=self.get_site_object_type(),
+        )
+
+        model = cot.get_model()
+        site_a = Site.objects.create(name='Site A', slug='site-a')
+        site_b = Site.objects.create(name='Site B', slug='site-b')
+        obj1 = model.objects.create(name='Obj 1', site=site_a)
+        obj1.sites.set([site_a, site_b])
+        obj2 = model.objects.create(name='Obj 2', site=site_a)
+        obj2.sites.set([site_a, site_b])
+
+        content_type = ContentType.objects.get_for_model(model)
+        obj_perm = ObjectPermission(name='bulk-edit-set-null-obj', actions=['view', 'change'])
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        obj_perm.object_types.add(content_type)
+
+        url_format = 'plugins:{}:customobject_{{}}'.format(model._meta.app_label)
+        bulk_edit_url = reverse(url_format.format('bulk_edit'), kwargs={'custom_object_type': cot.slug})
+        response = self.client.post(bulk_edit_url, data={
+            '_apply': 'Apply',
+            'pk': [obj1.pk, obj2.pk],
+            '_nullify': ['site', 'sites'],
+            'site': '',
+            'sites': [],
+        })
+        self.assertHttpStatus(response, 302)
+        obj1.refresh_from_db()
+        obj2.refresh_from_db()
+        self.assertIsNone(obj1.site)
+        self.assertIsNone(obj2.site)
+        self.assertEqual(obj1.sites.count(), 0)
+        self.assertEqual(obj2.sites.count(), 0)
+
     def test_bulk_delete_get_queryset_does_not_full_scan(self):
         """Regression #620: CustomObjectBulkDeleteView.get_queryset()."""
         self._assert_get_queryset_does_not_full_scan(views.CustomObjectBulkDeleteView)
