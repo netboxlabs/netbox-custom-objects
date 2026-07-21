@@ -2257,3 +2257,40 @@ class CoordinatesFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
         obj.refresh_from_db()
         self.assertIsNone(obj.location_latitude)
         self.assertIsNone(obj.location_longitude)
+
+
+class IdFilterAPITest(CustomObjectsTestCase, TestCase):
+    """
+    Regression #628: GET /api/plugins/custom-objects/<slug>/?id=<pk> returned every
+    object instead of just the matching one. Reproduces the exact reported steps: a
+    Custom Object Type with no fields at all, two instances, filtered by id.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from netbox_custom_objects.models import CustomObjectType
+        self.cot = CustomObjectType.objects.create(name='IdFilterAPI', slug='id-filter-api')
+        self.model = self.cot.get_model()
+        token = create_token(self.user)
+        self.header = {'HTTP_AUTHORIZATION': f'Token {token}'}
+        self.client = APIClient()
+
+    def _list_url(self):
+        return reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-list',
+            kwargs={'custom_object_type': self.cot.slug},
+        )
+
+    def test_filter_by_id_returns_only_matching_object(self):
+        obj1 = self.model.objects.create()
+        obj2 = self.model.objects.create()
+        perm = ObjectPermission(name='view-id-filter', actions=['view'])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+        response = self.client.get(self._list_url(), {'id': obj1.pk}, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        ids = [r['id'] for r in response.data['results']]
+        self.assertEqual(ids, [obj1.pk])
+        self.assertNotIn(obj2.pk, ids)
