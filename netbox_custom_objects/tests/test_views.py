@@ -459,6 +459,10 @@ class CustomObjectViewTestCase(
 
         self.assertIn('description', view.form.nullable_fields)
         self.assertIn('count', view.form.nullable_fields)
+        # 'name' is required=True; a required field must never offer "Set null",
+        # since every custom object column is nullable at the DB level regardless
+        # of the field's own required flag.
+        self.assertNotIn('name', view.form.nullable_fields)
 
     def test_bulk_edit_set_null_clears_field(self):
         """Regression #621: checking 'Set null' for a field must clear it across selected objects."""
@@ -1324,6 +1328,35 @@ class CoordinatesFieldViewTest(CustomObjectsTestCase, TestCase):
         # Values are unchanged because the form failed validation.
         self.assertEqual(obj.location_latitude, Decimal("40.712800"))
         self.assertEqual(obj.location_longitude, Decimal("-74.006000"))
+
+    def test_bulk_edit_coordinates_not_individually_nullable(self):
+        """Regression: latitude/longitude must not get independent Set Null controls."""
+        request = RequestFactory().get('/')
+        request.user = self.user
+
+        view = views.CustomObjectBulkEditView()
+        view.setup(request, custom_object_type=self.cot.slug)
+        self.assertNotIn('location_latitude', view.form.nullable_fields)
+        self.assertNotIn('location_longitude', view.form.nullable_fields)
+
+    def test_bulk_edit_set_null_clears_coordinates_atomically(self):
+        """A single 'Set null' checkbox for the coordinates field clears both halves."""
+        from decimal import Decimal
+        obj = self.model.objects.create(
+            name="Existing2",
+            location_latitude=Decimal("40.712800"),
+            location_longitude=Decimal("-74.006000"),
+        )
+        data = {
+            "pk": [obj.pk],
+            "_apply": "Apply",
+            "_nullify": ["location"],
+        }
+        response = self.client.post(self._bulk_edit_url(), data)
+        self.assertEqual(response.status_code, 302, getattr(response, "content", b""))
+        obj.refresh_from_db()
+        self.assertIsNone(obj.location_latitude)
+        self.assertIsNone(obj.location_longitude)
 
 
 class QuickAddViewTestCase(CustomObjectsTestCase, TestCase):

@@ -1194,11 +1194,15 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
             "custom_object_type_rendered_names": set(),
             # field_name → (latitude_field_name, longitude_field_name)
             "custom_object_type_coordinates_fields": {},
+            # latitude_field_name → (sub_names, field_label, field_name); drives a single
+            # shared "Set null" control so lat/long clear atomically (see post_save_operations).
+            "custom_object_type_coordinates_groups": {},
         }
 
-        # Names added here get a "Set null" checkbox (nullable_fields). Polymorphic fields
-        # are excluded: their sub-field names (e.g. "<name>__ct") aren't real model fields,
-        # so core's generic nullify lookup can't resolve them.
+        # Names added here get a "Set null" checkbox (nullable_fields). Required fields are
+        # excluded, matching core's convention of never offering Set Null on a required
+        # field. Polymorphic fields are also excluded: their sub-field names (e.g. "<name>__ct")
+        # aren't real model fields, so core's generic nullify lookup can't resolve them.
         nullable_field_names = []
 
         for field in self.custom_object_type.fields.prefetch_related('related_object_types').all():
@@ -1215,7 +1219,16 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
                     sub_names.append(sub_name)
                 # (latitude_name, longitude_name) for cross-field validation below.
                 attrs["custom_object_type_coordinates_fields"][field.name] = tuple(sub_names)
-                nullable_field_names.extend(sub_names)
+                # Not added to nullable_field_names: latitude/longitude are one logical
+                # field, so a shared checkbox (below) clears both atomically instead of
+                # offering two independent "Set null" controls for a single value.
+                if not field.required:
+                    field_label = field.label or field.name.replace("_", " ").title()
+                    attrs["custom_object_type_coordinates_groups"][sub_names[0]] = (
+                        tuple(sub_names), field_label, field.name,
+                    )
+                    for sub_name in sub_names:
+                        attrs["custom_object_type_rendered_names"].add(sub_name)
                 continue
 
             # Polymorphic single-object: scope-style type-selector + object-picker pair
@@ -1254,7 +1267,8 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
                 form_field.widget.is_required = False
                 form_field.initial = None
                 attrs[field.name] = form_field
-                nullable_field_names.append(field.name)
+                if not field.required:
+                    nullable_field_names.append(field.name)
             except NotImplementedError:
                 logger.debug(
                     "bulk edit form: {} field is not supported".format(field.name)
@@ -1321,6 +1335,20 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
 
     def post_save_operations(self, form, obj):
         super().post_save_operations(form, obj)
+
+        # Coordinates: a single "Set null" checkbox clears both lat/long sub-columns
+        # atomically. They're deliberately absent from form.nullable_fields (see
+        # get_form()), so core's generic per-field nullify loop never touches them --
+        # handled here instead, reading the same raw _nullify POST data core parses.
+        nullified = self.request.POST.getlist('_nullify')
+        coords_needs_save = False
+        for field_name, (lat_name, lon_name) in form.custom_object_type_coordinates_fields.items():
+            if field_name in nullified:
+                setattr(obj, lat_name, None)
+                setattr(obj, lon_name, None)
+                coords_needs_save = True
+        if coords_needs_save:
+            obj.save()
 
         # Apply polymorphic single-object scope fields: read the obj sub-field
         needs_save = False
