@@ -1894,6 +1894,22 @@ class OwnerAPITest(CustomObjectsTestCase, TestCase):
         self.assertIn(obj_x.pk, ids)
         self.assertNotIn(obj_y.pk, ids)
 
+    def test_filter_by_id(self):
+        """Regression #628: ?id=<pk> must return only the matching instance."""
+        obj_a = self.model.objects.create()
+        obj_b = self.model.objects.create()
+        self._add_perm('view', self.model)
+
+        response = self.client.get(
+            self._list_url(),
+            {'id': obj_a.pk},
+            **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        ids = [r['id'] for r in response.data['results']]
+        self.assertIn(obj_a.pk, ids)
+        self.assertNotIn(obj_b.pk, ids)
+
 
 class ConfigContextAPITest(CustomObjectsTestCase, TestCase):
     """REST API exposure of local_context_data for config-context-enabled types (#98)."""

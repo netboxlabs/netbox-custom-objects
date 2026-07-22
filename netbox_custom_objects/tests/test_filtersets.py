@@ -875,6 +875,11 @@ class ScalarFieldFiltersetTestCase(CustomObjectsTestCase):
     def test_no_filter_returns_all(self):
         self.assertEqual(self._filterset({}).qs.count(), self.total_count)
 
+    def test_filter_by_id_returns_only_matching_object(self):
+        """Regression #628: ?id=<pk> was silently ignored, returning every row."""
+        pks = list(self._filterset({'id': [str(self.obj_match.pk)]}).qs.values_list('pk', flat=True))
+        self.assertEqual(pks, [self.obj_match.pk])
+
 
 class TextFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
     """CharFilter with icontains is generated for TYPE_TEXT fields."""

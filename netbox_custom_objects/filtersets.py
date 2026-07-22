@@ -405,14 +405,15 @@ def get_filterset_class(model):
     """
     Create and return a filterset class for the given custom object model.
     """
-    # fields=[] disables auto-generation; all filters are added explicitly below
-    # via build_filter_for_field so there are no shadowed duplicates.
+    # id is the only base column filterable via Meta.fields auto-generation (matching
+    # core FilterSets); every other filter is added explicitly below via
+    # build_filter_for_field, so there are no shadowed duplicates.
     meta = type(
         "Meta",
         (),
         {
             "model": model,
-            "fields": [],
+            "fields": ["id"],
         },
     )
 
