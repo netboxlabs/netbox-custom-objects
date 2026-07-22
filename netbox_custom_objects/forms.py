@@ -248,6 +248,12 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
     class Meta:
         model = CustomObjectTypeField
         fields = '__all__'
+        # deprecated/deprecated_since/scheduled_removal are set via the portable-schema
+        # import mechanism (or directly via the REST API), never through this form --
+        # excluded here so an unrelated edit doesn't silently reset them to their
+        # defaults. schema_id needs no entry: it's excluded automatically via the
+        # model field's editable=False.
+        exclude = ('deprecated', 'deprecated_since', 'scheduled_removal')
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
