@@ -23,11 +23,30 @@
         <h3 class="col-9 offset-3 mb-3 h4">{{ group_info.1 }}</h3>
       </div>
       {% for sub_name in group_info.0 %}
-        {% render_field form|getfield:sub_name bulk_nullable=True %}
+        {# Not in form.nullable_fields (see get_form()) -- no bulk_nullable control. #}
+        {% render_field form|getfield:sub_name %}
       {% endfor %}
     {% endwith %}
+  {% elif field.name in form.custom_object_type_coordinates_groups %}
+    {# Coordinates group: heading + lat/long sub-fields + one shared Set Null control #}
+    {% with group_info=form.custom_object_type_coordinates_groups|dict_get:field.name %}
+      <div class="row">
+        <h3 class="col-9 offset-3 mb-3 h4">{{ group_info.1 }}</h3>
+      </div>
+      {% for sub_name in group_info.0 %}
+        {% render_field form|getfield:sub_name %}
+      {% endfor %}
+      <div class="row mb-3">
+        <div class="col offset-3">
+          <div class="form-check my-1">
+            <input type="checkbox" class="form-check-input" name="_nullify" value="{{ group_info.2 }}" id="nullify_{{ group_info.2 }}">
+            <label for="nullify_{{ group_info.2 }}" class="form-check-label">{% trans "Set Null" %}</label>
+          </div>
+        </div>
+      </div>
+    {% endwith %}
   {% elif field.name in form.custom_object_type_rendered_names %}
-    {# Non-group-start poly sub-field: already rendered via its group — skip. #}
+    {# Non-group-start poly/coordinates sub-field: already rendered via its group — skip. #}
   {% elif field.name in form.nullable_fields %}
     {% render_field field bulk_nullable=True %}
   {% else %}

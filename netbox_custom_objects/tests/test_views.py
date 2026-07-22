@@ -449,6 +449,94 @@ class CustomObjectViewTestCase(
         """Regression #620: CustomObjectBulkEditView.get_queryset()."""
         self._assert_get_queryset_does_not_full_scan(views.CustomObjectBulkEditView)
 
+    def test_bulk_edit_form_nullable_fields_includes_scalar_fields(self):
+        """Regression #621: bulk edit must offer 'Set null' for real, nullable fields."""
+        request = RequestFactory().get('/')
+        request.user = self.user
+
+        view = views.CustomObjectBulkEditView()
+        view.setup(request, custom_object_type=self.custom_object_type.slug)
+
+        self.assertIn('description', view.form.nullable_fields)
+        self.assertIn('count', view.form.nullable_fields)
+        # 'name' is required=True; a required field must never offer "Set null",
+        # since every custom object column is nullable at the DB level regardless
+        # of the field's own required flag.
+        self.assertNotIn('name', view.form.nullable_fields)
+
+    def test_bulk_edit_set_null_clears_field(self):
+        """Regression #621: checking 'Set null' for a field must clear it across selected objects."""
+        content_type = ContentType.objects.get_for_model(self.model)
+        obj_perm = ObjectPermission(name='bulk-edit-set-null', actions=['view', 'change'])
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        obj_perm.object_types.add(content_type)
+
+        bulk_edit_url = self._get_url('bulk_edit')
+        response = self.client.post(bulk_edit_url, data={
+            '_apply': 'Apply',
+            'pk': [self.instance1.pk, self.instance2.pk],
+            '_nullify': ['description'],
+            'description': '',
+        })
+        self.assertHttpStatus(response, 302)
+        self.instance1.refresh_from_db()
+        self.instance2.refresh_from_db()
+        self.assertIsNone(self.instance1.description)
+        self.assertIsNone(self.instance2.description)
+
+    def test_bulk_edit_set_null_clears_object_and_multiobject_fields(self):
+        """
+        Regression #621: non-polymorphic object/multiobject fields must also support
+        'Set null' in bulk edit -- they map to a real, nullable FK column / M2M relation
+        (like core's Site.asns), unlike polymorphic fields which are excluded.
+        """
+        from dcim.models import Site
+
+        cot = self.create_custom_object_type(name='ObjNullTest', slug='obj-null-test')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name='site', label='Site', type='object',
+            related_object_type=self.get_site_object_type(),
+        )
+        self.create_custom_object_type_field(
+            cot, name='sites', label='Sites', type='multiobject',
+            related_object_type=self.get_site_object_type(),
+        )
+
+        model = cot.get_model()
+        site_a = Site.objects.create(name='Site A', slug='site-a')
+        site_b = Site.objects.create(name='Site B', slug='site-b')
+        obj1 = model.objects.create(name='Obj 1', site=site_a)
+        obj1.sites.set([site_a, site_b])
+        obj2 = model.objects.create(name='Obj 2', site=site_a)
+        obj2.sites.set([site_a, site_b])
+
+        content_type = ContentType.objects.get_for_model(model)
+        obj_perm = ObjectPermission(name='bulk-edit-set-null-obj', actions=['view', 'change'])
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        obj_perm.object_types.add(content_type)
+
+        url_format = 'plugins:{}:customobject_{{}}'.format(model._meta.app_label)
+        bulk_edit_url = reverse(url_format.format('bulk_edit'), kwargs={'custom_object_type': cot.slug})
+        response = self.client.post(bulk_edit_url, data={
+            '_apply': 'Apply',
+            'pk': [obj1.pk, obj2.pk],
+            '_nullify': ['site', 'sites'],
+            'site': '',
+            'sites': [],
+        })
+        self.assertHttpStatus(response, 302)
+        obj1.refresh_from_db()
+        obj2.refresh_from_db()
+        self.assertIsNone(obj1.site)
+        self.assertIsNone(obj2.site)
+        self.assertEqual(obj1.sites.count(), 0)
+        self.assertEqual(obj2.sites.count(), 0)
+
     def test_bulk_delete_get_queryset_does_not_full_scan(self):
         """Regression #620: CustomObjectBulkDeleteView.get_queryset()."""
         self._assert_get_queryset_does_not_full_scan(views.CustomObjectBulkDeleteView)
@@ -1240,6 +1328,35 @@ class CoordinatesFieldViewTest(CustomObjectsTestCase, TestCase):
         # Values are unchanged because the form failed validation.
         self.assertEqual(obj.location_latitude, Decimal("40.712800"))
         self.assertEqual(obj.location_longitude, Decimal("-74.006000"))
+
+    def test_bulk_edit_coordinates_not_individually_nullable(self):
+        """Regression: latitude/longitude must not get independent Set Null controls."""
+        request = RequestFactory().get('/')
+        request.user = self.user
+
+        view = views.CustomObjectBulkEditView()
+        view.setup(request, custom_object_type=self.cot.slug)
+        self.assertNotIn('location_latitude', view.form.nullable_fields)
+        self.assertNotIn('location_longitude', view.form.nullable_fields)
+
+    def test_bulk_edit_set_null_clears_coordinates_atomically(self):
+        """A single 'Set null' checkbox for the coordinates field clears both halves."""
+        from decimal import Decimal
+        obj = self.model.objects.create(
+            name="Existing2",
+            location_latitude=Decimal("40.712800"),
+            location_longitude=Decimal("-74.006000"),
+        )
+        data = {
+            "pk": [obj.pk],
+            "_apply": "Apply",
+            "_nullify": ["location"],
+        }
+        response = self.client.post(self._bulk_edit_url(), data)
+        self.assertEqual(response.status_code, 302, getattr(response, "content", b""))
+        obj.refresh_from_db()
+        self.assertIsNone(obj.location_latitude)
+        self.assertIsNone(obj.location_longitude)
 
 
 class QuickAddViewTestCase(CustomObjectsTestCase, TestCase):

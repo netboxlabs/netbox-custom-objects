@@ -259,7 +259,7 @@ def custom_object_bulk_edit_button(
         url = None
 
     return {
-        "label": "Bulk Edit",
+        "label": "Edit Selected",
         "htmx_navigation": context.get("htmx_navigation"),
         "url": url,
     }
@@ -280,7 +280,7 @@ def custom_object_bulk_delete_button(
         url = None
 
     return {
-        "label": "Bulk Delete",
+        "label": "Delete Selected",
         "htmx_navigation": context.get("htmx_navigation"),
         "url": url,
     }
