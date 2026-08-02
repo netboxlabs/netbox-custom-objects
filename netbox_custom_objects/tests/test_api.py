@@ -2067,3 +2067,77 @@ class CoordinatesFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
         obj.refresh_from_db()
         self.assertIsNone(obj.location_latitude)
         self.assertIsNone(obj.location_longitude)
+
+
+class URLFieldLinkTitleAPITest(CustomObjectsTestCase, NetBoxTestCase):
+    """REST API behaviour for the url field type's link-title support (issue #496)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.cot = CustomObjectType.objects.create(
+            name="LinkObject",
+            verbose_name_plural="Link Objects",
+            slug="link-objects",
+        )
+        cls.create_custom_object_type_field(
+            cls.cot, name="name", type="text", primary=True, required=True
+        )
+        cls.create_custom_object_type_field(cls.cot, name="website", type="url")
+        cls.model = cls.cot.get_model()
+
+    def setUp(self):
+        super().setUp()
+        self.user = create_test_user("linkuser")
+        self.client = APIClient()
+        token_key = create_token(self.user)
+        self.header = {"HTTP_AUTHORIZATION": f"Token {token_key}"}
+        perm = ObjectPermission(
+            name="link all", actions=["view", "add", "change", "delete"]
+        )
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+    def _list_url(self):
+        return reverse(
+            "plugins-api:netbox_custom_objects-api:customobject-list",
+            kwargs={"custom_object_type": self.cot.slug},
+        )
+
+    def _detail_url(self, instance):
+        return reverse(
+            "plugins-api:netbox_custom_objects-api:customobject-detail",
+            kwargs={"pk": instance.pk, "custom_object_type": self.cot.slug},
+        )
+
+    def test_serializer_exposes_flat_url_title(self):
+        """The URL and title columns are serialized as two flat fields."""
+        obj = self.model.objects.create(
+            name="Box", website="https://example.com/", website_title="Example Site",
+        )
+        response = self.client.get(self._detail_url(obj), **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(response.data["website"], "https://example.com/")
+        self.assertEqual(response.data["website_title"], "Example Site")
+
+    def test_create_with_url_and_title(self):
+        """Creating an object via the API persists both the URL and title columns."""
+        data = {
+            "name": "Created box",
+            "website": "https://example.com/",
+            "website_title": "Example Site",
+        }
+        response = self.client.post(self._list_url(), data, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        obj = self.model.objects.get(pk=response.data["id"])
+        self.assertEqual(obj.website, "https://example.com/")
+        self.assertEqual(obj.website_title, "Example Site")
+
+    def test_create_with_url_and_no_title_allowed(self):
+        """Creating with a URL and no title is accepted (no both-required rule)."""
+        data = {"name": "Created box", "website": "https://example.com/"}
+        response = self.client.post(self._list_url(), data, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        obj = self.model.objects.get(pk=response.data["id"])
+        self.assertEqual(obj.website, "https://example.com/")
+        self.assertIsNone(obj.website_title)

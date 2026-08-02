@@ -1072,6 +1072,67 @@ class CoordinatesFieldViewTest(CustomObjectsTestCase, TestCase):
         self.assertEqual(obj.location_longitude, Decimal("-74.006000"))
 
 
+class URLFieldLinkTitleViewTest(CustomObjectsTestCase, TestCase):
+    """UI form behaviour for the url field type's link-title support (issue #496)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.cot = CustomObjectType.objects.create(
+            name="LinkView",
+            verbose_name_plural="Link Views",
+            slug="link-views",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.cot, name="name", type="text", primary=True, required=True
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.cot, name="website", type="url"
+        )
+        cls.model = cls.cot.get_model()
+
+    def setUp(self):
+        super().setUp()
+        perm = ObjectPermission(
+            name="link view all", actions=["view", "add", "change", "delete"]
+        )
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+    def _add_url(self):
+        return reverse(
+            "plugins:netbox_custom_objects:customobject_add",
+            kwargs={"custom_object_type": self.cot.slug},
+        )
+
+    def test_add_form_renders_url_and_title_inputs(self):
+        response = self.client.get(self._add_url())
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "website")
+        self.assertContains(response, "website_title")
+
+    def test_create_valid_url_with_title(self):
+        data = {
+            "name": "Box",
+            "website": "https://example.com/",
+            "website_title": "Example Site",
+        }
+        response = self.client.post(self._add_url(), data)
+        self.assertEqual(response.status_code, 302, getattr(response, "content", b""))
+        obj = self.model.objects.get(name="Box")
+        self.assertEqual(obj.website, "https://example.com/")
+        self.assertEqual(obj.website_title, "Example Site")
+
+    def test_create_valid_url_with_no_title(self):
+        """A URL with no title is accepted (no both-required rule, unlike coordinates)."""
+        data = {"name": "Box", "website": "https://example.com/"}
+        response = self.client.post(self._add_url(), data)
+        self.assertEqual(response.status_code, 302, getattr(response, "content", b""))
+        obj = self.model.objects.get(name="Box")
+        self.assertEqual(obj.website, "https://example.com/")
+        self.assertFalse(obj.website_title)
+
+
 class QuickAddViewTestCase(CustomObjectsTestCase, TestCase):
     """
     Tests for the quick-add flow in CustomObjectEditView.

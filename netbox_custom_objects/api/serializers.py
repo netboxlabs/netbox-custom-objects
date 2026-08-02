@@ -502,6 +502,11 @@ def get_serializer_class(model, skip_object_fields=False):
         if field.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
             custom_field_names += [f"{field.name}_latitude", f"{field.name}_longitude"]
             continue
+        # URL fields expand into the URL itself plus an optional title column;
+        # expose both flat, mirroring the coordinates treatment above.
+        if field.type == CustomObjectFieldTypeChoices.TYPE_URL:
+            custom_field_names += [field.name, f"{field.name}_title"]
+            continue
         if field.name not in model_field_names:
             continue  # excluded during model generation (e.g. broken FK)
         if skip_object_fields and field.type in [

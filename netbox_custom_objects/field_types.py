@@ -524,17 +524,62 @@ class DateTimeFieldType(FieldType):
 
 
 class URLFieldType(FieldType):
+    """
+    A URL field. Expands into two real DB columns: ``<name>``, the URL itself, and
+    ``<name>_title``, an optional human-readable title shown in place of the raw URL
+    on an object's detail page. Unlike CoordinatesFieldType, the primary ``<name>``
+    column keeps behaving like any other single-value column (unique/default/regex
+    validation all still apply to it) -- only the title is new.
+    """
+
     graphql_annotation = str
+
+    @staticmethod
+    def title_field_name(field):
+        return f"{field.name}_title"
 
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
-        return models.URLField(null=True, blank=True, **field_kwargs)
+        return {
+            field.name: models.URLField(null=True, blank=True, **field_kwargs),
+            self.title_field_name(field): models.CharField(
+                max_length=200,
+                null=True,
+                blank=True,
+                help_text=_("Human-readable text shown instead of the raw URL."),
+            ),
+        }
 
     def get_form_field(self, field, **kwargs):
         return LaxURLField(
             assume_scheme="https", required=field.required, initial=field.default
         )
+
+    def get_form_fields(self, field):
+        """
+        Return the URL and title form fields, keyed by their backing column names
+        (mirrors CoordinatesFieldType.get_form_fields).
+        """
+        base_label = field.label or field.name.replace("_", " ").title()
+        url_field = LaxURLField(
+            label=base_label,
+            assume_scheme="https",
+            required=field.required,
+            initial=field.default,
+        )
+        title_field = forms.CharField(
+            label=f"{base_label} ({_('link title')})",
+            required=False,
+            max_length=200,
+        )
+        if field.ui_editable != CustomFieldUIEditableChoices.YES:
+            url_field.disabled = True
+            title_field.disabled = True
+        return {
+            field.name: url_field,
+            self.title_field_name(field): title_field,
+        }
 
     def get_filterform_field(self, field, **kwargs):
         return forms.CharField(

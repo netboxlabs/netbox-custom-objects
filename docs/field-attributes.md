@@ -13,7 +13,7 @@ The following attributes are available when creating or editing a Custom Object 
 | `boolean` | True/false |
 | `date` | Date |
 | `datetime` | Date and time |
-| `url` | URL |
+| `url` | URL, with an optional link title |
 | `json` | Arbitrary JSON value |
 | `select` | Single selection from a choice set |
 | `multiselect` | Multiple selections from a choice set |
@@ -107,3 +107,24 @@ Behaviour:
 - **Map link.** Detail views render the coordinates with a **Map** button that opens the location
   using NetBox's `MAPS_URL` configuration parameter (Google Maps by default).
 - `Must be unique` and `Default` are not supported for `coordinates` fields.
+
+## URL Fields
+
+Field type: `url`
+
+A `url` field stores the URL value plus an optional human-readable **link title**.
+Adding one `url` field named `website` creates two backing columns:
+
+- `website` — the URL itself
+- `website_title` — optional display text shown in place of the raw URL on the
+  object's detail page
+
+Behaviour:
+
+- **Detail page only.** The title is used as the visible link text on the object
+  detail page. List/table views continue to show the raw URL as plain text.
+- **Optional independently.** The title has no relationship to the URL value —
+  setting one without the other is allowed and harmless.
+- **REST API.** The pair is exposed as two flat fields, `<name>` and `<name>_title`.
+- `Must be unique` and `Default` continue to apply to the URL value itself, exactly
+  as for any other `url` field.

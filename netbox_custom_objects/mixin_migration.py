@@ -47,6 +47,14 @@ def _expected_base_fields(cot, model=None):
     (f.name).  This is equivalent to matching by f.column for user-defined COT
     fields because they are never created with db_column overrides.
 
+    Multi-column custom field types (e.g. CoordinatesFieldType's "_latitude"/
+    "_longitude", URLFieldType's "_title") are NOT excluded here, since their
+    backing columns' attribute names never equal the user field's own f.name --
+    so this heal pass also covers them as a deliberate side effect. This is why
+    a newly introduced sub-column for one of those types needs no dedicated
+    migration/upgrade code: as long as it's nullable, the next post_migrate run
+    (or `upgrade_custom_objects`) auto-adds it to every existing COT table.
+
     Pass *model* to avoid a second get_model() call when the caller already
     holds the model reference.
     """

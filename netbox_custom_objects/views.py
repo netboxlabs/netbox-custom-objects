@@ -787,6 +787,20 @@ class CustomObjectEditView(generic.ObjectEditView):
                 attrs["custom_object_type_coordinates_fields"][field.name] = tuple(sub_names)
                 continue
 
+            # URL: one logical field rendered as two grouped url/title inputs. Unlike
+            # coordinates, there's no "both required" pairing rule, so no tracking dict
+            # is needed here beyond the generic field-group/rendered-names bookkeeping.
+            if field.type == CustomObjectFieldTypeChoices.TYPE_URL:
+                sub_fields = field_type.get_form_fields(field)
+                sub_names = list(sub_fields.keys())
+                for sub_name, sub_field in sub_fields.items():
+                    attrs[sub_name] = sub_field
+                    attrs["custom_object_type_rendered_names"].add(sub_name)
+                if group_name not in attrs["custom_object_type_field_groups"]:
+                    attrs["custom_object_type_field_groups"][group_name] = []
+                attrs["custom_object_type_field_groups"][group_name].extend(sub_names)
+                continue
+
             # Polymorphic single-object: type-selector + object-picker pair
             if field.is_polymorphic and field.type == CustomFieldTypeChoices.TYPE_OBJECT:
                 ct_sub = f"{field.name}__ct"
@@ -1210,6 +1224,17 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
                     sub_names.append(sub_name)
                 # (latitude_name, longitude_name) for cross-field validation below.
                 attrs["custom_object_type_coordinates_fields"][field.name] = tuple(sub_names)
+                continue
+
+            # URL: two optional url/title inputs in bulk edit. No cross-field
+            # validation rule exists for URL (unlike coordinates), so no tracking
+            # dict is needed beyond adding the sub-fields themselves.
+            if field.type == CustomObjectFieldTypeChoices.TYPE_URL:
+                for sub_name, sub_field in field_type.get_form_fields(field).items():
+                    sub_field.required = False
+                    sub_field.widget.is_required = False
+                    sub_field.initial = None
+                    attrs[sub_name] = sub_field
                 continue
 
             # Polymorphic single-object: scope-style type-selector + object-picker pair

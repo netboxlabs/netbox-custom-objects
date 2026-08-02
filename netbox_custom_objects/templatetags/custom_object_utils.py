@@ -1,5 +1,8 @@
 from django import template
+from django.utils.html import format_html
+from django.utils.text import Truncator
 from extras.choices import CustomFieldUIVisibleChoices
+from utilities.validators import url_scheme_is_allowed
 
 from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
 from netbox_custom_objects.models import CustomObjectTypeField
@@ -12,6 +15,7 @@ __all__ = (
     "get_field_is_ui_visible",
     "get_child_relations",
     "get_coordinate_map_url",
+    "get_url_field_html",
 )
 
 register = template.Library()
@@ -66,6 +70,27 @@ def get_field_is_ui_visible(obj, field: CustomObjectTypeField) -> bool:
     if field.ui_visible == CustomFieldUIVisibleChoices.IF_SET and field_value:
         return True
     return False
+
+
+@register.filter(name="get_url_field_html")
+def get_url_field_html(obj, field: CustomObjectTypeField):
+    """
+    Render a url-type field as a safe link: the title as link text if set, falling
+    back to the URL itself, truncated to 70 chars -- mirrors NetBox core's
+    builtins/customfield_value.html convention for 'url' custom fields, including
+    its url_scheme_is_allowed() guard against unsafe schemes (e.g. javascript:).
+    Returns '' when the URL itself is unset, regardless of whether a title is set.
+    """
+    if field.type != CustomObjectFieldTypeChoices.TYPE_URL:
+        return ""
+    url = getattr(obj, field.name, None)
+    if not url:
+        return ""
+    title = getattr(obj, f"{field.name}_title", None)
+    display_text = Truncator(title or url).chars(70)
+    if url_scheme_is_allowed(url):
+        return format_html('<a href="{}">{}</a>', url, display_text)
+    return display_text
 
 
 @register.filter(name="get_child_relations")

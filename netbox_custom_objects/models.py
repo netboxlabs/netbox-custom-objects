@@ -285,6 +285,24 @@ def _apply_deferred_co_field(field_instance):
         _deferred_co_field_data.set(None)
 
 
+# Field types whose FieldType.get_model_field() returns a dict of multiple backing
+# columns rather than a single Field (coordinates: latitude/longitude; url: the URL
+# itself plus an optional title). Used to reject type conversion to/from these types
+# (see CustomObjectTypeField.clean()) and to widen the backing-column-collision scan.
+MULTI_COLUMN_TYPES = {
+    CustomObjectFieldTypeChoices.TYPE_COORDINATES,
+    CustomObjectFieldTypeChoices.TYPE_URL,
+}
+
+
+def _primary_model_field(fi):
+    """fi's own <name>-column Field, unwrapping FieldType.get_model_field()'s dict
+    return for a multi-column type (coordinates, url) so single-column DDL/validation
+    code can keep treating every field type uniformly."""
+    mf = FIELD_TYPE_CLASS[fi.type]().get_model_field(fi)
+    return mf[fi.name] if isinstance(mf, dict) else mf
+
+
 def _schema_add_field(fi, model, schema_editor, schema_conn):
     """``add_field`` against *schema_conn*; idempotent (skips if column exists).
 
@@ -292,7 +310,7 @@ def _schema_add_field(fi, model, schema_editor, schema_conn):
     applied here — call ``_apply_deferred_co_field`` separately after.
     """
     ft = FIELD_TYPE_CLASS[fi.type]()
-    mf = ft.get_model_field(fi)
+    mf = _primary_model_field(fi)
     mf.contribute_to_class(model, fi.name)
 
     with schema_conn.cursor() as cursor:
@@ -342,8 +360,7 @@ def _schema_remove_field(fi, model, schema_editor, schema_conn=None, existing_ta
     PostgreSQL doesn't reject the call with "pending trigger events".
     *existing_tables* optionally short-circuits the per-call introspection.
     """
-    ft = FIELD_TYPE_CLASS[fi.type]()
-    mf = ft.get_model_field(fi)
+    mf = _primary_model_field(fi)
     mf.contribute_to_class(model, fi.name)
 
     if fi.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
@@ -397,8 +414,8 @@ def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, exist
         )
         return
 
-    old_mf = FIELD_TYPE_CLASS[old_fi.type]().get_model_field(old_fi)
-    new_mf = FIELD_TYPE_CLASS[new_fi.type]().get_model_field(new_fi)
+    old_mf = _primary_model_field(old_fi)
+    new_mf = _primary_model_field(new_fi)
     old_mf.contribute_to_class(model, old_fi.name)
     new_mf.contribute_to_class(model, new_fi.name)
 
@@ -437,7 +454,7 @@ def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, exist
                 new_fi.pk, schema_conn.alias,
             )
             return
-        live_mf = FIELD_TYPE_CLASS[live_fi.type]().get_model_field(live_fi)
+        live_mf = _primary_model_field(live_fi)
         live_mf.contribute_to_class(model, live_fi.name)
         if live_mf.column not in existing_cols:
             logger.debug(
@@ -955,6 +972,8 @@ class CustomObject(
             # Coordinates fields have no single column; clone the two backing columns.
             if field_type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
                 names += [f"{name}_latitude", f"{name}_longitude"]
+            elif field_type == CustomObjectFieldTypeChoices.TYPE_URL:
+                names += [name, f"{name}_title"]
             else:
                 names.append(name)
 
@@ -2667,12 +2686,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             and hasattr(self, '_original')
             and not self.original.unique
         ):
-            field_type = FIELD_TYPE_CLASS[self.type]()
-            model_field = field_type.get_model_field(self)
+            model_field = _primary_model_field(self)
             model = self.custom_object_type.get_model()
             model_field.contribute_to_class(model, self.name)
 
-            old_field = field_type.get_model_field(self.original)
+            old_field = _primary_model_field(self.original)
             old_field.contribute_to_class(model, self._original_name)
 
             # Route the probe through the branch's connection so the ALTER
@@ -2811,46 +2829,53 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 {"name": _("Cannot rename a polymorphic field after creation.")}
             )
 
-        # Prevent converting an existing field to or from coordinates.
+        # Prevent converting an existing field to or from a multi-column type
+        # (coordinates, url).
         #
-        # A coordinates field occupies two concrete columns ("{name}_latitude" and
-        # "{name}_longitude") while every other field type occupies a single column
-        # named "{name}". The save() path has no logic to migrate between those two
-        # shapes, so allowing the conversion would either leave the original column
-        # orphaned (→ coordinates) or attempt to alter a column that doesn't exist
-        # (coordinates → other), raising an uncaught database error. Reject it here,
+        # A multi-column field occupies more than one concrete column ("{name}_latitude"/
+        # "{name}_longitude" for coordinates, "{name}"/"{name}_title" for url) while every
+        # other field type (and, prior to this conversion, the field itself) occupies a
+        # single column. The save() path has no logic to migrate between those shapes, so
+        # allowing the conversion would either leave columns orphaned or attempt to alter a
+        # column that doesn't exist, raising an uncaught database error. Reject it here,
         # mirroring the polymorphic-flag guard above.
-        is_coordinates = self.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES
-        was_coordinates = self._original_type == CustomObjectFieldTypeChoices.TYPE_COORDINATES
-        if self.pk and not self._state.adding and is_coordinates != was_coordinates:
+        if (
+            self.pk
+            and not self._state.adding
+            and self.type != self._original_type
+            and (self.type in MULTI_COLUMN_TYPES or self._original_type in MULTI_COLUMN_TYPES)
+        ):
             raise ValidationError(
-                {"type": _("Cannot change a field's type to or from coordinates after creation.")}
+                {"type": _(
+                    "Cannot change a field's type to or from a multi-column type "
+                    "(coordinates, URL) after creation."
+                )}
             )
 
         # Guard against backing-column name collisions.
         #
-        # A coordinates field expands into "{name}_latitude"/"{name}_longitude". If a
-        # sibling field already occupies one of those column names (or vice versa: a
-        # plain field named "<coord>_latitude"), the schema editor would issue a
-        # duplicate-column ALTER and PostgreSQL would raise a ProgrammingError instead
-        # of a clean validation error. Detect the overlap here.
+        # A multi-column field expands into more than one real column (see above). If a
+        # sibling field already occupies one of those column names (or vice versa: a plain
+        # field named e.g. "<coord>_latitude" or "<url>_title"), the schema editor would
+        # issue a duplicate-column ALTER and PostgreSQL would raise a ProgrammingError
+        # instead of a clean validation error. Detect the overlap here.
         if self.custom_object_type_id:
             def _occupied_columns(name, field_type):
                 if field_type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
                     return {f"{name}_latitude", f"{name}_longitude"}
+                if field_type == CustomObjectFieldTypeChoices.TYPE_URL:
+                    return {name, f"{name}_title"}
                 return {name}
 
             own_columns = _occupied_columns(self.name, self.type)
-            # A clash can only involve a coordinates field's expanded columns. If
-            # this field isn't coordinates, only sibling coordinates fields can
-            # collide with it — so skip the full sibling scan and query just those
-            # (usually zero) to avoid an extra queryset on every field's save.
-            if self.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+            # A clash can only involve a multi-column field's expanded columns. If this
+            # field isn't multi-column, only sibling multi-column fields can collide with
+            # it — so skip the full sibling scan and query just those (usually zero) to
+            # avoid an extra queryset on every field's save.
+            if self.type in MULTI_COLUMN_TYPES:
                 siblings = self.custom_object_type.fields.all()
             else:
-                siblings = self.custom_object_type.fields.filter(
-                    type=CustomObjectFieldTypeChoices.TYPE_COORDINATES
-                )
+                siblings = self.custom_object_type.fields.filter(type__in=MULTI_COLUMN_TYPES)
             if self.pk:
                 siblings = siblings.exclude(pk=self.pk)
             for sibling in siblings:
@@ -3516,6 +3541,13 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     else:
                         _schema_add_field(self, model, schema_editor, schema_conn)
                         _apply_deferred_co_field(self)
+                        if self.type == CustomObjectFieldTypeChoices.TYPE_URL:
+                            # A url field's title column has no deferred-CO-field
+                            # replay support (matches the existing coordinates gap).
+                            title_name = field_type.title_field_name(self)
+                            title_field = field_type.get_model_field(self)[title_name]
+                            title_field.contribute_to_class(model, title_name)
+                            schema_editor.add_field(model, title_field)
                 else:
                     if self.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
                         # Only a rename touches the schema; other attribute changes
@@ -3536,6 +3568,19 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                             )
                     else:
                         _schema_alter_field(self.original, self, model, schema_editor, schema_conn)
+                        if (
+                            self.type == CustomObjectFieldTypeChoices.TYPE_URL
+                            and self.name != self._original_name
+                        ):
+                            # Only a rename touches the title column; other attribute
+                            # changes are persisted by super().save() below.
+                            old_title = field_type.title_field_name(self.original)
+                            new_title = field_type.title_field_name(self)
+                            old_title_field = field_type.get_model_field(self.original)[old_title]
+                            new_title_field = field_type.get_model_field(self)[new_title]
+                            old_title_field.contribute_to_class(model, old_title)
+                            new_title_field.contribute_to_class(model, new_title)
+                            schema_editor.alter_field(model, old_title_field, new_title_field)
 
             # Rewrite historical audit-data keys so any future replay can
             # resolve old or new name to the current field name.
@@ -3660,6 +3705,12 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     except LookupError:
                         pass
                 _schema_remove_field(self, model, schema_editor, schema_conn=schema_conn)
+                if self.type == CustomObjectFieldTypeChoices.TYPE_URL:
+                    # Drop the title column alongside the primary URL column.
+                    title_name = field_type.title_field_name(self)
+                    title_field = field_type.get_model_field(self)[title_name]
+                    title_field.contribute_to_class(model, title_name)
+                    schema_editor.remove_field(model, title_field)
 
         # Deregister the dropped through model (both polymorphic and plain MULTIOBJECT)
         # so the cascade-delete collector no longer queries the now-missing table.
