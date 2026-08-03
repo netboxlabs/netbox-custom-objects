@@ -1145,7 +1145,7 @@ class URLFieldLinkTitleViewTest(CustomObjectsTestCase, TestCase):
         self.assertEqual(response.status_code, 302, getattr(response, "content", b""))
         obj = self.model.objects.get(name="Box")
         self.assertEqual(obj.website, "https://example.com/")
-        self.assertFalse(obj.website_title)
+        self.assertEqual(obj.website_title, "")
 
 
 class QuickAddViewTestCase(CustomObjectsTestCase, TestCase):

@@ -128,3 +128,6 @@ Behaviour:
 - **REST API.** The pair is exposed as two flat fields, `<name>` and `<name>_title`.
 - `Must be unique` and `Default` continue to apply to the URL value itself, exactly
   as for any other `url` field.
+- **CSV import.** Bulk CSV import only populates the URL value; the title column is
+  not importable via CSV (the same limitation applies to `coordinates` fields' backing
+  columns).

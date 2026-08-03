@@ -710,7 +710,10 @@ class URLFieldTypeTestCase(FieldTypeTestCase):
         self.assertEqual(instance.website_title, "Example Site")
 
     def test_url_field_title_is_optional(self):
-        """A url value with no title set is valid (no both-required rule)."""
+        """
+        A url value with no title set is valid (no both-required rule). The title
+        column defaults to '' (not None) so "unset" has one canonical representation.
+        """
         self.create_custom_object_type_field(
             self.custom_object_type,
             name="website",
@@ -720,7 +723,7 @@ class URLFieldTypeTestCase(FieldTypeTestCase):
         model = self.custom_object_type.get_model()
         instance = model.objects.create(name="Test", website="https://example.com/")
         self.assertEqual(instance.website, "https://example.com/")
-        self.assertIsNone(instance.website_title)
+        self.assertEqual(instance.website_title, "")
 
     def test_url_field_unique_still_enforced(self):
         """
@@ -792,6 +795,61 @@ class URLFieldTypeTestCase(FieldTypeTestCase):
         )
         with self.assertRaises(ValidationError):
             field.full_clean()
+
+    def test_get_url_field_html_renders_link_with_title(self):
+        """get_url_field_html renders <a href> using the title as link text when set."""
+        from netbox_custom_objects.templatetags.custom_object_utils import get_url_field_html
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type, name="website3", label="Website", type="url",
+        )
+        model = self.custom_object_type.get_model(no_cache=True)
+        instance = model.objects.create(
+            name="Test", website3="https://example.com/", website3_title="Example Site",
+        )
+        html = get_url_field_html(instance, cotf)
+        self.assertIn('href="https://example.com/"', html)
+        self.assertIn("Example Site", html)
+
+    def test_get_url_field_html_falls_back_to_url_text_without_title(self):
+        """get_url_field_html uses the URL itself as link text when no title is set."""
+        from netbox_custom_objects.templatetags.custom_object_utils import get_url_field_html
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type, name="website4", label="Website", type="url",
+        )
+        model = self.custom_object_type.get_model(no_cache=True)
+        instance = model.objects.create(name="Test", website4="https://example.com/")
+        html = get_url_field_html(instance, cotf)
+        self.assertIn('href="https://example.com/"', html)
+        self.assertIn(">https://example.com/<", html)
+
+    def test_get_url_field_html_rejects_disallowed_scheme(self):
+        """
+        A disallowed URL scheme (e.g. javascript:) renders as plain text, not a link.
+        Guards the security-relevant _url_scheme_is_allowed() check -- the value is
+        assigned directly (bypassing form/URLField validation) to simulate data that
+        reached the column via any path other than the add/edit form.
+        """
+        from netbox_custom_objects.templatetags.custom_object_utils import get_url_field_html
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type, name="website5", label="Website", type="url",
+        )
+        model = self.custom_object_type.get_model(no_cache=True)
+        instance = model.objects.create(
+            name="Test", website5="javascript:alert(1)", website5_title="Click me",
+        )
+        html = get_url_field_html(instance, cotf)
+        self.assertNotIn("<a ", html)
+        self.assertIn("Click me", html)
+
+    def test_get_url_field_html_returns_empty_string_when_url_unset(self):
+        """get_url_field_html returns '' when the URL itself is unset, regardless of title."""
+        from netbox_custom_objects.templatetags.custom_object_utils import get_url_field_html
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type, name="website6", label="Website", type="url",
+        )
+        model = self.custom_object_type.get_model(no_cache=True)
+        instance = model.objects.create(name="Test")
+        self.assertEqual(get_url_field_html(instance, cotf), "")
 
 
 class JSONFieldTypeTestCase(FieldTypeTestCase):

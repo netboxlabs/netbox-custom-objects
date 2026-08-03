@@ -543,10 +543,17 @@ class URLFieldType(FieldType):
         field_kwargs.update({"default": field.default, "unique": field.unique})
         return {
             field.name: models.URLField(null=True, blank=True, **field_kwargs),
+            # blank=True, default='' (not null=True): a CharField with null=True lets
+            # "no title" be represented as both NULL (ORM/API create omitting the key)
+            # and '' (a form submission clearing the field), which would make
+            # isnull-based filtering unreliable. default='' also keeps this column
+            # eligible for mixin_migration.py's post_migrate auto-heal pass on
+            # existing installations, which only auto-ADDs a new column when it is
+            # nullable or has a Django-level default (see _can_auto_add()).
             self.title_field_name(field): models.CharField(
                 max_length=200,
-                null=True,
                 blank=True,
+                default="",
                 help_text=_("Human-readable text shown instead of the raw URL."),
             ),
         }

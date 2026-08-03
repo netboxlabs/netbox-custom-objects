@@ -3547,7 +3547,19 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                             title_name = field_type.title_field_name(self)
                             title_field = field_type.get_model_field(self)[title_name]
                             title_field.contribute_to_class(model, title_name)
-                            schema_editor.add_field(model, title_field)
+                            with schema_conn.cursor() as cursor:
+                                existing_cols = {
+                                    col.name for col in schema_conn.introspection.get_table_description(
+                                        cursor, model._meta.db_table
+                                    )
+                                }
+                            if title_field.column in existing_cols:
+                                logger.debug(
+                                    '_schema_add_field: %r already exists on %s, skipping',
+                                    title_field.column, model._meta.db_table,
+                                )
+                            else:
+                                schema_editor.add_field(model, title_field)
                 else:
                     if self.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
                         # Only a rename touches the schema; other attribute changes

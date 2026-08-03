@@ -2140,4 +2140,4 @@ class URLFieldLinkTitleAPITest(CustomObjectsTestCase, NetBoxTestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
         obj = self.model.objects.get(pk=response.data["id"])
         self.assertEqual(obj.website, "https://example.com/")
-        self.assertIsNone(obj.website_title)
+        self.assertEqual(obj.website_title, "")
