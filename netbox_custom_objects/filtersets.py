@@ -9,7 +9,7 @@ from django.db.models import QuerySet, Q
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.timezone import make_aware, is_aware
 
-from extras.choices import CustomFieldTypeChoices
+from extras.choices import CustomFieldFilterLogicChoices, CustomFieldTypeChoices
 from netbox.filtersets import NetBoxModelFilterSet
 from users.models import Owner, OwnerGroup
 
@@ -287,6 +287,17 @@ FIELD_TYPE_FILTERS = {
     CustomFieldTypeChoices.TYPE_MULTIOBJECT: FilterSpec(NonPolymorphicMultiObjectFilter),
 }
 
+# Field types whose base filter's lookup expression is driven by field.filter_logic
+# (mirrors NetBox core's CustomField.to_filter()): "loose" uses icontains, "exact"
+# uses the CharFilter default (exact). TYPE_JSON also uses icontains via
+# FIELD_TYPE_FILTERS above, but has no core-NetBox equivalent to mirror an "exact"
+# mode from, so it is intentionally left out here and always stays icontains.
+FILTER_LOGIC_AWARE_TYPES = (
+    CustomFieldTypeChoices.TYPE_TEXT,
+    CustomFieldTypeChoices.TYPE_LONGTEXT,
+    CustomFieldTypeChoices.TYPE_URL,
+)
+
 
 class CustomObjectTypeFilterSet(NetBoxModelFilterSet):
     class Meta:
@@ -336,6 +347,12 @@ def build_filter_for_field(field) -> dict:
     fields one entry is emitted per allowed related type, named
     ``{field.name}_{app_label}_{model}``.
     """
+    # Mirrors NetBox core's own custom-field filter registration, which skips a
+    # field entirely (not just its extra lookups) when filtering is disabled for
+    # it. Checked first, applying uniformly regardless of field type.
+    if field.filter_logic == CustomFieldFilterLogicChoices.FILTER_DISABLED:
+        return {}
+
     if field.is_polymorphic and field.type in (
         CustomFieldTypeChoices.TYPE_OBJECT,
         CustomFieldTypeChoices.TYPE_MULTIOBJECT,
@@ -378,6 +395,19 @@ def build_filter_for_field(field) -> dict:
     if spec.extra_kwargs:
         for key, value in spec.extra_kwargs.items():
             extra_kwargs[key] = value(field) if callable(value) else value
+
+    if field.type in FILTER_LOGIC_AWARE_TYPES:
+        # "Exact" drops the lookup_expr override (CharFilter's own default is
+        # "exact"), which is what makes the base filter eligible for
+        # BaseFilterSet.get_additional_lookups() to generate the __n/__ic/__isw/
+        # __iew/__ie/__empty/__regex suffix filters -- that mechanism only fires
+        # for filters whose own lookup_expr is one of a small fixed set
+        # ('exact', 'iexact', 'in', 'contains'), which "icontains" is not part of.
+        # "Loose" (the default) keeps the existing substring-match behavior.
+        if field.filter_logic == CustomFieldFilterLogicChoices.FILTER_EXACT:
+            extra_kwargs["lookup_expr"] = None
+        else:
+            extra_kwargs["lookup_expr"] = "icontains"
 
     filters = {
         field.name: spec.build(

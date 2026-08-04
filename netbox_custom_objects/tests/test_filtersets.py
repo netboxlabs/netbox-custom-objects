@@ -905,6 +905,93 @@ class TextFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
         self.assertNotIn(self.obj_no_match.pk, pks)
 
 
+class TextFieldFilterLogicTestCase(CustomObjectsTestCase, TestCase):
+    """
+    Regression #639: CustomObjectTypeField.filter_logic was ignored by filterset
+    generation. Every text-family field always got a hardcoded icontains base
+    filter, whose lookup_expr falls outside the fixed set that
+    BaseFilterSet.get_additional_lookups() augments with suffix lookups -- so a
+    filter like ``__isw`` was never registered at all, and the unrecognized query
+    param was silently ignored (returning every row unfiltered), regardless of
+    what filter_logic was actually set to.
+
+    Mirrors NetBox core's own CustomField convention: suffix lookups (__isw,
+    __iew, __ic, __ie, __n, __empty, __regex) are only available on a field whose
+    filter_logic is "exact"; "loose" gets substring matching on the bare filter
+    name only, and "disabled" gets no filter at all.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(name='FilterLogicFS', slug='filter-logic-fs')
+        cls.create_custom_object_type_field(
+            cls.cot, name='name', label='Name', type='text', primary=True, required=True
+        )
+        cls.create_custom_object_type_field(
+            cls.cot, name='loose_field', label='Loose', type='text', filter_logic='loose',
+        )
+        cls.create_custom_object_type_field(
+            cls.cot, name='exact_field', label='Exact', type='text', filter_logic='exact',
+        )
+        cls.create_custom_object_type_field(
+            cls.cot, name='disabled_field', label='Disabled', type='text', filter_logic='disabled',
+        )
+
+        model = cls.cot.get_model()
+        cls.obj_a = model.objects.create(
+            name='a', loose_field='foobar', exact_field='foobar', disabled_field='foobar',
+        )
+        cls.obj_b = model.objects.create(
+            name='b', loose_field='barfoo', exact_field='barfoo', disabled_field='barfoo',
+        )
+
+    def _filterset(self, params):
+        model = self.cot.get_model()
+        return get_filterset_class(model)(params, model.objects.all())
+
+    def test_loose_field_bare_filter_is_icontains(self):
+        """Existing (pre-fix) loose behavior is unchanged."""
+        pks = list(self._filterset({'loose_field': 'oob'}).qs.values_list('pk', flat=True))
+        self.assertEqual(pks, [self.obj_a.pk])
+
+    def test_loose_field_isw_suffix_not_registered(self):
+        """
+        A loose field's base filter uses icontains, which get_additional_lookups()
+        does not augment -- so __isw is never registered, and the param is
+        silently ignored rather than actually filtering.
+        """
+        fs = self._filterset({'loose_field__isw': 'foo'})
+        self.assertNotIn('loose_field__isw', fs.filters)
+        self.assertEqual(fs.qs.count(), 2)
+
+    def test_exact_field_bare_filter_is_exact_match(self):
+        pks = list(self._filterset({'exact_field': 'foobar'}).qs.values_list('pk', flat=True))
+        self.assertEqual(pks, [self.obj_a.pk])
+
+    def test_exact_field_isw_suffix_matches_startswith(self):
+        """The reported bug: an exact-logic field's __isw suffix must actually filter."""
+        pks = list(self._filterset({'exact_field__isw': 'foo'}).qs.values_list('pk', flat=True))
+        self.assertEqual(pks, [self.obj_a.pk])
+
+    def test_exact_field_iew_suffix_matches_endswith(self):
+        pks = list(self._filterset({'exact_field__iew': 'foo'}).qs.values_list('pk', flat=True))
+        self.assertEqual(pks, [self.obj_b.pk])
+
+    def test_exact_field_ic_suffix_matches_substring(self):
+        pks = list(self._filterset({'exact_field__ic': 'oob'}).qs.values_list('pk', flat=True))
+        self.assertEqual(pks, [self.obj_a.pk])
+
+    def test_disabled_field_has_no_filter_registered(self):
+        fs = self._filterset({})
+        self.assertNotIn('disabled_field', fs.filters)
+
+    def test_disabled_field_query_param_ignored(self):
+        """Matches NetBox core: a disabled field's query param has no effect."""
+        pks = list(self._filterset({'disabled_field': 'foobar'}).qs.values_list('pk', flat=True))
+        self.assertEqual(len(pks), 2)
+
+
 class LongTextFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
     """CharFilter with icontains is generated for TYPE_LONGTEXT fields."""
 
