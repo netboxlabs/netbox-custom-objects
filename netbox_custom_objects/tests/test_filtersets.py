@@ -906,20 +906,7 @@ class TextFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
 
 
 class TextFieldFilterLogicTestCase(CustomObjectsTestCase, TestCase):
-    """
-    Regression #639: CustomObjectTypeField.filter_logic was ignored by filterset
-    generation. Every text-family field always got a hardcoded icontains base
-    filter, whose lookup_expr falls outside the fixed set that
-    BaseFilterSet.get_additional_lookups() augments with suffix lookups -- so a
-    filter like ``__isw`` was never registered at all, and the unrecognized query
-    param was silently ignored (returning every row unfiltered), regardless of
-    what filter_logic was actually set to.
-
-    Mirrors NetBox core's own CustomField convention: suffix lookups (__isw,
-    __iew, __ic, __ie, __n, __empty, __regex) are only available on a field whose
-    filter_logic is "exact"; "loose" gets substring matching on the bare filter
-    name only, and "disabled" gets no filter at all.
-    """
+    """Regression #639: CustomObjectTypeField.filter_logic was ignored by filterset generation."""
 
     @classmethod
     def setUpTestData(cls):
@@ -956,11 +943,7 @@ class TextFieldFilterLogicTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(pks, [self.obj_a.pk])
 
     def test_loose_field_isw_suffix_not_registered(self):
-        """
-        A loose field's base filter uses icontains, which get_additional_lookups()
-        does not augment -- so __isw is never registered, and the param is
-        silently ignored rather than actually filtering.
-        """
+        """icontains isn't augmented by get_additional_lookups(), so __isw is never registered."""
         fs = self._filterset({'loose_field__isw': 'foo'})
         self.assertNotIn('loose_field__isw', fs.filters)
         self.assertEqual(fs.qs.count(), 2)

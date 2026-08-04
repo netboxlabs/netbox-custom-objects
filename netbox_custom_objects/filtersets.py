@@ -287,11 +287,9 @@ FIELD_TYPE_FILTERS = {
     CustomFieldTypeChoices.TYPE_MULTIOBJECT: FilterSpec(NonPolymorphicMultiObjectFilter),
 }
 
-# Field types whose base filter's lookup expression is driven by field.filter_logic
-# (mirrors NetBox core's CustomField.to_filter()): "loose" uses icontains, "exact"
-# uses the CharFilter default (exact). TYPE_JSON also uses icontains via
-# FIELD_TYPE_FILTERS above, but has no core-NetBox equivalent to mirror an "exact"
-# mode from, so it is intentionally left out here and always stays icontains.
+# Field types whose base filter's lookup_expr is driven by field.filter_logic,
+# mirroring NetBox core's CustomField.to_filter(). TYPE_JSON has no core "exact"
+# mode to mirror, so it's excluded and always stays icontains.
 FILTER_LOGIC_AWARE_TYPES = (
     CustomFieldTypeChoices.TYPE_TEXT,
     CustomFieldTypeChoices.TYPE_LONGTEXT,
@@ -347,9 +345,7 @@ def build_filter_for_field(field) -> dict:
     fields one entry is emitted per allowed related type, named
     ``{field.name}_{app_label}_{model}``.
     """
-    # Mirrors NetBox core's own custom-field filter registration, which skips a
-    # field entirely (not just its extra lookups) when filtering is disabled for
-    # it. Checked first, applying uniformly regardless of field type.
+    # Mirrors NetBox core: a disabled field gets no filter at all, regardless of type.
     if field.filter_logic == CustomFieldFilterLogicChoices.FILTER_DISABLED:
         return {}
 
@@ -397,13 +393,10 @@ def build_filter_for_field(field) -> dict:
             extra_kwargs[key] = value(field) if callable(value) else value
 
     if field.type in FILTER_LOGIC_AWARE_TYPES:
-        # "Exact" drops the lookup_expr override (CharFilter's own default is
-        # "exact"), which is what makes the base filter eligible for
-        # BaseFilterSet.get_additional_lookups() to generate the __n/__ic/__isw/
-        # __iew/__ie/__empty/__regex suffix filters -- that mechanism only fires
-        # for filters whose own lookup_expr is one of a small fixed set
-        # ('exact', 'iexact', 'in', 'contains'), which "icontains" is not part of.
-        # "Loose" (the default) keeps the existing substring-match behavior.
+        # "Exact" (None normalizes to django-filter's own default, "exact") is
+        # required for BaseFilterSet.get_additional_lookups() to generate suffix
+        # filters like __isw -- it only augments a small fixed set of lookup_exprs,
+        # and "icontains" isn't one of them.
         if field.filter_logic == CustomFieldFilterLogicChoices.FILTER_EXACT:
             extra_kwargs["lookup_expr"] = None
         else:
