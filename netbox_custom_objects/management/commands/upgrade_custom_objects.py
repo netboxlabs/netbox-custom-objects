@@ -5,15 +5,21 @@ Checks all Custom Object Type tables for mixin column drift and applies safe
 fixes.  Intended as an explicit escape hatch alongside the automatic
 post_migrate signal handler (issue #391).
 
+A full run (no --cot filter) also heals every live NetBox Branching branch's
+own schema, mirroring the post_migrate signal handler -- see
+mixin_migration.heal_all_branches()'s docstring for why that can't be left to
+a branch's own migration signal.  --cot only heals main (a branch-scoped
+single-COT filter isn't supported).
+
 Usage examples
 --------------
-    # Check and fix all COTs
+    # Check and fix all COTs (and all branch schemas)
     manage.py upgrade_custom_objects
 
     # Preview changes without touching the DB
     manage.py upgrade_custom_objects --dry-run
 
-    # Operate on a single COT (by name or numeric ID)
+    # Operate on a single COT on main only (by name or numeric ID)
     manage.py upgrade_custom_objects --cot my_device
     manage.py upgrade_custom_objects --cot 7 --dry-run
 """
@@ -65,20 +71,55 @@ class Command(BaseCommand):
 
             result = heal_cot(cot, verbosity=verbosity, dry_run=dry_run)
             self._print_cot_result(cot.name, result, dry_run, verbosity)
-        else:
-            cots = list(CustomObjectType.objects.all())
-            total = len(cots)
-            healed = warnings = 0
-            for cot in cots:
-                result = heal_cot(cot, verbosity=verbosity, dry_run=dry_run)
-                self._print_cot_result(cot.name, result, dry_run, verbosity)
-                if result["added"]:
-                    healed += 1
-                warnings += len(result["warned"])
-            self._print_summary(
-                {"total": total, "healed": healed, "warnings": warnings},
-                dry_run,
+            return
+
+        cots = list(CustomObjectType.objects.all())
+        total = len(cots)
+        healed = warnings = 0
+        for cot in cots:
+            result = heal_cot(cot, verbosity=verbosity, dry_run=dry_run)
+            self._print_cot_result(cot.name, result, dry_run, verbosity)
+            if result["added"]:
+                healed += 1
+            warnings += len(result["warned"])
+        self._print_summary(
+            {"total": total, "healed": healed, "warnings": warnings},
+            dry_run,
+        )
+
+        self._heal_branches(dry_run, verbosity)
+
+    def _heal_branches(self, dry_run, verbosity):
+        """
+        Heal every live Branch's own schema too.  heal_all_branches() itself
+        no-ops (returns an all-zero summary) when netbox-branching isn't
+        installed, so nothing extra is printed in that case.
+        """
+        from netbox_custom_objects.mixin_migration import heal_all_branches  # noqa: PLC0415
+        result = heal_all_branches(verbosity=verbosity, dry_run=dry_run)
+
+        if result["total"] == 0:
+            return
+
+        tag = " (dry run)" if dry_run else ""
+        if result["healed"] == 0 and result["warnings"] == 0:
+            self.stdout.write(
+                self.style.SUCCESS(
+                    f"All {result['total']} branch schema(s) are up to date{tag}."
+                )
             )
+        else:
+            self.stdout.write(
+                f"{result['total']} branch(es) checked{tag}: "
+                f"{result['healed']} healed, "
+                f"{result['warnings']} warning(s)."
+            )
+            if result["warnings"]:
+                self.stdout.write(
+                    self.style.WARNING(
+                        "Run with -v 2 or check the application log for warning details."
+                    )
+                )
 
     # ------------------------------------------------------------------
     # Output helpers

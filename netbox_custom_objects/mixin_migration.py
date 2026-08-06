@@ -5,10 +5,12 @@ Phase 2 of issue #391: when NetBox is upgraded and a mixin (e.g.
 ChangeLoggingMixin) gains a new concrete column, existing COT tables will be
 missing that column.  This module provides:
 
-  heal_cot(cot, verbosity, dry_run)   — check and repair a single COT table
-  heal_all_cots(verbosity, dry_run)   — iterate over all COTs
+  heal_cot(cot, verbosity, dry_run)          — check and repair a single COT table
+  heal_all_cots(verbosity, dry_run)          — iterate over all COTs on one connection
+  heal_branch(branch, verbosity, dry_run)    — heal_all_cots() against one Branch's schema
+  heal_all_branches(verbosity, dry_run)      — heal_branch() for every live Branch
 
-Both are called from:
+All four are called from:
   - The post_migrate signal handler in __init__.py (automatic, zero-config)
   - The upgrade_custom_objects management command (explicit, with --dry-run)
 
@@ -17,6 +19,8 @@ Safety rules
   ADD allowed  : new column is nullable OR has a Django-level default
   Warn only    : new column is NOT NULL with no default (would fail for existing rows)
   Warn only    : column type appears to have changed
+  Warn only    : a field's name collides with another field's backing column
+                 (see detect_backing_column_collisions() in models.py)
   Never        : auto-drop a column that is no longer in the base class
 """
 
@@ -121,6 +125,21 @@ def heal_cot(cot, verbosity=1, dry_run=False, using=DEFAULT_DB_ALIAS):
     table_name = cot.get_database_table_name()
     added = []
     warned = []
+
+    # Detect pre-existing field-name collisions with a multi-column type's
+    # synthesized backing column (e.g. a plain field literally named
+    # "<url_field>_title" predating the validation that now blocks this).
+    # Independent of DB introspection -- purely a field-definition check --
+    # so it runs even if the table itself can't be introspected below.
+    from netbox_custom_objects.models import detect_backing_column_collisions  # noqa: PLC0415
+    for collision in detect_backing_column_collisions(cot):
+        entry = {
+            "type": "backing_column_collision",
+            "field": collision["field"],
+            "message": collision["message"],
+        }
+        warned.append(entry)
+        logger.warning(entry["message"])
 
     try:
         actual_names = _actual_column_names(table_name, using=using)
@@ -293,13 +312,17 @@ def heal_branch(branch, verbosity=1, dry_run=False):
     """
     Run heal_all_cots() against a single Branch's own PostgreSQL schema.
 
-    Branch schema migrations run via netbox-branching's own MigrationExecutor
-    (Branch.migrate()), which never emits Django's core post_migrate signal —
-    only netbox-branching's own post_migrate (see the receiver registered in
-    __init__.py). A branch created before a plugin release that adds a new
-    base column (e.g. #496's <name>_title column) therefore never gets that
-    column added to its own schema: the plugin's post_migrate heal pass only
-    ever ran against DEFAULT_DB_ALIAS.
+    A schema change like #496's <name>_title column ships with no Django
+    migration of its own (URLFieldType.get_model_field() just changes what
+    columns a dynamically generated model has -- there's no migration file
+    for netbox-branching's MigrationExecutor to detect as "pending" against
+    a branch). Branch.migrate() therefore has nothing to apply and never
+    fires, so this can't rely on being triggered by a branch's own migrate
+    step or its post_migrate signal. heal_all_branches() (below) is the
+    reliable trigger: it's called unconditionally from the main upgrade
+    path (post_migrate on the default connection, and
+    `manage.py upgrade_custom_objects`), independent of any branch's
+    migration state.
 
     activate_branch() makes get_model() resolve each COT's branch-specific
     model variant (a branch may have renamed columns that don't exist in
@@ -310,3 +333,73 @@ def heal_branch(branch, verbosity=1, dry_run=False):
 
     with activate_branch(branch):
         return heal_all_cots(verbosity=verbosity, dry_run=dry_run, using=branch.connection_name)
+
+
+def heal_all_branches(verbosity=1, dry_run=False):
+    """
+    Run heal_branch() for every Branch that has a real PostgreSQL schema.
+
+    Called unconditionally from the main upgrade path (the post_migrate
+    signal handler in __init__.py, and the upgrade_custom_objects management
+    command) rather than from any branch-specific migration signal -- see
+    heal_branch()'s docstring for why that signal can't be relied on.
+
+    Returns immediately (all-zero summary) when netbox-branching isn't
+    installed -- checked via apps.is_installed(), NOT a bare
+    "import netbox_branching" try/except: netbox-branching can be pip-
+    installed in the environment without being enabled in PLUGINS (e.g. a
+    shared venv, or during the version-check window in checks.py), and in
+    that case importing its models raises `RuntimeError: Model class ...
+    isn't in an application in INSTALLED_APPS` -- not ImportError -- because
+    the package itself resolves fine; only its Django app isn't registered.
+
+    Excludes branches with no live schema: NEW and PROVISIONING haven't been
+    provisioned yet (or are mid-provision); ARCHIVED has had its schema
+    dropped. Every other status (READY, PENDING_MIGRATIONS, the transitional
+    SYNCING/MIGRATING/MERGING/REVERTING, MERGED, FAILED) keeps its schema
+    until the branch is archived or deleted, so all of those are healed.
+    heal_cot()'s existing per-COT try/except around table introspection
+    means a branch whose schema is unexpectedly missing or broken is
+    reported as a warning for that COT, not a hard failure for the whole run.
+
+    Returns
+    -------
+    dict with keys:
+      "total"    : number of branches checked
+      "healed"   : number of branches with at least one COT healed
+      "warnings" : total number of non-auto-fixable issues across all branches
+    """
+    from django.apps import apps as django_apps  # noqa: PLC0415
+
+    if not django_apps.is_installed('netbox_branching'):
+        return {"total": 0, "healed": 0, "warnings": 0}
+
+    from netbox_branching.choices import BranchStatusChoices  # noqa: PLC0415
+    from netbox_branching.models import Branch  # noqa: PLC0415
+
+    no_schema_statuses = (
+        BranchStatusChoices.NEW,
+        BranchStatusChoices.PROVISIONING,
+        BranchStatusChoices.ARCHIVED,
+    )
+
+    total = healed = warnings = 0
+    for branch in Branch.objects.exclude(status__in=no_schema_statuses):
+        total += 1
+        result = heal_branch(branch, verbosity=verbosity, dry_run=dry_run)
+        if result["healed"]:
+            healed += 1
+        warnings += result["warnings"]
+
+    if verbosity >= 2:
+        logger.info(
+            "upgrade_custom_objects: %d branch(es) checked, %d healed, %d warning(s)",
+            total, healed, warnings,
+        )
+    elif verbosity >= 1 and (healed > 0 or warnings > 0):
+        logger.info(
+            "upgrade_custom_objects: %d branch(es) healed, %d warning(s)",
+            healed, warnings,
+        )
+
+    return {"total": total, "healed": healed, "warnings": warnings}

@@ -312,6 +312,74 @@ MULTI_COLUMN_TYPES = {
 }
 
 
+def _occupied_columns(name, field_type):
+    """Real DB column name(s) that a field named *name* of *field_type* occupies.
+
+    Single-column types occupy just {name}; multi-column types (coordinates,
+    url) occupy more than one -- see MULTI_COLUMN_TYPES. Shared by
+    CustomObjectTypeField.clean()'s collision guard (new/renamed fields going
+    forward) and detect_backing_column_collisions() (pre-existing fields at
+    heal time).
+    """
+    if field_type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+        return {f"{name}_latitude", f"{name}_longitude"}
+    if field_type == CustomObjectFieldTypeChoices.TYPE_URL:
+        return {name, f"{name}_title"}
+    return {name}
+
+
+def detect_backing_column_collisions(cot):
+    """
+    Detect pairs of fields on *cot* whose backing columns collide.
+
+    ``CustomObjectTypeField.clean()`` rejects this combination for any *new*
+    or *renamed* field going forward (see its collision guard), but a plain
+    field literally named e.g. ``"<url_field>_title"`` could already exist
+    from before that validation shipped -- ``URLFieldType.get_model_field()``
+    didn't expand into a second backing column until #496, so nothing stopped
+    a sibling field from claiming that name first. After upgrading, both
+    fields would silently share one Django model attribute in
+    ``CustomObjectType._fetch_and_generate_field_attrs()`` (whichever is
+    processed last wins, discarding the other) with no error raised. Called
+    from ``mixin_migration.heal_cot()`` so this is surfaced as an actionable
+    warning instead of proceeding silently.
+
+    Returns a list of ``{"field", "other", "column", "message"}`` dicts, one
+    per colliding pair (each unordered pair reported once).
+    """
+    fields = list(cot.fields.all())
+    collisions = []
+    seen_pairs = set()
+    for field in fields:
+        if field.type not in MULTI_COLUMN_TYPES:
+            continue
+        own_columns = _occupied_columns(field.name, field.type)
+        for sibling in fields:
+            if sibling.pk == field.pk:
+                continue
+            pair_key = frozenset((field.pk, sibling.pk))
+            if pair_key in seen_pairs:
+                continue
+            clash = own_columns & _occupied_columns(sibling.name, sibling.type)
+            if clash:
+                seen_pairs.add(pair_key)
+                column = sorted(clash)[0]
+                collisions.append({
+                    "field": field.name,
+                    "other": sibling.name,
+                    "column": column,
+                    "message": (
+                        f"Custom Object Type {cot.name!r}: field {field.name!r} "
+                        f"({field.type}) and field {sibling.name!r} ({sibling.type}) "
+                        f"both map to backing column {column!r}. This predates "
+                        f"validation that now blocks creating this combination; "
+                        f"rename one of the two fields to resolve the collision, "
+                        f"then re-run 'manage.py upgrade_custom_objects'."
+                    ),
+                })
+    return collisions
+
+
 def _primary_model_field(fi):
     """fi's own <name>-column Field, unwrapping FieldType.get_model_field()'s dict
     return for a multi-column type (coordinates, url) so single-column DDL/validation
@@ -2903,13 +2971,6 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         # issue a duplicate-column ALTER and PostgreSQL would raise a ProgrammingError
         # instead of a clean validation error. Detect the overlap here.
         if self.custom_object_type_id:
-            def _occupied_columns(name, field_type):
-                if field_type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
-                    return {f"{name}_latitude", f"{name}_longitude"}
-                if field_type == CustomObjectFieldTypeChoices.TYPE_URL:
-                    return {name, f"{name}_title"}
-                return {name}
-
             own_columns = _occupied_columns(self.name, self.type)
             # A clash can only involve a multi-column field's expanded columns. If this
             # field isn't multi-column, only sibling multi-column fields can collide with
@@ -3583,10 +3644,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                             field_type.create_polymorphic_m2m_table(self, model, schema_editor)
                     else:
                         _schema_add_field(self, model, schema_editor, schema_conn)
-                        _apply_deferred_co_field(self)
                         if self.type == CustomObjectFieldTypeChoices.TYPE_URL:
-                            # A url field's title column has no deferred-CO-field
-                            # replay support (matches the existing coordinates gap).
+                            # Add the title column before _apply_deferred_co_field()
+                            # runs below -- it replays both <name> and <name>_title
+                            # from buffered squash-merge data, and an UPDATE against
+                            # a column that doesn't exist yet would fail.
                             title_name = field_type.title_field_name(self)
                             title_field = field_type.get_model_field(self)[title_name]
                             title_field.contribute_to_class(model, title_name)
@@ -3603,6 +3665,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                                 )
                             else:
                                 schema_editor.add_field(model, title_field)
+                        _apply_deferred_co_field(self)
                 else:
                     if self.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
                         # Only a rename touches the schema; other attribute changes

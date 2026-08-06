@@ -2534,44 +2534,41 @@ class SequentialRenameSquashTestCase(SequentialRenameTestCase, TransactionTestCa
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
 class BranchUpgradeHealTestCase(BranchingTestBase, TransactionTestCase):
     """
-    Regression test for upgrading a branch that already existed before a
+    Regression tests for upgrading a branch that already existed before a
     plugin release added a new base column (here, URLFieldType's
     ``<name>_title`` column from issue #496).
 
-    Branch schema migrations run via netbox-branching's own
-    ``MigrationExecutor`` (``Branch.migrate()``), which never triggers
-    Django's core ``post_migrate`` signal — only netbox-branching's own,
-    which ``heal_branch()`` is wired to.  Before that wiring existed, the
-    plugin's post_migrate heal pass only ever ran against the default
-    connection, so a pre-existing branch's own schema never got the new
-    column added.
+    A schema change like this ships with no actual Django migration file
+    (URLFieldType.get_model_field() just changes what columns a dynamically
+    generated model has), so there's nothing for netbox-branching's own
+    ``MigrationExecutor`` to detect as "pending" against a branch --
+    ``Branch.migrate()`` never runs for it, and neither does its
+    ``post_migrate`` signal.  The reliable trigger is ``heal_all_branches()``,
+    called unconditionally from the main upgrade path (the post_migrate
+    signal handler, and ``manage.py upgrade_custom_objects``) -- see
+    ``mixin_migration.heal_branch()``'s docstring.
     """
 
-    def test_heal_branch_adds_missing_title_column_to_branch_schema_only(self):
+    def _setup_branch_with_dropped_title_column(self, cot_name, cot_slug, field_name):
+        """Shared fixture: a COT+url field in main, a branch with a full schema
+        copy, then the title column dropped from *only* the branch's schema to
+        simulate a branch provisioned before #496 shipped.  Returns
+        (cot, branch, table_name, branch_conn, _columns) where _columns(conn)
+        introspects the live column set.
         """
-        Create a ``url`` field in main (so both main and a subsequently
-        provisioned branch have the full ``<name>``/``<name>_title`` schema),
-        then simulate a pre-upgrade branch by dropping ``<name>_title`` from
-        *only* the branch's own connection.  ``heal_branch()`` must restore
-        it on the branch's schema without touching main's.
-        """
-        from netbox_custom_objects.mixin_migration import heal_branch
-
         request = _make_request(self.user)
         with event_tracking(request):
-            cot = CustomObjectType.objects.create(name='heal_cot', slug='heal-cot')
+            cot = CustomObjectType.objects.create(name=cot_name, slug=cot_slug)
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='site_link', label='Site Link', type='url',
+                custom_object_type=cot, name=field_name, label=field_name.title(), type='url',
             )
 
-        branch = _provision_branch('Heal Branch', None, self.user)
+        branch = _provision_branch(f'{cot_name} branch', None, self.user)
         table_name = cot.get_database_table_name()
         branch_conn = connections[branch.connection_name]
 
-        # Simulate a branch provisioned before #496 shipped: drop the title
-        # column from *only* the branch's own schema.
         with branch_conn.cursor() as cursor:
-            cursor.execute(f'ALTER TABLE "{table_name}" DROP COLUMN "site_link_title"')
+            cursor.execute(f'ALTER TABLE "{table_name}" DROP COLUMN "{field_name}_title"')
 
         def _columns(conn):
             with conn.cursor() as cursor:
@@ -2581,12 +2578,25 @@ class BranchUpgradeHealTestCase(BranchingTestBase, TransactionTestCase):
                 }
 
         self.assertNotIn(
-            'site_link_title', _columns(branch_conn),
+            f'{field_name}_title', _columns(branch_conn),
             'Precondition: title column must be absent from the branch schema',
         )
         self.assertIn(
-            'site_link_title', _columns(main_conn),
+            f'{field_name}_title', _columns(main_conn),
             'Precondition: title column must still be present in main',
+        )
+        return cot, branch, table_name, branch_conn, _columns
+
+    def test_heal_branch_adds_missing_title_column_to_branch_schema_only(self):
+        """
+        Lower-level unit check of heal_branch() itself, called directly.  See
+        test_upgrade_custom_objects_command_heals_existing_branch below for
+        the end-to-end trigger this plugin actually relies on in production.
+        """
+        from netbox_custom_objects.mixin_migration import heal_branch
+
+        cot, branch, table_name, branch_conn, _columns = (
+            self._setup_branch_with_dropped_title_column('heal_cot', 'heal-cot', 'site_link')
         )
 
         result = heal_branch(branch)
@@ -2600,6 +2610,34 @@ class BranchUpgradeHealTestCase(BranchingTestBase, TransactionTestCase):
             "heal_branch() must not have touched main's schema",
         )
         self.assertEqual(result['healed'], 1)
+
+    def test_upgrade_custom_objects_command_heals_existing_branch(self):
+        """
+        End-to-end regression test for the reviewer's concern that the only
+        prior coverage called heal_branch() directly, bypassing the actual
+        trigger a real upgrade uses.  Drives the management command instead
+        -- the same entry point an administrator runs after upgrading the
+        plugin, and the same code path the post_migrate signal handler uses
+        internally (heal_all_branches()) -- and never calls heal_branch()
+        directly.
+        """
+        from django.core.management import call_command
+
+        cot, branch, table_name, branch_conn, _columns = (
+            self._setup_branch_with_dropped_title_column('heal_cmd_cot', 'heal-cmd-cot', 'site_link')
+        )
+
+        call_command('upgrade_custom_objects', verbosity=0)
+
+        self.assertIn(
+            'site_link_title', _columns(branch_conn),
+            "'manage.py upgrade_custom_objects' must heal the branch's schema too, "
+            'not just main\'s',
+        )
+        self.assertIn(
+            'site_link_title', _columns(main_conn),
+            "the command must not have broken main's already-healthy schema",
+        )
 
 
 # ── Missing field-type coverage (iterative only) ──────────────────────────────

@@ -66,13 +66,16 @@ def _reset_deferred_co_field_data(sender, **kwargs):
 def _heal_branch_on_migrate(sender, branch, **kwargs):
     """netbox-branching's own ``post_migrate`` receiver.
 
-    ``Branch.migrate()`` applies migrations directly via Django's
-    ``MigrationExecutor`` against the branch's own connection and never calls
-    ``call_command('migrate', ...)``, so Django's core ``post_migrate`` signal
-    (handled by ``_heal_mixin_columns`` below) never fires for it. Without this
-    receiver, a branch provisioned before a plugin release that adds a new base
-    column (e.g. a multi-column field type's extra sub-column) never gets that
-    column healed into its own schema — only into the default connection's.
+    Secondary/defense-in-depth path only. The reliable trigger for healing
+    *existing* branches is ``heal_all_branches()``, called unconditionally
+    from ``_heal_mixin_columns`` below (Django's core ``post_migrate``, fired
+    by every ``manage.py migrate`` run) -- a schema change like a new
+    multi-column sub-column ships with no actual Django migration file, so
+    there's nothing for netbox-branching's ``MigrationExecutor`` to detect as
+    "pending" against a branch, and ``Branch.migrate()`` never runs for it.
+    This receiver still re-heals the one branch that was just migrated,
+    covering a *future* plugin release that does ship a real migration
+    alongside a schema change.
     """
     try:
         from netbox_custom_objects.mixin_migration import heal_branch  # noqa: PLC0415
@@ -161,6 +164,12 @@ def _heal_mixin_columns(sender, **kwargs):
     process so the cost is negligible on normal server starts where no
     migrations run.
 
+    Also heals every live Branch's own schema (heal_all_branches()), not just
+    the default connection's.  This can't be delegated to Branch.migrate()'s
+    own post_migrate signal (see heal_branch()'s docstring in
+    mixin_migration.py for why) -- the main upgrade path is the only reliable
+    trigger, so it runs unconditionally here alongside the main-schema heal.
+
     Skipped during makemigrations and collectstatic (DB may be unavailable or
     in an inconsistent state for our purposes).
     """
@@ -172,8 +181,11 @@ def _heal_mixin_columns(sender, **kwargs):
         return
 
     try:
-        from netbox_custom_objects.mixin_migration import heal_all_cots  # noqa: PLC0415
+        from netbox_custom_objects.mixin_migration import heal_all_branches, heal_all_cots  # noqa: PLC0415
         heal_all_cots(verbosity=kwargs.get("verbosity", 1))
+        # No-ops (zero-result) when netbox-branching isn't installed -- see
+        # heal_all_branches()'s own apps.is_installed() check.
+        heal_all_branches(verbosity=kwargs.get("verbosity", 1))
     except Exception:
         import logging  # noqa: PLC0415
         logging.getLogger(__name__).exception(
