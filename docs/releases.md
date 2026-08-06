@@ -17,14 +17,6 @@ Custom Object Types and their instances are now queryable and mutable via the Ne
 
 - [#30](https://github.com/netboxlabs/netbox-custom-objects/issues/30) - GraphQL support for Custom Objects
 
-**Optional Link Title for URL Fields**
-
-`url`-type fields now support an optional, human-readable link title, shown as the link text in place of the raw URL on both the object's detail page and in list views.
-
-Upgrading: existing `url` fields gain the new `<name>_title` column automatically — no manual migration is needed. On the main schema this happens the next time `manage.py migrate` runs (or immediately via `manage.py upgrade_custom_objects`, which also supports `--dry-run`). On a NetBox Branching branch it happens the next time that branch itself is migrated (its "Migrate branch" action, available whenever the branch's migration state lags behind main).
-
-- [#496](https://github.com/netboxlabs/netbox-custom-objects/issues/496) - Add optional link title to URL fields
-
 ### Enhancements
 
 - [#98](https://github.com/netboxlabs/netbox-custom-objects/issues/98) - Config context support for Custom Objects

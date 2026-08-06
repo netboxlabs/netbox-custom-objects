@@ -135,5 +135,4 @@ Behaviour:
 - **Upgrading from an older release.** Existing `url` fields gain the `<name>_title`
   column automatically on the next `manage.py migrate` (or immediately via
   `manage.py upgrade_custom_objects`). On a NetBox Branching branch, it's healed the
-  next time that branch itself is migrated. See the [release notes](releases.md) for
-  details.
+  next time that branch itself is migrated.
