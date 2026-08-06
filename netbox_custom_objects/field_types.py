@@ -5,6 +5,7 @@ import json
 import logging
 from decimal import Decimal
 from typing import List
+from urllib.parse import urlparse
 
 import django_tables2 as tables
 from strawberry.scalars import JSON
@@ -22,8 +23,9 @@ from django.db.models.fields.related import ForeignKey, ManyToManyDescriptor
 from django.db.models.manager import Manager
 from django.db.models.signals import m2m_changed
 from django.urls import reverse
-from django.utils.html import escape
+from django.utils.html import escape, format_html
 from django.utils.safestring import mark_safe
+from django.utils.text import Truncator
 from django.utils.translation import gettext_lazy as _
 from extras.choices import CustomFieldTypeChoices, CustomFieldUIEditableChoices
 from utilities.api import get_serializer_for_model
@@ -41,6 +43,7 @@ from utilities.forms.widgets import (
     DateTimePicker,
 )
 from utilities.templatetags.builtins.filters import linkify, render_markdown
+from netbox.config import get_config
 from netbox.tables.columns import BooleanColumn
 
 from netbox_custom_objects.choices import (CustomObjectFieldTypeChoices,
@@ -538,6 +541,27 @@ class URLFieldType(FieldType):
     def title_field_name(field):
         return f"{field.name}_title"
 
+    @staticmethod
+    def render_url_html(url, title):
+        """
+        Render *url* as a safe, truncated link -- the title as link text if set,
+        falling back to the URL itself -- mirroring NetBox core's
+        builtins/customfield_value.html convention for 'url' custom fields,
+        including its scheme-allowlist guard against unsafe schemes (e.g.
+        javascript:).  Returns '' if *url* is falsy.  Shared by the detail-page
+        template filter and the list-view table column so both render identically.
+        """
+        if not url:
+            return ""
+        try:
+            scheme = urlparse(url).scheme.lower()
+        except ValueError:
+            scheme = ""
+        display_text = Truncator(title or url).chars(70)
+        if not scheme or scheme in get_config().ALLOWED_URL_SCHEMES:
+            return format_html('<a href="{}">{}</a>', url, display_text)
+        return display_text
+
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
@@ -595,6 +619,16 @@ class URLFieldType(FieldType):
             label=field,
             required=False,
         )
+
+    def render_table_column(self, record, bound_column):
+        """
+        Render the same title-as-link-text HTML as the detail page, rather than
+        showing the two backing columns (<name>, <name>_title) as separate table
+        columns -- keeps the list view consistent with the detail view.
+        """
+        url = getattr(record, bound_column.name, None)
+        title = getattr(record, f"{bound_column.name}_title", None)
+        return self.render_url_html(url, title)
 
 
 class JSONFieldType(FieldType):

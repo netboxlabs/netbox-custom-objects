@@ -116,13 +116,14 @@ A `url` field stores the URL value plus an optional human-readable **link title*
 Adding one `url` field named `website` creates two backing columns:
 
 - `website` — the URL itself
-- `website_title` — optional display text shown in place of the raw URL on the
-  object's detail page
+- `website_title` — optional display text shown in place of the raw URL
 
 Behaviour:
 
-- **Detail page only.** The title is used as the visible link text on the object
-  detail page. List/table views continue to show the raw URL as plain text.
+- **Detail page and list view.** The title, when set, is used as the visible link
+  text both on the object's detail page and in its column in list/table views —
+  the two backing columns are never shown as separate table columns. Falls back to
+  the raw URL as link text when no title is set.
 - **Optional independently.** The title has no relationship to the URL value —
   setting one without the other is allowed and harmless.
 - **REST API.** The pair is exposed as two flat fields, `<name>` and `<name>_title`.
@@ -131,3 +132,8 @@ Behaviour:
 - **CSV import.** Bulk CSV import only populates the URL value; the title column is
   not importable via CSV (the same limitation applies to `coordinates` fields' backing
   columns).
+- **Upgrading from an older release.** Existing `url` fields gain the `<name>_title`
+  column automatically on the next `manage.py migrate` (or immediately via
+  `manage.py upgrade_custom_objects`). On a NetBox Branching branch, it's healed the
+  next time that branch itself is migrated. See the [release notes](releases.md) for
+  details.

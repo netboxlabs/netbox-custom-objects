@@ -1,12 +1,8 @@
-from urllib.parse import urlparse
-
 from django import template
-from django.utils.html import format_html
-from django.utils.text import Truncator
 from extras.choices import CustomFieldUIVisibleChoices
-from netbox.config import get_config
 
 from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
+from netbox_custom_objects.field_types import URLFieldType
 from netbox_custom_objects.models import CustomObjectTypeField
 from netbox_custom_objects.utilities import build_map_url
 
@@ -74,41 +70,19 @@ def get_field_is_ui_visible(obj, field: CustomObjectTypeField) -> bool:
     return False
 
 
-def _url_scheme_is_allowed(value):
-    """
-    Return True if value's URL scheme is permitted by ALLOWED_URL_SCHEMES (a
-    schemeless/unparseable value is treated as relative and allowed). Reimplemented
-    locally rather than imported from NetBox core's utilities.validators, since
-    url_scheme_is_allowed() only exists on NetBox's feature branch (added 2026-07-23)
-    and this plugin supports NetBox versions well before that -- ALLOWED_URL_SCHEMES
-    itself has existed since 2020 and is safe to rely on across the supported range.
-    """
-    try:
-        scheme = urlparse(value).scheme.lower()
-    except ValueError:
-        scheme = ""
-    return not scheme or scheme in get_config().ALLOWED_URL_SCHEMES
-
-
 @register.filter(name="get_url_field_html")
 def get_url_field_html(obj, field: CustomObjectTypeField):
     """
-    Render a url-type field as a safe link: the title as link text if set, falling
-    back to the URL itself, truncated to 70 chars -- mirrors NetBox core's
-    builtins/customfield_value.html convention for 'url' custom fields, including
-    its scheme-allowlist guard against unsafe schemes (e.g. javascript:).
+    Render a url-type field as a safe link: the title as link text if set,
+    falling back to the URL itself.  Delegates to URLFieldType.render_url_html()
+    so the detail page and the list-view table column render identically.
     Returns '' when the URL itself is unset, regardless of whether a title is set.
     """
     if field.type != CustomObjectFieldTypeChoices.TYPE_URL:
         return ""
     url = getattr(obj, field.name, None)
-    if not url:
-        return ""
     title = getattr(obj, f"{field.name}_title", None)
-    display_text = Truncator(title or url).chars(70)
-    if _url_scheme_is_allowed(url):
-        return format_html('<a href="{}">{}</a>', url, display_text)
-    return display_text
+    return URLFieldType.render_url_html(url, title)
 
 
 @register.filter(name="get_child_relations")
