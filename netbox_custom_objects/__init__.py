@@ -63,6 +63,27 @@ def _reset_deferred_co_field_data(sender, **kwargs):
     _deferred_co_field_data.set(None)
 
 
+def _heal_branch_on_migrate(sender, branch, **kwargs):
+    """netbox-branching's own ``post_migrate`` receiver.
+
+    ``Branch.migrate()`` applies migrations directly via Django's
+    ``MigrationExecutor`` against the branch's own connection and never calls
+    ``call_command('migrate', ...)``, so Django's core ``post_migrate`` signal
+    (handled by ``_heal_mixin_columns`` below) never fires for it. Without this
+    receiver, a branch provisioned before a plugin release that adds a new base
+    column (e.g. a multi-column field type's extra sub-column) never gets that
+    column healed into its own schema — only into the default connection's.
+    """
+    try:
+        from netbox_custom_objects.mixin_migration import heal_branch  # noqa: PLC0415
+        heal_branch(branch, verbosity=kwargs.get("verbosity", 1))
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "netbox_custom_objects: unexpected error healing branch %s after migrate",
+            getattr(branch, "pk", branch),
+        )
+
+
 def _register_branching_hooks_once():
     """Register netbox-branching integration hooks at most once per process.
 
@@ -87,6 +108,12 @@ def _register_branching_hooks_once():
 
     for sig in (pre_merge, post_merge, pre_sync, post_sync, pre_revert, post_revert):
         sig.connect(_reset_deferred_co_field_data, weak=False)
+
+    try:
+        from netbox_branching.signals import post_migrate as branching_post_migrate
+        branching_post_migrate.connect(_heal_branch_on_migrate, weak=False)
+    except ImportError:
+        pass
 
     try:
         from netbox_branching.utilities import (

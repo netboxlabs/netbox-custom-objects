@@ -253,6 +253,17 @@ def _apply_deferred_co_field(field_instance):
     if field_instance.pk is not None:
         candidate_keys.update(_historical_names_for_field(field_instance.pk))
 
+    # A URL field has a second backing column (<name>_title) whose value must
+    # be replayed too, or it silently reverts to its default empty string —
+    # the URL and title can be set independently, so each is matched and
+    # applied on its own.
+    title_col_name = None
+    title_candidate_keys = set()
+    if field_instance.type == CustomFieldTypeChoices.TYPE_URL:
+        from netbox_custom_objects.field_types import URLFieldType  # noqa: PLC0415
+        title_col_name = URLFieldType.title_field_name(field_instance)
+        title_candidate_keys = {f'{k}_title' for k in candidate_keys}
+
     schema_conn = _get_schema_connection()
 
     with schema_conn.cursor() as cursor:
@@ -261,19 +272,25 @@ def _apply_deferred_co_field(field_instance):
             # Distinguish "key absent" from "key present with NULL" — explicit
             # None is a legitimate write and must reach the column.
             matched = next((k for k in candidate_keys if k in data), None)
-            if matched is None:
+            title_matched = next((k for k in title_candidate_keys if k in data), None)
+            if matched is None and title_matched is None:
                 continue
-            value = data[matched]
             # table_name / col_name come from validated identifiers
             # (^[a-z0-9_]+$ on field.name) — safe to interpolate.
-            cursor.execute(
-                f'UPDATE "{table_name}" SET "{col_name}" = %s WHERE id = %s',
-                [value, co_pk],
-            )
+            if matched is not None:
+                cursor.execute(
+                    f'UPDATE "{table_name}" SET "{col_name}" = %s WHERE id = %s',
+                    [data[matched], co_pk],
+                )
+            if title_matched is not None:
+                cursor.execute(
+                    f'UPDATE "{table_name}" SET "{title_col_name}" = %s WHERE id = %s',
+                    [data[title_matched], co_pk],
+                )
             # Pop consumed keys immediately so a mid-loop failure leaves
             # un-applied rows intact for retry but doesn't re-apply
             # rows that already succeeded.
-            for k in candidate_keys:
+            for k in candidate_keys | title_candidate_keys:
                 data.pop(k, None)
 
     exhausted = [pk for pk, entry in per_table.items() if not entry['data']]
@@ -395,6 +412,53 @@ def _schema_remove_field(fi, model, schema_editor, schema_conn=None, existing_ta
     schema_editor.remove_field(model, mf)
 
 
+def _alter_column_with_rename_conflict_resolution(
+    old_mf, new_mf, model, schema_editor, schema_conn, resolve_live_column, log_label,
+):
+    """``alter_field`` from *old_mf* to *new_mf*, resolving a rename conflict
+    (neither the old nor the new column exists — independent renames on
+    branch A→X vs. main A→Y that must converge) by asking
+    *resolve_live_column* for the field's actual current column.
+
+    *resolve_live_column* takes no arguments and returns the live ``Field``
+    (already ``contribute_to_class``-ed onto *model*), or ``None`` if it
+    can't be resolved — in which case the rename is skipped for this replay.
+    Idempotent: a no-op if *new_mf*'s column already exists.
+    """
+    with schema_conn.cursor() as cursor:
+        existing_cols = {
+            col.name
+            for col in schema_conn.introspection.get_table_description(cursor, model._meta.db_table)
+        }
+    if old_mf.column not in existing_cols:
+        if new_mf.column in existing_cols:
+            logger.debug(
+                '%s: %r already renamed to %r on %s, skipping',
+                log_label, old_mf.column, new_mf.column, model._meta.db_table,
+            )
+            return
+        # Both source and target columns absent → independent rename in this
+        # schema; look up the live column and converge on the merge target.
+        logger.warning(
+            '%s: rename conflict on %s — neither %r nor %r exists; '
+            'resolving via live field',
+            log_label, model._meta.db_table, old_mf.column, new_mf.column,
+        )
+        live_mf = resolve_live_column()
+        if live_mf is None:
+            return
+        if live_mf.column not in existing_cols:
+            logger.debug(
+                '%s: live column %r also absent on %s; skipping',
+                log_label, live_mf.column, model._meta.db_table,
+            )
+            return
+        schema_editor.alter_field(model, live_mf, new_mf)
+        return
+
+    schema_editor.alter_field(model, old_mf, new_mf)
+
+
 def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, existing_tables=None):
     """``alter_field`` from *old_fi* to *new_fi*; idempotent across replays.
 
@@ -427,25 +491,7 @@ def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, exist
             )
         return
 
-    with schema_conn.cursor() as cursor:
-        existing_cols = {
-            col.name
-            for col in schema_conn.introspection.get_table_description(cursor, model._meta.db_table)
-        }
-    if old_mf.column not in existing_cols:
-        if new_mf.column in existing_cols:
-            logger.debug(
-                '_schema_alter_field: %r already renamed to %r on %s, skipping',
-                old_mf.column, new_mf.column, model._meta.db_table,
-            )
-            return
-        # Both source and target columns absent → independent rename in this
-        # schema; look up the live column and converge on the merge target.
-        logger.warning(
-            '_schema_alter_field: rename conflict on %s — neither %r nor %r '
-            'exists; resolving via live field pk=%d',
-            model._meta.db_table, old_mf.column, new_mf.column, new_fi.pk,
-        )
+    def _resolve_live_primary_column():
         try:
             live_fi = CustomObjectTypeField.objects.using(schema_conn.alias).get(pk=new_fi.pk)
         except CustomObjectTypeField.DoesNotExist:
@@ -453,19 +499,16 @@ def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, exist
                 '_schema_alter_field: field pk=%d not found in %s; skipping',
                 new_fi.pk, schema_conn.alias,
             )
-            return
+            return None
         live_mf = _primary_model_field(live_fi)
         live_mf.contribute_to_class(model, live_fi.name)
-        if live_mf.column not in existing_cols:
-            logger.debug(
-                '_schema_alter_field: live column %r also absent on %s; skipping',
-                live_mf.column, model._meta.db_table,
-            )
-            return
-        schema_editor.alter_field(model, live_mf, new_mf)
-        return
+        return live_mf
 
-    schema_editor.alter_field(model, old_mf, new_mf)
+    _alter_column_with_rename_conflict_resolution(
+        old_mf, new_mf, model, schema_editor, schema_conn,
+        resolve_live_column=_resolve_live_primary_column,
+        log_label='_schema_alter_field',
+    )
 
 
 def _rename_or_create_m2m_through(old_fi, new_fi, model, schema_editor, schema_conn, existing_tables):
@@ -3592,7 +3635,24 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                             new_title_field = field_type.get_model_field(self)[new_title]
                             old_title_field.contribute_to_class(model, old_title)
                             new_title_field.contribute_to_class(model, new_title)
-                            schema_editor.alter_field(model, old_title_field, new_title_field)
+
+                            def _resolve_live_title_column():
+                                try:
+                                    live_fi = CustomObjectTypeField.objects.using(
+                                        schema_conn.alias
+                                    ).get(pk=self.pk)
+                                except CustomObjectTypeField.DoesNotExist:
+                                    return None
+                                live_title_name = field_type.title_field_name(live_fi)
+                                live_title_field = field_type.get_model_field(live_fi)[live_title_name]
+                                live_title_field.contribute_to_class(model, live_title_name)
+                                return live_title_field
+
+                            _alter_column_with_rename_conflict_resolution(
+                                old_title_field, new_title_field, model, schema_editor, schema_conn,
+                                resolve_live_column=_resolve_live_title_column,
+                                log_label='CustomObjectTypeField.save (title column)',
+                            )
 
             # Rewrite historical audit-data keys so any future replay can
             # resolve old or new name to the current field name.
@@ -3602,6 +3662,12 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 and self._original_name != self.name
             ):
                 _rename_objectchange_field_key(self, self._original_name, self.name)
+                if self.type == CustomObjectFieldTypeChoices.TYPE_URL:
+                    _rename_objectchange_field_key(
+                        self,
+                        field_type.title_field_name(self.original),
+                        field_type.title_field_name(self),
+                    )
 
             # FK-constraint decision inside the atomic so a rollback discards it too.
             should_ensure_fk = False

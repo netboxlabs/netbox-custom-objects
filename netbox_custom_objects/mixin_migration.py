@@ -22,7 +22,7 @@ Safety rules
 
 import logging
 
-from django.db import connection
+from django.db import DEFAULT_DB_ALIAS, connections
 
 logger = logging.getLogger(__name__)
 
@@ -68,16 +68,18 @@ def _expected_base_fields(cot, model=None):
     }
 
 
-def _actual_column_names(table_name):
+def _actual_column_names(table_name, using=DEFAULT_DB_ALIAS):
     """
-    Return the set of column names currently present in *table_name*.
+    Return the set of column names currently present in *table_name* on the
+    *using* connection (a branch's own schema when healing a branch).
 
     Raises OperationalError / ProgrammingError if the table does not exist.
     """
-    with connection.cursor() as cursor:
+    conn = connections[using]
+    with conn.cursor() as cursor:
         return {
             col.name
-            for col in connection.introspection.get_table_description(cursor, table_name)
+            for col in conn.introspection.get_table_description(cursor, table_name)
         }
 
 
@@ -98,7 +100,7 @@ def _can_auto_add(field):
 # Public API
 # ---------------------------------------------------------------------------
 
-def heal_cot(cot, verbosity=1, dry_run=False):
+def heal_cot(cot, verbosity=1, dry_run=False, using=DEFAULT_DB_ALIAS):
     """
     Detect and repair mixin column drift for a single CustomObjectType.
 
@@ -107,6 +109,8 @@ def heal_cot(cot, verbosity=1, dry_run=False):
     cot       : CustomObjectType instance
     verbosity : int  0=silent, 1=changes+warnings, 2=verbose
     dry_run   : bool  if True, report but do not modify the DB
+    using     : str   connection alias to introspect/alter — a branch's own
+                connection when healing a branch schema (see heal_branch())
 
     Returns
     -------
@@ -119,7 +123,7 @@ def heal_cot(cot, verbosity=1, dry_run=False):
     warned = []
 
     try:
-        actual_names = _actual_column_names(table_name)
+        actual_names = _actual_column_names(table_name, using=using)
     except Exception as exc:
         logger.warning(
             "upgrade_custom_objects: cannot introspect table %r (COT %s): %s",
@@ -164,7 +168,7 @@ def heal_cot(cot, verbosity=1, dry_run=False):
             continue
 
         try:
-            with connection.schema_editor() as editor:
+            with connections[using].schema_editor() as editor:
                 # Flush pending DEFERRABLE FK trigger events before ALTER TABLE;
                 # PostgreSQL rejects ADD COLUMN when deferred triggers are pending.
                 editor.execute('SET CONSTRAINTS ALL IMMEDIATE')
@@ -238,19 +242,20 @@ def heal_cot(cot, verbosity=1, dry_run=False):
                 "null": field.null,
             }
         doc["base_columns"] = list(current_cols.values())
-        cot.__class__.objects.filter(pk=cot.pk).update(schema_document=doc)
+        cot.__class__.objects.using(using).filter(pk=cot.pk).update(schema_document=doc)
         cot.schema_document = doc
 
     return {"added": added, "warned": warned}
 
 
-def heal_all_cots(verbosity=1, dry_run=False):
+def heal_all_cots(verbosity=1, dry_run=False, using=DEFAULT_DB_ALIAS):
     """
     Run heal_cot() for every CustomObjectType.
 
     Called by the post_migrate signal handler.  The upgrade_custom_objects
     management command iterates COTs directly so it can print per-COT output
-    to stdout.
+    to stdout.  heal_branch() calls this with using set to a branch's own
+    connection, from inside activate_branch(), to heal that branch's schema.
 
     Returns
     -------
@@ -263,9 +268,9 @@ def heal_all_cots(verbosity=1, dry_run=False):
 
     total = healed = warnings = 0
 
-    for cot in CustomObjectType.objects.all():
+    for cot in CustomObjectType.objects.using(using).all():
         total += 1
-        result = heal_cot(cot, verbosity=verbosity, dry_run=dry_run)
+        result = heal_cot(cot, verbosity=verbosity, dry_run=dry_run, using=using)
         if result["added"]:
             healed += 1
         warnings += len(result["warned"])
@@ -282,3 +287,26 @@ def heal_all_cots(verbosity=1, dry_run=False):
         )
 
     return {"total": total, "healed": healed, "warnings": warnings}
+
+
+def heal_branch(branch, verbosity=1, dry_run=False):
+    """
+    Run heal_all_cots() against a single Branch's own PostgreSQL schema.
+
+    Branch schema migrations run via netbox-branching's own MigrationExecutor
+    (Branch.migrate()), which never emits Django's core post_migrate signal —
+    only netbox-branching's own post_migrate (see the receiver registered in
+    __init__.py). A branch created before a plugin release that adds a new
+    base column (e.g. #496's <name>_title column) therefore never gets that
+    column added to its own schema: the plugin's post_migrate heal pass only
+    ever ran against DEFAULT_DB_ALIAS.
+
+    activate_branch() makes get_model() resolve each COT's branch-specific
+    model variant (a branch may have renamed columns that don't exist in
+    main); using=branch.connection_name makes the actual introspection/DDL
+    target the branch's own schema, not main's. Both are required together.
+    """
+    from netbox_branching.utilities import activate_branch  # noqa: PLC0415
+
+    with activate_branch(branch):
+        return heal_all_cots(verbosity=verbosity, dry_run=dry_run, using=branch.connection_name)

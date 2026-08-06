@@ -574,11 +574,13 @@ class URLFieldType(FieldType):
             assume_scheme="https",
             required=field.required,
             initial=field.default,
+            help_text=render_markdown(field.description) if field.description else None,
         )
         title_field = forms.CharField(
             label=f"{base_label} ({_('link title')})",
             required=False,
             max_length=200,
+            help_text=_("Text shown as the link instead of the raw URL."),
         )
         if field.ui_editable != CustomFieldUIEditableChoices.YES:
             url_field.disabled = True

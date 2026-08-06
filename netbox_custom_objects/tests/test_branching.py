@@ -253,6 +253,13 @@ class BaseBranchingTests(BranchingTestBase):
         select      — VARCHAR column with a ChoiceSet
         object      — ForeignKey column (to dcim.Site)
         multiobject — M2M through-table (to dcim.Site)
+        url         — two backing columns (<name>, <name>_title); the CO is
+                      created in the same atomic block as the field, so under
+                      squash the CO's CREATE can replay before the field's own
+                      CREATE — exercising _apply_deferred_co_field's replay of
+                      both the URL and title values (title only reverts to its
+                      default empty string, not the URL, if the replay ever
+                      drops it)
 
         This exercises every distinct schema-editor operation
         (add_field, add_FK, create_through_table) across a merge cycle and
@@ -294,6 +301,7 @@ class BaseBranchingTests(BranchingTestBase):
                 ('select_field', {'type': 'select', 'choice_set': choice_set}),
                 ('obj_field', {'type': 'object', 'related_object_type': site_ot}),
                 ('multi_field', {'type': 'multiobject', 'related_object_type': site_ot}),
+                ('url_field', {'type': 'url'}),
             ]
             for name, kwargs in field_specs:
                 f = CustomObjectTypeField.objects.create(
@@ -314,6 +322,8 @@ class BaseBranchingTests(BranchingTestBase):
                 select_field='active',
                 obj_field_id=site.pk,
                 # multi_field left empty — through-table creation is still exercised
+                url_field='https://example.com/path',
+                url_field_title='Example Path',
             )
             co_pk = co.pk
 
@@ -353,6 +363,11 @@ class BaseBranchingTests(BranchingTestBase):
         self.assertEqual(co_main.dt_field, test_dt)
         self.assertEqual(co_main.select_field, 'active')
         self.assertEqual(co_main.obj_field_id, site.pk)
+        self.assertEqual(co_main.url_field, 'https://example.com/path')
+        self.assertEqual(
+            co_main.url_field_title, 'Example Path',
+            'Title value must survive replay alongside the URL value',
+        )
 
         # Capture the multi_field's physical through-table name *while* it
         # still exists so we can confirm it's gone after revert.
@@ -2336,6 +2351,174 @@ class SequentialRenameTestCase(BranchingTestBase, TransactionTestCase):
         self.assertNotIn('beta', main_cols, 'beta column must be gone after merge')
         self.assertNotIn('alpha', main_cols, 'alpha column must be gone after merge')
 
+    # ── url field: title column rename + replay/revert ─────────────────────
+
+    def test_url_field_rename_replays_title_and_reverts(self):
+        """
+        Rename a ``url``-type field inside a branch, updating both the URL
+        and title values under the new name.  After merge, both backing
+        columns (``<name>``, ``<name>_title``) must have been renamed and
+        both values must be present under the new name.  After revert, both
+        must be restored under the old name.
+
+        Regression test for the naive ``alter_field()`` call on the title
+        column (previously assumed the old title column always existed,
+        unlike the primary column's conflict-aware ``_schema_alter_field``
+        path) and for the title key's audit-data rewrite.
+        """
+        request = _make_request(self.user)
+
+        with event_tracking(request):
+            cot = CustomObjectType.objects.create(name='url_rename_cot', slug='url-rename-cot')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='site_link', label='Site Link', type='url',
+            )
+            co = cot.get_model().objects.create(
+                site_link='https://old.example.com', site_link_title='Old Title',
+            )
+
+        co_pk = co.pk
+        branch = _provision_branch('URL Rename Branch', self.MERGE_STRATEGY, self.user)
+        branch_request = _make_request(self.user)
+
+        with activate_branch(branch), event_tracking(branch_request):
+            field = CustomObjectTypeField.objects.get(custom_object_type=cot, name='site_link')
+            field.snapshot()
+            field.name = 'external_link'
+            field.label = 'External Link'
+            field.save()
+            BM = cot.get_model()
+            b_co = BM.objects.get(pk=co_pk)
+            b_co.snapshot()
+            b_co.external_link = 'https://new.example.com'
+            b_co.external_link_title = 'New Title'
+            b_co.save()
+
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        with main_conn.cursor() as cursor:
+            main_cols = {
+                col.name
+                for col in main_conn.introspection.get_table_description(
+                    cursor, cot.get_database_table_name(),
+                )
+            }
+        self.assertIn('external_link', main_cols)
+        self.assertIn('external_link_title', main_cols)
+        self.assertNotIn('site_link', main_cols)
+        self.assertNotIn('site_link_title', main_cols)
+
+        MergedModel = cot.get_model()
+        co_main = MergedModel.objects.get(pk=co_pk)
+        self.assertEqual(co_main.external_link, 'https://new.example.com')
+        self.assertEqual(co_main.external_link_title, 'New Title')
+
+        branch.revert(user=self.user, commit=True)
+
+        with main_conn.cursor() as cursor:
+            main_cols_r = {
+                col.name
+                for col in main_conn.introspection.get_table_description(
+                    cursor, cot.get_database_table_name(),
+                )
+            }
+        self.assertIn('site_link', main_cols_r)
+        self.assertIn('site_link_title', main_cols_r)
+        self.assertNotIn('external_link', main_cols_r)
+        self.assertNotIn('external_link_title', main_cols_r)
+
+        RevertedModel = cot.get_model()
+        co_reverted = RevertedModel.objects.get(pk=co_pk)
+        self.assertEqual(co_reverted.site_link, 'https://old.example.com')
+        self.assertEqual(co_reverted.site_link_title, 'Old Title')
+
+    def test_url_field_title_column_rename_conflict_merge(self):
+        """
+        Same independent-rename conflict as ``test_sequential_renames_both_sides_merge``
+        (branch renames A→B→C while main independently renames A→D), but for a
+        ``url``-type field, asserting the *title* column resolves the conflict
+        the same way the primary column does.
+
+        Regression test: the naive ``alter_field()`` call for the title column
+        assumed the old title column still existed; when it doesn't (because
+        main independently renamed the field first), the title rename must
+        resolve via the live field record — exactly like
+        ``_schema_alter_field`` already does for the primary column — instead
+        of crashing or silently leaving the title column stale.
+        """
+        request = _make_request(self.user)
+
+        with event_tracking(request):
+            cot = CustomObjectType.objects.create(name='url_conflict_cot', slug='url-conflict-cot')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='alpha', label='Alpha', type='url',
+            )
+            co = cot.get_model().objects.create(alpha='https://a.example.com', alpha_title='A')
+
+        co_pk = co.pk
+        branch = _provision_branch('URL Conflict Branch', self.MERGE_STRATEGY, self.user)
+        branch_request = _make_request(self.user)
+
+        # ── branch: alpha → beta → gamma ──────────────────────────────────
+        with activate_branch(branch), event_tracking(branch_request):
+            f = CustomObjectTypeField.objects.get(custom_object_type=cot, name='alpha')
+            f.snapshot()
+            f.name = 'beta'
+            f.label = 'Beta'
+            f.save()
+            BM = cot.get_model()
+            co_b = BM.objects.get(pk=co_pk)
+            co_b.snapshot()
+            co_b.beta = 'https://b.example.com'
+            co_b.beta_title = 'B'
+            co_b.save()
+
+        with activate_branch(branch), event_tracking(branch_request):
+            f = CustomObjectTypeField.objects.get(custom_object_type=cot, name='beta')
+            f.snapshot()
+            f.name = 'gamma'
+            f.label = 'Gamma'
+            f.save()
+            BM = cot.get_model()
+            co_g = BM.objects.get(pk=co_pk)
+            co_g.snapshot()
+            co_g.gamma = 'https://g.example.com'
+            co_g.gamma_title = 'G'
+            co_g.save()
+
+        # ── main: alpha → delta (independent rename) ──────────────────────
+        with event_tracking(request):
+            f = CustomObjectTypeField.objects.get(custom_object_type=cot, name='alpha')
+            f.name = 'delta'
+            f.label = 'Delta'
+            f.save()
+
+        # ── merge — let any failure propagate with its original traceback ──
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+
+        with main_conn.cursor() as cursor:
+            main_cols = {
+                col.name
+                for col in main_conn.introspection.get_table_description(
+                    cursor, cot.get_database_table_name(),
+                )
+            }
+        self.assertIn('gamma', main_cols, 'Main URL column must be gamma after merge')
+        self.assertIn(
+            'gamma_title', main_cols,
+            'Main title column must converge to gamma_title, not be left as delta_title/stale',
+        )
+        for stale in ('alpha', 'beta', 'delta', 'alpha_title', 'beta_title', 'delta_title'):
+            self.assertNotIn(stale, main_cols, f'{stale!r} column must be gone after merge')
+
+        MergedModel = cot.get_model()
+        co_main = MergedModel.objects.get(pk=co_pk)
+        self.assertEqual(co_main.gamma, 'https://g.example.com')
+        self.assertEqual(co_main.gamma_title, 'G')
+
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
 class SequentialRenameSquashTestCase(SequentialRenameTestCase, TransactionTestCase):
@@ -2344,6 +2527,79 @@ class SequentialRenameSquashTestCase(SequentialRenameTestCase, TransactionTestCa
 
     def test_sequential_renames_alpha_beta_gamma_merge(self):
         self._run_sequential_rename_merge('seq_squash_cot', 'seq-squash-cot')
+
+
+# ── Branch upgrade heal (mixin_migration.heal_branch) ──────────────────────────
+
+@unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
+class BranchUpgradeHealTestCase(BranchingTestBase, TransactionTestCase):
+    """
+    Regression test for upgrading a branch that already existed before a
+    plugin release added a new base column (here, URLFieldType's
+    ``<name>_title`` column from issue #496).
+
+    Branch schema migrations run via netbox-branching's own
+    ``MigrationExecutor`` (``Branch.migrate()``), which never triggers
+    Django's core ``post_migrate`` signal — only netbox-branching's own,
+    which ``heal_branch()`` is wired to.  Before that wiring existed, the
+    plugin's post_migrate heal pass only ever ran against the default
+    connection, so a pre-existing branch's own schema never got the new
+    column added.
+    """
+
+    def test_heal_branch_adds_missing_title_column_to_branch_schema_only(self):
+        """
+        Create a ``url`` field in main (so both main and a subsequently
+        provisioned branch have the full ``<name>``/``<name>_title`` schema),
+        then simulate a pre-upgrade branch by dropping ``<name>_title`` from
+        *only* the branch's own connection.  ``heal_branch()`` must restore
+        it on the branch's schema without touching main's.
+        """
+        from netbox_custom_objects.mixin_migration import heal_branch
+
+        request = _make_request(self.user)
+        with event_tracking(request):
+            cot = CustomObjectType.objects.create(name='heal_cot', slug='heal-cot')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='site_link', label='Site Link', type='url',
+            )
+
+        branch = _provision_branch('Heal Branch', None, self.user)
+        table_name = cot.get_database_table_name()
+        branch_conn = connections[branch.connection_name]
+
+        # Simulate a branch provisioned before #496 shipped: drop the title
+        # column from *only* the branch's own schema.
+        with branch_conn.cursor() as cursor:
+            cursor.execute(f'ALTER TABLE "{table_name}" DROP COLUMN "site_link_title"')
+
+        def _columns(conn):
+            with conn.cursor() as cursor:
+                return {
+                    col.name
+                    for col in conn.introspection.get_table_description(cursor, table_name)
+                }
+
+        self.assertNotIn(
+            'site_link_title', _columns(branch_conn),
+            'Precondition: title column must be absent from the branch schema',
+        )
+        self.assertIn(
+            'site_link_title', _columns(main_conn),
+            'Precondition: title column must still be present in main',
+        )
+
+        result = heal_branch(branch)
+
+        self.assertIn(
+            'site_link_title', _columns(branch_conn),
+            'heal_branch() must add the missing title column to the branch schema',
+        )
+        self.assertIn(
+            'site_link_title', _columns(main_conn),
+            "heal_branch() must not have touched main's schema",
+        )
+        self.assertEqual(result['healed'], 1)
 
 
 # ── Missing field-type coverage (iterative only) ──────────────────────────────
@@ -2393,6 +2649,7 @@ class MissingFieldTypesTestCase(BranchingTestBase, TransactionTestCase):
                 longtext_field='line1\nline2',
                 date_field=datetime.date(2026, 5, 21),
                 url_field='https://example.com/path',
+                url_field_title='Example Path',
                 json_field={'k': 'v', 'n': 1, 'list': [1, 2, 3]},
                 multiselect_field=['a', 'c'],
             )
@@ -2408,6 +2665,7 @@ class MissingFieldTypesTestCase(BranchingTestBase, TransactionTestCase):
         self.assertEqual(co_main.longtext_field, 'line1\nline2')
         self.assertEqual(co_main.date_field, datetime.date(2026, 5, 21))
         self.assertEqual(co_main.url_field, 'https://example.com/path')
+        self.assertEqual(co_main.url_field_title, 'Example Path')
         self.assertEqual(co_main.json_field, {'k': 'v', 'n': 1, 'list': [1, 2, 3]})
         self.assertEqual(sorted(co_main.multiselect_field), ['a', 'c'])
 

@@ -447,6 +447,13 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
             # Polymorphic Object (GFK): query via the concrete content_type column
             ct_field = f"{obj.name}_content_type__isnull"
             num_dependent_objects = model.objects.filter(**{ct_field: False}).count()
+        elif obj.type == CustomObjectFieldTypeChoices.TYPE_URL:
+            # The title may be set independently of the URL value, so an object with
+            # only a title (no URL) is dependent too and must not be omitted.
+            title_col = field_types.FIELD_TYPE_CLASS[obj.type]().title_field_name(obj)
+            num_dependent_objects = model.objects.filter(
+                Q(**{f"{obj.name}__isnull": False}) | ~Q(**{title_col: ""})
+            ).count()
         else:
             num_dependent_objects = model.objects.filter(**{f"{obj.name}__isnull": False}).count()
 
@@ -497,6 +504,11 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
             # Polymorphic GFK: filter on the concrete content_type column.
             ct_field = f"{obj.name}_content_type__isnull"
             dependent_objects[model] = list(model.objects.filter(**{ct_field: False}))
+        elif obj.type == CustomObjectFieldTypeChoices.TYPE_URL:
+            title_col = field_types.FIELD_TYPE_CLASS[obj.type]().title_field_name(obj)
+            dependent_objects[model] = list(model.objects.filter(
+                Q(**{f"{obj.name}__isnull": False}) | ~Q(**{title_col: ""})
+            ))
         else:
             dependent_objects[model] = list(model.objects.filter(**{f"{obj.name}__isnull": False}))
 
