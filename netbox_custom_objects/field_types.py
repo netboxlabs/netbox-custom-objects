@@ -1787,23 +1787,41 @@ class MultiObjectFieldType(FieldType):
         ``with connection.schema_editor()`` here would flush deferred SQL
         prematurely on PostgreSQL.
         """
+        from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
+
         source_model_string = f"{APP_LABEL}.{model.__name__}"
-        through = self.get_polymorphic_through_model(field_instance, source_model_string)
 
-        source_field = through._meta.get_field("source")
-        source_field.remote_field.model = model
-        source_field.related_model = model
+        # Serialized against CustomObjectType.get_model()'s own through-model
+        # reuse-or-create check (_after_model_generation runs under the same
+        # lock, held by its caller for the whole call). Without this, a
+        # concurrent reader regenerating this COT's model can observe this
+        # through model mid-construction here -- registered by Django's
+        # ModelBase metaclass inside generate_model() below, but before its
+        # "source" FK is repointed at `model` on the next line -- and race to
+        # point the registered class's FK at its OWN (different) model
+        # instance. Whichever thread's mutation and whichever thread's
+        # get_model() cache-write happen last aren't guaranteed to be the
+        # same thread, leaving the through's "source" FK and the cached model
+        # class mismatched. Confirmed live under concurrent load:
+        # intermittent "ValueError: Cannot query 'X': Must be 'TableYModel'
+        # instance." and RecursionError (issue #640).
+        with CustomObjectType._global_lock:
+            through = self.get_polymorphic_through_model(field_instance, source_model_string)
 
-        # Probe the same schema the DDL will target.  schema_editor is branch-aware
-        # (opened via _get_schema_connection() by the caller), whereas the module-level
-        # ``connection`` always points at the main schema — using it here would let the
-        # idempotency guard diverge from where create_model() actually writes.
-        conn = schema_editor.connection
-        table_name = through._meta.db_table
-        with conn.cursor() as cursor:
-            existing_tables = conn.introspection.table_names(cursor)
-            if table_name not in existing_tables:
-                schema_editor.create_model(through)
+            source_field = through._meta.get_field("source")
+            source_field.remote_field.model = model
+            source_field.related_model = model
+
+            # Probe the same schema the DDL will target.  schema_editor is branch-aware
+            # (opened via _get_schema_connection() by the caller), whereas the module-level
+            # ``connection`` always points at the main schema — using it here would let the
+            # idempotency guard diverge from where create_model() actually writes.
+            conn = schema_editor.connection
+            table_name = through._meta.db_table
+            with conn.cursor() as cursor:
+                existing_tables = conn.introspection.table_names(cursor)
+                if table_name not in existing_tables:
+                    schema_editor.create_model(through)
 
     def drop_polymorphic_m2m_table(self, field_instance, model, schema_editor):
         """Drops the DB table for a polymorphic MultiObject through.
