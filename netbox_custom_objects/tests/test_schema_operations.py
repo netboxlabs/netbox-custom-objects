@@ -4,15 +4,21 @@ Tests for database schema operations and model-cache behaviour.
 Uses TransactionTestCase so DDL and on_commit callbacks behave exactly as they
 do in production (no wrapping savepoint prevents commits).
 """
+import threading
 from io import StringIO
+from unittest.mock import patch
 
 from django.apps import apps
 from django.core.management import call_command
 from django.db import connection
 from django.test import TransactionTestCase
 
+from core.models import ObjectType
+from dcim.models import Site
+from extras.choices import CustomFieldTypeChoices
 from netbox_custom_objects.constants import APP_LABEL
-from netbox_custom_objects.models import CustomObjectTypeField
+from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 
 from .base import CustomObjectsTestCase, TransactionCleanupMixin
 
@@ -275,3 +281,205 @@ class SchemaOperationsTestCase(TransactionCleanupMixin, CustomObjectsTestCase, T
         columns = self._db_columns(cot.get_model())
         self.assertNotIn('location_latitude', columns)
         self.assertNotIn('location_longitude', columns)
+
+
+class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
+    """
+    Regression tests for issue #640: creating a polymorphic multiobject field
+    races registering its through-model class against a concurrent
+    get_model() call, producing a class-identity mismatch that later surfaces
+    as "ValueError: Cannot query 'X': Must be 'TableYModel' instance." or a
+    RecursionError (same symptom class as #477/#483).
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.site_ot = ObjectType.objects.get_for_model(Site)
+
+    def test_field_creation_racing_concurrent_readers_yields_consistent_through_model(self):
+        """
+        Races field *creation* (real DB I/O) against 12 looping get_model()
+        readers -- the shape that reproduced #640 live. Rarely lands inside
+        the actual race window in-process (see the deterministic version
+        below), but exercises the same code path under real concurrency.
+        """
+        cot = self.create_simple_custom_object_type(name='polyrace', slug='poly-race')
+
+        stop = threading.Event()
+        reader_errors = []
+        reader_errors_lock = threading.Lock()
+
+        def reader():
+            while not stop.is_set():
+                try:
+                    CustomObjectType.objects.get(pk=cot.pk).get_model(no_cache=True)
+                except Exception as e:  # noqa: BLE001 - captured for the assertion below
+                    with reader_errors_lock:
+                        reader_errors.append(e)
+                finally:
+                    connection.close()
+
+        n_readers = 12
+        readers = [threading.Thread(target=reader) for _ in range(n_readers)]
+        for t in readers:
+            t.start()
+
+        try:
+            field = self.create_custom_object_type_field(
+                cot,
+                name='depends_on',
+                label='Depends On',
+                type='multiobject',
+                is_polymorphic=True,
+            )
+            field.related_object_types.set([self.site_ot])
+        finally:
+            stop.set()
+            for t in readers:
+                t.join()
+
+        self.assertEqual(
+            reader_errors, [],
+            "concurrent get_model() calls must not raise while a polymorphic "
+            "multiobject field is being created",
+        )
+
+        # get_model() and the through model's "source" FK must agree on which
+        # class is canonical -- a mismatch is the #477/#483-class staleness.
+        final_model = CustomObjectType.objects.get(pk=cot.pk).get_model()
+        through_model = apps.get_model(APP_LABEL, field.through_model_name)
+        source_field = through_model._meta.get_field('source')
+        self.assertIs(
+            source_field.remote_field.model, final_model,
+            "the registered through model's source FK must point at the model class "
+            "get_model() currently returns, not an orphaned duplicate from a losing thread",
+        )
+
+        obj = final_model.objects.create(name='Instance 1')
+        obj.depends_on.set([Site.objects.create(name='Race Site', slug='race-site')])
+        obj.delete()  # Must not raise ValueError: "Cannot query ...: Must be ... instance."
+
+    def test_forced_registration_interleaving_stays_consistent(self):
+        """
+        Deterministic version of the same race, forced via mocking instead of
+        relying on thread-scheduling luck.
+
+        get_model() already wraps _after_model_generation() in
+        CustomObjectType._global_lock, so two concurrent readers can't race
+        each other there. The actual gap is the *writer*:
+        create_polymorphic_m2m_table() (called once, from
+        CustomObjectTypeField.save(), when a polymorphic multiobject field is
+        first created) registers its through-model class via Django's
+        metaclass, then repoints its "source" FK -- all without that lock. A
+        concurrent reader can land in between: it finds the through model
+        already registered and repoints "source" at its own model instead,
+        so the through's FK and get_model()'s cache can end up pointing at
+        two different classes.
+
+        Thread "W" plays the writer (create_polymorphic_m2m_table()
+        directly), thread "R" the reader (get_model()). A mocked
+        register_model() pauses W right after registration but before it
+        repoints "source", giving R a window to run. With the fix, W holds
+        _global_lock for that whole call, so R can't even start until W is
+        done -- the pause below just times out harmlessly. Without the fix,
+        R runs inside the pause and the two threads' writes land in
+        different orders, reliably producing the mismatch asserted below.
+        """
+        cot = self.create_simple_custom_object_type(name='polyforce', slug='poly-force')
+        field = self.create_custom_object_type_field(
+            cot,
+            name='depends_on',
+            label='Depends On',
+            type='multiobject',
+            is_polymorphic=True,
+        )
+        field.related_object_types.set([self.site_ot])
+
+        # The table/through model already exist (created for real above via
+        # the normal save() path). Force the through model back to
+        # "unregistered" so a direct create_polymorphic_m2m_table() call
+        # takes the same build-register-repoint path a brand-new field's
+        # first save would; create_polymorphic_m2m_table()'s own idempotency
+        # check will see the physical table already exists and skip the DDL.
+        writer_model = CustomObjectType.objects.get(pk=cot.pk).get_model()
+        CustomObjectType.clear_model_cache()
+        model_name_lower = field.through_model_name.lower()
+        del apps.all_models[APP_LABEL][model_name_lower]
+        apps.clear_cache()
+
+        real_register_model = apps.register_model
+        reader_may_proceed = threading.Event()
+        reader_done = threading.Event()
+        gated = set()
+
+        def ordered_register_model(app_label, model):
+            # Only intercept the through model under test.
+            if app_label != APP_LABEL or model.__name__ != field.through_model_name:
+                return real_register_model(app_label, model)
+            # Only the first call matters (Django's metaclass registers the
+            # model as soon as it's built; a harmless explicit re-registration
+            # follows immediately after in the real code).
+            if 'seen' in gated:
+                return real_register_model(app_label, model)
+            gated.add('seen')
+
+            result = real_register_model(app_label, model)
+            # Registered, but "source" isn't repointed at writer_model yet --
+            # give R a window here. With the fix, W holds _global_lock for
+            # this whole call, so R can't have started yet and this times out.
+            reader_may_proceed.set()
+            reader_done.wait(timeout=2)
+            return result
+
+        writer_result = {}
+
+        def run_writer():
+            threading.current_thread().name = 'W'
+            field_type = FIELD_TYPE_CLASS[CustomFieldTypeChoices.TYPE_MULTIOBJECT]()
+            try:
+                with connection.schema_editor() as schema_editor:
+                    field_type.create_polymorphic_m2m_table(field, writer_model, schema_editor)
+            except Exception as e:  # noqa: BLE001 - surfaced via the assertion below
+                writer_result['error'] = e
+            finally:
+                connection.close()
+
+        reader_result = {}
+
+        def run_reader():
+            threading.current_thread().name = 'R'
+            reader_may_proceed.wait(timeout=5)
+            try:
+                reader_result['model'] = CustomObjectType.objects.get(pk=cot.pk).get_model(no_cache=True)
+            except Exception as e:  # noqa: BLE001 - surfaced via the assertion below
+                reader_result['error'] = e
+            finally:
+                reader_done.set()
+                connection.close()
+
+        with patch.object(apps, 'register_model', side_effect=ordered_register_model):
+            t_w = threading.Thread(target=run_writer, name='W')
+            t_r = threading.Thread(target=run_reader, name='R')
+            t_w.start()
+            t_r.start()
+            t_w.join(timeout=10)
+            t_r.join(timeout=10)
+
+        self.assertNotIn('error', writer_result, f"writer raised: {writer_result.get('error')!r}")
+        self.assertNotIn('error', reader_result, f"reader raised: {reader_result.get('error')!r}")
+
+        # Without the fix, this reliably produces a mismatch: reader's model
+        # cached while writer's model is left on the through's "source" FK,
+        # or vice versa.
+        final_model = CustomObjectType.objects.get(pk=cot.pk).get_model()
+        through_model = apps.get_model(APP_LABEL, field.through_model_name)
+        source_field = through_model._meta.get_field('source')
+        self.assertIs(
+            source_field.remote_field.model, final_model,
+            "the registered through model's source FK must point at the model class "
+            "get_model() currently returns -- a mismatch here is issue #640",
+        )
+
+        obj = final_model.objects.create(name='Instance 1')
+        obj.depends_on.set([Site.objects.create(name='Force Site', slug='force-site')])
+        obj.delete()  # Must not raise ValueError: "Cannot query ...: Must be ... instance."
