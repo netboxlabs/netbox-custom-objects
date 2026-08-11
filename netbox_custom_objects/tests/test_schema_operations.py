@@ -426,9 +426,16 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
             result = real_register_model(app_label, model)
             # Registered, but "source" isn't repointed at writer_model yet --
             # give R a window here. With the fix, W holds _global_lock for
-            # this whole call, so R can't have started yet and this times out.
+            # this whole call, so R can't have started yet and this always
+            # times out rather than being signalled -- R can't reach
+            # reader_done.set() until W releases the lock, which doesn't
+            # happen until this wait returns. The duration only bounds how
+            # long that unavoidable wait lasts; it has no bearing on
+            # correctness (R's ability to run concurrently here is decided
+            # by lock state, not by wall-clock timing), so keep it short to
+            # avoid taxing every CI run by a fixed 2s.
             reader_may_proceed.set()
-            reader_done.wait(timeout=2)
+            reader_done.wait(timeout=0.5)
             return result
 
         writer_result = {}
