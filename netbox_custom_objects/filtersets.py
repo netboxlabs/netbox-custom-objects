@@ -1,3 +1,4 @@
+import copy
 import django_filters
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -503,8 +504,50 @@ def get_filterset_class(model):
     }
 
     # For each custom field, add a corresponding filter (dict of name → Filter).
+    # Loose text-family fields are tracked separately so their suffix lookups
+    # (__isw, __iew, etc.) can be backported by get_filters() below -- their bare
+    # filter uses icontains, which BaseFilterSet.get_additional_lookups() does not
+    # augment.
+    loose_text_field_names = []
     for field in model.custom_object_type.fields.all():
         attrs.update(build_filter_for_field(field))
+        if field.type in FILTER_LOGIC_AWARE_TYPES and field.filter_logic == CustomFieldFilterLogicChoices.FILTER_LOOSE:
+            loose_text_field_names.append(field.name)
+
+    def get_filters(cls):
+        """
+        Backport suffix lookups (__isw, __iew, __ic, __ie, __n, __empty, __regex)
+        for loose text-family fields (issue #639).
+
+        NetBox's own BaseFilterSet.__init__ re-derives ``base_filters`` from
+        get_filters() on *every* instantiation (a workaround for #9231), so this
+        can't be done once as a post-processing step after the class is built --
+        it must happen inside get_filters() itself to survive that. The base
+        get_filters() (via get_additional_lookups()) only augments a filter whose
+        own lookup_expr is exact/iexact/in/contains; "icontains" -- what a loose
+        field's bare filter uses, so the plain ?field=value substring match keeps
+        working -- isn't one of them, so a loose field's suffix lookups would
+        otherwise never be registered at all, and e.g. ?field__isw=value would be
+        an unrecognized, silently-ignored param matching every row unfiltered.
+        Asking get_additional_lookups() what it would generate for an exact-based
+        version of the same filter, and merging just the suffix filters in
+        alongside the real (unmodified) bare one, avoids that without changing
+        the bare filter's own substring-matching behavior.
+
+        super(cls, cls) rather than bare super(): this function is attached to
+        the class via `attrs`, not defined inside an actual `class` block, so
+        there's no __class__ cell for zero-arg super() to use.
+        """
+        filters = super(cls, cls).get_filters()
+        for field_name in loose_text_field_names:
+            if field_name not in filters:
+                continue
+            reference_filter = copy.deepcopy(filters[field_name])
+            reference_filter.lookup_expr = 'exact'
+            filters.update(cls.get_additional_lookups(field_name, reference_filter))
+        return filters
+
+    attrs['get_filters'] = classmethod(get_filters)
 
     return type(
         f"{model._meta.object_name}FilterSet",

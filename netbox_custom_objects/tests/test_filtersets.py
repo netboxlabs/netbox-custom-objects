@@ -942,11 +942,24 @@ class TextFieldFilterLogicTestCase(CustomObjectsTestCase, TestCase):
         pks = list(self._filterset({'loose_field': 'oob'}).qs.values_list('pk', flat=True))
         self.assertEqual(pks, [self.obj_a.pk])
 
-    def test_loose_field_isw_suffix_not_registered(self):
-        """icontains isn't augmented by get_additional_lookups(), so __isw is never registered."""
-        fs = self._filterset({'loose_field__isw': 'foo'})
-        self.assertNotIn('loose_field__isw', fs.filters)
-        self.assertEqual(fs.qs.count(), 2)
+    def test_loose_field_isw_suffix_matches_startswith(self):
+        """
+        The exact scenario from the bug report (#639): a field left at the
+        default (loose) filter_logic must still support __isw. Its own bare
+        filter uses icontains, which get_additional_lookups() does not augment
+        on its own -- get_filterset_class() backports the suffix filters
+        separately for this reason.
+        """
+        pks = list(self._filterset({'loose_field__isw': 'foo'}).qs.values_list('pk', flat=True))
+        self.assertEqual(pks, [self.obj_a.pk])
+
+    def test_loose_field_iew_suffix_matches_endswith(self):
+        pks = list(self._filterset({'loose_field__iew': 'foo'}).qs.values_list('pk', flat=True))
+        self.assertEqual(pks, [self.obj_b.pk])
+
+    def test_loose_field_n_suffix_negates(self):
+        pks = list(self._filterset({'loose_field__n': 'foobar'}).qs.values_list('pk', flat=True))
+        self.assertEqual(pks, [self.obj_b.pk])
 
     def test_exact_field_bare_filter_is_exact_match(self):
         pks = list(self._filterset({'exact_field': 'foobar'}).qs.values_list('pk', flat=True))
