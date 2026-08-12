@@ -2639,6 +2639,103 @@ class BranchUpgradeHealTestCase(BranchingTestBase, TransactionTestCase):
             "the command must not have broken main's already-healthy schema",
         )
 
+    def test_heal_all_branches_skips_branch_with_missing_schema(self):
+        """
+        A branch's schema can be gone even when its status doesn't obviously say
+        so -- e.g. provisioning failed after the schema was created, or it was
+        since dropped (PR #641 review). Introspecting through that branch's own
+        connection wouldn't raise: its search path falls through to main, so it
+        would silently report (and risk "healing") main's table instead. Confirm
+        the branch is skipped instead -- no exception, main untouched, no COT
+        reported healed for it.
+        """
+        from netbox_custom_objects.mixin_migration import heal_all_branches
+
+        cot, branch, table_name, branch_conn, _columns = (
+            self._setup_branch_with_dropped_title_column('heal_missing', 'heal-missing', 'site_link')
+        )
+        branch_conn.close()
+        with main_conn.cursor() as cursor:
+            cursor.execute(f'DROP SCHEMA IF EXISTS "{branch.schema_name}" CASCADE')
+        # Simulates provisioning having failed (or the schema having been dropped)
+        # without going through the normal archive/deprovision flow.
+        Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.FAILED)
+
+        result = heal_all_branches(verbosity=0)
+
+        self.assertEqual(result['total'], 1)
+        self.assertEqual(result['healed'], 0)
+        self.assertGreaterEqual(result['warnings'], 1)
+        self.assertIn(
+            'site_link_title', _columns(main_conn),
+            "main's own schema must be unaffected by a branch with no schema",
+        )
+
+    def test_heal_all_branches_skips_branch_with_pending_migrations(self):
+        """
+        A branch with pending migrations has an ORM that may not match its
+        actual (outdated) schema yet -- heal_cot() could misdiagnose drift
+        against columns the branch doesn't have for unrelated reasons (PR #641
+        review). Confirm such a branch is skipped rather than healed; it's
+        picked up later by the branch's own post_migrate hook once it migrates.
+        """
+        from netbox_custom_objects.mixin_migration import heal_all_branches
+
+        cot, branch, table_name, branch_conn, _columns = (
+            self._setup_branch_with_dropped_title_column('heal_pending', 'heal-pending', 'site_link')
+        )
+
+        with mock.patch(
+            'netbox_branching.models.Branch.pending_migrations',
+            new_callable=mock.PropertyMock,
+            return_value=[('dcim', '9999_fake_pending_migration')],
+        ):
+            result = heal_all_branches(verbosity=0)
+
+        self.assertEqual(result['healed'], 0)
+        self.assertNotIn(
+            'site_link_title', _columns(branch_conn),
+            "a branch with pending migrations must not be healed yet",
+        )
+
+    def test_heal_all_branches_continues_after_one_branch_fails(self):
+        """
+        One branch failing unexpectedly during heal_branch() must not abort the
+        sweep for every other branch (PR #641 review).
+        """
+        from netbox_custom_objects import mixin_migration
+        from netbox_custom_objects.mixin_migration import heal_all_branches
+
+        cot, branch1, table_name, branch1_conn, _columns = (
+            self._setup_branch_with_dropped_title_column('heal_multi_a', 'heal-multi-a', 'site_link')
+        )
+        branch2 = _provision_branch('heal_multi_b branch', None, self.user)
+        table_name2 = cot.get_database_table_name()
+        branch2_conn = connections[branch2.connection_name]
+        with branch2_conn.cursor() as cursor:
+            cursor.execute(f'ALTER TABLE "{table_name2}" DROP COLUMN "site_link_title"')
+        self.assertNotIn('site_link_title', _columns(branch2_conn))
+
+        original_heal_branch = mixin_migration.heal_branch
+
+        def _flaky_heal_branch(branch, **kwargs):
+            if branch.pk == branch1.pk:
+                raise RuntimeError('simulated failure healing branch1')
+            return original_heal_branch(branch, **kwargs)
+
+        with mock.patch('netbox_custom_objects.mixin_migration.heal_branch', side_effect=_flaky_heal_branch):
+            result = heal_all_branches(verbosity=0)
+
+        self.assertNotIn(
+            'site_link_title', _columns(branch1_conn),
+            'branch1 was never healed (its heal_branch() call raised)',
+        )
+        self.assertIn(
+            'site_link_title', _columns(branch2_conn),
+            "branch2 must still be healed despite branch1's failure",
+        )
+        self.assertGreaterEqual(result['warnings'], 1)
+
 
 # ── Missing field-type coverage (iterative only) ──────────────────────────────
 

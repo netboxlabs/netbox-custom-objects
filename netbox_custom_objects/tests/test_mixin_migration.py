@@ -23,7 +23,11 @@ from netbox_custom_objects.mixin_migration import (
     heal_all_cots,
     heal_cot,
 )
-from netbox_custom_objects.models import CustomObjectType, detect_backing_column_collisions
+from netbox_custom_objects.models import (
+    CustomObjectType,
+    CustomObjectTypeField,
+    detect_backing_column_collisions,
+)
 
 from .base import CustomObjectsTestCase, TransactionCleanupMixin
 
@@ -381,6 +385,98 @@ class BackingColumnCollisionTestCase(
         self.assertEqual(collisions[0]["field"], "website")
         self.assertEqual(collisions[0]["other"], "website_title")
         self.assertEqual(collisions[0]["column"], "website_title")
+        # "website_title" (the plain field) is the one whose own name matches the
+        # clashing column -- it's safe to rename; renaming "website" instead would
+        # carry this same column along with it. See models.py's comment at the
+        # collision-detection site for why.
+        self.assertEqual(collisions[0]["safe_to_rename"], "website_title")
+        self.assertIn("Rename 'website_title'", collisions[0]["message"])
+
+    def test_safe_rename_preserves_sibling_data_and_resolves_collision(self):
+        """
+        Renaming the field identified by `safe_to_rename` (PR #641 review) must
+        preserve that field's own data and leave the *other* field's column
+        untouched -- proving the recovery guidance is actually safe to follow,
+        not just that the collision is detected.
+        """
+        cot = self.create_custom_object_type(name="bcc_recover", slug="bcc-recover")
+        self.create_custom_object_type_field(cot, name="name", label="Name", type="text", primary=True)
+        self.create_custom_object_type_field(
+            cot, name="website", label="Website", type="url",
+        )
+        plain_field = self.create_custom_object_type_field(
+            cot, name="website_title", label="Website Title", type="text", required=False,
+        )
+
+        collisions = detect_backing_column_collisions(cot)
+        self.assertEqual(collisions[0]["safe_to_rename"], "website_title")
+
+        # Write a known value directly to the shared physical column, bypassing
+        # the ORM: with two fields mapped to the same attribute, only whichever
+        # was processed last in _fetch_and_generate_field_attrs() is reachable
+        # through the model, so this is the only unambiguous way to establish
+        # "the plain field's own data" independent of that resolution order.
+        model = cot.get_model()
+        # website_title="" sidesteps a quirk that's itself a symptom of the collision:
+        # the physical column was created NOT NULL DEFAULT '' by the url field (created
+        # first; see URLFieldType.get_model_field()'s comment on why its title column
+        # isn't null=True), but the plain field's own definition -- which won the model
+        # attrs slot since it was created second -- believes the column is nullable, so
+        # create() with no value for it would try to insert NULL and violate that
+        # constraint. Overwritten via raw SQL immediately below regardless.
+        instance = model.objects.create(
+            name="Test Object", website="https://example.com/", website_title="",
+        )
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f'UPDATE {model._meta.db_table} SET website_title = %s WHERE id = %s',
+                ["plain field's own value", instance.pk],
+            )
+
+        # The safe rename: reload from DB so the rename path has the original
+        # snapshot, exactly as the edit view would (see test_schema_operations.py).
+        plain_field = CustomObjectTypeField.objects.get(pk=plain_field.pk)
+        plain_field.name = "description"
+        plain_field.save()
+
+        # Collision resolved, and the plain field's data followed it to the new
+        # column name rather than being left behind or overwritten.
+        self.assertEqual(detect_backing_column_collisions(cot), [])
+        model = cot.get_model(no_cache=True)
+        columns = {
+            col.name for col in connection.introspection.get_table_description(
+                connection.cursor(), model._meta.db_table,
+            )
+        }
+        self.assertIn("description", columns)
+        # The rename also carried the physical column away from "website_title" --
+        # the url field's title sub-column name is derived from its own (unchanged)
+        # name, not stored, so nothing renamed *it* back into existence. This is
+        # exactly why the guidance says to re-run the heal afterward: it re-adds
+        # "website_title" fresh (nullable, default ''), now unambiguously the url
+        # field's alone.
+        self.assertNotIn("website_title", columns)
+        heal_cot(cot, verbosity=0)
+        model = cot.get_model(no_cache=True)
+        columns = {
+            col.name for col in connection.introspection.get_table_description(
+                connection.cursor(), model._meta.db_table,
+            )
+        }
+        self.assertIn("website_title", columns)
+
+        # Re-fetched via the post-heal model class: `instance` was built from an
+        # earlier class that no longer matches the current columns.
+        instance = model.objects.get(pk=instance.pk)
+        self.assertEqual(instance.description, "plain field's own value")
+
+        # The url field's own title sub-column is now unambiguously its own --
+        # setting it doesn't touch (or get confused with) the renamed sibling.
+        instance.website_title = "My Website"
+        instance.save()
+        instance = model.objects.get(pk=instance.pk)
+        self.assertEqual(instance.website_title, "My Website")
+        self.assertEqual(instance.description, "plain field's own value")
 
     def test_detects_pre_existing_coordinates_collision(self):
         cot = self.create_custom_object_type(name="bcc_coord", slug="bcc-coord")

@@ -344,8 +344,12 @@ def detect_backing_column_collisions(cot):
     from ``mixin_migration.heal_cot()`` so this is surfaced as an actionable
     warning instead of proceeding silently.
 
-    Returns a list of ``{"field", "other", "column", "message"}`` dicts, one
-    per colliding pair (each unordered pair reported once).
+    Returns a list of ``{"field", "other", "column", "safe_to_rename", "message"}``
+    dicts, one per colliding pair (each unordered pair reported once).
+    ``safe_to_rename`` names whichever of ``field``/``other`` has that column
+    as its own primary name -- the only one of the two safe to rename, since
+    renaming the *other* field would carry this shared column along with it
+    (see the comment at the collision-detection site below).
     """
     fields = list(cot.fields.all())
     collisions = []
@@ -364,17 +368,30 @@ def detect_backing_column_collisions(cot):
             if clash:
                 seen_pairs.add(pair_key)
                 column = sorted(clash)[0]
+                # Only the field whose OWN name literally equals the clashing column
+                # name is safe to rename: renaming the *other* field would, via its
+                # own multi-column rename, also rename this same column out from
+                # under whichever field's data actually lives there -- e.g. renaming
+                # a "website" (url) field whose derived "website_title" sub-column
+                # collides with a plain field literally named "website_title" would
+                # rename that column to "<new-name>_title", moving the plain field's
+                # data into what looks like the URL's title and leaving the plain
+                # field pointing at a column that no longer exists.
+                safe_to_rename = field.name if field.name == column else sibling.name
                 collisions.append({
                     "field": field.name,
                     "other": sibling.name,
                     "column": column,
+                    "safe_to_rename": safe_to_rename,
                     "message": (
                         f"Custom Object Type {cot.name!r}: field {field.name!r} "
                         f"({field.type}) and field {sibling.name!r} ({sibling.type}) "
                         f"both map to backing column {column!r}. This predates "
-                        f"validation that now blocks creating this combination; "
-                        f"rename one of the two fields to resolve the collision, "
-                        f"then re-run 'manage.py upgrade_custom_objects'."
+                        f"validation that now blocks creating this combination. Rename "
+                        f"{safe_to_rename!r} (the field whose own name matches the "
+                        f"colliding column) to resolve this -- renaming the other field "
+                        f"instead would move {safe_to_rename!r}'s data into that field's "
+                        f"sub-column -- then re-run 'manage.py upgrade_custom_objects'."
                     ),
                 })
     return collisions

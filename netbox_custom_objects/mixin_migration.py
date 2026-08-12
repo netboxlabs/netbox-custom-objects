@@ -26,7 +26,10 @@ Safety rules
 
 import logging
 
+from django.apps import apps as django_apps
 from django.db import DEFAULT_DB_ALIAS, connections
+
+from netbox_custom_objects.models import detect_backing_column_collisions
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +90,24 @@ def _actual_column_names(table_name, using=DEFAULT_DB_ALIAS):
         }
 
 
+def _branch_schema_exists(schema_name, using=DEFAULT_DB_ALIAS):
+    """
+    Return True if *schema_name* is a real PostgreSQL schema in the database.
+
+    Queried via the *default* connection's catalog, not the branch's own
+    connection -- a branch connection's search path falls through to main
+    when its own schema doesn't exist, so introspecting through it would
+    silently report main's tables instead of raising. information_schema
+    is per-database (not per-schema), so it's visible regardless of which
+    schema is actually live.
+    """
+    with connections[using].cursor() as cursor:
+        cursor.execute(
+            "SELECT 1 FROM information_schema.schemata WHERE schema_name = %s", [schema_name]
+        )
+        return cursor.fetchone() is not None
+
+
 def _can_auto_add(field):
     """
     Return True if it is safe to ADD COLUMN for *field* on a table that
@@ -131,11 +152,11 @@ def heal_cot(cot, verbosity=1, dry_run=False, using=DEFAULT_DB_ALIAS):
     # "<url_field>_title" predating the validation that now blocks this).
     # Independent of DB introspection -- purely a field-definition check --
     # so it runs even if the table itself can't be introspected below.
-    from netbox_custom_objects.models import detect_backing_column_collisions  # noqa: PLC0415
     for collision in detect_backing_column_collisions(cot):
         entry = {
             "type": "backing_column_collision",
             "field": collision["field"],
+            "safe_to_rename": collision["safe_to_rename"],
             "message": collision["message"],
         }
         warned.append(entry)
@@ -356,11 +377,31 @@ def heal_all_branches(verbosity=1, dry_run=False):
     Excludes branches with no live schema: NEW and PROVISIONING haven't been
     provisioned yet (or are mid-provision); ARCHIVED has had its schema
     dropped. Every other status (READY, PENDING_MIGRATIONS, the transitional
-    SYNCING/MIGRATING/MERGING/REVERTING, MERGED, FAILED) keeps its schema
-    until the branch is archived or deleted, so all of those are healed.
-    heal_cot()'s existing per-COT try/except around table introspection
-    means a branch whose schema is unexpectedly missing or broken is
-    reported as a warning for that COT, not a hard failure for the whole run.
+    SYNCING/MIGRATING/MERGING/REVERTING, MERGED, FAILED) normally still has
+    its schema and is a healing candidate, but two further checks are needed
+    before actually touching one:
+
+    - FAILED can mean provisioning itself failed after the schema was
+      created (or the schema was since dropped) -- its status alone doesn't
+      guarantee a live schema the way READY etc. do. Verified explicitly via
+      _branch_schema_exists() rather than assumed from status, since healing
+      through a branch connection whose schema doesn't exist would silently
+      introspect and alter *main*'s tables instead (see that helper's
+      docstring) -- exactly the kind of silent cross-branch corruption this
+      sweep must not risk.
+    - A branch with pending migrations has an ORM that may not match its
+      actual (outdated) schema yet -- heal_cot() could misdiagnose drift, or
+      the branch's schema might be missing entire unrelated tables/columns
+      current model code assumes exist. Skipped here in favor of
+      _heal_branch_on_migrate() (netbox_branching's own per-branch
+      post_migrate receiver in __init__.py), which re-heals that branch once
+      it actually migrates and its schema catches up.
+
+    Each branch's heal_branch() call is wrapped individually so one branch's
+    unexpected failure (e.g. a connection error specific to its schema)
+    doesn't abort the sweep for every other branch; heal_cot()'s own
+    per-COT try/except handles introspection failures within a single
+    otherwise-healthy branch.
 
     Returns
     -------
@@ -369,8 +410,6 @@ def heal_all_branches(verbosity=1, dry_run=False):
       "healed"   : number of branches with at least one COT healed
       "warnings" : total number of non-auto-fixable issues across all branches
     """
-    from django.apps import apps as django_apps  # noqa: PLC0415
-
     if not django_apps.is_installed('netbox_branching'):
         return {"total": 0, "healed": 0, "warnings": 0}
 
@@ -386,7 +425,36 @@ def heal_all_branches(verbosity=1, dry_run=False):
     total = healed = warnings = 0
     for branch in Branch.objects.exclude(status__in=no_schema_statuses):
         total += 1
-        result = heal_branch(branch, verbosity=verbosity, dry_run=dry_run)
+
+        if not _branch_schema_exists(branch.schema_name):
+            logger.warning(
+                "upgrade_custom_objects: skipping branch %r (id=%s, status=%s) -- schema %r "
+                "does not exist (likely a failed or interrupted provision); it will be healed "
+                "once it has a live schema.",
+                branch.name, branch.pk, branch.status, branch.schema_name,
+            )
+            warnings += 1
+            continue
+
+        if branch.pending_migrations:
+            if verbosity >= 2:
+                logger.info(
+                    "upgrade_custom_objects: skipping branch %r (id=%s) -- has pending "
+                    "migrations; will be healed by its own post_migrate hook once migrated.",
+                    branch.name, branch.pk,
+                )
+            continue
+
+        try:
+            result = heal_branch(branch, verbosity=verbosity, dry_run=dry_run)
+        except Exception:
+            logger.exception(
+                "upgrade_custom_objects: unexpected error healing branch %r (id=%s)",
+                branch.name, branch.pk,
+            )
+            warnings += 1
+            continue
+
         if result["healed"]:
             healed += 1
         warnings += result["warnings"]
