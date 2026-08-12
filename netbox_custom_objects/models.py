@@ -368,15 +368,9 @@ def detect_backing_column_collisions(cot):
             if clash:
                 seen_pairs.add(pair_key)
                 column = sorted(clash)[0]
-                # Only the field whose OWN name literally equals the clashing column
-                # name is safe to rename: renaming the *other* field would, via its
-                # own multi-column rename, also rename this same column out from
-                # under whichever field's data actually lives there -- e.g. renaming
-                # a "website" (url) field whose derived "website_title" sub-column
-                # collides with a plain field literally named "website_title" would
-                # rename that column to "<new-name>_title", moving the plain field's
-                # data into what looks like the URL's title and leaving the plain
-                # field pointing at a column that no longer exists.
+                # Renaming the *other* field would carry this column along via its
+                # own multi-column rename instead of leaving it in place -- only
+                # whichever field's own name equals it is safe to rename.
                 safe_to_rename = field.name if field.name == column else sibling.name
                 collisions.append({
                     "field": field.name,
