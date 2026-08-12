@@ -5,12 +5,19 @@ Phase 2 of issue #391: when NetBox is upgraded and a mixin (e.g.
 ChangeLoggingMixin) gains a new concrete column, existing COT tables will be
 missing that column.  This module provides:
 
-  heal_cot(cot, verbosity, dry_run)   — check and repair a single COT table
-  heal_all_cots(verbosity, dry_run)   — iterate over all COTs
+  heal_cot(cot, verbosity, dry_run)         — check and repair a single COT table
+  heal_all_cots(verbosity, dry_run)         — iterate over all COTs
+  heal_unmasked_fields(cot, model, schema_conn)
+                                             — add mixin columns unmasked by a
+                                               field rename/delete
 
-Both are called from:
+heal_cot/heal_all_cots are called from:
   - The post_migrate signal handler in __init__.py (automatic, zero-config)
   - The upgrade_custom_objects management command (explicit, with --dry-run)
+
+heal_unmasked_fields is called directly from CustomObjectTypeField.save()/
+delete() in models.py, right after a rename or delete, rather than waiting
+for the next post_migrate pass.
 
 Safety rules
 ------------
