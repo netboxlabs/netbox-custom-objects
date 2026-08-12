@@ -906,7 +906,7 @@ class TextFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
 
 
 class TextFieldFilterLogicTestCase(CustomObjectsTestCase, TestCase):
-    """Regression #639: CustomObjectTypeField.filter_logic was ignored by filterset generation."""
+    """CustomObjectTypeField.filter_logic must actually be respected by filterset generation."""
 
     @classmethod
     def setUpTestData(cls):
@@ -944,11 +944,10 @@ class TextFieldFilterLogicTestCase(CustomObjectsTestCase, TestCase):
 
     def test_loose_field_isw_suffix_matches_startswith(self):
         """
-        The exact scenario from the bug report (#639): a field left at the
-        default (loose) filter_logic must still support __isw. Its own bare
-        filter uses icontains, which get_additional_lookups() does not augment
-        on its own -- get_filterset_class() backports the suffix filters
-        separately for this reason.
+        A field left at the default (loose) filter_logic must still support
+        __isw. Its own bare filter uses icontains, which get_additional_lookups()
+        does not augment on its own -- get_filterset_class() backports the
+        suffix filters separately for this reason.
         """
         pks = list(self._filterset({'loose_field__isw': 'foo'}).qs.values_list('pk', flat=True))
         self.assertEqual(pks, [self.obj_a.pk])

@@ -516,27 +516,16 @@ def get_filterset_class(model):
 
     def get_filters(cls):
         """
-        Backport suffix lookups (__isw, __iew, __ic, __ie, __n, __empty, __regex)
-        for loose text-family fields (issue #639).
-
-        NetBox's own BaseFilterSet.__init__ re-derives ``base_filters`` from
-        get_filters() on *every* instantiation (a workaround for #9231), so this
-        can't be done once as a post-processing step after the class is built --
-        it must happen inside get_filters() itself to survive that. The base
-        get_filters() (via get_additional_lookups()) only augments a filter whose
-        own lookup_expr is exact/iexact/in/contains; "icontains" -- what a loose
-        field's bare filter uses, so the plain ?field=value substring match keeps
-        working -- isn't one of them, so a loose field's suffix lookups would
-        otherwise never be registered at all, and e.g. ?field__isw=value would be
-        an unrecognized, silently-ignored param matching every row unfiltered.
-        Asking get_additional_lookups() what it would generate for an exact-based
-        version of the same filter, and merging just the suffix filters in
-        alongside the real (unmodified) bare one, avoids that without changing
-        the bare filter's own substring-matching behavior.
-
-        super(cls, cls) rather than bare super(): this function is attached to
-        the class via `attrs`, not defined inside an actual `class` block, so
-        there's no __class__ cell for zero-arg super() to use.
+        Backport suffix lookups (__isw, __iew, __ic, etc.) for loose text-family
+        fields: get_additional_lookups() only augments a filter whose own
+        lookup_expr is exact/iexact/in/contains, which the loose bare filter's
+        icontains isn't, so these are added by asking it what it would generate
+        for an exact-based version of the same filter, without touching the bare
+        filter itself. Must live in get_filters(), not a one-time step after the
+        class is built -- NetBox's BaseFilterSet.__init__ re-derives base_filters
+        from get_filters() on every instantiation, which would otherwise discard
+        this. super(cls, cls): no __class__ cell for bare super() since this is
+        attached via `attrs`, not a real `class` block.
         """
         filters = super(cls, cls).get_filters()
         for field_name in loose_text_field_names:
