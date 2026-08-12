@@ -90,6 +90,47 @@ def _can_auto_add(field):
 # Public API
 # ---------------------------------------------------------------------------
 
+def heal_unmasked_fields(cot, model, schema_conn):
+    """
+    Add missing columns for CustomObject mixin fields unmasked by renaming or
+    deleting a same-named user field (e.g. 'owner' shadowing OwnerMixin.owner).
+
+    Schema-connection-aware (branch-safe) counterpart to the add-column loop
+    in heal_cot(), meant to be called right after a CustomObjectTypeField
+    rename/delete rather than waiting for the next post_migrate heal pass.
+    """
+    expected = _expected_base_fields(cot, model)
+    with schema_conn.cursor() as cursor:
+        actual_cols = {
+            col.name
+            for col in schema_conn.introspection.get_table_description(cursor, model._meta.db_table)
+        }
+
+    missing = []
+    for col_name, field in expected.items():
+        if col_name in actual_cols:
+            continue
+        if not _can_auto_add(field):
+            logger.warning(
+                "heal_unmasked_fields: unmasked base column %r (field %r) on %s is not "
+                "nullable and has no default — cannot auto-add. Run "
+                "'manage.py upgrade_custom_objects'.",
+                col_name, field.name, model._meta.db_table,
+            )
+            continue
+        missing.append(field)
+
+    if not missing:
+        return
+
+    with schema_conn.schema_editor() as schema_editor:
+        # Flush pending DEFERRABLE FK trigger events before ALTER TABLE, matching
+        # every other add_field() call site in this codebase.
+        schema_editor.execute('SET CONSTRAINTS ALL IMMEDIATE')
+        for field in missing:
+            schema_editor.add_field(model, field)
+
+
 def heal_cot(cot, verbosity=1, dry_run=False):
     """
     Detect and repair mixin column drift for a single CustomObjectType.

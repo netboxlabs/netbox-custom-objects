@@ -80,6 +80,7 @@ from netbox_custom_objects.field_types import (
     PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor,
 )
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
+from netbox_custom_objects.mixin_migration import heal_unmasked_fields
 from netbox_custom_objects.utilities import (
     _suppress_clear_cache,
     extract_cot_id_from_model_name,
@@ -451,37 +452,6 @@ def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, exist
         return
 
     schema_editor.alter_field(model, old_mf, new_mf)
-
-
-def _heal_unmasked_base_fields(cot, model, schema_conn):
-    """Add missing columns for CustomObject mixin fields unmasked by a rename/delete.
-
-    A user field named the same as a mixin field (e.g. 'owner') shadows it while the
-    collision lasts. Renaming or deleting that field unmasks the mixin field, which
-    never had its own column.
-    """
-    from netbox_custom_objects.mixin_migration import _can_auto_add, _expected_base_fields
-
-    expected = _expected_base_fields(cot, model)
-    with schema_conn.cursor() as cursor:
-        actual_cols = {
-            col.name
-            for col in schema_conn.introspection.get_table_description(cursor, model._meta.db_table)
-        }
-
-    for col_name, field in expected.items():
-        if col_name in actual_cols:
-            continue
-        if not _can_auto_add(field):
-            logger.warning(
-                "_heal_unmasked_base_fields: unmasked base column %r (field %r) on %s is "
-                "not nullable and has no default — cannot auto-add. Run "
-                "'manage.py upgrade_custom_objects'.",
-                col_name, field.name, model._meta.db_table,
-            )
-            continue
-        with schema_conn.schema_editor() as schema_editor:
-            schema_editor.add_field(model, field)
 
 
 def _rename_or_create_m2m_through(old_fi, new_fi, model, schema_editor, schema_conn, existing_tables):
@@ -3662,7 +3632,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             )
             if renamed:
                 updated_model = self.custom_object_type.get_model(no_cache=True)
-                _heal_unmasked_base_fields(self.custom_object_type, updated_model, schema_conn)
+                heal_unmasked_fields(self.custom_object_type, updated_model, schema_conn)
 
         # FK constraint runs AFTER commit to avoid "pending trigger events".
         if should_ensure_fk:
@@ -3767,7 +3737,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         # field-undo and CO-undo, and a stale class would emit ProgrammingError.
         updated_model = self.custom_object_type.get_model()
 
-        _heal_unmasked_base_fields(self.custom_object_type, updated_model, schema_conn)
+        heal_unmasked_fields(self.custom_object_type, updated_model, schema_conn)
         self.custom_object_type.register_custom_object_search_index(updated_model)
 
         if self.search_weight > 0:
