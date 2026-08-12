@@ -3648,6 +3648,22 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
             super().save(*args, **kwargs)
 
+            # On rename, _schema_alter_field calls contribute_to_class twice on the
+            # same class — force a no_cache regeneration so _meta is clean.  Healing
+            # runs in this same transaction so a reader can never observe the rename
+            # committed without the unmasked base field's column.  Non-rename changes
+            # lean on cache_timestamp for lazy invalidation; we skip the
+            # apps.clear_cache() cascade so signal-driven cache evictions (e.g.
+            # clear_cache_on_field_save for OBJECT fields) survive.
+            renamed = (
+                not self._state.adding
+                and not self.is_polymorphic
+                and self._original_name != self.name
+            )
+            if renamed:
+                updated_model = self.custom_object_type.get_model(no_cache=True)
+                _heal_unmasked_base_fields(self.custom_object_type, updated_model, schema_conn)
+
         # FK constraint runs AFTER commit to avoid "pending trigger events".
         if should_ensure_fk:
             _on_delete = self.on_delete_behavior
@@ -3666,19 +3682,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
             transaction.on_commit(ensure_constraint)
 
-        # On rename, _schema_alter_field calls contribute_to_class twice on the
-        # same class — force a no_cache regeneration so _meta is clean.  Non-
-        # rename changes lean on cache_timestamp for lazy invalidation; we skip
-        # the apps.clear_cache() cascade so signal-driven cache evictions (e.g.
-        # clear_cache_on_field_save for OBJECT fields) survive.
-        renamed = (
-            not self._state.adding
-            and not self.is_polymorphic
-            and self._original_name != self.name
-        )
         if renamed:
-            updated_model = self.custom_object_type.get_model(no_cache=True)
-            _heal_unmasked_base_fields(self.custom_object_type, updated_model, schema_conn)
             self.custom_object_type.register_custom_object_search_index(updated_model)
 
         # Clean up stale descriptor when related_name is renamed on an existing polymorphic field
