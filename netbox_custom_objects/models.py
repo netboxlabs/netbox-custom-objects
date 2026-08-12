@@ -453,6 +453,37 @@ def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, exist
     schema_editor.alter_field(model, old_mf, new_mf)
 
 
+def _heal_unmasked_base_fields(cot, model, schema_conn):
+    """Add missing columns for CustomObject mixin fields unmasked by a rename/delete.
+
+    A user field named the same as a mixin field (e.g. 'owner') shadows it while the
+    collision lasts. Renaming or deleting that field unmasks the mixin field, which
+    never had its own column.
+    """
+    from netbox_custom_objects.mixin_migration import _can_auto_add, _expected_base_fields
+
+    expected = _expected_base_fields(cot, model)
+    with schema_conn.cursor() as cursor:
+        actual_cols = {
+            col.name
+            for col in schema_conn.introspection.get_table_description(cursor, model._meta.db_table)
+        }
+
+    for col_name, field in expected.items():
+        if col_name in actual_cols:
+            continue
+        if not _can_auto_add(field):
+            logger.warning(
+                "_heal_unmasked_base_fields: unmasked base column %r (field %r) on %s is "
+                "not nullable and has no default — cannot auto-add. Run "
+                "'manage.py upgrade_custom_objects'.",
+                col_name, field.name, model._meta.db_table,
+            )
+            continue
+        with schema_conn.schema_editor() as schema_editor:
+            schema_editor.add_field(model, field)
+
+
 def _rename_or_create_m2m_through(old_fi, new_fi, model, schema_editor, schema_conn, existing_tables):
     """Rename the through-table for a renamed M2M field, or create the new one
     if the old table is absent (sync/merge against a schema that never had it).
@@ -3647,6 +3678,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         )
         if renamed:
             updated_model = self.custom_object_type.get_model(no_cache=True)
+            _heal_unmasked_base_fields(self.custom_object_type, updated_model, schema_conn)
             self.custom_object_type.register_custom_object_search_index(updated_model)
 
         # Clean up stale descriptor when related_name is renamed on an existing polymorphic field
@@ -3731,6 +3763,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         # field-undo and CO-undo, and a stale class would emit ProgrammingError.
         updated_model = self.custom_object_type.get_model()
 
+        _heal_unmasked_base_fields(self.custom_object_type, updated_model, schema_conn)
         self.custom_object_type.register_custom_object_search_index(updated_model)
 
         if self.search_weight > 0:
