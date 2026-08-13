@@ -2736,6 +2736,36 @@ class BranchUpgradeHealTestCase(BranchingTestBase, TransactionTestCase):
         )
         self.assertGreaterEqual(result['warnings'], 1)
 
+    def test_heal_all_branches_closes_branch_connections(self):
+        """
+        pending_migrations (via MigrationExecutor) and heal_branch() both open a
+        connection on branch.connection_name without closing it -- left open, these
+        accumulate across every branch in the sweep, the same leak netbox_branching
+        fixed in its own per-branch migration sweep (issue #581). Confirm the
+        connection is closed afterward, for both a healed branch and one skipped for
+        pending migrations.
+        """
+        from netbox_custom_objects.mixin_migration import heal_all_branches
+
+        cot, branch, table_name, branch_conn, _columns = (
+            self._setup_branch_with_dropped_title_column('heal_close', 'heal-close', 'site_link')
+        )
+        branch2 = _provision_branch('heal_close_pending branch', None, self.user)
+        branch2_conn = connections[branch2.connection_name]
+
+        # A plain PropertyMock has no access to the instance being accessed, so it can't
+        # distinguish branch from branch2 -- use a real property bound to the class instead.
+        def _pending_migrations(self):
+            if self.pk == branch2.pk:
+                return [('dcim', '9999_fake_pending_migration')]
+            return []
+
+        with mock.patch.object(Branch, 'pending_migrations', property(_pending_migrations)):
+            heal_all_branches(verbosity=0)
+
+        self.assertIsNone(branch_conn.connection, "healed branch's connection must be closed")
+        self.assertIsNone(branch2_conn.connection, "skipped branch's connection must be closed too")
+
 
 # ── Missing field-type coverage (iterative only) ──────────────────────────────
 

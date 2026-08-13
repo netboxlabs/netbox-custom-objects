@@ -397,11 +397,12 @@ def heal_all_branches(verbosity=1, dry_run=False):
       post_migrate receiver in __init__.py), which re-heals that branch once
       it actually migrates and its schema catches up.
 
-    Each branch's heal_branch() call is wrapped individually so one branch's
-    unexpected failure (e.g. a connection error specific to its schema)
-    doesn't abort the sweep for every other branch; heal_cot()'s own
-    per-COT try/except handles introspection failures within a single
-    otherwise-healthy branch.
+    Each branch's pending_migrations check and heal_branch() call are wrapped
+    individually (one shared try/finally) so one branch's unexpected failure
+    doesn't abort the sweep for every other branch, and its connection is
+    always closed afterward rather than accumulating across the loop;
+    heal_cot()'s own per-COT try/except handles introspection failures
+    within a single otherwise-healthy branch.
 
     Returns
     -------
@@ -436,16 +437,23 @@ def heal_all_branches(verbosity=1, dry_run=False):
             warnings += 1
             continue
 
-        if branch.pending_migrations:
-            if verbosity >= 2:
-                logger.info(
-                    "upgrade_custom_objects: skipping branch %r (id=%s) -- has pending "
-                    "migrations; will be healed by its own post_migrate hook once migrated.",
-                    branch.name, branch.pk,
-                )
-            continue
-
+        # pending_migrations and heal_branch() share one try/finally: both open a
+        # connection on branch.connection_name (pending_migrations via MigrationExecutor),
+        # and neither closes it. netbox_branching hit the same leak in its own per-branch
+        # migration sweep (issue #581) -- accumulating open connections across many
+        # branches can exhaust PostgreSQL's connection limit during `manage.py migrate`.
+        # The shared try also means a broken pending_migrations check can't abort the
+        # sweep for every other branch, matching heal_branch()'s own isolation.
         try:
+            if branch.pending_migrations:
+                if verbosity >= 2:
+                    logger.info(
+                        "upgrade_custom_objects: skipping branch %r (id=%s) -- has pending "
+                        "migrations; will be healed by its own post_migrate hook once migrated.",
+                        branch.name, branch.pk,
+                    )
+                continue
+
             result = heal_branch(branch, verbosity=verbosity, dry_run=dry_run)
         except Exception:
             logger.exception(
@@ -454,6 +462,8 @@ def heal_all_branches(verbosity=1, dry_run=False):
             )
             warnings += 1
             continue
+        finally:
+            connections[branch.connection_name].close()
 
         if result["healed"]:
             healed += 1
