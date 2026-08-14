@@ -275,3 +275,49 @@ class SchemaOperationsTestCase(TransactionCleanupMixin, CustomObjectsTestCase, T
         columns = self._db_columns(cot.get_model())
         self.assertNotIn('location_latitude', columns)
         self.assertNotIn('location_longitude', columns)
+
+    def test_url_field_rename_renames_both_columns(self):
+        """Renaming a url field renames both backing DB columns (issue #496)."""
+        cot = self.create_custom_object_type(name='urlrename', slug='url-rename')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True,
+        )
+        field = self.create_custom_object_type_field(
+            cot, name='website', label='Website', type='url',
+        )
+
+        columns = self._db_columns(cot.get_model())
+        self.assertIn('website', columns)
+        self.assertIn('website_title', columns)
+
+        # Reload from DB so the rename path has the original snapshot (set in
+        # from_db) — this mirrors how the edit view loads the field before saving.
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.name = 'homepage'
+        field.save()
+
+        columns = self._db_columns(cot.get_model())
+        self.assertNotIn('website', columns)
+        self.assertNotIn('website_title', columns)
+        self.assertIn('homepage', columns)
+        self.assertIn('homepage_title', columns)
+
+    def test_url_field_delete_drops_both_columns(self):
+        """Deleting a url field drops both backing DB columns (issue #496)."""
+        cot = self.create_custom_object_type(name='urldelete', slug='url-delete')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True,
+        )
+        field = self.create_custom_object_type_field(
+            cot, name='website', label='Website', type='url',
+        )
+
+        columns = self._db_columns(cot.get_model())
+        self.assertIn('website', columns)
+        self.assertIn('website_title', columns)
+
+        field.delete()
+
+        columns = self._db_columns(cot.get_model())
+        self.assertNotIn('website', columns)
+        self.assertNotIn('website_title', columns)

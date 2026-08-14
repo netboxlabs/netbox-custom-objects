@@ -5,6 +5,7 @@ import json
 import logging
 from decimal import Decimal
 from typing import List
+from urllib.parse import urlparse
 
 import django_tables2 as tables
 from strawberry.scalars import JSON
@@ -22,8 +23,9 @@ from django.db.models.fields.related import ForeignKey, ManyToManyDescriptor
 from django.db.models.manager import Manager
 from django.db.models.signals import m2m_changed
 from django.urls import reverse
-from django.utils.html import escape
+from django.utils.html import escape, format_html
 from django.utils.safestring import mark_safe
+from django.utils.text import Truncator
 from django.utils.translation import gettext_lazy as _
 from extras.choices import CustomFieldTypeChoices, CustomFieldUIEditableChoices
 from utilities.api import get_serializer_for_model
@@ -41,6 +43,7 @@ from utilities.forms.widgets import (
     DateTimePicker,
 )
 from utilities.templatetags.builtins.filters import linkify, render_markdown
+from netbox.config import get_config
 from netbox.tables.columns import BooleanColumn
 
 from netbox_custom_objects.choices import (CustomObjectFieldTypeChoices,
@@ -524,23 +527,108 @@ class DateTimeFieldType(FieldType):
 
 
 class URLFieldType(FieldType):
+    """
+    A URL field. Expands into two real DB columns: ``<name>``, the URL itself, and
+    ``<name>_title``, an optional human-readable title shown in place of the raw URL
+    on an object's detail page. Unlike CoordinatesFieldType, the primary ``<name>``
+    column keeps behaving like any other single-value column (unique/default/regex
+    validation all still apply to it) -- only the title is new.
+    """
+
     graphql_annotation = str
+
+    @staticmethod
+    def title_field_name(field):
+        return f"{field.name}_title"
+
+    @staticmethod
+    def render_url_html(url, title):
+        """
+        Render *url* as a safe, truncated link -- the title as link text if set,
+        falling back to the URL itself -- mirroring NetBox core's
+        builtins/customfield_value.html convention for 'url' custom fields,
+        including its scheme-allowlist guard against unsafe schemes (e.g.
+        javascript:).  Returns '' if *url* is falsy.  Shared by the detail-page
+        template filter and the list-view table column so both render identically.
+        """
+        if not url:
+            return ""
+        try:
+            scheme = urlparse(url).scheme.lower()
+        except ValueError:
+            scheme = ""
+        display_text = Truncator(title or url).chars(70)
+        if not scheme or scheme in get_config().ALLOWED_URL_SCHEMES:
+            return format_html('<a href="{}">{}</a>', url, display_text)
+        return display_text
 
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
-        return models.URLField(null=True, blank=True, **field_kwargs)
+        return {
+            field.name: models.URLField(null=True, blank=True, **field_kwargs),
+            # blank=True, default='' (not null=True): a CharField with null=True lets
+            # "no title" be represented as both NULL (ORM/API create omitting the key)
+            # and '' (a form submission clearing the field), which would make
+            # isnull-based filtering unreliable. default='' also keeps this column
+            # eligible for mixin_migration.py's post_migrate auto-heal pass on
+            # existing installations, which only auto-ADDs a new column when it is
+            # nullable or has a Django-level default (see _can_auto_add()).
+            self.title_field_name(field): models.CharField(
+                max_length=200,
+                blank=True,
+                default="",
+                help_text=_("Human-readable text shown instead of the raw URL."),
+            ),
+        }
 
     def get_form_field(self, field, **kwargs):
         return LaxURLField(
             assume_scheme="https", required=field.required, initial=field.default
         )
 
+    def get_form_fields(self, field):
+        """
+        Return the URL and title form fields, keyed by their backing column names
+        (mirrors CoordinatesFieldType.get_form_fields).
+        """
+        base_label = field.label or field.name.replace("_", " ").title()
+        url_field = LaxURLField(
+            label=base_label,
+            assume_scheme="https",
+            required=field.required,
+            initial=field.default,
+            help_text=render_markdown(field.description) if field.description else None,
+        )
+        title_field = forms.CharField(
+            label=f"{base_label} ({_('link title')})",
+            required=False,
+            max_length=200,
+            help_text=_("Text shown as the link instead of the raw URL."),
+        )
+        if field.ui_editable != CustomFieldUIEditableChoices.YES:
+            url_field.disabled = True
+            title_field.disabled = True
+        return {
+            field.name: url_field,
+            self.title_field_name(field): title_field,
+        }
+
     def get_filterform_field(self, field, **kwargs):
         return forms.CharField(
             label=field,
             required=False,
         )
+
+    def render_table_column(self, record, bound_column):
+        """
+        Render the same title-as-link-text HTML as the detail page, rather than
+        showing the two backing columns (<name>, <name>_title) as separate table
+        columns -- keeps the list view consistent with the detail view.
+        """
+        url = getattr(record, bound_column.name, None)
+        title = getattr(record, f"{bound_column.name}_title", None)
+        return self.render_url_html(url, title)
 
 
 class JSONFieldType(FieldType):

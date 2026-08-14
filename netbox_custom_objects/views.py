@@ -447,6 +447,13 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
             # Polymorphic Object (GFK): query via the concrete content_type column
             ct_field = f"{obj.name}_content_type__isnull"
             num_dependent_objects = model.objects.filter(**{ct_field: False}).count()
+        elif obj.type == CustomObjectFieldTypeChoices.TYPE_URL:
+            # The title may be set independently of the URL value, so an object with
+            # only a title (no URL) is dependent too and must not be omitted.
+            title_col = field_types.FIELD_TYPE_CLASS[obj.type]().title_field_name(obj)
+            num_dependent_objects = model.objects.filter(
+                Q(**{f"{obj.name}__isnull": False}) | ~Q(**{title_col: ""})
+            ).count()
         else:
             num_dependent_objects = model.objects.filter(**{f"{obj.name}__isnull": False}).count()
 
@@ -497,6 +504,11 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
             # Polymorphic GFK: filter on the concrete content_type column.
             ct_field = f"{obj.name}_content_type__isnull"
             dependent_objects[model] = list(model.objects.filter(**{ct_field: False}))
+        elif obj.type == CustomObjectFieldTypeChoices.TYPE_URL:
+            title_col = field_types.FIELD_TYPE_CLASS[obj.type]().title_field_name(obj)
+            dependent_objects[model] = list(model.objects.filter(
+                Q(**{f"{obj.name}__isnull": False}) | ~Q(**{title_col: ""})
+            ))
         else:
             dependent_objects[model] = list(model.objects.filter(**{f"{obj.name}__isnull": False}))
 
@@ -785,6 +797,20 @@ class CustomObjectEditView(generic.ObjectEditView):
                     attrs["custom_object_type_field_groups"][group_name] = []
                 attrs["custom_object_type_field_groups"][group_name].extend(sub_names)
                 attrs["custom_object_type_coordinates_fields"][field.name] = tuple(sub_names)
+                continue
+
+            # URL: one logical field rendered as two grouped url/title inputs. Unlike
+            # coordinates, there's no "both required" pairing rule, so no tracking dict
+            # is needed here beyond the generic field-group/rendered-names bookkeeping.
+            if field.type == CustomObjectFieldTypeChoices.TYPE_URL:
+                sub_fields = field_type.get_form_fields(field)
+                sub_names = list(sub_fields.keys())
+                for sub_name, sub_field in sub_fields.items():
+                    attrs[sub_name] = sub_field
+                    attrs["custom_object_type_rendered_names"].add(sub_name)
+                if group_name not in attrs["custom_object_type_field_groups"]:
+                    attrs["custom_object_type_field_groups"][group_name] = []
+                attrs["custom_object_type_field_groups"][group_name].extend(sub_names)
                 continue
 
             # Polymorphic single-object: type-selector + object-picker pair
@@ -1210,6 +1236,17 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
                     sub_names.append(sub_name)
                 # (latitude_name, longitude_name) for cross-field validation below.
                 attrs["custom_object_type_coordinates_fields"][field.name] = tuple(sub_names)
+                continue
+
+            # URL: two optional url/title inputs in bulk edit. No cross-field
+            # validation rule exists for URL (unlike coordinates), so no tracking
+            # dict is needed beyond adding the sub-fields themselves.
+            if field.type == CustomObjectFieldTypeChoices.TYPE_URL:
+                for sub_name, sub_field in field_type.get_form_fields(field).items():
+                    sub_field.required = False
+                    sub_field.widget.is_required = False
+                    sub_field.initial = None
+                    attrs[sub_name] = sub_field
                 continue
 
             # Polymorphic single-object: scope-style type-selector + object-picker pair

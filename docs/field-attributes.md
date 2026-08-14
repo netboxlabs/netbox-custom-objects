@@ -13,7 +13,7 @@ The following attributes are available when creating or editing a Custom Object 
 | `boolean` | True/false |
 | `date` | Date |
 | `datetime` | Date and time |
-| `url` | URL |
+| `url` | URL, with an optional link title |
 | `json` | Arbitrary JSON value |
 | `select` | Single selection from a choice set |
 | `multiselect` | Multiple selections from a choice set |
@@ -107,3 +107,34 @@ Behaviour:
 - **Map link.** Detail views render the coordinates with a **Map** button that opens the location
   using NetBox's `MAPS_URL` configuration parameter (Google Maps by default).
 - `Must be unique` and `Default` are not supported for `coordinates` fields.
+
+## URL Fields
+
+Field type: `url`
+
+A `url` field stores the URL value plus an optional human-readable **link title**.
+Adding one `url` field named `website` creates two backing columns:
+
+- `website` — the URL itself
+- `website_title` — optional display text shown in place of the raw URL
+
+Behaviour:
+
+- **Detail page and list view.** The title, when set, is used as the visible link
+  text both on the object's detail page and in its column in list/table views —
+  the two backing columns are never shown as separate table columns. Falls back to
+  the raw URL as link text when no title is set.
+- **Optional independently.** The title has no relationship to the URL value —
+  setting one without the other is allowed and harmless.
+- **REST API.** The pair is exposed as two flat fields, `<name>` and `<name>_title`.
+- `Must be unique` and `Default` continue to apply to the URL value itself, exactly
+  as for any other `url` field.
+- **CSV import.** Bulk CSV import only populates the URL value; the title column is
+  not importable via CSV (the same limitation applies to `coordinates` fields' backing
+  columns).
+- **Upgrading from an older release.** Existing `url` fields gain the `<name>_title`
+  column automatically on the next `manage.py migrate` (or immediately via
+  `manage.py upgrade_custom_objects`) -- this also heals every existing NetBox
+  Branching branch's own schema, not just main's. A branch migrating on its own
+  afterward re-heals itself too, as a secondary safeguard, but isn't required for
+  the column to already be there.

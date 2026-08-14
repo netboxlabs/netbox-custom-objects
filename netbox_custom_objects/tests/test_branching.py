@@ -253,6 +253,13 @@ class BaseBranchingTests(BranchingTestBase):
         select      — VARCHAR column with a ChoiceSet
         object      — ForeignKey column (to dcim.Site)
         multiobject — M2M through-table (to dcim.Site)
+        url         — two backing columns (<name>, <name>_title); the CO is
+                      created in the same atomic block as the field, so under
+                      squash the CO's CREATE can replay before the field's own
+                      CREATE — exercising _apply_deferred_co_field's replay of
+                      both the URL and title values (title only reverts to its
+                      default empty string, not the URL, if the replay ever
+                      drops it)
 
         This exercises every distinct schema-editor operation
         (add_field, add_FK, create_through_table) across a merge cycle and
@@ -294,6 +301,7 @@ class BaseBranchingTests(BranchingTestBase):
                 ('select_field', {'type': 'select', 'choice_set': choice_set}),
                 ('obj_field', {'type': 'object', 'related_object_type': site_ot}),
                 ('multi_field', {'type': 'multiobject', 'related_object_type': site_ot}),
+                ('url_field', {'type': 'url'}),
             ]
             for name, kwargs in field_specs:
                 f = CustomObjectTypeField.objects.create(
@@ -314,6 +322,8 @@ class BaseBranchingTests(BranchingTestBase):
                 select_field='active',
                 obj_field_id=site.pk,
                 # multi_field left empty — through-table creation is still exercised
+                url_field='https://example.com/path',
+                url_field_title='Example Path',
             )
             co_pk = co.pk
 
@@ -353,6 +363,11 @@ class BaseBranchingTests(BranchingTestBase):
         self.assertEqual(co_main.dt_field, test_dt)
         self.assertEqual(co_main.select_field, 'active')
         self.assertEqual(co_main.obj_field_id, site.pk)
+        self.assertEqual(co_main.url_field, 'https://example.com/path')
+        self.assertEqual(
+            co_main.url_field_title, 'Example Path',
+            'Title value must survive replay alongside the URL value',
+        )
 
         # Capture the multi_field's physical through-table name *while* it
         # still exists so we can confirm it's gone after revert.
@@ -2336,6 +2351,174 @@ class SequentialRenameTestCase(BranchingTestBase, TransactionTestCase):
         self.assertNotIn('beta', main_cols, 'beta column must be gone after merge')
         self.assertNotIn('alpha', main_cols, 'alpha column must be gone after merge')
 
+    # ── url field: title column rename + replay/revert ─────────────────────
+
+    def test_url_field_rename_replays_title_and_reverts(self):
+        """
+        Rename a ``url``-type field inside a branch, updating both the URL
+        and title values under the new name.  After merge, both backing
+        columns (``<name>``, ``<name>_title``) must have been renamed and
+        both values must be present under the new name.  After revert, both
+        must be restored under the old name.
+
+        Regression test for the naive ``alter_field()`` call on the title
+        column (previously assumed the old title column always existed,
+        unlike the primary column's conflict-aware ``_schema_alter_field``
+        path) and for the title key's audit-data rewrite.
+        """
+        request = _make_request(self.user)
+
+        with event_tracking(request):
+            cot = CustomObjectType.objects.create(name='url_rename_cot', slug='url-rename-cot')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='site_link', label='Site Link', type='url',
+            )
+            co = cot.get_model().objects.create(
+                site_link='https://old.example.com', site_link_title='Old Title',
+            )
+
+        co_pk = co.pk
+        branch = _provision_branch('URL Rename Branch', self.MERGE_STRATEGY, self.user)
+        branch_request = _make_request(self.user)
+
+        with activate_branch(branch), event_tracking(branch_request):
+            field = CustomObjectTypeField.objects.get(custom_object_type=cot, name='site_link')
+            field.snapshot()
+            field.name = 'external_link'
+            field.label = 'External Link'
+            field.save()
+            BM = cot.get_model()
+            b_co = BM.objects.get(pk=co_pk)
+            b_co.snapshot()
+            b_co.external_link = 'https://new.example.com'
+            b_co.external_link_title = 'New Title'
+            b_co.save()
+
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        with main_conn.cursor() as cursor:
+            main_cols = {
+                col.name
+                for col in main_conn.introspection.get_table_description(
+                    cursor, cot.get_database_table_name(),
+                )
+            }
+        self.assertIn('external_link', main_cols)
+        self.assertIn('external_link_title', main_cols)
+        self.assertNotIn('site_link', main_cols)
+        self.assertNotIn('site_link_title', main_cols)
+
+        MergedModel = cot.get_model()
+        co_main = MergedModel.objects.get(pk=co_pk)
+        self.assertEqual(co_main.external_link, 'https://new.example.com')
+        self.assertEqual(co_main.external_link_title, 'New Title')
+
+        branch.revert(user=self.user, commit=True)
+
+        with main_conn.cursor() as cursor:
+            main_cols_r = {
+                col.name
+                for col in main_conn.introspection.get_table_description(
+                    cursor, cot.get_database_table_name(),
+                )
+            }
+        self.assertIn('site_link', main_cols_r)
+        self.assertIn('site_link_title', main_cols_r)
+        self.assertNotIn('external_link', main_cols_r)
+        self.assertNotIn('external_link_title', main_cols_r)
+
+        RevertedModel = cot.get_model()
+        co_reverted = RevertedModel.objects.get(pk=co_pk)
+        self.assertEqual(co_reverted.site_link, 'https://old.example.com')
+        self.assertEqual(co_reverted.site_link_title, 'Old Title')
+
+    def test_url_field_title_column_rename_conflict_merge(self):
+        """
+        Same independent-rename conflict as ``test_sequential_renames_both_sides_merge``
+        (branch renames A→B→C while main independently renames A→D), but for a
+        ``url``-type field, asserting the *title* column resolves the conflict
+        the same way the primary column does.
+
+        Regression test: the naive ``alter_field()`` call for the title column
+        assumed the old title column still existed; when it doesn't (because
+        main independently renamed the field first), the title rename must
+        resolve via the live field record — exactly like
+        ``_schema_alter_field`` already does for the primary column — instead
+        of crashing or silently leaving the title column stale.
+        """
+        request = _make_request(self.user)
+
+        with event_tracking(request):
+            cot = CustomObjectType.objects.create(name='url_conflict_cot', slug='url-conflict-cot')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='alpha', label='Alpha', type='url',
+            )
+            co = cot.get_model().objects.create(alpha='https://a.example.com', alpha_title='A')
+
+        co_pk = co.pk
+        branch = _provision_branch('URL Conflict Branch', self.MERGE_STRATEGY, self.user)
+        branch_request = _make_request(self.user)
+
+        # ── branch: alpha → beta → gamma ──────────────────────────────────
+        with activate_branch(branch), event_tracking(branch_request):
+            f = CustomObjectTypeField.objects.get(custom_object_type=cot, name='alpha')
+            f.snapshot()
+            f.name = 'beta'
+            f.label = 'Beta'
+            f.save()
+            BM = cot.get_model()
+            co_b = BM.objects.get(pk=co_pk)
+            co_b.snapshot()
+            co_b.beta = 'https://b.example.com'
+            co_b.beta_title = 'B'
+            co_b.save()
+
+        with activate_branch(branch), event_tracking(branch_request):
+            f = CustomObjectTypeField.objects.get(custom_object_type=cot, name='beta')
+            f.snapshot()
+            f.name = 'gamma'
+            f.label = 'Gamma'
+            f.save()
+            BM = cot.get_model()
+            co_g = BM.objects.get(pk=co_pk)
+            co_g.snapshot()
+            co_g.gamma = 'https://g.example.com'
+            co_g.gamma_title = 'G'
+            co_g.save()
+
+        # ── main: alpha → delta (independent rename) ──────────────────────
+        with event_tracking(request):
+            f = CustomObjectTypeField.objects.get(custom_object_type=cot, name='alpha')
+            f.name = 'delta'
+            f.label = 'Delta'
+            f.save()
+
+        # ── merge — let any failure propagate with its original traceback ──
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+
+        with main_conn.cursor() as cursor:
+            main_cols = {
+                col.name
+                for col in main_conn.introspection.get_table_description(
+                    cursor, cot.get_database_table_name(),
+                )
+            }
+        self.assertIn('gamma', main_cols, 'Main URL column must be gamma after merge')
+        self.assertIn(
+            'gamma_title', main_cols,
+            'Main title column must converge to gamma_title, not be left as delta_title/stale',
+        )
+        for stale in ('alpha', 'beta', 'delta', 'alpha_title', 'beta_title', 'delta_title'):
+            self.assertNotIn(stale, main_cols, f'{stale!r} column must be gone after merge')
+
+        MergedModel = cot.get_model()
+        co_main = MergedModel.objects.get(pk=co_pk)
+        self.assertEqual(co_main.gamma, 'https://g.example.com')
+        self.assertEqual(co_main.gamma_title, 'G')
+
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
 class SequentialRenameSquashTestCase(SequentialRenameTestCase, TransactionTestCase):
@@ -2344,6 +2527,244 @@ class SequentialRenameSquashTestCase(SequentialRenameTestCase, TransactionTestCa
 
     def test_sequential_renames_alpha_beta_gamma_merge(self):
         self._run_sequential_rename_merge('seq_squash_cot', 'seq-squash-cot')
+
+
+# ── Branch upgrade heal (mixin_migration.heal_branch) ──────────────────────────
+
+@unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
+class BranchUpgradeHealTestCase(BranchingTestBase, TransactionTestCase):
+    """
+    Regression tests for upgrading a branch that already existed before a
+    plugin release added a new base column (here, URLFieldType's
+    ``<name>_title`` column from issue #496).
+
+    A schema change like this ships with no actual Django migration file
+    (URLFieldType.get_model_field() just changes what columns a dynamically
+    generated model has), so there's nothing for netbox-branching's own
+    ``MigrationExecutor`` to detect as "pending" against a branch --
+    ``Branch.migrate()`` never runs for it, and neither does its
+    ``post_migrate`` signal.  The reliable trigger is ``heal_all_branches()``,
+    called unconditionally from the main upgrade path (the post_migrate
+    signal handler, and ``manage.py upgrade_custom_objects``) -- see
+    ``mixin_migration.heal_branch()``'s docstring.
+    """
+
+    def _setup_branch_with_dropped_title_column(self, cot_name, cot_slug, field_name):
+        """Shared fixture: a COT+url field in main, a branch with a full schema
+        copy, then the title column dropped from *only* the branch's schema to
+        simulate a branch provisioned before #496 shipped.  Returns
+        (cot, branch, table_name, branch_conn, _columns) where _columns(conn)
+        introspects the live column set.
+        """
+        request = _make_request(self.user)
+        with event_tracking(request):
+            cot = CustomObjectType.objects.create(name=cot_name, slug=cot_slug)
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name=field_name, label=field_name.title(), type='url',
+            )
+
+        branch = _provision_branch(f'{cot_name} branch', None, self.user)
+        table_name = cot.get_database_table_name()
+        branch_conn = connections[branch.connection_name]
+
+        with branch_conn.cursor() as cursor:
+            cursor.execute(f'ALTER TABLE "{table_name}" DROP COLUMN "{field_name}_title"')
+
+        def _columns(conn):
+            with conn.cursor() as cursor:
+                return {
+                    col.name
+                    for col in conn.introspection.get_table_description(cursor, table_name)
+                }
+
+        self.assertNotIn(
+            f'{field_name}_title', _columns(branch_conn),
+            'Precondition: title column must be absent from the branch schema',
+        )
+        self.assertIn(
+            f'{field_name}_title', _columns(main_conn),
+            'Precondition: title column must still be present in main',
+        )
+        return cot, branch, table_name, branch_conn, _columns
+
+    def test_heal_branch_adds_missing_title_column_to_branch_schema_only(self):
+        """
+        Lower-level unit check of heal_branch() itself, called directly.  See
+        test_upgrade_custom_objects_command_heals_existing_branch below for
+        the end-to-end trigger this plugin actually relies on in production.
+        """
+        from netbox_custom_objects.mixin_migration import heal_branch
+
+        cot, branch, table_name, branch_conn, _columns = (
+            self._setup_branch_with_dropped_title_column('heal_cot', 'heal-cot', 'site_link')
+        )
+
+        result = heal_branch(branch)
+
+        self.assertIn(
+            'site_link_title', _columns(branch_conn),
+            'heal_branch() must add the missing title column to the branch schema',
+        )
+        self.assertIn(
+            'site_link_title', _columns(main_conn),
+            "heal_branch() must not have touched main's schema",
+        )
+        self.assertEqual(result['healed'], 1)
+
+    def test_upgrade_custom_objects_command_heals_existing_branch(self):
+        """
+        End-to-end regression test for the reviewer's concern that the only
+        prior coverage called heal_branch() directly, bypassing the actual
+        trigger a real upgrade uses.  Drives the management command instead
+        -- the same entry point an administrator runs after upgrading the
+        plugin, and the same code path the post_migrate signal handler uses
+        internally (heal_all_branches()) -- and never calls heal_branch()
+        directly.
+        """
+        from django.core.management import call_command
+
+        cot, branch, table_name, branch_conn, _columns = (
+            self._setup_branch_with_dropped_title_column('heal_cmd_cot', 'heal-cmd-cot', 'site_link')
+        )
+
+        call_command('upgrade_custom_objects', verbosity=0)
+
+        self.assertIn(
+            'site_link_title', _columns(branch_conn),
+            "'manage.py upgrade_custom_objects' must heal the branch's schema too, "
+            'not just main\'s',
+        )
+        self.assertIn(
+            'site_link_title', _columns(main_conn),
+            "the command must not have broken main's already-healthy schema",
+        )
+
+    def test_heal_all_branches_skips_branch_with_missing_schema(self):
+        """
+        A branch's schema can be gone even when its status doesn't obviously say
+        so -- e.g. provisioning failed after the schema was created, or it was
+        since dropped (PR #641 review). Introspecting through that branch's own
+        connection wouldn't raise: its search path falls through to main, so it
+        would silently report (and risk "healing") main's table instead. Confirm
+        the branch is skipped instead -- no exception, main untouched, no COT
+        reported healed for it.
+        """
+        from netbox_custom_objects.mixin_migration import heal_all_branches
+
+        cot, branch, table_name, branch_conn, _columns = (
+            self._setup_branch_with_dropped_title_column('heal_missing', 'heal-missing', 'site_link')
+        )
+        branch_conn.close()
+        with main_conn.cursor() as cursor:
+            cursor.execute(f'DROP SCHEMA IF EXISTS "{branch.schema_name}" CASCADE')
+        # Simulates provisioning having failed (or the schema having been dropped)
+        # without going through the normal archive/deprovision flow.
+        Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.FAILED)
+
+        result = heal_all_branches(verbosity=0)
+
+        self.assertEqual(result['total'], 1)
+        self.assertEqual(result['healed'], 0)
+        self.assertGreaterEqual(result['warnings'], 1)
+        self.assertIn(
+            'site_link_title', _columns(main_conn),
+            "main's own schema must be unaffected by a branch with no schema",
+        )
+
+    def test_heal_all_branches_skips_branch_with_pending_migrations(self):
+        """
+        A branch with pending migrations has an ORM that may not match its
+        actual (outdated) schema yet -- heal_cot() could misdiagnose drift
+        against columns the branch doesn't have for unrelated reasons (PR #641
+        review). Confirm such a branch is skipped rather than healed; it's
+        picked up later by the branch's own post_migrate hook once it migrates.
+        """
+        from netbox_custom_objects.mixin_migration import heal_all_branches
+
+        cot, branch, table_name, branch_conn, _columns = (
+            self._setup_branch_with_dropped_title_column('heal_pending', 'heal-pending', 'site_link')
+        )
+
+        with mock.patch(
+            'netbox_branching.models.Branch.pending_migrations',
+            new_callable=mock.PropertyMock,
+            return_value=[('dcim', '9999_fake_pending_migration')],
+        ):
+            result = heal_all_branches(verbosity=0)
+
+        self.assertEqual(result['healed'], 0)
+        self.assertNotIn(
+            'site_link_title', _columns(branch_conn),
+            "a branch with pending migrations must not be healed yet",
+        )
+
+    def test_heal_all_branches_continues_after_one_branch_fails(self):
+        """
+        One branch failing unexpectedly during heal_branch() must not abort the
+        sweep for every other branch (PR #641 review).
+        """
+        from netbox_custom_objects import mixin_migration
+        from netbox_custom_objects.mixin_migration import heal_all_branches
+
+        cot, branch1, table_name, branch1_conn, _columns = (
+            self._setup_branch_with_dropped_title_column('heal_multi_a', 'heal-multi-a', 'site_link')
+        )
+        branch2 = _provision_branch('heal_multi_b branch', None, self.user)
+        table_name2 = cot.get_database_table_name()
+        branch2_conn = connections[branch2.connection_name]
+        with branch2_conn.cursor() as cursor:
+            cursor.execute(f'ALTER TABLE "{table_name2}" DROP COLUMN "site_link_title"')
+        self.assertNotIn('site_link_title', _columns(branch2_conn))
+
+        original_heal_branch = mixin_migration.heal_branch
+
+        def _flaky_heal_branch(branch, **kwargs):
+            if branch.pk == branch1.pk:
+                raise RuntimeError('simulated failure healing branch1')
+            return original_heal_branch(branch, **kwargs)
+
+        with mock.patch('netbox_custom_objects.mixin_migration.heal_branch', side_effect=_flaky_heal_branch):
+            result = heal_all_branches(verbosity=0)
+
+        self.assertNotIn(
+            'site_link_title', _columns(branch1_conn),
+            'branch1 was never healed (its heal_branch() call raised)',
+        )
+        self.assertIn(
+            'site_link_title', _columns(branch2_conn),
+            "branch2 must still be healed despite branch1's failure",
+        )
+        self.assertGreaterEqual(result['warnings'], 1)
+
+    def test_heal_all_branches_closes_branch_connections(self):
+        """
+        pending_migrations (via MigrationExecutor) and heal_branch() both open a
+        connection on branch.connection_name without closing it -- left open, these
+        accumulate across every branch in the sweep, the same leak netbox_branching
+        fixed in its own per-branch migration sweep (issue #581). Confirm the
+        connection is closed afterward, for both a healed branch and one skipped for
+        pending migrations.
+        """
+        from netbox_custom_objects.mixin_migration import heal_all_branches
+
+        cot, branch, table_name, branch_conn, _columns = (
+            self._setup_branch_with_dropped_title_column('heal_close', 'heal-close', 'site_link')
+        )
+        branch2 = _provision_branch('heal_close_pending branch', None, self.user)
+        branch2_conn = connections[branch2.connection_name]
+
+        # A plain PropertyMock has no access to the instance being accessed, so it can't
+        # distinguish branch from branch2 -- use a real property bound to the class instead.
+        def _pending_migrations(self):
+            if self.pk == branch2.pk:
+                return [('dcim', '9999_fake_pending_migration')]
+            return []
+
+        with mock.patch.object(Branch, 'pending_migrations', property(_pending_migrations)):
+            heal_all_branches(verbosity=0)
+
+        self.assertIsNone(branch_conn.connection, "healed branch's connection must be closed")
+        self.assertIsNone(branch2_conn.connection, "skipped branch's connection must be closed too")
 
 
 # ── Missing field-type coverage (iterative only) ──────────────────────────────
@@ -2393,6 +2814,7 @@ class MissingFieldTypesTestCase(BranchingTestBase, TransactionTestCase):
                 longtext_field='line1\nline2',
                 date_field=datetime.date(2026, 5, 21),
                 url_field='https://example.com/path',
+                url_field_title='Example Path',
                 json_field={'k': 'v', 'n': 1, 'list': [1, 2, 3]},
                 multiselect_field=['a', 'c'],
             )
@@ -2408,6 +2830,7 @@ class MissingFieldTypesTestCase(BranchingTestBase, TransactionTestCase):
         self.assertEqual(co_main.longtext_field, 'line1\nline2')
         self.assertEqual(co_main.date_field, datetime.date(2026, 5, 21))
         self.assertEqual(co_main.url_field, 'https://example.com/path')
+        self.assertEqual(co_main.url_field_title, 'Example Path')
         self.assertEqual(co_main.json_field, {'k': 'v', 'n': 1, 'list': [1, 2, 3]})
         self.assertEqual(sorted(co_main.multiselect_field), ['a', 'c'])
 

@@ -2514,3 +2514,54 @@ class LazySerializerRegistrationTestCase(CustomObjectsTestCase, TestCase):
                       "building child serializer must not clobber parent's full serializer")
         self.assertIn("title", registered_parent.Meta.fields,
                       "parent's full field set must be intact after child serializer is built")
+
+
+class DeferredCOFieldReplayOrderingTestCase(CustomObjectsTestCase, TestCase):
+    """
+    Regression test (PR #641 review) for an ordering bug in the deferred CO
+    field replay: _apply_deferred_co_field() replays a url field's title value
+    via a raw UPDATE against "<name>_title", but in CustomObjectTypeField.save()
+    the title column used to be added *after* that call ran. A deferred title
+    value would therefore issue an UPDATE against a column that doesn't exist
+    yet and raise psycopg.errors.UndefinedColumn.
+
+    The scenario this guards against — a CO's CREATE replaying before its
+    field's CREATE — normally only arises from netbox-branching squash-merge
+    ordering, but the replay mechanism itself doesn't depend on branching at
+    all: it's driven purely by the _deferred_co_field_data contextvar and
+    CustomObjectTypeField.save(). This manufactures that scenario directly
+    (populating the contextvar before creating the field) so the ordering fix
+    is covered without needing netbox-branching installed.
+    """
+
+    def test_title_column_exists_before_deferred_title_replay_runs(self):
+        from netbox_custom_objects.models import _deferred_co_field_data
+
+        cot = self.create_custom_object_type(name="DeferredCOT", slug="deferred-cot")
+        model = cot.get_model()
+        co = model.objects.create()
+        table_name = cot.get_database_table_name()
+
+        _deferred_co_field_data.set({
+            table_name: {
+                co.pk: {
+                    "data": {
+                        "website": "https://example.com/",
+                        "website_title": "Example Site",
+                    },
+                },
+            },
+        })
+        try:
+            self.create_custom_object_type_field(
+                cot, name="website", label="Website", type="url",
+            )
+        finally:
+            _deferred_co_field_data.set(None)
+
+        fresh_co = cot.get_model().objects.get(pk=co.pk)
+        self.assertEqual(fresh_co.website, "https://example.com/")
+        self.assertEqual(
+            fresh_co.website_title, "Example Site",
+            "deferred title value must be replayed once the title column exists",
+        )

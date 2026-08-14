@@ -153,6 +153,14 @@
                             {{ ''|placeholder }}
                           {% endif %}
                         {% endwith %}
+                      {% elif field.type == 'url' %}
+                        {% with url_html=object|get_url_field_html:field %}
+                          {% if url_html %}
+                            {{ url_html }}
+                          {% else %}
+                            {{ ''|placeholder }}
+                          {% endif %}
+                        {% endwith %}
                       {% else %}
                         {% customfield_value field object|get_field_value:field %}
                       {% endif %}
