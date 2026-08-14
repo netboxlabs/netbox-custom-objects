@@ -11,7 +11,7 @@ from unittest.mock import patch
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
-from django.db import connection
+from django.db import IntegrityError, connection
 from django.test import TransactionTestCase
 from django.urls import reverse
 
@@ -522,6 +522,66 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
         )
 
         obj.delete()  # Must not raise ValueError: "Cannot query ...: Must be ... instance."
+
+    def test_concurrent_double_submit_does_not_deadlock(self):
+        """
+        Two threads independently calling CustomObjectTypeField.objects.create() for the
+        identical (custom_object_type, name) at once -- a genuinely reachable scenario (e.g. a
+        retried request, or a doubly-clicked "save" button) -- must not deadlock.
+
+        This is a real deadlock, not just a slow race, when CustomObjectType._global_lock spans
+        create_polymorphic_m2m_table()'s DDL: both threads build+register a through model for the
+        SAME physical table before either knows which one will win the (name, custom_object_type)
+        UniqueConstraint, so whichever thread's schema_editor.create_model() runs second blocks at
+        the Postgres level waiting for the first thread's uncommitted CREATE TABLE (same table
+        name) to resolve. If the first thread still needs the *same* Python lock afterward (its
+        own save() calls CustomObjectType.clear_model_cache(), which acquires it) before it can
+        commit and release that Postgres-level wait, neither thread can make progress. Confirmed
+        empirically: this exact scenario hung a live test run before the lock was narrowed to
+        cover only the build+register+repoint step, not the DDL.
+        """
+        cot = self.create_simple_custom_object_type(name='doublesubmit', slug='double-submit')
+        self_ot = ObjectType.objects.get_for_model(cot.get_model())
+
+        results = {}
+
+        def create_field(key):
+            threading.current_thread().name = key
+            try:
+                field = CustomObjectTypeField.objects.create(
+                    custom_object_type=cot,
+                    name='depends_on',
+                    label='Depends On',
+                    type=CustomFieldTypeChoices.TYPE_MULTIOBJECT,
+                    is_polymorphic=True,
+                )
+                field.related_object_types.set([self_ot, self.site_ot])
+                results[key] = {'field': field}
+            except IntegrityError as e:
+                # Expected for exactly one of the two: the (name, custom_object_type)
+                # UniqueConstraint has only one winner.
+                results[key] = {'integrity_error': e}
+            except Exception as e:  # noqa: BLE001 - surfaced via the assertion below
+                results[key] = {'error': e}
+            finally:
+                connection.close()
+
+        t_a = threading.Thread(target=create_field, args=('A',), name='A')
+        t_b = threading.Thread(target=create_field, args=('B',), name='B')
+        t_a.start()
+        t_b.start()
+        t_a.join(timeout=15)
+        t_b.join(timeout=15)
+
+        self.assertFalse(t_a.is_alive(), "thread A did not complete within the join timeout (deadlocked?)")
+        self.assertFalse(t_b.is_alive(), "thread B did not complete within the join timeout (deadlocked?)")
+        for key, result in results.items():
+            self.assertNotIn('error', result, f"thread {key} raised an unexpected error: {result.get('error')!r}")
+
+        succeeded = [key for key, result in results.items() if 'field' in result]
+        failed = [key for key, result in results.items() if 'integrity_error' in result]
+        self.assertEqual(len(succeeded), 1, f"expected exactly one winner: {results!r}")
+        self.assertEqual(len(failed), 1, f"expected exactly one IntegrityError: {results!r}")
 
     def test_field_creation_via_public_save_path_with_two_type_setup_yields_consistent_through_model(self):
         """

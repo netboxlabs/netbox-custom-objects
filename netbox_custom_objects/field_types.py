@@ -1805,6 +1805,17 @@ class MultiObjectFieldType(FieldType):
         # class mismatched. Confirmed live under concurrent load:
         # intermittent "ValueError: Cannot query 'X': Must be 'TableYModel'
         # instance." and RecursionError (issue #640).
+        #
+        # Deliberately scoped to just the build+register+repoint above -- NOT the
+        # table-existence probe/DDL below. A concurrent CustomObjectTypeField.save() for the
+        # same field also calls CustomObjectType.clear_model_cache(), which acquires this same
+        # lock; if the lock stayed held across schema_editor.create_model() (an uncommitted
+        # CREATE TABLE inside this save()'s own transaction), a second thread blocked here
+        # waiting for the lock -- itself stuck at the Postgres level waiting on the first
+        # thread's uncommitted transaction for the same physical table -- would prevent the
+        # first thread from ever reaching clear_model_cache() to commit. Releasing the lock
+        # before the DDL avoids that deadlock; the DDL itself has no equivalent staleness
+        # window to guard (the "source" FK is already correctly repointed by the time it runs).
         with CustomObjectType._global_lock:
             through = self.get_polymorphic_through_model(field_instance, source_model_string)
 
@@ -1812,16 +1823,16 @@ class MultiObjectFieldType(FieldType):
             source_field.remote_field.model = model
             source_field.related_model = model
 
-            # Probe the same schema the DDL will target.  schema_editor is branch-aware
-            # (opened via _get_schema_connection() by the caller), whereas the module-level
-            # ``connection`` always points at the main schema — using it here would let the
-            # idempotency guard diverge from where create_model() actually writes.
-            conn = schema_editor.connection
-            table_name = through._meta.db_table
-            with conn.cursor() as cursor:
-                existing_tables = conn.introspection.table_names(cursor)
-                if table_name not in existing_tables:
-                    schema_editor.create_model(through)
+        # Probe the same schema the DDL will target.  schema_editor is branch-aware
+        # (opened via _get_schema_connection() by the caller), whereas the module-level
+        # ``connection`` always points at the main schema — using it here would let the
+        # idempotency guard diverge from where create_model() actually writes.
+        conn = schema_editor.connection
+        table_name = through._meta.db_table
+        with conn.cursor() as cursor:
+            existing_tables = conn.introspection.table_names(cursor)
+            if table_name not in existing_tables:
+                schema_editor.create_model(through)
 
     def drop_polymorphic_m2m_table(self, field_instance, model, schema_editor):
         """Drops the DB table for a polymorphic MultiObject through.
