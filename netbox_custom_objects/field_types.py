@@ -1787,12 +1787,41 @@ class MultiObjectFieldType(FieldType):
         ``with connection.schema_editor()`` here would flush deferred SQL
         prematurely on PostgreSQL.
         """
-        source_model_string = f"{APP_LABEL}.{model.__name__}"
-        through = self.get_polymorphic_through_model(field_instance, source_model_string)
+        from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
 
-        source_field = through._meta.get_field("source")
-        source_field.remote_field.model = model
-        source_field.related_model = model
+        source_model_string = f"{APP_LABEL}.{model.__name__}"
+
+        # Serialized against CustomObjectType.get_model()'s own through-model
+        # reuse-or-create check (_after_model_generation runs under the same
+        # lock, held by its caller for the whole call). Without this, a
+        # concurrent reader regenerating this COT's model can observe this
+        # through model mid-construction here -- registered by Django's
+        # ModelBase metaclass inside generate_model() below, but before its
+        # "source" FK is repointed at `model` on the next line -- and race to
+        # point the registered class's FK at its OWN (different) model
+        # instance. Whichever thread's mutation and whichever thread's
+        # get_model() cache-write happen last aren't guaranteed to be the
+        # same thread, leaving the through's "source" FK and the cached model
+        # class mismatched. Confirmed live under concurrent load:
+        # intermittent "ValueError: Cannot query 'X': Must be 'TableYModel'
+        # instance." and RecursionError (issue #658).
+        #
+        # Deliberately scoped to just the build+register+repoint above -- NOT the
+        # table-existence probe/DDL below. A concurrent CustomObjectTypeField.save() for the
+        # same field also calls CustomObjectType.clear_model_cache(), which acquires this same
+        # lock; if the lock stayed held across schema_editor.create_model() (an uncommitted
+        # CREATE TABLE inside this save()'s own transaction), a second thread blocked here
+        # waiting for the lock -- itself stuck at the Postgres level waiting on the first
+        # thread's uncommitted transaction for the same physical table -- would prevent the
+        # first thread from ever reaching clear_model_cache() to commit. Releasing the lock
+        # before the DDL avoids that deadlock; the DDL itself has no equivalent staleness
+        # window to guard (the "source" FK is already correctly repointed by the time it runs).
+        with CustomObjectType._global_lock:
+            through = self.get_polymorphic_through_model(field_instance, source_model_string)
+
+            source_field = through._meta.get_field("source")
+            source_field.remote_field.model = model
+            source_field.related_model = model
 
         # Probe the same schema the DDL will target.  schema_editor is branch-aware
         # (opened via _get_schema_connection() by the caller), whereas the module-level
