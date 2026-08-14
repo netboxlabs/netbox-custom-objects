@@ -9,9 +9,11 @@ from io import StringIO
 from unittest.mock import patch
 
 from django.apps import apps
+from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
 from django.db import connection
 from django.test import TransactionTestCase
+from django.urls import reverse
 
 from core.models import ObjectType
 from dcim.models import Site
@@ -19,6 +21,7 @@ from extras.choices import CustomFieldTypeChoices
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from users.models import ObjectPermission
 
 from .base import CustomObjectsTestCase, TransactionCleanupMixin
 
@@ -472,6 +475,12 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
             t_w.join(timeout=10)
             t_r.join(timeout=10)
 
+        # A join() timeout leaves the result dicts empty rather than raising, so without these
+        # checks a hung thread could silently make the assertions below vacuously pass -- e.g. a
+        # writer that never finished never reaches the mismatch-inducing repoint at all.
+        self.assertFalse(t_w.is_alive(), "writer thread did not complete within the join timeout")
+        self.assertFalse(t_r.is_alive(), "reader thread did not complete within the join timeout")
+
         self.assertNotIn('error', writer_result, f"writer raised: {writer_result.get('error')!r}")
         self.assertNotIn('error', reader_result, f"reader raised: {reader_result.get('error')!r}")
 
@@ -489,4 +498,109 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
 
         obj = final_model.objects.create(name='Instance 1')
         obj.depends_on.set([Site.objects.create(name='Force Site', slug='force-site')])
+
+        # The delete-confirmation GET is the reported UI path (issue #640, step 4): obj.delete()
+        # below realigns each through's "source" FK to type(self) before Django's collector runs
+        # (see CustomObject.delete()), which would silently paper over a lingering registry
+        # mismatch. A GET here never calls delete() at all, so it exercises the raw, unrepaired
+        # state directly -- exactly what crashed with "ValueError: Cannot query ...: Must be ...
+        # instance." in the original report, and what the class-identity assertion above cannot
+        # by itself confirm is actually reachable through the UI.
+        content_type = ContentType.objects.get_for_model(final_model)
+        obj_perm = ObjectPermission(name='poly-force-delete-view', actions=['view', 'delete'])
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        obj_perm.object_types.add(content_type)
+        delete_url = reverse(
+            'plugins:netbox_custom_objects:customobject_delete',
+            kwargs={'custom_object_type': cot.slug, 'pk': obj.pk},
+        )
+        response = self.client.get(delete_url)
+        self.assertEqual(
+            response.status_code, 200,
+            f"delete-confirmation GET must render, not crash (got {response.status_code})",
+        )
+
+        obj.delete()  # Must not raise ValueError: "Cannot query ...: Must be ... instance."
+
+    def test_field_creation_via_public_save_path_with_two_type_setup_yields_consistent_through_model(self):
+        """
+        Variant of test_field_creation_racing_concurrent_readers_yields_consistent_through_model
+        above, using the reported two-type Custom Object setup (a self-reference plus a second,
+        genuine Custom Object Type -- not just a single core dcim model) instead of one type, to
+        match the exact reported repro. Goes through the public field-save path
+        (CustomObjectTypeField.objects.create()) throughout, with no private-helper shortcut.
+
+        A deterministic, forced-interleaving version of *this specific* scenario (two threads
+        both calling CustomObjectTypeField.objects.create() for the identical (name,
+        custom_object_type) at once, paused via the same mocked apps.register_model() technique
+        as test_forced_registration_interleaving_stays_consistent) was attempted and abandoned:
+        it can genuinely deadlock rather than just race. Both threads target the same physical
+        through table, so the second thread's CREATE TABLE blocks at the Postgres level on the
+        first thread's still-open transaction; CustomObjectType._global_lock is held by the first
+        thread across that same window (with the fix in place); and if anything downstream in the
+        first thread's own save() needs that lock again (e.g. a signal handler calling
+        get_model()), neither thread can make progress -- confirmed by hanging an actual test
+        run. Real thread-scheduling luck, exercised here instead via 12 looping readers (matching
+        the existing single-type test above), cannot deadlock this way: no reader ever holds
+        transaction.atomic() open across a paused lock acquisition.
+        """
+        cot = self.create_simple_custom_object_type(name='polypublic', slug='poly-public')
+        other_cot = self.create_simple_custom_object_type(name='polypublicother', slug='poly-public-other')
+        self_ot = ObjectType.objects.get_for_model(cot.get_model())
+        other_ot = ObjectType.objects.get_for_model(other_cot.get_model())
+
+        stop = threading.Event()
+        reader_errors = []
+        reader_errors_lock = threading.Lock()
+
+        def reader():
+            while not stop.is_set():
+                try:
+                    CustomObjectType.objects.get(pk=cot.pk).get_model(no_cache=True)
+                except Exception as e:  # noqa: BLE001 - captured for the assertion below
+                    with reader_errors_lock:
+                        reader_errors.append(e)
+                finally:
+                    connection.close()
+
+        n_readers = 12
+        readers = [threading.Thread(target=reader) for _ in range(n_readers)]
+        for t in readers:
+            t.start()
+
+        try:
+            field = CustomObjectTypeField.objects.create(
+                custom_object_type=cot,
+                name='depends_on',
+                label='Depends On',
+                type=CustomFieldTypeChoices.TYPE_MULTIOBJECT,
+                is_polymorphic=True,
+            )
+            field.related_object_types.set([self_ot, other_ot])
+        finally:
+            stop.set()
+            for t in readers:
+                t.join()
+
+        self.assertEqual(
+            reader_errors, [],
+            "concurrent get_model() calls must not raise while a polymorphic multiobject field "
+            "with the reported two-type setup is being created",
+        )
+        self.assertEqual(set(field.related_object_types.all()), {self_ot, other_ot})
+
+        # get_model() and the through model's "source" FK must agree on which class is canonical
+        # -- a mismatch is the #477/#483-class staleness that issue #640 reported.
+        final_model = CustomObjectType.objects.get(pk=cot.pk).get_model()
+        through_model = apps.get_model(APP_LABEL, field.through_model_name)
+        source_field = through_model._meta.get_field('source')
+        self.assertIs(
+            source_field.remote_field.model, final_model,
+            "the registered through model's source FK must point at the model class "
+            "get_model() currently returns, not an orphaned duplicate from a losing thread",
+        )
+
+        obj = final_model.objects.create(name='Instance 1')
+        obj.depends_on.set([Site.objects.create(name='Public Race Site', slug='public-race-site')])
         obj.delete()  # Must not raise ValueError: "Cannot query ...: Must be ... instance."
