@@ -1804,7 +1804,7 @@ class MultiObjectFieldType(FieldType):
         # same thread, leaving the through's "source" FK and the cached model
         # class mismatched. Confirmed live under concurrent load:
         # intermittent "ValueError: Cannot query 'X': Must be 'TableYModel'
-        # instance." and RecursionError (issue #640).
+        # instance." and RecursionError (issue #658).
         #
         # Deliberately scoped to just the build+register+repoint above -- NOT the
         # table-existence probe/DDL below. A concurrent CustomObjectTypeField.save() for the

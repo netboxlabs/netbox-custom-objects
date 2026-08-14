@@ -288,7 +288,7 @@ class SchemaOperationsTestCase(TransactionCleanupMixin, CustomObjectsTestCase, T
 
 class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
     """
-    Regression tests for issue #640: creating a polymorphic multiobject field
+    Regression tests for issue #658: creating a polymorphic multiobject field
     races registering its through-model class against a concurrent
     get_model() call, producing a class-identity mismatch that later surfaces
     as "ValueError: Cannot query 'X': Must be 'TableYModel' instance." or a
@@ -302,7 +302,7 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
     def test_field_creation_racing_concurrent_readers_yields_consistent_through_model(self):
         """
         Races field *creation* (real DB I/O) against 12 looping get_model()
-        readers -- the shape that reproduced #640 live. Rarely lands inside
+        readers -- the shape that reproduced #658 live. Rarely lands inside
         the actual race window in-process (see the deterministic version
         below), but exercises the same code path under real concurrency.
         """
@@ -383,10 +383,12 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
         directly), thread "R" the reader (get_model()). A mocked
         register_model() pauses W right after registration but before it
         repoints "source", giving R a window to run. With the fix, W holds
-        _global_lock for that whole call, so R can't even start until W is
-        done -- the pause below just times out harmlessly. Without the fix,
-        R runs inside the pause and the two threads' writes land in
-        different orders, reliably producing the mismatch asserted below.
+        _global_lock across that build+register+repoint step, so R can't
+        start until W has repointed "source" -- the pause below just times
+        out harmlessly. Without the fix, R runs inside the pause and the two
+        threads' writes land in different orders, reliably producing the
+        mismatch asserted below. See #658 for the full analysis, including
+        why the lock can't simply span the rest of the call too.
         """
         cot = self.create_simple_custom_object_type(name='polyforce', slug='poly-force')
         field = self.create_custom_object_type_field(
@@ -493,7 +495,7 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
         self.assertIs(
             source_field.remote_field.model, final_model,
             "the registered through model's source FK must point at the model class "
-            "get_model() currently returns -- a mismatch here is issue #640",
+            "get_model() currently returns -- a mismatch here is issue #658",
         )
 
         obj = final_model.objects.create(name='Instance 1')
@@ -651,7 +653,7 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
         self.assertEqual(set(field.related_object_types.all()), {self_ot, other_ot})
 
         # get_model() and the through model's "source" FK must agree on which class is canonical
-        # -- a mismatch is the #477/#483-class staleness that issue #640 reported.
+        # -- a mismatch is the #477/#483-class staleness that issue #658 reported.
         final_model = CustomObjectType.objects.get(pk=cot.pk).get_model()
         through_model = apps.get_model(APP_LABEL, field.through_model_name)
         source_field = through_model._meta.get_field('source')
