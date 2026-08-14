@@ -1,3 +1,4 @@
+import copy
 import django_filters
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
@@ -9,7 +10,7 @@ from django.db.models import QuerySet, Q
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.timezone import make_aware, is_aware
 
-from extras.choices import CustomFieldTypeChoices
+from extras.choices import CustomFieldFilterLogicChoices, CustomFieldTypeChoices
 from netbox.filtersets import NetBoxModelFilterSet
 from users.models import Owner, OwnerGroup
 
@@ -287,6 +288,15 @@ FIELD_TYPE_FILTERS = {
     CustomFieldTypeChoices.TYPE_MULTIOBJECT: FilterSpec(NonPolymorphicMultiObjectFilter),
 }
 
+# Field types whose base filter's lookup_expr is driven by field.filter_logic,
+# mirroring NetBox core's CustomField.to_filter(). TYPE_JSON has no core "exact"
+# mode to mirror, so it's excluded and always stays icontains.
+FILTER_LOGIC_AWARE_TYPES = (
+    CustomFieldTypeChoices.TYPE_TEXT,
+    CustomFieldTypeChoices.TYPE_LONGTEXT,
+    CustomFieldTypeChoices.TYPE_URL,
+)
+
 
 class CustomObjectTypeFilterSet(NetBoxModelFilterSet):
     class Meta:
@@ -336,6 +346,10 @@ def build_filter_for_field(field) -> dict:
     fields one entry is emitted per allowed related type, named
     ``{field.name}_{app_label}_{model}``.
     """
+    # Mirrors NetBox core: a disabled field gets no filter at all, regardless of type.
+    if field.filter_logic == CustomFieldFilterLogicChoices.FILTER_DISABLED:
+        return {}
+
     if field.is_polymorphic and field.type in (
         CustomFieldTypeChoices.TYPE_OBJECT,
         CustomFieldTypeChoices.TYPE_MULTIOBJECT,
@@ -378,6 +392,16 @@ def build_filter_for_field(field) -> dict:
     if spec.extra_kwargs:
         for key, value in spec.extra_kwargs.items():
             extra_kwargs[key] = value(field) if callable(value) else value
+
+    if field.type in FILTER_LOGIC_AWARE_TYPES:
+        # "Exact" (None normalizes to django-filter's own default, "exact") is
+        # required for BaseFilterSet.get_additional_lookups() to generate suffix
+        # filters like __isw -- it only augments a small fixed set of lookup_exprs,
+        # and "icontains" isn't one of them.
+        if field.filter_logic == CustomFieldFilterLogicChoices.FILTER_EXACT:
+            extra_kwargs["lookup_expr"] = None
+        else:
+            extra_kwargs["lookup_expr"] = "icontains"
 
     filters = {
         field.name: spec.build(
@@ -480,8 +504,39 @@ def get_filterset_class(model):
     }
 
     # For each custom field, add a corresponding filter (dict of name → Filter).
+    # Loose text-family fields are tracked separately so their suffix lookups
+    # (__isw, __iew, etc.) can be backported by get_filters() below -- their bare
+    # filter uses icontains, which BaseFilterSet.get_additional_lookups() does not
+    # augment.
+    loose_text_field_names = []
     for field in model.custom_object_type.fields.all():
         attrs.update(build_filter_for_field(field))
+        if field.type in FILTER_LOGIC_AWARE_TYPES and field.filter_logic == CustomFieldFilterLogicChoices.FILTER_LOOSE:
+            loose_text_field_names.append(field.name)
+
+    def get_filters(cls):
+        """
+        Backport suffix lookups (__isw, __iew, __ic, etc.) for loose text-family
+        fields: get_additional_lookups() only augments a filter whose own
+        lookup_expr is exact/iexact/in/contains, which the loose bare filter's
+        icontains isn't, so these are added by asking it what it would generate
+        for an exact-based version of the same filter, without touching the bare
+        filter itself. Must live in get_filters(), not a one-time step after the
+        class is built -- NetBox's BaseFilterSet.__init__ re-derives base_filters
+        from get_filters() on every instantiation, which would otherwise discard
+        this. super(cls, cls): no __class__ cell for bare super() since this is
+        attached via `attrs`, not a real `class` block.
+        """
+        filters = super(cls, cls).get_filters()
+        for field_name in loose_text_field_names:
+            if field_name not in filters:
+                continue
+            reference_filter = copy.deepcopy(filters[field_name])
+            reference_filter.lookup_expr = 'exact'
+            filters.update(cls.get_additional_lookups(field_name, reference_filter))
+        return filters
+
+    attrs['get_filters'] = classmethod(get_filters)
 
     return type(
         f"{model._meta.object_name}FilterSet",

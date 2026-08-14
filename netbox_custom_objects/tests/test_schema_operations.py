@@ -604,3 +604,65 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
         obj = final_model.objects.create(name='Instance 1')
         obj.depends_on.set([Site.objects.create(name='Public Race Site', slug='public-race-site')])
         obj.delete()  # Must not raise ValueError: "Cannot query ...: Must be ... instance."
+
+
+class OwnerFieldNameCollisionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
+    """A user field named 'owner' shadows CustomObject's own OwnerMixin.owner field.
+    Renaming or deleting it must not crash on the unmasked mixin field's missing column.
+    """
+
+    def _db_columns(self, model):
+        with connection.cursor() as cursor:
+            return {
+                col.name
+                for col in connection.introspection.get_table_description(
+                    cursor, model._meta.db_table
+                )
+            }
+
+    def _make_owner_collision_cot(self, slug):
+        from core.models import ObjectType
+        contact_ot = ObjectType.objects.get(app_label='tenancy', model='contact')
+
+        cot = self.create_custom_object_type(name=slug, slug=slug)
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        # .objects.create() bypasses the reserved-name check in clean().
+        field = self.create_custom_object_type_field(
+            cot, name='owner', label='Owner', type='object', related_object_type=contact_ot,
+        )
+        return cot, field
+
+    def test_renaming_away_from_owner_does_not_break_list_view(self):
+        cot, field = self._make_owner_collision_cot('owner-rename')
+        model = cot.get_model()
+        model.objects.create(name='Obj1')
+        model.objects.create(name='Obj2')
+
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.name = 'client_contact'
+        field.save()
+
+        updated_model = cot.get_model(no_cache=True)
+        columns = self._db_columns(updated_model)
+        self.assertIn('client_contact_id', columns)
+        self.assertIn('owner_id', columns, "OwnerMixin's own column must be healed back in")
+
+        results = list(updated_model.objects.all())
+        self.assertEqual(len(results), 2)
+
+    def test_deleting_owner_field_does_not_break_list_view(self):
+        cot, field = self._make_owner_collision_cot('owner-delete')
+        model = cot.get_model()
+        model.objects.create(name='Obj1')
+
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.delete()
+
+        updated_model = cot.get_model()
+        columns = self._db_columns(updated_model)
+        self.assertIn('owner_id', columns)
+
+        results = list(updated_model.objects.all())
+        self.assertEqual(len(results), 1)
