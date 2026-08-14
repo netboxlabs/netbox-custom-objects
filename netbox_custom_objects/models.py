@@ -1638,10 +1638,26 @@ class CustomObjectType(NetBoxModel):
                 continue
             fields.append((field.name, field.search_weight))
 
+        # Gather fields marked with context=True
+        context_field_names = tuple(
+            f.name for f in self.fields.filter(context=True) if f.name in present
+        )
+
+        # Custom get_display_attrs method injected into the dynamic SearchIndex class
+        @classmethod
+        def get_display_attrs(cls, instance):
+            attrs = {}
+            for field_name in context_field_names:
+                val = getattr(instance, field_name, None)
+                if val is not None and val != "":
+                    attrs[field_name] = str(val)
+            return attrs
+
         attrs = {
             "model": model,
             "fields": tuple(fields),
-            "display_attrs": tuple(),
+            "display_attrs": context_field_names,
+            "get_display_attrs": get_display_attrs,
         }
         search_index = type(
             f"{self.name}SearchIndex",
