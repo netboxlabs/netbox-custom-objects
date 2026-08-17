@@ -3448,8 +3448,10 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             raise ValidationError(_("Required field cannot be empty."))
 
     @classmethod
-    def from_db(cls, db, field_names, values):
-        instance = super().from_db(db, field_names, values)
+    def from_db(cls, db, field_names, values, **kwargs):
+        # **kwargs forwards Django 6.1+'s keyword-only fetch_mode to super()
+        # while staying compatible with older Django, which accepts no extra kwargs here.
+        instance = super().from_db(db, field_names, values, **kwargs)
 
         # save original values, when model is loaded from database,
         # in a separate attribute on the model
