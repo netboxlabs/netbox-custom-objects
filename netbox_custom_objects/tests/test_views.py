@@ -617,6 +617,9 @@ class CustomObjectViewTestCase(
         self.create_custom_object_type_field(
             cot, name='hidden', label='Hidden', type='text', ui_editable='hidden',
         )
+        self.create_custom_object_type_field(
+            cot, name='readonly', label='Readonly', type='text', ui_editable='no',
+        )
 
         request = RequestFactory().get('/')
         request.user = self.user
@@ -625,6 +628,8 @@ class CustomObjectViewTestCase(
         view.setup(request, custom_object_type=cot.slug)
 
         self.assertNotIn('hidden', view.form.base_fields)
+        # A read-only (ui_editable=no) field is disabled, not omitted -- distinct from hidden.
+        self.assertIn('readonly', view.form.base_fields)
 
     def test_bulk_edit_form_omits_hidden_field(self):
         """Regression #645: same as above, for the bulk edit form."""
@@ -635,6 +640,9 @@ class CustomObjectViewTestCase(
         self.create_custom_object_type_field(
             cot, name='hidden', label='Hidden', type='text', ui_editable='hidden',
         )
+        self.create_custom_object_type_field(
+            cot, name='readonly', label='Readonly', type='text', ui_editable='no',
+        )
 
         request = RequestFactory().get('/')
         request.user = self.user
@@ -643,6 +651,45 @@ class CustomObjectViewTestCase(
         view.setup(request, custom_object_type=cot.slug)
 
         self.assertNotIn('hidden', view.form.base_fields)
+        self.assertIn('readonly', view.form.base_fields)
+
+    def test_edit_form_omits_hidden_coordinates_field(self):
+        """Regression #645: a hidden coordinates field must omit both its lat/long sub-fields."""
+        cot = self.create_custom_object_type(name='HiddenCoordsEditTest', slug='hidden-coords-edit-test')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name='location', label='Location', type='coordinates', ui_editable='hidden',
+        )
+
+        request = RequestFactory().get('/')
+        request.user = self.user
+
+        view = views.CustomObjectEditView()
+        view.setup(request, custom_object_type=cot.slug)
+
+        self.assertNotIn('location_latitude', view.form.base_fields)
+        self.assertNotIn('location_longitude', view.form.base_fields)
+
+    def test_bulk_edit_form_omits_hidden_coordinates_field(self):
+        """Regression #645: same as above, for the bulk edit form."""
+        cot = self.create_custom_object_type(name='HiddenCoordsBulkEditTest', slug='hidden-coords-bulk-edit-test')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name='location', label='Location', type='coordinates', ui_editable='hidden',
+        )
+
+        request = RequestFactory().get('/')
+        request.user = self.user
+
+        view = views.CustomObjectBulkEditView()
+        view.setup(request, custom_object_type=cot.slug)
+
+        self.assertNotIn('location_latitude', view.form.base_fields)
+        self.assertNotIn('location_longitude', view.form.base_fields)
 
     def test_bulk_edit_select_all_respects_full_queryset(self):
         """Regression #380: 'select all matching query' must edit all objects, not just the current page.
