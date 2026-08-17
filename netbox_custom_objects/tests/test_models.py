@@ -648,6 +648,26 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
                 )
                 field.full_clean()
 
+    def test_from_db_populates_original_snapshot(self):
+        """
+        Loading a field from the database (e.g. via a plain queryset fetch) must
+        succeed and populate .original from the row's own values -- this is what
+        save() diffs against to detect renames/type changes. Also guards
+        from_db()'s signature against Django versions that call it with extra
+        keyword arguments (e.g. Django 6.1's fetch_mode).
+        """
+        created = self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="test_field",
+            label="Test Field",
+            type="text",
+        )
+
+        fetched = CustomObjectTypeField.objects.get(pk=created.pk)
+
+        self.assertEqual(fetched.original.name, "test_field")
+        self.assertEqual(fetched.original.label, "Test Field")
+
     def test_custom_object_type_field_unique_name_per_type(self):
         """Test that field names must be unique within a custom object type."""
         self.create_custom_object_type_field(
