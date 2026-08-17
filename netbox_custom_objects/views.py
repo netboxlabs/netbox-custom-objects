@@ -60,6 +60,23 @@ def _is_in_branch():
         return False
 
 
+def _hidden_field_raw_columns(fields):
+    """Return backing column name(s) for HIDDEN fields, for a ModelForm's Meta.exclude."""
+    columns = []
+    for f in fields:
+        if f.ui_editable != CustomFieldUIEditableChoices.HIDDEN:
+            continue
+        if f.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+            columns += [f"{f.name}_latitude", f"{f.name}_longitude"]
+        elif f.is_polymorphic and f.type == CustomFieldTypeChoices.TYPE_OBJECT:
+            columns += [f"{f.name}_content_type", f"{f.name}_object_id"]
+        elif f.is_polymorphic and f.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+            continue
+        else:
+            columns.append(f.name)
+    return columns
+
+
 # ---------------------------------------------------------------------------
 # Sub-field naming helpers for polymorphic form fields
 #
@@ -734,13 +751,15 @@ class CustomObjectEditView(generic.ObjectEditView):
         ):
             poly_obj_raw_exclude += [f"{f.name}_content_type", f"{f.name}_object_id"]
 
+        hidden_raw_exclude = _hidden_field_raw_columns(self.object.custom_object_type.fields.all())
+
         meta = type(
             "Meta",
             (),
             {
                 "model": model,
                 "fields": "__all__",
-                "exclude": poly_obj_raw_exclude,
+                "exclude": list(set(poly_obj_raw_exclude + hidden_raw_exclude)),
             },
         )
 
@@ -771,6 +790,10 @@ class CustomObjectEditView(generic.ObjectEditView):
         for field in self.object.custom_object_type.fields.prefetch_related(
             'related_object_types'
         ).order_by("group_name", "weight", "name"):
+            # Hidden fields are omitted entirely, not just disabled.
+            if field.ui_editable == CustomFieldUIEditableChoices.HIDDEN:
+                continue
+
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
             group_name = field.group_name or None
 
@@ -1160,13 +1183,15 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
         ):
             poly_obj_raw_exclude += [f"{f.name}_content_type", f"{f.name}_object_id"]
 
+        hidden_raw_exclude = _hidden_field_raw_columns(self.custom_object_type.fields.all())
+
         meta = type(
             "Meta",
             (),
             {
                 "model": queryset.model,
                 "fields": "__all__",
-                "exclude": poly_obj_raw_exclude,
+                "exclude": list(set(poly_obj_raw_exclude + hidden_raw_exclude)),
             },
         )
 
@@ -1206,6 +1231,10 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
         nullable_field_names = []
 
         for field in self.custom_object_type.fields.prefetch_related('related_object_types').all():
+            # Hidden fields are omitted entirely, not just disabled.
+            if field.ui_editable == CustomFieldUIEditableChoices.HIDDEN:
+                continue
+
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
 
             # Coordinates: two optional latitude/longitude inputs in bulk edit

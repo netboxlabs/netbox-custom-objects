@@ -608,6 +608,42 @@ class CustomObjectViewTestCase(
         instance = form.save()
         self.assertIsNone(instance.identifier)
 
+    def test_edit_form_omits_hidden_field(self):
+        """Regression #645: a hidden field must be omitted from the edit form, not just disabled."""
+        cot = self.create_custom_object_type(name='HiddenFieldEditTest', slug='hidden-field-edit-test')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name='hidden', label='Hidden', type='text', ui_editable='hidden',
+        )
+
+        request = RequestFactory().get('/')
+        request.user = self.user
+
+        view = views.CustomObjectEditView()
+        view.setup(request, custom_object_type=cot.slug)
+
+        self.assertNotIn('hidden', view.form.base_fields)
+
+    def test_bulk_edit_form_omits_hidden_field(self):
+        """Regression #645: same as above, for the bulk edit form."""
+        cot = self.create_custom_object_type(name='HiddenFieldBulkEditTest', slug='hidden-field-bulk-edit-test')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name='hidden', label='Hidden', type='text', ui_editable='hidden',
+        )
+
+        request = RequestFactory().get('/')
+        request.user = self.user
+
+        view = views.CustomObjectBulkEditView()
+        view.setup(request, custom_object_type=cot.slug)
+
+        self.assertNotIn('hidden', view.form.base_fields)
+
     def test_bulk_edit_select_all_respects_full_queryset(self):
         """Regression #380: 'select all matching query' must edit all objects, not just the current page.
 
