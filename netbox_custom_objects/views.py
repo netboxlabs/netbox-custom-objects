@@ -797,8 +797,14 @@ class CustomObjectEditView(generic.ObjectEditView):
 
         # Process custom object type fields (with grouping)
         for field in cot_fields:
-            # Hidden fields are omitted entirely, not just disabled.
+            # Hidden fields are omitted entirely, not just disabled -- but a
+            # non-polymorphic MultiObject field is a real M2M model attribute
+            # whose configured default must still be applied on create (#42).
+            # Track it in custom_object_type_fields (bookkeeping only, not
+            # rendered anywhere) so custom_init/custom_save still process it.
             if field.ui_editable == CustomFieldUIEditableChoices.HIDDEN:
+                if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT and not field.is_polymorphic:
+                    attrs["custom_object_type_fields"][field.name] = field
                 continue
 
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
@@ -888,6 +894,10 @@ class CustomObjectEditView(generic.ObjectEditView):
             self.custom_object_type_poly_obj_ct_names = attrs["custom_object_type_poly_obj_ct_names"]
             self.custom_object_type_poly_obj_pairs = attrs["custom_object_type_poly_obj_pairs"]
             self.custom_object_type_coordinates_fields = attrs["custom_object_type_coordinates_fields"]
+            # A hidden MultiObject field has no rendered form field, so its resolved
+            # default can't reach cleaned_data via kwargs['initial'] below -- custom_save
+            # applies these directly on create instead. See the note in the loop above.
+            self._hidden_multiobject_defaults = {}
 
             instance = kwargs.get('instance', None)
 
@@ -918,6 +928,8 @@ class CustomObjectEditView(generic.ObjectEditView):
                                     .values_list('pk', flat=True)
                                 )
                                 kwargs['initial'][field_name] = initial_ids
+                                if field_obj.ui_editable == CustomFieldUIEditableChoices.HIDDEN:
+                                    self._hidden_multiobject_defaults[field_name] = initial_ids
                             except Exception:
                                 logger.debug(
                                     "Failed to load default initial values for field %r",
@@ -1009,6 +1021,7 @@ class CustomObjectEditView(generic.ObjectEditView):
         # Create a custom save method to properly handle M2M fields
         def custom_save(self, commit=True):
             instance = forms.NetBoxModelForm.save(self, commit=False)
+            is_new = instance.pk is None
 
             if commit:
                 # Set polymorphic GFK attributes before the first save so the row
@@ -1021,7 +1034,16 @@ class CustomObjectEditView(generic.ObjectEditView):
                 # Handle non-polymorphic M2M fields (require PK, so after save)
                 for field_name, field_obj in self.custom_object_type_fields.items():
                     if field_obj.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                        current_value = self.cleaned_data.get(field_name, [])
+                        if field_obj.ui_editable == CustomFieldUIEditableChoices.HIDDEN:
+                            # No rendered input to read from cleaned_data: apply the
+                            # resolved default on create (see custom_init), and leave
+                            # existing relations alone on edit -- consistent with a
+                            # hidden field being neither displayed nor editable.
+                            if not is_new:
+                                continue
+                            current_value = self._hidden_multiobject_defaults.get(field_name, [])
+                        else:
+                            current_value = self.cleaned_data.get(field_name, [])
                         instance_field = getattr(instance, field_name)
                         if hasattr(instance_field, 'clear') and hasattr(instance_field, 'set'):
                             instance_field.clear()
