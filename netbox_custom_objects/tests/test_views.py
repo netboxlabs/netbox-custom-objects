@@ -608,6 +608,161 @@ class CustomObjectViewTestCase(
         instance = form.save()
         self.assertIsNone(instance.identifier)
 
+    def test_edit_form_omits_hidden_field(self):
+        """Regression #645: a hidden field must be omitted from the edit form, not just disabled."""
+        cot = self.create_custom_object_type(name='HiddenFieldEditTest', slug='hidden-field-edit-test')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name='hidden', label='Hidden', type='text', ui_editable='hidden',
+        )
+        self.create_custom_object_type_field(
+            cot, name='readonly', label='Readonly', type='text', ui_editable='no',
+        )
+
+        request = RequestFactory().get('/')
+        request.user = self.user
+
+        view = views.CustomObjectEditView()
+        view.setup(request, custom_object_type=cot.slug)
+
+        self.assertNotIn('hidden', view.form.base_fields)
+        # A read-only (ui_editable=no) field is disabled, not omitted -- distinct from hidden.
+        self.assertIn('readonly', view.form.base_fields)
+
+    def test_bulk_edit_form_omits_hidden_field(self):
+        """Regression #645: same as above, for the bulk edit form."""
+        cot = self.create_custom_object_type(name='HiddenFieldBulkEditTest', slug='hidden-field-bulk-edit-test')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name='hidden', label='Hidden', type='text', ui_editable='hidden',
+        )
+        self.create_custom_object_type_field(
+            cot, name='readonly', label='Readonly', type='text', ui_editable='no',
+        )
+
+        request = RequestFactory().get('/')
+        request.user = self.user
+
+        view = views.CustomObjectBulkEditView()
+        view.setup(request, custom_object_type=cot.slug)
+
+        self.assertNotIn('hidden', view.form.base_fields)
+        self.assertIn('readonly', view.form.base_fields)
+
+    def test_edit_form_omits_hidden_coordinates_field(self):
+        """Regression #645: a hidden coordinates field must omit both its lat/long sub-fields."""
+        cot = self.create_custom_object_type(name='HiddenCoordsEditTest', slug='hidden-coords-edit-test')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name='location', label='Location', type='coordinates', ui_editable='hidden',
+        )
+
+        request = RequestFactory().get('/')
+        request.user = self.user
+
+        view = views.CustomObjectEditView()
+        view.setup(request, custom_object_type=cot.slug)
+
+        self.assertNotIn('location_latitude', view.form.base_fields)
+        self.assertNotIn('location_longitude', view.form.base_fields)
+
+    def test_bulk_edit_form_omits_hidden_coordinates_field(self):
+        """Regression #645: same as above, for the bulk edit form."""
+        cot = self.create_custom_object_type(name='HiddenCoordsBulkEditTest', slug='hidden-coords-bulk-edit-test')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name='location', label='Location', type='coordinates', ui_editable='hidden',
+        )
+
+        request = RequestFactory().get('/')
+        request.user = self.user
+
+        view = views.CustomObjectBulkEditView()
+        view.setup(request, custom_object_type=cot.slug)
+
+        self.assertNotIn('location_latitude', view.form.base_fields)
+        self.assertNotIn('location_longitude', view.form.base_fields)
+
+    def test_edit_form_applies_hidden_multiobject_default_on_create(self):
+        """
+        Regression #42/#645: a hidden non-polymorphic MultiObject field is a real M2M
+        model attribute, so omitting it from the rendered form must not also skip
+        applying its configured default when creating a new object.
+        """
+        from dcim.models import Site
+
+        site_a = Site.objects.create(name='Site A', slug='site-a-hidden-mo-create')
+        site_b = Site.objects.create(name='Site B', slug='site-b-hidden-mo-create')
+
+        cot = self.create_custom_object_type(name='HiddenMultiObjCreateTest', slug='hidden-multiobj-create-test')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name='sites', label='Sites', type='multiobject',
+            related_object_type=self.get_site_object_type(),
+            ui_editable='hidden',
+            default=[site_a.pk, site_b.pk],
+        )
+
+        request = RequestFactory().post('/')
+        request.user = self.user
+
+        view = views.CustomObjectEditView()
+        view.setup(request, custom_object_type=cot.slug)
+
+        form = view.form(data={'name': 'New Instance'}, instance=view.object)
+        self.assertTrue(form.is_valid(), form.errors)
+        instance = form.save()
+
+        self.assertEqual(set(instance.sites.values_list('pk', flat=True)), {site_a.pk, site_b.pk})
+
+    def test_edit_form_preserves_hidden_multiobject_relation_on_edit(self):
+        """
+        Regression #645: editing an object must not clear a hidden MultiObject field's
+        existing relation -- there is no rendered input for it to come from, and a
+        hidden field is defined as neither displayed nor editable.
+        """
+        from dcim.models import Site
+
+        site_a = Site.objects.create(name='Site A', slug='site-a-hidden-mo-edit')
+        site_b = Site.objects.create(name='Site B', slug='site-b-hidden-mo-edit')
+
+        cot = self.create_custom_object_type(name='HiddenMultiObjEditTest', slug='hidden-multiobj-edit-test')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name='sites', label='Sites', type='multiobject',
+            related_object_type=self.get_site_object_type(),
+            ui_editable='hidden',
+            default=[site_a.pk],
+        )
+
+        model = cot.get_model()
+        obj = model.objects.create(name='Existing Instance')
+        obj.sites.set([site_a.pk, site_b.pk])
+
+        request = RequestFactory().post('/')
+        request.user = self.user
+
+        view = views.CustomObjectEditView()
+        view.setup(request, custom_object_type=cot.slug, pk=obj.pk)
+
+        form = view.form(data={'name': 'Renamed Instance'}, instance=view.object)
+        self.assertTrue(form.is_valid(), form.errors)
+        instance = form.save()
+
+        self.assertEqual(set(instance.sites.values_list('pk', flat=True)), {site_a.pk, site_b.pk})
+
     def test_bulk_edit_select_all_respects_full_queryset(self):
         """Regression #380: 'select all matching query' must edit all objects, not just the current page.
 

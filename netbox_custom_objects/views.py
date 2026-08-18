@@ -60,6 +60,27 @@ def _is_in_branch():
         return False
 
 
+def _hidden_field_raw_columns(fields):
+    """Return backing column name(s) for HIDDEN fields, for a ModelForm's Meta.exclude.
+
+    Polymorphic fields aren't handled here: TYPE_OBJECT's raw columns are
+    already excluded unconditionally by callers, and TYPE_MULTIOBJECT has
+    no raw column (backed by a through table).
+    """
+    columns = []
+    for f in fields:
+        if f.ui_editable != CustomFieldUIEditableChoices.HIDDEN or f.is_polymorphic:
+            continue
+        if f.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+            columns += [
+                field_types.CoordinatesFieldType.latitude_field_name(f),
+                field_types.CoordinatesFieldType.longitude_field_name(f),
+            ]
+        else:
+            columns.append(f.name)
+    return columns
+
+
 # ---------------------------------------------------------------------------
 # Sub-field naming helpers for polymorphic form fields
 #
@@ -725,14 +746,21 @@ class CustomObjectEditView(generic.ObjectEditView):
         return get_object_or_404(model.objects.all(), **self.kwargs)
 
     def get_form(self, model):
+        cot_fields = list(
+            self.object.custom_object_type.fields.prefetch_related(
+                'related_object_types'
+            ).order_by("group_name", "weight", "name")
+        )
+
         # Collect raw GFK column names to exclude from the auto-generated form fields.
         # For each polymorphic Object field "foo", Django adds "foo_content_type" and
         # "foo_object_id" as real model columns; we replace those with per-type selects.
         poly_obj_raw_exclude = []
-        for f in self.object.custom_object_type.fields.filter(
-            type=CustomFieldTypeChoices.TYPE_OBJECT, is_polymorphic=True
-        ):
-            poly_obj_raw_exclude += [f"{f.name}_content_type", f"{f.name}_object_id"]
+        for f in cot_fields:
+            if f.type == CustomFieldTypeChoices.TYPE_OBJECT and f.is_polymorphic:
+                poly_obj_raw_exclude += [f"{f.name}_content_type", f"{f.name}_object_id"]
+
+        hidden_raw_exclude = _hidden_field_raw_columns(cot_fields)
 
         meta = type(
             "Meta",
@@ -740,7 +768,7 @@ class CustomObjectEditView(generic.ObjectEditView):
             {
                 "model": model,
                 "fields": "__all__",
-                "exclude": poly_obj_raw_exclude,
+                "exclude": list(set(poly_obj_raw_exclude + hidden_raw_exclude)),
             },
         )
 
@@ -768,9 +796,17 @@ class CustomObjectEditView(generic.ObjectEditView):
         }
 
         # Process custom object type fields (with grouping)
-        for field in self.object.custom_object_type.fields.prefetch_related(
-            'related_object_types'
-        ).order_by("group_name", "weight", "name"):
+        for field in cot_fields:
+            # Hidden fields are omitted entirely, not just disabled -- but a
+            # non-polymorphic MultiObject field is a real M2M model attribute
+            # whose configured default must still be applied on create (#42).
+            # Track it in custom_object_type_fields (bookkeeping only, not
+            # rendered anywhere) so custom_init/custom_save still process it.
+            if field.ui_editable == CustomFieldUIEditableChoices.HIDDEN:
+                if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT and not field.is_polymorphic:
+                    attrs["custom_object_type_fields"][field.name] = field
+                continue
+
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
             group_name = field.group_name or None
 
@@ -858,6 +894,10 @@ class CustomObjectEditView(generic.ObjectEditView):
             self.custom_object_type_poly_obj_ct_names = attrs["custom_object_type_poly_obj_ct_names"]
             self.custom_object_type_poly_obj_pairs = attrs["custom_object_type_poly_obj_pairs"]
             self.custom_object_type_coordinates_fields = attrs["custom_object_type_coordinates_fields"]
+            # A hidden MultiObject field has no rendered form field, so its resolved
+            # default can't reach cleaned_data via kwargs['initial'] below -- custom_save
+            # applies these directly on create instead. See the note in the loop above.
+            self._hidden_multiobject_defaults = {}
 
             instance = kwargs.get('instance', None)
 
@@ -888,6 +928,8 @@ class CustomObjectEditView(generic.ObjectEditView):
                                     .values_list('pk', flat=True)
                                 )
                                 kwargs['initial'][field_name] = initial_ids
+                                if field_obj.ui_editable == CustomFieldUIEditableChoices.HIDDEN:
+                                    self._hidden_multiobject_defaults[field_name] = initial_ids
                             except Exception:
                                 logger.debug(
                                     "Failed to load default initial values for field %r",
@@ -979,6 +1021,7 @@ class CustomObjectEditView(generic.ObjectEditView):
         # Create a custom save method to properly handle M2M fields
         def custom_save(self, commit=True):
             instance = forms.NetBoxModelForm.save(self, commit=False)
+            is_new = instance.pk is None
 
             if commit:
                 # Set polymorphic GFK attributes before the first save so the row
@@ -991,7 +1034,16 @@ class CustomObjectEditView(generic.ObjectEditView):
                 # Handle non-polymorphic M2M fields (require PK, so after save)
                 for field_name, field_obj in self.custom_object_type_fields.items():
                     if field_obj.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                        current_value = self.cleaned_data.get(field_name, [])
+                        if field_obj.ui_editable == CustomFieldUIEditableChoices.HIDDEN:
+                            # No rendered input to read from cleaned_data: apply the
+                            # resolved default on create (see custom_init), and leave
+                            # existing relations alone on edit -- consistent with a
+                            # hidden field being neither displayed nor editable.
+                            if not is_new:
+                                continue
+                            current_value = self._hidden_multiobject_defaults.get(field_name, [])
+                        else:
+                            current_value = self.cleaned_data.get(field_name, [])
                         instance_field = getattr(instance, field_name)
                         if hasattr(instance_field, 'clear') and hasattr(instance_field, 'set'):
                             instance_field.clear()
@@ -1154,11 +1206,14 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
         return model.objects.all()
 
     def get_form(self, queryset):
+        cot_fields = list(self.custom_object_type.fields.prefetch_related('related_object_types'))
+
         poly_obj_raw_exclude = []
-        for f in self.custom_object_type.fields.filter(
-            type=CustomFieldTypeChoices.TYPE_OBJECT, is_polymorphic=True
-        ):
-            poly_obj_raw_exclude += [f"{f.name}_content_type", f"{f.name}_object_id"]
+        for f in cot_fields:
+            if f.type == CustomFieldTypeChoices.TYPE_OBJECT and f.is_polymorphic:
+                poly_obj_raw_exclude += [f"{f.name}_content_type", f"{f.name}_object_id"]
+
+        hidden_raw_exclude = _hidden_field_raw_columns(cot_fields)
 
         meta = type(
             "Meta",
@@ -1166,16 +1221,16 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
             {
                 "model": queryset.model,
                 "fields": "__all__",
-                "exclude": poly_obj_raw_exclude,
+                "exclude": list(set(poly_obj_raw_exclude + hidden_raw_exclude)),
             },
         )
 
         # Pre-build ct_pk → model_class lookup for each poly obj field so the
         # bulk edit __init__ can wire up the obj picker without a DB query.
         poly_obj_allowed = {}
-        for f in self.custom_object_type.fields.filter(
-            type=CustomFieldTypeChoices.TYPE_OBJECT, is_polymorphic=True
-        ).prefetch_related('related_object_types'):
+        for f in cot_fields:
+            if not (f.type == CustomFieldTypeChoices.TYPE_OBJECT and f.is_polymorphic):
+                continue
             poly_obj_allowed[f.name] = {
                 ot.pk: ot.model_class()
                 for ot in f.related_object_types.all()
@@ -1205,7 +1260,11 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
         # aren't real model fields, so core's generic nullify lookup can't resolve them.
         nullable_field_names = []
 
-        for field in self.custom_object_type.fields.prefetch_related('related_object_types').all():
+        for field in cot_fields:
+            # Hidden fields are omitted entirely, not just disabled.
+            if field.ui_editable == CustomFieldUIEditableChoices.HIDDEN:
+                continue
+
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
 
             # Coordinates: two optional latitude/longitude inputs in bulk edit
