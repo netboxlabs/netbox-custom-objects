@@ -450,6 +450,26 @@ class SchemaYAMLFormatTestCase(_SchemaAPIBase):
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertTrue(CustomObjectType.objects.filter(slug="yaml-applied").exists())
 
+    def test_apply_non_dict_json_body_returns_400(self):
+        resp = self.client.post(self.apply_url, data=[1, 2, 3], format="json")
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_apply_non_dict_yaml_body_returns_400(self):
+        resp = self.client.post(
+            self.apply_url,
+            data=yaml.safe_dump([1, 2, 3]),
+            content_type="application/yaml",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_preview_empty_yaml_body_returns_400(self):
+        resp = self.client.post(self.preview_url, data="", content_type="application/yaml")
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_apply_empty_yaml_body_returns_400(self):
+        resp = self.client.post(self.apply_url, data="", content_type="application/yaml")
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
     def test_apply_returns_yaml_when_accepted(self):
         body = yaml.safe_dump({
             "allow_destructive": False,

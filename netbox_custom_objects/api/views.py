@@ -431,6 +431,9 @@ class SchemaApplyView(APIView):
                 "Both add and change permissions on CustomObjectType are required."
             )
 
+        if not isinstance(request.data, dict):
+            raise ValidationError({"non_field_errors": [_("Request body must be a JSON/YAML object.")]})
+
         allow_destructive = request.data.get("allow_destructive", False)
         if not isinstance(allow_destructive, bool):
             raise ValidationError({"allow_destructive": _("'allow_destructive' must be a boolean.")})
