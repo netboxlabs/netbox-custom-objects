@@ -37,6 +37,12 @@
             <th scope="row">{% trans "Description" %}</th>
             <td>{{ object.description|placeholder }}</td>
           </tr>
+          {% if object.display_expression %}
+          <tr>
+            <th scope="row">{% trans "Display expression" %}</th>
+            <td><code>{{ object.display_expression }}</code></td>
+          </tr>
+          {% endif %}
           <tr>
             <th scope="row">{% trans "Config context support" %}</th>
             <td>{% checkmark object.config_context_enabled %}</td>

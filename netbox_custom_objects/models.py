@@ -60,6 +60,8 @@ from netbox.search import SearchIndex
 from utilities import filters
 from utilities.data import deepmerge, get_config_value_ci
 from utilities.datetime import datetime_from_timestamp
+from jinja2 import Undefined as _JinjaUndefined
+from jinja2.sandbox import SandboxedEnvironment as _JinjaSandbox
 from utilities.object_types import object_type_name
 from utilities.querysets import RestrictedQuerySet
 from utilities.serialization import deserialize_object as _deserialize_object
@@ -78,6 +80,7 @@ from netbox_custom_objects.field_types import (
     PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor,
 )
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
+from netbox_custom_objects.mixin_migration import heal_unmasked_fields
 from netbox_custom_objects.utilities import (
     _suppress_clear_cache,
     extract_cot_id_from_model_name,
@@ -948,8 +951,35 @@ class CustomObject(
 
         return _Deserialized()
 
+    def _render_display_expression(self):
+        """Render the COT display_expression; return stripped result or None."""
+        # All access inside the try so any exception (including RelatedObjectDoesNotExist
+        # from custom_object_type access) falls through to the primary-field fallback.
+        try:
+            expression = getattr(self.custom_object_type, 'display_expression', '')
+            if not expression:
+                return None
+            ctx = {}
+            for field_info in self._field_objects.values():
+                field_name = field_info["name"]
+                field_type = FIELD_TYPE_CLASS[field_info["field"].type]()
+                try:
+                    value = field_type.get_display_value(self, field_name)
+                    ctx[field_name] = '' if value is None else value
+                except Exception:  # noqa: BLE001
+                    ctx[field_name] = ''
+            rendered = _JinjaSandbox(undefined=_JinjaUndefined).from_string(expression).render(**ctx).strip()
+            return rendered or None
+        except Exception:  # noqa: BLE001
+            return None
+
     def __str__(self):
-        # Find the field with primary=True and return that field's "name" as the name of the object
+        # If the COT defines a Jinja2 display expression, try that first.
+        rendered = self._render_display_expression()
+        if rendered:
+            return rendered
+
+        # Fall back to single-primary-field display name.
         primary_field = self._field_objects.get(self._primary_field_id, None)
         primary_field_value = None
         if primary_field:
@@ -1263,6 +1293,18 @@ class CustomObjectType(NetBoxModel):
         db_index=True,
         blank=True,
         help_text=_("Used to group similar custom object types in the navigation menu")
+    )
+    display_expression = models.CharField(
+        max_length=500,
+        blank=True,
+        verbose_name=_('display expression'),
+        help_text=_(
+            "Optional Jinja2 template for the object display name. "
+            "Reference field values by name, e.g. <code>{{ name }} - {{ manufacturer }}</code>. "
+            "Undefined fields resolve to an empty string — use "
+            "<code>{% if field %}{{ field }}{% endif %}</code> to suppress trailing separators. "
+            "Leave blank to use the field marked as primary name field, if any."
+        ),
     )
     schema_document = models.JSONField(
         blank=True,
@@ -2550,6 +2592,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     schema_id = models.PositiveIntegerField(
         blank=True,
         null=True,
+        editable=False,
         verbose_name=_("schema ID"),
         help_text=_(
             "Stable numeric identifier for this field used during schema diffing. "
@@ -3545,8 +3588,10 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             raise ValidationError(_("Required field cannot be empty."))
 
     @classmethod
-    def from_db(cls, db, field_names, values):
-        instance = super().from_db(db, field_names, values)
+    def from_db(cls, db, field_names, values, **kwargs):
+        # **kwargs forwards Django 6.1+'s keyword-only fetch_mode to super()
+        # while staying compatible with older Django, which accepts no extra kwargs here.
+        instance = super().from_db(db, field_names, values, **kwargs)
 
         # save original values, when model is loaded from database,
         # in a separate attribute on the model
@@ -3772,6 +3817,22 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
             super().save(*args, **kwargs)
 
+            # On rename, _schema_alter_field calls contribute_to_class twice on the
+            # same class — force a no_cache regeneration so _meta is clean.  Healing
+            # runs in this same transaction so a reader can never observe the rename
+            # committed without the unmasked base field's column.  Non-rename changes
+            # lean on cache_timestamp for lazy invalidation; we skip the
+            # apps.clear_cache() cascade so signal-driven cache evictions (e.g.
+            # clear_cache_on_field_save for OBJECT fields) survive.
+            renamed = (
+                not self._state.adding
+                and not self.is_polymorphic
+                and self._original_name != self.name
+            )
+            if renamed:
+                updated_model = self.custom_object_type.get_model(no_cache=True)
+                heal_unmasked_fields(self.custom_object_type, updated_model, schema_conn)
+
         # FK constraint runs AFTER commit to avoid "pending trigger events".
         if should_ensure_fk:
             _on_delete = self.on_delete_behavior
@@ -3790,18 +3851,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
             transaction.on_commit(ensure_constraint)
 
-        # On rename, _schema_alter_field calls contribute_to_class twice on the
-        # same class — force a no_cache regeneration so _meta is clean.  Non-
-        # rename changes lean on cache_timestamp for lazy invalidation; we skip
-        # the apps.clear_cache() cascade so signal-driven cache evictions (e.g.
-        # clear_cache_on_field_save for OBJECT fields) survive.
-        renamed = (
-            not self._state.adding
-            and not self.is_polymorphic
-            and self._original_name != self.name
-        )
         if renamed:
-            updated_model = self.custom_object_type.get_model(no_cache=True)
             self.custom_object_type.register_custom_object_search_index(updated_model)
 
         # Clean up stale descriptor when related_name is renamed on an existing polymorphic field
@@ -3833,6 +3883,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             _unwire_polymorphic_reverse_descriptors(self)
 
         with schema_conn.schema_editor() as schema_editor:
+            # Flush deferred FK trigger events before any ALTER TABLE or DROP TABLE.
+            # PostgreSQL rejects DDL with "pending trigger events" when a row
+            # deletion (e.g. from the branching revert path) has queued events on
+            # a DEFERRABLE FK column.  Guards all removal paths below.
+            schema_editor.execute('SET CONSTRAINTS ALL IMMEDIATE')
             if self.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
                 # Drop both backing columns (latitude/longitude).
                 for column_name, model_field in field_type.get_model_field(self).items():
@@ -3887,6 +3942,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         # field-undo and CO-undo, and a stale class would emit ProgrammingError.
         updated_model = self.custom_object_type.get_model()
 
+        heal_unmasked_fields(self.custom_object_type, updated_model, schema_conn)
         self.custom_object_type.register_custom_object_search_index(updated_model)
 
         if self.search_weight > 0:

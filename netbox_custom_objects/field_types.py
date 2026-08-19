@@ -1088,6 +1088,12 @@ class ObjectFieldType(FieldType):
         ct_field_name = f"{field_instance.name}_content_type"
         oid_field_name = f"{field_instance.name}_object_id"
 
+        # Flush deferred FK trigger events before ALTER TABLE; PostgreSQL rejects
+        # column removal with "pending trigger events" when a row deletion (from
+        # the revert path) has queued events on a DEFERRABLE FK column.
+        # Also called by CustomObjectTypeField.delete() for the full removal block,
+        # but kept here so this method is self-contained when called directly.
+        schema_editor.execute('SET CONSTRAINTS ALL IMMEDIATE')
         try:
             oid_field = model._meta.get_field(oid_field_name)
             schema_editor.remove_field(model, oid_field)
@@ -1438,6 +1444,13 @@ class MultiObjectFieldType(FieldType):
                 on_delete=models.CASCADE,
                 related_name="+",
                 db_column="target_id",
+                # The real DB-level FK is added separately in create_m2m_table
+                # as DEFERRABLE INITIALLY DEFERRED so iterative branch merges
+                # (time-ordered) can insert through rows before the target CO
+                # exists.  A new constraint created after SET CONSTRAINTS ALL
+                # IMMEDIATE is not affected by that earlier call; db_constraint=False
+                # prevents Django from creating a non-deferrable FK here.
+                db_constraint=False,
             ),
         }
 
@@ -1774,6 +1787,39 @@ class MultiObjectFieldType(FieldType):
                 tables = connection.introspection.table_names(cursor)
                 if table_name not in tables:
                     schema_editor.create_model(through)
+                    # Add the target FK as DEFERRABLE INITIALLY DEFERRED.
+                    # get_through_model uses db_constraint=False so Django
+                    # doesn't create a non-deferrable FK automatically.
+                    # _schema_add_field calls SET CONSTRAINTS ALL IMMEDIATE
+                    # before invoking create_m2m_table; in PostgreSQL this
+                    # applies to the entire transaction including constraints
+                    # created afterward.  We therefore:
+                    #   1. Add the constraint as DEFERRABLE INITIALLY DEFERRED
+                    #   2. Immediately re-defer it by name so it is DEFERRED
+                    #      for the rest of the merge transaction
+                    # This lets iterative branch merges (time-ordered) insert
+                    # through rows before the referenced target CO exists; the
+                    # FK check is deferred to transaction commit, by which
+                    # point all CO CREATEs have been applied.
+                    to_table = to_model._meta.db_table
+                    to_pk = to_model._meta.pk.column
+                    digest = hashlib.sha1(table_name.encode()).hexdigest()[:8]
+                    fk_conname = (table_name[:44] + '_' + digest + '_target_fk').lower()
+                    cursor.execute(
+                        'ALTER TABLE {tbl} ADD CONSTRAINT {con} '
+                        'FOREIGN KEY (target_id) REFERENCES {ref} ({pk}) '
+                        'ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED'.format(
+                            tbl=connection.ops.quote_name(table_name),
+                            con=connection.ops.quote_name(fk_conname),
+                            ref=connection.ops.quote_name(to_table),
+                            pk=connection.ops.quote_name(to_pk),
+                        )
+                    )
+                    cursor.execute(
+                        'SET CONSTRAINTS {} DEFERRED'.format(
+                            connection.ops.quote_name(fk_conname),
+                        )
+                    )
 
     def get_polymorphic_through_model(self, field_instance, source_model_string):
         """
@@ -1835,12 +1881,41 @@ class MultiObjectFieldType(FieldType):
         ``with connection.schema_editor()`` here would flush deferred SQL
         prematurely on PostgreSQL.
         """
-        source_model_string = f"{APP_LABEL}.{model.__name__}"
-        through = self.get_polymorphic_through_model(field_instance, source_model_string)
+        from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
 
-        source_field = through._meta.get_field("source")
-        source_field.remote_field.model = model
-        source_field.related_model = model
+        source_model_string = f"{APP_LABEL}.{model.__name__}"
+
+        # Serialized against CustomObjectType.get_model()'s own through-model
+        # reuse-or-create check (_after_model_generation runs under the same
+        # lock, held by its caller for the whole call). Without this, a
+        # concurrent reader regenerating this COT's model can observe this
+        # through model mid-construction here -- registered by Django's
+        # ModelBase metaclass inside generate_model() below, but before its
+        # "source" FK is repointed at `model` on the next line -- and race to
+        # point the registered class's FK at its OWN (different) model
+        # instance. Whichever thread's mutation and whichever thread's
+        # get_model() cache-write happen last aren't guaranteed to be the
+        # same thread, leaving the through's "source" FK and the cached model
+        # class mismatched. Confirmed live under concurrent load:
+        # intermittent "ValueError: Cannot query 'X': Must be 'TableYModel'
+        # instance." and RecursionError (issue #658).
+        #
+        # Deliberately scoped to just the build+register+repoint above -- NOT the
+        # table-existence probe/DDL below. A concurrent CustomObjectTypeField.save() for the
+        # same field also calls CustomObjectType.clear_model_cache(), which acquires this same
+        # lock; if the lock stayed held across schema_editor.create_model() (an uncommitted
+        # CREATE TABLE inside this save()'s own transaction), a second thread blocked here
+        # waiting for the lock -- itself stuck at the Postgres level waiting on the first
+        # thread's uncommitted transaction for the same physical table -- would prevent the
+        # first thread from ever reaching clear_model_cache() to commit. Releasing the lock
+        # before the DDL avoids that deadlock; the DDL itself has no equivalent staleness
+        # window to guard (the "source" FK is already correctly repointed by the time it runs).
+        with CustomObjectType._global_lock:
+            through = self.get_polymorphic_through_model(field_instance, source_model_string)
+
+            source_field = through._meta.get_field("source")
+            source_field.remote_field.model = model
+            source_field.related_model = model
 
         # Probe the same schema the DDL will target.  schema_editor is branch-aware
         # (opened via _get_schema_connection() by the caller), whereas the module-level

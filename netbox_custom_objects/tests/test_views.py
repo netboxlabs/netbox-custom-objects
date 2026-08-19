@@ -2,18 +2,42 @@
 Tests for all UI views.
 """
 from django.contrib.contenttypes.models import ContentType
-from django.test import TestCase
+from django.db import connection
+from django.test import RequestFactory, TestCase
 from django.urls import reverse
 from extras.models import CustomFieldChoiceSet
 from users.models import ObjectPermission
 from utilities.testing import ViewTestCases, create_test_user
 
+from netbox_custom_objects import views
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from .base import CustomObjectsTestCase
 from core.models.object_types import ObjectType
 
+try:
+    import netbox_branching  # noqa: F401
+    _HAS_BRANCHING = True
+except ImportError:
+    _HAS_BRANCHING = False
 
-class CustomObjectTypeViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase):
+
+class _SkipQueryCountsWhenBranching:
+    """Skip query-count assertion when netbox-branching is installed.
+
+    Branching adds per-request queries (branch lookup, schema check, etc.) that
+    are not present in the recorded baselines.  The counts are adequately tested
+    by the non-branching matrix jobs.
+    """
+
+    def test_list_objects_with_permission(self):
+        if _HAS_BRANCHING:
+            self.skipTest('query-count baselines not valid with netbox-branching installed')
+        super().test_list_objects_with_permission()
+
+
+class CustomObjectTypeViewTestCase(
+    _SkipQueryCountsWhenBranching, CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase
+):
     """Test cases for CustomObjectType views."""
 
     model = CustomObjectType
@@ -230,7 +254,9 @@ class CustomObjectTypeFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.Pri
         ...
 
 
-class CustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase):
+class CustomObjectViewTestCase(
+    _SkipQueryCountsWhenBranching, CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase
+):
     """Test cases for dynamic CustomObject views."""
 
     query_count_model_label = 'customobject-simple'
@@ -369,6 +395,374 @@ class CustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjec
     def test_bulk_delete_objects_with_constrained_permission(self):
         ...
 
+    def _assert_get_queryset_does_not_full_scan(self, view_class):
+        """Regression #620 helper.
+
+        All three bulk views (import/edit/delete) previously did
+        ``if self.queryset:`` in ``get_queryset()``, whose ``QuerySet.__bool__``
+        calls ``_fetch_all()`` — pulling every row into memory. On a type with
+        millions of records this spiked server memory and hung the request.
+
+        ``get_queryset()`` is invoked a second time by ``BaseMultiObjectView.
+        dispatch()`` after ``setup()`` has assigned the (lazy) queryset, which is
+        when the truthiness check evaluated it. We reproduce that state directly
+        so the assertion targets the exact regression regardless of each view's
+        HTTP method handling.
+        """
+        request = RequestFactory().get('/')
+        request.user = self.user
+
+        view = view_class()
+        view.kwargs = {'custom_object_type': self.model.custom_object_type.slug}
+        # Post-setup state: dispatch() will have left a lazy, unevaluated queryset.
+        view.queryset = self.model.objects.all()
+
+        db_table = self.model._meta.db_table
+        full_scans = []
+
+        def tracer(execute, sql, params, many, context):
+            normalized = sql.lstrip().upper()
+            if (
+                db_table in sql
+                and normalized.startswith('SELECT')
+                and 'LIMIT' not in normalized
+                and 'COUNT(' not in normalized
+            ):
+                full_scans.append(sql)
+            return execute(sql, params, many, context)
+
+        with connection.execute_wrapper(tracer):
+            view.get_queryset(request)
+
+        self.assertEqual(
+            full_scans, [],
+            f"{view_class.__name__}.get_queryset() issued an unbounded SELECT "
+            f"against {db_table}; the whole table is being loaded into memory:\n"
+            + "\n".join(full_scans),
+        )
+
+    def test_bulk_import_get_queryset_does_not_full_scan(self):
+        """Regression #620: CustomObjectBulkImportView.get_queryset()."""
+        self._assert_get_queryset_does_not_full_scan(views.CustomObjectBulkImportView)
+
+    def test_bulk_edit_get_queryset_does_not_full_scan(self):
+        """Regression #620: CustomObjectBulkEditView.get_queryset()."""
+        self._assert_get_queryset_does_not_full_scan(views.CustomObjectBulkEditView)
+
+    def test_bulk_edit_form_nullable_fields_includes_scalar_fields(self):
+        """Regression #621: bulk edit must offer 'Set null' for real, nullable fields."""
+        request = RequestFactory().get('/')
+        request.user = self.user
+
+        view = views.CustomObjectBulkEditView()
+        view.setup(request, custom_object_type=self.custom_object_type.slug)
+
+        self.assertIn('description', view.form.nullable_fields)
+        self.assertIn('count', view.form.nullable_fields)
+        # 'name' is required=True; a required field must never offer "Set null",
+        # since every custom object column is nullable at the DB level regardless
+        # of the field's own required flag.
+        self.assertNotIn('name', view.form.nullable_fields)
+
+    def test_bulk_edit_set_null_clears_field(self):
+        """Regression #621: checking 'Set null' for a field must clear it across selected objects."""
+        content_type = ContentType.objects.get_for_model(self.model)
+        obj_perm = ObjectPermission(name='bulk-edit-set-null', actions=['view', 'change'])
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        obj_perm.object_types.add(content_type)
+
+        bulk_edit_url = self._get_url('bulk_edit')
+        response = self.client.post(bulk_edit_url, data={
+            '_apply': 'Apply',
+            'pk': [self.instance1.pk, self.instance2.pk],
+            '_nullify': ['description'],
+            'description': '',
+        })
+        self.assertHttpStatus(response, 302)
+        self.instance1.refresh_from_db()
+        self.instance2.refresh_from_db()
+        self.assertIsNone(self.instance1.description)
+        self.assertIsNone(self.instance2.description)
+
+    def test_bulk_edit_set_null_clears_object_and_multiobject_fields(self):
+        """
+        Regression #621: non-polymorphic object/multiobject fields must also support
+        'Set null' in bulk edit -- they map to a real, nullable FK column / M2M relation
+        (like core's Site.asns), unlike polymorphic fields which are excluded.
+        """
+        from dcim.models import Site
+
+        cot = self.create_custom_object_type(name='ObjNullTest', slug='obj-null-test')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name='site', label='Site', type='object',
+            related_object_type=self.get_site_object_type(),
+        )
+        self.create_custom_object_type_field(
+            cot, name='sites', label='Sites', type='multiobject',
+            related_object_type=self.get_site_object_type(),
+        )
+
+        model = cot.get_model()
+        site_a = Site.objects.create(name='Site A', slug='site-a')
+        site_b = Site.objects.create(name='Site B', slug='site-b')
+        obj1 = model.objects.create(name='Obj 1', site=site_a)
+        obj1.sites.set([site_a, site_b])
+        obj2 = model.objects.create(name='Obj 2', site=site_a)
+        obj2.sites.set([site_a, site_b])
+
+        content_type = ContentType.objects.get_for_model(model)
+        obj_perm = ObjectPermission(name='bulk-edit-set-null-obj', actions=['view', 'change'])
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        obj_perm.object_types.add(content_type)
+
+        url_format = 'plugins:{}:customobject_{{}}'.format(model._meta.app_label)
+        bulk_edit_url = reverse(url_format.format('bulk_edit'), kwargs={'custom_object_type': cot.slug})
+        response = self.client.post(bulk_edit_url, data={
+            '_apply': 'Apply',
+            'pk': [obj1.pk, obj2.pk],
+            '_nullify': ['site', 'sites'],
+            'site': '',
+            'sites': [],
+        })
+        self.assertHttpStatus(response, 302)
+        obj1.refresh_from_db()
+        obj2.refresh_from_db()
+        self.assertIsNone(obj1.site)
+        self.assertIsNone(obj2.site)
+        self.assertEqual(obj1.sites.count(), 0)
+        self.assertEqual(obj2.sites.count(), 0)
+
+    def test_bulk_delete_get_queryset_does_not_full_scan(self):
+        """Regression #620: CustomObjectBulkDeleteView.get_queryset()."""
+        self._assert_get_queryset_does_not_full_scan(views.CustomObjectBulkDeleteView)
+
+    def test_bulk_import_omits_hidden_required_field_from_form(self):
+        """
+        Regression #626: a Required+Hidden field must be omitted from the bulk import
+        form (not disabled, which ignores submitted data and always fails "This field
+        is required"). Own COT used to avoid leaking model-cache state into other tests.
+        """
+        cot = self.create_custom_object_type(name='HiddenFieldImportTest', slug='hidden-field-import-test')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True,
+        )
+        self.create_custom_object_type_field(
+            cot,
+            name='identifier',
+            label='Identifier',
+            type='text',
+            required=True,
+            ui_editable='hidden',
+        )
+
+        request = RequestFactory().post('/')
+        request.user = self.user
+
+        view = views.CustomObjectBulkImportView()
+        view.setup(request, custom_object_type=cot.slug)
+
+        # The hidden required field must not appear in the import form at all...
+        self.assertNotIn('identifier', view.model_form.base_fields)
+
+        # ...so a row that omits it (as any importer must, since it can't be set) is valid.
+        model = view.queryset.model
+        form = view.model_form(data={'name': 'Imported Instance'}, instance=model())
+        self.assertTrue(form.is_valid(), form.errors)
+
+    def test_bulk_import_silently_ignores_value_for_hidden_field(self):
+        """
+        Regression #626: matches the original bug report's payload (a value supplied
+        for the hidden field). It must not error, and the value must be silently
+        dropped rather than written, matching core NetBox's own CSV import behavior.
+        """
+        cot = self.create_custom_object_type(name='HiddenFieldImportTest2', slug='hidden-field-import-test-2')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True,
+        )
+        self.create_custom_object_type_field(
+            cot,
+            name='identifier',
+            label='Identifier',
+            type='text',
+            required=True,
+            ui_editable='hidden',
+        )
+
+        request = RequestFactory().post('/')
+        request.user = self.user
+
+        view = views.CustomObjectBulkImportView()
+        view.setup(request, custom_object_type=cot.slug)
+
+        model = view.queryset.model
+        form = view.model_form(
+            data={'name': 'Imported Instance', 'identifier': '12345'}, instance=model(),
+        )
+        self.assertTrue(form.is_valid(), form.errors)
+
+        instance = form.save()
+        self.assertIsNone(instance.identifier)
+
+    def test_edit_form_omits_hidden_field(self):
+        """Regression #645: a hidden field must be omitted from the edit form, not just disabled."""
+        cot = self.create_custom_object_type(name='HiddenFieldEditTest', slug='hidden-field-edit-test')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name='hidden', label='Hidden', type='text', ui_editable='hidden',
+        )
+        self.create_custom_object_type_field(
+            cot, name='readonly', label='Readonly', type='text', ui_editable='no',
+        )
+
+        request = RequestFactory().get('/')
+        request.user = self.user
+
+        view = views.CustomObjectEditView()
+        view.setup(request, custom_object_type=cot.slug)
+
+        self.assertNotIn('hidden', view.form.base_fields)
+        # A read-only (ui_editable=no) field is disabled, not omitted -- distinct from hidden.
+        self.assertIn('readonly', view.form.base_fields)
+
+    def test_bulk_edit_form_omits_hidden_field(self):
+        """Regression #645: same as above, for the bulk edit form."""
+        cot = self.create_custom_object_type(name='HiddenFieldBulkEditTest', slug='hidden-field-bulk-edit-test')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name='hidden', label='Hidden', type='text', ui_editable='hidden',
+        )
+        self.create_custom_object_type_field(
+            cot, name='readonly', label='Readonly', type='text', ui_editable='no',
+        )
+
+        request = RequestFactory().get('/')
+        request.user = self.user
+
+        view = views.CustomObjectBulkEditView()
+        view.setup(request, custom_object_type=cot.slug)
+
+        self.assertNotIn('hidden', view.form.base_fields)
+        self.assertIn('readonly', view.form.base_fields)
+
+    def test_edit_form_omits_hidden_coordinates_field(self):
+        """Regression #645: a hidden coordinates field must omit both its lat/long sub-fields."""
+        cot = self.create_custom_object_type(name='HiddenCoordsEditTest', slug='hidden-coords-edit-test')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name='location', label='Location', type='coordinates', ui_editable='hidden',
+        )
+
+        request = RequestFactory().get('/')
+        request.user = self.user
+
+        view = views.CustomObjectEditView()
+        view.setup(request, custom_object_type=cot.slug)
+
+        self.assertNotIn('location_latitude', view.form.base_fields)
+        self.assertNotIn('location_longitude', view.form.base_fields)
+
+    def test_bulk_edit_form_omits_hidden_coordinates_field(self):
+        """Regression #645: same as above, for the bulk edit form."""
+        cot = self.create_custom_object_type(name='HiddenCoordsBulkEditTest', slug='hidden-coords-bulk-edit-test')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name='location', label='Location', type='coordinates', ui_editable='hidden',
+        )
+
+        request = RequestFactory().get('/')
+        request.user = self.user
+
+        view = views.CustomObjectBulkEditView()
+        view.setup(request, custom_object_type=cot.slug)
+
+        self.assertNotIn('location_latitude', view.form.base_fields)
+        self.assertNotIn('location_longitude', view.form.base_fields)
+
+    def test_edit_form_applies_hidden_multiobject_default_on_create(self):
+        """
+        Regression #42/#645: a hidden non-polymorphic MultiObject field is a real M2M
+        model attribute, so omitting it from the rendered form must not also skip
+        applying its configured default when creating a new object.
+        """
+        from dcim.models import Site
+
+        site_a = Site.objects.create(name='Site A', slug='site-a-hidden-mo-create')
+        site_b = Site.objects.create(name='Site B', slug='site-b-hidden-mo-create')
+
+        cot = self.create_custom_object_type(name='HiddenMultiObjCreateTest', slug='hidden-multiobj-create-test')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name='sites', label='Sites', type='multiobject',
+            related_object_type=self.get_site_object_type(),
+            ui_editable='hidden',
+            default=[site_a.pk, site_b.pk],
+        )
+
+        request = RequestFactory().post('/')
+        request.user = self.user
+
+        view = views.CustomObjectEditView()
+        view.setup(request, custom_object_type=cot.slug)
+
+        form = view.form(data={'name': 'New Instance'}, instance=view.object)
+        self.assertTrue(form.is_valid(), form.errors)
+        instance = form.save()
+
+        self.assertEqual(set(instance.sites.values_list('pk', flat=True)), {site_a.pk, site_b.pk})
+
+    def test_edit_form_preserves_hidden_multiobject_relation_on_edit(self):
+        """
+        Regression #645: editing an object must not clear a hidden MultiObject field's
+        existing relation -- there is no rendered input for it to come from, and a
+        hidden field is defined as neither displayed nor editable.
+        """
+        from dcim.models import Site
+
+        site_a = Site.objects.create(name='Site A', slug='site-a-hidden-mo-edit')
+        site_b = Site.objects.create(name='Site B', slug='site-b-hidden-mo-edit')
+
+        cot = self.create_custom_object_type(name='HiddenMultiObjEditTest', slug='hidden-multiobj-edit-test')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name='sites', label='Sites', type='multiobject',
+            related_object_type=self.get_site_object_type(),
+            ui_editable='hidden',
+            default=[site_a.pk],
+        )
+
+        model = cot.get_model()
+        obj = model.objects.create(name='Existing Instance')
+        obj.sites.set([site_a.pk, site_b.pk])
+
+        request = RequestFactory().post('/')
+        request.user = self.user
+
+        view = views.CustomObjectEditView()
+        view.setup(request, custom_object_type=cot.slug, pk=obj.pk)
+
+        form = view.form(data={'name': 'Renamed Instance'}, instance=view.object)
+        self.assertTrue(form.is_valid(), form.errors)
+        instance = form.save()
+
+        self.assertEqual(set(instance.sites.values_list('pk', flat=True)), {site_a.pk, site_b.pk})
+
     def test_bulk_edit_select_all_respects_full_queryset(self):
         """Regression #380: 'select all matching query' must edit all objects, not just the current page.
 
@@ -458,7 +852,9 @@ class CustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjec
         self.assertHttpStatus(self.client.get(edit_url), 200)
 
 
-class ComplexCustomObjectViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase):
+class ComplexCustomObjectViewTestCase(
+    _SkipQueryCountsWhenBranching, CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase
+):
     """Test cases for complex custom objects with various field types."""
 
     query_count_model_label = 'customobject-complex'
@@ -754,7 +1150,9 @@ class SelectFieldColorDetailViewTestCase(CustomObjectsTestCase, TestCase):
         self.assertIn('Yes', response.content.decode())
 
 
-class ObjectFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase):
+class ObjectFieldViewTestCase(
+    _SkipQueryCountsWhenBranching, CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase
+):
     """Test cases for custom objects with object and multi-object fields."""
 
     query_count_model_label = 'customobject-objectfields'
@@ -1085,6 +1483,35 @@ class CoordinatesFieldViewTest(CustomObjectsTestCase, TestCase):
         # Values are unchanged because the form failed validation.
         self.assertEqual(obj.location_latitude, Decimal("40.712800"))
         self.assertEqual(obj.location_longitude, Decimal("-74.006000"))
+
+    def test_bulk_edit_coordinates_not_individually_nullable(self):
+        """Regression: latitude/longitude must not get independent Set Null controls."""
+        request = RequestFactory().get('/')
+        request.user = self.user
+
+        view = views.CustomObjectBulkEditView()
+        view.setup(request, custom_object_type=self.cot.slug)
+        self.assertNotIn('location_latitude', view.form.nullable_fields)
+        self.assertNotIn('location_longitude', view.form.nullable_fields)
+
+    def test_bulk_edit_set_null_clears_coordinates_atomically(self):
+        """A single 'Set null' checkbox for the coordinates field clears both halves."""
+        from decimal import Decimal
+        obj = self.model.objects.create(
+            name="Existing2",
+            location_latitude=Decimal("40.712800"),
+            location_longitude=Decimal("-74.006000"),
+        )
+        data = {
+            "pk": [obj.pk],
+            "_apply": "Apply",
+            "_nullify": ["location"],
+        }
+        response = self.client.post(self._bulk_edit_url(), data)
+        self.assertEqual(response.status_code, 302, getattr(response, "content", b""))
+        obj.refresh_from_db()
+        self.assertIsNone(obj.location_latitude)
+        self.assertIsNone(obj.location_longitude)
 
 
 class URLFieldLinkTitleViewTest(CustomObjectsTestCase, TestCase):

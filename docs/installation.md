@@ -27,12 +27,13 @@ PLUGINS = [
 ]
 ```
 
-### 3. Run Database Migrations
+### 3. Run Database Migrations and Collect Static Files
 
-Apply the plugin's database migrations:
+Apply the plugin's database migrations and collect its static files:
 
 ```
 ./manage.py migrate
+./manage.py collectstatic
 ```
 
 ### 4. Restart NetBox

@@ -296,7 +296,7 @@ class CustomObjectsPluginConfig(PluginConfig):
     base_url = "custom-objects"
     # Remember to update COMPATIBILITY.md when modifying the minimum/maximum supported NetBox versions.
     min_version = "4.5.2"
-    max_version = "4.6.99"
+    max_version = "4.7.99"
     default_settings = {
         # The maximum number of Custom Object Types that may be created
         'max_custom_object_types': 50,
@@ -312,6 +312,10 @@ class CustomObjectsPluginConfig(PluginConfig):
     # so the swallowed exception isn't invisible outside the logs.
     _register_tabs_error = None
     template_extensions = "template_content.template_extensions"
+    # Registers the custom_objects Jinja filter (jinja_env.filters). Requires NetBox
+    # 4.7+; on older NetBox this attribute is simply never read by core (see ready()
+    # for the startup log message covering that case).
+    jinja_filters = "jinja_env.filters"
     # Resolves dynamic CO models (table{n}model) to on-the-fly serializers —
     # they have no importable path at the conventional location.
     serializer_resolver = "api.serializers.serializer_resolver"
@@ -426,6 +430,26 @@ class CustomObjectsPluginConfig(PluginConfig):
             return
         super().ready()
         _super_ready_called = True
+
+        # On NetBox < 4.7 the jinja_filters resource and get_jinja_context() hook
+        # don't exist, so super().ready() never calls _load_resource('jinja_filters')
+        # and get_jinja_context() is never invoked by RenderTemplateMixin.get_context().
+        # This is every currently-supported NetBox version (4.7 isn't released yet), so
+        # log at DEBUG rather than INFO: it's an explanation to reach for when actively
+        # troubleshooting why 'custom_objects' isn't resolving, not a startup notice
+        # every install should see by default.
+        from netbox.registry import registry
+        if 'custom_objects' not in registry.get('plugins', {}).get('jinja_filters', {}):
+            logger.debug(
+                "NetBox Jinja config template hooks (jinja_filters / get_jinja_context) "
+                "are not available in this version of NetBox. The 'custom_objects' filter "
+                "and context variable will not be active in config templates. Upgrade to "
+                "NetBox 4.7+ to enable this feature."
+            )
+
+    def get_jinja_context(self):
+        from netbox_custom_objects.jinja_env import CustomObjectsNamespace
+        return {'custom_objects': CustomObjectsNamespace()}
 
     def ready(self):
         # Install the thread-safe apps.clear_cache wrapper before any dynamic
