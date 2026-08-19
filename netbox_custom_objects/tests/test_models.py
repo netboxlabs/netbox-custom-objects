@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from django.apps import apps as django_apps
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import ValidationError
+from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import connection, transaction
 from django.db.utils import OperationalError, ProgrammingError
 from django.test import TestCase, override_settings, tag
@@ -1835,7 +1835,7 @@ class CrossCOTGetModelOutsideReadyTestCase(CustomObjectsTestCase, TestCase):
         with patch.object(config.__class__, '_dynamic_model_creation_unsafe', return_value=True):
             model = source_type.get_model()
 
-        with self.assertRaises(Exception):
+        with self.assertRaises(FieldDoesNotExist):
             model._meta.get_field('forwarder_profile')
         self.assertFalse(CustomObjectType.is_model_cached(source_type.id))
 

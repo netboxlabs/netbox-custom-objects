@@ -1667,12 +1667,6 @@ class CustomObjectType(NetBoxModel):
         :return: The generated model.
         :rtype: Model
         """
-        # Avoid a dangling cross-COT FK reference when get_model() runs outside
-        # ready()'s two-pass resolution, e.g. a plugin importing it at migrate
-        # time (#637). Never cached (see below), so a later call regenerates in full.
-        if apps.get_app_config(APP_LABEL)._dynamic_model_creation_unsafe():
-            skip_object_fields = True
-
         branch_id = self._active_branch_id()
 
         # Lock guards the cache check, not the miss → re-cache window.  Two
@@ -1695,6 +1689,12 @@ class CustomObjectType(NetBoxModel):
                     # bumped cache_timestamp to branches via change-capture, so
                     # they'll re-evaluate against their own row independently.
                     self.clear_model_cache(self.id)
+
+        # Avoid a dangling cross-COT FK reference when get_model() runs outside
+        # ready()'s two-pass resolution, e.g. a plugin importing it at migrate
+        # time (#637). Never cached (see below), so a later call regenerates in full.
+        if apps.get_app_config(APP_LABEL)._dynamic_model_creation_unsafe():
+            skip_object_fields = True
 
         # Generate the model outside the lock to avoid holding it during expensive operations
         model_name = self.get_table_model_name(self.pk)
