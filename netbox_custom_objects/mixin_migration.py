@@ -36,8 +36,6 @@ import logging
 from django.apps import apps as django_apps
 from django.db import DEFAULT_DB_ALIAS, connections
 
-from netbox_custom_objects.models import detect_backing_column_collisions
-
 logger = logging.getLogger(__name__)
 
 
@@ -200,6 +198,9 @@ def heal_cot(cot, verbosity=1, dry_run=False, using=DEFAULT_DB_ALIAS):
     # "<url_field>_title" predating the validation that now blocks this).
     # Independent of DB introspection -- purely a field-definition check --
     # so it runs even if the table itself can't be introspected below.
+    # Imported locally: models.py imports heal_unmasked_fields from this module
+    # at its own top level, so a top-level import here would be circular.
+    from netbox_custom_objects.models import detect_backing_column_collisions  # noqa: PLC0415
     for collision in detect_backing_column_collisions(cot):
         entry = {
             "type": "backing_column_collision",
