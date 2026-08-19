@@ -398,6 +398,11 @@ class BackingColumnCollisionTestCase(
         preserve that field's own data and leave the *other* field's column
         untouched -- proving the recovery guidance is actually safe to follow,
         not just that the collision is detected.
+
+        save()'s rename path now calls heal_unmasked_fields() unconditionally
+        (merged from main's #391 Phase 2 work), so the url field's title
+        sub-column is restored automatically in the same save() -- a separate
+        manual heal_cot() call is no longer required, though still safe/idempotent.
         """
         cot = self.create_custom_object_type(name="bcc_recover", slug="bcc-recover")
         self.create_custom_object_type_field(cot, name="name", label="Name", type="text", primary=True)
@@ -449,13 +454,15 @@ class BackingColumnCollisionTestCase(
             )
         }
         self.assertIn("description", columns)
-        # The rename also carried the physical column away from "website_title" --
-        # the url field's title sub-column name is derived from its own (unchanged)
-        # name, not stored, so nothing renamed *it* back into existence. This is
-        # exactly why the guidance says to re-run the heal afterward: it re-adds
-        # "website_title" fresh (nullable, default ''), now unambiguously the url
-        # field's alone.
-        self.assertNotIn("website_title", columns)
+        # The rename carried the physical column away from "website_title" -- the
+        # url field's title sub-column name is derived from its own (unchanged)
+        # name, not stored, so nothing renamed *it* back into existence. save()'s
+        # heal_unmasked_fields() call re-adds "website_title" fresh (nullable,
+        # default ''), now unambiguously the url field's alone, within the same
+        # save() that performed the rename.
+        self.assertIn("website_title", columns)
+
+        # A manual heal_cot() afterward must be a safe no-op (idempotent).
         heal_cot(cot, verbosity=0)
         model = cot.get_model(no_cache=True)
         columns = {

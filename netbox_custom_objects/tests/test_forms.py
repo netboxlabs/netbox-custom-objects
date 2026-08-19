@@ -7,7 +7,7 @@ from core.models import ObjectType
 from extras.choices import CustomFieldTypeChoices
 
 from netbox_custom_objects.forms import CustomObjectTypeFieldForm
-from netbox_custom_objects.models import CustomObjectType
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 
 from .base import CustomObjectsTestCase
 
@@ -228,3 +228,65 @@ class PolymorphicRelatedNameCollisionFormTestCase(CustomObjectsTestCase, TestCas
         validation."""
         form = self._make_polymorphic_object_form(related_name="co_safe_form_test_ref")
         self.assertTrue(form.is_valid(), form.errors)
+
+
+class SchemaBookkeepingFieldsPreservedOnEditTestCase(CustomObjectsTestCase, TestCase):
+    """
+    Regression #625: schema_id, deprecated, deprecated_since, and scheduled_removal
+    are set outside this form (auto-assigned on creation, or via the portable-schema
+    import mechanism) and are not rendered in any fieldset. An unrelated edit through
+    CustomObjectTypeFieldForm must not silently reset them.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.cot = CustomObjectType.objects.create(
+            name="SchemaBookkeepingTester",
+            slug="schema-bookkeeping-tester",
+            verbose_name_plural="Schema Bookkeeping Testers",
+        )
+
+    def test_editing_a_field_preserves_schema_id_and_deprecation_bookkeeping(self):
+        field = CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot,
+            name="myfield",
+            label="My Field",
+            type=CustomFieldTypeChoices.TYPE_TEXT,
+            schema_id=7,
+            deprecated=True,
+            deprecated_since="1.0.0",
+            scheduled_removal="2.0.0",
+        )
+
+        data = {
+            "custom_object_type": self.cot.pk,
+            "name": "myfield",
+            "label": "My Field Renamed",
+            "type": CustomFieldTypeChoices.TYPE_TEXT,
+            "required": "",
+            "unique": "",
+            "primary": "",
+            "default": "",
+            "description": "",
+            "group_name": "",
+            "context": "default",
+            "search_weight": "1000",
+            "filter_logic": "loose",
+            "ui_visible": "hidden",
+            "ui_editable": "hidden",
+            "weight": "100",
+            "is_cloneable": "",
+        }
+        # Fetch fresh from the DB, as a real edit view does: CustomObjectTypeField.save()
+        # relies on ``self.original`` (populated only by from_db()) for schema-diffing.
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        form = CustomObjectTypeFieldForm(data=data, instance=field)
+        self.assertTrue(form.is_valid(), form.errors)
+        saved = form.save()
+
+        saved.refresh_from_db()
+        self.assertEqual(saved.label, "My Field Renamed")
+        self.assertEqual(saved.schema_id, 7)
+        self.assertTrue(saved.deprecated)
+        self.assertEqual(saved.deprecated_since, "1.0.0")
+        self.assertEqual(saved.scheduled_removal, "2.0.0")

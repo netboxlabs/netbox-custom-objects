@@ -875,6 +875,11 @@ class ScalarFieldFiltersetTestCase(CustomObjectsTestCase):
     def test_no_filter_returns_all(self):
         self.assertEqual(self._filterset({}).qs.count(), self.total_count)
 
+    def test_filter_by_id_returns_only_matching_object(self):
+        """Regression #628: ?id=<pk> was silently ignored, returning every row."""
+        pks = list(self._filterset({'id': [str(self.obj_match.pk)]}).qs.values_list('pk', flat=True))
+        self.assertEqual(pks, [self.obj_match.pk])
+
 
 class TextFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
     """CharFilter with icontains is generated for TYPE_TEXT fields."""
@@ -898,6 +903,88 @@ class TextFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
         pks = list(self._filterset({'note': 'FOO'}).qs.values_list('pk', flat=True))
         self.assertIn(self.obj_match.pk, pks)
         self.assertNotIn(self.obj_no_match.pk, pks)
+
+
+class TextFieldFilterLogicTestCase(CustomObjectsTestCase, TestCase):
+    """CustomObjectTypeField.filter_logic must actually be respected by filterset generation."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(name='FilterLogicFS', slug='filter-logic-fs')
+        cls.create_custom_object_type_field(
+            cls.cot, name='name', label='Name', type='text', primary=True, required=True
+        )
+        cls.create_custom_object_type_field(
+            cls.cot, name='loose_field', label='Loose', type='text', filter_logic='loose',
+        )
+        cls.create_custom_object_type_field(
+            cls.cot, name='exact_field', label='Exact', type='text', filter_logic='exact',
+        )
+        cls.create_custom_object_type_field(
+            cls.cot, name='disabled_field', label='Disabled', type='text', filter_logic='disabled',
+        )
+
+        model = cls.cot.get_model()
+        cls.obj_a = model.objects.create(
+            name='a', loose_field='foobar', exact_field='foobar', disabled_field='foobar',
+        )
+        cls.obj_b = model.objects.create(
+            name='b', loose_field='barfoo', exact_field='barfoo', disabled_field='barfoo',
+        )
+
+    def _filterset(self, params):
+        model = self.cot.get_model()
+        return get_filterset_class(model)(params, model.objects.all())
+
+    def test_loose_field_bare_filter_is_icontains(self):
+        """Existing (pre-fix) loose behavior is unchanged."""
+        pks = list(self._filterset({'loose_field': 'oob'}).qs.values_list('pk', flat=True))
+        self.assertEqual(pks, [self.obj_a.pk])
+
+    def test_loose_field_isw_suffix_matches_startswith(self):
+        """
+        A field left at the default (loose) filter_logic must still support
+        __isw. Its own bare filter uses icontains, which get_additional_lookups()
+        does not augment on its own -- get_filterset_class() backports the
+        suffix filters separately for this reason.
+        """
+        pks = list(self._filterset({'loose_field__isw': 'foo'}).qs.values_list('pk', flat=True))
+        self.assertEqual(pks, [self.obj_a.pk])
+
+    def test_loose_field_iew_suffix_matches_endswith(self):
+        pks = list(self._filterset({'loose_field__iew': 'foo'}).qs.values_list('pk', flat=True))
+        self.assertEqual(pks, [self.obj_b.pk])
+
+    def test_loose_field_n_suffix_negates(self):
+        pks = list(self._filterset({'loose_field__n': 'foobar'}).qs.values_list('pk', flat=True))
+        self.assertEqual(pks, [self.obj_b.pk])
+
+    def test_exact_field_bare_filter_is_exact_match(self):
+        pks = list(self._filterset({'exact_field': 'foobar'}).qs.values_list('pk', flat=True))
+        self.assertEqual(pks, [self.obj_a.pk])
+
+    def test_exact_field_isw_suffix_matches_startswith(self):
+        """The reported bug: an exact-logic field's __isw suffix must actually filter."""
+        pks = list(self._filterset({'exact_field__isw': 'foo'}).qs.values_list('pk', flat=True))
+        self.assertEqual(pks, [self.obj_a.pk])
+
+    def test_exact_field_iew_suffix_matches_endswith(self):
+        pks = list(self._filterset({'exact_field__iew': 'foo'}).qs.values_list('pk', flat=True))
+        self.assertEqual(pks, [self.obj_b.pk])
+
+    def test_exact_field_ic_suffix_matches_substring(self):
+        pks = list(self._filterset({'exact_field__ic': 'oob'}).qs.values_list('pk', flat=True))
+        self.assertEqual(pks, [self.obj_a.pk])
+
+    def test_disabled_field_has_no_filter_registered(self):
+        fs = self._filterset({})
+        self.assertNotIn('disabled_field', fs.filters)
+
+    def test_disabled_field_query_param_ignored(self):
+        """Matches NetBox core: a disabled field's query param has no effect."""
+        pks = list(self._filterset({'disabled_field': 'foobar'}).qs.values_list('pk', flat=True))
+        self.assertEqual(len(pks), 2)
 
 
 class LongTextFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):

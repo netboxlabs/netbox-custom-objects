@@ -9,10 +9,17 @@ missing that column.  This module provides:
   heal_all_cots(verbosity, dry_run)          — iterate over all COTs on one connection
   heal_branch(branch, verbosity, dry_run)    — heal_all_cots() against one Branch's schema
   heal_all_branches(verbosity, dry_run)      — heal_branch() for every live Branch
+  heal_unmasked_fields(cot, model, schema_conn)
+                                              — add mixin columns unmasked by a
+                                                field rename/delete
 
-All four are called from:
+heal_cot/heal_all_cots/heal_branch/heal_all_branches are called from:
   - The post_migrate signal handler in __init__.py (automatic, zero-config)
   - The upgrade_custom_objects management command (explicit, with --dry-run)
+
+heal_unmasked_fields is called directly from CustomObjectTypeField.save()/
+delete() in models.py, right after a rename or delete, rather than waiting
+for the next post_migrate pass.
 
 Safety rules
 ------------
@@ -28,8 +35,6 @@ import logging
 
 from django.apps import apps as django_apps
 from django.db import DEFAULT_DB_ALIAS, connections
-
-from netbox_custom_objects.models import detect_backing_column_collisions
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +130,47 @@ def _can_auto_add(field):
 # Public API
 # ---------------------------------------------------------------------------
 
+def heal_unmasked_fields(cot, model, schema_conn):
+    """
+    Add missing columns for CustomObject mixin fields unmasked by renaming or
+    deleting a same-named user field (e.g. 'owner' shadowing OwnerMixin.owner).
+
+    Schema-connection-aware (branch-safe) counterpart to the add-column loop
+    in heal_cot(), meant to be called right after a CustomObjectTypeField
+    rename/delete rather than waiting for the next post_migrate heal pass.
+    """
+    expected = _expected_base_fields(cot, model)
+    with schema_conn.cursor() as cursor:
+        actual_cols = {
+            col.name
+            for col in schema_conn.introspection.get_table_description(cursor, model._meta.db_table)
+        }
+
+    missing = []
+    for col_name, field in expected.items():
+        if col_name in actual_cols:
+            continue
+        if not _can_auto_add(field):
+            logger.warning(
+                "heal_unmasked_fields: unmasked base column %r (field %r) on %s is not "
+                "nullable and has no default — cannot auto-add. Run "
+                "'manage.py upgrade_custom_objects'.",
+                col_name, field.name, model._meta.db_table,
+            )
+            continue
+        missing.append(field)
+
+    if not missing:
+        return
+
+    with schema_conn.schema_editor() as schema_editor:
+        # Flush pending DEFERRABLE FK trigger events before ALTER TABLE, matching
+        # every other add_field() call site in this codebase.
+        schema_editor.execute('SET CONSTRAINTS ALL IMMEDIATE')
+        for field in missing:
+            schema_editor.add_field(model, field)
+
+
 def heal_cot(cot, verbosity=1, dry_run=False, using=DEFAULT_DB_ALIAS):
     """
     Detect and repair mixin column drift for a single CustomObjectType.
@@ -152,6 +198,9 @@ def heal_cot(cot, verbosity=1, dry_run=False, using=DEFAULT_DB_ALIAS):
     # "<url_field>_title" predating the validation that now blocks this).
     # Independent of DB introspection -- purely a field-definition check --
     # so it runs even if the table itself can't be introspected below.
+    # Imported locally: models.py imports heal_unmasked_fields from this module
+    # at its own top level, so a top-level import here would be circular.
+    from netbox_custom_objects.models import detect_backing_column_collisions  # noqa: PLC0415
     for collision in detect_backing_column_collisions(cot):
         entry = {
             "type": "backing_column_collision",

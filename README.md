@@ -21,10 +21,11 @@ PLUGINS = [
 ]
 ```
 
-3. Run NetBox migrations:
+3. Run NetBox migrations and collect static files:
 
 ```
 $ ./manage.py migrate
+$ ./manage.py collectstatic
 ```
 
 4. Restart NetBox
