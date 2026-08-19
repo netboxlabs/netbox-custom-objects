@@ -1,36 +1,31 @@
 # Portable Schema
 
 The portable schema feature allows Custom Object Type (COT) definitions to be exported as
-structured JSON documents, versioned in source control, and applied to other NetBox instances.
+structured YAML documents, versioned in source control, and applied to other NetBox instances.
 This makes COT schemas shareable, auditable, and deployable across environments in a consistent
-and repeatable way.
+and repeatable way. YAML is the recommended format; JSON is also accepted (see
+[Schema Document Format](#schema-document-format)).
 
 ## Concepts
 
 ### Schema Documents
 
-A schema document is a JSON object that fully describes one or more Custom Object Types —
-their names, metadata, and all field definitions. The document is self-contained: a reader
-does not need access to the originating NetBox instance to understand or validate it.
+A schema document is a mapping that fully describes one or more Custom Object Types — their
+names, metadata, and all field definitions. The document is self-contained: a reader does not
+need access to the originating NetBox instance to understand or validate it.
 
-```json
-{
-  "schema_version": "1",
-  "types": [
-    {
-      "name": "circuit",
-      "slug": "circuit",
-      "verbose_name": "Circuit",
-      "verbose_name_plural": "Circuits",
-      "description": "WAN circuit inventory",
-      "fields": [
-        { "id": 1, "name": "carrier", "type": "text", "required": true },
-        { "id": 2, "name": "bandwidth_mbps", "type": "integer", "validation_minimum": 0 }
-      ],
-      "removed_fields": []
-    }
-  ]
-}
+```yaml
+schema_version: "1"
+types:
+  - name: circuit
+    slug: circuit
+    verbose_name: Circuit
+    verbose_name_plural: Circuits
+    description: WAN circuit inventory
+    fields:
+      - { id: 1, name: carrier, type: text, required: true }
+      - { id: 2, name: bandwidth_mbps, type: integer, validation_minimum: 0 }
+    removed_fields: []
 ```
 
 ### Schema IDs
@@ -58,10 +53,9 @@ When a field is removed from a COT, the comparator needs to distinguish "this fi
 intentionally deleted" from "this field is not in the schema yet." Tombstone entries in
 `removed_fields` provide that signal:
 
-```json
-"removed_fields": [
-  { "id": 4, "name": "legacy_carrier_code", "type": "text", "removed_in": "2.0.0" }
-]
+```yaml
+removed_fields:
+  - { id: 4, name: legacy_carrier_code, type: text, removed_in: "2.0.0" }
 ```
 
 A tombstone records the field's last-known `id`, `name`, `type`, and the version string when
@@ -139,9 +133,12 @@ The pattern rejects:
 
 ## Schema Document Format
 
-The JSON Schema validator for schema documents lives at
-`netbox_custom_objects/schema/cot_schema_v1.json` and is used by the API endpoints to
-validate incoming documents before any DB access.
+Schema documents may be written in YAML (recommended) or JSON — both parse to the same
+structure described below, and the [preview](#previewing-a-schema-api) and
+[apply](#applying-a-schema-api) endpoints accept either. The validator for this structure lives
+at `netbox_custom_objects/schema/cot_schema_v1.json`, a [JSON Schema](https://json-schema.org/)
+definition — it validates the parsed document itself, independent of whether it arrived as
+YAML or JSON, and is used by the API endpoints before any DB access.
 
 ### Top-Level Structure
 
@@ -219,13 +216,11 @@ Attributes that match their defaults are omitted from exported documents to keep
 
 ### Tombstone Record
 
-```json
-{
-  "id": 4,
-  "name": "legacy_carrier_code",
-  "type": "text",
-  "removed_in": "2.0.0"
-}
+```yaml
+id: 4
+name: legacy_carrier_code
+type: text
+removed_in: "2.0.0"
 ```
 
 `removed_in` is optional but recommended. The `id` value must match the original field's
@@ -261,11 +256,11 @@ Then inside the shell, export specific COTs by slug:
 ```python
 from netbox_custom_objects.schema.exporter import export_cots
 from netbox_custom_objects.models import CustomObjectType
-import json
+import yaml
 
 cots = CustomObjectType.objects.filter(slug__in=["circuit", "device-profile"])
 document = export_cots(cots)
-print(json.dumps(document, indent=2))
+print(yaml.safe_dump(document, sort_keys=False))
 ```
 
 Or export **all** COTs at once:
@@ -273,11 +268,11 @@ Or export **all** COTs at once:
 ```python
 from netbox_custom_objects.schema.exporter import export_cots
 from netbox_custom_objects.models import CustomObjectType
-import json
+import yaml
 
 cots = CustomObjectType.objects.all()
 document = export_cots(cots)
-print(json.dumps(document, indent=2))
+print(yaml.safe_dump(document, sort_keys=False))
 ```
 
 To run a script file non-interactively, pipe it in:
@@ -306,11 +301,11 @@ django.setup()  # must be called before any model or app imports
 
 from netbox_custom_objects.schema.exporter import export_cots
 from netbox_custom_objects.models import CustomObjectType
-import json
+import yaml
 
 cots = CustomObjectType.objects.filter(slug__in=["circuit", "device-profile"])
 document = export_cots(cots)
-print(json.dumps(document, indent=2))
+print(yaml.safe_dump(document, sort_keys=False))
 ```
 
 !!! warning "Missing `django.setup()` causes `AppRegistryNotReady`"
@@ -332,62 +327,49 @@ document wrapper, use `export_cot(cot)`.
 `POST /api/plugins/custom-objects/schema/preview/`
 
 Submit a schema document and receive a structured diff showing what would change, **without
-modifying the database**:
+modifying the database**. The request body and response may be YAML or JSON — YAML is
+recommended and is what's shown here; send `Content-Type: application/json` (and, if you want
+a JSON response, `Accept: application/json`) to use JSON instead. A request with no `Accept`
+header gets a JSON response.
 
 ```http
 POST /api/plugins/custom-objects/schema/preview/
-Content-Type: application/json
+Content-Type: application/yaml
+Accept: application/yaml
 Authorization: Token <token>
 
-{
-  "schema_version": "1",
-  "types": [
-    {
-      "name": "circuit",
-      "slug": "circuit",
-      "verbose_name_plural": "Circuits",
-      "fields": [
-        { "id": 1, "name": "carrier", "type": "text", "required": true },
-        { "id": 3, "name": "contract_ref", "type": "text" }
-      ],
-      "removed_fields": [
-        { "id": 2, "name": "bandwidth_mbps", "type": "integer", "removed_in": "2.0.0" }
-      ]
-    }
-  ]
-}
+schema_version: "1"
+types:
+  - name: circuit
+    slug: circuit
+    verbose_name_plural: Circuits
+    fields:
+      - { id: 1, name: carrier, type: text, required: true }
+      - { id: 3, name: contract_ref, type: text }
+    removed_fields:
+      - { id: 2, name: bandwidth_mbps, type: integer, removed_in: "2.0.0" }
 ```
 
 Response `200`:
 
-```json
-{
-  "diffs": [
-    {
-      "slug": "circuit",
-      "name": "circuit",
-      "is_new": false,
-      "has_changes": true,
-      "has_destructive_changes": true,
-      "cot_changes": {},
-      "field_changes": [
-        {
-          "op": "add",
-          "schema_id": 3,
-          "db_name": null,
-          "schema_def": { "id": 3, "name": "contract_ref", "type": "text" }
-        },
-        {
-          "op": "remove",
-          "schema_id": 2,
-          "db_name": "bandwidth_mbps",
-          "schema_def": { "id": 2, "name": "bandwidth_mbps", "type": "integer", "removed_in": "2.0.0" }
-        }
-      ],
-      "warnings": []
-    }
-  ]
-}
+```yaml
+diffs:
+  - slug: circuit
+    name: circuit
+    is_new: false
+    has_changes: true
+    has_destructive_changes: true
+    cot_changes: {}
+    field_changes:
+      - op: add
+        schema_id: 3
+        db_name: null
+        schema_def: { id: 3, name: contract_ref, type: text }
+      - op: remove
+        schema_id: 2
+        db_name: bandwidth_mbps
+        schema_def: { id: 2, name: bandwidth_mbps, type: integer, removed_in: "2.0.0" }
+    warnings: []
 ```
 
 `has_destructive_changes: true` indicates that applying this schema would drop at least one
@@ -399,13 +381,12 @@ column. The preview endpoint never returns `409` — it is safe to call at any t
 
 ```http
 POST /api/plugins/custom-objects/schema/apply/
-Content-Type: application/json
+Content-Type: application/yaml
+Accept: application/yaml
 Authorization: Token <token>
 
-{
-  "allow_destructive": false,
-  "schema": { ... }
-}
+allow_destructive: false
+schema: { ... }
 ```
 
 - **`allow_destructive`** (default `false`): must be `true` for the apply to proceed when the
@@ -421,37 +402,31 @@ Authorization: Token <token>
 
 Response `200`:
 
-```json
-{
-  "applied": true,
-  "diffs": [ ... ]
-}
+```yaml
+applied: true
+diffs: [ ... ]
 ```
 
 Response `409 Conflict`:
 
-```json
-{
-  "error": "destructive_changes",
-  "detail": "Schema contains destructive field removals for COT(s): circuit.",
-  "destructive_slugs": ["circuit"]
-}
+```yaml
+error: destructive_changes
+detail: "Schema contains destructive field removals for COT(s): circuit."
+destructive_slugs: [circuit]
 ```
 
 Response `400 Bad Request` (invalid schema, unresolvable reference, or circular COT dependency):
 
-```json
-{
-  "error": "unresolvable_reference",
-  "detail": "..."
-}
+```yaml
+error: unresolvable_reference
+detail: "..."
 ```
 
 ### Typical End-to-End Workflow
 
 1. **Define and iterate** on COT schemas in a development environment using the NetBox UI or
    API.
-2. **Export** the schemas to a JSON file and commit to version control.
+2. **Export** the schemas to a YAML file and commit to version control.
 3. **Review** the diff in the PR — because IDs are stable integers and defaults are elided,
    the diff is human-readable.
 4. **Preview** the schema on a staging instance using the preview endpoint to confirm the diff
@@ -465,15 +440,13 @@ Response `400 Bad Request` (invalid schema, unresolvable reference, or circular 
 
 Fields can be marked deprecated without being removed, allowing a grace period before deletion:
 
-```json
-{
-  "id": 5,
-  "name": "old_carrier_name",
-  "type": "text",
-  "deprecated": true,
-  "deprecated_since": "2.1.0",
-  "scheduled_removal": "3.0.0"
-}
+```yaml
+id: 5
+name: old_carrier_name
+type: text
+deprecated: true
+deprecated_since: "2.1.0"
+scheduled_removal: "3.0.0"
 ```
 
 - `deprecated: true` marks the field as read-only in the UI; no new values can be entered.

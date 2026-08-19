@@ -10,8 +10,10 @@ Covers:
 - Unresolvable FK reference error (400)
 - Missing / malformed 'schema' key (400)
 - Authentication enforced (401 for unauthenticated requests)
+- YAML request/response support (issue #665)
 """
 
+import yaml
 
 from django.urls import reverse
 from django.test import TransactionTestCase
@@ -388,3 +390,78 @@ class SchemaApplyTestCase(_SchemaAPIBase):
         )
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("allow_destructive", resp.data)
+
+
+# ---------------------------------------------------------------------------
+# YAML request/response support (issue #665)
+# ---------------------------------------------------------------------------
+
+class SchemaYAMLFormatTestCase(_SchemaAPIBase):
+    """POST /schema/preview/ and /schema/apply/ also accept and can return YAML."""
+
+    def setUp(self):
+        super().setUp()
+        self.cot = self.create_custom_object_type(name='yamlcot', slug='yaml-cot')
+        self.create_custom_object_type_field(self.cot, name='alpha', type='text')
+        perm = ObjectPermission(name='schema_yaml_cot_perm', actions=['add', 'change'])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
+
+    def test_preview_accepts_yaml_request_body(self):
+        type_def = export_cot(self.cot)
+        body = yaml.safe_dump({"schema_version": "1", "types": [type_def]})
+        resp = self.client.post(self.preview_url, data=body, content_type="application/yaml")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertIn("diffs", resp.data)
+
+    def test_preview_response_defaults_to_json_content_type(self):
+        type_def = export_cot(self.cot)
+        resp = self.client.post(
+            self.preview_url,
+            data={"schema_version": "1", "types": [type_def]},
+            format="json",
+        )
+        self.assertIn("application/json", resp["Content-Type"])
+
+    def test_preview_returns_yaml_when_accepted(self):
+        type_def = export_cot(self.cot)
+        resp = self.client.post(
+            self.preview_url,
+            data={"schema_version": "1", "types": [type_def]},
+            format="json",
+            HTTP_ACCEPT="application/yaml",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertIn("application/yaml", resp["Content-Type"])
+        parsed = yaml.safe_load(resp.content)
+        self.assertIn("diffs", parsed)
+
+    def test_preview_malformed_yaml_body_returns_400(self):
+        resp = self.client.post(self.preview_url, data="types: [\n", content_type="application/yaml")
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_apply_accepts_yaml_request_body_and_creates_cot(self):
+        body = yaml.safe_dump({
+            "allow_destructive": False,
+            "schema": {"schema_version": "1", "types": [{"name": "yamlapplied", "slug": "yaml-applied"}]},
+        })
+        resp = self.client.post(self.apply_url, data=body, content_type="application/yaml")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertTrue(CustomObjectType.objects.filter(slug="yaml-applied").exists())
+
+    def test_apply_returns_yaml_when_accepted(self):
+        body = yaml.safe_dump({
+            "allow_destructive": False,
+            "schema": {"schema_version": "1", "types": [{"name": "yamlapplied2", "slug": "yaml-applied-2"}]},
+        })
+        resp = self.client.post(
+            self.apply_url,
+            data=body,
+            content_type="application/yaml",
+            HTTP_ACCEPT="application/yaml",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertIn("application/yaml", resp["Content-Type"])
+        parsed = yaml.safe_load(resp.content)
+        self.assertTrue(parsed["applied"])
