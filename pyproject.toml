@@ -27,6 +27,7 @@ dependencies = [
     "Django",
     "jsonschema",
     "packaging",
+    "PyYAML",
 ]
 
 [project.optional-dependencies]
