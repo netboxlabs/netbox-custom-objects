@@ -12,5 +12,5 @@ class YAMLRenderer(BaseRenderer):
 
     def render(self, data, accepted_media_type=None, renderer_context=None):
         if data is None:
-            return ''
-        return yaml.safe_dump(data, sort_keys=False, default_flow_style=False)
+            return b''
+        return yaml.safe_dump(data, sort_keys=False, default_flow_style=False).encode(self.charset)

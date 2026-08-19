@@ -49,21 +49,27 @@ class YAMLParserTestCase(SimpleTestCase):
 
 class YAMLRendererTestCase(SimpleTestCase):
 
-    def test_renders_dict_to_yaml(self):
+    def test_renders_dict_to_yaml_bytes(self):
+        # DRF renderer convention: render() returns bytes, not str (matches
+        # JSONRenderer; DRF's Response.render() would otherwise have to
+        # re-encode a str result itself).
         output = YAMLRenderer().render({"diffs": [{"slug": "circuit"}]})
+        self.assertIsInstance(output, bytes)
         self.assertEqual(
             output,
-            "diffs:\n- slug: circuit\n",
+            b"diffs:\n- slug: circuit\n",
         )
 
-    def test_renders_none_to_empty_string(self):
-        self.assertEqual(YAMLRenderer().render(None), '')
+    def test_renders_none_to_empty_bytes(self):
+        output = YAMLRenderer().render(None)
+        self.assertIsInstance(output, bytes)
+        self.assertEqual(output, b'')
 
     def test_round_trips_through_parser(self):
         import yaml
         original = {"schema_version": "1", "types": [{"name": "circuit", "slug": "circuit"}]}
         rendered = YAMLRenderer().render(original)
-        parsed = YAMLParser().parse(io.BytesIO(rendered.encode("utf-8")))
+        parsed = YAMLParser().parse(io.BytesIO(rendered))
         self.assertEqual(parsed, original)
         # Sanity-check against a plain yaml.safe_load too.
         self.assertEqual(yaml.safe_load(rendered), original)

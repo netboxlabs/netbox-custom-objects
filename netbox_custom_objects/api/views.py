@@ -356,6 +356,9 @@ class SchemaPreviewView(APIView):
     permission_classes = [IsAuthenticatedOrLoginNotRequired]
 
     def post(self, request, *args, **kwargs):
+        if not isinstance(request.data, dict):
+            raise ValidationError({"non_field_errors": [_("Request body must be a JSON/YAML object.")]})
+
         schema_doc = request.data
         _validate_schema_doc(schema_doc)
         diffs = diff_document(schema_doc)

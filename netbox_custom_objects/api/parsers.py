@@ -40,7 +40,9 @@ class YAMLParser(BaseParser):
         except yaml.YAMLError as exc:
             raise ParseError(f"YAML parse error: {exc}")
         if data is None:
-            # Matches JSONParser, which raises ParseError (400) for an empty
-            # body rather than silently treating it as an empty document.
-            raise ParseError("YAML parse error: request body is empty.")
+            # Covers both an empty body and an explicit YAML `null` document --
+            # yaml.load() can't tell them apart, and neither is ever a valid
+            # schema/apply body (both endpoints require a mapping). Matches
+            # JSONParser, which also raises ParseError (400) for an empty body.
+            raise ParseError("YAML parse error: request body must be a mapping (object), not null or empty.")
         return data
