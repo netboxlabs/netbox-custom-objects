@@ -282,17 +282,27 @@ class CustomObjectsPluginConfig(PluginConfig):
     graphql_schema = "graphql.schema.schema"
 
     @staticmethod
-    def should_skip_dynamic_model_creation():
+    def should_skip_dynamic_model_creation(include_test_skip=True):
         """
         Determine if dynamic model creation should be skipped.
 
         Returns True if dynamic models should not be created/loaded due to:
         - Currently running migrations
-        - Running tests
+        - Running tests (if include_test_skip)
         - All migrations not yet applied
         - Running collectstatic
 
         Returns False if it's safe to proceed with dynamic model creation.
+
+        :param include_test_skip: Also skip when "test" is in sys.argv. The
+            plugin's own startup-time entry points (ready(), PluginConfig.get_model/
+            get_models) never need to run during tests -- test code generates COT
+            models directly via CustomObjectType.get_model() instead. That method
+            also consults this check (to avoid #637: a dangling cross-COT FK
+            reference when get_model() runs outside ready()'s two-pass resolution,
+            e.g. a third-party plugin importing it at migrate time), but must pass
+            False here since it's the one entry point tests DO rely on for a fully
+            hydrated model.
         """
         global _migrations_checked, _checking_migrations
 
@@ -300,17 +310,17 @@ class CustomObjectsPluginConfig(PluginConfig):
         if _is_migrating.get():
             return True
 
-        skip_commands = (
+        skip_commands = [
             # Running migrations should skip.
             "makemigrations",
             "migrate",
 
             # The database isn't accessible during collect static so should skip.
             "collectstatic",
-
+        ]
+        if include_test_skip:
             # Skip during tests.
-            "test",
-        )
+            skip_commands.append("test")
 
         if any(cmd in sys.argv for cmd in skip_commands):
             return True

@@ -1771,6 +1771,150 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
         finally:
             nco._migrations_checked = original_checked
 
+    def test_should_skip_excludes_test_when_requested(self):
+        """
+        include_test_skip=False must not treat 'test' in sys.argv as a skip
+        reason -- CustomObjectType.get_model() relies on this so that ordinary
+        test-suite runs (which always have 'test' in sys.argv) still generate
+        fully-hydrated models, while still catching a real migrate/makemigrations/
+        collectstatic run.  include_test_skip defaults to True for every other
+        caller (ready(), PluginConfig.get_model/get_models), which never need to
+        run during tests at all.
+        """
+        original_argv = sys.argv[:]
+        original_checked = nco._migrations_checked
+        try:
+            sys.argv = ['manage.py', 'test']
+            nco._migrations_checked = None
+            self.assertTrue(self.config.should_skip_dynamic_model_creation())
+            nco._migrations_checked = None
+            self.assertFalse(self.config.should_skip_dynamic_model_creation(include_test_skip=False))
+
+            sys.argv = ['manage.py', 'migrate']
+            nco._migrations_checked = None
+            self.assertTrue(self.config.should_skip_dynamic_model_creation(include_test_skip=False))
+        finally:
+            sys.argv = original_argv
+            nco._migrations_checked = original_checked
+
+
+class CrossCOTGetModelOutsideReadyTestCase(CustomObjectsTestCase, TestCase):
+    """
+    Regression tests for CustomObjectType.get_model() called directly (bypassing
+    ready()'s two-pass cross-COT FK resolution), reproducing issue #637: a
+    third-party plugin's module-level `CustomObjectType.objects.get(...).get_model()`
+    call fires during `manage.py migrate` (before ready()'s dynamic-model loop has
+    run, since should_skip_dynamic_model_creation() short-circuits it). Only the
+    requested COT gets registered; a cross-COT Object-type field's LazyForeignKey
+    target is left as an unresolved string reference, which Django's system checks
+    flag as fields.E300/E307.
+
+    See: https://github.com/netboxlabs/netbox-custom-objects/issues/637
+    """
+
+    def _make_cross_cot_pair(self, suffix):
+        """
+        Build a fresh target/source COT pair with a cross-COT Object field,
+        named uniquely per call so registry mutations in one test method (each
+        gets its own pair) can't bleed into another -- app registry state,
+        unlike DB rows, isn't rolled back between test methods.
+        """
+        target_type = CustomObjectType.objects.create(
+            name=f"ForwarderProfile637{suffix}", slug=f"forwarder-profile-637-{suffix}",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=target_type, name="name", label="Name",
+            type="text", primary=True,
+        )
+        source_type = CustomObjectType.objects.create(
+            name=f"DnsZone637{suffix}", slug=f"dns-zone-637-{suffix}",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=source_type, name="name", label="Name",
+            type="text", primary=True,
+        )
+        target_ct = ObjectType.objects.get_for_model(target_type.get_model())
+        CustomObjectTypeField.objects.create(
+            custom_object_type=source_type, name="forwarder_profile",
+            label="Forwarder Profile", type="object", related_object_type=target_ct,
+        )
+        return target_type, source_type
+
+    def _unregister(self, *cots):
+        """Simulate a fresh process where none of the given COT models are registered yet."""
+        for cot in cots:
+            model_name = cot.get_table_model_name(cot.id).lower()
+            django_apps.all_models.get(APP_LABEL, {}).pop(model_name, None)
+            CustomObjectType.clear_model_cache(cot.id)
+
+    def test_get_model_omits_cross_cot_field_when_should_skip(self):
+        """
+        get_model() must omit an unregistered cross-COT Object field (rather than
+        leaving a dangling LazyForeignKey) when should_skip_dynamic_model_creation()
+        is True, and must not cache the resulting degraded model.
+        """
+        target_type, source_type = self._make_cross_cot_pair("a")
+        self._unregister(target_type, source_type)
+        config = django_apps.get_app_config(APP_LABEL)
+
+        with patch.object(config.__class__, 'should_skip_dynamic_model_creation', return_value=True):
+            model = source_type.get_model()
+
+        with self.assertRaises(Exception):
+            model._meta.get_field('forwarder_profile')
+        self.assertFalse(CustomObjectType.is_model_cached(source_type.id))
+
+    def test_get_model_system_checks_pass_after_migrate_time_call(self):
+        """
+        Reproduces the exact reported symptom: Django's system checks must not
+        raise fields.E300/E307 for the cross-COT field after a get_model() call
+        made while should_skip_dynamic_model_creation() is True.
+        """
+        from django.core.checks.registry import registry as checks_registry
+
+        target_type, source_type = self._make_cross_cot_pair("b")
+        self._unregister(target_type, source_type)
+        config = django_apps.get_app_config(APP_LABEL)
+
+        with patch.object(config.__class__, 'should_skip_dynamic_model_creation', return_value=True):
+            source_type.get_model()
+
+        errors = checks_registry.run_checks()
+        relevant = [e for e in errors if 'forwarder_profile' in str(e)]
+        self.assertEqual(relevant, [])
+
+    def test_get_model_regenerates_in_full_on_next_normal_call(self):
+        """
+        Because the degraded model is never cached, a subsequent normal-context
+        get_model() call must fully re-resolve the cross-COT field once its target
+        is registered again -- mirroring a real restart, where a fresh worker
+        process's ready() registers every COT (via its own two-pass loop) rather
+        than the single COT this test's "migrate" call touched.
+        """
+        target_type, source_type = self._make_cross_cot_pair("c")
+        self._unregister(target_type, source_type)
+        config = django_apps.get_app_config(APP_LABEL)
+
+        with patch.object(config.__class__, 'should_skip_dynamic_model_creation', return_value=True):
+            source_type.get_model()
+
+        target_type.get_model()  # simulates ready()'s Pass 1 registering every COT
+        full_model = source_type.get_model()
+        field = full_model._meta.get_field('forwarder_profile')
+        self.assertFalse(isinstance(field.remote_field.model, str))
+
+    def test_get_model_unaffected_during_ordinary_test_run(self):
+        """
+        Sanity check that the fix's own guard (include_test_skip=False) keeps
+        ordinary test-suite get_model() calls fully hydrated -- 'test' is in
+        sys.argv for this entire process, so this would fail if get_model() used
+        the default include_test_skip=True.
+        """
+        target_type, source_type = self._make_cross_cot_pair("d")
+        model = source_type.get_model(no_cache=True)
+        field = model._meta.get_field('forwarder_profile')
+        self.assertFalse(isinstance(field.remote_field.model, str))
+
 
 class CrossCOTStubSearchIndexRegressionTestCase(CustomObjectsTestCase, TestCase):
     """Regression tests for the search-index crash on stub models.
