@@ -1771,15 +1771,15 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
         finally:
             nco._migrations_checked = original_checked
 
-    def test_should_skip_excludes_test_when_requested(self):
+    def test_dynamic_model_creation_unsafe_excludes_test(self):
         """
-        include_test_skip=False must not treat 'test' in sys.argv as a skip
-        reason -- CustomObjectType.get_model() relies on this so that ordinary
-        test-suite runs (which always have 'test' in sys.argv) still generate
-        fully-hydrated models, while still catching a real migrate/makemigrations/
-        collectstatic run.  include_test_skip defaults to True for every other
-        caller (ready(), PluginConfig.get_model/get_models), which never need to
-        run during tests at all.
+        _dynamic_model_creation_unsafe() -- the narrower check CustomObjectType.
+        get_model() uses -- must not treat 'test' in sys.argv as unsafe, so
+        ordinary test-suite runs (which always have 'test' in sys.argv) still
+        generate fully-hydrated models. should_skip_dynamic_model_creation()
+        itself must still treat 'test' as a skip reason, since ready()/
+        PluginConfig.get_model()/get_models() never need to run their
+        dynamic-model logic during a test process at all.
         """
         original_argv = sys.argv[:]
         original_checked = nco._migrations_checked
@@ -1788,11 +1788,11 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
             nco._migrations_checked = None
             self.assertTrue(self.config.should_skip_dynamic_model_creation())
             nco._migrations_checked = None
-            self.assertFalse(self.config.should_skip_dynamic_model_creation(include_test_skip=False))
+            self.assertFalse(self.config._dynamic_model_creation_unsafe())
 
             sys.argv = ['manage.py', 'migrate']
             nco._migrations_checked = None
-            self.assertTrue(self.config.should_skip_dynamic_model_creation(include_test_skip=False))
+            self.assertTrue(self.config._dynamic_model_creation_unsafe())
         finally:
             sys.argv = original_argv
             nco._migrations_checked = original_checked
@@ -1804,7 +1804,7 @@ class CrossCOTGetModelOutsideReadyTestCase(CustomObjectsTestCase, TestCase):
     ready()'s two-pass cross-COT FK resolution), reproducing issue #637: a
     third-party plugin's module-level `CustomObjectType.objects.get(...).get_model()`
     call fires during `manage.py migrate` (before ready()'s dynamic-model loop has
-    run, since should_skip_dynamic_model_creation() short-circuits it). Only the
+    run, since _dynamic_model_creation_unsafe() short-circuits it). Only the
     requested COT gets registered; a cross-COT Object-type field's LazyForeignKey
     target is left as an unresolved string reference, which Django's system checks
     flag as fields.E300/E307.
@@ -1847,17 +1847,17 @@ class CrossCOTGetModelOutsideReadyTestCase(CustomObjectsTestCase, TestCase):
             django_apps.all_models.get(APP_LABEL, {}).pop(model_name, None)
             CustomObjectType.clear_model_cache(cot.id)
 
-    def test_get_model_omits_cross_cot_field_when_should_skip(self):
+    def test_get_model_omits_cross_cot_field_when_unsafe(self):
         """
         get_model() must omit an unregistered cross-COT Object field (rather than
-        leaving a dangling LazyForeignKey) when should_skip_dynamic_model_creation()
+        leaving a dangling LazyForeignKey) when _dynamic_model_creation_unsafe()
         is True, and must not cache the resulting degraded model.
         """
         target_type, source_type = self._make_cross_cot_pair("a")
         self._unregister(target_type, source_type)
         config = django_apps.get_app_config(APP_LABEL)
 
-        with patch.object(config.__class__, 'should_skip_dynamic_model_creation', return_value=True):
+        with patch.object(config.__class__, '_dynamic_model_creation_unsafe', return_value=True):
             model = source_type.get_model()
 
         with self.assertRaises(Exception):
@@ -1868,7 +1868,7 @@ class CrossCOTGetModelOutsideReadyTestCase(CustomObjectsTestCase, TestCase):
         """
         Reproduces the exact reported symptom: Django's system checks must not
         raise fields.E300/E307 for the cross-COT field after a get_model() call
-        made while should_skip_dynamic_model_creation() is True.
+        made while _dynamic_model_creation_unsafe() is True.
         """
         from django.core.checks.registry import registry as checks_registry
 
@@ -1876,7 +1876,7 @@ class CrossCOTGetModelOutsideReadyTestCase(CustomObjectsTestCase, TestCase):
         self._unregister(target_type, source_type)
         config = django_apps.get_app_config(APP_LABEL)
 
-        with patch.object(config.__class__, 'should_skip_dynamic_model_creation', return_value=True):
+        with patch.object(config.__class__, '_dynamic_model_creation_unsafe', return_value=True):
             source_type.get_model()
 
         errors = checks_registry.run_checks()
@@ -1895,7 +1895,7 @@ class CrossCOTGetModelOutsideReadyTestCase(CustomObjectsTestCase, TestCase):
         self._unregister(target_type, source_type)
         config = django_apps.get_app_config(APP_LABEL)
 
-        with patch.object(config.__class__, 'should_skip_dynamic_model_creation', return_value=True):
+        with patch.object(config.__class__, '_dynamic_model_creation_unsafe', return_value=True):
             source_type.get_model()
 
         target_type.get_model()  # simulates ready()'s Pass 1 registering every COT
@@ -1905,10 +1905,11 @@ class CrossCOTGetModelOutsideReadyTestCase(CustomObjectsTestCase, TestCase):
 
     def test_get_model_unaffected_during_ordinary_test_run(self):
         """
-        Sanity check that the fix's own guard (include_test_skip=False) keeps
-        ordinary test-suite get_model() calls fully hydrated -- 'test' is in
+        Sanity check that get_model()'s own narrower check (which excludes "test")
+        keeps ordinary test-suite get_model() calls fully hydrated -- 'test' is in
         sys.argv for this entire process, so this would fail if get_model() used
-        the default include_test_skip=True.
+        should_skip_dynamic_model_creation() (which includes "test") instead of
+        _dynamic_model_creation_unsafe().
         """
         target_type, source_type = self._make_cross_cot_pair("d")
         model = source_type.get_model(no_cache=True)

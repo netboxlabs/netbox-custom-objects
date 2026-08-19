@@ -282,27 +282,20 @@ class CustomObjectsPluginConfig(PluginConfig):
     graphql_schema = "graphql.schema.schema"
 
     @staticmethod
-    def should_skip_dynamic_model_creation(include_test_skip=True):
+    def _dynamic_model_creation_unsafe():
         """
-        Determine if dynamic model creation should be skipped.
+        True if the DB can't safely be queried yet to generate a dynamic COT model:
+        mid-migration, running makemigrations/migrate/collectstatic (schema may be
+        incomplete or absent), or this app's own migrations aren't fully applied.
 
-        Returns True if dynamic models should not be created/loaded due to:
-        - Currently running migrations
-        - Running tests (if include_test_skip)
-        - All migrations not yet applied
-        - Running collectstatic
-
-        Returns False if it's safe to proceed with dynamic model creation.
-
-        :param include_test_skip: Also skip when "test" is in sys.argv. The
-            plugin's own startup-time entry points (ready(), PluginConfig.get_model/
-            get_models) never need to run during tests -- test code generates COT
-            models directly via CustomObjectType.get_model() instead. That method
-            also consults this check (to avoid #637: a dangling cross-COT FK
-            reference when get_model() runs outside ready()'s two-pass resolution,
-            e.g. a third-party plugin importing it at migrate time), but must pass
-            False here since it's the one entry point tests DO rely on for a fully
-            hydrated model.
+        Deliberately excludes "test" -- unlike should_skip_dynamic_model_creation()
+        below, this is the check CustomObjectType.get_model() itself uses (#637: a
+        bare get_model() call outside ready()'s two-pass cross-COT FK resolution,
+        e.g. a third-party plugin importing it at migrate time, leaves a dangling
+        LazyForeignKey that Django's system checks flag). By the time get_model()
+        runs on an already-fetched COT instance inside a test method, the test
+        database is fully migrated and safe to query -- and test code relies on
+        get_model() returning a fully-hydrated model, not a degraded one.
         """
         global _migrations_checked, _checking_migrations
 
@@ -310,17 +303,14 @@ class CustomObjectsPluginConfig(PluginConfig):
         if _is_migrating.get():
             return True
 
-        skip_commands = [
+        skip_commands = (
             # Running migrations should skip.
             "makemigrations",
             "migrate",
 
             # The database isn't accessible during collect static so should skip.
             "collectstatic",
-        ]
-        if include_test_skip:
-            # Skip during tests.
-            skip_commands.append("test")
+        )
 
         if any(cmd in sys.argv for cmd in skip_commands):
             return True
@@ -372,6 +362,28 @@ class CustomObjectsPluginConfig(PluginConfig):
         finally:
             # Always clear the recursion flag
             _checking_migrations = False
+
+    @staticmethod
+    def should_skip_dynamic_model_creation():
+        """
+        Determine if dynamic model creation should be skipped.
+
+        Returns True if dynamic models should not be created/loaded due to:
+        - Currently running migrations
+        - Running tests
+        - All migrations not yet applied
+        - Running collectstatic
+
+        Returns False if it's safe to proceed with dynamic model creation.
+
+        Used by ready(), PluginConfig.get_model()/get_models(), and navigation --
+        none of these need to run during a test process, since test code drives
+        dynamic model generation directly via CustomObjectType.get_model() instead.
+        That method has its own narrower check; see _dynamic_model_creation_unsafe().
+        """
+        if "test" in sys.argv:
+            return True
+        return CustomObjectsPluginConfig._dynamic_model_creation_unsafe()
 
     def _call_super_ready_once(self):
         """Call ``super().ready()`` once; subsequent calls are no-ops.

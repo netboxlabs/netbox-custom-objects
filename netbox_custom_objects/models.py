@@ -1676,7 +1676,7 @@ class CustomObjectType(NetBoxModel):
         # Falling back to skip_object_fields avoids ever creating that dangling
         # reference; the resulting model is never cached (see the cache-store
         # guard below), so a normal request after startup regenerates it in full.
-        if apps.get_app_config(APP_LABEL).should_skip_dynamic_model_creation(include_test_skip=False):
+        if apps.get_app_config(APP_LABEL)._dynamic_model_creation_unsafe():
             skip_object_fields = True
 
         branch_id = self._active_branch_id()
