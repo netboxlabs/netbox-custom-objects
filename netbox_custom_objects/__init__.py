@@ -284,18 +284,11 @@ class CustomObjectsPluginConfig(PluginConfig):
     @staticmethod
     def _dynamic_model_creation_unsafe():
         """
-        True if the DB can't safely be queried yet to generate a dynamic COT model:
-        mid-migration, running makemigrations/migrate/collectstatic (schema may be
-        incomplete or absent), or this app's own migrations aren't fully applied.
-
-        Deliberately excludes "test" -- unlike should_skip_dynamic_model_creation()
-        below, this is the check CustomObjectType.get_model() itself uses (#637: a
-        bare get_model() call outside ready()'s two-pass cross-COT FK resolution,
-        e.g. a third-party plugin importing it at migrate time, leaves a dangling
-        LazyForeignKey that Django's system checks flag). By the time get_model()
-        runs on an already-fetched COT instance inside a test method, the test
-        database is fully migrated and safe to query -- and test code relies on
-        get_model() returning a fully-hydrated model, not a degraded one.
+        True if the DB can't safely be queried to generate a dynamic COT model:
+        mid-migration, running makemigrations/migrate/collectstatic, or this
+        app's own migrations aren't fully applied. Unlike
+        should_skip_dynamic_model_creation() below, deliberately excludes "test" --
+        this is the narrower check CustomObjectType.get_model() itself uses (#637).
         """
         global _migrations_checked, _checking_migrations
 
@@ -375,11 +368,6 @@ class CustomObjectsPluginConfig(PluginConfig):
         - Running collectstatic
 
         Returns False if it's safe to proceed with dynamic model creation.
-
-        Used by ready(), PluginConfig.get_model()/get_models(), and navigation --
-        none of these need to run during a test process, since test code drives
-        dynamic model generation directly via CustomObjectType.get_model() instead.
-        That method has its own narrower check; see _dynamic_model_creation_unsafe().
         """
         if "test" in sys.argv:
             return True

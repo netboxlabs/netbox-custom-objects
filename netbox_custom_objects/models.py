@@ -1667,15 +1667,9 @@ class CustomObjectType(NetBoxModel):
         :return: The generated model.
         :rtype: Model
         """
-        # Every other dynamic-model entry point (PluginConfig.get_model/get_models,
-        # ready()) already guards against generating models before migrations have
-        # run. This is the one path that didn't: a module-level get_model() call in
-        # a third-party plugin (or anything else bypassing ready()'s two-pass FK
-        # resolution) leaves a cross-COT Object/MultiObject field's target
-        # unregistered, which Django's system checks flag as fields.E300/E307 (#637).
-        # Falling back to skip_object_fields avoids ever creating that dangling
-        # reference; the resulting model is never cached (see the cache-store
-        # guard below), so a normal request after startup regenerates it in full.
+        # Avoid a dangling cross-COT FK reference when get_model() runs outside
+        # ready()'s two-pass resolution, e.g. a plugin importing it at migrate
+        # time (#637). Never cached (see below), so a later call regenerates in full.
         if apps.get_app_config(APP_LABEL)._dynamic_model_creation_unsafe():
             skip_object_fields = True
 
