@@ -20,7 +20,7 @@ import netbox_custom_objects as nco
 from core.choices import JobStatusChoices
 from core.models import ObjectType
 from dcim.models import Site
-from extras.models import CachedValue
+from extras.models import CachedValue, Tag, TaggedItem
 from netbox.search import registry
 from netbox.search.backends import get_backend
 from netbox_custom_objects.api.serializers import get_serializer_class
@@ -2649,3 +2649,68 @@ class DisplayExpressionFormValidationTestCase(CustomObjectsTestCase, TestCase):
         form = self._form('{% if make %}{{ make }}')  # missing {% endif %}
         form.is_valid()
         self.assertIn('display_expression', form.errors)
+
+
+class PhantomTaggedObjectsTestCase(CustomObjectsTestCase, TestCase):
+    """Regression tests for issue #629 (Phantom Tagged Objects): deleting a
+    tagged custom object left its TaggedItem row behind."""
+
+    def setUp(self):
+        super().setUp()
+        self.cot = self.create_custom_object_type(name="SslProfile", slug="ssl-profiles")
+        self.create_custom_object_type_field(
+            self.cot, name="name", label="Name", type="text", primary=True, required=True,
+        )
+        self.tag = Tag.objects.create(name="unbound", slug="unbound")
+
+    def _tagged_item_count(self):
+        ct = ContentType.objects.get_for_model(self.cot.get_model())
+        return TaggedItem.objects.filter(tag=self.tag, content_type=ct).count()
+
+    def test_generated_model_has_tagged_items_generic_relation(self):
+        model = self.cot.get_model()
+        private_field_names = [f.name for f in model._meta.private_fields]
+        self.assertIn('tagged_items', private_field_names)
+
+    def test_direct_delete_removes_tagged_item(self):
+        model = self.cot.get_model()
+        obj = model.objects.create(name="profile-a")
+        obj.tags.set([self.tag])
+        self.assertEqual(self._tagged_item_count(), 1)
+
+        obj.delete()
+
+        self.assertEqual(self._tagged_item_count(), 0)
+
+    def test_queryset_bulk_delete_removes_tagged_item(self):
+        model = self.cot.get_model()
+        obj = model.objects.create(name="profile-b")
+        obj.tags.set([self.tag])
+        self.assertEqual(self._tagged_item_count(), 1)
+
+        model.objects.filter(pk=obj.pk).delete()
+
+        self.assertEqual(self._tagged_item_count(), 0)
+
+    def test_delete_after_model_regeneration_removes_tagged_item(self):
+        model = self.cot.get_model()
+        obj = model.objects.create(name="profile-c")
+        obj.tags.set([self.tag])
+        self.assertEqual(self._tagged_item_count(), 1)
+
+        fresh_model = self.cot.get_model(no_cache=True)
+        self.assertIsNot(fresh_model, model)
+        fresh_model.objects.get(pk=obj.pk).delete()
+
+        self.assertEqual(self._tagged_item_count(), 0)
+
+    def test_filtering_by_tag_matches_actual_object_count(self):
+        model = self.cot.get_model()
+        kept = model.objects.create(name="profile-kept")
+        kept.tags.set([self.tag])
+        deleted = model.objects.create(name="profile-deleted")
+        deleted.tags.set([self.tag])
+        deleted.delete()
+
+        self.assertEqual(model.objects.filter(tags=self.tag).count(), 1)
+        self.assertEqual(self._tagged_item_count(), 1)

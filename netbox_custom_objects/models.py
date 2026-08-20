@@ -1673,7 +1673,10 @@ class CustomObjectType(NetBoxModel):
         # Lock guards the cache check, not the miss → re-cache window.  Two
         # threads can regenerate the same (cot_id, branch_id) in parallel;
         # both produce equivalent classes, so the duplication is wasteful but
-        # not incorrect.  Worth it to avoid serialising all generation.
+        # not incorrect.  Worth it to avoid serialising all generation.  This
+        # window also means a concurrent, unrelated apps.get_model() call can
+        # transiently see this model name as unregistered while a regeneration
+        # is in progress (see the pre-deletion below, issue #629).
         with self._global_lock:
             if self.is_model_cached(self.id, branch_id) and not no_cache:
                 cached_timestamp = self.get_cached_timestamp(self.id, branch_id)
@@ -1736,6 +1739,16 @@ class CustomObjectType(NetBoxModel):
         # Wrap the existing post_through_setup method to handle ValueError exceptions
         from taggit.managers import TaggableManager as TM
 
+        # Delete any stale registration for this model name *before* generating
+        # the replacement class, not after (issue #629). TagsMixin's 'tags' field
+        # resolves its 'through' model lazily against whatever's registered under
+        # this model name at contribute_to_class() time; leaving the old class
+        # registered there let the new field's setup bind to the old class
+        # instead of itself, silently breaking tag cascade-delete.
+        model_key = model_name.lower()
+        if branch_id is None and model_key in apps.all_models[APP_LABEL]:
+            del apps.all_models[APP_LABEL][model_key]
+
         # TM.post_through_setup is class-level state; serialize concurrent
         # generations so save/restore can't interleave across threads.
         with _taggable_manager_patch_lock:
@@ -1773,11 +1786,11 @@ class CustomObjectType(NetBoxModel):
             # Main's class is the canonical registration in apps.all_models;
             # branch's class is cached only.  Without this, content_type.model_class()
             # would return a class with the wrong column set across contexts.
-            model_key = model_name.lower()
             if branch_id is None:
-                if model_key in apps.all_models[APP_LABEL]:
-                    del apps.all_models[APP_LABEL][model_key]
-                apps.register_model(APP_LABEL, model)
+                # generate_model() already registered this class; skip the
+                # redundant call to avoid a spurious "already registered" warning.
+                if apps.all_models[APP_LABEL].get(model_key) is not model:
+                    apps.register_model(APP_LABEL, model)
             else:
                 main_class = self.get_cached_model(self.id, branch_id=None)
                 if main_class is not None:
