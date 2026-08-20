@@ -1736,6 +1736,27 @@ class CustomObjectType(NetBoxModel):
         # Wrap the existing post_through_setup method to handle ValueError exceptions
         from taggit.managers import TaggableManager as TM
 
+        # Delete any stale registration for this model name *before* generating
+        # the replacement class, not after (issue #629). TagsMixin's 'tags' field
+        # resolves its 'through' model lazily: contribute_to_class() (which runs
+        # mid-construction, while Django's ModelBase.__new__() is still adding
+        # fields to the new class) calls lazy_related_operation(), which treats
+        # the OWNING class itself as a dependency, satisfied by looking it up in
+        # apps.all_models under this exact model name. If the *old* class was
+        # still registered under that name at that point, the lookup resolves
+        # immediately against the stale class instead of deferring — so the new
+        # field's post_through_setup() runs with cls=<old, about-to-be-replaced
+        # class>, and the new class's own 'tags' field never gets its
+        # tagged_items GenericRelation set up. Without that GenericRelation,
+        # Django's deletion collector has no way to cascade-delete a custom
+        # object's TaggedItem rows, leaving orphaned ("phantom") tagged items
+        # behind whenever a custom object is deleted.
+        if branch_id is None:
+            model_key = model_name.lower()
+            with _suppress_clear_cache():
+                if model_key in apps.all_models[APP_LABEL]:
+                    del apps.all_models[APP_LABEL][model_key]
+
         # TM.post_through_setup is class-level state; serialize concurrent
         # generations so save/restore can't interleave across threads.
         with _taggable_manager_patch_lock:
@@ -1775,9 +1796,13 @@ class CustomObjectType(NetBoxModel):
             # would return a class with the wrong column set across contexts.
             model_key = model_name.lower()
             if branch_id is None:
-                if model_key in apps.all_models[APP_LABEL]:
-                    del apps.all_models[APP_LABEL][model_key]
-                apps.register_model(APP_LABEL, model)
+                # generate_model()'s own type() call already registered this class
+                # under model_key (the pre-deletion above ensured nothing else held
+                # that slot). This call is a safety net for the (unexpected) case
+                # where it didn't -- skip it when redundant to avoid a spurious
+                # "already registered" RuntimeWarning.
+                if apps.all_models[APP_LABEL].get(model_key) is not model:
+                    apps.register_model(APP_LABEL, model)
             else:
                 main_class = self.get_cached_model(self.id, branch_id=None)
                 if main_class is not None:
