@@ -1738,19 +1738,10 @@ class CustomObjectType(NetBoxModel):
 
         # Delete any stale registration for this model name *before* generating
         # the replacement class, not after (issue #629). TagsMixin's 'tags' field
-        # resolves its 'through' model lazily: contribute_to_class() (which runs
-        # mid-construction, while Django's ModelBase.__new__() is still adding
-        # fields to the new class) calls lazy_related_operation(), which treats
-        # the OWNING class itself as a dependency, satisfied by looking it up in
-        # apps.all_models under this exact model name. If the *old* class was
-        # still registered under that name at that point, the lookup resolves
-        # immediately against the stale class instead of deferring — so the new
-        # field's post_through_setup() runs with cls=<old, about-to-be-replaced
-        # class>, and the new class's own 'tags' field never gets its
-        # tagged_items GenericRelation set up. Without that GenericRelation,
-        # Django's deletion collector has no way to cascade-delete a custom
-        # object's TaggedItem rows, leaving orphaned ("phantom") tagged items
-        # behind whenever a custom object is deleted.
+        # resolves its 'through' model lazily against whatever's registered under
+        # this model name at contribute_to_class() time; leaving the old class
+        # registered there let the new field's setup bind to the old class
+        # instead of itself, silently breaking tag cascade-delete.
         if branch_id is None:
             model_key = model_name.lower()
             with _suppress_clear_cache():
@@ -1796,11 +1787,8 @@ class CustomObjectType(NetBoxModel):
             # would return a class with the wrong column set across contexts.
             model_key = model_name.lower()
             if branch_id is None:
-                # generate_model()'s own type() call already registered this class
-                # under model_key (the pre-deletion above ensured nothing else held
-                # that slot). This call is a safety net for the (unexpected) case
-                # where it didn't -- skip it when redundant to avoid a spurious
-                # "already registered" RuntimeWarning.
+                # generate_model() already registered this class; skip the
+                # redundant call to avoid a spurious "already registered" warning.
                 if apps.all_models[APP_LABEL].get(model_key) is not model:
                     apps.register_model(APP_LABEL, model)
             else:

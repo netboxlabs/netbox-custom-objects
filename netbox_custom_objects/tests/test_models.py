@@ -2652,24 +2652,8 @@ class DisplayExpressionFormValidationTestCase(CustomObjectsTestCase, TestCase):
 
 
 class PhantomTaggedObjectsTestCase(CustomObjectsTestCase, TestCase):
-    """Regression tests for issue #629 (Phantom Tagged Objects).
-
-    CustomObjectType.get_model() deletes the old apps.all_models entry for a
-    COT's dynamic model *after* generating its replacement (generate_model()
-    runs first, then the stale entry is deleted and the new class registered).
-    TagsMixin's 'tags' field resolves its 'through' model lazily: taggit's
-    contribute_to_class() runs mid-construction (before the new class itself
-    is registered) and treats the *owning class* as a lazy dependency,
-    resolved by looking it up in apps.all_models under this model's name. With
-    the old class still registered under that name at that point, the lookup
-    resolved immediately against the stale, about-to-be-replaced class instead
-    of deferring -- so the new class's own 'tags' field never got its
-    tagged_items GenericRelation set up, and Django's deletion collector had
-    no way to cascade-delete a custom object's TaggedItem rows. Deleting a
-    tagged custom object therefore left its TaggedItem rows behind: the tag
-    page reported a nonzero item count, but filtering by that tag returned no
-    results, since the referenced object no longer existed.
-    """
+    """Regression tests for issue #629 (Phantom Tagged Objects): deleting a
+    tagged custom object left its TaggedItem row behind."""
 
     def setUp(self):
         super().setUp()
@@ -2684,9 +2668,6 @@ class PhantomTaggedObjectsTestCase(CustomObjectsTestCase, TestCase):
         return TaggedItem.objects.filter(tag=self.tag, content_type=ct).count()
 
     def test_generated_model_has_tagged_items_generic_relation(self):
-        """The root cause: the generated model's 'tags' field must complete its
-        setup, giving the class a 'tagged_items' GenericRelation the deletion
-        collector can use to cascade-delete TaggedItem rows."""
         model = self.cot.get_model()
         private_field_names = [f.name for f in model._meta.private_fields]
         self.assertIn('tagged_items', private_field_names)
@@ -2712,9 +2693,6 @@ class PhantomTaggedObjectsTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(self._tagged_item_count(), 0)
 
     def test_delete_after_model_regeneration_removes_tagged_item(self):
-        """Deleting through a freshly regenerated class (a fresh Python class
-        for the same COT, as happens whenever the cache is invalidated) must
-        still clean up the tag -- the fix isn't specific to one class instance."""
         model = self.cot.get_model()
         obj = model.objects.create(name="profile-c")
         obj.tags.set([self.tag])
@@ -2727,8 +2705,6 @@ class PhantomTaggedObjectsTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(self._tagged_item_count(), 0)
 
     def test_filtering_by_tag_matches_actual_object_count(self):
-        """The user-visible symptom: after deleting a tagged object, filtering
-        by that tag must not still count/return the deleted object."""
         model = self.cot.get_model()
         kept = model.objects.create(name="profile-kept")
         kept.tags.set([self.tag])
