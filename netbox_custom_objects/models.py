@@ -1363,6 +1363,7 @@ class CustomObjectType(NetBoxModel):
         self,
         fields,
         skip_object_fields=False,
+        skip_cot_object_fields=False,
     ):
         field_attrs = {
             "_primary_field_id": -1,
@@ -1380,8 +1381,13 @@ class CustomObjectType(NetBoxModel):
         fields = list(fields) + [field for field in fields_query]
 
         for field in fields:
-            if skip_object_fields:
-                if field.type in [CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT]:
+            if field.type in [CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT]:
+                if skip_object_fields:
+                    continue
+                # Only a COT target produces a LazyForeignKey that needs ready()'s
+                # second pass; core-model targets and polymorphic GFKs resolve on
+                # their own, so they stay even in the unsafe window (#637).
+                if skip_cot_object_fields and field.targets_custom_object_type:
                     continue
 
             field_type = FIELD_TYPE_CLASS[field.type]()
@@ -1667,7 +1673,6 @@ class CustomObjectType(NetBoxModel):
         :return: The generated model.
         :rtype: Model
         """
-
         branch_id = self._active_branch_id()
 
         # Lock guards the cache check, not the miss → re-cache window.  Two
@@ -1690,6 +1695,15 @@ class CustomObjectType(NetBoxModel):
                     # bumped cache_timestamp to branches via change-capture, so
                     # they'll re-evaluate against their own row independently.
                     self.clear_model_cache(self.id)
+
+        # Avoid a dangling cross-COT FK reference when get_model() runs outside
+        # ready()'s two-pass resolution, e.g. a plugin importing it at migrate
+        # time (#637). Only COT-targeting Object/Multi-object fields can dangle
+        # like this (core-model targets and polymorphic GFKs resolve on their
+        # own), so this narrower flag is kept separate from the caller's own
+        # skip_object_fields. Never cached (see below), so a later call
+        # regenerates in full.
+        skip_cot_object_fields = apps.get_app_config(APP_LABEL)._dynamic_model_creation_unsafe()
 
         # Generate the model outside the lock to avoid holding it during expensive operations
         model_name = self.get_table_model_name(self.pk)
@@ -1724,6 +1738,7 @@ class CustomObjectType(NetBoxModel):
         field_attrs = self._fetch_and_generate_field_attrs(
             fields,
             skip_object_fields=skip_object_fields,
+            skip_cot_object_fields=skip_cot_object_fields,
         )
 
         attrs.update(**field_attrs)
@@ -1847,10 +1862,11 @@ class CustomObjectType(NetBoxModel):
                     fk_field.__dict__.pop('reverse_path_infos', None)
 
                 # Only cache fully-generated models.  Models generated with
-                # skip_object_fields=True omit FK fields to other COTs; caching them
-                # would permanently hide those fields if a dependent COT triggers
-                # generation before this one in the startup loop (issue #408).
-                if not skip_object_fields:
+                # skip_object_fields=True or skip_cot_object_fields=True omit FK
+                # fields to other COTs; caching them would permanently hide those
+                # fields if a dependent COT triggers generation before this one in
+                # the startup loop (issue #408), or after a migrate-time call (#637).
+                if not (skip_object_fields or skip_cot_object_fields):
                     self._model_cache[(self.id, branch_id)] = (model, self.cache_timestamp)
 
         apps.clear_cache()
@@ -2579,6 +2595,24 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             getter = getattr(self.choice_set, 'get_choice_color', None)
             return getter(value) if getter else None
         return None
+
+    @property
+    def targets_custom_object_type(self):
+        """
+        True when this field points at another COT's dynamic model, i.e. its FK is a
+        LazyForeignKey that only resolves once the target is in the app registry.
+        Polymorphic fields use a GFK and need no resolution, so they are excluded.
+        """
+        if self.is_polymorphic or not self.related_object_type_id:
+            return False
+        try:
+            object_type = ContentType.objects.get_for_id(self.related_object_type_id)
+        except ContentType.DoesNotExist:
+            return False
+        return (
+            object_type.app_label == APP_LABEL
+            and extract_cot_id_from_model_name(object_type.model) is not None
+        )
 
     @property
     def related_object_type_label(self):

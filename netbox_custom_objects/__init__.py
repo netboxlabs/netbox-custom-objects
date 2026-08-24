@@ -282,17 +282,13 @@ class CustomObjectsPluginConfig(PluginConfig):
     graphql_schema = "graphql.schema.schema"
 
     @staticmethod
-    def should_skip_dynamic_model_creation():
+    def _dynamic_model_creation_unsafe():
         """
-        Determine if dynamic model creation should be skipped.
-
-        Returns True if dynamic models should not be created/loaded due to:
-        - Currently running migrations
-        - Running tests
-        - All migrations not yet applied
-        - Running collectstatic
-
-        Returns False if it's safe to proceed with dynamic model creation.
+        True if the DB can't safely be queried to generate a dynamic COT model:
+        mid-migration, running makemigrations/migrate/collectstatic, or this
+        app's own migrations aren't fully applied. Unlike
+        should_skip_dynamic_model_creation() below, deliberately excludes "test" --
+        this is the narrower check CustomObjectType.get_model() itself uses (#637).
         """
         global _migrations_checked, _checking_migrations
 
@@ -307,9 +303,6 @@ class CustomObjectsPluginConfig(PluginConfig):
 
             # The database isn't accessible during collect static so should skip.
             "collectstatic",
-
-            # Skip during tests.
-            "test",
         )
 
         if any(cmd in sys.argv for cmd in skip_commands):
@@ -362,6 +355,23 @@ class CustomObjectsPluginConfig(PluginConfig):
         finally:
             # Always clear the recursion flag
             _checking_migrations = False
+
+    @staticmethod
+    def should_skip_dynamic_model_creation():
+        """
+        Determine if dynamic model creation should be skipped.
+
+        Returns True if dynamic models should not be created/loaded due to:
+        - Currently running migrations
+        - Running tests
+        - All migrations not yet applied
+        - Running collectstatic
+
+        Returns False if it's safe to proceed with dynamic model creation.
+        """
+        if "test" in sys.argv:
+            return True
+        return CustomObjectsPluginConfig._dynamic_model_creation_unsafe()
 
     def _call_super_ready_once(self):
         """Call ``super().ready()`` once; subsequent calls are no-ops.
