@@ -346,6 +346,57 @@ class PolymorphicFieldAPITest(TransactionCleanupMixin, CustomObjectsTestCase, Tr
         obj.refresh_from_db()
         self.assertIsNone(obj.poly_obj)
 
+    def test_custom_validator_sees_gfk_value_on_api_create(self):
+        """A CUSTOM_VALIDATORS validate() call during API create must see the
+        submitted polymorphic GFK value, not None (#677)."""
+        from django.contrib.contenttypes.models import ContentType
+        from extras.validators import CustomValidator
+
+        _grant_perm(self.user, "add", self.model, "co-add-validator")
+        seen = {}
+
+        class _CaptureValidator(CustomValidator):
+            def validate(self, instance, request):
+                seen['poly_obj'] = instance.poly_obj
+
+        site_ct = ContentType.objects.get_for_model(Site)
+        data = {
+            "name": "validator-api-create-obj",
+            "poly_obj": {"content_type_id": site_ct.pk, "object_id": self.site.pk},
+        }
+        with self.settings(CUSTOM_VALIDATORS={f'{APP_LABEL}.{self.cot.slug}': [_CaptureValidator()]}):
+            response = self.client.post(
+                self._obj_list_url(), json.dumps(data), content_type="application/json", **self.header
+            )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.content)
+        self.assertEqual(seen.get('poly_obj'), self.site)
+
+    def test_custom_validator_sees_updated_gfk_value_on_api_update(self):
+        """A CUSTOM_VALIDATORS validate() call during an API PATCH that changes the
+        polymorphic GFK value must see the new value, not the pre-update one (#677)."""
+        from django.contrib.contenttypes.models import ContentType
+        from extras.validators import CustomValidator
+
+        _grant_perm(self.user, "change", self.model, "co-change-validator")
+        obj = self.model.objects.create(name="validator-api-update-obj")
+        obj.poly_obj = self.site
+        obj.save()
+
+        seen = {}
+
+        class _CaptureValidator(CustomValidator):
+            def validate(self, instance, request):
+                seen['poly_obj'] = instance.poly_obj
+
+        prefix_ct = ContentType.objects.get_for_model(Prefix)
+        data = {"poly_obj": {"content_type_id": prefix_ct.pk, "object_id": self.prefix.pk}}
+        with self.settings(CUSTOM_VALIDATORS={f'{APP_LABEL}.{self.cot.slug}': [_CaptureValidator()]}):
+            response = self.client.patch(
+                self._obj_detail_url(obj.pk), json.dumps(data), content_type="application/json", **self.header
+            )
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.content)
+        self.assertEqual(seen.get('poly_obj'), self.prefix)
+
     # --- Custom object CRUD with polymorphic M2M ---
 
     def test_create_custom_object_with_polymorphic_m2m_via_api(self):
@@ -959,6 +1010,62 @@ class PolymorphicFieldUITest(TransactionCleanupMixin, CustomObjectsTestCase, Tra
 
         response = self.client.get(self._field_delete_url(self.gfk_field.pk))
         self.assertEqual(response.status_code, 200)
+
+    # --- CUSTOM_VALIDATORS visibility of polymorphic GFK values (#677) ---
+
+    def test_custom_validator_sees_gfk_value_on_create(self):
+        """A CUSTOM_VALIDATORS validate() call during form-based create must see the
+        submitted polymorphic GFK value on the instance, not None. Before the fix,
+        custom_save() set the GFK attribute only after Django's full_clean() (and
+        therefore CUSTOM_VALIDATORS) had already run against the unsaved instance."""
+        from django.contrib.contenttypes.models import ContentType
+        from extras.validators import CustomValidator
+
+        seen = {}
+
+        class _CaptureValidator(CustomValidator):
+            def validate(self, instance, request):
+                seen['poly_obj'] = instance.poly_obj
+
+        site_ct = ContentType.objects.get_for_model(Site)
+        data = {
+            "name": "validator-create-obj",
+            "poly_obj__ct": site_ct.pk,
+            "poly_obj__obj": self.site1.pk,
+            "csrfmiddlewaretoken": "fake",
+        }
+        with self.settings(CUSTOM_VALIDATORS={f'{APP_LABEL}.{self.cot.slug}': [_CaptureValidator()]}):
+            response = self.client.post(self._add_url(), data, follow=True)
+        self.assertNotIn(response.status_code, [400, 403, 500])
+        self.assertEqual(seen.get('poly_obj'), self.site1)
+
+    def test_custom_validator_sees_updated_gfk_value_on_edit(self):
+        """Editing an object and changing its polymorphic GFK value must be visible
+        to CUSTOM_VALIDATORS during that same request, not the pre-edit value."""
+        from django.contrib.contenttypes.models import ContentType
+        from extras.validators import CustomValidator
+
+        obj = self.model.objects.create(name="validator-edit-obj")
+        obj.poly_obj = self.site1
+        obj.save()
+
+        seen = {}
+
+        class _CaptureValidator(CustomValidator):
+            def validate(self, instance, request):
+                seen['poly_obj'] = instance.poly_obj
+
+        prefix_ct = ContentType.objects.get_for_model(Prefix)
+        data = {
+            "name": "validator-edit-obj",
+            "poly_obj__ct": prefix_ct.pk,
+            "poly_obj__obj": self.prefix1.pk,
+            "csrfmiddlewaretoken": "fake",
+        }
+        with self.settings(CUSTOM_VALIDATORS={f'{APP_LABEL}.{self.cot.slug}': [_CaptureValidator()]}):
+            response = self.client.post(self._edit_url(obj.pk), data, follow=True)
+        self.assertNotIn(response.status_code, [400, 403, 500])
+        self.assertEqual(seen.get('poly_obj'), self.prefix1)
 
 
 # ---------------------------------------------------------------------------

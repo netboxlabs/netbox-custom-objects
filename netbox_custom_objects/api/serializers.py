@@ -688,18 +688,45 @@ def get_serializer_class(model, skip_object_fields=False):
         if type(data) is not dict:
             return NetBoxModelSerializer.validate(self, data)
 
-        # NetBoxModelSerializer.validate() calls Model(**attrs) to check field
-        # values. Polymorphic GFK and M2M fields are not real Django model fields,
-        # so they'd cause a TypeError. Pop them before delegating to the parent,
-        # then restore them afterward.
+        # NetBoxModelSerializer.validate() calls Model(**attrs) (create) or
+        # setattr(instance, k, v) per attrs key (update), then instance.full_clean()
+        # -- which is what runs CUSTOM_VALIDATORS. Polymorphic GFK and M2M fields
+        # aren't real Django model fields, so passing either straight through
+        # would raise TypeError. Pop them before delegating to the parent, then
+        # restore them afterward.
         # super() is unavailable here because this function is defined outside a
         # class body (no __class__ cell). The generated class has a single base
         # (NetBoxModelSerializer), so calling it directly is equivalent.
         saved = {}
-        for field_name in (*_poly_obj_fields, *_poly_m2m_fields):
+        for field_name in _poly_m2m_fields:
             if field_name in data:
                 saved[field_name] = data.pop(field_name)
+
+        # Polymorphic single-object (GFK) fields, unlike the M2M case above, ARE
+        # backed by two real scalar columns (<name>_content_type_id,
+        # <name>_object_id) that an unsaved instance can hold. Substitute those
+        # for the resolved object before delegating, so the instance
+        # full_clean() (and CUSTOM_VALIDATORS) actually validates sees the
+        # submitted value instead of a blank/stale one (#677); restore the
+        # resolved object under the original field name afterward, since
+        # create()/update() expect to find it there.
+        poly_obj_originals = {}
+        for field_name in _poly_obj_fields:
+            if field_name in data:
+                obj = data.pop(field_name)
+                poly_obj_originals[field_name] = obj
+                ct_attname = f"{field_name}_content_type_id"
+                oid_attname = f"{field_name}_object_id"
+                data[ct_attname] = ContentType.objects.get_for_model(obj).pk if obj is not None else None
+                data[oid_attname] = obj.pk if obj is not None else None
+
         data = NetBoxModelSerializer.validate(self, data)
+
+        for field_name, obj in poly_obj_originals.items():
+            data.pop(f"{field_name}_content_type_id", None)
+            data.pop(f"{field_name}_object_id", None)
+            data[field_name] = obj
+
         data.update(saved)
 
         # Coordinates: latitude and longitude must both be set or both be empty.
