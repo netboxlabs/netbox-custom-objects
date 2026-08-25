@@ -397,6 +397,36 @@ class PolymorphicFieldAPITest(TransactionCleanupMixin, CustomObjectsTestCase, Tr
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.content)
         self.assertEqual(seen.get('poly_obj'), self.prefix)
 
+    def test_custom_validator_sees_cleared_gfk_value_on_api_update(self):
+        """PATCHing poly_obj to null must clear it on the instance validate() runs
+        against, and the None restore after validate() must still round-trip
+        correctly into update()."""
+        from extras.validators import CustomValidator
+
+        _grant_perm(self.user, "change", self.model, "co-change-validator-null")
+        obj = self.model.objects.create(name="validator-api-clear-obj")
+        obj.poly_obj = self.site
+        obj.save()
+
+        seen = {}
+        called = []
+
+        class _CaptureValidator(CustomValidator):
+            def validate(self, instance, request):
+                called.append(True)
+                seen['poly_obj'] = instance.poly_obj
+
+        data = {"poly_obj": None}
+        with self.settings(CUSTOM_VALIDATORS={f'{APP_LABEL}.{self.cot.slug}': [_CaptureValidator()]}):
+            response = self.client.patch(
+                self._obj_detail_url(obj.pk), json.dumps(data), content_type="application/json", **self.header
+            )
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.content)
+        self.assertTrue(called, "validator was never invoked")
+        self.assertIsNone(seen.get('poly_obj'))
+        obj.refresh_from_db()
+        self.assertIsNone(obj.poly_obj)
+
     # --- Custom object CRUD with polymorphic M2M ---
 
     def test_create_custom_object_with_polymorphic_m2m_via_api(self):

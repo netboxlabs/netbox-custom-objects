@@ -1077,11 +1077,12 @@ class CustomObjectEditView(generic.ObjectEditView):
                         obj_sub,
                         _("Please select an object of the chosen type."),
                     )
-                # Set here too (custom_save() sets it again before the DB write):
-                # _post_clean() calls instance.full_clean() -- and therefore
-                # CUSTOM_VALIDATORS -- right after this method returns, so waiting
-                # until custom_save() left validators seeing a blank value (#677).
-                setattr(self.instance, field_name, obj_val)
+                else:
+                    # Set here too (custom_save() sets it again before the DB write):
+                    # _post_clean() calls instance.full_clean() -- and therefore
+                    # CUSTOM_VALIDATORS -- right after this method returns, so waiting
+                    # until custom_save() left validators seeing a blank value (#677).
+                    setattr(self.instance, field_name, obj_val)
             # Coordinates: latitude and longitude must both be set or both be empty.
             for field_name, (lat_name, lon_name) in self.custom_object_type_coordinates_fields.items():
                 latitude = self.cleaned_data.get(lat_name)
