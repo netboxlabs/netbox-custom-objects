@@ -2229,9 +2229,14 @@ def _rename_objectchange_field_key(fi, old_name, new_name):
         'SET {col} = ({col} - %s) || jsonb_build_object(%s, {col}->%s) '
         'WHERE object_type_id = %s AND {col} IS NOT NULL AND {col} ? %s'
     )
+    # Unlike core.ObjectChange, ChangeDiff has no per-branch schema copy, so every
+    # other access to it (including netbox-branching's own record_change_diff
+    # receiver) uses DEFAULT_DB_ALIAS. Writing it via the branch connection here
+    # instead introduced a second connection into sync()'s open transaction,
+    # causing a same-process cross-connection deadlock (issue #653).
     try:
-        with transaction.atomic(using=conn.alias):
-            with conn.cursor() as cursor:
+        with transaction.atomic(using=DEFAULT_DB_ALIAS):
+            with connections[DEFAULT_DB_ALIAS].cursor() as cursor:
                 for json_col in ('original', 'modified', 'current'):
                     cursor.execute(
                         cd_sql.format(col=json_col),
