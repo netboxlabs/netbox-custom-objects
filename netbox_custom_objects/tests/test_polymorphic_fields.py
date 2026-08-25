@@ -1014,10 +1014,8 @@ class PolymorphicFieldUITest(TransactionCleanupMixin, CustomObjectsTestCase, Tra
     # --- CUSTOM_VALIDATORS visibility of polymorphic GFK values (#677) ---
 
     def test_custom_validator_sees_gfk_value_on_create(self):
-        """A CUSTOM_VALIDATORS validate() call during form-based create must see the
-        submitted polymorphic GFK value on the instance, not None. Before the fix,
-        custom_save() set the GFK attribute only after Django's full_clean() (and
-        therefore CUSTOM_VALIDATORS) had already run against the unsaved instance."""
+        """CUSTOM_VALIDATORS must see the submitted GFK value during form-based
+        create, not None (#677)."""
         from django.contrib.contenttypes.models import ContentType
         from extras.validators import CustomValidator
 

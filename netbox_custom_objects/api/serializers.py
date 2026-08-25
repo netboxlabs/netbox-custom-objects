@@ -688,12 +688,10 @@ def get_serializer_class(model, skip_object_fields=False):
         if type(data) is not dict:
             return NetBoxModelSerializer.validate(self, data)
 
-        # NetBoxModelSerializer.validate() calls Model(**attrs) (create) or
-        # setattr(instance, k, v) per attrs key (update), then instance.full_clean()
-        # -- which is what runs CUSTOM_VALIDATORS. Polymorphic GFK and M2M fields
-        # aren't real Django model fields, so passing either straight through
-        # would raise TypeError. Pop them before delegating to the parent, then
-        # restore them afterward.
+        # NetBoxModelSerializer.validate() calls Model(**attrs)/setattr then
+        # instance.full_clean() (which runs CUSTOM_VALIDATORS). Polymorphic M2M
+        # fields aren't real Django model fields, so pop them before delegating
+        # and restore them after.
         # super() is unavailable here because this function is defined outside a
         # class body (no __class__ cell). The generated class has a single base
         # (NetBoxModelSerializer), so calling it directly is equivalent.
@@ -702,14 +700,11 @@ def get_serializer_class(model, skip_object_fields=False):
             if field_name in data:
                 saved[field_name] = data.pop(field_name)
 
-        # Polymorphic single-object (GFK) fields, unlike the M2M case above, ARE
-        # backed by two real scalar columns (<name>_content_type_id,
-        # <name>_object_id) that an unsaved instance can hold. Substitute those
-        # for the resolved object before delegating, so the instance
-        # full_clean() (and CUSTOM_VALIDATORS) actually validates sees the
-        # submitted value instead of a blank/stale one (#677); restore the
-        # resolved object under the original field name afterward, since
-        # create()/update() expect to find it there.
+        # Polymorphic single-object (GFK) fields ARE backed by two real scalar
+        # columns an unsaved instance can hold. Substitute those for the
+        # resolved object before delegating, so full_clean()/CUSTOM_VALIDATORS
+        # see the submitted value instead of a blank one (#677); restore the
+        # resolved object afterward for create()/update() to consume.
         poly_obj_originals = {}
         for field_name in _poly_obj_fields:
             if field_name in data:
