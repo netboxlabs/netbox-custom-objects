@@ -1673,10 +1673,7 @@ class CustomObjectType(NetBoxModel):
         # Lock guards the cache check, not the miss → re-cache window.  Two
         # threads can regenerate the same (cot_id, branch_id) in parallel;
         # both produce equivalent classes, so the duplication is wasteful but
-        # not incorrect.  Worth it to avoid serialising all generation.  This
-        # window also means a concurrent, unrelated apps.get_model() call can
-        # transiently see this model name as unregistered while a regeneration
-        # is in progress (see the pre-deletion below, issue #629).
+        # not incorrect.  Worth it to avoid serialising all generation.
         with self._global_lock:
             if self.is_model_cached(self.id, branch_id) and not no_cache:
                 cached_timestamp = self.get_cached_timestamp(self.id, branch_id)
@@ -1739,24 +1736,25 @@ class CustomObjectType(NetBoxModel):
         # Wrap the existing post_through_setup method to handle ValueError exceptions
         from taggit.managers import TaggableManager as TM
 
-        # Delete any stale registration for this model name *before* generating
-        # the replacement class, not after (issue #629). TagsMixin's 'tags' field
-        # resolves its 'through' model lazily against whatever's registered under
-        # this model name at contribute_to_class() time; leaving the old class
-        # registered there let the new field's setup bind to the old class
-        # instead of itself, silently breaking tag cascade-delete.
-        model_key = model_name.lower()
-        if branch_id is None and model_key in apps.all_models[APP_LABEL]:
-            del apps.all_models[APP_LABEL][model_key]
-
         # TM.post_through_setup is class-level state; serialize concurrent
         # generations so save/restore can't interleave across threads.
         with _taggable_manager_patch_lock:
             original_post_through_setup = TM.post_through_setup
 
-            def wrapped_post_through_setup(self, cls):
+            def wrapped_post_through_setup(manager, _resolved_model):
+                # contribute_to_class() sets manager.model to the actual class
+                # under construction *before* scheduling this call via
+                # lazy_related_operation(); _resolved_model instead comes from
+                # re-resolving the model by name through the app registry at
+                # call time. If a prior generation for the same COT is still
+                # registered under this model name when this fires, that
+                # lookup resolves immediately against the stale class instead
+                # of the one actually being built, so the new 'tags' field
+                # never gets its own tagged_items GenericRelation -- silently
+                # breaking tag cascade-delete (issue #629). manager.model is
+                # never subject to that staleness, so use it instead.
                 try:
-                    return original_post_through_setup(self, cls)
+                    return original_post_through_setup(manager, manager.model)
                 except ValueError:
                     pass
 
@@ -1786,11 +1784,11 @@ class CustomObjectType(NetBoxModel):
             # Main's class is the canonical registration in apps.all_models;
             # branch's class is cached only.  Without this, content_type.model_class()
             # would return a class with the wrong column set across contexts.
+            model_key = model_name.lower()
             if branch_id is None:
-                # generate_model() already registered this class; skip the
-                # redundant call to avoid a spurious "already registered" warning.
-                if apps.all_models[APP_LABEL].get(model_key) is not model:
-                    apps.register_model(APP_LABEL, model)
+                if model_key in apps.all_models[APP_LABEL]:
+                    del apps.all_models[APP_LABEL][model_key]
+                apps.register_model(APP_LABEL, model)
             else:
                 main_class = self.get_cached_model(self.id, branch_id=None)
                 if main_class is not None:
