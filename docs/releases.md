@@ -1,5 +1,40 @@
 # Releases
 
+## 0.6.1
+
+### New Features
+
+- [#268](https://github.com/netboxlabs/netbox-custom-objects/issues/268) - Add `display_expression`, a Jinja2 expression for composing a custom object's displayed name from multiple fields instead of a single primary field
+
+### Enhancements
+
+- [#549](https://github.com/netboxlabs/netbox-custom-objects/issues/549) - Custom Objects can now be referenced directly from NetBox device/VM configuration templates, via `custom_objects.<type>` or the `| custom_objects` Jinja2 filter
+- [#583](https://github.com/netboxlabs/netbox-custom-objects/issues/583) - Add a CI matrix job with netbox-branching enabled, so branching tests run continuously instead of being permanently skipped
+- [#621](https://github.com/netboxlabs/netbox-custom-objects/issues/621) - Add "Set null" option to bulk edit for real, nullable custom object fields
+- [#659](https://github.com/netboxlabs/netbox-custom-objects/issues/659) - Confirm compatibility with NetBox v4.7
+
+### Bug Fixes
+
+- [#566](https://github.com/netboxlabs/netbox-custom-objects/issues/566) - Mismatched `collectstatic` step in the install/upgrade instructions
+- [#595](https://github.com/netboxlabs/netbox-custom-objects/issues/595) - Reverting a merged branch failed for Custom Object Types with a polymorphic object field
+- [#614](https://github.com/netboxlabs/netbox-custom-objects/issues/614) - Spurious "netbox-branching is installed but its version could not be determined" warning; version check now also tries the `netboxlabs-netbox-branching` distribution name
+- [#620](https://github.com/netboxlabs/netbox-custom-objects/issues/620) - Opening the bulk import/edit/delete pages on a large table caused a memory spike from loading the entire table into memory
+- [#625](https://github.com/netboxlabs/netbox-custom-objects/issues/625) - Editing a field set `schema_id` (and related bookkeeping fields) to null on unrelated field edits
+- [#626](https://github.com/netboxlabs/netbox-custom-objects/issues/626) - Bulk import failed on required Hidden/Read-only fields
+- [#628](https://github.com/netboxlabs/netbox-custom-objects/issues/628) - `?id=` filtering was silently ignored on the Custom Object REST API
+- [#629](https://github.com/netboxlabs/netbox-custom-objects/issues/629) - Deleting a tagged custom object left orphaned ("phantom") tag associations behind
+- [#637](https://github.com/netboxlabs/netbox-custom-objects/issues/637) - Model-registry errors when `get_model()` was called outside `ready()`'s startup resolution, e.g. by another plugin during a NetBox upgrade
+- [#639](https://github.com/netboxlabs/netbox-custom-objects/issues/639) - Filter lookup expressions (e.g. `__gt`, `__icontains`) were ignored in generated filtersets
+- [#645](https://github.com/netboxlabs/netbox-custom-objects/issues/645) - Fields with UI Editable set to "Hidden" still appeared on create/edit and bulk edit forms
+- [#647](https://github.com/netboxlabs/netbox-custom-objects/issues/647) - Renaming or deleting a field could leave stale backing columns behind when it collided with a mixin-provided column
+- [#649](https://github.com/netboxlabs/netbox-custom-objects/issues/649) - CI `tests (main)` matrix leg failed against an unmodified checkout due to stale query-count baselines
+- [#653](https://github.com/netboxlabs/netbox-custom-objects/issues/653) - `Branch.sync()` could deadlock when a field rename's `ChangeDiff` rewrite conflicted with netbox-branching's own `ChangeDiff` write
+- [#658](https://github.com/netboxlabs/netbox-custom-objects/issues/658) - Race condition and deadlock in polymorphic multiobject through-model registration under concurrent field creation/reads
+- [#661](https://github.com/netboxlabs/netbox-custom-objects/issues/661) - `CustomObjectTypeField.from_db()` was incompatible with Django 6.1
+- [#677](https://github.com/netboxlabs/netbox-custom-objects/issues/677) - `CUSTOM_VALIDATORS` did not see the submitted value of a polymorphic object field during validation
+
+---
+
 ## 0.6.0
 
 ### New Features
