@@ -5,7 +5,7 @@
 ### Enhancements
 
 - [#268](https://github.com/netboxlabs/netbox-custom-objects/issues/268) - Add `display_expression`, a Jinja2 expression for composing a custom object's displayed name from multiple fields instead of a single primary field
-- [#549](https://github.com/netboxlabs/netbox-custom-objects/issues/549) - Custom Objects can now be referenced directly from NetBox device/VM configuration templates, via `custom_objects.<type>` or the `| custom_objects` Jinja2 filter
+- [#549](https://github.com/netboxlabs/netbox-custom-objects/issues/549) - On NetBox 4.7+, Custom Objects can now be referenced directly from NetBox device/VM configuration templates via `custom_objects.<type>` or the `'<type>' | custom_objects` Jinja2 filter
 - [#583](https://github.com/netboxlabs/netbox-custom-objects/issues/583) - Add a CI matrix job with netbox-branching enabled, so branching tests run continuously instead of being permanently skipped
 - [#621](https://github.com/netboxlabs/netbox-custom-objects/issues/621) - Add "Set null" option to bulk edit for real, nullable custom object fields
 - [#659](https://github.com/netboxlabs/netbox-custom-objects/issues/659) - Confirm compatibility with NetBox v4.7
