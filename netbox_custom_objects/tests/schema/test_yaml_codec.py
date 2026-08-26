@@ -46,6 +46,13 @@ class YAMLParserTestCase(SimpleTestCase):
         data = YAMLParser().parse(stream)
         self.assertEqual(data, {"a": True, "b": False})
 
+    def test_anchors_and_aliases_rejected(self):
+        # Schema documents have no legitimate use for anchors/aliases; rejecting
+        # them outright avoids an anchor/alias expansion bomb at parse time.
+        stream = io.BytesIO(b"a: &anchor [1, 2, 3]\nb: *anchor\n")
+        with self.assertRaises(ParseError):
+            YAMLParser().parse(stream)
+
 
 class YAMLRendererTestCase(SimpleTestCase):
 

@@ -15,7 +15,19 @@ class _StrictBoolLoader(yaml.SafeLoader):
     also treating ``yes``/``no``/``on``/``off`` as booleans (the "Norway
     problem"). Without this, an unquoted schema value like ``no`` would be
     silently coerced to ``False`` rather than kept as the string "no".
+
+    Also rejects anchors/aliases outright: schema documents have no legitimate
+    use for them, and without this an anchor/alias bomb could expand in memory
+    at parse time, before _validate_schema_doc() ever sees the result.
     """
+
+    def compose_node(self, parent, index):
+        if self.check_event(yaml.events.AliasEvent):
+            event = self.peek_event()
+            raise yaml.composer.ComposerError(
+                None, None, "YAML anchors/aliases are not permitted in schema documents", event.start_mark
+            )
+        return super().compose_node(parent, index)
 
 
 _StrictBoolLoader.yaml_implicit_resolvers = {
