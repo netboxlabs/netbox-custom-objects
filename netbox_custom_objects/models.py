@@ -1756,9 +1756,20 @@ class CustomObjectType(NetBoxModel):
         with _taggable_manager_patch_lock:
             original_post_through_setup = TM.post_through_setup
 
-            def wrapped_post_through_setup(self, cls):
+            def wrapped_post_through_setup(manager, _resolved_model):
+                # contribute_to_class() sets manager.model to the actual class
+                # under construction *before* scheduling this call via
+                # lazy_related_operation(); _resolved_model instead comes from
+                # re-resolving the model by name through the app registry at
+                # call time. If a prior generation for the same COT is still
+                # registered under this model name when this fires, that
+                # lookup resolves immediately against the stale class instead
+                # of the one actually being built, so the new 'tags' field
+                # never gets its own tagged_items GenericRelation -- silently
+                # breaking tag cascade-delete (issue #629). manager.model is
+                # never subject to that staleness, so use it instead.
                 try:
-                    return original_post_through_setup(self, cls)
+                    return original_post_through_setup(manager, manager.model)
                 except ValueError:
                     pass
 
