@@ -264,6 +264,29 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         label = f"{APP_LABEL}.{cot.get_table_model_name(cot.id).lower()}"
         search_index = registry["search"][label]
         self.assertIn("status", search_index.display_attrs)
+        self.assertNotIn("name", search_index.display_attrs)
+
+    def test_register_search_index_includes_object_context_fields(self):
+        """A context field of type object (a single real FK, unlike multiobject's
+        M2M) IS included in display_attrs -- getattr() on it returns the related
+        instance directly, not a manager, so NetBox's generic renderer handles it
+        correctly. Confirms the TYPE_MULTIOBJECT exclusion is scoped to just that
+        one type, not object fields generally."""
+        cot = self.create_custom_object_type(name="ContextObjectTest", slug="context-object-test")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, search_weight=1000,
+        )
+        self.create_custom_object_type_field(
+            cot, name="related_site", label="Related Site", type="object",
+            related_object_type=self.get_site_object_type(), context=True,
+        )
+        cot.clear_model_cache(cot.id)
+        model = cot.get_model()
+        cot.register_custom_object_search_index(model)
+
+        label = f"{APP_LABEL}.{cot.get_table_model_name(cot.id).lower()}"
+        search_index = registry["search"][label]
+        self.assertIn("related_site", search_index.display_attrs)
 
     def test_register_search_index_excludes_multiobject_context_fields(self):
         """A context field of type multiobject must not reach display_attrs.
