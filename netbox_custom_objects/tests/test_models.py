@@ -246,6 +246,51 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         # Must not raise FieldDoesNotExist, RecursionError, or any other exception.
         cot.register_custom_object_search_index(stub_model)
 
+    def test_register_search_index_includes_context_fields_in_display_attrs(self):
+        """Fields marked context=True surface as display_attrs (issue #655), so
+        NetBox's global search shows them as supplementary "attributes" alongside
+        each result, the same as any other model's SearchIndex.display_attrs."""
+        cot = self.create_custom_object_type(name="ContextSearchTest", slug="context-search-test")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, search_weight=1000,
+        )
+        self.create_custom_object_type_field(
+            cot, name="status", label="Status", type="text", context=True,
+        )
+        cot.clear_model_cache(cot.id)
+        model = cot.get_model()
+        cot.register_custom_object_search_index(model)
+
+        label = f"{APP_LABEL}.{cot.get_table_model_name(cot.id).lower()}"
+        search_index = registry["search"][label]
+        self.assertIn("status", search_index.display_attrs)
+
+    def test_register_search_index_excludes_multiobject_context_fields(self):
+        """A context field of type multiobject must not reach display_attrs.
+
+        NetBox core's CachedValue.display_attrs (the only consumer of this
+        attribute) renders each entry via plain getattr() on the instance --
+        for a real ManyToManyField that returns the RelatedManager itself, not
+        its contents, so the search UI would show a broken object repr instead
+        of the related objects. Excluding multiobject context fields here avoids
+        surfacing that.
+        """
+        cot = self.create_custom_object_type(name="ContextM2MTest", slug="context-m2m-test")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, search_weight=1000,
+        )
+        self.create_custom_object_type_field(
+            cot, name="related_sites", label="Related Sites", type="multiobject",
+            related_object_type=self.get_site_object_type(), context=True,
+        )
+        cot.clear_model_cache(cot.id)
+        model = cot.get_model()
+        cot.register_custom_object_search_index(model)
+
+        label = f"{APP_LABEL}.{cot.get_table_model_name(cot.id).lower()}"
+        search_index = registry["search"][label]
+        self.assertNotIn("related_sites", search_index.display_attrs)
+
     def test_skipped_object_field_with_stale_content_type_logs_warning(self):
         """When get_model_field raises NotImplementedError for an object field whose
         related_object_type_id is non-null (stale/deleted ContentType), a WARNING must
