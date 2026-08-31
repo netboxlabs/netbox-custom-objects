@@ -18,6 +18,15 @@ logger = logging.getLogger(__name__)
 # Context variable to track if we're currently running migrations
 _is_migrating = contextvars.ContextVar('is_migrating', default=False)
 
+# Guards get_models() against re-entrancy (issues #685/#686): generating a COT
+# model can itself trigger Django to rebuild its global relation graph (e.g. via
+# ObjectType.objects.get_for_model()'s .create(), or a polymorphic field's
+# related_object_types.all() query), which calls apps.get_models() again. Without
+# this guard, that re-entrant call would call get_model() again for every COT --
+# including the one still mid-construction -- recursing without ever reaching the
+# point where the first call finishes and registers/caches it.
+_generating_models = contextvars.ContextVar('generating_models', default=False)
+
 # Cache for migration check to avoid repeated expensive filesystem/database operations
 _migrations_checked = None
 _checking_migrations = False
@@ -560,52 +569,76 @@ class CustomObjectsPluginConfig(PluginConfig):
         for model in super().get_models(include_auto_created, include_swapped):
             yield model
 
-        # Suppress warnings about database calls during model loading.
-        # See the corresponding block in ready() for the rationale for using
-        # module-based filtering instead of message-content matching.
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore", category=RuntimeWarning,
-                module=r"django\.db\.backends\..*",
-            )
-            warnings.filterwarnings(
-                "ignore", category=UserWarning,
-                module=r"netbox_branching\..*",
-            )
+        # Re-entrant call (issues #685/#686): something invoked while WE are
+        # already generating COT models needed Django's model registry -- most
+        # commonly Options._relation_tree, via ObjectType.objects.get_for_model()
+        # or a polymorphic field's related_object_types.all() query. Recursing
+        # into get_model() again here would keep regenerating the same
+        # still-under-construction model forever, since the outer call hasn't
+        # reached the point where it finishes and registers/caches it.
+        #
+        # super().get_models() above already covers everything this caller can
+        # safely see right now: generate_model()'s type() call registers a COT's
+        # model with Django's app registry synchronously (inside ModelBase.__new__),
+        # before get_model() ever calls _after_model_generation() -- the method
+        # that can trigger this re-entrancy. Any COT the outer loop below hasn't
+        # reached yet is simply absent from this transient, incomplete snapshot;
+        # get_model()'s own apps.clear_cache() call (once each COT finishes)
+        # invalidates any relation-tree computed against that incomplete view, so
+        # it self-heals as soon as the remaining COTs are generated.
+        if _generating_models.get():
+            return
 
-            # Skip dynamic model generation until ready() has completed.
-            # Other apps' ready() calls (e.g. dcim) trigger _relation_tree →
-            # apps.get_models() before our ready() runs.  At that point _model_cache
-            # is empty, so get_model() would regenerate every COT from scratch —
-            # including ContentType DB lookups that may fail.  After our ready()
-            # finishes, _app_ready is True and get_model() returns cached models
-            # without any ContentType lookups.
-            if not _app_ready:
-                return
+        token = _generating_models.set(True)
+        try:
+            # Suppress warnings about database calls during model loading.
+            # See the corresponding block in ready() for the rationale for using
+            # module-based filtering instead of message-content matching.
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore", category=RuntimeWarning,
+                    module=r"django\.db\.backends\..*",
+                )
+                warnings.filterwarnings(
+                    "ignore", category=UserWarning,
+                    module=r"netbox_branching\..*",
+                )
 
-            # Skip custom object type model loading if dynamic models can't be created yet
-            if self.should_skip_dynamic_model_creation():
-                return
+                # Skip dynamic model generation until ready() has completed.
+                # Other apps' ready() calls (e.g. dcim) trigger _relation_tree →
+                # apps.get_models() before our ready() runs.  At that point _model_cache
+                # is empty, so get_model() would regenerate every COT from scratch —
+                # including ContentType DB lookups that may fail.  After our ready()
+                # finishes, _app_ready is True and get_model() returns cached models
+                # without any ContentType lookups.
+                if not _app_ready:
+                    return
 
-            # Add custom object type models
-            from .models import CustomObjectType
+                # Skip custom object type model loading if dynamic models can't be created yet
+                if self.should_skip_dynamic_model_creation():
+                    return
 
-            try:
-                with transaction.atomic():
-                    custom_object_types = CustomObjectType.objects.all()
-                    for custom_type in custom_object_types:
-                        model = custom_type.get_model()
-                        if model:
-                            yield model
+                # Add custom object type models
+                from .models import CustomObjectType
 
-                            # If include_auto_created is True, also yield through models
-                            if include_auto_created and hasattr(model, '_through_models'):
-                                for through_model in model._through_models:
-                                    yield through_model
-            except (ProgrammingError, OperationalError):
-                # DB schema is incomplete (unapplied migrations). Yield nothing —
-                # dynamic models will be available once migrations have run.
-                return
+                try:
+                    with transaction.atomic():
+                        custom_object_types = CustomObjectType.objects.all()
+                        for custom_type in custom_object_types:
+                            model = custom_type.get_model()
+                            if model:
+                                yield model
+
+                                # If include_auto_created is True, also yield through models
+                                if include_auto_created and hasattr(model, '_through_models'):
+                                    for through_model in model._through_models:
+                                        yield through_model
+                except (ProgrammingError, OperationalError):
+                    # DB schema is incomplete (unapplied migrations). Yield nothing —
+                    # dynamic models will be available once migrations have run.
+                    return
+        finally:
+            _generating_models.reset(token)
 
 
 config = CustomObjectsPluginConfig
