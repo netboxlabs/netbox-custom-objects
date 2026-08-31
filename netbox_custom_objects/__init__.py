@@ -19,12 +19,8 @@ logger = logging.getLogger(__name__)
 _is_migrating = contextvars.ContextVar('is_migrating', default=False)
 
 # Guards get_models() against re-entrancy (issues #685/#686): generating a COT
-# model can itself trigger Django to rebuild its global relation graph (e.g. via
-# ObjectType.objects.get_for_model()'s .create(), or a polymorphic field's
-# related_object_types.all() query), which calls apps.get_models() again. Without
-# this guard, that re-entrant call would call get_model() again for every COT --
-# including the one still mid-construction -- recursing without ever reaching the
-# point where the first call finishes and registers/caches it.
+# model can trigger Django to rebuild its relation graph, which calls
+# apps.get_models() again while we're still mid-generation.
 _generating_models = contextvars.ContextVar('generating_models', default=False)
 
 # Cache for migration check to avoid repeated expensive filesystem/database operations
@@ -569,23 +565,10 @@ class CustomObjectsPluginConfig(PluginConfig):
         for model in super().get_models(include_auto_created, include_swapped):
             yield model
 
-        # Re-entrant call (issues #685/#686): something invoked while WE are
-        # already generating COT models needed Django's model registry -- most
-        # commonly Options._relation_tree, via ObjectType.objects.get_for_model()
-        # or a polymorphic field's related_object_types.all() query. Recursing
-        # into get_model() again here would keep regenerating the same
-        # still-under-construction model forever, since the outer call hasn't
-        # reached the point where it finishes and registers/caches it.
-        #
-        # super().get_models() above already covers everything this caller can
-        # safely see right now: generate_model()'s type() call registers a COT's
-        # model with Django's app registry synchronously (inside ModelBase.__new__),
-        # before get_model() ever calls _after_model_generation() -- the method
-        # that can trigger this re-entrancy. Any COT the outer loop below hasn't
-        # reached yet is simply absent from this transient, incomplete snapshot;
-        # get_model()'s own apps.clear_cache() call (once each COT finishes)
-        # invalidates any relation-tree computed against that incomplete view, so
-        # it self-heals as soon as the remaining COTs are generated.
+        # Re-entrant call (issues #685/#686): generate_model() registers a COT's
+        # model synchronously, before get_model() can trigger this recursion, so
+        # super().get_models() above already covers everything safely visible
+        # here -- fall back to that instead of regenerating.
         if _generating_models.get():
             return
 

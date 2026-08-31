@@ -2117,20 +2117,8 @@ class PolymorphicReverseDescriptorTest(
 class PolymorphicReverseDescriptorRecursionTestCase(
     TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
 ):
-    """
-    Regression test for issue #686: generating a polymorphic field's reverse
-    descriptor raised RecursionError.
-
-    _wire_polymorphic_reverse_descriptors() (called from
-    CustomObjectType._after_model_generation() for every polymorphic field with
-    a related_name) evaluates field_instance.related_object_types.all(), a
-    queryset that needs Django's relation graph to resolve -- which calls
-    apps.get_models(), re-entering this plugin's own get_models(), which called
-    get_model() again for the same still-under-construction COT with no way to
-    ever finish. apps.clear_cache() is called explicitly to force a cold
-    relation-tree cache, matching the "first time these classes are touched"
-    condition the sibling issue (#685) identified as the trigger.
-    """
+    """Regression test for issue #686: generating a polymorphic field's
+    reverse descriptor raised RecursionError."""
 
     def test_get_model_with_polymorphic_related_name_does_not_recurse(self):
         from unittest import mock
@@ -2158,17 +2146,14 @@ class PolymorphicReverseDescriptorRecursionTestCase(
         field.related_object_types.set([site_ot, prefix_ot])
 
         # Force the model out of cache and the relation-tree cold, so
-        # get_model() -> _after_model_generation() -> _wire_polymorphic_reverse_descriptors()
-        # -> related_object_types.all() hits the "first access" path that
-        # triggers apps.get_models() from inside Django's relation-graph build.
+        # get_model() -> _after_model_generation() -> related_object_types.all()
+        # hits the "first access" path that triggers apps.get_models().
         cot.clear_model_cache(cot.id)
         django_apps.clear_cache()
 
-        # get_models()'s CustomObjectType-enumeration loop -- the one this
-        # re-entrant trigger actually recurses through -- is unconditionally
-        # disabled under `manage.py test` (should_skip_dynamic_model_creation()
-        # returns True whenever "test" in sys.argv). Patch around that so this
-        # test exercises the real vulnerable loop instead of a no-op.
+        # should_skip_dynamic_model_creation() disables get_models()'s
+        # CustomObjectType loop under `manage.py test`; bypass it so this test
+        # exercises the real vulnerable code path.
         app_config = django_apps.get_app_config('netbox_custom_objects')
         with (
             mock.patch.object(nco_pkg, '_app_ready', True),
