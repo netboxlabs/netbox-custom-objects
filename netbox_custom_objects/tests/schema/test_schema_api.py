@@ -13,6 +13,9 @@ Covers:
 """
 
 
+from unittest import mock
+
+from django.apps import apps as django_apps
 from django.urls import reverse
 from django.test import TransactionTestCase
 from rest_framework import status
@@ -22,6 +25,7 @@ from core.models import ObjectType
 from users.models import ObjectPermission
 from utilities.testing import create_test_user
 
+import netbox_custom_objects as nco_pkg
 from netbox_custom_objects.schema.exporter import export_cot
 from netbox_custom_objects.models import CustomObjectType
 
@@ -407,12 +411,6 @@ class SchemaApplyMultiCOTRecursionTestCase(_SchemaAPIBase):
         perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
 
     def test_apply_two_new_cross_referencing_cots_in_one_request(self):
-        from unittest import mock
-
-        from django.apps import apps as django_apps
-
-        import netbox_custom_objects as nco_pkg
-
         django_apps.clear_cache()
 
         # should_skip_dynamic_model_creation() disables get_models()'s
@@ -459,12 +457,6 @@ class SchemaApplyMultiCOTRecursionTestCase(_SchemaAPIBase):
     def test_apply_three_new_cots_chained_references_in_one_request(self):
         """The issue notes a 3-type chain (interface -> area -> instance) fails
         identically to the 2-type case; cover it too."""
-        from unittest import mock
-
-        from django.apps import apps as django_apps
-
-        import netbox_custom_objects as nco_pkg
-
         django_apps.clear_cache()
 
         app_config = django_apps.get_app_config('netbox_custom_objects')
@@ -526,11 +518,6 @@ class SchemaApplyMultiCOTRecursionTestCase(_SchemaAPIBase):
         state, so this simulates the re-entrant get_models() call directly and
         asserts get_model() isn't invoked twice for an already-generated COT."""
         from collections import defaultdict
-        from unittest import mock
-
-        from django.apps import apps as django_apps
-
-        import netbox_custom_objects as nco_pkg
 
         cot1 = self.create_custom_object_type(name='Reentrancy Source', slug='reentrancy-source')
         cot2 = self.create_custom_object_type(name='Reentrancy Target', slug='reentrancy-target')
