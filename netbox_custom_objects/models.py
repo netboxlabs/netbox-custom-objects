@@ -1639,15 +1639,28 @@ class CustomObjectType(NetBoxModel):
             | {f.name for f in model._meta.local_many_to_many}
         )
         fields = []
-        for field in self.fields.filter(search_weight__gt=0):
+        display_attrs = []
+        for field in self.fields.all():
             if field.name not in present:
                 continue
-            fields.append((field.name, field.search_weight))
+            if field.search_weight > 0:
+                fields.append((field.name, field.search_weight))
+            # Context fields surface as supplementary "attributes" on global search
+            # results (issue #655), via the same generic CachedValue.display_attrs
+            # mechanism every other NetBox model's SearchIndex uses. That mechanism
+            # renders a field with plain getattr() (falling back to
+            # get_<field>_display() for Django choices=), so it has no way to render
+            # a MultiObject field's RelatedManager as anything meaningful -- exclude
+            # those. Polymorphic and coordinates fields need no such exclusion: they
+            # have no real backing column under the field's own name, so `present`
+            # already filters them out above.
+            if field.context and field.type != CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+                display_attrs.append(field.name)
 
         attrs = {
             "model": model,
             "fields": tuple(fields),
-            "display_attrs": tuple(),
+            "display_attrs": tuple(display_attrs),
         }
         search_index = type(
             f"{self.name}SearchIndex",
