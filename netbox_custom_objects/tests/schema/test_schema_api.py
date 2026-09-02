@@ -451,8 +451,19 @@ class SchemaApplyMultiCOTRecursionTestCase(_SchemaAPIBase):
         resp = self.client.post(self.apply_url, data=self._apply_body(schema_doc), format="json")
         self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.content)
         self.assertTrue(resp.data["applied"])
-        self.assertTrue(CustomObjectType.objects.filter(slug="ospf-instances").exists())
-        self.assertTrue(CustomObjectType.objects.filter(slug="ospf-areas").exists())
+        instance_cot = CustomObjectType.objects.get(slug="ospf-instances")
+        area_cot = CustomObjectType.objects.get(slug="ospf-areas")
+        self.assertIn(
+            instance_cot.get_model(),
+            django_apps.get_models(),
+            "Generated model should be returned by apps.get_models().",
+        )
+        self.assertIn(
+            area_cot.get_model(),
+            django_apps.get_models(),
+            "Generated model should be returned by apps.get_models().",
+        )
+        self.assertFalse(nco_pkg._generating_models.get())
 
     def test_apply_three_new_cots_chained_references_in_one_request(self):
         """The issue notes a 3-type chain (interface -> area -> instance) fails
@@ -508,9 +519,25 @@ class SchemaApplyMultiCOTRecursionTestCase(_SchemaAPIBase):
         resp = self.client.post(self.apply_url, data=self._apply_body(schema_doc), format="json")
         self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.content)
         self.assertTrue(resp.data["applied"])
-        self.assertTrue(CustomObjectType.objects.filter(slug="ospf-instances").exists())
-        self.assertTrue(CustomObjectType.objects.filter(slug="ospf-areas").exists())
-        self.assertTrue(CustomObjectType.objects.filter(slug="ospf-interfaces").exists())
+        instance_cot = CustomObjectType.objects.get(slug="ospf-instances")
+        area_cot = CustomObjectType.objects.get(slug="ospf-areas")
+        interface_cot = CustomObjectType.objects.get(slug="ospf-interfaces")
+        self.assertIn(
+            instance_cot.get_model(),
+            django_apps.get_models(),
+            "Generated model should be returned by apps.get_models().",
+        )
+        self.assertIn(
+            area_cot.get_model(),
+            django_apps.get_models(),
+            "Generated model should be returned by apps.get_models().",
+        )
+        self.assertIn(
+            interface_cot.get_model(),
+            django_apps.get_models(),
+            "Generated model should be returned by apps.get_models().",
+        )
+        self.assertFalse(nco_pkg._generating_models.get())
 
     def test_get_models_guards_against_reentrant_cot_generation(self):
         """Deterministic counterpart to the two end-to-end tests above: whether
@@ -550,5 +577,6 @@ class SchemaApplyMultiCOTRecursionTestCase(_SchemaAPIBase):
             # already before the call below even starts.
             list(app_config.get_models())
 
+        self.assertFalse(nco_pkg._generating_models.get())
         self.assertEqual(call_counts[cot1.pk], 1)
         self.assertEqual(call_counts[cot2.pk], 1)

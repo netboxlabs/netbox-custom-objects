@@ -2161,6 +2161,17 @@ class PolymorphicReverseDescriptorRecursionTestCase(
         ):
             # Must not raise RecursionError.
             model = cot.get_model()
+        self.assertFalse(nco_pkg._generating_models.get())
+        # Look up the registered class directly rather than trusting `model`:
+        # a nested get_models() call triggered mid-generation (as above) can
+        # leave get_model()'s return value out of sync with what's actually
+        # registered in the app registry -- see #688.
+        registered_model = django_apps.get_model(APP_LABEL, model.__name__)
+        self.assertIn(
+            registered_model,
+            django_apps.get_models(),
+            "Generated model should be returned by apps.get_models().",
+        )
         self.assertTrue(
             hasattr(Site, "rev_recursion_test"),
             "Reverse descriptor must still be set on Site after get_model()",
