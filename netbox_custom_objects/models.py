@@ -1832,9 +1832,9 @@ class CustomObjectType(NetBoxModel):
                 self._after_model_generation(attrs, model)
 
                 # _after_model_generation() can trigger a re-entrant get_model() for this
-                # same (cot_id, branch_id) (#688) -- e.g. a polymorphic field's
+                # same (cot_id, branch_id) -- e.g. a polymorphic field's
                 # related_object_types.all() rebuilding the relation tree and re-entering
-                # get_models() before the #685/#686 guard is set -- which re-registers a
+                # get_models() before the reentrancy guard is set -- which re-registers a
                 # different class under this key. Re-assert this call's own class so
                 # apps.all_models matches _model_cache and the return value below.
                 if branch_id is None and apps.all_models[APP_LABEL].get(model_key) is not model:

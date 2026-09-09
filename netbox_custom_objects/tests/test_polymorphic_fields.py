@@ -2165,7 +2165,7 @@ class PolymorphicReverseDescriptorRecursionTestCase(
         # Look up the registered class directly rather than trusting `model`:
         # a nested get_models() call triggered mid-generation (as above) can
         # leave get_model()'s return value out of sync with what's actually
-        # registered in the app registry -- see #688.
+        # registered in the app registry.
         registered_model = django_apps.get_model(APP_LABEL, model.__name__)
         self.assertIn(
             registered_model,
@@ -2182,9 +2182,8 @@ class PolymorphicReverseDescriptorRecursionTestCase(
 class GetModelCacheRegistryConsistencyTestCase(
     TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
 ):
-    """Regression test for issue #688: a re-entrant get_model() (#685/#686)
-    could leave _model_cache and apps.all_models pointing at two different
-    classes for the same COT."""
+    """Regression test: a re-entrant get_model() for the same COT could leave
+    _model_cache and apps.all_models pointing at two different classes."""
 
     def test_get_model_registers_the_same_class_it_returns_and_caches(self):
         from unittest import mock
@@ -2211,7 +2210,7 @@ class GetModelCacheRegistryConsistencyTestCase(
         )
         field.related_object_types.set([site_ot, prefix_ot])
 
-        # Same setup as the #686 recursion test, to force the re-entrant path.
+        # Same setup as the sibling recursion test, to force the re-entrant path.
         cot.clear_model_cache(cot.id)
         django_apps.clear_cache()
 
@@ -2231,7 +2230,7 @@ class GetModelCacheRegistryConsistencyTestCase(
         self.assertIs(
             registered_model, model,
             "apps.all_models must register the same class get_model() returned/cached, not a stray "
-            "class from a re-entrant regeneration (#688)",
+            "class from a re-entrant regeneration",
         )
         self.assertIn(
             registered_model,
