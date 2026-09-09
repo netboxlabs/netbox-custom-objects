@@ -2177,3 +2177,72 @@ class PolymorphicReverseDescriptorRecursionTestCase(
             "Reverse descriptor must still be set on Site after get_model()",
         )
         self.assertIsNotNone(model)
+
+
+class GetModelCacheRegistryConsistencyTestCase(
+    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
+):
+    """Regression test for issue #688: a re-entrant get_model() for the same
+    COT, triggered mid-generation (see #685/#686), could leave _model_cache
+    and apps.all_models pointing at two different classes for that COT."""
+
+    def test_get_model_registers_the_same_class_it_returns_and_caches(self):
+        from unittest import mock
+
+        from django.apps import apps as django_apps
+
+        import netbox_custom_objects as nco_pkg
+
+        site_ot = ObjectType.objects.get(app_label="dcim", model="site")
+        prefix_ot = ObjectType.objects.get(app_label="ipam", model="prefix")
+
+        cot = CustomObjectType.objects.create(
+            name="CacheRegistryTest", slug="cache-registry-test",
+            verbose_name_plural="Cache Registry Tests",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cot, name="name", type="text", primary=True, required=True,
+        )
+        field = CustomObjectTypeField.objects.create(
+            custom_object_type=cot,
+            name="target_obj", label="Target", type="object",
+            is_polymorphic=True,
+            related_name="rev_cache_registry_test",
+        )
+        field.related_object_types.set([site_ot, prefix_ot])
+
+        # Same setup as the #686 recursion test: force the model out of cache
+        # and the relation-tree cold, so get_model() -> _after_model_generation()
+        # -> related_object_types.all() hits the "first access" path that
+        # triggers apps.get_models() re-entrantly for this same COT.
+        cot.clear_model_cache(cot.id)
+        django_apps.clear_cache()
+
+        app_config = django_apps.get_app_config('netbox_custom_objects')
+        with (
+            mock.patch.object(nco_pkg, '_app_ready', True),
+            mock.patch.object(app_config, 'should_skip_dynamic_model_creation', return_value=False),
+        ):
+            model = cot.get_model()
+        self.assertFalse(nco_pkg._generating_models.get())
+
+        cached_model = CustomObjectType.get_cached_model(cot.id)
+        registered_model = django_apps.get_model(APP_LABEL, model.__name__)
+
+        # All three -- the return value, the per-COT cache, and the app
+        # registry -- must be the exact same class object. Before the #688
+        # fix, a re-entrant regeneration during _after_model_generation()
+        # could leave the app registry holding a different class than the one
+        # returned/cached, so `isinstance`/identity checks against one would
+        # silently fail against the other.
+        self.assertIs(cached_model, model, "get_cached_model() must return the same class get_model() returned")
+        self.assertIs(
+            registered_model, model,
+            "apps.all_models must register the same class get_model() returned/cached, not a stray "
+            "class from a re-entrant regeneration (#688)",
+        )
+        self.assertIn(
+            registered_model,
+            django_apps.get_models(),
+            "Generated model should be returned by apps.get_models().",
+        )
