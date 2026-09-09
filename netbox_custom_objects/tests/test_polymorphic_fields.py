@@ -2182,9 +2182,9 @@ class PolymorphicReverseDescriptorRecursionTestCase(
 class GetModelCacheRegistryConsistencyTestCase(
     TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
 ):
-    """Regression test for issue #688: a re-entrant get_model() for the same
-    COT, triggered mid-generation (see #685/#686), could leave _model_cache
-    and apps.all_models pointing at two different classes for that COT."""
+    """Regression test for issue #688: a re-entrant get_model() (#685/#686)
+    could leave _model_cache and apps.all_models pointing at two different
+    classes for the same COT."""
 
     def test_get_model_registers_the_same_class_it_returns_and_caches(self):
         from unittest import mock
@@ -2211,10 +2211,7 @@ class GetModelCacheRegistryConsistencyTestCase(
         )
         field.related_object_types.set([site_ot, prefix_ot])
 
-        # Same setup as the #686 recursion test: force the model out of cache
-        # and the relation-tree cold, so get_model() -> _after_model_generation()
-        # -> related_object_types.all() hits the "first access" path that
-        # triggers apps.get_models() re-entrantly for this same COT.
+        # Same setup as the #686 recursion test, to force the re-entrant path.
         cot.clear_model_cache(cot.id)
         django_apps.clear_cache()
 
@@ -2229,12 +2226,7 @@ class GetModelCacheRegistryConsistencyTestCase(
         cached_model = CustomObjectType.get_cached_model(cot.id)
         registered_model = django_apps.get_model(APP_LABEL, model.__name__)
 
-        # All three -- the return value, the per-COT cache, and the app
-        # registry -- must be the exact same class object. Before the #688
-        # fix, a re-entrant regeneration during _after_model_generation()
-        # could leave the app registry holding a different class than the one
-        # returned/cached, so `isinstance`/identity checks against one would
-        # silently fail against the other.
+        # Must be the exact same class object, not just an equal one.
         self.assertIs(cached_model, model, "get_cached_model() must return the same class get_model() returned")
         self.assertIs(
             registered_model, model,
