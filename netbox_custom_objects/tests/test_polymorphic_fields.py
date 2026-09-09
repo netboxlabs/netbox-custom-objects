@@ -2108,3 +2108,72 @@ class PolymorphicReverseDescriptorTest(
             Site.__dict__.get("co_shared_ref"), descriptor_b,
             "_unwire must not remove a descriptor owned by a different CO field",
         )
+
+
+# ---------------------------------------------------------------------------
+# get_models() re-entrancy (issue #686)
+# ---------------------------------------------------------------------------
+
+class PolymorphicReverseDescriptorRecursionTestCase(
+    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
+):
+    """Regression test for issue #686: generating a polymorphic field's
+    reverse descriptor raised RecursionError."""
+
+    def test_get_model_with_polymorphic_related_name_does_not_recurse(self):
+        from unittest import mock
+
+        from django.apps import apps as django_apps
+
+        import netbox_custom_objects as nco_pkg
+
+        site_ot = ObjectType.objects.get(app_label="dcim", model="site")
+        prefix_ot = ObjectType.objects.get(app_label="ipam", model="prefix")
+
+        cot = CustomObjectType.objects.create(
+            name="RecursionRevTest", slug="recursion-rev-test",
+            verbose_name_plural="Recursion Rev Tests",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cot, name="name", type="text", primary=True, required=True,
+        )
+        field = CustomObjectTypeField.objects.create(
+            custom_object_type=cot,
+            name="target_obj", label="Target", type="object",
+            is_polymorphic=True,
+            related_name="rev_recursion_test",
+        )
+        field.related_object_types.set([site_ot, prefix_ot])
+
+        # Force the model out of cache and the relation-tree cold, so
+        # get_model() -> _after_model_generation() -> related_object_types.all()
+        # hits the "first access" path that triggers apps.get_models().
+        cot.clear_model_cache(cot.id)
+        django_apps.clear_cache()
+
+        # should_skip_dynamic_model_creation() disables get_models()'s
+        # CustomObjectType loop under `manage.py test`; bypass it so this test
+        # exercises the real vulnerable code path.
+        app_config = django_apps.get_app_config('netbox_custom_objects')
+        with (
+            mock.patch.object(nco_pkg, '_app_ready', True),
+            mock.patch.object(app_config, 'should_skip_dynamic_model_creation', return_value=False),
+        ):
+            # Must not raise RecursionError.
+            model = cot.get_model()
+        self.assertFalse(nco_pkg._generating_models.get())
+        # Look up the registered class directly rather than trusting `model`:
+        # a nested get_models() call triggered mid-generation (as above) can
+        # leave get_model()'s return value out of sync with what's actually
+        # registered in the app registry -- see #688.
+        registered_model = django_apps.get_model(APP_LABEL, model.__name__)
+        self.assertIn(
+            registered_model,
+            django_apps.get_models(),
+            "Generated model should be returned by apps.get_models().",
+        )
+        self.assertTrue(
+            hasattr(Site, "rev_recursion_test"),
+            "Reverse descriptor must still be set on Site after get_model()",
+        )
+        self.assertIsNotNone(model)

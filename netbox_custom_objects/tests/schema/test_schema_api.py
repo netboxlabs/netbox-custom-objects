@@ -13,6 +13,9 @@ Covers:
 """
 
 
+from unittest import mock
+
+from django.apps import apps as django_apps
 from django.urls import reverse
 from django.test import TransactionTestCase
 from rest_framework import status
@@ -22,6 +25,7 @@ from core.models import ObjectType
 from users.models import ObjectPermission
 from utilities.testing import create_test_user
 
+import netbox_custom_objects as nco_pkg
 from netbox_custom_objects.schema.exporter import export_cot
 from netbox_custom_objects.models import CustomObjectType
 
@@ -388,3 +392,191 @@ class SchemaApplyTestCase(_SchemaAPIBase):
         )
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("allow_destructive", resp.data)
+
+
+# ---------------------------------------------------------------------------
+# get_models() re-entrancy (issue #685)
+# ---------------------------------------------------------------------------
+
+class SchemaApplyMultiCOTRecursionTestCase(_SchemaAPIBase):
+    """Regression test for issue #685: applying a document that creates
+    multiple new, cross-referencing Custom Object Types in one request
+    raised RecursionError."""
+
+    def setUp(self):
+        super().setUp()
+        perm = ObjectPermission(name='schema_apply_recursion_cot_perm', actions=['add', 'change'])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
+
+    def test_apply_two_new_cross_referencing_cots_in_one_request(self):
+        django_apps.clear_cache()
+
+        # should_skip_dynamic_model_creation() disables get_models()'s
+        # CustomObjectType loop under `manage.py test`; bypass it so this test
+        # exercises the real vulnerable code path.
+        app_config = django_apps.get_app_config('netbox_custom_objects')
+        self.enterContext(mock.patch.object(nco_pkg, '_app_ready', True))
+        self.enterContext(
+            mock.patch.object(app_config, 'should_skip_dynamic_model_creation', return_value=False)
+        )
+
+        schema_doc = {
+            "schema_version": "1",
+            "types": [
+                {
+                    "name": "ospf_instance",
+                    "slug": "ospf-instances",
+                    "fields": [
+                        {"id": 1, "name": "name", "type": "text", "primary": True, "required": True, "unique": True},
+                    ],
+                },
+                {
+                    "name": "ospf_area",
+                    "slug": "ospf-areas",
+                    "fields": [
+                        {"id": 1, "name": "name", "type": "text", "primary": True, "required": True, "unique": True},
+                        {
+                            "id": 2,
+                            "name": "instance",
+                            "type": "object",
+                            "required": True,
+                            "related_object_type": "custom-objects/ospf-instances",
+                        },
+                    ],
+                },
+            ],
+        }
+        resp = self.client.post(self.apply_url, data=self._apply_body(schema_doc), format="json")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.content)
+        self.assertTrue(resp.data["applied"])
+        instance_cot = CustomObjectType.objects.get(slug="ospf-instances")
+        area_cot = CustomObjectType.objects.get(slug="ospf-areas")
+        self.assertIn(
+            instance_cot.get_model(),
+            django_apps.get_models(),
+            "Generated model should be returned by apps.get_models().",
+        )
+        self.assertIn(
+            area_cot.get_model(),
+            django_apps.get_models(),
+            "Generated model should be returned by apps.get_models().",
+        )
+        self.assertFalse(nco_pkg._generating_models.get())
+
+    def test_apply_three_new_cots_chained_references_in_one_request(self):
+        """The issue notes a 3-type chain (interface -> area -> instance) fails
+        identically to the 2-type case; cover it too."""
+        django_apps.clear_cache()
+
+        app_config = django_apps.get_app_config('netbox_custom_objects')
+        self.enterContext(mock.patch.object(nco_pkg, '_app_ready', True))
+        self.enterContext(
+            mock.patch.object(app_config, 'should_skip_dynamic_model_creation', return_value=False)
+        )
+
+        schema_doc = {
+            "schema_version": "1",
+            "types": [
+                {
+                    "name": "ospf_instance",
+                    "slug": "ospf-instances",
+                    "fields": [
+                        {"id": 1, "name": "name", "type": "text", "primary": True, "required": True, "unique": True},
+                    ],
+                },
+                {
+                    "name": "ospf_area",
+                    "slug": "ospf-areas",
+                    "fields": [
+                        {"id": 1, "name": "name", "type": "text", "primary": True, "required": True, "unique": True},
+                        {
+                            "id": 2,
+                            "name": "instance",
+                            "type": "object",
+                            "required": True,
+                            "related_object_type": "custom-objects/ospf-instances",
+                        },
+                    ],
+                },
+                {
+                    "name": "ospf_interface",
+                    "slug": "ospf-interfaces",
+                    "fields": [
+                        {"id": 1, "name": "name", "type": "text", "primary": True, "required": True, "unique": True},
+                        {
+                            "id": 2,
+                            "name": "area",
+                            "type": "object",
+                            "required": True,
+                            "related_object_type": "custom-objects/ospf-areas",
+                        },
+                    ],
+                },
+            ],
+        }
+        resp = self.client.post(self.apply_url, data=self._apply_body(schema_doc), format="json")
+        self.assertEqual(resp.status_code, status.HTTP_200_OK, resp.content)
+        self.assertTrue(resp.data["applied"])
+        instance_cot = CustomObjectType.objects.get(slug="ospf-instances")
+        area_cot = CustomObjectType.objects.get(slug="ospf-areas")
+        interface_cot = CustomObjectType.objects.get(slug="ospf-interfaces")
+        self.assertIn(
+            instance_cot.get_model(),
+            django_apps.get_models(),
+            "Generated model should be returned by apps.get_models().",
+        )
+        self.assertIn(
+            area_cot.get_model(),
+            django_apps.get_models(),
+            "Generated model should be returned by apps.get_models().",
+        )
+        self.assertIn(
+            interface_cot.get_model(),
+            django_apps.get_models(),
+            "Generated model should be returned by apps.get_models().",
+        )
+        self.assertFalse(nco_pkg._generating_models.get())
+
+    def test_get_models_guards_against_reentrant_cot_generation(self):
+        """Deterministic counterpart to the two end-to-end tests above: whether
+        those actually blow the recursion limit depends on incidental process
+        state, so this simulates the re-entrant get_models() call directly and
+        asserts get_model() isn't invoked twice for an already-generated COT."""
+        from collections import defaultdict
+
+        cot1 = self.create_custom_object_type(name='Reentrancy Source', slug='reentrancy-source')
+        cot2 = self.create_custom_object_type(name='Reentrancy Target', slug='reentrancy-target')
+        app_config = django_apps.get_app_config('netbox_custom_objects')
+
+        call_counts = defaultdict(int)
+        real_get_model = CustomObjectType.get_model
+        test_case = self
+
+        def spying_get_model(self, *args, **kwargs):
+            call_counts[self.pk] += 1
+            if call_counts[self.pk] > 10:
+                test_case.fail(
+                    f"get_model() called {call_counts[self.pk]} times for COT "
+                    f"{self.pk} -- unbounded re-entrant generation (issue #685/#686)"
+                )
+            result = real_get_model(self, *args, **kwargs)
+            if call_counts[self.pk] == 1:
+                # Simulate Django re-entering get_models() mid-generation.
+                list(app_config.get_models())
+            return result
+
+        with (
+            mock.patch.object(CustomObjectType, 'get_model', spying_get_model),
+            mock.patch.object(nco_pkg, '_app_ready', True),
+            mock.patch.object(app_config, 'should_skip_dynamic_model_creation', return_value=False),
+        ):
+            # Not calling django_apps.clear_cache() here -- it walks
+            # apps.get_models() itself, which would drive this loop once
+            # already before the call below even starts.
+            list(app_config.get_models())
+
+        self.assertFalse(nco_pkg._generating_models.get())
+        self.assertEqual(call_counts[cot1.pk], 1)
+        self.assertEqual(call_counts[cot2.pk], 1)

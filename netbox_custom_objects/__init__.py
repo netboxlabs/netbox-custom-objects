@@ -18,6 +18,11 @@ logger = logging.getLogger(__name__)
 # Context variable to track if we're currently running migrations
 _is_migrating = contextvars.ContextVar('is_migrating', default=False)
 
+# Guards get_models() against re-entrancy (issues #685/#686): generating a COT
+# model can trigger Django to rebuild its relation graph, which calls
+# apps.get_models() again while we're still mid-generation.
+_generating_models = contextvars.ContextVar('generating_models', default=False)
+
 # Cache for migration check to avoid repeated expensive filesystem/database operations
 _migrations_checked = None
 _checking_migrations = False
@@ -560,52 +565,63 @@ class CustomObjectsPluginConfig(PluginConfig):
         for model in super().get_models(include_auto_created, include_swapped):
             yield model
 
-        # Suppress warnings about database calls during model loading.
-        # See the corresponding block in ready() for the rationale for using
-        # module-based filtering instead of message-content matching.
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore", category=RuntimeWarning,
-                module=r"django\.db\.backends\..*",
-            )
-            warnings.filterwarnings(
-                "ignore", category=UserWarning,
-                module=r"netbox_branching\..*",
-            )
+        # Re-entrant call (issues #685/#686): generate_model() registers a COT's
+        # model synchronously, before get_model() can trigger this recursion, so
+        # super().get_models() above already covers everything safely visible
+        # here -- fall back to that instead of regenerating.
+        if _generating_models.get():
+            return
 
-            # Skip dynamic model generation until ready() has completed.
-            # Other apps' ready() calls (e.g. dcim) trigger _relation_tree →
-            # apps.get_models() before our ready() runs.  At that point _model_cache
-            # is empty, so get_model() would regenerate every COT from scratch —
-            # including ContentType DB lookups that may fail.  After our ready()
-            # finishes, _app_ready is True and get_model() returns cached models
-            # without any ContentType lookups.
-            if not _app_ready:
-                return
+        token = _generating_models.set(True)
+        try:
+            # Suppress warnings about database calls during model loading.
+            # See the corresponding block in ready() for the rationale for using
+            # module-based filtering instead of message-content matching.
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore", category=RuntimeWarning,
+                    module=r"django\.db\.backends\..*",
+                )
+                warnings.filterwarnings(
+                    "ignore", category=UserWarning,
+                    module=r"netbox_branching\..*",
+                )
 
-            # Skip custom object type model loading if dynamic models can't be created yet
-            if self.should_skip_dynamic_model_creation():
-                return
+                # Skip dynamic model generation until ready() has completed.
+                # Other apps' ready() calls (e.g. dcim) trigger _relation_tree →
+                # apps.get_models() before our ready() runs.  At that point _model_cache
+                # is empty, so get_model() would regenerate every COT from scratch —
+                # including ContentType DB lookups that may fail.  After our ready()
+                # finishes, _app_ready is True and get_model() returns cached models
+                # without any ContentType lookups.
+                if not _app_ready:
+                    return
 
-            # Add custom object type models
-            from .models import CustomObjectType
+                # Skip custom object type model loading if dynamic models can't be created yet
+                if self.should_skip_dynamic_model_creation():
+                    return
 
-            try:
-                with transaction.atomic():
-                    custom_object_types = CustomObjectType.objects.all()
-                    for custom_type in custom_object_types:
-                        model = custom_type.get_model()
-                        if model:
-                            yield model
+                # Add custom object type models
+                from .models import CustomObjectType
 
-                            # If include_auto_created is True, also yield through models
-                            if include_auto_created and hasattr(model, '_through_models'):
-                                for through_model in model._through_models:
-                                    yield through_model
-            except (ProgrammingError, OperationalError):
-                # DB schema is incomplete (unapplied migrations). Yield nothing —
-                # dynamic models will be available once migrations have run.
-                return
+                try:
+                    with transaction.atomic():
+                        custom_object_types = CustomObjectType.objects.all()
+                        for custom_type in custom_object_types:
+                            model = custom_type.get_model()
+                            if model:
+                                yield model
+
+                                # If include_auto_created is True, also yield through models
+                                if include_auto_created and hasattr(model, '_through_models'):
+                                    for through_model in model._through_models:
+                                        yield through_model
+                except (ProgrammingError, OperationalError):
+                    # DB schema is incomplete (unapplied migrations). Yield nothing —
+                    # dynamic models will be available once migrations have run.
+                    return
+        finally:
+            _generating_models.reset(token)
 
 
 config = CustomObjectsPluginConfig
