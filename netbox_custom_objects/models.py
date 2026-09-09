@@ -1831,6 +1831,17 @@ class CustomObjectType(NetBoxModel):
             with self._global_lock:
                 self._after_model_generation(attrs, model)
 
+                # _after_model_generation() can trigger a re-entrant get_model() for this
+                # same (cot_id, branch_id) -- e.g. a polymorphic field's
+                # related_object_types.all() rebuilding the relation tree and re-entering
+                # get_models() before the reentrancy guard is set -- which re-registers a
+                # different class under this key. Re-assert this call's own class so
+                # apps.all_models matches _model_cache and the return value below.
+                if branch_id is None and apps.all_models[APP_LABEL].get(model_key) is not model:
+                    if model_key in apps.all_models[APP_LABEL]:
+                        del apps.all_models[APP_LABEL][model_key]
+                    apps.register_model(APP_LABEL, model)
+
                 # When this COT's model is regenerated (cache miss), non-polymorphic through
                 # models owned by OTHER COTs that point to this COT as their M2M target keep
                 # their target FK stale (pointing at the old model class).  Django's deletion
