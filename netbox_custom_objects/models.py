@@ -1504,6 +1504,7 @@ class CustomObjectType(NetBoxModel):
         self,
         fields,
         skip_object_fields=False,
+        skip_cot_object_fields=False,
     ):
         field_attrs = {
             "_primary_field_id": -1,
@@ -1521,8 +1522,13 @@ class CustomObjectType(NetBoxModel):
         fields = list(fields) + [field for field in fields_query]
 
         for field in fields:
-            if skip_object_fields:
-                if field.type in [CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT]:
+            if field.type in [CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT]:
+                if skip_object_fields:
+                    continue
+                # Only a COT target produces a LazyForeignKey that needs ready()'s
+                # second pass; core-model targets and polymorphic GFKs resolve on
+                # their own, so they stay even in the unsafe window (#637).
+                if skip_cot_object_fields and field.targets_custom_object_type:
                     continue
 
             field_type = FIELD_TYPE_CLASS[field.type]()
@@ -1774,15 +1780,28 @@ class CustomObjectType(NetBoxModel):
             | {f.name for f in model._meta.local_many_to_many}
         )
         fields = []
-        for field in self.fields.filter(search_weight__gt=0):
+        display_attrs = []
+        for field in self.fields.all():
             if field.name not in present:
                 continue
-            fields.append((field.name, field.search_weight))
+            if field.search_weight > 0:
+                fields.append((field.name, field.search_weight))
+            # Context fields surface as supplementary "attributes" on global search
+            # results (issue #655), via the same generic CachedValue.display_attrs
+            # mechanism every other NetBox model's SearchIndex uses. That mechanism
+            # renders a field with plain getattr() (falling back to
+            # get_<field>_display() for Django choices=), so it has no way to render
+            # a MultiObject field's RelatedManager as anything meaningful -- exclude
+            # those. Polymorphic and coordinates fields need no such exclusion: they
+            # have no real backing column under the field's own name, so `present`
+            # already filters them out above.
+            if field.context and field.type != CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+                display_attrs.append(field.name)
 
         attrs = {
             "model": model,
             "fields": tuple(fields),
-            "display_attrs": tuple(),
+            "display_attrs": tuple(display_attrs),
         }
         search_index = type(
             f"{self.name}SearchIndex",
@@ -1808,7 +1827,6 @@ class CustomObjectType(NetBoxModel):
         :return: The generated model.
         :rtype: Model
         """
-
         branch_id = self._active_branch_id()
 
         # Lock guards the cache check, not the miss → re-cache window.  Two
@@ -1831,6 +1849,15 @@ class CustomObjectType(NetBoxModel):
                     # bumped cache_timestamp to branches via change-capture, so
                     # they'll re-evaluate against their own row independently.
                     self.clear_model_cache(self.id)
+
+        # Avoid a dangling cross-COT FK reference when get_model() runs outside
+        # ready()'s two-pass resolution, e.g. a plugin importing it at migrate
+        # time (#637). Only COT-targeting Object/Multi-object fields can dangle
+        # like this (core-model targets and polymorphic GFKs resolve on their
+        # own), so this narrower flag is kept separate from the caller's own
+        # skip_object_fields. Never cached (see below), so a later call
+        # regenerates in full.
+        skip_cot_object_fields = apps.get_app_config(APP_LABEL)._dynamic_model_creation_unsafe()
 
         # Generate the model outside the lock to avoid holding it during expensive operations
         model_name = self.get_table_model_name(self.pk)
@@ -1865,6 +1892,7 @@ class CustomObjectType(NetBoxModel):
         field_attrs = self._fetch_and_generate_field_attrs(
             fields,
             skip_object_fields=skip_object_fields,
+            skip_cot_object_fields=skip_cot_object_fields,
         )
 
         attrs.update(**field_attrs)
@@ -1882,9 +1910,20 @@ class CustomObjectType(NetBoxModel):
         with _taggable_manager_patch_lock:
             original_post_through_setup = TM.post_through_setup
 
-            def wrapped_post_through_setup(self, cls):
+            def wrapped_post_through_setup(manager, _resolved_model):
+                # contribute_to_class() sets manager.model to the actual class
+                # under construction *before* scheduling this call via
+                # lazy_related_operation(); _resolved_model instead comes from
+                # re-resolving the model by name through the app registry at
+                # call time. If a prior generation for the same COT is still
+                # registered under this model name when this fires, that
+                # lookup resolves immediately against the stale class instead
+                # of the one actually being built, so the new 'tags' field
+                # never gets its own tagged_items GenericRelation -- silently
+                # breaking tag cascade-delete (issue #629). manager.model is
+                # never subject to that staleness, so use it instead.
                 try:
-                    return original_post_through_setup(self, cls)
+                    return original_post_through_setup(manager, manager.model)
                 except ValueError:
                     pass
 
@@ -1932,6 +1971,17 @@ class CustomObjectType(NetBoxModel):
             # interleave their through-model registrations.
             with self._global_lock:
                 self._after_model_generation(attrs, model)
+
+                # _after_model_generation() can trigger a re-entrant get_model() for this
+                # same (cot_id, branch_id) -- e.g. a polymorphic field's
+                # related_object_types.all() rebuilding the relation tree and re-entering
+                # get_models() before the reentrancy guard is set -- which re-registers a
+                # different class under this key. Re-assert this call's own class so
+                # apps.all_models matches _model_cache and the return value below.
+                if branch_id is None and apps.all_models[APP_LABEL].get(model_key) is not model:
+                    if model_key in apps.all_models[APP_LABEL]:
+                        del apps.all_models[APP_LABEL][model_key]
+                    apps.register_model(APP_LABEL, model)
 
                 # When this COT's model is regenerated (cache miss), non-polymorphic through
                 # models owned by OTHER COTs that point to this COT as their M2M target keep
@@ -1988,10 +2038,11 @@ class CustomObjectType(NetBoxModel):
                     fk_field.__dict__.pop('reverse_path_infos', None)
 
                 # Only cache fully-generated models.  Models generated with
-                # skip_object_fields=True omit FK fields to other COTs; caching them
-                # would permanently hide those fields if a dependent COT triggers
-                # generation before this one in the startup loop (issue #408).
-                if not skip_object_fields:
+                # skip_object_fields=True or skip_cot_object_fields=True omit FK
+                # fields to other COTs; caching them would permanently hide those
+                # fields if a dependent COT triggers generation before this one in
+                # the startup loop (issue #408), or after a migrate-time call (#637).
+                if not (skip_object_fields or skip_cot_object_fields):
                     self._model_cache[(self.id, branch_id)] = (model, self.cache_timestamp)
 
         apps.clear_cache()
@@ -2354,9 +2405,14 @@ def _rename_objectchange_field_key(fi, old_name, new_name):
         'SET {col} = ({col} - %s) || jsonb_build_object(%s, {col}->%s) '
         'WHERE object_type_id = %s AND {col} IS NOT NULL AND {col} ? %s'
     )
+    # Unlike core.ObjectChange, ChangeDiff has no per-branch schema copy, so every
+    # other access to it (including netbox-branching's own record_change_diff
+    # receiver) uses DEFAULT_DB_ALIAS. Writing it via the branch connection here
+    # instead introduced a second connection into sync()'s open transaction,
+    # causing a same-process cross-connection deadlock (issue #653).
     try:
-        with transaction.atomic(using=conn.alias):
-            with conn.cursor() as cursor:
+        with transaction.atomic(using=DEFAULT_DB_ALIAS):
+            with connections[DEFAULT_DB_ALIAS].cursor() as cursor:
                 for json_col in ('original', 'modified', 'current'):
                     cursor.execute(
                         cd_sql.format(col=json_col),
@@ -2720,6 +2776,24 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             getter = getattr(self.choice_set, 'get_choice_color', None)
             return getter(value) if getter else None
         return None
+
+    @property
+    def targets_custom_object_type(self):
+        """
+        True when this field points at another COT's dynamic model, i.e. its FK is a
+        LazyForeignKey that only resolves once the target is in the app registry.
+        Polymorphic fields use a GFK and need no resolution, so they are excluded.
+        """
+        if self.is_polymorphic or not self.related_object_type_id:
+            return False
+        try:
+            object_type = ContentType.objects.get_for_id(self.related_object_type_id)
+        except ContentType.DoesNotExist:
+            return False
+        return (
+            object_type.app_label == APP_LABEL
+            and extract_cot_id_from_model_name(object_type.model) is not None
+        )
 
     @property
     def related_object_type_label(self):
