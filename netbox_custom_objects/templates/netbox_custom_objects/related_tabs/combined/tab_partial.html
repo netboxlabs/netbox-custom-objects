@@ -1,0 +1,136 @@
+{% load i18n perms %}
+<div id="custom_objects_list" class="htmx-container">
+    {% include 'inc/paginator.html' with paginator=paginator page=page_obj placement='top' htmx=True table=htmx_table %}
+    {% if page_rows %}
+        <div class="table-responsive">
+            <table class="table table-hover object-list">
+                <thead hx-target="#custom_objects_list" hx-swap="outerHTML" hx-push-url="true">
+                    <tr>
+                        {% if 'type' in selected_columns %}
+                            <th class="{{ sort_headers.type.th_class }} orderable">
+                                {% if sort_headers.type.is_active %}
+                                    <div class="float-end">
+                                        <a href="#" hx-get="{{ sort_headers.type.clear_url }}" class="text-danger" title="{% trans 'Clear ordering' %}"><i class="mdi mdi-close"></i></a>
+                                    </div>
+                                {% endif %}
+                                <a href="#" hx-get="{{ sort_headers.type.url }}">{% trans "Type" %}</a>
+                            </th>
+                        {% endif %}
+                        {% if 'object' in selected_columns %}
+                            <th class="{{ sort_headers.object.th_class }} orderable">
+                                {% if sort_headers.object.is_active %}
+                                    <div class="float-end">
+                                        <a href="#" hx-get="{{ sort_headers.object.clear_url }}" class="text-danger" title="{% trans 'Clear ordering' %}"><i class="mdi mdi-close"></i></a>
+                                    </div>
+                                {% endif %}
+                                <a href="#" hx-get="{{ sort_headers.object.url }}">{% trans "Object" %}</a>
+                            </th>
+                        {% endif %}
+                        {% if 'value' in selected_columns %}
+                            <th>{% trans "Value" %}</th>
+                        {% endif %}
+                        {% if 'field' in selected_columns %}
+                            <th class="{{ sort_headers.field.th_class }} orderable">
+                                {% if sort_headers.field.is_active %}
+                                    <div class="float-end">
+                                        <a href="#" hx-get="{{ sort_headers.field.clear_url }}" class="text-danger" title="{% trans 'Clear ordering' %}"><i class="mdi mdi-close"></i></a>
+                                    </div>
+                                {% endif %}
+                                <a href="#" hx-get="{{ sort_headers.field.url }}">{% trans "Field" %}</a>
+                            </th>
+                        {% endif %}
+                        {% if 'tags' in selected_columns %}
+                            <th>{% trans "Tags" %}</th>
+                        {% endif %}
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for obj, field, value in page_rows %}
+                        <tr>
+                            {% if 'type' in selected_columns %}
+                                <td>
+                                    {% if request.user|can_view:field.custom_object_type %}
+                                        <a href="{{ field.custom_object_type.get_absolute_url }}">{{ field.custom_object_type }}</a>
+                                    {% else %}
+                                        {{ field.custom_object_type }}
+                                    {% endif %}
+                                </td>
+                            {% endif %}
+                            {% if 'object' in selected_columns %}
+                                <td>
+                                    <a href="{{ obj.get_absolute_url }}">{{ obj }}</a>
+                                </td>
+                            {% endif %}
+                            {% if 'value' in selected_columns %}
+                                <td>
+                                    {% if field.type == 'object' %}
+                                        {% if value %}
+                                            <a href="{{ value.get_absolute_url }}">{{ value }}</a>
+                                        {% else %}
+                                            &mdash;
+                                        {% endif %}
+                                    {% elif field.type == 'multiobject' %}
+                                        {% if value %}
+                                            {% for related_obj in value|slice:max_multiobject_display %}
+                                                <a href="{{ related_obj.get_absolute_url }}">{{ related_obj }}</a>
+                                                {% if not forloop.last %},{% endif %}
+                                            {% endfor %}
+                                            {% if value|length > max_multiobject_display %}&hellip;{% endif %}
+                                        {% else %}
+                                            &mdash;
+                                        {% endif %}
+                                    {% else %}
+                                        &mdash;
+                                    {% endif %}
+                                </td>
+                            {% endif %}
+                            {% if 'field' in selected_columns %}<td>{{ field }}</td>{% endif %}
+                            {% if 'tags' in selected_columns %}
+                                <td>
+                                    {% for t in obj.tags.all %}
+                                        {% tag t %}
+                                    {% empty %}
+                                        &mdash;
+                                    {% endfor %}
+                                </td>
+                            {% endif %}
+                            <td class="text-end text-nowrap noprint">
+                                <span class="btn-group dropdown">
+                                    {% if request.user|can_change:obj %}
+                                        <a class="btn btn-sm btn-warning"
+                                           href="{% url 'plugins:netbox_custom_objects:customobject_edit' pk=obj.pk custom_object_type=obj.custom_object_type.slug %}?return_url={{ return_url|urlencode }}"
+                                           type="button"
+                                           aria-label="{% trans 'Edit' %}"><i class="mdi mdi-pencil"></i></a>
+                                    {% endif %}
+                                    <button type="button"
+                                            class="btn btn-sm btn-warning dropdown-toggle"
+                                            data-bs-toggle="dropdown"
+                                            aria-expanded="false"
+                                            style="padding-left: 2px">
+                                        <span class="visually-hidden">{% trans 'Toggle Dropdown' %}</span>
+                                    </button>
+                                    <ul class="dropdown-menu">
+                                        <li><a class="dropdown-item" href="{% url 'plugins:netbox_custom_objects:customobject_changelog' pk=obj.pk custom_object_type=obj.custom_object_type.slug %}"><i class="mdi mdi-history" aria-hidden="true"></i> {% trans "Changelog" %}</a></li>
+                                        {% if request.user|can_delete:obj %}
+                                            <li><a class="dropdown-item" href="{% url 'plugins:netbox_custom_objects:customobject_delete' pk=obj.pk custom_object_type=obj.custom_object_type.slug %}?return_url={{ return_url|urlencode }}"><i class="mdi mdi-trash-can-outline" aria-hidden="true"></i> {% trans "Delete" %}</a></li>
+                                        {% endif %}
+                                    </ul>
+                                </span>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div class="card-body text-muted">
+            {% if q or type_slug or tag_slug %}
+                {% trans "No custom objects match your filters." %}
+            {% else %}
+                {% trans "No custom objects are linked to this object." %}
+            {% endif %}
+        </div>
+    {% endif %}
+    {% include 'inc/paginator.html' with paginator=paginator page=page_obj placement='bottom' htmx=True table=htmx_table %}
+</div>

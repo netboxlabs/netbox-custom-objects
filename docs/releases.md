@@ -1,5 +1,29 @@
 # Releases
 
+## 0.7.0
+
+### New Features
+
+**Related Custom Objects Tab**
+
+Any NetBox object referenced by a Custom Object — via an Object or Multi-object field, polymorphic or not — now surfaces a combined "Custom Objects" tab on its own detail page, listing every Custom Object that links to it across all Custom Object Types. The tab includes a live count badge, quicksearch, Type/Tag filters, sortable columns, and per-row actions, and respects each Custom Object Type's own view permissions throughout — replacing the older, unfiltered "Custom Objects linking to this object" panel. Also fixes a pre-existing cosmetic bug in the Custom Object Type fields table, where the row-actions dropdown rendered raw template placeholders instead of translated text.
+
+- [#26](https://github.com/netboxlabs/netbox-custom-objects/issues/26) - Auto-generate a combined tab of related Custom Objects on any object they reference
+
+### Enhancements
+
+- [#496](https://github.com/netboxlabs/netbox-custom-objects/issues/496) - URL fields can now define an optional link title, displayed in place of the raw URL on an object's detail page
+- [#655](https://github.com/netboxlabs/netbox-custom-objects/issues/655) - Global search results now surface a Custom Object Type's "context" fields as attributes, matching stock NetBox models
+- [#665](https://github.com/netboxlabs/netbox-custom-objects/issues/665) - The portable schema export/preview/apply endpoints now also accept and can return YAML (JSON remains the default)
+
+### Bug Fixes
+
+- [#678](https://github.com/netboxlabs/netbox-custom-objects/issues/678) - Custom Objects tab raised `TemplateDoesNotExist` (500) on models without a detail template (e.g. VRF, MACAddress)
+- [#685](https://github.com/netboxlabs/netbox-custom-objects/issues/685) - `schema/apply/` raised `RecursionError` when a document created multiple new, cross-referencing Custom Object Types in one request
+- [#688](https://github.com/netboxlabs/netbox-custom-objects/issues/688) - `get_model()` could leave `_model_cache` and `apps.all_models` pointing at two different classes for the same Custom Object Type
+
+---
+
 ## 0.6.1
 
 ### Enhancements

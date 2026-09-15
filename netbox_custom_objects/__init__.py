@@ -68,6 +68,30 @@ def _reset_deferred_co_field_data(sender, **kwargs):
     _deferred_co_field_data.set(None)
 
 
+def _heal_branch_on_migrate(sender, branch, **kwargs):
+    """netbox-branching's own ``post_migrate`` receiver.
+
+    Secondary/defense-in-depth path only. The reliable trigger for healing
+    *existing* branches is ``heal_all_branches()``, called unconditionally
+    from ``_heal_mixin_columns`` below (Django's core ``post_migrate``, fired
+    by every ``manage.py migrate`` run) -- a schema change like a new
+    multi-column sub-column ships with no actual Django migration file, so
+    there's nothing for netbox-branching's ``MigrationExecutor`` to detect as
+    "pending" against a branch, and ``Branch.migrate()`` never runs for it.
+    This receiver still re-heals the one branch that was just migrated,
+    covering a *future* plugin release that does ship a real migration
+    alongside a schema change.
+    """
+    try:
+        from netbox_custom_objects.mixin_migration import heal_branch  # noqa: PLC0415
+        heal_branch(branch, verbosity=kwargs.get("verbosity", 1))
+    except Exception:
+        logging.getLogger(__name__).exception(
+            "netbox_custom_objects: unexpected error healing branch %s after migrate",
+            getattr(branch, "pk", branch),
+        )
+
+
 def _register_branching_hooks_once():
     """Register netbox-branching integration hooks at most once per process.
 
@@ -92,6 +116,12 @@ def _register_branching_hooks_once():
 
     for sig in (pre_merge, post_merge, pre_sync, post_sync, pre_revert, post_revert):
         sig.connect(_reset_deferred_co_field_data, weak=False)
+
+    try:
+        from netbox_branching.signals import post_migrate as branching_post_migrate
+        branching_post_migrate.connect(_heal_branch_on_migrate, weak=False)
+    except ImportError:
+        pass
 
     try:
         from netbox_branching.utilities import (
@@ -139,6 +169,12 @@ def _heal_mixin_columns(sender, **kwargs):
     process so the cost is negligible on normal server starts where no
     migrations run.
 
+    Also heals every live Branch's own schema (heal_all_branches()), not just
+    the default connection's.  This can't be delegated to Branch.migrate()'s
+    own post_migrate signal (see heal_branch()'s docstring in
+    mixin_migration.py for why) -- the main upgrade path is the only reliable
+    trigger, so it runs unconditionally here alongside the main-schema heal.
+
     Skipped during makemigrations and collectstatic (DB may be unavailable or
     in an inconsistent state for our purposes).
     """
@@ -150,8 +186,11 @@ def _heal_mixin_columns(sender, **kwargs):
         return
 
     try:
-        from netbox_custom_objects.mixin_migration import heal_all_cots  # noqa: PLC0415
+        from netbox_custom_objects.mixin_migration import heal_all_branches, heal_all_cots  # noqa: PLC0415
         heal_all_cots(verbosity=kwargs.get("verbosity", 1))
+        # No-ops (zero-result) when netbox-branching isn't installed -- see
+        # heal_all_branches()'s own apps.is_installed() check.
+        heal_all_branches(verbosity=kwargs.get("verbosity", 1))
     except Exception:
         import logging  # noqa: PLC0415
         logging.getLogger(__name__).exception(
@@ -256,7 +295,7 @@ class CustomObjectsPluginConfig(PluginConfig):
     name = "netbox_custom_objects"
     verbose_name = "Custom Objects"
     description = "A plugin to manage custom objects in NetBox"
-    version = "0.6.1"
+    version = "0.7.0"
     author = 'Netbox Labs'
     author_email = 'support@netboxlabs.com'
     base_url = "custom-objects"
@@ -266,8 +305,17 @@ class CustomObjectsPluginConfig(PluginConfig):
     default_settings = {
         # The maximum number of Custom Object Types that may be created
         'max_custom_object_types': 50,
+        # Max related objects shown per row in the combined tab's Value column
+        # for a multi-object field before the rest are truncated to an ellipsis.
+        'max_multiobject_display': 3,
     }
     required_settings = []
+
+    # Set by ready() to a short "ExcType: message" string if registering the
+    # combined "Custom Objects" related tab fails; None means no failure.
+    # Surfaced as a system check warning (checks.check_related_tabs_registration)
+    # so the swallowed exception isn't invisible outside the logs.
+    _register_tabs_error = None
     template_extensions = "template_content.template_extensions"
     # Registers the custom_objects Jinja filter (jinja_env.filters). Requires NetBox
     # 4.7+; on older NetBox this attribute is simply never read by core (see ready()
@@ -379,8 +427,19 @@ class CustomObjectsPluginConfig(PluginConfig):
         return CustomObjectsPluginConfig._dynamic_model_creation_unsafe()
 
     def _call_super_ready_once(self):
-        """Call ``super().ready()`` once; subsequent calls are no-ops.
-        ``register_serializer_resolver`` rejects duplicates."""
+        """Call ``super().ready()`` synchronously, exactly once.
+
+        The first invocation always delegates to ``super().ready()`` inline
+        (never deferred, scheduled, or skipped); only repeat invocations are
+        no-ops, because ``register_serializer_resolver`` rejects duplicates.
+
+        This synchronous-on-first-call contract is load-bearing: ``ready()``
+        must run ``super().ready()`` — which populates ``registry['views']`` —
+        before ``register_tabs()``, since ``urls.py`` snapshots that registry
+        when the combined tab is registered. If this wrapper ever deferred the
+        super call, tabs would register against an empty view registry and
+        ``reverse()`` for CustomObject feature URLs would fail.
+        """
         global _super_ready_called
         if _super_ready_called:
             return
@@ -517,7 +576,23 @@ class CustomObjectsPluginConfig(PluginConfig):
         from django.apps import apps as django_apps
         django_apps.clear_cache()
 
+        # Must precede register_tabs(): super().ready() populates registry['views'],
+        # which urls.py snapshots when register_tabs() loads it — registering tabs
+        # first would break reverse() for CustomObject feature URLs.
         self._call_super_ready_once()
+
+        # Register the combined "Custom Objects" tab (see related_tabs/__init__.py),
+        # once at startup before Django freezes the root URLconf.
+        try:
+            from netbox_custom_objects.related_tabs.registry import register_tabs
+            register_tabs()
+            self._register_tabs_error = None
+        except Exception as exc:
+            # Surface the failure both in the logs and via a system check
+            # (checks.check_related_tabs_registration) so a missing tab is
+            # diagnosable in `manage.py check`, not silently swallowed.
+            logger.exception("related_tabs.register_tabs() failed; continuing without tabs")
+            self._register_tabs_error = f"{type(exc).__name__}: {exc}"
 
     def get_model(self, model_name, require_ready=True):
         self.apps.check_apps_ready()

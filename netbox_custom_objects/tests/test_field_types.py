@@ -687,7 +687,10 @@ class URLFieldTypeTestCase(FieldTypeTestCase):
             field.validate("http:/example.com")
 
     def test_url_field_model_generation(self):
-        """Test URL field model generation."""
+        """
+        Test URL field model generation. A url field expands into two backing
+        columns: the URL itself and an optional link title (issue #496).
+        """
         self.create_custom_object_type_field(
             self.custom_object_type,
             name="website",
@@ -696,9 +699,157 @@ class URLFieldTypeTestCase(FieldTypeTestCase):
         )
 
         model = self.custom_object_type.get_model()
-        instance = model.objects.create(name="Test", website="https://example.com")
+        column_names = {f.name for f in model._meta.local_fields}
+        self.assertIn("website", column_names)
+        self.assertIn("website_title", column_names)
 
+        instance = model.objects.create(
+            name="Test", website="https://example.com", website_title="Example Site",
+        )
         self.assertEqual(instance.website, "https://example.com")
+        self.assertEqual(instance.website_title, "Example Site")
+
+    def test_url_field_title_is_optional(self):
+        """
+        A url value with no title set is valid (no both-required rule). The title
+        column defaults to '' (not None) so "unset" has one canonical representation.
+        """
+        self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="website",
+            label="Website",
+            type="url",
+        )
+        model = self.custom_object_type.get_model()
+        instance = model.objects.create(name="Test", website="https://example.com/")
+        self.assertEqual(instance.website, "https://example.com/")
+        self.assertEqual(instance.website_title, "")
+
+    def test_url_field_unique_still_enforced(self):
+        """
+        Unique still applies to the URL column itself for a url field (unlike
+        coordinates, which disallows unique entirely) -- guards the fix making the
+        clean() uniqueness-conversion probe dict-aware.
+        """
+        self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="website",
+            label="Website",
+            type="url",
+            unique=True,
+        )
+        model = self.custom_object_type.get_model()
+        model.objects.create(name="A", website="https://example.com/a")
+        with self.assertRaises(ValidationError):
+            duplicate = model(name="B", website="https://example.com/a")
+            duplicate.full_clean()
+
+    def test_change_existing_field_to_url_rejected(self):
+        """An existing non-url field cannot be converted to url."""
+        field = self.create_custom_object_type_field(
+            self.custom_object_type, name="website2", label="Website", type="text",
+        )
+        field.type = "url"
+        with self.assertRaises(ValidationError):
+            field.full_clean()
+
+    def test_change_url_field_to_other_type_rejected(self):
+        """An existing url field cannot be converted to another type."""
+        field = self.create_custom_object_type_field(
+            self.custom_object_type, name="website2", label="Website", type="url",
+        )
+        field.type = "text"
+        with self.assertRaises(ValidationError):
+            field.full_clean()
+
+    def test_url_backing_column_collision_rejected(self):
+        """
+        Adding a url field whose title column collides with an existing field's
+        column raises a ValidationError rather than a DB error.
+        """
+        self.create_custom_object_type_field(
+            self.custom_object_type, name="website2_title", label="Title", type="text",
+        )
+        field = CustomObjectTypeField(
+            custom_object_type=self.custom_object_type,
+            name="website2",
+            label="Website",
+            type="url",
+        )
+        with self.assertRaises(ValidationError):
+            field.full_clean()
+
+    def test_field_colliding_with_url_backing_column_rejected(self):
+        """
+        The reverse collision: a plain field named "<url>_title" cannot be added
+        when a url field "<url>" already exists.
+        """
+        self.create_custom_object_type_field(
+            self.custom_object_type, name="website2", label="Website", type="url",
+        )
+        field = CustomObjectTypeField(
+            custom_object_type=self.custom_object_type,
+            name="website2_title",
+            label="Title",
+            type="text",
+        )
+        with self.assertRaises(ValidationError):
+            field.full_clean()
+
+    def test_get_url_field_html_renders_link_with_title(self):
+        """get_url_field_html renders <a href> using the title as link text when set."""
+        from netbox_custom_objects.templatetags.custom_object_utils import get_url_field_html
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type, name="website3", label="Website", type="url",
+        )
+        model = self.custom_object_type.get_model(no_cache=True)
+        instance = model.objects.create(
+            name="Test", website3="https://example.com/", website3_title="Example Site",
+        )
+        html = get_url_field_html(instance, cotf)
+        self.assertIn('href="https://example.com/"', html)
+        self.assertIn("Example Site", html)
+
+    def test_get_url_field_html_falls_back_to_url_text_without_title(self):
+        """get_url_field_html uses the URL itself as link text when no title is set."""
+        from netbox_custom_objects.templatetags.custom_object_utils import get_url_field_html
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type, name="website4", label="Website", type="url",
+        )
+        model = self.custom_object_type.get_model(no_cache=True)
+        instance = model.objects.create(name="Test", website4="https://example.com/")
+        html = get_url_field_html(instance, cotf)
+        self.assertIn('href="https://example.com/"', html)
+        self.assertIn(">https://example.com/<", html)
+
+    def test_get_url_field_html_rejects_disallowed_scheme(self):
+        """
+        A disallowed URL scheme (e.g. javascript:) renders as plain text, not a link.
+        Guards the security-relevant _url_scheme_is_allowed() check -- the value is
+        assigned directly (bypassing form/URLField validation) to simulate data that
+        reached the column via any path other than the add/edit form.
+        """
+        from netbox_custom_objects.templatetags.custom_object_utils import get_url_field_html
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type, name="website5", label="Website", type="url",
+        )
+        model = self.custom_object_type.get_model(no_cache=True)
+        instance = model.objects.create(
+            name="Test", website5="javascript:alert(1)", website5_title="Click me",
+        )
+        html = get_url_field_html(instance, cotf)
+        self.assertNotIn("<a ", html)
+        self.assertIn("Click me", html)
+
+    def test_get_url_field_html_returns_empty_string_when_url_unset(self):
+        """get_url_field_html returns '' when the URL itself is unset, regardless of title."""
+        from netbox_custom_objects.templatetags.custom_object_utils import get_url_field_html
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type, name="website6", label="Website", type="url",
+        )
+        model = self.custom_object_type.get_model(no_cache=True)
+        instance = model.objects.create(name="Test")
+        self.assertEqual(get_url_field_html(instance, cotf), "")
 
 
 class JSONFieldTypeTestCase(FieldTypeTestCase):

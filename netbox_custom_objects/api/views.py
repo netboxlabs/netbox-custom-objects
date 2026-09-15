@@ -18,6 +18,8 @@ except ImportError:
     class ETagMixin:  # pragma: no cover – NetBox < 4.6 shim
         """No-op shim for NetBox versions that don't provide ETagMixin."""
         pass
+from rest_framework.parsers import JSONParser
+from rest_framework.renderers import JSONRenderer
 from rest_framework.response import Response
 from rest_framework.routers import APIRootView
 from rest_framework.views import APIView
@@ -25,6 +27,7 @@ from rest_framework.viewsets import ModelViewSet
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from netbox.api.authentication import IsAuthenticatedOrLoginNotRequired, TokenWritePermission
+from netbox.api.renderers import FormlessBrowsableAPIRenderer
 
 
 from netbox_custom_objects.constants import APP_LABEL
@@ -40,6 +43,8 @@ from netbox_custom_objects.schema.executor import (
     UnknownObjectTypeError,
 )
 from . import serializers
+from .parsers import YAMLParser
+from .renderers import YAMLRenderer
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +53,13 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _SCHEMA_FILE = Path(__file__).parent.parent / "schema" / "cot_schema_v1.json"
+
+# Schema preview/apply accept and can return either format (#665); YAML is the
+# documented default for new integrations. JSONRenderer stays first so that a
+# request with no explicit Accept header (existing callers) keeps getting JSON
+# back; send `Accept: application/yaml` to get YAML instead.
+_SCHEMA_PARSER_CLASSES = [YAMLParser, JSONParser]
+_SCHEMA_RENDERER_CLASSES = [JSONRenderer, YAMLRenderer, FormlessBrowsableAPIRenderer]
 
 
 @functools.lru_cache(maxsize=1)
@@ -311,41 +323,42 @@ class SchemaPreviewView(APIView):
     ``cot_schema_v1.json``.  Returns a structured diff for every COT in the
     document without making any DB changes.
 
+    Accepts and returns either YAML (``application/yaml``, the recommended
+    format) or JSON (``application/json``), selected via the ``Content-Type``
+    and ``Accept`` headers respectively.  A request with no ``Accept`` header
+    gets a JSON response.
+
     ## Request body
 
-        {
-            "schema_version": "1",
-            "types": [ ... ]
-        }
+        schema_version: "1"
+        types: [ ... ]
 
     ## Response (200)
 
-        {
-            "diffs": [
-                {
-                    "slug":                   "my-cot",
-                    "name":                   "my_cot",
-                    "is_new":                 false,
-                    "has_changes":            true,
-                    "has_destructive_changes": false,
-                    "cot_changes":            {"description": ["old", "new"]},
-                    "field_changes": [
-                        {
-                            "op":         "add",
-                            "schema_id":  5,
-                            "db_name":    null,
-                            "schema_def": { ... }
-                        }
-                    ],
-                    "warnings": []
-                }
-            ]
-        }
+        diffs:
+          - slug: my-cot
+            name: my_cot
+            is_new: false
+            has_changes: true
+            has_destructive_changes: false
+            cot_changes:
+              description: [old, new]
+            field_changes:
+              - op: add
+                schema_id: 5
+                db_name: null
+                schema_def: { ... }
+            warnings: []
     """
 
+    parser_classes = _SCHEMA_PARSER_CLASSES
+    renderer_classes = _SCHEMA_RENDERER_CLASSES
     permission_classes = [IsAuthenticatedOrLoginNotRequired]
 
     def post(self, request, *args, **kwargs):
+        if not isinstance(request.data, dict):
+            raise ValidationError({"non_field_errors": [_("Request body must be a JSON/YAML object.")]})
+
         schema_doc = request.data
         _validate_schema_doc(schema_doc)
         diffs = diff_document(schema_doc)
@@ -361,36 +374,34 @@ class SchemaApplyView(APIView):
     current DB state and all changes are applied atomically.  The applied
     diffs are returned in the response.
 
+    Accepts and returns either YAML (``application/yaml``, the recommended
+    format) or JSON (``application/json``), selected via the ``Content-Type``
+    and ``Accept`` headers respectively.  A request with no ``Accept`` header
+    gets a JSON response.
+
     ## Request body
 
-        {
-            "allow_destructive": false,
-            "schema": {
-                "schema_version": "1",
-                "types": [ ... ]
-            }
-        }
+        allow_destructive: false
+        schema:
+          schema_version: "1"
+          types: [ ... ]
 
     ``allow_destructive`` defaults to ``false``.  Set it to ``true`` to
     permit ``REMOVE`` field operations (which drop DB columns).
 
     ## Response (200)
 
-        {
-            "applied": true,
-            "diffs": [ ... ]
-        }
+        applied: true
+        diffs: [ ... ]
 
     ## Error responses
 
     **409 Conflict** — the document contains ``REMOVE`` operations and
     ``allow_destructive`` was not set:
 
-        {
-            "error":             "destructive_changes",
-            "detail":            "Schema contains destructive ...",
-            "destructive_slugs": ["my-cot"]
-        }
+        error: destructive_changes
+        detail: "Schema contains destructive ..."
+        destructive_slugs: [my-cot]
 
     **400 Bad Request** — circular COT dependency, unresolvable FK target,
     or invalid schema document structure.
@@ -401,6 +412,8 @@ class SchemaApplyView(APIView):
     ``transaction.atomic()``, so any such failure leaves the DB unchanged.
     """
 
+    parser_classes = _SCHEMA_PARSER_CLASSES
+    renderer_classes = _SCHEMA_RENDERER_CLASSES
     permission_classes = [IsAuthenticatedOrLoginNotRequired, TokenWritePermission]
 
     def post(self, request, *args, **kwargs):
@@ -420,6 +433,9 @@ class SchemaApplyView(APIView):
                 "You do not have permission to apply a schema document. "
                 "Both add and change permissions on CustomObjectType are required."
             )
+
+        if not isinstance(request.data, dict):
+            raise ValidationError({"non_field_errors": [_("Request body must be a JSON/YAML object.")]})
 
         allow_destructive = request.data.get("allow_destructive", False)
         if not isinstance(allow_destructive, bool):

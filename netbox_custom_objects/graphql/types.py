@@ -38,7 +38,7 @@ from netbox.graphql.types import BaseObjectType
 from strawberry.types import Info
 
 from netbox_custom_objects.constants import APP_LABEL
-from netbox_custom_objects.utilities import extract_cot_id_from_model_name
+from netbox_custom_objects.utilities import extract_cot_id_from_model_name, restrict_to_viewable
 
 logger = logging.getLogger("netbox_custom_objects.graphql")
 
@@ -188,46 +188,11 @@ def _filter_viewable(user, objects):
     """
     Return the subset of ``objects`` the user may view, preserving order.
 
-    The top-level query restricts the custom objects themselves, but the objects
-    reached through their relationship fields are *not* covered by that check, so
-    each one must be gated here or the field would leak objects the user cannot
-    see.  Used for both single- and multi-object fields so the permission rule
-    lives in one place; batches the check to one query per distinct model rather
-    than one ``.exists()`` per object (an N+1 explosion on multi-object fields):
-    the related objects are grouped by model and each model's permission-restricted
-    queryset is evaluated once with ``pk__in``.
-
-    The user (anonymous or ``None`` included) is passed straight to the model
-    manager's ``restrict(user, "view")``, mirroring NetBox's
-    ``BaseObjectType.get_queryset`` — superuser bypass, ``EXEMPT_VIEW_PERMISSIONS``
-    and anonymous handling are all left to ``restrict``.
+    Thin GraphQL-side wrapper over the shared
+    :func:`netbox_custom_objects.utilities.restrict_to_viewable` helper (also used
+    by the combined related-objects tab) so the permission rule lives in one place.
     """
-    objects = [obj for obj in objects if obj is not None]
-    if not objects:
-        return []
-    if getattr(user, "is_superuser", False):
-        return objects
-
-    # sentinel meaning "model isn't permission-aware → all allowed".
-    allowed_by_model = {}
-    by_model = {}
-    for obj in objects:
-        by_model.setdefault(type(obj), []).append(obj)
-    for model, model_objs in by_model.items():
-        manager = getattr(model, "_default_manager", None)
-        if manager is None or not hasattr(manager, "restrict"):
-            allowed_by_model[model] = None
-            continue
-        pks = [obj.pk for obj in model_objs]
-        allowed_by_model[model] = set(
-            manager.restrict(user, "view").filter(pk__in=pks).values_list("pk", flat=True)
-        )
-
-    return [
-        obj
-        for obj in objects
-        if (allowed_by_model[type(obj)] is None or obj.pk in allowed_by_model[type(obj)])
-    ]
+    return restrict_to_viewable(user, objects)
 
 
 def _related_repr(obj):

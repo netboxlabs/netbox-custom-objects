@@ -2,6 +2,7 @@ from django import template
 from extras.choices import CustomFieldUIVisibleChoices
 
 from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
+from netbox_custom_objects.field_types import URLFieldType
 from netbox_custom_objects.models import CustomObjectTypeField
 from netbox_custom_objects.utilities import build_map_url
 
@@ -12,6 +13,7 @@ __all__ = (
     "get_field_is_ui_visible",
     "get_child_relations",
     "get_coordinate_map_url",
+    "get_url_field_html",
 )
 
 register = template.Library()
@@ -66,6 +68,21 @@ def get_field_is_ui_visible(obj, field: CustomObjectTypeField) -> bool:
     if field.ui_visible == CustomFieldUIVisibleChoices.IF_SET and field_value:
         return True
     return False
+
+
+@register.filter(name="get_url_field_html")
+def get_url_field_html(obj, field: CustomObjectTypeField):
+    """
+    Render a url-type field as a safe link: the title as link text if set,
+    falling back to the URL itself.  Delegates to URLFieldType.render_url_html()
+    so the detail page and the list-view table column render identically.
+    Returns '' when the URL itself is unset, regardless of whether a title is set.
+    """
+    if field.type != CustomObjectFieldTypeChoices.TYPE_URL:
+        return ""
+    url = getattr(obj, field.name, None)
+    title = getattr(obj, f"{field.name}_title", None)
+    return URLFieldType.render_url_html(url, title)
 
 
 @register.filter(name="get_child_relations")

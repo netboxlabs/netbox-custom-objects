@@ -85,3 +85,27 @@ class CheckBranchingCompatibilityTest(SimpleTestCase):
         """An installed-but-unmeasurable branching dist warns rather than passing silently."""
         errors = _run(netbox_version='4.6.2', branching_version=PackageNotFoundError())
         self.assertEqual(_ids(errors), {'netbox_custom_objects.W001'})
+
+
+class CheckRelatedTabsRegistrationTest(SimpleTestCase):
+    """The check reads ``_register_tabs_error`` off the plugin's app config."""
+
+    def _run(self, error):
+        app_config = SimpleNamespace(_register_tabs_error=error)
+        with patch.object(checks.apps, 'get_app_config', return_value=app_config):
+            return checks.check_related_tabs_registration(app_configs=None)
+
+    def test_no_error_is_noop(self):
+        """Successful (or skipped) registration records no error -> no warning."""
+        self.assertEqual(self._run(None), [])
+
+    def test_error_warns(self):
+        """A recorded failure produces W002 with the cause in the message."""
+        errors = self._run('ImportError: boom')
+        self.assertEqual(_ids(errors), {'netbox_custom_objects.W002'})
+        self.assertIn('boom', errors[0].msg)
+
+    def test_missing_app_config_is_noop(self):
+        """A LookupError from get_app_config is tolerated, not raised."""
+        with patch.object(checks.apps, 'get_app_config', side_effect=LookupError):
+            self.assertEqual(checks.check_related_tabs_registration(app_configs=None), [])

@@ -5,7 +5,7 @@ import json
 import uuid
 from decimal import Decimal
 
-from django.test import TestCase, RequestFactory
+from django.test import TestCase
 from django.urls import reverse
 
 from utilities.testing import TestCase as NetBoxTestCase, create_test_user
@@ -13,7 +13,6 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
-from netbox_custom_objects.template_content import CustomObjectLink, LinkedCustomObject
 from .base import CustomObjectsTestCase, create_token
 from core.models import ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Rack, Site
@@ -1410,195 +1409,6 @@ class SchemaIdReadOnlyTest(CustomObjectsTestCase, TestCase):
         self.assertEqual(field.scheduled_removal, '2.0.0')
 
 
-# ---------------------------------------------------------------------------
-# CustomObjectLink UI panel — linked_custom_objects population
-# ---------------------------------------------------------------------------
-
-
-class CustomObjectLinkPanelTest(CustomObjectsTestCase, TestCase):
-    """
-    Tests that CustomObjectLink.left_page() populates linked_custom_objects
-    correctly for non-polymorphic, polymorphic GFK, and polymorphic M2M fields.
-
-    We call left_page() with a minimal fake context rather than going through
-    the full template-extension machinery, since the interesting logic is in
-    data gathering, not rendering.
-    """
-
-    def _make_device(self, suffix):
-        manufacturer = Manufacturer.objects.create(
-            name=f'PanelMfr {suffix}', slug=f'panel-mfr-{suffix}'
-        )
-        device_type = DeviceType.objects.create(
-            manufacturer=manufacturer, model=f'PanelType {suffix}', slug=f'panel-type-{suffix}'
-        )
-        role = DeviceRole.objects.create(
-            name=f'PanelRole {suffix}', slug=f'panel-role-{suffix}', color='ffffff'
-        )
-        site = Site.objects.create(name=f'PanelSite {suffix}', slug=f'panel-site-{suffix}')
-        return Device.objects.create(
-            device_type=device_type, role=role, name=f'Panel Device {suffix}', site=site
-        )
-
-    def _panel(self, obj):
-        """Return a CustomObjectLink instance with a minimal fake context."""
-        request = RequestFactory().get('/')
-        return CustomObjectLink({'object': obj, 'request': request})
-
-    def _linked_objects_for(self, obj):
-        """Return the list of LinkedCustomObject entries the panel would render."""
-        self._panel(obj)
-        # Intercept just before template rendering by extracting the data
-        # the same way left_page() does, without actually rendering HTML.
-        from django.contrib.contenttypes.models import ContentType
-        from django.apps import apps as django_apps
-        from extras.choices import CustomFieldTypeChoices
-        from netbox_custom_objects.constants import APP_LABEL
-
-        content_type = ContentType.objects.get_for_model(obj._meta.model)
-        from netbox_custom_objects.models import CustomObjectTypeField
-        non_poly = CustomObjectTypeField.objects.filter(related_object_type=content_type)
-        poly = CustomObjectTypeField.objects.filter(related_object_types=content_type)
-
-        results = []
-        for field in list(non_poly) + list(poly):
-            model = field.custom_object_type.get_model(no_cache=True)
-            if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                if field.is_polymorphic:
-                    through = django_apps.get_model(APP_LABEL, field.through_model_name)
-                    ids = through.objects.filter(
-                        content_type_id=content_type.id, object_id=obj.pk
-                    ).values_list('source_id', flat=True)
-                else:
-                    m2m_field = model._meta.get_field(field.name)
-                    ids = m2m_field.remote_field.through.objects.filter(
-                        target_id=obj.pk
-                    ).values_list('source_id', flat=True)
-                for o in model.objects.filter(pk__in=ids):
-                    results.append(LinkedCustomObject(custom_object=o, field=field))
-            else:
-                if field.is_polymorphic:
-                    qs = model.objects.filter(**{
-                        f"{field.name}_content_type_id": content_type.id,
-                        f"{field.name}_object_id": obj.pk,
-                    })
-                else:
-                    qs = model.objects.filter(**{f"{field.name}_id": obj.pk})
-                for o in qs:
-                    results.append(LinkedCustomObject(custom_object=o, field=field))
-        return results
-
-    def test_non_polymorphic_fk_field_appears(self):
-        cot = self.create_custom_object_type(name='PanelFKTest', slug='panel-fk-test')
-        self.create_custom_object_type_field(cot, name='name', label='Name', type='text', primary=True, required=True)
-        self.create_custom_object_type_field(cot, name='device', label='Device', type='object',
-                                              related_object_type=self.get_device_object_type())
-        model = cot.get_model()
-        device = self._make_device('fk')
-        linked = model.objects.create(name='panel-fk', device=device)
-
-        entries = self._linked_objects_for(device)
-        self.assertTrue(
-            any(e.custom_object.pk == linked.pk and e.field.name == 'device' for e in entries),
-            "Non-polymorphic FK object not found in panel linked_custom_objects"
-        )
-
-    def test_polymorphic_gfk_field_appears(self):
-        cot = self.create_custom_object_type(name='PanelPolyGFK', slug='panel-poly-gfk')
-        self.create_custom_object_type_field(cot, name='name', label='Name', type='text', primary=True, required=True)
-        self.create_polymorphic_field(
-            cot,
-            related_object_types=[self.get_device_object_type(), self.get_site_object_type()],
-            name='target', label='Target', type='object',
-        )
-        model = cot.get_model()
-        device = self._make_device('poly-gfk')
-        linked = model.objects.create(name='panel-poly-gfk', target=device)
-
-        entries = self._linked_objects_for(device)
-        self.assertTrue(
-            any(e.custom_object.pk == linked.pk and e.field.name == 'target' for e in entries),
-            "Polymorphic GFK object not found in panel linked_custom_objects"
-        )
-
-    def test_polymorphic_m2m_field_appears(self):
-        cot = self.create_custom_object_type(name='PanelPolyM2M', slug='panel-poly-m2m')
-        self.create_custom_object_type_field(cot, name='name', label='Name', type='text', primary=True, required=True)
-        self.create_polymorphic_field(
-            cot,
-            related_object_types=[self.get_device_object_type(), self.get_site_object_type()],
-            name='targets', label='Targets', type='multiobject',
-        )
-        model = cot.get_model()
-        device = self._make_device('poly-m2m')
-        linked = model.objects.create(name='panel-poly-m2m')
-        linked.targets.add(device)
-
-        entries = self._linked_objects_for(device)
-        self.assertTrue(
-            any(e.custom_object.pk == linked.pk and e.field.name == 'targets' for e in entries),
-            "Polymorphic M2M object not found in panel linked_custom_objects"
-        )
-
-    def test_unrelated_object_not_returned(self):
-        """An object not linked to the target does not appear in the panel."""
-        cot = self.create_custom_object_type(name='PanelUnrelated', slug='panel-unrelated')
-        self.create_custom_object_type_field(cot, name='name', label='Name', type='text', primary=True, required=True)
-        self.create_polymorphic_field(
-            cot,
-            related_object_types=[self.get_device_object_type(), self.get_site_object_type()],
-            name='target', label='Target', type='object',
-        )
-        model = cot.get_model()
-        device_a = self._make_device('unrelated-a')
-        device_b = self._make_device('unrelated-b')
-        model.objects.create(name='panel-linked-a', target=device_a)
-
-        entries = self._linked_objects_for(device_b)
-        self.assertEqual(entries, [], "Expected no entries for unrelated device")
-
-    def test_self_referential_fk_does_not_raise(self):
-        """
-        Regression for #508: self-referential Object fields must not raise
-        ValueError when no_cache=True causes a fresh class to be generated.
-
-        get_model(no_cache=True) returns a newly constructed Python class.
-        For a self-referential field, target_obj was created via the cached
-        class, so filter(**{field_name: target_obj}) triggers Django's
-        isinstance check between two class objects that are logically identical
-        but not identity-equal — raising "Must be TableNModel instance".
-
-        The fix filters by PK (_id suffix) instead, bypassing the check.
-        """
-        from core.models import ObjectType
-        from netbox_custom_objects.constants import APP_LABEL
-
-        cot = self.create_custom_object_type(name='SelfRefPanel', slug='self-ref-panel')
-        self.create_custom_object_type_field(
-            cot, name='name', label='Name', type='text', primary=True, required=True,
-        )
-        # Look up the COT's own ObjectType for the self-referential field.
-        cot_model_name = cot.get_model()._meta.model_name
-        self_ot = ObjectType.objects.get(app_label=APP_LABEL, model=cot_model_name)
-        self.create_custom_object_type_field(
-            cot, name='parent', label='Parent', type='object', related_object_type=self_ot,
-        )
-
-        model = cot.get_model()
-        target = model.objects.create(name='target-obj')
-        child = model.objects.create(name='child-obj', parent=target)
-
-        try:
-            entries = self._linked_objects_for(target)
-        except ValueError as exc:
-            self.fail(f'left_page() raised ValueError for self-referential field: {exc}')
-
-        self.assertTrue(
-            any(e.custom_object.pk == child.pk for e in entries),
-            "Child object not found in panel entries for self-referential field",
-        )
-
-
 class CrossCOTMultiObjectAPITest(CustomObjectsTestCase, TestCase):
     """
     Tests for API PATCH/PUT behaviour when a CO has a cross-COT multiobject
@@ -2296,3 +2106,77 @@ class CoordinatesFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
         obj.refresh_from_db()
         self.assertIsNone(obj.location_latitude)
         self.assertIsNone(obj.location_longitude)
+
+
+class URLFieldLinkTitleAPITest(CustomObjectsTestCase, NetBoxTestCase):
+    """REST API behaviour for the url field type's link-title support (issue #496)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.cot = CustomObjectType.objects.create(
+            name="LinkObject",
+            verbose_name_plural="Link Objects",
+            slug="link-objects",
+        )
+        cls.create_custom_object_type_field(
+            cls.cot, name="name", type="text", primary=True, required=True
+        )
+        cls.create_custom_object_type_field(cls.cot, name="website", type="url")
+        cls.model = cls.cot.get_model()
+
+    def setUp(self):
+        super().setUp()
+        self.user = create_test_user("linkuser")
+        self.client = APIClient()
+        token_key = create_token(self.user)
+        self.header = {"HTTP_AUTHORIZATION": f"Token {token_key}"}
+        perm = ObjectPermission(
+            name="link all", actions=["view", "add", "change", "delete"]
+        )
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+    def _list_url(self):
+        return reverse(
+            "plugins-api:netbox_custom_objects-api:customobject-list",
+            kwargs={"custom_object_type": self.cot.slug},
+        )
+
+    def _detail_url(self, instance):
+        return reverse(
+            "plugins-api:netbox_custom_objects-api:customobject-detail",
+            kwargs={"pk": instance.pk, "custom_object_type": self.cot.slug},
+        )
+
+    def test_serializer_exposes_flat_url_title(self):
+        """The URL and title columns are serialized as two flat fields."""
+        obj = self.model.objects.create(
+            name="Box", website="https://example.com/", website_title="Example Site",
+        )
+        response = self.client.get(self._detail_url(obj), **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(response.data["website"], "https://example.com/")
+        self.assertEqual(response.data["website_title"], "Example Site")
+
+    def test_create_with_url_and_title(self):
+        """Creating an object via the API persists both the URL and title columns."""
+        data = {
+            "name": "Created box",
+            "website": "https://example.com/",
+            "website_title": "Example Site",
+        }
+        response = self.client.post(self._list_url(), data, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        obj = self.model.objects.get(pk=response.data["id"])
+        self.assertEqual(obj.website, "https://example.com/")
+        self.assertEqual(obj.website_title, "Example Site")
+
+    def test_create_with_url_and_no_title_allowed(self):
+        """Creating with a URL and no title is accepted (no both-required rule)."""
+        data = {"name": "Created box", "website": "https://example.com/"}
+        response = self.client.post(self._list_url(), data, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        obj = self.model.objects.get(pk=response.data["id"])
+        self.assertEqual(obj.website, "https://example.com/")
+        self.assertEqual(obj.website_title, "")
