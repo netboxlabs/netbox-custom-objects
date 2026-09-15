@@ -18,6 +18,11 @@ logger = logging.getLogger(__name__)
 # Context variable to track if we're currently running migrations
 _is_migrating = contextvars.ContextVar('is_migrating', default=False)
 
+# Guards get_models() against re-entrancy (issues #685/#686): generating a COT
+# model can trigger Django to rebuild its relation graph, which calls
+# apps.get_models() again while we're still mid-generation.
+_generating_models = contextvars.ContextVar('generating_models', default=False)
+
 # Cache for migration check to avoid repeated expensive filesystem/database operations
 _migrations_checked = None
 _checking_migrations = False
@@ -290,7 +295,7 @@ class CustomObjectsPluginConfig(PluginConfig):
     name = "netbox_custom_objects"
     verbose_name = "Custom Objects"
     description = "A plugin to manage custom objects in NetBox"
-    version = "0.6.0"
+    version = "0.6.1"
     author = 'Netbox Labs'
     author_email = 'support@netboxlabs.com'
     base_url = "custom-objects"
@@ -330,17 +335,13 @@ class CustomObjectsPluginConfig(PluginConfig):
     graphql_schema = "graphql.schema.schema"
 
     @staticmethod
-    def should_skip_dynamic_model_creation():
+    def _dynamic_model_creation_unsafe():
         """
-        Determine if dynamic model creation should be skipped.
-
-        Returns True if dynamic models should not be created/loaded due to:
-        - Currently running migrations
-        - Running tests
-        - All migrations not yet applied
-        - Running collectstatic
-
-        Returns False if it's safe to proceed with dynamic model creation.
+        True if the DB can't safely be queried to generate a dynamic COT model:
+        mid-migration, running makemigrations/migrate/collectstatic, or this
+        app's own migrations aren't fully applied. Unlike
+        should_skip_dynamic_model_creation() below, deliberately excludes "test" --
+        this is the narrower check CustomObjectType.get_model() itself uses (#637).
         """
         global _migrations_checked, _checking_migrations
 
@@ -355,9 +356,6 @@ class CustomObjectsPluginConfig(PluginConfig):
 
             # The database isn't accessible during collect static so should skip.
             "collectstatic",
-
-            # Skip during tests.
-            "test",
         )
 
         if any(cmd in sys.argv for cmd in skip_commands):
@@ -410,6 +408,23 @@ class CustomObjectsPluginConfig(PluginConfig):
         finally:
             # Always clear the recursion flag
             _checking_migrations = False
+
+    @staticmethod
+    def should_skip_dynamic_model_creation():
+        """
+        Determine if dynamic model creation should be skipped.
+
+        Returns True if dynamic models should not be created/loaded due to:
+        - Currently running migrations
+        - Running tests
+        - All migrations not yet applied
+        - Running collectstatic
+
+        Returns False if it's safe to proceed with dynamic model creation.
+        """
+        if "test" in sys.argv:
+            return True
+        return CustomObjectsPluginConfig._dynamic_model_creation_unsafe()
 
     def _call_super_ready_once(self):
         """Call ``super().ready()`` synchronously, exactly once.
@@ -625,52 +640,63 @@ class CustomObjectsPluginConfig(PluginConfig):
         for model in super().get_models(include_auto_created, include_swapped):
             yield model
 
-        # Suppress warnings about database calls during model loading.
-        # See the corresponding block in ready() for the rationale for using
-        # module-based filtering instead of message-content matching.
-        with warnings.catch_warnings():
-            warnings.filterwarnings(
-                "ignore", category=RuntimeWarning,
-                module=r"django\.db\.backends\..*",
-            )
-            warnings.filterwarnings(
-                "ignore", category=UserWarning,
-                module=r"netbox_branching\..*",
-            )
+        # Re-entrant call (issues #685/#686): generate_model() registers a COT's
+        # model synchronously, before get_model() can trigger this recursion, so
+        # super().get_models() above already covers everything safely visible
+        # here -- fall back to that instead of regenerating.
+        if _generating_models.get():
+            return
 
-            # Skip dynamic model generation until ready() has completed.
-            # Other apps' ready() calls (e.g. dcim) trigger _relation_tree →
-            # apps.get_models() before our ready() runs.  At that point _model_cache
-            # is empty, so get_model() would regenerate every COT from scratch —
-            # including ContentType DB lookups that may fail.  After our ready()
-            # finishes, _app_ready is True and get_model() returns cached models
-            # without any ContentType lookups.
-            if not _app_ready:
-                return
+        token = _generating_models.set(True)
+        try:
+            # Suppress warnings about database calls during model loading.
+            # See the corresponding block in ready() for the rationale for using
+            # module-based filtering instead of message-content matching.
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore", category=RuntimeWarning,
+                    module=r"django\.db\.backends\..*",
+                )
+                warnings.filterwarnings(
+                    "ignore", category=UserWarning,
+                    module=r"netbox_branching\..*",
+                )
 
-            # Skip custom object type model loading if dynamic models can't be created yet
-            if self.should_skip_dynamic_model_creation():
-                return
+                # Skip dynamic model generation until ready() has completed.
+                # Other apps' ready() calls (e.g. dcim) trigger _relation_tree →
+                # apps.get_models() before our ready() runs.  At that point _model_cache
+                # is empty, so get_model() would regenerate every COT from scratch —
+                # including ContentType DB lookups that may fail.  After our ready()
+                # finishes, _app_ready is True and get_model() returns cached models
+                # without any ContentType lookups.
+                if not _app_ready:
+                    return
 
-            # Add custom object type models
-            from .models import CustomObjectType
+                # Skip custom object type model loading if dynamic models can't be created yet
+                if self.should_skip_dynamic_model_creation():
+                    return
 
-            try:
-                with transaction.atomic():
-                    custom_object_types = CustomObjectType.objects.all()
-                    for custom_type in custom_object_types:
-                        model = custom_type.get_model()
-                        if model:
-                            yield model
+                # Add custom object type models
+                from .models import CustomObjectType
 
-                            # If include_auto_created is True, also yield through models
-                            if include_auto_created and hasattr(model, '_through_models'):
-                                for through_model in model._through_models:
-                                    yield through_model
-            except (ProgrammingError, OperationalError):
-                # DB schema is incomplete (unapplied migrations). Yield nothing —
-                # dynamic models will be available once migrations have run.
-                return
+                try:
+                    with transaction.atomic():
+                        custom_object_types = CustomObjectType.objects.all()
+                        for custom_type in custom_object_types:
+                            model = custom_type.get_model()
+                            if model:
+                                yield model
+
+                                # If include_auto_created is True, also yield through models
+                                if include_auto_created and hasattr(model, '_through_models'):
+                                    for through_model in model._through_models:
+                                        yield through_model
+                except (ProgrammingError, OperationalError):
+                    # DB schema is incomplete (unapplied migrations). Yield nothing —
+                    # dynamic models will be available once migrations have run.
+                    return
+        finally:
+            _generating_models.reset(token)
 
 
 config = CustomObjectsPluginConfig

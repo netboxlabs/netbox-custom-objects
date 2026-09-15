@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from django.apps import apps as django_apps
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import ValidationError
+from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import connection, transaction
 from django.db.utils import OperationalError, ProgrammingError
 from django.test import TestCase, override_settings, tag
@@ -20,7 +20,7 @@ import netbox_custom_objects as nco
 from core.choices import JobStatusChoices
 from core.models import ObjectType
 from dcim.models import Site
-from extras.models import CachedValue
+from extras.models import CachedValue, Tag, TaggedItem
 from netbox.search import registry
 from netbox.search.backends import get_backend
 from netbox_custom_objects.api.serializers import get_serializer_class
@@ -245,6 +245,74 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
                          "OBJECT field must be absent from stub model")
         # Must not raise FieldDoesNotExist, RecursionError, or any other exception.
         cot.register_custom_object_search_index(stub_model)
+
+    def test_register_search_index_includes_context_fields_in_display_attrs(self):
+        """Fields marked context=True surface as display_attrs (issue #655), so
+        NetBox's global search shows them as supplementary "attributes" alongside
+        each result, the same as any other model's SearchIndex.display_attrs."""
+        cot = self.create_custom_object_type(name="ContextSearchTest", slug="context-search-test")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, search_weight=1000,
+        )
+        self.create_custom_object_type_field(
+            cot, name="status", label="Status", type="text", context=True,
+        )
+        cot.clear_model_cache(cot.id)
+        model = cot.get_model()
+        cot.register_custom_object_search_index(model)
+
+        label = f"{APP_LABEL}.{cot.get_table_model_name(cot.id).lower()}"
+        search_index = registry["search"][label]
+        self.assertIn("status", search_index.display_attrs)
+        self.assertNotIn("name", search_index.display_attrs)
+
+    def test_register_search_index_includes_object_context_fields(self):
+        """A context field of type object (a single real FK, unlike multiobject's
+        M2M) IS included in display_attrs -- getattr() on it returns the related
+        instance directly, not a manager, so NetBox's generic renderer handles it
+        correctly. Confirms the TYPE_MULTIOBJECT exclusion is scoped to just that
+        one type, not object fields generally."""
+        cot = self.create_custom_object_type(name="ContextObjectTest", slug="context-object-test")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, search_weight=1000,
+        )
+        self.create_custom_object_type_field(
+            cot, name="related_site", label="Related Site", type="object",
+            related_object_type=self.get_site_object_type(), context=True,
+        )
+        cot.clear_model_cache(cot.id)
+        model = cot.get_model()
+        cot.register_custom_object_search_index(model)
+
+        label = f"{APP_LABEL}.{cot.get_table_model_name(cot.id).lower()}"
+        search_index = registry["search"][label]
+        self.assertIn("related_site", search_index.display_attrs)
+
+    def test_register_search_index_excludes_multiobject_context_fields(self):
+        """A context field of type multiobject must not reach display_attrs.
+
+        NetBox core's CachedValue.display_attrs (the only consumer of this
+        attribute) renders each entry via plain getattr() on the instance --
+        for a real ManyToManyField that returns the RelatedManager itself, not
+        its contents, so the search UI would show a broken object repr instead
+        of the related objects. Excluding multiobject context fields here avoids
+        surfacing that.
+        """
+        cot = self.create_custom_object_type(name="ContextM2MTest", slug="context-m2m-test")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, search_weight=1000,
+        )
+        self.create_custom_object_type_field(
+            cot, name="related_sites", label="Related Sites", type="multiobject",
+            related_object_type=self.get_site_object_type(), context=True,
+        )
+        cot.clear_model_cache(cot.id)
+        model = cot.get_model()
+        cot.register_custom_object_search_index(model)
+
+        label = f"{APP_LABEL}.{cot.get_table_model_name(cot.id).lower()}"
+        search_index = registry["search"][label]
+        self.assertNotIn("related_sites", search_index.display_attrs)
 
     def test_skipped_object_field_with_stale_content_type_logs_warning(self):
         """When get_model_field raises NotImplementedError for an object field whose
@@ -1771,6 +1839,207 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
         finally:
             nco._migrations_checked = original_checked
 
+    def test_dynamic_model_creation_unsafe_excludes_test(self):
+        """_dynamic_model_creation_unsafe() must not treat 'test' in sys.argv as unsafe."""
+        original_argv = sys.argv[:]
+        original_checked = nco._migrations_checked
+        try:
+            sys.argv = ['manage.py', 'test']
+            nco._migrations_checked = None
+            self.assertTrue(self.config.should_skip_dynamic_model_creation())
+            nco._migrations_checked = None
+            self.assertFalse(self.config._dynamic_model_creation_unsafe())
+
+            sys.argv = ['manage.py', 'migrate']
+            nco._migrations_checked = None
+            self.assertTrue(self.config._dynamic_model_creation_unsafe())
+        finally:
+            sys.argv = original_argv
+            nco._migrations_checked = original_checked
+
+
+class CrossCOTGetModelOutsideReadyTestCase(CustomObjectsTestCase, TestCase):
+    """Regression tests for CustomObjectType.get_model() bypassing ready()'s two-pass
+    cross-COT FK resolution (#637)."""
+
+    def _make_cross_cot_pair(self, suffix):
+        """Build a fresh target/source COT pair, uniquely named so registry
+        mutations in one test method can't bleed into another."""
+        target_type = CustomObjectType.objects.create(
+            name=f"ForwarderProfile637{suffix}", slug=f"forwarder-profile-637-{suffix}",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=target_type, name="name", label="Name",
+            type="text", primary=True,
+        )
+        source_type = CustomObjectType.objects.create(
+            name=f"DnsZone637{suffix}", slug=f"dns-zone-637-{suffix}",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=source_type, name="name", label="Name",
+            type="text", primary=True,
+        )
+        target_ct = ObjectType.objects.get_for_model(target_type.get_model())
+        CustomObjectTypeField.objects.create(
+            custom_object_type=source_type, name="forwarder_profile",
+            label="Forwarder Profile", type="object", related_object_type=target_ct,
+        )
+        return target_type, source_type
+
+    def _unregister(self, *cots):
+        """Simulate a fresh process where none of the given COT models are registered yet."""
+        for cot in cots:
+            model_name = cot.get_table_model_name(cot.id).lower()
+            django_apps.all_models.get(APP_LABEL, {}).pop(model_name, None)
+            CustomObjectType.clear_model_cache(cot.id)
+
+    def test_get_model_omits_cross_cot_field_when_unsafe(self):
+        """Omits an unregistered cross-COT field rather than leaving a dangling
+        LazyForeignKey, and doesn't cache the degraded model."""
+        target_type, source_type = self._make_cross_cot_pair("a")
+        self._unregister(target_type, source_type)
+        config = django_apps.get_app_config(APP_LABEL)
+
+        with patch.object(config.__class__, '_dynamic_model_creation_unsafe', return_value=True):
+            model = source_type.get_model()
+
+        with self.assertRaises(FieldDoesNotExist):
+            model._meta.get_field('forwarder_profile')
+        self.assertFalse(CustomObjectType.is_model_cached(source_type.id))
+
+    def test_get_model_system_checks_pass_after_migrate_time_call(self):
+        """Reproduces the reported symptom: system checks must not raise E300/E307."""
+        from django.core.checks.registry import registry as checks_registry
+
+        target_type, source_type = self._make_cross_cot_pair("b")
+        self._unregister(target_type, source_type)
+        config = django_apps.get_app_config(APP_LABEL)
+
+        with patch.object(config.__class__, '_dynamic_model_creation_unsafe', return_value=True):
+            source_type.get_model()
+
+        errors = checks_registry.run_checks()
+        relevant = [e for e in errors if 'forwarder_profile' in str(e)]
+        self.assertEqual(relevant, [])
+
+    def test_get_model_regenerates_in_full_on_next_normal_call(self):
+        """Once the degraded model's target is registered again, a later call
+        fully re-resolves the cross-COT field."""
+        target_type, source_type = self._make_cross_cot_pair("c")
+        self._unregister(target_type, source_type)
+        config = django_apps.get_app_config(APP_LABEL)
+
+        with patch.object(config.__class__, '_dynamic_model_creation_unsafe', return_value=True):
+            source_type.get_model()
+
+        target_type.get_model()  # simulates ready()'s Pass 1 registering every COT
+        full_model = source_type.get_model()
+        field = full_model._meta.get_field('forwarder_profile')
+        self.assertFalse(isinstance(field.remote_field.model, str))
+
+    def test_get_model_unaffected_during_ordinary_test_run(self):
+        """Ordinary test-suite get_model() calls stay fully hydrated."""
+        target_type, source_type = self._make_cross_cot_pair("d")
+        model = source_type.get_model(no_cache=True)
+        field = model._meta.get_field('forwarder_profile')
+        self.assertFalse(isinstance(field.remote_field.model, str))
+
+    def test_get_model_keeps_core_model_field_when_unsafe(self):
+        """A field targeting a core NetBox model (not another COT) can't dangle
+        the way a cross-COT LazyForeignKey can, so it must not be dropped during
+        the unsafe window (review of #664)."""
+        source_type = CustomObjectType.objects.create(
+            name="DnsZone637e", slug="dns-zone-637-e",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=source_type, name="name", label="Name",
+            type="text", primary=True,
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=source_type, name="device", label="Device",
+            type="object", related_object_type=self.get_device_object_type(),
+        )
+        self._unregister(source_type)
+        config = django_apps.get_app_config(APP_LABEL)
+
+        with patch.object(config.__class__, '_dynamic_model_creation_unsafe', return_value=True):
+            model = source_type.get_model()
+
+        field = model._meta.get_field('device')
+        self.assertFalse(isinstance(field.remote_field.model, str))
+
+    def test_get_model_keeps_polymorphic_field_when_unsafe(self):
+        """A polymorphic Object field uses a GFK, which needs no app-registry
+        resolution, so it must not be dropped during the unsafe window either."""
+        source_type = CustomObjectType.objects.create(
+            name="DnsZone637f", slug="dns-zone-637-f",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=source_type, name="name", label="Name",
+            type="text", primary=True,
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=source_type, name="owner", label="Owner",
+            type="object", is_polymorphic=True,
+        )
+        self._unregister(source_type)
+        config = django_apps.get_app_config(APP_LABEL)
+
+        with patch.object(config.__class__, '_dynamic_model_creation_unsafe', return_value=True):
+            model = source_type.get_model()
+
+        # A GFK field is a virtual field, not a concrete one — get_field() still
+        # finds it, but the important thing is that it's present at all.
+        self.assertIsNotNone(model._meta.get_field('owner'))
+
+
+class TargetsCustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
+    """Unit tests for CustomObjectTypeField.targets_custom_object_type (#664 review)."""
+
+    def test_true_for_field_targeting_another_cot(self):
+        target_type = self.create_custom_object_type(name="TargetsCOTTarget", slug="targets-cot-target")
+        source_type = self.create_custom_object_type(name="TargetsCOTSource", slug="targets-cot-source")
+        target_ct = ObjectType.objects.get_for_model(target_type.get_model())
+        field = self.create_custom_object_type_field(
+            source_type, name="ref", type="object", related_object_type=target_ct,
+        )
+        self.assertTrue(field.targets_custom_object_type)
+
+    def test_false_for_field_targeting_core_model(self):
+        source_type = self.create_custom_object_type(name="TargetsCoreSource", slug="targets-core-source")
+        field = self.create_custom_object_type_field(
+            source_type, name="device", type="object",
+            related_object_type=self.get_device_object_type(),
+        )
+        self.assertFalse(field.targets_custom_object_type)
+
+    def test_false_for_polymorphic_field(self):
+        source_type = self.create_custom_object_type(name="TargetsPolySource", slug="targets-poly-source")
+        field = self.create_custom_object_type_field(
+            source_type, name="owner", type="object", is_polymorphic=True,
+        )
+        self.assertFalse(field.targets_custom_object_type)
+
+    def test_false_for_field_targeting_custom_object_type_model_itself(self):
+        # netbox_custom_objects.customobjecttype shares APP_LABEL with dynamic
+        # COT models but isn't one -- extract_cot_id_from_model_name() must
+        # return None for it, not raise. Building this in memory rather than
+        # saving: a real save() rejects this related_object_type outright, since
+        # CustomObjectType itself isn't a "table<id>model" dynamic model, but the
+        # property's own guard against it is worth testing directly.
+        source_type = self.create_custom_object_type(name="TargetsCOTModelSource", slug="targets-cot-model-source")
+        cot_ct = ObjectType.objects.get_for_model(CustomObjectType)
+        field = CustomObjectTypeField(
+            custom_object_type=source_type, name="cot_ref", type="object",
+            related_object_type=cot_ct,
+        )
+        self.assertFalse(field.targets_custom_object_type)
+
+    def test_false_for_no_related_object_type(self):
+        source_type = self.create_custom_object_type(name="TargetsNoneSource", slug="targets-none-source")
+        field = self.create_custom_object_type_field(source_type, name="label", type="text")
+        self.assertFalse(field.targets_custom_object_type)
+
 
 class CrossCOTStubSearchIndexRegressionTestCase(CustomObjectsTestCase, TestCase):
     """Regression tests for the search-index crash on stub models.
@@ -2700,3 +2969,68 @@ class DisplayExpressionFormValidationTestCase(CustomObjectsTestCase, TestCase):
         form = self._form('{% if make %}{{ make }}')  # missing {% endif %}
         form.is_valid()
         self.assertIn('display_expression', form.errors)
+
+
+class PhantomTaggedObjectsTestCase(CustomObjectsTestCase, TestCase):
+    """Regression tests for issue #629 (Phantom Tagged Objects): deleting a
+    tagged custom object left its TaggedItem row behind."""
+
+    def setUp(self):
+        super().setUp()
+        self.cot = self.create_custom_object_type(name="SslProfile", slug="ssl-profiles")
+        self.create_custom_object_type_field(
+            self.cot, name="name", label="Name", type="text", primary=True, required=True,
+        )
+        self.tag = Tag.objects.create(name="unbound", slug="unbound")
+
+    def _tagged_item_count(self):
+        ct = ContentType.objects.get_for_model(self.cot.get_model())
+        return TaggedItem.objects.filter(tag=self.tag, content_type=ct).count()
+
+    def test_generated_model_has_tagged_items_generic_relation(self):
+        model = self.cot.get_model()
+        private_field_names = [f.name for f in model._meta.private_fields]
+        self.assertIn('tagged_items', private_field_names)
+
+    def test_direct_delete_removes_tagged_item(self):
+        model = self.cot.get_model()
+        obj = model.objects.create(name="profile-a")
+        obj.tags.set([self.tag])
+        self.assertEqual(self._tagged_item_count(), 1)
+
+        obj.delete()
+
+        self.assertEqual(self._tagged_item_count(), 0)
+
+    def test_queryset_bulk_delete_removes_tagged_item(self):
+        model = self.cot.get_model()
+        obj = model.objects.create(name="profile-b")
+        obj.tags.set([self.tag])
+        self.assertEqual(self._tagged_item_count(), 1)
+
+        model.objects.filter(pk=obj.pk).delete()
+
+        self.assertEqual(self._tagged_item_count(), 0)
+
+    def test_delete_after_model_regeneration_removes_tagged_item(self):
+        model = self.cot.get_model()
+        obj = model.objects.create(name="profile-c")
+        obj.tags.set([self.tag])
+        self.assertEqual(self._tagged_item_count(), 1)
+
+        fresh_model = self.cot.get_model(no_cache=True)
+        self.assertIsNot(fresh_model, model)
+        fresh_model.objects.get(pk=obj.pk).delete()
+
+        self.assertEqual(self._tagged_item_count(), 0)
+
+    def test_filtering_by_tag_matches_actual_object_count(self):
+        model = self.cot.get_model()
+        kept = model.objects.create(name="profile-kept")
+        kept.tags.set([self.tag])
+        deleted = model.objects.create(name="profile-deleted")
+        deleted.tags.set([self.tag])
+        deleted.delete()
+
+        self.assertEqual(model.objects.filter(tags=self.tag).count(), 1)
+        self.assertEqual(self._tagged_item_count(), 1)

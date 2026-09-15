@@ -346,6 +346,87 @@ class PolymorphicFieldAPITest(TransactionCleanupMixin, CustomObjectsTestCase, Tr
         obj.refresh_from_db()
         self.assertIsNone(obj.poly_obj)
 
+    def test_custom_validator_sees_gfk_value_on_api_create(self):
+        """A CUSTOM_VALIDATORS validate() call during API create must see the
+        submitted polymorphic GFK value, not None (#677)."""
+        from django.contrib.contenttypes.models import ContentType
+        from extras.validators import CustomValidator
+
+        _grant_perm(self.user, "add", self.model, "co-add-validator")
+        seen = {}
+
+        class _CaptureValidator(CustomValidator):
+            def validate(self, instance, request):
+                seen['poly_obj'] = instance.poly_obj
+
+        site_ct = ContentType.objects.get_for_model(Site)
+        data = {
+            "name": "validator-api-create-obj",
+            "poly_obj": {"content_type_id": site_ct.pk, "object_id": self.site.pk},
+        }
+        with self.settings(CUSTOM_VALIDATORS={f'{APP_LABEL}.{self.cot.slug}': [_CaptureValidator()]}):
+            response = self.client.post(
+                self._obj_list_url(), json.dumps(data), content_type="application/json", **self.header
+            )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.content)
+        self.assertEqual(seen.get('poly_obj'), self.site)
+
+    def test_custom_validator_sees_updated_gfk_value_on_api_update(self):
+        """A CUSTOM_VALIDATORS validate() call during an API PATCH that changes the
+        polymorphic GFK value must see the new value, not the pre-update one (#677)."""
+        from django.contrib.contenttypes.models import ContentType
+        from extras.validators import CustomValidator
+
+        _grant_perm(self.user, "change", self.model, "co-change-validator")
+        obj = self.model.objects.create(name="validator-api-update-obj")
+        obj.poly_obj = self.site
+        obj.save()
+
+        seen = {}
+
+        class _CaptureValidator(CustomValidator):
+            def validate(self, instance, request):
+                seen['poly_obj'] = instance.poly_obj
+
+        prefix_ct = ContentType.objects.get_for_model(Prefix)
+        data = {"poly_obj": {"content_type_id": prefix_ct.pk, "object_id": self.prefix.pk}}
+        with self.settings(CUSTOM_VALIDATORS={f'{APP_LABEL}.{self.cot.slug}': [_CaptureValidator()]}):
+            response = self.client.patch(
+                self._obj_detail_url(obj.pk), json.dumps(data), content_type="application/json", **self.header
+            )
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.content)
+        self.assertEqual(seen.get('poly_obj'), self.prefix)
+
+    def test_custom_validator_sees_cleared_gfk_value_on_api_update(self):
+        """PATCHing poly_obj to null must clear it on the instance validate() runs
+        against, and the None restore after validate() must still round-trip
+        correctly into update()."""
+        from extras.validators import CustomValidator
+
+        _grant_perm(self.user, "change", self.model, "co-change-validator-null")
+        obj = self.model.objects.create(name="validator-api-clear-obj")
+        obj.poly_obj = self.site
+        obj.save()
+
+        seen = {}
+        called = []
+
+        class _CaptureValidator(CustomValidator):
+            def validate(self, instance, request):
+                called.append(True)
+                seen['poly_obj'] = instance.poly_obj
+
+        data = {"poly_obj": None}
+        with self.settings(CUSTOM_VALIDATORS={f'{APP_LABEL}.{self.cot.slug}': [_CaptureValidator()]}):
+            response = self.client.patch(
+                self._obj_detail_url(obj.pk), json.dumps(data), content_type="application/json", **self.header
+            )
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.content)
+        self.assertTrue(called, "validator was never invoked")
+        self.assertIsNone(seen.get('poly_obj'))
+        obj.refresh_from_db()
+        self.assertIsNone(obj.poly_obj)
+
     # --- Custom object CRUD with polymorphic M2M ---
 
     def test_create_custom_object_with_polymorphic_m2m_via_api(self):
@@ -959,6 +1040,60 @@ class PolymorphicFieldUITest(TransactionCleanupMixin, CustomObjectsTestCase, Tra
 
         response = self.client.get(self._field_delete_url(self.gfk_field.pk))
         self.assertEqual(response.status_code, 200)
+
+    # --- CUSTOM_VALIDATORS visibility of polymorphic GFK values (#677) ---
+
+    def test_custom_validator_sees_gfk_value_on_create(self):
+        """CUSTOM_VALIDATORS must see the submitted GFK value during form-based
+        create, not None (#677)."""
+        from django.contrib.contenttypes.models import ContentType
+        from extras.validators import CustomValidator
+
+        seen = {}
+
+        class _CaptureValidator(CustomValidator):
+            def validate(self, instance, request):
+                seen['poly_obj'] = instance.poly_obj
+
+        site_ct = ContentType.objects.get_for_model(Site)
+        data = {
+            "name": "validator-create-obj",
+            "poly_obj__ct": site_ct.pk,
+            "poly_obj__obj": self.site1.pk,
+            "csrfmiddlewaretoken": "fake",
+        }
+        with self.settings(CUSTOM_VALIDATORS={f'{APP_LABEL}.{self.cot.slug}': [_CaptureValidator()]}):
+            response = self.client.post(self._add_url(), data, follow=True)
+        self.assertNotIn(response.status_code, [400, 403, 500])
+        self.assertEqual(seen.get('poly_obj'), self.site1)
+
+    def test_custom_validator_sees_updated_gfk_value_on_edit(self):
+        """Editing an object and changing its polymorphic GFK value must be visible
+        to CUSTOM_VALIDATORS during that same request, not the pre-edit value."""
+        from django.contrib.contenttypes.models import ContentType
+        from extras.validators import CustomValidator
+
+        obj = self.model.objects.create(name="validator-edit-obj")
+        obj.poly_obj = self.site1
+        obj.save()
+
+        seen = {}
+
+        class _CaptureValidator(CustomValidator):
+            def validate(self, instance, request):
+                seen['poly_obj'] = instance.poly_obj
+
+        prefix_ct = ContentType.objects.get_for_model(Prefix)
+        data = {
+            "name": "validator-edit-obj",
+            "poly_obj__ct": prefix_ct.pk,
+            "poly_obj__obj": self.prefix1.pk,
+            "csrfmiddlewaretoken": "fake",
+        }
+        with self.settings(CUSTOM_VALIDATORS={f'{APP_LABEL}.{self.cot.slug}': [_CaptureValidator()]}):
+            response = self.client.post(self._edit_url(obj.pk), data, follow=True)
+        self.assertNotIn(response.status_code, [400, 403, 500])
+        self.assertEqual(seen.get('poly_obj'), self.prefix1)
 
 
 # ---------------------------------------------------------------------------
@@ -1972,4 +2107,133 @@ class PolymorphicReverseDescriptorTest(
         self.assertIs(
             Site.__dict__.get("co_shared_ref"), descriptor_b,
             "_unwire must not remove a descriptor owned by a different CO field",
+        )
+
+
+# ---------------------------------------------------------------------------
+# get_models() re-entrancy (issue #686)
+# ---------------------------------------------------------------------------
+
+class PolymorphicReverseDescriptorRecursionTestCase(
+    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
+):
+    """Regression test for issue #686: generating a polymorphic field's
+    reverse descriptor raised RecursionError."""
+
+    def test_get_model_with_polymorphic_related_name_does_not_recurse(self):
+        from unittest import mock
+
+        from django.apps import apps as django_apps
+
+        import netbox_custom_objects as nco_pkg
+
+        site_ot = ObjectType.objects.get(app_label="dcim", model="site")
+        prefix_ot = ObjectType.objects.get(app_label="ipam", model="prefix")
+
+        cot = CustomObjectType.objects.create(
+            name="RecursionRevTest", slug="recursion-rev-test",
+            verbose_name_plural="Recursion Rev Tests",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cot, name="name", type="text", primary=True, required=True,
+        )
+        field = CustomObjectTypeField.objects.create(
+            custom_object_type=cot,
+            name="target_obj", label="Target", type="object",
+            is_polymorphic=True,
+            related_name="rev_recursion_test",
+        )
+        field.related_object_types.set([site_ot, prefix_ot])
+
+        # Force the model out of cache and the relation-tree cold, so
+        # get_model() -> _after_model_generation() -> related_object_types.all()
+        # hits the "first access" path that triggers apps.get_models().
+        cot.clear_model_cache(cot.id)
+        django_apps.clear_cache()
+
+        # should_skip_dynamic_model_creation() disables get_models()'s
+        # CustomObjectType loop under `manage.py test`; bypass it so this test
+        # exercises the real vulnerable code path.
+        app_config = django_apps.get_app_config('netbox_custom_objects')
+        with (
+            mock.patch.object(nco_pkg, '_app_ready', True),
+            mock.patch.object(app_config, 'should_skip_dynamic_model_creation', return_value=False),
+        ):
+            # Must not raise RecursionError.
+            model = cot.get_model()
+        self.assertFalse(nco_pkg._generating_models.get())
+        # Look up the registered class directly rather than trusting `model`:
+        # a nested get_models() call triggered mid-generation (as above) can
+        # leave get_model()'s return value out of sync with what's actually
+        # registered in the app registry.
+        registered_model = django_apps.get_model(APP_LABEL, model.__name__)
+        self.assertIn(
+            registered_model,
+            django_apps.get_models(),
+            "Generated model should be returned by apps.get_models().",
+        )
+        self.assertTrue(
+            hasattr(Site, "rev_recursion_test"),
+            "Reverse descriptor must still be set on Site after get_model()",
+        )
+        self.assertIsNotNone(model)
+
+
+class GetModelCacheRegistryConsistencyTestCase(
+    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
+):
+    """Regression test: a re-entrant get_model() for the same COT could leave
+    _model_cache and apps.all_models pointing at two different classes."""
+
+    def test_get_model_registers_the_same_class_it_returns_and_caches(self):
+        from unittest import mock
+
+        from django.apps import apps as django_apps
+
+        import netbox_custom_objects as nco_pkg
+
+        site_ot = ObjectType.objects.get(app_label="dcim", model="site")
+        prefix_ot = ObjectType.objects.get(app_label="ipam", model="prefix")
+
+        cot = CustomObjectType.objects.create(
+            name="CacheRegistryTest", slug="cache-registry-test",
+            verbose_name_plural="Cache Registry Tests",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cot, name="name", type="text", primary=True, required=True,
+        )
+        field = CustomObjectTypeField.objects.create(
+            custom_object_type=cot,
+            name="target_obj", label="Target", type="object",
+            is_polymorphic=True,
+            related_name="rev_cache_registry_test",
+        )
+        field.related_object_types.set([site_ot, prefix_ot])
+
+        # Same setup as the sibling recursion test, to force the re-entrant path.
+        cot.clear_model_cache(cot.id)
+        django_apps.clear_cache()
+
+        app_config = django_apps.get_app_config('netbox_custom_objects')
+        with (
+            mock.patch.object(nco_pkg, '_app_ready', True),
+            mock.patch.object(app_config, 'should_skip_dynamic_model_creation', return_value=False),
+        ):
+            model = cot.get_model()
+        self.assertFalse(nco_pkg._generating_models.get())
+
+        cached_model = CustomObjectType.get_cached_model(cot.id)
+        registered_model = django_apps.get_model(APP_LABEL, model.__name__)
+
+        # Must be the exact same class object, not just an equal one.
+        self.assertIs(cached_model, model, "get_cached_model() must return the same class get_model() returned")
+        self.assertIs(
+            registered_model, model,
+            "apps.all_models must register the same class get_model() returned/cached, not a stray "
+            "class from a re-entrant regeneration",
+        )
+        self.assertIn(
+            registered_model,
+            django_apps.get_models(),
+            "Generated model should be returned by apps.get_models().",
         )
