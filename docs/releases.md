@@ -18,7 +18,6 @@ Any NetBox object referenced by a Custom Object — via an Object or Multi-objec
 
 ### Bug Fixes
 
-- [#642](https://github.com/netboxlabs/netbox-custom-objects/issues/642) - `feature` branch CI failed due to a missing test stub
 - [#678](https://github.com/netboxlabs/netbox-custom-objects/issues/678) - Custom Objects tab raised `TemplateDoesNotExist` (500) on models without a detail template (e.g. VRF, MACAddress)
 - [#685](https://github.com/netboxlabs/netbox-custom-objects/issues/685) - `schema/apply/` raised `RecursionError` when a document created multiple new, cross-referencing Custom Object Types in one request
 - [#688](https://github.com/netboxlabs/netbox-custom-objects/issues/688) - `get_model()` could leave `_model_cache` and `apps.all_models` pointing at two different classes for the same Custom Object Type
