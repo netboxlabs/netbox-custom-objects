@@ -3034,3 +3034,94 @@ class PhantomTaggedObjectsTestCase(CustomObjectsTestCase, TestCase):
 
         self.assertEqual(model.objects.filter(tags=self.tag).count(), 1)
         self.assertEqual(self._tagged_item_count(), 1)
+
+
+class ChoiceSetCacheInvalidationRegressionTest(CustomObjectsTestCase, TestCase):
+    """Regression test for issue #697: editing a CustomFieldChoiceSet's values
+    doesn't invalidate any COT model that references it via a select/multiselect
+    field.
+
+    SelectFieldType/MultiSelectFieldType.get_model_field() bake the choice
+    set's current values into the generated model field's ``choices=`` at
+    model-generation time. Nothing about editing a CustomFieldChoiceSet touches
+    a CustomObjectTypeField, so without a signal bumping cache_timestamp, every
+    already-cached COT model keeps validating against the choice set's old
+    values -- rejecting a legitimate new value with "not a valid choice" until
+    something unrelated happens to invalidate the cache.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.choice_set = self.create_choice_set(
+            name="CacheInvalidationChoices",
+            extra_choices=[["one", "One"], ["two", "Two"], ["three", "Three"]],
+        )
+
+    def test_multiselect_accepts_value_added_after_model_was_cached(self):
+        cot = self.create_custom_object_type(name="MultiSelectCache", slug="multiselect-cache")
+        self.create_custom_object_type_field(cot, name="name", type="text", primary=True, required=True)
+        self.create_custom_object_type_field(cot, name="opts", type="multiselect", choice_set=self.choice_set)
+
+        # Populate the model cache before the choice set changes, exactly like a
+        # request that renders the object's edit form would.
+        model = cot.get_model()
+        obj = model.objects.create(name="obj-1", opts=["one", "two"])
+
+        self.choice_set.extra_choices = [
+            ["one", "One"], ["two", "Two"], ["three", "Three"], ["four", "Four"],
+        ]
+        self.choice_set.save()
+
+        # A later request re-fetches the COT and calls get_model() again; without
+        # the fix this returns the same stale cached class.
+        cot.refresh_from_db()
+        fresh_model = cot.get_model()
+        self.assertIsNot(
+            fresh_model, model,
+            "get_model() must regenerate after the choice set it depends on changes",
+        )
+
+        fresh_obj = fresh_model.objects.get(pk=obj.pk)
+        fresh_obj.opts = ["one", "four"]
+        fresh_obj.full_clean()
+        fresh_obj.save()
+        fresh_obj.refresh_from_db()
+        self.assertEqual(fresh_obj.opts, ["one", "four"])
+
+    def test_select_accepts_value_added_after_model_was_cached(self):
+        cot = self.create_custom_object_type(name="SelectCache", slug="select-cache")
+        self.create_custom_object_type_field(cot, name="name", type="text", primary=True, required=True)
+        self.create_custom_object_type_field(cot, name="opt", type="select", choice_set=self.choice_set)
+
+        model = cot.get_model()
+        obj = model.objects.create(name="obj-1", opt="one")
+
+        self.choice_set.extra_choices = [
+            ["one", "One"], ["two", "Two"], ["three", "Three"], ["four", "Four"],
+        ]
+        self.choice_set.save()
+
+        cot.refresh_from_db()
+        fresh_model = cot.get_model()
+        self.assertIsNot(fresh_model, model)
+
+        fresh_obj = fresh_model.objects.get(pk=obj.pk)
+        fresh_obj.opt = "four"
+        fresh_obj.full_clean()
+        fresh_obj.save()
+        fresh_obj.refresh_from_db()
+        self.assertEqual(fresh_obj.opt, "four")
+
+    def test_unrelated_cot_is_not_invalidated(self):
+        """Only COTs actually referencing the edited choice set should have
+        their cache_timestamp bumped."""
+        other_cot = self.create_custom_object_type(name="Unrelated", slug="unrelated-cot")
+        self.create_custom_object_type_field(other_cot, name="name", type="text", primary=True, required=True)
+        other_cot.get_model()
+        timestamp_before = other_cot.cache_timestamp
+
+        self.choice_set.extra_choices = [["one", "One"], ["two", "Two"], ["three", "Three"], ["four", "Four"]]
+        self.choice_set.save()
+
+        other_cot.refresh_from_db()
+        self.assertEqual(other_cot.cache_timestamp, timestamp_before)

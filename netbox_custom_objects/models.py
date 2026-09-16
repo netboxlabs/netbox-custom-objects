@@ -34,7 +34,7 @@ from extras.choices import (
     CustomFieldUIEditableChoices,
     CustomFieldUIVisibleChoices,
 )
-from extras.models import ConfigContext, ConfigContextModel, CustomField
+from extras.models import ConfigContext, ConfigContextModel, CustomField, CustomFieldChoiceSet
 from extras.models.customfields import SEARCH_TYPES
 from extras.utils import is_taggable, run_validators
 from netbox.config import get_config
@@ -4285,3 +4285,25 @@ def clear_cache_on_field_delete(sender, instance, **kwargs):
     """
     if instance.custom_object_type_id:
         CustomObjectType.clear_model_cache(instance.custom_object_type_id)
+
+
+@receiver(post_save, sender=CustomFieldChoiceSet)
+def clear_cache_on_choice_set_save(sender, instance, **kwargs):
+    """
+    Select/multiselect fields bake their choice set's values into the generated
+    model field's `choices=` at model-generation time (SelectFieldType/
+    MultiSelectFieldType.get_model_field()). Editing a CustomFieldChoiceSet
+    (e.g. adding a new value) doesn't touch any CustomObjectTypeField, so
+    without this, every COT whose model was already cached keeps validating
+    against the choice set's old values -- rejecting a legitimate new value
+    with "not a valid choice" until something else happens to invalidate it.
+    Bump cache_timestamp (not just clear_model_cache) so every worker, not
+    just this process, regenerates the model on its next get_model() call.
+    """
+    cot_ids = CustomObjectTypeField.objects.filter(
+        choice_set=instance
+    ).values_list('custom_object_type_id', flat=True).distinct()
+    for cot in CustomObjectType.objects.filter(id__in=cot_ids):
+        CustomObjectType.clear_model_cache(cot.id)
+        cot.snapshot()
+        cot.save(update_fields=['cache_timestamp'])
