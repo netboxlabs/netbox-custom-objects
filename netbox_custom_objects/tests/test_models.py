@@ -3036,7 +3036,7 @@ class PhantomTaggedObjectsTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(self._tagged_item_count(), 1)
 
 
-class ChoiceSetCacheInvalidationRegressionTest(CustomObjectsTestCase, TestCase):
+class ChoiceSetCacheInvalidationTestCase(CustomObjectsTestCase, TestCase):
     """Editing a CustomFieldChoiceSet's values must invalidate any COT model
     that references it via a select/multiselect field, since those fields'
     choices are baked into the generated model at cache time."""
