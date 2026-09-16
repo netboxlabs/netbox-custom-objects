@@ -4291,14 +4291,10 @@ def clear_cache_on_field_delete(sender, instance, **kwargs):
 def clear_cache_on_choice_set_save(sender, instance, **kwargs):
     """
     Select/multiselect fields bake their choice set's values into the generated
-    model field's `choices=` at model-generation time (SelectFieldType/
-    MultiSelectFieldType.get_model_field()). Editing a CustomFieldChoiceSet
-    (e.g. adding a new value) doesn't touch any CustomObjectTypeField, so
-    without this, every COT whose model was already cached keeps validating
-    against the choice set's old values -- rejecting a legitimate new value
-    with "not a valid choice" until something else happens to invalidate it.
-    Bump cache_timestamp (not just clear_model_cache) so every worker, not
-    just this process, regenerates the model on its next get_model() call.
+    model field's `choices=` at model-generation time, so editing a choice set
+    must invalidate every COT model that references it. Bump cache_timestamp
+    (not just clear_model_cache) so every worker regenerates on its next
+    get_model() call, not just this process.
     """
     cot_ids = CustomObjectTypeField.objects.filter(
         choice_set=instance

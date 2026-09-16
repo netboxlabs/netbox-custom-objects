@@ -3037,18 +3037,9 @@ class PhantomTaggedObjectsTestCase(CustomObjectsTestCase, TestCase):
 
 
 class ChoiceSetCacheInvalidationRegressionTest(CustomObjectsTestCase, TestCase):
-    """Regression test for issue #697: editing a CustomFieldChoiceSet's values
-    doesn't invalidate any COT model that references it via a select/multiselect
-    field.
-
-    SelectFieldType/MultiSelectFieldType.get_model_field() bake the choice
-    set's current values into the generated model field's ``choices=`` at
-    model-generation time. Nothing about editing a CustomFieldChoiceSet touches
-    a CustomObjectTypeField, so without a signal bumping cache_timestamp, every
-    already-cached COT model keeps validating against the choice set's old
-    values -- rejecting a legitimate new value with "not a valid choice" until
-    something unrelated happens to invalidate the cache.
-    """
+    """Editing a CustomFieldChoiceSet's values must invalidate any COT model
+    that references it via a select/multiselect field, since those fields'
+    choices are baked into the generated model at cache time."""
 
     def setUp(self):
         super().setUp()
@@ -3062,8 +3053,6 @@ class ChoiceSetCacheInvalidationRegressionTest(CustomObjectsTestCase, TestCase):
         self.create_custom_object_type_field(cot, name="name", type="text", primary=True, required=True)
         self.create_custom_object_type_field(cot, name="opts", type="multiselect", choice_set=self.choice_set)
 
-        # Populate the model cache before the choice set changes, exactly like a
-        # request that renders the object's edit form would.
         model = cot.get_model()
         obj = model.objects.create(name="obj-1", opts=["one", "two"])
 
@@ -3072,8 +3061,6 @@ class ChoiceSetCacheInvalidationRegressionTest(CustomObjectsTestCase, TestCase):
         ]
         self.choice_set.save()
 
-        # A later request re-fetches the COT and calls get_model() again; without
-        # the fix this returns the same stale cached class.
         cot.refresh_from_db()
         fresh_model = cot.get_model()
         self.assertIsNot(
