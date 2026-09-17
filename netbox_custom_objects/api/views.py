@@ -146,28 +146,37 @@ class CustomObjectViewSet(NetBoxModelViewSet):
         return serializers.get_serializer_class(self.model)
 
     def get_queryset(self):
-        # Resolve the dynamic per-COT model/queryset once per request. initial()
-        # below forces this to run before BaseViewSet.initial() applies
-        # queryset.restrict(), so later calls (list/get_object/bulk mixins) must
-        # keep returning that already-restricted self.queryset rather than
-        # rebuilding a fresh, unrestricted one from scratch.
+        # By the time any action handler calls this, initial() below has already
+        # resolved self.model (or left it None if the slug didn't match a COT).
+        # A missing COT is reported here, after authentication/permission checks
+        # have run in super().initial() — see the comment there for why.
         if self.model is None:
-            try:
-                custom_object_type = CustomObjectType.objects.get(
-                    slug=self.kwargs["custom_object_type"]
-                )
-            except CustomObjectType.DoesNotExist:
-                raise Http404
-            self.model = custom_object_type.get_model_with_serializer()
-            self.queryset = self.model.objects.all()
+            raise Http404
         return super().get_queryset()
 
     def initial(self, request, *args, **kwargs):
         # BaseViewSet.initial() enforces object-level permissions by reassigning
         # self.queryset in place (self.queryset = self.queryset.restrict(...)), so
         # self.queryset must already point at this request's dynamic model before
-        # it runs.
-        self.get_queryset()
+        # it calls super().initial() below, which performs that restriction.
+        #
+        # Resolve the COT without raising Http404 for a bad slug here, though:
+        # super().initial() is also what runs authentication (via DRF's own
+        # initial()), and it hasn't run yet at this point. Raising 404 ahead of
+        # that would let an unauthenticated caller distinguish a valid slug
+        # (401, once auth runs) from an invalid one (404, immediately) — a slug
+        # enumeration side-channel. Fall back to an empty queryset instead, and
+        # defer the actual 404 to get_queryset(), which only runs after the
+        # action handler has been reached (i.e. after auth/permission checks).
+        if self.model is None:
+            try:
+                custom_object_type = CustomObjectType.objects.get(
+                    slug=self.kwargs["custom_object_type"]
+                )
+                self.model = custom_object_type.get_model_with_serializer()
+                self.queryset = self.model.objects.all()
+            except CustomObjectType.DoesNotExist:
+                self.queryset = CustomObjectType.objects.none()
         super().initial(request, *args, **kwargs)
 
     @property

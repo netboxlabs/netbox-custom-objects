@@ -275,6 +275,26 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, NetB
         # The three objects created in setUpTestData must be present.
         self.assertGreaterEqual(response.data['count'], 3)
 
+    def test_unauthenticated_request_does_not_leak_slug_existence(self):
+        """An unauthenticated request must get the same status for a real and a bogus COT slug.
+
+        Regression test: CustomObjectViewSet.initial() resolves the COT slug before
+        BaseViewSet.initial() (via DRF's own initial()) performs authentication. If
+        it raised Http404 for an unknown slug at that point, an unauthenticated
+        caller could distinguish a valid slug (401/403, once auth runs) from an
+        invalid one (404, immediately) - a slug enumeration side-channel.
+        """
+        invalid_url = reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-list',
+            kwargs={'custom_object_type': 'does-not-exist'},
+        )
+
+        valid_response = self.client.get(self._get_list_url())
+        invalid_response = self.client.get(invalid_url)
+
+        self.assertEqual(valid_response.status_code, invalid_response.status_code)
+        self.assertIn(valid_response.status_code, (401, 403))
+
     def test_list_objects_respects_object_level_permission_constraints(self):
         """The list endpoint must only return objects matching the user's constrained permission.
 
@@ -342,13 +362,18 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, NetB
         """
         self._add_permission('view', 'Query count list perm')
 
+        # Force every request onto a single page regardless of PAGINATE_COUNT, so a
+        # pagination-count query firing (or not) at some default page-size boundary
+        # can't be mistaken for the row-count effect this test actually checks.
+        list_url = f'{self._get_list_url()}?limit=100'
+
         # Warm the dynamic model/serializer class cache (CustomObjectType.get_model_with_serializer())
         # with a throwaway request first, so the comparison below isolates the effect of row count
         # rather than one-time class-building queries that only happen on a cold cache.
-        self.client.get(self._get_list_url(), **self.header)
+        self.client.get(list_url, **self.header)
 
         with CaptureQueriesContext(connection) as ctx:
-            response = self.client.get(self._get_list_url(), **self.header)
+            response = self.client.get(list_url, **self.header)
         self.assertHttpStatus(response, 200)
         baseline_query_count = len(ctx.captured_queries)
 
@@ -357,7 +382,7 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, NetB
         self.model.objects.bulk_create(extra_objects)
 
         with CaptureQueriesContext(connection) as ctx:
-            response = self.client.get(self._get_list_url(), **self.header)
+            response = self.client.get(list_url, **self.header)
         self.assertHttpStatus(response, 200)
         self.assertEqual(
             len(ctx.captured_queries),
@@ -888,6 +913,31 @@ class CustomObjectTypeAPITest(CustomObjectsTestCase, TestCase):
         self.assertIn('config_context_enabled', response.data)
         cot.refresh_from_db()
         self.assertFalse(cot.config_context_enabled)
+
+
+class CustomObjectTypeAndFieldViewSetPermissionTest(CustomObjectsTestCase, TestCase):
+    """
+    Regression test for #699/NPL-1366: CustomObjectTypeViewSet and
+    CustomObjectTypeFieldViewSet now inherit from NetBoxModelViewSet rather than a
+    plain DRF ModelViewSet, which enforces object-level permissions on LIST via
+    BaseViewSet.initial(). Before that fix, both viewsets returned 200 to any
+    authenticated user's list request regardless of permission.
+    """
+
+    def setUp(self):
+        self.user = create_test_user('unprivileged_user')
+        token_key = create_token(self.user)
+        self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
+
+    def test_custom_object_type_list_without_permission_returns_403(self):
+        url = reverse('plugins-api:netbox_custom_objects-api:customobjecttype-list')
+        response = self.client.get(url, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_custom_object_type_field_list_without_permission_returns_403(self):
+        url = reverse('plugins-api:netbox_custom_objects-api:customobjecttypefield-list')
+        response = self.client.get(url, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
 
 class CustomObjectTypeFieldObjectResolutionTest(CustomObjectsTestCase, TestCase):
