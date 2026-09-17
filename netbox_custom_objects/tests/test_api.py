@@ -2467,3 +2467,71 @@ class IntegerDecimalMinMaxAPITest(CustomObjectsTestCase, NetBoxTestCase):
                 }
                 response = self.client.post(self._list_url(), data, format="json", **self.header)
                 self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+
+
+class SelectMultiSelectValueLabelAPITest(CustomObjectsTestCase, NetBoxTestCase):
+    """select/multiselect fields must read as {value, label}, matching core ChoiceField."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.cot = CustomObjectType.objects.create(name="ValueLabelTest", slug="value-label-test")
+        cls.create_custom_object_type_field(
+            cls.cot, name="name", type="text", primary=True, required=True,
+        )
+        cls.choice_set = cls.create_choice_set()
+        cls.create_custom_object_type_field(
+            cls.cot, name="status", type="select", choice_set=cls.choice_set,
+        )
+        cls.create_custom_object_type_field(
+            cls.cot, name="tags_field", type="multiselect", choice_set=cls.choice_set,
+        )
+        cls.model = cls.cot.get_model()
+
+    def setUp(self):
+        super().setUp()
+        self.user = create_test_user("valuelabeluser")
+        self.client = APIClient()
+        token_key = create_token(self.user)
+        self.header = {"HTTP_AUTHORIZATION": f"Token {token_key}"}
+        perm = ObjectPermission(name="value label perm", actions=["view", "add"])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+    def _list_url(self):
+        return reverse(
+            "plugins-api:netbox_custom_objects-api:customobject-list",
+            kwargs={"custom_object_type": self.cot.slug},
+        )
+
+    def _detail_url(self, instance):
+        return reverse(
+            "plugins-api:netbox_custom_objects-api:customobject-detail",
+            kwargs={"pk": instance.pk, "custom_object_type": self.cot.slug},
+        )
+
+    def test_select_field_reads_as_value_label(self):
+        instance = self.model.objects.create(name="obj", status="choice2")
+        response = self.client.get(self._detail_url(instance), **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["status"], {"value": "choice2", "label": "Choice 2"})
+
+    def test_multiselect_field_reads_as_list_of_value_label(self):
+        instance = self.model.objects.create(name="obj", tags_field=["choice1", "choice3"])
+        response = self.client.get(self._detail_url(instance), **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response.data["tags_field"],
+            [
+                {"value": "choice1", "label": "Choice 1"},
+                {"value": "choice3", "label": "Choice 3"},
+            ],
+        )
+
+    def test_select_and_multiselect_still_accept_bare_values_on_write(self):
+        data = {"name": "written", "status": "choice1", "tags_field": ["choice2"]}
+        response = self.client.post(self._list_url(), data, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        instance = self.model.objects.get(pk=response.data["id"])
+        self.assertEqual(instance.status, "choice1")
+        self.assertEqual(instance.tags_field, ["choice2"])
