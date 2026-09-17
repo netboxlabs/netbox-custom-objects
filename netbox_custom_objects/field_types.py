@@ -8,6 +8,7 @@ from typing import List
 from urllib.parse import urlparse
 
 import django_tables2 as tables
+from rest_framework import serializers as drf_serializers
 from strawberry.scalars import JSON
 from django import forms
 from django.apps import apps
@@ -328,7 +329,6 @@ class TextFieldType(FieldType):
         return models.CharField(null=True, blank=not field.required, **field_kwargs)
 
     def get_serializer_field(self, field, **kwargs):
-        from rest_framework import serializers as drf_serializers
         return drf_serializers.CharField(
             required=field.required,
             allow_null=not field.required,
@@ -375,7 +375,6 @@ class LongTextFieldType(FieldType):
         return models.TextField(null=True, blank=not field.required, **field_kwargs)
 
     def get_serializer_field(self, field, **kwargs):
-        from rest_framework import serializers as drf_serializers
         return drf_serializers.CharField(
             required=field.required,
             allow_null=not field.required,
@@ -417,7 +416,6 @@ class IntegerFieldType(FieldType):
         return models.BigIntegerField(null=True, blank=not field.required, **field_kwargs)
 
     def get_serializer_field(self, field, **kwargs):
-        from rest_framework import serializers as drf_serializers
         return drf_serializers.IntegerField(
             required=field.required,
             allow_null=not field.required,
@@ -453,7 +451,6 @@ class DecimalFieldType(FieldType):
         )
 
     def get_serializer_field(self, field, **kwargs):
-        from rest_framework import serializers as drf_serializers
         return drf_serializers.DecimalField(
             max_digits=8,
             decimal_places=2,
@@ -489,7 +486,6 @@ class BooleanFieldType(FieldType):
         return models.BooleanField(null=True, blank=not field.required, **field_kwargs)
 
     def get_serializer_field(self, field, **kwargs):
-        from rest_framework import serializers as drf_serializers
         return drf_serializers.BooleanField(
             required=field.required,
             allow_null=not field.required,
@@ -532,7 +528,6 @@ class DateFieldType(FieldType):
         return models.DateField(null=True, blank=not field.required, **field_kwargs)
 
     def get_serializer_field(self, field, **kwargs):
-        from rest_framework import serializers as drf_serializers
         return drf_serializers.DateField(
             required=field.required,
             allow_null=not field.required,
@@ -560,7 +555,6 @@ class DateTimeFieldType(FieldType):
         return models.DateTimeField(null=True, blank=not field.required, **field_kwargs)
 
     def get_serializer_field(self, field, **kwargs):
-        from rest_framework import serializers as drf_serializers
         return drf_serializers.DateTimeField(
             required=field.required,
             allow_null=not field.required,
@@ -638,7 +632,6 @@ class URLFieldType(FieldType):
     def get_serializer_field(self, field, **kwargs):
         # Only the URL column follows field.required; the title stays always-optional
         # (see the class docstring), so its auto-built serializer field is left alone.
-        from rest_framework import serializers as drf_serializers
         return drf_serializers.URLField(
             required=field.required,
             allow_null=not field.required,
@@ -703,7 +696,6 @@ class JSONFieldType(FieldType):
         return models.JSONField(null=True, blank=not field.required, **field_kwargs)
 
     def get_serializer_field(self, field, **kwargs):
-        from rest_framework import serializers as drf_serializers
         return drf_serializers.JSONField(
             required=field.required,
             allow_null=not field.required,
@@ -773,7 +765,6 @@ class SelectFieldType(FieldType):
         )
 
     def get_serializer_field(self, field, **kwargs):
-        from rest_framework import serializers as drf_serializers
         return drf_serializers.ChoiceField(
             choices=field.choices,
             required=field.required,
@@ -843,7 +834,6 @@ class MultiSelectFieldType(FieldType):
         )
 
     def get_serializer_field(self, field, **kwargs):
-        from rest_framework import serializers as drf_serializers
         return drf_serializers.ListField(
             child=drf_serializers.ChoiceField(choices=field.choices),
             required=field.required,
@@ -2591,7 +2581,6 @@ class CoordinatesFieldType(FieldType):
 
     def get_serializer_field(self, field, **kwargs):
         # A required coordinates field means both halves are mandatory together.
-        from rest_framework import serializers as drf_serializers
         return {
             self.latitude_field_name(field): drf_serializers.DecimalField(
                 max_digits=8, decimal_places=6,
