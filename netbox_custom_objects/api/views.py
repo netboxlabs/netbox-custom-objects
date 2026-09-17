@@ -138,7 +138,26 @@ class CustomObjectViewSet(NetBoxModelViewSet):
     def get_queryset(self):
         if self.model is None:
             raise Http404
-        return super().get_queryset()
+        qs = super().get_queryset()
+
+        # Polymorphic multi-object fields are backed by a custom manager, not a
+        # real registered Django relation, so get_prefetches_for_serializer()
+        # can't discover them via _meta.get_field(). Add them explicitly.
+        fields = self.field_kwargs.get('fields')
+        omit = self.field_kwargs.get('omit') or ()
+        polymorphic_m2m_fields = [
+            info['name']
+            for info in self.model._field_objects.values()
+            if (
+                info['field'].type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
+                and info['field'].is_polymorphic
+                and (fields is None or info['name'] in fields)
+                and info['name'] not in omit
+            )
+        ]
+        if polymorphic_m2m_fields:
+            qs = qs.prefetch_related(*polymorphic_m2m_fields)
+        return qs
 
     def initial(self, request, *args, **kwargs):
         # self.model/queryset must be resolved before super().initial() applies
