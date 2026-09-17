@@ -4,7 +4,6 @@ import hashlib
 import json
 import logging
 from decimal import Decimal
-from typing import List
 from urllib.parse import urlparse
 
 import django_tables2 as tables
@@ -734,7 +733,9 @@ class JSONFieldType(FieldType):
 
 
 class SelectFieldType(FieldType):
-    graphql_annotation = str
+    # No graphql_annotation: GraphQL resolution goes through graphql/types.py's
+    # CHOICE_TYPES resolver, not the plain-scalar _scalar_annotation_for() path
+    # (same as ObjectFieldType/MultiObjectFieldType, resolved via RELATIONSHIP_TYPES).
 
     def get_display_value(self, instance, field_name):
         value = getattr(instance, field_name)
@@ -829,7 +830,7 @@ class SelectFieldType(FieldType):
 
 
 class MultiSelectFieldType(FieldType):
-    graphql_annotation = List[str]
+    # No graphql_annotation: see SelectFieldType above.
 
     def get_filterform_field(self, field, **kwargs):
         choices = field.choice_set.choices
