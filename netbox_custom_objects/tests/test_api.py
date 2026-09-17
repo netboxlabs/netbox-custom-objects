@@ -16,7 +16,7 @@ from rest_framework.test import APIClient
 
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from .base import CustomObjectsTestCase, create_token
-from core.models import ObjectType
+from core.models import Job, ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Rack, Site
 from extras.models import Tag
 from users.models import ObjectPermission
@@ -424,6 +424,22 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, NetB
         instances[1].refresh_from_db()
         self.assertEqual(instances[0].test_field, 'Updated 001')
         self.assertEqual(instances[1].test_field, 'Updated 002')
+
+    def test_background_bulk_update_rejected(self):
+        """?background=true on a bulk write must be rejected rather than silently broken."""
+        self._add_permission('change', 'Background bulk update perm')
+        instance = self._get_queryset().first()
+        data = [{'id': instance.pk, 'test_field': 'Should not apply'}]
+        initial_job_count = Job.objects.count()
+
+        response = self.client.patch(
+            f'{self._get_list_url()}?background=true', data, format='json', **self.header
+        )
+
+        self.assertHttpStatus(response, 400)
+        self.assertEqual(Job.objects.count(), initial_job_count)
+        instance.refresh_from_db()
+        self.assertNotEqual(instance.test_field, 'Should not apply')
 
     def test_delete_object(self):
         """DELETE a single object returns 204 and removes the record."""
@@ -910,6 +926,15 @@ class CustomObjectTypeAndFieldViewSetPermissionTest(CustomObjectsTestCase, TestC
         url = reverse('plugins-api:netbox_custom_objects-api:customobjecttypefield-list')
         response = self.client.get(url, **self.header)
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class SchemaGenerationTest(CustomObjectsTestCase, TestCase):
+    """The OpenAPI schema must build without error even though CustomObjectViewSet's
+    model/queryset depend on a URL slug that schema generation never provides."""
+
+    def test_api_schema_generates_without_error(self):
+        response = self.client.get(reverse('schema'))
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
 
 
 class CustomObjectTypeFieldObjectResolutionTest(CustomObjectsTestCase, TestCase):

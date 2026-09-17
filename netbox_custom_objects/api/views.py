@@ -9,7 +9,7 @@ from django.apps import apps as django_apps
 from django.contrib.contenttypes.models import ContentType
 from django.http import Http404
 from django.utils.translation import gettext_lazy as _
-from drf_spectacular.utils import extend_schema_view, extend_schema
+from drf_spectacular.utils import extend_schema
 from extras.choices import CustomFieldTypeChoices
 from rest_framework import status
 from rest_framework.parsers import JSONParser
@@ -121,18 +121,8 @@ class CustomObjectTypeFieldViewSet(NetBoxModelViewSet):
     serializer_class = serializers.CustomObjectTypeFieldSerializer
 
 
-# TODO: Need to remove this for now, check if work-around in the future.
-# There is a catch-22 spectacular get the queryset and serializer class without
-# params at startup.  The suggested workaround is to return the model empty
-# queryset, but we can't get the model without params at startup.
-@extend_schema_view(
-    list=extend_schema(exclude=True),
-    retrieve=extend_schema(exclude=True),
-    create=extend_schema(exclude=True),
-    update=extend_schema(exclude=True),
-    partial_update=extend_schema(exclude=True),
-    destroy=extend_schema(exclude=True)
-)
+# Schema generation cannot resolve the dynamic model without a URL slug.
+@extend_schema(exclude=True)
 class CustomObjectViewSet(NetBoxModelViewSet):
     serializer_class = serializers.CustomObjectSerializer
     model = None
@@ -168,6 +158,13 @@ class CustomObjectViewSet(NetBoxModelViewSet):
     @property
     def filterset_class(self):
         return get_filterset_class(self.model)
+
+    def _enqueue_bulk_job(self, request, action, payload, action_kwargs=None):
+        # AsyncAPIJob instantiates a fresh viewset without the URL kwargs and never calls
+        # initial(), so it can't resolve this viewset's per-request dynamic model.
+        raise ValidationError(
+            _("Background processing is not supported for custom objects.")
+        )
 
 
 class LinkedObjectsView(APIView):
