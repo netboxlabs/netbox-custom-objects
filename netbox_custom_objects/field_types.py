@@ -325,7 +325,15 @@ class TextFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
-        return models.CharField(null=True, blank=True, **field_kwargs)
+        return models.CharField(null=True, blank=not field.required, **field_kwargs)
+
+    def get_serializer_field(self, field, **kwargs):
+        from rest_framework import serializers as drf_serializers
+        return drf_serializers.CharField(
+            required=field.required,
+            allow_null=not field.required,
+            allow_blank=not field.required,
+        )
 
     def get_form_field(self, field, **kwargs):
         validators = []
@@ -364,7 +372,15 @@ class LongTextFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
-        return models.TextField(null=True, blank=True, **field_kwargs)
+        return models.TextField(null=True, blank=not field.required, **field_kwargs)
+
+    def get_serializer_field(self, field, **kwargs):
+        from rest_framework import serializers as drf_serializers
+        return drf_serializers.CharField(
+            required=field.required,
+            allow_null=not field.required,
+            allow_blank=not field.required,
+        )
 
     def get_form_field(self, field, **kwargs):
         widget = forms.Textarea
@@ -398,7 +414,14 @@ class IntegerFieldType(FieldType):
         # TODO: handle all args for IntegerField
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
-        return models.BigIntegerField(null=True, blank=True, **field_kwargs)
+        return models.BigIntegerField(null=True, blank=not field.required, **field_kwargs)
+
+    def get_serializer_field(self, field, **kwargs):
+        from rest_framework import serializers as drf_serializers
+        return drf_serializers.IntegerField(
+            required=field.required,
+            allow_null=not field.required,
+        )
 
     def get_filterform_field(self, field, **kwargs):
         return forms.IntegerField(
@@ -423,10 +446,19 @@ class DecimalFieldType(FieldType):
         field_kwargs.update({"default": field.default, "unique": field.unique})
         return models.DecimalField(
             null=True,
-            blank=True,
+            blank=not field.required,
             max_digits=8,
             decimal_places=2,
             **field_kwargs
+        )
+
+    def get_serializer_field(self, field, **kwargs):
+        from rest_framework import serializers as drf_serializers
+        return drf_serializers.DecimalField(
+            max_digits=8,
+            decimal_places=2,
+            required=field.required,
+            allow_null=not field.required,
         )
 
     def get_form_field(self, field, **kwargs):
@@ -454,7 +486,14 @@ class BooleanFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
-        return models.BooleanField(null=True, blank=True, **field_kwargs)
+        return models.BooleanField(null=True, blank=not field.required, **field_kwargs)
+
+    def get_serializer_field(self, field, **kwargs):
+        from rest_framework import serializers as drf_serializers
+        return drf_serializers.BooleanField(
+            required=field.required,
+            allow_null=not field.required,
+        )
 
     def get_form_field(self, field, **kwargs):
         choices = (
@@ -490,7 +529,14 @@ class DateFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
-        return models.DateField(null=True, blank=True, **field_kwargs)
+        return models.DateField(null=True, blank=not field.required, **field_kwargs)
+
+    def get_serializer_field(self, field, **kwargs):
+        from rest_framework import serializers as drf_serializers
+        return drf_serializers.DateField(
+            required=field.required,
+            allow_null=not field.required,
+        )
 
     def get_form_field(self, field, **kwargs):
         return forms.DateField(
@@ -511,7 +557,14 @@ class DateTimeFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
-        return models.DateTimeField(null=True, blank=True, **field_kwargs)
+        return models.DateTimeField(null=True, blank=not field.required, **field_kwargs)
+
+    def get_serializer_field(self, field, **kwargs):
+        from rest_framework import serializers as drf_serializers
+        return drf_serializers.DateTimeField(
+            required=field.required,
+            allow_null=not field.required,
+        )
 
     def get_form_field(self, field, **kwargs):
         return forms.DateTimeField(
@@ -566,7 +619,7 @@ class URLFieldType(FieldType):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
         return {
-            field.name: models.URLField(null=True, blank=True, **field_kwargs),
+            field.name: models.URLField(null=True, blank=not field.required, **field_kwargs),
             # blank=True, default='' (not null=True): a CharField with null=True lets
             # "no title" be represented as both NULL (ORM/API create omitting the key)
             # and '' (a form submission clearing the field), which would make
@@ -581,6 +634,16 @@ class URLFieldType(FieldType):
                 help_text=_("Human-readable text shown instead of the raw URL."),
             ),
         }
+
+    def get_serializer_field(self, field, **kwargs):
+        # Only the URL column follows field.required; the title stays always-optional
+        # (see the class docstring), so its auto-built serializer field is left alone.
+        from rest_framework import serializers as drf_serializers
+        return drf_serializers.URLField(
+            required=field.required,
+            allow_null=not field.required,
+            allow_blank=not field.required,
+        )
 
     def get_form_field(self, field, **kwargs):
         return LaxURLField(
@@ -637,7 +700,14 @@ class JSONFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
-        return models.JSONField(null=True, blank=True, **field_kwargs)
+        return models.JSONField(null=True, blank=not field.required, **field_kwargs)
+
+    def get_serializer_field(self, field, **kwargs):
+        from rest_framework import serializers as drf_serializers
+        return drf_serializers.JSONField(
+            required=field.required,
+            allow_null=not field.required,
+        )
 
     def get_form_field(self, field, **kwargs):
         return JSONField(
@@ -698,8 +768,17 @@ class SelectFieldType(FieldType):
             max_length=100,
             choices=field.choices,
             null=True,
-            blank=True,
+            blank=not field.required,
             **field_kwargs
+        )
+
+    def get_serializer_field(self, field, **kwargs):
+        from rest_framework import serializers as drf_serializers
+        return drf_serializers.ChoiceField(
+            choices=field.choices,
+            required=field.required,
+            allow_null=not field.required,
+            allow_blank=not field.required,
         )
 
     def get_form_field(self, field, for_csv_import=False, **kwargs):
@@ -759,8 +838,17 @@ class MultiSelectFieldType(FieldType):
         return ArrayField(
             base_field=models.CharField(max_length=50, choices=field.choices),
             null=True,
-            blank=True,
+            blank=not field.required,
             **field_kwargs
+        )
+
+    def get_serializer_field(self, field, **kwargs):
+        from rest_framework import serializers as drf_serializers
+        return drf_serializers.ListField(
+            child=drf_serializers.ChoiceField(choices=field.choices),
+            required=field.required,
+            allow_null=not field.required,
+            allow_empty=not field.required,
         )
 
     def get_form_field(self, field, for_csv_import=False, **kwargs):
@@ -2391,7 +2479,7 @@ class CoordinatesFieldType(FieldType):
             self.latitude_field_name(field): models.DecimalField(
                 verbose_name=_("latitude"),
                 null=True,
-                blank=True,
+                blank=not field.required,
                 max_digits=8,
                 decimal_places=6,
                 validators=[
@@ -2403,7 +2491,7 @@ class CoordinatesFieldType(FieldType):
             self.longitude_field_name(field): models.DecimalField(
                 verbose_name=_("longitude"),
                 null=True,
-                blank=True,
+                blank=not field.required,
                 max_digits=9,
                 decimal_places=6,
                 validators=[
@@ -2411,6 +2499,20 @@ class CoordinatesFieldType(FieldType):
                     MaxValueValidator(Decimal("180.0")),
                 ],
                 help_text=_("GPS coordinate in decimal format (xx.yyyyyy)"),
+            ),
+        }
+
+    def get_serializer_field(self, field, **kwargs):
+        # A required coordinates field means both halves are mandatory together.
+        from rest_framework import serializers as drf_serializers
+        return {
+            self.latitude_field_name(field): drf_serializers.DecimalField(
+                max_digits=8, decimal_places=6,
+                required=field.required, allow_null=not field.required,
+            ),
+            self.longitude_field_name(field): drf_serializers.DecimalField(
+                max_digits=9, decimal_places=6,
+                required=field.required, allow_null=not field.required,
             ),
         }
 

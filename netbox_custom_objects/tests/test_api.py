@@ -2306,3 +2306,93 @@ class URLFieldLinkTitleAPITest(CustomObjectsTestCase, NetBoxTestCase):
         obj = self.model.objects.get(pk=response.data["id"])
         self.assertEqual(obj.website, "https://example.com/")
         self.assertEqual(obj.website_title, "")
+
+
+class RequiredScalarFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
+    """A scalar field marked "Required" must be enforced by the REST API, not just the UI form."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.cot = CustomObjectType.objects.create(
+            name="RequiredScalarTest", slug="required-scalar-test",
+        )
+        cls.create_custom_object_type_field(
+            cls.cot, name="name", type="text", primary=True, required=True,
+        )
+        cls.create_custom_object_type_field(cls.cot, name="req_int", type="integer", required=True)
+        cls.create_custom_object_type_field(cls.cot, name="opt_int", type="integer", required=False)
+        cls.create_custom_object_type_field(cls.cot, name="req_bool", type="boolean", required=True)
+        cls.create_custom_object_type_field(cls.cot, name="req_url", type="url", required=True)
+        cls.create_custom_object_type_field(cls.cot, name="req_coords", type="coordinates", required=True)
+        cls.choice_set = cls.create_choice_set()
+        cls.create_custom_object_type_field(
+            cls.cot, name="req_select", type="select", required=True, choice_set=cls.choice_set,
+        )
+        cls.model = cls.cot.get_model()
+
+    def setUp(self):
+        super().setUp()
+        self.user = create_test_user("requiredscalaruser")
+        self.client = APIClient()
+        token_key = create_token(self.user)
+        self.header = {"HTTP_AUTHORIZATION": f"Token {token_key}"}
+        perm = ObjectPermission(name="required scalar perm", actions=["view", "add"])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+    def _list_url(self):
+        return reverse(
+            "plugins-api:netbox_custom_objects-api:customobject-list",
+            kwargs={"custom_object_type": self.cot.slug},
+        )
+
+    def _full_payload(self):
+        return {
+            "name": "Full object",
+            "req_int": 5,
+            "opt_int": 7,
+            "req_bool": True,
+            "req_url": "https://example.com",
+            "req_coords_latitude": "10.000000",
+            "req_coords_longitude": "20.000000",
+            "req_select": self.choice_set.extra_choices[0][0],
+        }
+
+    def test_post_omitting_required_fields_returns_400(self):
+        response = self.client.post(
+            self._list_url(), {"name": "Missing required fields"}, format="json", **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        for field_name in (
+            "req_int", "req_bool", "req_url", "req_coords_latitude",
+            "req_coords_longitude", "req_select",
+        ):
+            self.assertIn(field_name, response.data)
+
+    def test_post_with_required_fields_present_returns_201(self):
+        response = self.client.post(self._list_url(), self._full_payload(), format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+
+    def test_post_omitting_only_optional_field_returns_201(self):
+        payload = self._full_payload()
+        del payload["opt_int"]
+        response = self.client.post(self._list_url(), payload, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+
+    def test_options_reports_required_true_for_required_fields(self):
+        response = self.client.options(self._list_url(), **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        post_actions = response.data["actions"]["POST"]
+        for field_name in (
+            "req_int", "req_bool", "req_url", "req_coords_latitude",
+            "req_coords_longitude", "req_select",
+        ):
+            self.assertTrue(post_actions[field_name]["required"], field_name)
+
+    def test_options_reports_required_false_for_optional_and_title_fields(self):
+        response = self.client.options(self._list_url(), **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        post_actions = response.data["actions"]["POST"]
+        for field_name in ("opt_int", "req_url_title"):
+            self.assertFalse(post_actions[field_name]["required"], field_name)
