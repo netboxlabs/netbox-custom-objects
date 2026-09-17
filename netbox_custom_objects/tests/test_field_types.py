@@ -245,6 +245,21 @@ class IntegerFieldTypeTestCase(FieldTypeTestCase):
 
         self.assertEqual(instance.count, 25)
 
+    def test_integer_field_min_max_enforced_by_full_clean(self):
+        """validation_minimum/maximum must be enforced by the model field, not just the UI form."""
+        self.create_custom_object_type_field(
+            self.custom_object_type, name="count", type="integer",
+            validation_minimum=0, validation_maximum=100,
+        )
+        model = self.custom_object_type.get_model()
+
+        model(name="Test", count=50).full_clean()
+
+        with self.assertRaises(ValidationError):
+            model(name="Test", count=-1).full_clean()
+        with self.assertRaises(ValidationError):
+            model(name="Test", count=101).full_clean()
+
     def test_integer_field_is_64_bit(self):
         """Integer fields use a 64-bit (bigint) column, not 32-bit (issue #532)."""
         self.create_custom_object_type_field(
@@ -389,6 +404,21 @@ class DecimalFieldTypeTestCase(FieldTypeTestCase):
         instance = model.objects.create(name="Test", price=Decimal("25.75"))
 
         self.assertEqual(instance.price, Decimal("25.75"))
+
+    def test_decimal_field_min_max_enforced_by_full_clean(self):
+        """validation_minimum/maximum must be enforced by the model field, not just the UI form."""
+        self.create_custom_object_type_field(
+            self.custom_object_type, name="price", type="decimal",
+            validation_minimum=0, validation_maximum=100,
+        )
+        model = self.custom_object_type.get_model()
+
+        model(name="Test", price=Decimal("50.00")).full_clean()
+
+        with self.assertRaises(ValidationError):
+            model(name="Test", price=Decimal("-1.00")).full_clean()
+        with self.assertRaises(ValidationError):
+            model(name="Test", price=Decimal("101.00")).full_clean()
 
 
 class CoordinatesFieldTypeTestCase(FieldTypeTestCase):

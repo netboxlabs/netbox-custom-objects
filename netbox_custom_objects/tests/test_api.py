@@ -2532,3 +2532,61 @@ class RequiredScalarFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
         post_actions = response.data["actions"]["POST"]
         for field_name in ("opt_int", "req_url_title"):
             self.assertFalse(post_actions[field_name]["required"], field_name)
+
+
+class IntegerDecimalMinMaxAPITest(CustomObjectsTestCase, NetBoxTestCase):
+    """validation_minimum/maximum must be enforced by the REST API, not just the UI form."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.cot = CustomObjectType.objects.create(
+            name="MinMaxTest", slug="min-max-test",
+        )
+        cls.create_custom_object_type_field(
+            cls.cot, name="name", type="text", primary=True, required=True,
+        )
+        cls.create_custom_object_type_field(
+            cls.cot, name="bounded_int", type="integer",
+            validation_minimum=0, validation_maximum=100,
+        )
+        cls.create_custom_object_type_field(
+            cls.cot, name="bounded_dec", type="decimal",
+            validation_minimum=0, validation_maximum=100,
+        )
+        cls.model = cls.cot.get_model()
+
+    def setUp(self):
+        super().setUp()
+        self.user = create_test_user("minmaxuser")
+        self.client = APIClient()
+        token_key = create_token(self.user)
+        self.header = {"HTTP_AUTHORIZATION": f"Token {token_key}"}
+        perm = ObjectPermission(name="min max perm", actions=["view", "add"])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+    def _list_url(self):
+        return reverse(
+            "plugins-api:netbox_custom_objects-api:customobject-list",
+            kwargs={"custom_object_type": self.cot.slug},
+        )
+
+    def test_post_above_maximum_returns_400(self):
+        data = {"name": "too big", "bounded_int": 101, "bounded_dec": "101.00"}
+        response = self.client.post(self._list_url(), data, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("bounded_int", response.data)
+        self.assertIn("bounded_dec", response.data)
+
+    def test_post_below_minimum_returns_400(self):
+        data = {"name": "too small", "bounded_int": -1, "bounded_dec": "-1.00"}
+        response = self.client.post(self._list_url(), data, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("bounded_int", response.data)
+        self.assertIn("bounded_dec", response.data)
+
+    def test_post_within_range_returns_201(self):
+        data = {"name": "just right", "bounded_int": 50, "bounded_dec": "50.00"}
+        response = self.client.post(self._list_url(), data, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
