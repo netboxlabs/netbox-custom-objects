@@ -8,9 +8,15 @@ from netbox_custom_objects.models import CustomObjectType
 
 from . import views
 
-custom_object_list = views.CustomObjectViewSet.as_view(
-    {"get": "list", "post": "create"}
-)
+custom_object_list = views.CustomObjectViewSet.as_view({
+    "get": "list",
+    "post": "create",
+    # Matches NetBoxRouter's own bulk-operation mapping (netbox.api.routers.NetBoxRouter),
+    # since this list route is wired up manually rather than via that router.
+    "put": "bulk_update",
+    "patch": "bulk_partial_update",
+    "delete": "bulk_destroy",
+})
 custom_object_detail = views.CustomObjectViewSet.as_view(
     {"get": "retrieve", "put": "update", "patch": "partial_update", "delete": "destroy"}
 )

@@ -5,7 +5,9 @@ import json
 import uuid
 from decimal import Decimal
 
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
 from utilities.testing import TestCase as NetBoxTestCase, create_test_user
@@ -273,40 +275,125 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, NetB
         # The three objects created in setUpTestData must be present.
         self.assertGreaterEqual(response.data['count'], 3)
 
-    def test_bulk_create_objects(self):
-        """Create multiple objects with required fields via individual POST requests.
+    def test_list_objects_respects_object_level_permission_constraints(self):
+        """The list endpoint must only return objects matching the user's constrained permission.
 
-        CustomObjectViewSet uses a standard DRF ModelViewSet which does not expose a
-        bulk-create endpoint, so we exercise per-object creation to verify required
-        field enforcement and response shape.
+        Regression test: CustomObjectViewSet previously built its queryset directly from
+        the dynamic model, bypassing BaseViewSet.initial()'s queryset.restrict() call, so a
+        user with a permission scoped to a subset of objects (via `constraints`) could still
+        list every object of that type.
         """
+        instance = self._get_queryset().first()
+        perm = ObjectPermission(
+            name='Constrained list perm',
+            actions=['view'],
+            constraints={'pk': instance.pk},
+        )
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+        response = self.client.get(self._get_list_url(), **self.header)
+
+        self.assertHttpStatus(response, 200)
+        self.assertEqual(response.data['count'], 1)
+        self.assertEqual(response.data['results'][0]['id'], instance.pk)
+
+    def test_list_objects_brief(self):
+        """?brief=true trims the response to the brief field set."""
+        self._add_permission('view', 'Brief list perm')
+
+        response = self.client.get(f'{self._get_list_url()}?brief=true', **self.header)
+
+        self.assertHttpStatus(response, 200)
+        result = response.data['results'][0]
+        self.assertIn('id', result)
+        self.assertIn('url', result)
+        self.assertNotIn('test_field', result)
+
+    def test_list_objects_fields(self):
+        """?fields= restricts the response to the requested fields."""
+        self._add_permission('view', 'Fields list perm')
+
+        response = self.client.get(f'{self._get_list_url()}?fields=id,test_field', **self.header)
+
+        self.assertHttpStatus(response, 200)
+        result = response.data['results'][0]
+        self.assertEqual(set(result.keys()), {'id', 'test_field'})
+
+    def test_list_objects_omit(self):
+        """?omit= excludes the requested fields from the response."""
+        self._add_permission('view', 'Omit list perm')
+
+        response = self.client.get(f'{self._get_list_url()}?omit=test_field', **self.header)
+
+        self.assertHttpStatus(response, 200)
+        result = response.data['results'][0]
+        self.assertNotIn('test_field', result)
+        self.assertIn('id', result)
+
+    def test_list_objects_query_count_is_constant(self):
+        """The list endpoint's query count must not scale with the number of returned rows.
+
+        Regression test for the N+1 query pattern fixed alongside object-level permission
+        enforcement: CustomObjectViewSet previously built its own queryset by hand rather
+        than inheriting NetBoxModelViewSet.get_queryset()'s automatic select_related/
+        prefetch_related/annotate resolution from the serializer's declared fields.
+        """
+        self._add_permission('view', 'Query count list perm')
+
+        # Warm the dynamic model/serializer class cache (CustomObjectType.get_model_with_serializer())
+        # with a throwaway request first, so the comparison below isolates the effect of row count
+        # rather than one-time class-building queries that only happen on a cold cache.
+        self.client.get(self._get_list_url(), **self.header)
+
+        with CaptureQueriesContext(connection) as ctx:
+            response = self.client.get(self._get_list_url(), **self.header)
+        self.assertHttpStatus(response, 200)
+        baseline_query_count = len(ctx.captured_queries)
+
+        # Add more objects of the same type and confirm the query count does not grow.
+        extra_objects = [self.model(test_field=f'Extra {i}') for i in range(9)]
+        self.model.objects.bulk_create(extra_objects)
+
+        with CaptureQueriesContext(connection) as ctx:
+            response = self.client.get(self._get_list_url(), **self.header)
+        self.assertHttpStatus(response, 200)
+        self.assertEqual(
+            len(ctx.captured_queries),
+            baseline_query_count,
+            "Query count must stay flat as the number of returned rows grows.",
+        )
+
+    def test_bulk_create_objects(self):
+        """POST a list of objects to the list endpoint in a single request."""
         self._add_permission('add', 'Bulk create perm')
 
         initial_count = self._get_queryset().count()
-        for data in self.create_data:
-            response = self.client.post(
-                self._get_list_url(), data, format='json', **self.header
-            )
-            self.assertHttpStatus(response, 201)
+        response = self.client.post(
+            self._get_list_url(), self.create_data, format='json', **self.header
+        )
 
+        self.assertHttpStatus(response, 201)
+        self.assertEqual(len(response.data), len(self.create_data))
         self.assertEqual(self._get_queryset().count(), initial_count + len(self.create_data))
+        for i, obj in enumerate(response.data):
+            self.assertEqual(obj['test_field'], self.create_data[i]['test_field'])
 
     def test_bulk_delete_objects(self):
-        """Delete multiple objects via individual DELETE requests.
-
-        CustomObjectViewSet uses a standard DRF ModelViewSet which does not expose a
-        bulk-delete endpoint, so we exercise per-object deletion.
-        """
+        """DELETE a list of {"id": ...} objects to the list endpoint in a single request."""
         self._add_permission('delete', 'Bulk delete perm')
 
         initial_count = self._get_queryset().count()
         self.assertGreaterEqual(initial_count, 2, "Need at least 2 objects to test bulk delete.")
         instances = list(self._get_queryset()[:2])
+        data = [{'id': instance.pk} for instance in instances]
 
-        for instance in instances:
-            response = self.client.delete(self._get_detail_url(instance), **self.header)
-            self.assertHttpStatus(response, 204)
+        response = self.client.delete(
+            self._get_list_url(), data, format='json', **self.header
+        )
 
+        self.assertHttpStatus(response, 204)
         self.assertEqual(self._get_queryset().count(), initial_count - 2)
         for instance in instances:
             self.assertFalse(
@@ -315,12 +402,7 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, NetB
             )
 
     def test_bulk_update_objects(self):
-        """Partial-update (PATCH) multiple objects — required fields are not enforced.
-
-        CustomObjectViewSet uses a standard DRF ModelViewSet which does not expose a
-        bulk-update endpoint, so we exercise per-object PATCH to verify that required
-        fields need not be re-supplied on each update.
-        """
+        """PATCH a list of {"id": ..., ...} objects to the list endpoint in a single request."""
         self._add_permission('change', 'Bulk update perm')
 
         instances = list(self._get_queryset()[:2])
@@ -328,16 +410,13 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, NetB
             instances[0].pk: 'Updated 001',
             instances[1].pk: 'Updated 002',
         }
+        data = [{'id': pk, 'test_field': value} for pk, value in updates.items()]
 
-        for instance in instances:
-            response = self.client.patch(
-                self._get_detail_url(instance),
-                {'test_field': updates[instance.pk]},
-                format='json',
-                **self.header,
-            )
-            self.assertHttpStatus(response, 200)
+        response = self.client.patch(
+            self._get_list_url(), data, format='json', **self.header
+        )
 
+        self.assertHttpStatus(response, 200)
         instances[0].refresh_from_db()
         instances[1].refresh_from_db()
         self.assertEqual(instances[0].test_field, 'Updated 001')
