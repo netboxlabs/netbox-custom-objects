@@ -2319,6 +2319,8 @@ class RequiredScalarFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
         cls.create_custom_object_type_field(
             cls.cot, name="name", type="text", primary=True, required=True,
         )
+        cls.create_custom_object_type_field(cls.cot, name="req_text", type="text", required=True)
+        cls.create_custom_object_type_field(cls.cot, name="req_longtext", type="longtext", required=True)
         cls.create_custom_object_type_field(cls.cot, name="req_int", type="integer", required=True)
         cls.create_custom_object_type_field(cls.cot, name="opt_int", type="integer", required=False)
         cls.create_custom_object_type_field(cls.cot, name="req_bool", type="boolean", required=True)
@@ -2350,6 +2352,8 @@ class RequiredScalarFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
     def _full_payload(self):
         return {
             "name": "Full object",
+            "req_text": "hello",
+            "req_longtext": "hello at length",
             "req_int": 5,
             "opt_int": 7,
             "req_bool": True,
@@ -2365,8 +2369,8 @@ class RequiredScalarFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         for field_name in (
-            "req_int", "req_bool", "req_url", "req_coords_latitude",
-            "req_coords_longitude", "req_select",
+            "req_text", "req_longtext", "req_int", "req_bool", "req_url",
+            "req_coords_latitude", "req_coords_longitude", "req_select",
         ):
             self.assertIn(field_name, response.data)
 
@@ -2385,8 +2389,8 @@ class RequiredScalarFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         post_actions = response.data["actions"]["POST"]
         for field_name in (
-            "req_int", "req_bool", "req_url", "req_coords_latitude",
-            "req_coords_longitude", "req_select",
+            "req_text", "req_longtext", "req_int", "req_bool", "req_url",
+            "req_coords_latitude", "req_coords_longitude", "req_select",
         ):
             self.assertTrue(post_actions[field_name]["required"], field_name)
 
