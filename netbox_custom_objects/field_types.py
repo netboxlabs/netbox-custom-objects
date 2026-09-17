@@ -764,9 +764,13 @@ class SelectFieldType(FieldType):
             **field_kwargs
         )
 
-    def get_serializer_field(self, field, **kwargs):
+    def get_serializer_field(self, field, model=None, **kwargs):
+        # Read choices off the already-generated model field rather than field.choices,
+        # which would re-query field.choice_set on every request (get_serializer_class()
+        # is rebuilt per-request; the model field's choices were resolved once already).
+        choices = model._meta.get_field(field.name).choices if model else field.choices
         return drf_serializers.ChoiceField(
-            choices=field.choices,
+            choices=choices,
             required=field.required,
             allow_null=not field.required,
             allow_blank=not field.required,
@@ -833,9 +837,14 @@ class MultiSelectFieldType(FieldType):
             **field_kwargs
         )
 
-    def get_serializer_field(self, field, **kwargs):
+    def get_serializer_field(self, field, model=None, **kwargs):
+        # See SelectFieldType.get_serializer_field(): read choices off the
+        # already-generated model field rather than re-querying field.choice_set.
+        choices = (
+            model._meta.get_field(field.name).base_field.choices if model else field.choices
+        )
         return drf_serializers.ListField(
-            child=drf_serializers.ChoiceField(choices=field.choices),
+            child=drf_serializers.ChoiceField(choices=choices),
             required=field.required,
             allow_null=not field.required,
             allow_empty=not field.required,
