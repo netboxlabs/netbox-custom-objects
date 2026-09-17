@@ -2528,6 +2528,18 @@ class SelectMultiSelectValueLabelAPITest(CustomObjectsTestCase, NetBoxTestCase):
             ],
         )
 
+    def test_select_field_reads_as_none_when_unset(self):
+        instance = self.model.objects.create(name="obj")
+        response = self.client.get(self._detail_url(instance), **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNone(response.data["status"])
+
+    def test_multiselect_field_reads_as_none_when_unset(self):
+        instance = self.model.objects.create(name="obj")
+        response = self.client.get(self._detail_url(instance), **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIsNone(response.data["tags_field"])
+
     def test_select_and_multiselect_still_accept_bare_values_on_write(self):
         data = {"name": "written", "status": "choice1", "tags_field": ["choice2"]}
         response = self.client.post(self._list_url(), data, format="json", **self.header)
