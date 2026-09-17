@@ -34,7 +34,7 @@ from extras.choices import (
     CustomFieldUIEditableChoices,
     CustomFieldUIVisibleChoices,
 )
-from extras.models import ConfigContext, ConfigContextModel, CustomField
+from extras.models import ConfigContext, ConfigContextModel, CustomField, CustomFieldChoiceSet
 from extras.models.customfields import SEARCH_TYPES
 from extras.utils import is_taggable, run_validators
 from netbox.config import get_config
@@ -4285,3 +4285,21 @@ def clear_cache_on_field_delete(sender, instance, **kwargs):
     """
     if instance.custom_object_type_id:
         CustomObjectType.clear_model_cache(instance.custom_object_type_id)
+
+
+@receiver(post_save, sender=CustomFieldChoiceSet)
+def clear_cache_on_choice_set_save(sender, instance, **kwargs):
+    """
+    Select/multiselect fields bake their choice set's values into the generated
+    model field's `choices=` at model-generation time, so editing a choice set
+    must invalidate every COT model that references it. Bump cache_timestamp
+    (not just clear_model_cache) so every worker regenerates on its next
+    get_model() call, not just this process.
+    """
+    cot_ids = CustomObjectTypeField.objects.filter(
+        choice_set=instance
+    ).values_list('custom_object_type_id', flat=True).distinct()
+    for cot in CustomObjectType.objects.filter(id__in=cot_ids):
+        CustomObjectType.clear_model_cache(cot.id)
+        cot.snapshot()
+        cot.save(update_fields=['cache_timestamp'])
