@@ -789,7 +789,7 @@ def get_serializer_class(model, skip_object_fields=False):
             continue
         field_type = field_types.FIELD_TYPE_CLASS[field.type]()
         try:
-            serializer_field = field_type.get_serializer_field(field)
+            serializer_field = field_type.get_serializer_field(field, model=model)
         except NotImplementedError:
             # Field type intentionally has no serializer representation; omit it.
             logger.debug(
