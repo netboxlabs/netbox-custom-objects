@@ -254,6 +254,8 @@ class IntegerFieldTypeTestCase(FieldTypeTestCase):
         model = self.custom_object_type.get_model()
 
         model(name="Test", count=50).full_clean()
+        model(name="Test", count=0).full_clean()  # exact minimum
+        model(name="Test", count=100).full_clean()  # exact maximum
 
         with self.assertRaises(ValidationError):
             model(name="Test", count=-1).full_clean()
@@ -414,6 +416,8 @@ class DecimalFieldTypeTestCase(FieldTypeTestCase):
         model = self.custom_object_type.get_model()
 
         model(name="Test", price=Decimal("50.00")).full_clean()
+        model(name="Test", price=Decimal("0.00")).full_clean()  # exact minimum
+        model(name="Test", price=Decimal("100.00")).full_clean()  # exact maximum
 
         with self.assertRaises(ValidationError):
             model(name="Test", price=Decimal("-1.00")).full_clean()

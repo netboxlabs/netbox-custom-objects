@@ -2590,3 +2590,12 @@ class IntegerDecimalMinMaxAPITest(CustomObjectsTestCase, NetBoxTestCase):
         data = {"name": "just right", "bounded_int": 50, "bounded_dec": "50.00"}
         response = self.client.post(self._list_url(), data, format="json", **self.header)
         self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+
+    def test_post_at_exact_boundaries_returns_201(self):
+        for label, value_int, value_dec in (("minimum", 0, "0.00"), ("maximum", 100, "100.00")):
+            with self.subTest(boundary=label):
+                data = {
+                    "name": f"exact {label}", "bounded_int": value_int, "bounded_dec": value_dec,
+                }
+                response = self.client.post(self._list_url(), data, format="json", **self.header)
+                self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
