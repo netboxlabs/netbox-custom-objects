@@ -2023,10 +2023,14 @@ class PolymorphicManyToManyManager:
         `instances` in one query per distinct target content type, regardless
         of target model, rather than one query per instance.
         """
-        if querysets:
-            raise ValueError(
-                "Custom querysets are not supported for polymorphic multi-object prefetches."
-            )
+        # A queryset override applies to one specific target model, so key custom
+        # querysets by content type (mirroring GenericForeignKey.get_prefetch_querysets).
+        custom_querysets_by_ct = {}
+        for queryset in querysets or ():
+            ct_id = ContentType.objects.get_for_model(queryset.model).pk
+            if ct_id in custom_querysets_by_ct:
+                raise ValueError("Only one queryset is allowed for each content type.")
+            custom_querysets_by_ct[ct_id] = queryset
 
         through = self._get_through_model()
         instance_pks = [obj.pk for obj in instances]
@@ -2040,23 +2044,32 @@ class PolymorphicManyToManyManager:
             obj_ids_by_ct.setdefault(ct_id, set()).add(obj_id)
 
         through_table = through._meta.db_table
+        # extra()'s IN-list can't use %s (a variable-length parameter list needs
+        # one placeholder per value); instance_pks are already-fetched objects'
+        # integer PKs, not user input, so direct interpolation is safe here —
+        # same as CustomManyToManyManager.get_prefetch_querysets() above.
         pk_list = ",".join(str(pk) for pk in instance_pks)
         all_related_objects = []
         for ct_id, obj_ids in obj_ids_by_ct.items():
-            try:
-                ct = ContentType.objects.get_for_id(ct_id)
-            except ContentType.DoesNotExist:
-                continue
-            model_class = ct.model_class()
-            if model_class is None:
-                continue
+            if ct_id in custom_querysets_by_ct:
+                base_qs = custom_querysets_by_ct[ct_id].filter(pk__in=obj_ids)
+                model_class = custom_querysets_by_ct[ct_id].model
+            else:
+                try:
+                    ct = ContentType.objects.get_for_id(ct_id)
+                except ContentType.DoesNotExist:
+                    continue
+                model_class = ct.model_class()
+                if model_class is None:
+                    continue
+                base_qs = model_class.objects.filter(pk__in=obj_ids)
             target_table = model_class._meta.db_table
             target_pk_col = model_class._meta.pk.column
             # A target linked from N sources must appear N times, each tagged with
             # its source_id, so prefetch grouping can match it to every owner —
             # the same extra()-based join CustomManyToManyManager uses, and for
             # the same reason (see its own get_prefetch_querysets above).
-            target_qs = model_class.objects.filter(pk__in=obj_ids).extra(  # noqa: S610
+            target_qs = base_qs.extra(  # noqa: S610
                 select={"_prefetch_source_id": f'"{through_table}"."source_id"'},
                 tables=[through_table],
                 where=[
@@ -2078,11 +2091,10 @@ class PolymorphicManyToManyManager:
         )
 
     def get_queryset(self):
-        """Called per-instance by Django's prefetch machinery, which immediately
-        overwrites the returned queryset's _result_cache with the batched results
-        from get_prefetch_querysets() above. Only reached through prefetch_related();
-        .all() below checks the prefetch cache directly instead of calling this.
-        """
+        # Called per-instance by Django's prefetch loop, which overwrites whatever
+        # queryset comes back with the batched results regardless — the cache-check
+        # below only matters for a direct call outside prefetch_related(), since
+        # nothing else here calls get_queryset() (.all() checks the cache itself).
         try:
             return self.instance._prefetched_objects_cache[self.field_name]
         except (AttributeError, KeyError):

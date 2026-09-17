@@ -833,6 +833,34 @@ class PolymorphicMultiObjectPrefetchTest(CustomObjectsTestCase, TestCase):
             "Query count must stay flat as the number of returned rows grows.",
         )
 
+    def test_omit_excludes_field_and_skips_its_prefetch(self):
+        """?omit=targets must drop the field from the response and skip prefetching it."""
+        for i in range(6):
+            obj = self.model.objects.create(name=f'PM2M Obj {i}')
+            obj.targets.set([self.devices[0], self.devices[1], self.site_a])
+
+        list_url = f'{self._url()}?limit=100'
+        omit_url = f'{list_url}&omit=targets'
+        # Warm the per-COT dynamic model/serializer class cache for both shapes.
+        self.client.get(list_url, **self.header)
+        self.client.get(omit_url, **self.header)
+
+        with CaptureQueriesContext(connection) as ctx:
+            response = self.client.get(list_url, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('targets', response.data['results'][0])
+        with_field_query_count = len(ctx.captured_queries)
+
+        with CaptureQueriesContext(connection) as ctx:
+            response = self.client.get(omit_url, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertNotIn('targets', response.data['results'][0])
+        self.assertLess(
+            len(ctx.captured_queries),
+            with_field_query_count,
+            "?omit=targets must skip the polymorphic field's prefetch entirely.",
+        )
+
     def test_prefetched_results_are_scoped_per_instance(self):
         """Each instance's serialized targets must reflect only its own memberships,
         not another instance's, even though results share a single prefetch pass."""
