@@ -2017,6 +2017,89 @@ class PolymorphicManyToManyManager:
     def _get_through_model(self):
         return apps.get_model(APP_LABEL, self.through_model_name)
 
+    def get_prefetch_querysets(self, instances, querysets=None):
+        """Django's prefetch_related() protocol (see CustomManyToManyManager's
+        MAINTENANCE NOTE above for the six-tuple format). Batches across all
+        `instances` in one query per distinct target content type, regardless
+        of target model, rather than one query per instance.
+        """
+        # A queryset override applies to one specific target model, so key custom
+        # querysets by content type (mirroring GenericForeignKey.get_prefetch_querysets).
+        custom_querysets_by_ct = {}
+        for queryset in querysets or ():
+            ct_id = ContentType.objects.get_for_model(queryset.model).pk
+            if ct_id in custom_querysets_by_ct:
+                raise ValueError("Only one queryset is allowed for each content type.")
+            custom_querysets_by_ct[ct_id] = queryset
+
+        through = self._get_through_model()
+        instance_pks = [obj.pk for obj in instances]
+        if not instance_pks:
+            return ([], lambda obj: None, lambda obj: None, False, self.field_name, False)
+
+        obj_ids_by_ct: dict[int, set] = {}
+        for ct_id, obj_id in through.objects.filter(
+            source_id__in=instance_pks
+        ).values_list("content_type_id", "object_id"):
+            obj_ids_by_ct.setdefault(ct_id, set()).add(obj_id)
+
+        through_table = through._meta.db_table
+        # extra()'s IN-list can't use %s (a variable-length parameter list needs
+        # one placeholder per value); instance_pks are already-fetched objects'
+        # integer PKs, not user input, so direct interpolation is safe here —
+        # same as CustomManyToManyManager.get_prefetch_querysets() above.
+        pk_list = ",".join(str(pk) for pk in instance_pks)
+        all_related_objects = []
+        for ct_id, obj_ids in obj_ids_by_ct.items():
+            if ct_id in custom_querysets_by_ct:
+                base_qs = custom_querysets_by_ct[ct_id].filter(pk__in=obj_ids)
+                model_class = custom_querysets_by_ct[ct_id].model
+            else:
+                try:
+                    ct = ContentType.objects.get_for_id(ct_id)
+                except ContentType.DoesNotExist:
+                    continue
+                model_class = ct.model_class()
+                if model_class is None:
+                    continue
+                base_qs = model_class.objects.filter(pk__in=obj_ids)
+            target_table = model_class._meta.db_table
+            target_pk_col = model_class._meta.pk.column
+            # A target linked from N sources must appear N times, each tagged with
+            # its source_id, so prefetch grouping can match it to every owner —
+            # the same extra()-based join CustomManyToManyManager uses, and for
+            # the same reason (see its own get_prefetch_querysets above).
+            target_qs = base_qs.extra(  # noqa: S610
+                select={"_prefetch_source_id": f'"{through_table}"."source_id"'},
+                tables=[through_table],
+                where=[
+                    f'"{through_table}"."object_id" = "{target_table}"."{target_pk_col}"',
+                    f'"{through_table}"."content_type_id" = %s',
+                    f'"{through_table}"."source_id" IN ({pk_list})',
+                ],
+                params=[ct_id],
+            )
+            all_related_objects.extend(target_qs)
+
+        return (
+            all_related_objects,
+            lambda rel_obj: rel_obj._prefetch_source_id,
+            lambda inst: inst.pk,
+            False,
+            self.field_name,
+            False,
+        )
+
+    def get_queryset(self):
+        # Called per-instance by Django's prefetch loop, which overwrites whatever
+        # queryset comes back with the batched results regardless — the cache-check
+        # below only matters for a direct call outside prefetch_related(), since
+        # nothing else here calls get_queryset() (.all() checks the cache itself).
+        try:
+            return self.instance._prefetched_objects_cache[self.field_name]
+        except (AttributeError, KeyError):
+            return self._get_through_model().objects.none()
+
     def _get_objects(self):
         through = self._get_through_model()
         rows = list(
@@ -2055,7 +2138,11 @@ class PolymorphicManyToManyManager:
         yield from sorted(objects, key=str)
 
     def all(self):
-        return PolymorphicResultList(self._get_objects)
+        try:
+            cached = self.instance._prefetched_objects_cache[self.field_name]
+        except (AttributeError, KeyError):
+            return PolymorphicResultList(self._get_objects)
+        return PolymorphicResultList(lambda: sorted(cached, key=str))
 
     def count(self):
         return self._get_through_model().objects.filter(source_id=self.instance.pk).count()

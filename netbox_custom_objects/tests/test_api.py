@@ -757,6 +757,138 @@ class LinkedObjectsAPITest(CustomObjectsTestCase, TestCase):
         self.assertIn('object', result)
 
 
+class PolymorphicMultiObjectPrefetchTest(CustomObjectsTestCase, TestCase):
+    """Polymorphic multi-object fields must be prefetched (flat query count) and
+    must serialize each instance's own members correctly once prefetched."""
+
+    def setUp(self):
+        self.user = create_test_user('polym2mprefetchuser')
+        token_key = create_token(self.user)
+        self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
+
+        self.cot = CustomObjectsTestCase.create_custom_object_type(
+            name='PolyM2MPrefetchTest', slug='poly-m2m-prefetch-test',
+        )
+        CustomObjectsTestCase.create_custom_object_type_field(
+            self.cot, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        CustomObjectsTestCase.create_polymorphic_field(
+            self.cot,
+            related_object_types=[
+                CustomObjectsTestCase.get_device_object_type(),
+                CustomObjectsTestCase.get_site_object_type(),
+            ],
+            name='targets',
+            label='Targets',
+            type='multiobject',
+        )
+        self.model = self.cot.get_model()
+
+        manufacturer = Manufacturer.objects.create(name='PM2M Mfr', slug='pm2m-mfr')
+        device_type = DeviceType.objects.create(
+            manufacturer=manufacturer, model='PM2M Type', slug='pm2m-type',
+        )
+        role = DeviceRole.objects.create(name='PM2M Role', slug='pm2m-role', color='ffffff')
+        self.site_a = Site.objects.create(name='PM2M Site A', slug='pm2m-site-a')
+        self.site_b = Site.objects.create(name='PM2M Site B', slug='pm2m-site-b')
+        self.devices = Device.objects.bulk_create([
+            Device(device_type=device_type, role=role, name=f'PM2M Device {i}', site=self.site_a)
+            for i in range(3)
+        ])
+
+        perm = ObjectPermission(name='PM2M view perm', actions=['view'])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+    def _url(self):
+        viewname = 'plugins-api:netbox_custom_objects-api:customobject-list'
+        return reverse(viewname, kwargs={'custom_object_type': self.cot.slug})
+
+    def test_query_count_is_constant(self):
+        """The list endpoint's query count must not scale with the number of returned rows."""
+        for i in range(12):
+            obj = self.model.objects.create(name=f'PM2M Obj {i}')
+            obj.targets.set([self.devices[0], self.devices[1], self.site_a])
+
+        list_url = f'{self._url()}?limit=100'
+        # Warm the per-COT dynamic model/serializer class cache first.
+        self.client.get(list_url, **self.header)
+
+        with CaptureQueriesContext(connection) as ctx:
+            response = self.client.get(list_url, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        baseline_query_count = len(ctx.captured_queries)
+
+        for i in range(12, 24):
+            obj = self.model.objects.create(name=f'PM2M Obj {i}')
+            obj.targets.set([self.devices[0], self.devices[1], self.site_a])
+
+        with CaptureQueriesContext(connection) as ctx:
+            response = self.client.get(list_url, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            len(ctx.captured_queries),
+            baseline_query_count,
+            "Query count must stay flat as the number of returned rows grows.",
+        )
+
+    def test_omit_excludes_field_and_skips_its_prefetch(self):
+        """?omit=targets must drop the field from the response and skip prefetching it."""
+        for i in range(6):
+            obj = self.model.objects.create(name=f'PM2M Obj {i}')
+            obj.targets.set([self.devices[0], self.devices[1], self.site_a])
+
+        list_url = f'{self._url()}?limit=100'
+        omit_url = f'{list_url}&omit=targets'
+        # Warm the per-COT dynamic model/serializer class cache for both shapes.
+        self.client.get(list_url, **self.header)
+        self.client.get(omit_url, **self.header)
+
+        with CaptureQueriesContext(connection) as ctx:
+            response = self.client.get(list_url, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('targets', response.data['results'][0])
+        with_field_query_count = len(ctx.captured_queries)
+
+        with CaptureQueriesContext(connection) as ctx:
+            response = self.client.get(omit_url, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertNotIn('targets', response.data['results'][0])
+        self.assertLess(
+            len(ctx.captured_queries),
+            with_field_query_count,
+            "?omit=targets must skip the polymorphic field's prefetch entirely.",
+        )
+
+    def test_prefetched_results_are_scoped_per_instance(self):
+        """Each instance's serialized targets must reflect only its own memberships,
+        not another instance's, even though results share a single prefetch pass."""
+        obj_a = self.model.objects.create(name='PM2M Obj A')
+        obj_a.targets.set([self.devices[0], self.devices[1], self.site_a])
+        obj_b = self.model.objects.create(name='PM2M Obj B')
+        obj_b.targets.set([self.devices[0], self.site_b])
+        self.model.objects.create(name='PM2M Obj C')
+        # 'PM2M Obj C' intentionally left with no targets.
+
+        response = self.client.get(f'{self._url()}?limit=100', **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        by_name = {row['name']: row for row in response.data['results']}
+
+        def target_ids(row):
+            return sorted(t['id'] for t in row['targets'])
+
+        self.assertEqual(
+            target_ids(by_name['PM2M Obj A']),
+            sorted([self.devices[0].pk, self.devices[1].pk, self.site_a.pk]),
+        )
+        self.assertEqual(
+            target_ids(by_name['PM2M Obj B']),
+            sorted([self.devices[0].pk, self.site_b.pk]),
+        )
+        self.assertEqual(target_ids(by_name['PM2M Obj C']), [])
+
+
 class CustomObjectTypeAPITest(CustomObjectsTestCase, TestCase):
     """
     Test CustomObjectType API endpoint validation.
