@@ -9,25 +9,19 @@ from django.apps import apps as django_apps
 from django.contrib.contenttypes.models import ContentType
 from django.http import Http404
 from django.utils.translation import gettext_lazy as _
-from drf_spectacular.utils import extend_schema_view, extend_schema
+from drf_spectacular.utils import extend_schema
 from extras.choices import CustomFieldTypeChoices
 from rest_framework import status
-try:
-    from netbox.api.viewsets import ETagMixin  # NetBox 4.6+
-except ImportError:
-    class ETagMixin:  # pragma: no cover – NetBox < 4.6 shim
-        """No-op shim for NetBox versions that don't provide ETagMixin."""
-        pass
 from rest_framework.parsers import JSONParser
 from rest_framework.renderers import JSONRenderer
 from rest_framework.response import Response
 from rest_framework.routers import APIRootView
 from rest_framework.views import APIView
-from rest_framework.viewsets import ModelViewSet
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from netbox.api.authentication import IsAuthenticatedOrLoginNotRequired, TokenWritePermission
 from netbox.api.renderers import FormlessBrowsableAPIRenderer
+from netbox.api.viewsets import NetBoxModelViewSet
 
 
 from netbox_custom_objects.constants import APP_LABEL
@@ -117,24 +111,19 @@ class RootView(APIRootView):
         return "CustomObjects"
 
 
-class CustomObjectTypeViewSet(ModelViewSet):
+class CustomObjectTypeViewSet(NetBoxModelViewSet):
     queryset = CustomObjectType.objects.prefetch_related('fields__related_object_types')
     serializer_class = serializers.CustomObjectTypeSerializer
 
 
-# TODO: Need to remove this for now, check if work-around in the future.
-# There is a catch-22 spectacular get the queryset and serializer class without
-# params at startup.  The suggested workaround is to return the model empty
-# queryset, but we can't get the model without params at startup.
-@extend_schema_view(
-    list=extend_schema(exclude=True),
-    retrieve=extend_schema(exclude=True),
-    create=extend_schema(exclude=True),
-    update=extend_schema(exclude=True),
-    partial_update=extend_schema(exclude=True),
-    destroy=extend_schema(exclude=True)
-)
-class CustomObjectViewSet(ETagMixin, ModelViewSet):
+class CustomObjectTypeFieldViewSet(NetBoxModelViewSet):
+    queryset = CustomObjectTypeField.objects.prefetch_related('related_object_types')
+    serializer_class = serializers.CustomObjectTypeFieldSerializer
+
+
+# Schema generation cannot resolve the dynamic model without a URL slug.
+@extend_schema(exclude=True)
+class CustomObjectViewSet(NetBoxModelViewSet):
     serializer_class = serializers.CustomObjectSerializer
     model = None
 
@@ -147,63 +136,35 @@ class CustomObjectViewSet(ETagMixin, ModelViewSet):
         return serializers.get_serializer_class(self.model)
 
     def get_queryset(self):
-        try:
-            custom_object_type = CustomObjectType.objects.get(
-                slug=self.kwargs["custom_object_type"]
-            )
-        except CustomObjectType.DoesNotExist:
+        if self.model is None:
             raise Http404
-        self.model = custom_object_type.get_model_with_serializer()
-        return self.model.objects.all()
+        return super().get_queryset()
+
+    def initial(self, request, *args, **kwargs):
+        # self.model/queryset must be resolved before super().initial() applies
+        # restrict(). Don't raise Http404 for a bad slug here though - auth hasn't
+        # run yet, and that would leak slug existence to an unauthenticated caller.
+        if self.model is None:
+            try:
+                custom_object_type = CustomObjectType.objects.get(
+                    slug=self.kwargs["custom_object_type"]
+                )
+                self.model = custom_object_type.get_model_with_serializer()
+                self.queryset = self.model.objects.all()
+            except CustomObjectType.DoesNotExist:
+                self.queryset = CustomObjectType.objects.none()
+        super().initial(request, *args, **kwargs)
 
     @property
     def filterset_class(self):
         return get_filterset_class(self.model)
 
-    def list(self, request, *args, **kwargs):
-        return super().list(request, *args, **kwargs)
-
-    def create(self, request, *args, **kwargs):
-        return super().create(request, *args, **kwargs)
-
-    def update(self, request, *args, **kwargs):
-        # Replicate DRF's UpdateModelMixin.update() so we can snapshot the instance
-        # before the serializer is constructed.  Calling super().update() would invoke
-        # get_object() a second time and return a fresh, un-snapshotted instance.
-        partial = kwargs.pop('partial', False)
-        instance = self.get_object()
-        if hasattr(instance, 'snapshot'):
-            instance.snapshot()
-        if hasattr(self, '_validate_etag'):
-            # NetBox 4.6+: enforce If-Match precondition (RFC 9110 §13.1.1)
-            self._validate_etag(request, instance)
-        serializer = self.get_serializer(instance, data=request.data, partial=partial)
-        serializer.is_valid(raise_exception=True)
-        self.perform_update(serializer)
-        if getattr(instance, '_prefetched_objects_cache', None):
-            instance._prefetched_objects_cache = {}
-        response = Response(serializer.data)
-        if hasattr(self, '_get_etag'):
-            # last_updated is auto_now=True and is updated in-place by save(),
-            # so instance already carries the new timestamp after perform_update.
-            if etag := self._get_etag(instance):
-                response['ETag'] = etag
-        return response
-
-    def partial_update(self, request, *args, **kwargs):
-        kwargs['partial'] = True
-        return self.update(request, *args, **kwargs)
-
-    def perform_destroy(self, instance):
-        # Take a pre-change snapshot so prechange_data is populated in the changelog.
-        if hasattr(instance, 'snapshot'):
-            instance.snapshot()
-        super().perform_destroy(instance)
-
-
-class CustomObjectTypeFieldViewSet(ModelViewSet):
-    queryset = CustomObjectTypeField.objects.prefetch_related('related_object_types')
-    serializer_class = serializers.CustomObjectTypeFieldSerializer
+    def _enqueue_bulk_job(self, request, action, payload, action_kwargs=None):
+        # AsyncAPIJob instantiates a fresh viewset without the URL kwargs and never calls
+        # initial(), so it can't resolve this viewset's per-request dynamic model.
+        raise ValidationError(
+            _("Background processing is not supported for custom objects.")
+        )
 
 
 class LinkedObjectsView(APIView):
