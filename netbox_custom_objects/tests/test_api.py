@@ -276,14 +276,7 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, NetB
         self.assertGreaterEqual(response.data['count'], 3)
 
     def test_unauthenticated_request_does_not_leak_slug_existence(self):
-        """An unauthenticated request must get the same status for a real and a bogus COT slug.
-
-        Regression test: CustomObjectViewSet.initial() resolves the COT slug before
-        BaseViewSet.initial() (via DRF's own initial()) performs authentication. If
-        it raised Http404 for an unknown slug at that point, an unauthenticated
-        caller could distinguish a valid slug (401/403, once auth runs) from an
-        invalid one (404, immediately) - a slug enumeration side-channel.
-        """
+        """An unauthenticated request must get the same status for a real and a bogus COT slug."""
         invalid_url = reverse(
             'plugins-api:netbox_custom_objects-api:customobject-list',
             kwargs={'custom_object_type': 'does-not-exist'},
@@ -296,13 +289,7 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, NetB
         self.assertIn(valid_response.status_code, (401, 403))
 
     def test_list_objects_respects_object_level_permission_constraints(self):
-        """The list endpoint must only return objects matching the user's constrained permission.
-
-        Regression test: CustomObjectViewSet previously built its queryset directly from
-        the dynamic model, bypassing BaseViewSet.initial()'s queryset.restrict() call, so a
-        user with a permission scoped to a subset of objects (via `constraints`) could still
-        list every object of that type.
-        """
+        """The list endpoint must only return objects matching the user's constrained permission."""
         instance = self._get_queryset().first()
         perm = ObjectPermission(
             name='Constrained list perm',
@@ -353,23 +340,15 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, NetB
         self.assertIn('id', result)
 
     def test_list_objects_query_count_is_constant(self):
-        """The list endpoint's query count must not scale with the number of returned rows.
-
-        Regression test for the N+1 query pattern fixed alongside object-level permission
-        enforcement: CustomObjectViewSet previously built its own queryset by hand rather
-        than inheriting NetBoxModelViewSet.get_queryset()'s automatic select_related/
-        prefetch_related/annotate resolution from the serializer's declared fields.
-        """
+        """The list endpoint's query count must not scale with the number of returned rows."""
         self._add_permission('view', 'Query count list perm')
 
-        # Force every request onto a single page regardless of PAGINATE_COUNT, so a
-        # pagination-count query firing (or not) at some default page-size boundary
-        # can't be mistaken for the row-count effect this test actually checks.
+        # Pin to one page regardless of PAGINATE_COUNT, so a pagination-count query
+        # can't be mistaken for the row-count effect under test.
         list_url = f'{self._get_list_url()}?limit=100'
 
-        # Warm the dynamic model/serializer class cache (CustomObjectType.get_model_with_serializer())
-        # with a throwaway request first, so the comparison below isolates the effect of row count
-        # rather than one-time class-building queries that only happen on a cold cache.
+        # Warm the per-COT dynamic model/serializer class cache first, so the
+        # comparison below isolates row count rather than one-time class-building.
         self.client.get(list_url, **self.header)
 
         with CaptureQueriesContext(connection) as ctx:
@@ -377,7 +356,6 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, NetB
         self.assertHttpStatus(response, 200)
         baseline_query_count = len(ctx.captured_queries)
 
-        # Add more objects of the same type and confirm the query count does not grow.
         extra_objects = [self.model(test_field=f'Extra {i}') for i in range(9)]
         self.model.objects.bulk_create(extra_objects)
 
@@ -916,13 +894,7 @@ class CustomObjectTypeAPITest(CustomObjectsTestCase, TestCase):
 
 
 class CustomObjectTypeAndFieldViewSetPermissionTest(CustomObjectsTestCase, TestCase):
-    """
-    Regression test for #699/NPL-1366: CustomObjectTypeViewSet and
-    CustomObjectTypeFieldViewSet now inherit from NetBoxModelViewSet rather than a
-    plain DRF ModelViewSet, which enforces object-level permissions on LIST via
-    BaseViewSet.initial(). Before that fix, both viewsets returned 200 to any
-    authenticated user's list request regardless of permission.
-    """
+    """CustomObjectTypeViewSet/CustomObjectTypeFieldViewSet must enforce object-level permissions on LIST."""
 
     def setUp(self):
         self.user = create_test_user('unprivileged_user')

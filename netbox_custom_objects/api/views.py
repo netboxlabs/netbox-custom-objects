@@ -146,28 +146,14 @@ class CustomObjectViewSet(NetBoxModelViewSet):
         return serializers.get_serializer_class(self.model)
 
     def get_queryset(self):
-        # By the time any action handler calls this, initial() below has already
-        # resolved self.model (or left it None if the slug didn't match a COT).
-        # A missing COT is reported here, after authentication/permission checks
-        # have run in super().initial() — see the comment there for why.
         if self.model is None:
             raise Http404
         return super().get_queryset()
 
     def initial(self, request, *args, **kwargs):
-        # BaseViewSet.initial() enforces object-level permissions by reassigning
-        # self.queryset in place (self.queryset = self.queryset.restrict(...)), so
-        # self.queryset must already point at this request's dynamic model before
-        # it calls super().initial() below, which performs that restriction.
-        #
-        # Resolve the COT without raising Http404 for a bad slug here, though:
-        # super().initial() is also what runs authentication (via DRF's own
-        # initial()), and it hasn't run yet at this point. Raising 404 ahead of
-        # that would let an unauthenticated caller distinguish a valid slug
-        # (401, once auth runs) from an invalid one (404, immediately) — a slug
-        # enumeration side-channel. Fall back to an empty queryset instead, and
-        # defer the actual 404 to get_queryset(), which only runs after the
-        # action handler has been reached (i.e. after auth/permission checks).
+        # self.model/queryset must be resolved before super().initial() applies
+        # restrict(). Don't raise Http404 for a bad slug here though - auth hasn't
+        # run yet, and that would leak slug existence to an unauthenticated caller.
         if self.model is None:
             try:
                 custom_object_type = CustomObjectType.objects.get(
