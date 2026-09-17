@@ -44,6 +44,7 @@ from utilities.forms.widgets import (
     DateTimePicker,
 )
 from utilities.templatetags.builtins.filters import linkify, render_markdown
+from netbox.api.fields import ChoiceField as NetBoxChoiceField
 from netbox.config import get_config
 from netbox.tables.columns import BooleanColumn
 
@@ -787,10 +788,11 @@ class SelectFieldType(FieldType):
         # which would re-query field.choice_set on every request (get_serializer_class()
         # is rebuilt per-request; the model field's choices were resolved once already).
         choices = model._meta.get_field(field.name).choices if model else field.choices
-        # No allow_blank: ChoiceField.to_internal_value() special-cases "" to bypass
-        # choice validation entirely when allow_blank=True. "no selection" is null,
-        # not an empty string that happens not to be one of the defined choices.
-        return drf_serializers.ChoiceField(
+        # NetBox core's own ChoiceField represents {value, label} on read (matching
+        # every core ChoiceField, e.g. dcim.Site.status) and still accepts a bare
+        # value on write. allow_blank defaults to False: "no selection" is null, not
+        # an empty string that happens not to be one of the defined choices.
+        return NetBoxChoiceField(
             choices=choices,
             required=field.required,
             allow_null=not field.required,
@@ -859,12 +861,14 @@ class MultiSelectFieldType(FieldType):
 
     def get_serializer_field(self, field, model=None, **kwargs):
         # See SelectFieldType.get_serializer_field(): read choices off the
-        # already-generated model field rather than re-querying field.choice_set.
+        # already-generated model field rather than re-querying field.choice_set,
+        # and use core's own ChoiceField as the child so each item reads as
+        # {value, label} instead of the raw value (still writes a bare value).
         choices = (
             model._meta.get_field(field.name).base_field.choices if model else field.choices
         )
         return drf_serializers.ListField(
-            child=drf_serializers.ChoiceField(choices=choices),
+            child=NetBoxChoiceField(choices=choices),
             required=field.required,
             allow_null=not field.required,
             allow_empty=not field.required,

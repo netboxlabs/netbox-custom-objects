@@ -442,14 +442,42 @@ class GraphQLEndpointTestCase(CustomObjectsTestCase, TestCase):
         model = cot.get_model()
         model.objects.create(name="First", count=7, active=True, status="choice1")
 
-        data = self._gql("{ custom_objects_asset_list { id display name count active status } }")
+        data = self._gql(
+            "{ custom_objects_asset_list { id display name count active status { value label } } }"
+        )
         rows = data["custom_objects_asset_list"]
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["display"], "First")
         self.assertEqual(rows[0]["name"], "First")
         self.assertEqual(rows[0]["count"], 7)
         self.assertTrue(rows[0]["active"])
-        self.assertEqual(rows[0]["status"], "choice1")
+        self.assertEqual(rows[0]["status"], {"value": "choice1", "label": "Choice 1"})
+
+    def test_multiselect_field_query_returns_value_label_pairs(self):
+        """A multiselect field's values must each resolve to {value, label}, matching select."""
+        cot = self.create_custom_object_type(name="Tagged", slug="tagged")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        choice_set = self.create_choice_set()
+        self.create_custom_object_type_field(
+            cot, name="tags_field", label="Tags", type="multiselect", choice_set=choice_set,
+        )
+        model = cot.get_model()
+        model.objects.create(name="First", tags_field=["choice1", "choice3"])
+
+        data = self._gql(
+            "{ custom_objects_tagged_list { name tags_field { value label } } }"
+        )
+        rows = data["custom_objects_tagged_list"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(
+            rows[0]["tags_field"],
+            [
+                {"value": "choice1", "label": "Choice 1"},
+                {"value": "choice3", "label": "Choice 3"},
+            ],
+        )
 
     def test_decimal_field_round_trips(self):
         # A decimal field is annotated with the stdlib ``decimal.Decimal``, which
