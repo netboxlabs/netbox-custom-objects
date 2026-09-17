@@ -807,7 +807,16 @@ def get_serializer_class(model, skip_object_fields=False):
                 "falling back to JSONField",
                 field.name, field.type, exc,
             )
-            attrs[field.name] = serializers.JSONField(required=False, allow_null=True)
+            if is_coordinates:
+                # field.name itself is not a backing column for this type (see above).
+                attrs[field_type.latitude_field_name(field)] = serializers.JSONField(
+                    required=False, allow_null=True
+                )
+                attrs[field_type.longitude_field_name(field)] = serializers.JSONField(
+                    required=False, allow_null=True
+                )
+            else:
+                attrs[field.name] = serializers.JSONField(required=False, allow_null=True)
             continue
         if isinstance(serializer_field, dict):
             # Multi-column field type (e.g. coordinates): keyed by backing column name.

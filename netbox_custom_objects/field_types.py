@@ -769,11 +769,13 @@ class SelectFieldType(FieldType):
         # which would re-query field.choice_set on every request (get_serializer_class()
         # is rebuilt per-request; the model field's choices were resolved once already).
         choices = model._meta.get_field(field.name).choices if model else field.choices
+        # No allow_blank: ChoiceField.to_internal_value() special-cases "" to bypass
+        # choice validation entirely when allow_blank=True. "no selection" is null,
+        # not an empty string that happens not to be one of the defined choices.
         return drf_serializers.ChoiceField(
             choices=choices,
             required=field.required,
             allow_null=not field.required,
-            allow_blank=not field.required,
         )
 
     def get_form_field(self, field, for_csv_import=False, **kwargs):
