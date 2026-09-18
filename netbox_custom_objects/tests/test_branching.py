@@ -2988,13 +2988,13 @@ class FieldAttributeChangesTestCase(BranchingTestBase, _TestBase):
     def test_field_required_toggle_merge(self):
         """Toggle a field's required flag from False to True across merge.
 
-        ``required`` is a form-layer attribute in this plugin — every field
-        constructor in ``field_types.py`` hardcodes ``null=True, blank=True``
-        on the model field, so the DB column stays nullable regardless of
-        ``required``.  This test pins both halves of that contract:
-        ``required=True`` does survive the merge as an ORM attribute (form
-        validation will reject empty values), but the underlying column does
-        NOT become NOT NULL.
+        ``required`` is enforced at the application layer only (model
+        ``blank``, DRF serializer ``required``) — every field constructor in
+        ``field_types.py`` keeps ``null=True`` unconditionally, so the DB
+        column stays nullable regardless of ``required``.  This test pins
+        both halves of that contract: ``required=True`` does survive the
+        merge as an ORM attribute (form/serializer validation will reject
+        empty values), but the underlying column does NOT become NOT NULL.
         """
         with event_tracking(self.request):
             cot = CustomObjectType.objects.create(name='required_cot', slug='required-cot')
