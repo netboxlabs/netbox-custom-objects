@@ -15,6 +15,7 @@ from django.apps import apps
 from django.conf import settings
 
 # from django.contrib.contenttypes.management import create_contenttypes
+from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldDoesNotExist
 from django.core.validators import RegexValidator, ValidationError
@@ -2977,8 +2978,21 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             model_field = FIELD_TYPE_CLASS[self.type]().get_model_field(self)
             columns = model_field if isinstance(model_field, dict) else {self.name: model_field}
             # Only columns actually made non-blank by this field's required flag
-            # (e.g. a url field's title column always stays blank=True).
-            required_columns = {name: f for name, f in columns.items() if not f.blank}
+            # (e.g. a url field's title column always stays blank=True). A
+            # relationship field's "column" may not be a real, directly queryable
+            # Django Field at all: a polymorphic multiobject's is a
+            # PolymorphicM2MDescriptor (no .blank attribute), and a polymorphic
+            # object field's dict includes a GenericForeignKey entry alongside its
+            # two real backing columns - a real Field with .blank=False by default,
+            # but not itself a queryable column (values_list() can't resolve it).
+            # Treat anything without a usable .blank, and GFKs specifically, as
+            # always blank=True, i.e. not checkable here - matching
+            # ObjectFieldType/MultiObjectFieldType's own concrete model fields,
+            # which hardcode blank=True regardless of required.
+            required_columns = {
+                name: f for name, f in columns.items()
+                if not isinstance(f, GenericForeignKey) and not getattr(f, 'blank', True)
+            }
             if required_columns:
                 existing = model.objects.values_list(*required_columns.keys())
                 for row in existing.iterator():
