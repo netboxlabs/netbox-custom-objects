@@ -413,12 +413,21 @@ class IntegerFieldType(FieldType):
         # TODO: handle all args for IntegerField
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
+        validators = []
+        if field.validation_minimum is not None:
+            validators.append(MinValueValidator(field.validation_minimum))
+        if field.validation_maximum is not None:
+            validators.append(MaxValueValidator(field.validation_maximum))
+        if validators:
+            field_kwargs["validators"] = validators
         return models.BigIntegerField(null=True, blank=not field.required, **field_kwargs)
 
     def get_serializer_field(self, field, **kwargs):
         return drf_serializers.IntegerField(
             required=field.required,
             allow_null=not field.required,
+            min_value=field.validation_minimum,
+            max_value=field.validation_maximum,
         )
 
     def get_filterform_field(self, field, **kwargs):
@@ -442,6 +451,13 @@ class DecimalFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
+        validators = []
+        if field.validation_minimum is not None:
+            validators.append(MinValueValidator(field.validation_minimum))
+        if field.validation_maximum is not None:
+            validators.append(MaxValueValidator(field.validation_maximum))
+        if validators:
+            field_kwargs["validators"] = validators
         return models.DecimalField(
             null=True,
             blank=not field.required,
@@ -456,6 +472,8 @@ class DecimalFieldType(FieldType):
             decimal_places=2,
             required=field.required,
             allow_null=not field.required,
+            min_value=field.validation_minimum,
+            max_value=field.validation_maximum,
         )
 
     def get_form_field(self, field, **kwargs):
