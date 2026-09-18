@@ -2959,6 +2959,42 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             finally:
                 self.custom_object_type.clear_model_cache(self.custom_object_type.id)
 
+        # Toggling a field from optional to required can strand existing rows that
+        # left it blank: blank=False is checked by full_clean() against every field
+        # on the object, so even an edit that never touches this field would then
+        # fail. Mirrors the uniqueness pre-flight check above, minus the DDL probe -
+        # required is enforced at the application layer only (blank/serializer
+        # required=True), never as a DB-level NOT NULL, so there is no schema change
+        # to test-drive here, just existing data to check.
+        if (
+            self.pk
+            and self.required
+            and not self._state.adding
+            and hasattr(self, '_original')
+            and not self.original.required
+        ):
+            model = self.custom_object_type.get_model()
+            model_field = FIELD_TYPE_CLASS[self.type]().get_model_field(self)
+            columns = model_field if isinstance(model_field, dict) else {self.name: model_field}
+            # Only columns actually made non-blank by this field's required flag
+            # (e.g. a url field's title column always stays blank=True).
+            required_columns = {name: f for name, f in columns.items() if not f.blank}
+            if required_columns:
+                existing = model.objects.values_list(*required_columns.keys())
+                for row in existing.iterator():
+                    if any(
+                        value in f.empty_values
+                        for value, f in zip(row, required_columns.values())
+                    ):
+                        raise ValidationError(
+                            {
+                                "required": _(
+                                    "Custom objects with a blank value for this field "
+                                    "already exist, so this action isn't permitted"
+                                )
+                            }
+                        )
+
         # Choice set must be set on selection fields, and *only* on selection fields
         if self.type in (
             CustomFieldTypeChoices.TYPE_SELECT,

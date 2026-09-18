@@ -736,6 +736,49 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(fetched.original.name, "test_field")
         self.assertEqual(fetched.original.label, "Test Field")
 
+    def test_required_toggle_rejected_when_existing_row_is_blank(self):
+        """Toggling optional -> required must be rejected if an existing row is blank.
+
+        Otherwise full_clean() (form submission, API PATCH, branch merge) would
+        reject that row on its very next save, even for an edit unrelated to
+        this field. Mirrors the analogous non-unique-values pre-flight check.
+        """
+        field = self.create_custom_object_type_field(
+            self.custom_object_type, name="note", type="text", required=False,
+        )
+        model = self.custom_object_type.get_model()
+        model.objects.create()
+
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.required = True
+        with self.assertRaises(ValidationError):
+            field.full_clean()
+
+    def test_required_toggle_allowed_when_no_blank_rows(self):
+        """Toggling optional -> required succeeds when no existing row is blank."""
+        field = self.create_custom_object_type_field(
+            self.custom_object_type, name="note", type="text", required=False,
+        )
+        model = self.custom_object_type.get_model()
+        model.objects.create(note="has a value")
+
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.required = True
+        field.full_clean()  # must not raise
+
+    def test_required_toggle_rejected_for_coordinates_with_one_half_blank(self):
+        """A coordinates field's latitude/longitude halves are checked independently."""
+        field = self.create_custom_object_type_field(
+            self.custom_object_type, name="geo", type="coordinates", required=False,
+        )
+        model = self.custom_object_type.get_model()
+        model.objects.create(geo_latitude=10, geo_longitude=None)
+
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.required = True
+        with self.assertRaises(ValidationError):
+            field.full_clean()
+
     def test_custom_object_type_field_unique_name_per_type(self):
         """Test that field names must be unique within a custom object type."""
         self.create_custom_object_type_field(
