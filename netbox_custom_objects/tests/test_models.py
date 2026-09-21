@@ -786,10 +786,9 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
         (a polymorphic object field's GenericForeignKey entry; a polymorphic
         multiobject field's PolymorphicM2MDescriptor, which has no .blank attribute)
         -- neither is checked by the required-toggle pre-flight check, but they must
-        be skipped cleanly rather than raising AttributeError/FieldError. (Plain
-        object/multiobject fields, by contrast, now ARE checked -- see
-        test_required_toggle_rejected_when_existing_object_row_is_blank et al -- since
-        #719 tied their blank to field.required same as every scalar type.)
+        be skipped cleanly rather than raising AttributeError/FieldError. Plain
+        object/multiobject fields, by contrast, ARE checked (see
+        test_required_toggle_rejected_when_existing_object_row_is_blank et al).
         """
         device_ot = self.get_device_object_type()
         site_ot = self.get_site_object_type()
@@ -810,8 +809,8 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
                 field.full_clean()  # must not raise
 
     def test_required_toggle_rejected_when_existing_object_row_is_blank(self):
-        """A plain object field's FK is now checked by the required-toggle pre-flight
-        check (#719: blank ties to field.required, same as every scalar type)."""
+        """A plain object field's FK is checked by the required-toggle
+        pre-flight check, same as every scalar type."""
         site_ot = self.get_site_object_type()
         field = self.create_custom_object_type_field(
             self.custom_object_type, name="site", type="object",
@@ -843,10 +842,9 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
 
     def test_required_toggle_rejected_when_existing_multiobject_row_is_blank(self):
         """A plain multiobject field's M2M is also checked by the required-toggle
-        pre-flight check (#719): even though full_clean() itself can never validate
-        an M2M field (Django's clean_fields() excludes M2M fields entirely), the
-        pre-flight check queries existing data directly via values_list(), which
-        still correctly catches a row with no related objects."""
+        pre-flight check: even though full_clean() can never validate an M2M
+        field, the pre-flight check queries existing data directly via
+        values_list(), which still correctly catches a blank row."""
         site_ot = self.get_site_object_type()
         field = self.create_custom_object_type_field(
             self.custom_object_type, name="sites", type="multiobject",

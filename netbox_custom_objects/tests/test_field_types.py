@@ -102,9 +102,9 @@ class RequiredFieldEnforcementTestCase(FieldTypeTestCase):
         self.assertTrue(model._meta.get_field('url_req_title').blank)
 
     def test_object_field_blank_matches_required(self):
-        """#719: a plain (non-polymorphic) object field's FK follows required,
-        same as every scalar type -- and full_clean() actually enforces it, since
-        FK fields (unlike M2M) are validated by Django's clean_fields()."""
+        """A plain object field's FK follows required, like every scalar type --
+        and full_clean() enforces it, since FK fields are validated by
+        Django's clean_fields()."""
         site_ot = ObjectType.objects.get(app_label='dcim', model='site')
         required = self.create_custom_object_type_field(
             self.custom_object_type, name='site_req', type='object',
@@ -124,12 +124,10 @@ class RequiredFieldEnforcementTestCase(FieldTypeTestCase):
             instance.full_clean()
 
     def test_multiobject_field_blank_matches_required_but_full_clean_cannot_check_it(self):
-        """#719: a plain multiobject field's M2M also follows required, for
-        declarative correctness and because the required-toggle pre-flight check
-        (CustomObjectTypeField.clean()) relies on it -- but Django's clean_fields()
-        never validates M2M fields at all (they aren't in _meta.fields), so
-        full_clean() cannot and does not enforce this at the model layer. required
-        stays enforced at the REST/UI layer for multiobject, same as before #719."""
+        """A plain multiobject field's M2M also follows required (the
+        required-toggle pre-flight check relies on it), but full_clean() can't
+        enforce it -- Django's clean_fields() excludes M2M fields entirely, so
+        required stays enforced at the REST/UI layer for multiobject."""
         site_ot = ObjectType.objects.get(app_label='dcim', model='site')
         required = self.create_custom_object_type_field(
             self.custom_object_type, name='sites_req', type='multiobject',

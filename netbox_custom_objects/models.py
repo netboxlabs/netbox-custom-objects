@@ -2978,18 +2978,17 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             model_field = FIELD_TYPE_CLASS[self.type]().get_model_field(self)
             columns = model_field if isinstance(model_field, dict) else {self.name: model_field}
             # Only columns actually made non-blank by this field's required flag
-            # (e.g. a url field's title column always stays blank=True). A plain
-            # object field's FK and a plain multiobject field's M2M both follow
-            # required (#719) and so ARE checkable here. A *polymorphic*
-            # relationship field's "column" may not be a real, directly queryable
-            # Django Field at all, though: a polymorphic multiobject's is a
-            # PolymorphicM2MDescriptor (no .blank attribute), and a polymorphic
-            # object field's dict includes a GenericForeignKey entry alongside its
-            # two real backing columns - a real Field with .blank=False by default,
-            # but not itself a queryable column (values_list() can't resolve it).
-            # Treat anything without a usable .blank, and GFKs specifically, as
-            # always blank=True, i.e. not checkable here - #719 leaves both
-            # polymorphic cases unaffected, pending a parallel mechanism for them.
+            # (e.g. a url field's title column always stays blank=True). Plain
+            # object/multiobject fields follow required and so ARE checkable
+            # here. A *polymorphic* relationship field's "column" may not be a
+            # real, directly queryable Django Field at all, though: a
+            # polymorphic multiobject's is a PolymorphicM2MDescriptor (no
+            # .blank attribute), and a polymorphic object field's dict includes
+            # a GenericForeignKey entry alongside its two real backing columns
+            # - a real Field with .blank=False by default, but not itself a
+            # queryable column (values_list() can't resolve it). Treat anything
+            # without a usable .blank, and GFKs specifically, as always
+            # blank=True, i.e. not checkable here.
             required_columns = {
                 name: f for name, f in columns.items()
                 if not isinstance(f, GenericForeignKey) and not getattr(f, 'blank', True)
