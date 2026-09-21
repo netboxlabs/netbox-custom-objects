@@ -101,6 +101,51 @@ class RequiredFieldEnforcementTestCase(FieldTypeTestCase):
         self.assertFalse(model._meta.get_field('url_req').blank)
         self.assertTrue(model._meta.get_field('url_req_title').blank)
 
+    def test_object_field_blank_matches_required(self):
+        """#719: a plain (non-polymorphic) object field's FK follows required,
+        same as every scalar type -- and full_clean() actually enforces it, since
+        FK fields (unlike M2M) are validated by Django's clean_fields()."""
+        site_ot = ObjectType.objects.get(app_label='dcim', model='site')
+        required = self.create_custom_object_type_field(
+            self.custom_object_type, name='site_req', type='object',
+            related_object_type=site_ot, required=True,
+        )
+        optional = self.create_custom_object_type_field(
+            self.custom_object_type, name='site_opt', type='object',
+            related_object_type=site_ot, required=False,
+        )
+        model = self.custom_object_type.get_model()
+        self.assertFalse(model._meta.get_field(required.name).blank)
+        self.assertTrue(model._meta.get_field(optional.name).blank)
+        self.assertTrue(model._meta.get_field(required.name).null)
+
+        instance = model(name='obj')
+        with self.assertRaises(ValidationError):
+            instance.full_clean()
+
+    def test_multiobject_field_blank_matches_required_but_full_clean_cannot_check_it(self):
+        """#719: a plain multiobject field's M2M also follows required, for
+        declarative correctness and because the required-toggle pre-flight check
+        (CustomObjectTypeField.clean()) relies on it -- but Django's clean_fields()
+        never validates M2M fields at all (they aren't in _meta.fields), so
+        full_clean() cannot and does not enforce this at the model layer. required
+        stays enforced at the REST/UI layer for multiobject, same as before #719."""
+        site_ot = ObjectType.objects.get(app_label='dcim', model='site')
+        required = self.create_custom_object_type_field(
+            self.custom_object_type, name='sites_req', type='multiobject',
+            related_object_type=site_ot, required=True,
+        )
+        optional = self.create_custom_object_type_field(
+            self.custom_object_type, name='sites_opt', type='multiobject',
+            related_object_type=site_ot, required=False,
+        )
+        model = self.custom_object_type.get_model()
+        self.assertFalse(model._meta.get_field(required.name).blank)
+        self.assertTrue(model._meta.get_field(optional.name).blank)
+
+        instance = model.objects.create(name='obj')
+        instance.full_clean()  # does not raise -- M2M is outside clean_fields()'s reach
+
 
 class TextFieldTypeTestCase(FieldTypeTestCase):
     """Test cases for text field type."""
