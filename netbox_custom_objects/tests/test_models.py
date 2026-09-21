@@ -860,6 +860,27 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
         with self.assertRaises(ValidationError):
             field.full_clean()
 
+    def test_required_toggle_rejected_when_one_of_several_multiobject_rows_is_blank(self):
+        """The pre-flight check's values_list() query must use a LEFT OUTER JOIN,
+        not an INNER JOIN, across the M2M -- otherwise a blank row would be
+        silently excluded from the result rather than surfaced as (None,), and a
+        blank row sitting alongside filled ones would slip through undetected."""
+        site_ot = self.get_site_object_type()
+        site = Site.objects.create(name="Req Toggle Site Mixed", slug="req-toggle-site-mixed")
+        field = self.create_custom_object_type_field(
+            self.custom_object_type, name="sites", type="multiobject",
+            related_object_type=site_ot, required=False,
+        )
+        model = self.custom_object_type.get_model()
+        filled = model.objects.create()
+        getattr(filled, "sites").set([site])
+        model.objects.create()  # blank, alongside the filled row above
+
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.required = True
+        with self.assertRaises(ValidationError):
+            field.full_clean()
+
     def test_required_toggle_allowed_when_no_blank_multiobject_rows(self):
         """Toggling a plain multiobject field to required succeeds when every
         existing row already has at least one related object."""
