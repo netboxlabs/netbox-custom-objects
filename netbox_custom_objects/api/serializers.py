@@ -776,7 +776,12 @@ def get_serializer_class(model, skip_object_fields=False):
         attrs["get__context"] = get__context
 
     for field in model_fields:
-        if field.name not in model_field_names:
+        # Coordinates fields have no column literally named field.name (only the
+        # _latitude/_longitude columns get_serializer_field() returns below), so
+        # they're exempt from the model_field_names check that guards every other
+        # type against fields excluded during model generation.
+        is_coordinates = field.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES
+        if not is_coordinates and field.name not in model_field_names:
             continue  # excluded during model generation (e.g. broken FK)
         if skip_object_fields and field.type in [
             CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT
@@ -784,13 +789,14 @@ def get_serializer_class(model, skip_object_fields=False):
             continue
         field_type = field_types.FIELD_TYPE_CLASS[field.type]()
         try:
-            attrs[field.name] = field_type.get_serializer_field(field)
+            serializer_field = field_type.get_serializer_field(field, model=model)
         except NotImplementedError:
             # Field type intentionally has no serializer representation; omit it.
             logger.debug(
                 "serializer: field %r (type %r) has no serializer implementation; skipping",
                 field.name, field.type,
             )
+            continue
         except Exception as exc:
             # Unexpected error (e.g. ContentType.DoesNotExist from a deleted
             # ContentType row).  Fall back to a permissive JSONField so the
@@ -801,7 +807,22 @@ def get_serializer_class(model, skip_object_fields=False):
                 "falling back to JSONField",
                 field.name, field.type, exc,
             )
-            attrs[field.name] = serializers.JSONField(required=False, allow_null=True)
+            if is_coordinates:
+                # field.name itself is not a backing column for this type (see above).
+                attrs[field_type.latitude_field_name(field)] = serializers.JSONField(
+                    required=False, allow_null=True
+                )
+                attrs[field_type.longitude_field_name(field)] = serializers.JSONField(
+                    required=False, allow_null=True
+                )
+            else:
+                attrs[field.name] = serializers.JSONField(required=False, allow_null=True)
+            continue
+        if isinstance(serializer_field, dict):
+            # Multi-column field type (e.g. coordinates): keyed by backing column name.
+            attrs.update(serializer_field)
+        else:
+            attrs[field.name] = serializer_field
 
     serializer_name = f"{model._meta.object_name}Serializer"
     serializer = type(

@@ -50,6 +50,58 @@ class FieldTypeTestCase(CustomObjectsTestCase, TestCase):
         # Any test-specific setup can go here
 
 
+class RequiredFieldEnforcementTestCase(FieldTypeTestCase):
+    """A required field must produce blank=False at the model layer, regardless of type."""
+
+    SCALAR_TYPES = (
+        'text', 'longtext', 'integer', 'decimal', 'boolean', 'date', 'datetime',
+        'url', 'json',
+    )
+
+    def test_scalar_fields_blank_matches_required(self):
+        for field_type in self.SCALAR_TYPES:
+            with self.subTest(field_type=field_type):
+                required = self.create_custom_object_type_field(
+                    self.custom_object_type, name=f'{field_type}_req', type=field_type,
+                    required=True,
+                )
+                optional = self.create_custom_object_type_field(
+                    self.custom_object_type, name=f'{field_type}_opt', type=field_type,
+                    required=False,
+                )
+                model = self.custom_object_type.get_model()
+                self.assertFalse(model._meta.get_field(required.name).blank)
+                self.assertTrue(model._meta.get_field(optional.name).blank)
+                self.assertTrue(model._meta.get_field(required.name).null)
+
+    def test_select_and_multiselect_blank_matches_required(self):
+        choice_set = self.create_choice_set()
+        for field_type in ('select', 'multiselect'):
+            with self.subTest(field_type=field_type):
+                required = self.create_custom_object_type_field(
+                    self.custom_object_type, name=f'{field_type}_req', type=field_type,
+                    required=True, choice_set=choice_set,
+                )
+                model = self.custom_object_type.get_model()
+                self.assertFalse(model._meta.get_field(required.name).blank)
+
+    def test_coordinates_both_halves_follow_required(self):
+        self.create_custom_object_type_field(
+            self.custom_object_type, name='coords_req', type='coordinates', required=True,
+        )
+        model = self.custom_object_type.get_model()
+        self.assertFalse(model._meta.get_field('coords_req_latitude').blank)
+        self.assertFalse(model._meta.get_field('coords_req_longitude').blank)
+
+    def test_url_title_stays_optional_regardless_of_required(self):
+        self.create_custom_object_type_field(
+            self.custom_object_type, name='url_req', type='url', required=True,
+        )
+        model = self.custom_object_type.get_model()
+        self.assertFalse(model._meta.get_field('url_req').blank)
+        self.assertTrue(model._meta.get_field('url_req_title').blank)
+
+
 class TextFieldTypeTestCase(FieldTypeTestCase):
     """Test cases for text field type."""
 
