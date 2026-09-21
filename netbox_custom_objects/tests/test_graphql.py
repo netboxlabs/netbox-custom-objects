@@ -600,6 +600,113 @@ class GraphQLEndpointTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(target["id"], str(site.pk))
         self.assertEqual(target["siteName"], "PolySite")
 
+    def _make_poly_cot(self):
+        """A COT with a polymorphic object field and a polymorphic multiobject
+        field, each pointing at Site or Device -- matching #705's repro."""
+        cot = self.create_custom_object_type(name="Poly705", slug="poly705")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True,
+        )
+        targets = [self.get_site_object_type(), self.get_device_object_type()]
+        self.create_polymorphic_field(cot, targets, name="poly_obj", type="object")
+        self.create_polymorphic_field(cot, targets, name="poly_objs", type="multiobject")
+        return cot
+
+    def _make_poly_row(self, model, i):
+        # Not self._make_device(): that helper creates its own Site internally
+        # with a fixed default slug, colliding across repeated calls in a loop.
+        manufacturer, _ = Manufacturer.objects.get_or_create(name="Mfr", slug="mfr")
+        device_type, _ = DeviceType.objects.get_or_create(
+            manufacturer=manufacturer, model="Model", slug="model"
+        )
+        role, _ = DeviceRole.objects.get_or_create(name="Role", slug="role")
+        # Site/Device rows are never cleaned up between phases below (only the
+        # COT's own rows are), so each call needs a slug unique across the whole
+        # test, not just within one phase's range(n).
+        uniq = Site.objects.count()
+        site = self._make_site(name=f"PS{uniq}", slug=f"ps{uniq}")
+        device = Device.objects.create(
+            name=f"PD{uniq}", device_type=device_type, role=role, site=site,
+        )
+        obj = model.objects.create(name=f"prow{i}", poly_obj=site)
+        obj.poly_objs.set([site, device])
+        return obj
+
+    def _query_count(self, query):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        with CaptureQueriesContext(connection) as ctx:
+            self._gql(query)
+        return len(ctx.captured_queries)
+
+    def _assert_query_count_flat(self, model, query):
+        """Regression for #705: N+1 queries in polymorphic relationship fields.
+
+        A GenericForeignKey (polymorphic object) needs an explicit per-target-model
+        prefetch (build_gfk_prefetch) -- a bare string hint is inert for it, since
+        strawberry_django's optimizer has no single related model to build an inner
+        queryset from -- paired with an `only` hint naming its two backing columns,
+        or each column gets fetched with its own deferred-field query per row. A
+        polymorphic multiobject field's PolymorphicManyToManyManager, unlike the
+        GFK case, already implements Django's own get_prefetch_querysets protocol
+        directly, so a bare string hint reaches it via ordinary prefetch_related().
+        """
+        # Warm every cache a query touches (ContentType cache, schema build, token
+        # lookups) with one throwaway row so the comparison below isolates
+        # per-row scaling, not one-time setup cost that would otherwise make an
+        # early measurement look artificially cheap or expensive.
+        self._make_poly_row(model, "warmup")
+        self._query_count(query)
+        model.objects.all().delete()
+
+        for i in range(3):
+            self._make_poly_row(model, i)
+        count_at_3 = self._query_count(query)
+
+        model.objects.all().delete()
+        for i in range(9):
+            self._make_poly_row(model, i)
+        count_at_9 = self._query_count(query)
+
+        self.assertEqual(
+            count_at_3, count_at_9,
+            f"query count scaled with row count ({count_at_3} at 3 rows vs "
+            f"{count_at_9} at 9 rows) -- N+1 regression in polymorphic "
+            "relationship resolution",
+        )
+
+    def test_polymorphic_object_field_query_count_stays_flat(self):
+        cot = self._make_poly_cot()
+        model = cot.get_model()
+        query = (
+            "{ custom_objects_poly705_list { name "
+            "poly_obj { ... on SiteType { id } ... on DeviceType { id } } "
+            "} }"
+        )
+        self._assert_query_count_flat(model, query)
+
+    def test_polymorphic_multiobject_field_query_count_stays_flat(self):
+        cot = self._make_poly_cot()
+        model = cot.get_model()
+        query = (
+            "{ custom_objects_poly705_list { name "
+            "poly_objs { ... on SiteType { id } ... on DeviceType { id } } "
+            "} }"
+        )
+        self._assert_query_count_flat(model, query)
+
+    def test_polymorphic_object_and_multiobject_together_query_count_stays_flat(self):
+        cot = self._make_poly_cot()
+        model = cot.get_model()
+        query = (
+            "{ custom_objects_poly705_list { name "
+            "poly_obj { ... on SiteType { id } ... on DeviceType { id } } "
+            "poly_objs { ... on SiteType { id } ... on DeviceType { id } } "
+            "} }"
+        )
+        self._assert_query_count_flat(model, query)
+
     def test_multiple_types_in_one_schema(self):
         # Several custom object types must all be queryable from the same schema.
         a = self.create_simple_custom_object_type(name="Alpha", slug="alpha")

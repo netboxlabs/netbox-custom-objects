@@ -33,6 +33,7 @@ import strawberry_django
 from core.graphql.mixins import ChangelogMixin
 from extras.choices import CustomFieldTypeChoices
 from extras.graphql.mixins import TagsMixin
+from netbox.graphql.optimization import build_gfk_prefetch
 from netbox.graphql.scalars import BigInt
 from netbox.graphql.types import BaseObjectType
 from strawberry.types import Info
@@ -396,15 +397,50 @@ def _make_relationship_resolver(field):
     annotation = _relationship_annotation(members, is_list, _relationship_union_name(field))
 
     # Query-optimisation hints read by NetBox's DjangoOptimizerExtension. A
-    # non-polymorphic OBJECT field is a ForeignKey (select_related); a polymorphic
-    # one is a GenericForeignKey (prefetch_related only). A non-polymorphic
-    # MULTIOBJECT field is a real M2M (prefetch_related); a polymorphic one is a
-    # custom descriptor that can't be prefetched.
+    # non-polymorphic OBJECT field is a ForeignKey (select_related); a
+    # non-polymorphic MULTIOBJECT field is a real M2M (prefetch_related).
+    #
+    # A polymorphic OBJECT field is a GenericForeignKey: a bare string hint is
+    # inert for it (strawberry_django's optimizer has no single related model to
+    # build an inner queryset from), so it needs an explicit per-target-model
+    # prefetch. build_gfk_prefetch() (core NetBox's own helper, used the same way
+    # for e.g. Cable terminations) does exactly this via Django's GenericPrefetch.
+    #
+    # A polymorphic MULTIOBJECT field's PolymorphicManyToManyManager already
+    # implements Django's get_prefetch_querysets(instances, querysets=None)
+    # protocol directly (see field_types.py) -- batching per distinct target
+    # content type when no queryset override is given -- so, unlike the GFK case,
+    # a bare string hint reaches it via Django's ordinary prefetch_related()
+    # machinery and works with no extra plumbing needed.
+    target_models = [
+        model for model in (
+            content_type.model_class() for content_type in _field_target_content_types(field)
+        )
+        if model is not None
+    ]
+
     if is_list:
-        hint = {} if field.is_polymorphic else {"prefetch_related": field_name}
+        hint = {"prefetch_related": field_name} if target_models else {}
         description = f"Related objects referenced by '{field_name}'"
+    elif field.is_polymorphic:
+        # The prefetch reads the GFK's two backing columns directly (see
+        # GenericForeignKeyDescriptor.get_prefetch_querysets), so they must be
+        # in the base query's SELECT -- otherwise strawberry_django's `only()`
+        # trimming (which only knows about this manually-defined resolver's
+        # declared hints, not the columns a GFK needs under the hood) leaves
+        # them out, and each gets fetched with its own deferred-field query per
+        # row instead. Mirrors core NetBox's own build_gfk_prefetch() call
+        # sites (e.g. dcim.graphql.types), which always pair it with `only`.
+        hint = (
+            {
+                "prefetch_related": build_gfk_prefetch(field_name, target_models),
+                "only": [f"{field_name}_content_type", f"{field_name}_object_id"],
+            }
+            if target_models else {}
+        )
+        description = f"Related object referenced by '{field_name}'"
     else:
-        hint = {"prefetch_related": field_name} if field.is_polymorphic else {"select_related": field_name}
+        hint = {"select_related": field_name}
         description = f"Related object referenced by '{field_name}'"
 
     def resolver(self, info: Info):
