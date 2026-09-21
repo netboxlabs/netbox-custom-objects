@@ -2679,3 +2679,105 @@ class SelectMultiSelectValueLabelAPITest(CustomObjectsTestCase, NetBoxTestCase):
         instance = self.model.objects.get(pk=response.data["id"])
         self.assertEqual(instance.status, "choice1")
         self.assertEqual(instance.tags_field, ["choice2"])
+
+
+class SelectMultiSelectNumericChoiceValueAPITest(CustomObjectsTestCase, NetBoxTestCase):
+    """
+    Choice values are always raw admin-typed strings, so a value like "1" or "true"
+    must round-trip through the API even though core's ChoiceField would otherwise
+    coerce it to int/bool before checking choice membership.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.cot = CustomObjectType.objects.create(name="NumericChoiceTest", slug="numeric-choice-test")
+        cls.create_custom_object_type_field(
+            cls.cot, name="name", type="text", primary=True, required=True,
+        )
+        cls.choice_set = cls.create_choice_set(
+            name="Numeric Choice Set",
+            extra_choices=[
+                ["1", "One"],
+                ["2", "Two"],
+                ["true", "Enabled"],
+            ],
+        )
+        cls.create_custom_object_type_field(
+            cls.cot, name="priority", type="select", choice_set=cls.choice_set,
+        )
+        cls.create_custom_object_type_field(
+            cls.cot, name="flags", type="multiselect", choice_set=cls.choice_set,
+        )
+        cls.model = cls.cot.get_model()
+
+    def setUp(self):
+        super().setUp()
+        self.user = create_test_user("numericchoiceuser")
+        self.client = APIClient()
+        token_key = create_token(self.user)
+        self.header = {"HTTP_AUTHORIZATION": f"Token {token_key}"}
+        perm = ObjectPermission(name="numeric choice perm", actions=["view", "add", "change"])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+    def _list_url(self):
+        return reverse(
+            "plugins-api:netbox_custom_objects-api:customobject-list",
+            kwargs={"custom_object_type": self.cot.slug},
+        )
+
+    def _detail_url(self, instance):
+        return reverse(
+            "plugins-api:netbox_custom_objects-api:customobject-detail",
+            kwargs={"pk": instance.pk, "custom_object_type": self.cot.slug},
+        )
+
+    def test_numeric_string_choice_value_round_trips_on_select(self):
+        response = self.client.post(
+            self._list_url(), {"name": "a", "priority": "1"}, format="json", **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(response.data["priority"], {"value": "1", "label": "One"})
+
+        # Write back the exact value the API just returned in its GET representation.
+        round_tripped_value = response.data["priority"]["value"]
+        patch_response = self.client.patch(
+            self._detail_url(self.model.objects.get(pk=response.data["id"])),
+            {"priority": round_tripped_value},
+            format="json",
+            **self.header,
+        )
+        self.assertEqual(patch_response.status_code, status.HTTP_200_OK, patch_response.data)
+        self.assertEqual(patch_response.data["priority"], {"value": "1", "label": "One"})
+
+    def test_boolean_like_string_choice_value_round_trips_on_select(self):
+        response = self.client.post(
+            self._list_url(), {"name": "b", "priority": "true"}, format="json", **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(response.data["priority"], {"value": "true", "label": "Enabled"})
+
+    def test_numeric_string_choice_values_round_trip_on_multiselect(self):
+        response = self.client.post(
+            self._list_url(), {"name": "c", "flags": ["1", "true"]}, format="json", **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(
+            response.data["flags"],
+            [{"value": "1", "label": "One"}, {"value": "true", "label": "Enabled"}],
+        )
+
+    def test_select_still_rejects_value_outside_choice_set(self):
+        response = self.client.post(
+            self._list_url(), {"name": "d", "priority": "99"}, format="json", **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("priority", response.data)
+
+    def test_multiselect_still_rejects_value_outside_choice_set(self):
+        response = self.client.post(
+            self._list_url(), {"name": "e", "flags": ["1", "99"]}, format="json", **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("flags", response.data)
