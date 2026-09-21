@@ -9,6 +9,7 @@ from django.urls import NoReverseMatch
 from django.utils.translation import gettext_lazy as _
 from extras.choices import CustomFieldTypeChoices
 from extras.models import ConfigContextModel
+from netbox.api.fields import ChoiceField as NetBoxChoiceField
 from netbox.api.serializers import NetBoxModelSerializer
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
@@ -44,6 +45,36 @@ class ContentTypeSerializer(NetBoxModelSerializer):
             "app_label",
             "model",
         )
+
+
+class SafeChoiceField(NetBoxChoiceField):
+    """
+    Like core's ChoiceField (same {value, label} read representation), but without
+    its write-side coercion of numeric/boolean-looking strings to int/bool before
+    checking membership. That coercion assumes developer-defined enum choices with
+    non-string values; this plugin's choice values are always the raw strings an
+    admin typed into a choice set, so a value like "1" or "true" would otherwise
+    fail to validate against itself -- the API rejecting its own GET output on PUT.
+    """
+
+    def to_internal_value(self, data):
+        if data == '':
+            if self.allow_blank:
+                return data
+            raise ValidationError(_("This field may not be blank."))
+
+        if isinstance(data, (dict, list)):
+            raise ValidationError(
+                _('Value must be passed directly (e.g. "foo": 123); do not use a dictionary or list.')
+            )
+
+        try:
+            if data in self._choices:
+                return data
+        except TypeError:
+            pass
+
+        raise ValidationError(_("{value} is not a valid choice.").format(value=data))
 
 
 class PolymorphicObjectSerializerField(serializers.Field):

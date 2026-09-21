@@ -435,6 +435,47 @@ def _make_relationship_resolver(field):
     return strawberry_django.field(description=description, **hint)(resolver)
 
 
+CHOICE_TYPES = (
+    CustomFieldTypeChoices.TYPE_SELECT,
+    CustomFieldTypeChoices.TYPE_MULTISELECT,
+)
+
+
+@strawberry.type
+class CustomObjectChoiceType:
+    """A select/multiselect field's stored value paired with its human-readable label."""
+
+    value: str
+    label: str
+
+
+def _make_choice_resolver(field):
+    """
+    Build a resolver for a SELECT or MULTISELECT field, returning {value, label}
+    (a list of them for MULTISELECT) instead of the raw stored value(s) -- matching
+    core NetBox's own ChoiceField convention.
+    """
+    field_name = field.name
+    is_list = field.type == CustomFieldTypeChoices.TYPE_MULTISELECT
+
+    def resolver(self):
+        value = getattr(self, field_name, None)
+        if is_list:
+            if not value:
+                return []
+            return [
+                CustomObjectChoiceType(value=v, label=field.get_choice_label(v))
+                for v in value
+            ]
+        if value is None:
+            return None
+        return CustomObjectChoiceType(value=value, label=field.get_choice_label(value))
+
+    annotation = List[CustomObjectChoiceType] if is_list else Optional[CustomObjectChoiceType]
+    resolver.__annotations__ = {"return": annotation}
+    return strawberry_django.field(description=f"Choice value for '{field_name}'")(resolver)
+
+
 def _scalar_annotation_for(field_type):
     """Return the GraphQL scalar annotation for a field type, or ``None``."""
     from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
@@ -507,6 +548,9 @@ def _build_object_type(custom_object_type, model):
             resolver = _make_relationship_resolver(field)
             if resolver is not None:
                 namespace[field_name] = resolver
+            continue
+        if field.type in CHOICE_TYPES:
+            namespace[field_name] = _make_choice_resolver(field)
             continue
 
         annotation = _scalar_annotation_for(field.type)
