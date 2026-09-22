@@ -653,21 +653,22 @@ class GraphQLEndpointTestCase(CustomObjectsTestCase, TestCase):
             self._gql(query)
         return len(ctx.captured_queries)
 
-    def _assert_query_count_flat(self, model, query):
+    def _assert_query_count_flat(self, model, query, make_row=None):
         """Query count must not scale with row count."""
+        make_row = make_row or self._make_poly_row
         # Warm caches (ContentType, schema build, token) with a throwaway row
         # first so they don't skew the first real measurement below.
-        self._make_poly_row(model, "warmup")
+        make_row(model, "warmup")
         self._query_count(query)
         model.objects.all().delete()
 
         for i in range(3):
-            self._make_poly_row(model, i)
+            make_row(model, i)
         count_at_3 = self._query_count(query)
 
         model.objects.all().delete()
         for i in range(9):
-            self._make_poly_row(model, i)
+            make_row(model, i)
         count_at_9 = self._query_count(query)
 
         self.assertEqual(
@@ -722,8 +723,10 @@ class GraphQLEndpointTestCase(CustomObjectsTestCase, TestCase):
             for f in data["__type"]["fields"]
         }
         self.assertEqual(args_by_field["tags"], {"filters", "pagination"})
-        # devices -> Device, a core NetBox type with its own registered filters.
+        # devices -> Device, sites -> Site: both core NetBox types with their
+        # own registered filters.
         self.assertEqual(args_by_field["devices"], {"filters", "pagination"})
+        self.assertEqual(args_by_field["sites"], {"filters", "pagination"})
 
     def _make_two_devices(self, name1, name2):
         # Not two self._make_device() calls: each creates its own Site
@@ -764,6 +767,30 @@ class GraphQLEndpointTestCase(CustomObjectsTestCase, TestCase):
         )
         devices = data["custom_objects_filt707_list"][0]["devices"]
         self.assertEqual([d["name"] for d in devices], ["keep"])
+
+    def test_multiobject_declarative_field_query_count_stays_flat(self):
+        """The declarative (resolver-free) path must not reintroduce an N+1."""
+        cot = self.create_multi_object_custom_object_type(name="Flat707", slug="flat707")
+        model = cot.get_model()
+
+        manufacturer, _ = Manufacturer.objects.get_or_create(name="Mfr", slug="mfr")
+        device_type, _ = DeviceType.objects.get_or_create(
+            manufacturer=manufacturer, model="Model", slug="model"
+        )
+        role, _ = DeviceRole.objects.get_or_create(name="Role", slug="role")
+
+        def make_row(model, i):
+            uniq = Site.objects.count()
+            site = Site.objects.create(name=f"FS{uniq}", slug=f"fs{uniq}")
+            device = Device.objects.create(
+                name=f"FD{uniq}", device_type=device_type, role=role, site=site,
+            )
+            obj = model.objects.create(name=f"frow{i}")
+            obj.devices.set([device])
+            obj.sites.set([site])
+
+        query = "{ custom_objects_flat707_list { name devices { name } sites { name } } }"
+        self._assert_query_count_flat(model, query, make_row=make_row)
 
     def test_polymorphic_multiobject_field_has_no_filters_or_pagination_arguments(self):
         """Polymorphic fields keep the custom-resolver path (a QuerySet is

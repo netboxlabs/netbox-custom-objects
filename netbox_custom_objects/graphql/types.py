@@ -398,11 +398,18 @@ def _coerce_related(obj, native_models):
 
 def _make_relationship_resolver(field):
     """
-    Build a resolver for an OBJECT or MULTIOBJECT relationship field.
+    Build the field value for an OBJECT or MULTIOBJECT relationship field.
 
-    The resolver returns the referenced object(s) as their native GraphQL
-    type(s) (or the flat stub for targets without one), filtered to those the
-    requesting user may view.
+    Returns a ``(value, class_annotation)`` tuple. ``value`` is either a
+    resolver function wrapped in ``strawberry_django.field()`` (its return
+    annotation lives on the function itself) or a resolver-free
+    ``strawberry_django.field()`` descriptor (see
+    :func:`_make_declarative_multiobject_field`), in which case
+    ``class_annotation`` is the type annotation the caller must set on the
+    class instead. ``(None, None)`` means the field has no resolvable
+    targets and should be skipped. The resolver-based value returns the
+    referenced object(s) as their native GraphQL type(s) (or the flat stub
+    for targets without one), filtered to those the requesting user may view.
     """
     field_name = field.name
     is_list = field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
