@@ -221,10 +221,12 @@ def _make_lazy_cot_fk(cot, field, on_delete, **field_kwargs):
             field.custom_object_type.id
         ).lower()
         related_name = f"{table_model_name}_{field.name}_set"
+    # blank ties to required, same as the direct (non-lazy) ForeignKey branch in
+    # ObjectFieldType.get_model_field() -- see the comment there.
     return LazyForeignKey(
         model_name,
         null=True,
-        blank=True,
+        blank=not field.required,
         on_delete=on_delete,
         related_name=related_name,
         **field_kwargs
@@ -1004,8 +1006,12 @@ class ObjectFieldType(FieldType):
         else:
             table_model_name = field.custom_object_type.get_table_model_name(field.custom_object_type.id).lower()
             related_name = f"{table_model_name}_{field.name}_set"
+        # blank ties to required, so full_clean() rejects an unset required
+        # object field like any scalar type; null stays True regardless (a
+        # DB-level concern, not a user-facing one).
         f = models.ForeignKey(
-            model, null=True, blank=True, on_delete=on_delete, related_name=related_name, **field_kwargs
+            model, null=True, blank=not field.required, on_delete=on_delete, related_name=related_name,
+            **field_kwargs
         )
 
         return f
@@ -1613,12 +1619,16 @@ class MultiObjectFieldType(FieldType):
             m2m_related_name = "+"
             m2m_related_query_name = "+"
 
-        # For self-referential fields, use 'self' as the target
+        # blank ties to required, mirroring the FK above. Has no effect on
+        # full_clean() (Django's clean_fields() excludes M2M fields entirely),
+        # but does matter to the required-toggle pre-flight check in
+        # CustomObjectTypeField.clean(), which queries existing data directly
+        # rather than relying on full_clean().
         m2m_field = CustomManyToManyField(
             to="self" if is_self_referential else model_string,
             through=through,
             through_fields=("source", "target"),
-            blank=True,
+            blank=not field.required,
             related_name=m2m_related_name,
             related_query_name=m2m_related_query_name,
             **field_kwargs

@@ -779,27 +779,20 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
         with self.assertRaises(ValidationError):
             field.full_clean()
 
-    def test_required_toggle_does_not_crash_for_relationship_fields(self):
-        """Object/multiobject fields (plain and polymorphic) must not crash on toggle.
+    def test_required_toggle_does_not_crash_for_polymorphic_relationship_fields(self):
+        """Polymorphic object/multiobject fields must not crash on toggle.
 
-        Their model field(s) either hardcode blank=True unconditionally (plain
-        object/multiobject) or are not a real, directly queryable Django Field at
-        all (a polymorphic object field's GenericForeignKey entry; a polymorphic
-        multiobject field's PolymorphicM2MDescriptor) - none of them are checked
-        by the required-toggle pre-flight check, but they must be skipped
-        cleanly rather than raising AttributeError/FieldError.
+        Their model field(s) are not a real, directly queryable Django Field at all
+        (a polymorphic object field's GenericForeignKey entry; a polymorphic
+        multiobject field's PolymorphicM2MDescriptor, which has no .blank attribute)
+        -- neither is checked by the required-toggle pre-flight check, but they must
+        be skipped cleanly rather than raising AttributeError/FieldError. Plain
+        object/multiobject fields, by contrast, ARE checked (see
+        test_required_toggle_rejected_when_existing_object_row_is_blank et al).
         """
         device_ot = self.get_device_object_type()
         site_ot = self.get_site_object_type()
 
-        plain_object = self.create_custom_object_type_field(
-            self.custom_object_type, name="dev", type="object",
-            related_object_type=device_ot, required=False,
-        )
-        plain_multiobject = self.create_custom_object_type_field(
-            self.custom_object_type, name="devs", type="multiobject",
-            related_object_type=device_ot, required=False,
-        )
         poly_object = self.create_polymorphic_field(
             self.custom_object_type, related_object_types=[device_ot, site_ot],
             name="poly_dev", type="object", required=False,
@@ -809,11 +802,99 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
             name="poly_devs", type="multiobject", required=False,
         )
 
-        for field in (plain_object, plain_multiobject, poly_object, poly_multiobject):
+        for field in (poly_object, poly_multiobject):
             with self.subTest(field=field.name):
                 field = CustomObjectTypeField.objects.get(pk=field.pk)
                 field.required = True
                 field.full_clean()  # must not raise
+
+    def test_required_toggle_rejected_when_existing_object_row_is_blank(self):
+        """A plain object field's FK is checked by the required-toggle
+        pre-flight check, same as every scalar type."""
+        site_ot = self.get_site_object_type()
+        field = self.create_custom_object_type_field(
+            self.custom_object_type, name="site", type="object",
+            related_object_type=site_ot, required=False,
+        )
+        model = self.custom_object_type.get_model()
+        model.objects.create()
+
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.required = True
+        with self.assertRaises(ValidationError):
+            field.full_clean()
+
+    def test_required_toggle_allowed_when_no_blank_object_rows(self):
+        """Toggling a plain object field to required succeeds when every existing
+        row already has a value."""
+        site_ot = self.get_site_object_type()
+        site = Site.objects.create(name="Req Toggle Site", slug="req-toggle-site")
+        field = self.create_custom_object_type_field(
+            self.custom_object_type, name="site", type="object",
+            related_object_type=site_ot, required=False,
+        )
+        model = self.custom_object_type.get_model()
+        model.objects.create(site=site)
+
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.required = True
+        field.full_clean()  # must not raise
+
+    def test_required_toggle_rejected_when_existing_multiobject_row_is_blank(self):
+        """A plain multiobject field's M2M is also checked by the required-toggle
+        pre-flight check: even though full_clean() can never validate an M2M
+        field, the pre-flight check queries existing data directly via
+        values_list(), which still correctly catches a blank row."""
+        site_ot = self.get_site_object_type()
+        field = self.create_custom_object_type_field(
+            self.custom_object_type, name="sites", type="multiobject",
+            related_object_type=site_ot, required=False,
+        )
+        model = self.custom_object_type.get_model()
+        model.objects.create()
+
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.required = True
+        with self.assertRaises(ValidationError):
+            field.full_clean()
+
+    def test_required_toggle_rejected_when_one_of_several_multiobject_rows_is_blank(self):
+        """The pre-flight check's values_list() query must use a LEFT OUTER JOIN,
+        not an INNER JOIN, across the M2M -- otherwise a blank row would be
+        silently excluded from the result rather than surfaced as (None,), and a
+        blank row sitting alongside filled ones would slip through undetected."""
+        site_ot = self.get_site_object_type()
+        site = Site.objects.create(name="Req Toggle Site Mixed", slug="req-toggle-site-mixed")
+        field = self.create_custom_object_type_field(
+            self.custom_object_type, name="sites", type="multiobject",
+            related_object_type=site_ot, required=False,
+        )
+        model = self.custom_object_type.get_model()
+        filled = model.objects.create()
+        getattr(filled, "sites").set([site])
+        model.objects.create()  # blank, alongside the filled row above
+
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.required = True
+        with self.assertRaises(ValidationError):
+            field.full_clean()
+
+    def test_required_toggle_allowed_when_no_blank_multiobject_rows(self):
+        """Toggling a plain multiobject field to required succeeds when every
+        existing row already has at least one related object."""
+        site_ot = self.get_site_object_type()
+        site = Site.objects.create(name="Req Toggle Site M2M", slug="req-toggle-site-m2m")
+        field = self.create_custom_object_type_field(
+            self.custom_object_type, name="sites", type="multiobject",
+            related_object_type=site_ot, required=False,
+        )
+        model = self.custom_object_type.get_model()
+        instance = model.objects.create()
+        getattr(instance, "sites").set([site])
+
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.required = True
+        field.full_clean()  # must not raise
 
     def test_custom_object_type_field_unique_name_per_type(self):
         """Test that field names must be unique within a custom object type."""
