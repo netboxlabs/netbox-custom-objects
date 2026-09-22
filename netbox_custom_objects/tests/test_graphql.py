@@ -40,6 +40,21 @@ from .base import CustomObjectsTestCase, create_token
 class GraphQLSchemaGenerationTestCase(CustomObjectsTestCase, TestCase):
     """Tests for the schema/query-class generation helpers."""
 
+    def test_gfk_prefetch_fallback_builds_generic_prefetch(self):
+        """_build_gfk_prefetch_fallback (used when NetBox < 4.6.8 lacks
+        netbox.graphql.optimization.build_gfk_prefetch) must still produce a
+        working GenericPrefetch, one queryset per target model."""
+        from django.contrib.contenttypes.prefetch import GenericPrefetch
+
+        from netbox_custom_objects.graphql.types import _build_gfk_prefetch_fallback
+
+        prefetch_fn = _build_gfk_prefetch_fallback("target", [Site, Device])
+        result = prefetch_fn(info=None)
+        self.assertIsInstance(result, GenericPrefetch)
+        self.assertEqual(result.prefetch_through, "target")
+        self.assertEqual(len(result.querysets), 2)
+        self.assertEqual({qs.model for qs in result.querysets}, {Site, Device})
+
     def test_query_field_name_sanitizes_and_namespaces_slug(self):
         used = set()
         cot = self.create_custom_object_type(name="Widget", slug="my-widget")

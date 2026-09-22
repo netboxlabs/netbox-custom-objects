@@ -33,7 +33,6 @@ import strawberry_django
 from core.graphql.mixins import ChangelogMixin
 from extras.choices import CustomFieldTypeChoices
 from extras.graphql.mixins import TagsMixin
-from netbox.graphql.optimization import build_gfk_prefetch
 from netbox.graphql.scalars import BigInt
 from netbox.graphql.types import BaseObjectType
 from strawberry.types import Info
@@ -42,6 +41,23 @@ from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name, restrict_to_viewable
 
 logger = logging.getLogger("netbox_custom_objects.graphql")
+
+
+def _build_gfk_prefetch_fallback(lookup, models):
+    """Fallback for NetBox < 4.6.8: a GenericPrefetch without per-field
+    GraphQL-selection trimming. Still fixes the N+1; just less targeted."""
+    from django.contrib.contenttypes.prefetch import GenericPrefetch
+
+    def prefetch(info):
+        return GenericPrefetch(lookup, [model.objects.all() for model in models])
+    return prefetch
+
+
+try:
+    # Added in NetBox 4.6.8; this plugin supports back to 4.5.2.
+    from netbox.graphql.optimization import build_gfk_prefetch
+except ImportError:
+    build_gfk_prefetch = _build_gfk_prefetch_fallback
 
 __all__ = (
     "CustomObjectObjectType",
