@@ -409,7 +409,16 @@ def _make_relationship_resolver(field):
 
     members, native_models = _resolve_relationship_members(field)
     if not members:
-        return None
+        return None, None
+
+    # A plain MULTIOBJECT field with one native target type can skip the custom
+    # resolver entirely -- a bare strawberry_django.field(), like TagsMixin.tags
+    # -- which is the only way strawberry_django exposes filters:/pagination:
+    # arguments (both require no custom resolver). Polymorphic/stub-needing
+    # fields can't: a QuerySet is inherently single-model.
+    if is_list and not field.is_polymorphic and native_models:
+        return _make_declarative_multiobject_field(field, members[0])
+
     annotation = _relationship_annotation(members, is_list, _relationship_union_name(field))
 
     # A polymorphic OBJECT field is a GenericForeignKey, for which a bare
@@ -468,7 +477,20 @@ def _make_relationship_resolver(field):
         return _coerce_related(viewable[0], native_models)
 
     resolver.__annotations__ = {"info": Info, "return": annotation}
-    return strawberry_django.field(description=description, **hint)(resolver)
+    return strawberry_django.field(description=description, **hint)(resolver), None
+
+
+def _make_declarative_multiobject_field(field, gql_type):
+    """Build a resolver-free MULTIOBJECT field: gets filters:/pagination: (and
+    permission restriction) for free from the target type's own strawberry_django
+    config and BaseObjectType.get_queryset(), via strawberry_django's normal
+    auto-resolution -- exactly like TagsMixin.tags."""
+    field_name = field.name
+    value = strawberry_django.field(
+        prefetch_related=[field_name],
+        description=f"Related objects referenced by '{field_name}'",
+    )
+    return value, List[gql_type]
 
 
 CHOICE_TYPES = (
@@ -581,9 +603,11 @@ def _build_object_type(custom_object_type, model):
     for field in custom_object_type.fields.all():
         field_name = field.name
         if field.type in RELATIONSHIP_TYPES:
-            resolver = _make_relationship_resolver(field)
-            if resolver is not None:
-                namespace[field_name] = resolver
+            value, class_annotation = _make_relationship_resolver(field)
+            if value is not None:
+                namespace[field_name] = value
+                if class_annotation is not None:
+                    namespace["__annotations__"][field_name] = class_annotation
             continue
         if field.type in CHOICE_TYPES:
             namespace[field_name] = _make_choice_resolver(field)

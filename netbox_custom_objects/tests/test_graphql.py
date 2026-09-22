@@ -708,6 +708,94 @@ class GraphQLEndpointTestCase(CustomObjectsTestCase, TestCase):
         )
         self._assert_query_count_flat(model, query)
 
+    def test_multiobject_field_gets_filters_and_pagination_arguments(self):
+        """Regression for #707: a plain multiobject field's schema arguments
+        must match tags on the same type (both need no custom resolver)."""
+        cot = self.create_multi_object_custom_object_type(name="Args707", slug="args707")
+        gql_type_name = f"{cot.get_model().__name__}Type"
+
+        data = self._gql(
+            '{ __type(name: "%s") { fields { name args { name } } } }' % gql_type_name
+        )
+        args_by_field = {
+            f["name"]: {a["name"] for a in f["args"]}
+            for f in data["__type"]["fields"]
+        }
+        self.assertEqual(args_by_field["tags"], {"filters", "pagination"})
+        # devices -> Device, a core NetBox type with its own registered filters.
+        self.assertEqual(args_by_field["devices"], {"filters", "pagination"})
+
+    def _make_two_devices(self, name1, name2):
+        # Not two self._make_device() calls: each creates its own Site
+        # internally with a fixed default slug, colliding on the second call.
+        manufacturer, _ = Manufacturer.objects.get_or_create(name="Mfr", slug="mfr")
+        device_type, _ = DeviceType.objects.get_or_create(
+            manufacturer=manufacturer, model="Model", slug="model"
+        )
+        role, _ = DeviceRole.objects.get_or_create(name="Role", slug="role")
+        site = self._make_site(name="TwoDevSite", slug="two-dev-site")
+        return (
+            Device.objects.create(name=name1, device_type=device_type, role=role, site=site),
+            Device.objects.create(name=name2, device_type=device_type, role=role, site=site),
+        )
+
+    def test_multiobject_field_pagination_limits_results(self):
+        cot = self.create_multi_object_custom_object_type(name="Page707", slug="page707")
+        model = cot.get_model()
+        d1, d2 = self._make_two_devices("d1", "d2")
+        obj = model.objects.create(name="obj1")
+        obj.devices.set([d1, d2])
+
+        data = self._gql(
+            "{ custom_objects_page707_list { devices(pagination: {limit: 1}) { name } } }"
+        )
+        self.assertEqual(len(data["custom_objects_page707_list"][0]["devices"]), 1)
+
+    def test_multiobject_field_filters_restricts_results(self):
+        cot = self.create_multi_object_custom_object_type(name="Filt707", slug="filt707")
+        model = cot.get_model()
+        d1, d2 = self._make_two_devices("keep", "drop")
+        obj = model.objects.create(name="obj1")
+        obj.devices.set([d1, d2])
+
+        data = self._gql(
+            '{ custom_objects_filt707_list { '
+            'devices(filters: {name: {exact: "keep"}}) { name } } }'
+        )
+        devices = data["custom_objects_filt707_list"][0]["devices"]
+        self.assertEqual([d["name"] for d in devices], ["keep"])
+
+    def test_polymorphic_multiobject_field_has_no_filters_or_pagination_arguments(self):
+        """Polymorphic fields keep the custom-resolver path (a QuerySet is
+        inherently single-model), so they get neither argument."""
+        cot = self._make_poly_cot()
+        gql_type_name = f"{cot.get_model().__name__}Type"
+
+        data = self._gql(
+            '{ __type(name: "%s") { fields { name args { name } } } }' % gql_type_name
+        )
+        args_by_field = {
+            f["name"]: {a["name"] for a in f["args"]}
+            for f in data["__type"]["fields"]
+        }
+        self.assertEqual(args_by_field["poly_obj"], set())
+        self.assertEqual(args_by_field["poly_objs"], set())
+
+    def test_object_field_has_no_pagination_argument(self):
+        """filters:/pagination: are list-only concepts; a singular OBJECT field
+        (unlike MULTIOBJECT) is out of scope for #707."""
+        cot = self._site_object_field_type()
+        gql_type_name = f"{cot.get_model().__name__}Type"
+
+        data = self._gql(
+            '{ __type(name: "%s") { fields { name args { name } } } }' % gql_type_name
+        )
+        args_by_field = {
+            f["name"]: {a["name"] for a in f["args"]}
+            for f in data["__type"]["fields"]
+        }
+        self.assertEqual(args_by_field["site"], set())
+
     def test_multiple_types_in_one_schema(self):
         # Several custom object types must all be queryable from the same schema.
         a = self.create_simple_custom_object_type(name="Alpha", slug="alpha")
