@@ -654,7 +654,7 @@ class GraphQLEndpointTestCase(CustomObjectsTestCase, TestCase):
         return len(ctx.captured_queries)
 
     def _assert_query_count_flat(self, model, query):
-        """Regression for #705: query count must not scale with row count."""
+        """Query count must not scale with row count."""
         # Warm caches (ContentType, schema build, token) with a throwaway row
         # first so they don't skew the first real measurement below.
         self._make_poly_row(model, "warmup")
@@ -709,8 +709,8 @@ class GraphQLEndpointTestCase(CustomObjectsTestCase, TestCase):
         self._assert_query_count_flat(model, query)
 
     def test_multiobject_field_gets_filters_and_pagination_arguments(self):
-        """Regression for #707: a plain multiobject field's schema arguments
-        must match tags on the same type (both need no custom resolver)."""
+        """A plain multiobject field's schema arguments must match tags on
+        the same type (both need no custom resolver)."""
         cot = self.create_multi_object_custom_object_type(name="Args707", slug="args707")
         gql_type_name = f"{cot.get_model().__name__}Type"
 
@@ -783,7 +783,7 @@ class GraphQLEndpointTestCase(CustomObjectsTestCase, TestCase):
 
     def test_object_field_has_no_pagination_argument(self):
         """filters:/pagination: are list-only concepts; a singular OBJECT field
-        (unlike MULTIOBJECT) is out of scope for #707."""
+        (unlike MULTIOBJECT) is out of scope."""
         cot = self._site_object_field_type()
         gql_type_name = f"{cot.get_model().__name__}Type"
 
