@@ -660,8 +660,12 @@ class GraphQLEndpointTestCase(CustomObjectsTestCase, TestCase):
         self.create_custom_object_type_field(cot, name="owner", label="Owner", type="text")
         cot.get_model().objects.create(name="L1", owner="Alice")
 
-        data = self._gql("{ custom_objects_legacy_list { name owner } }")
-        self.assertEqual(data["custom_objects_legacy_list"][0]["owner"], "Alice")
+        data = self._gql("{ custom_objects_legacy_list { name owner journal_entries { id } } }")
+        row = data["custom_objects_legacy_list"][0]
+        self.assertEqual(row["owner"], "Alice")
+        # JournalEntriesMixin is on the shared base type, so it must still resolve
+        # when OwnerMixin is omitted.
+        self.assertEqual(row["journal_entries"], [])
 
     def test_local_context_data_when_config_context_enabled(self):
         cot = self.create_custom_object_type(

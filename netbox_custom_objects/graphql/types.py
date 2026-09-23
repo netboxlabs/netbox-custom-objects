@@ -33,7 +33,7 @@ import strawberry_django
 from core.graphql.mixins import ChangelogMixin
 from extras.choices import CustomFieldTypeChoices
 from extras.graphql.mixins import JournalEntriesMixin, TagsMixin
-from extras.models.configs import ConfigContextModel
+from extras.models import ConfigContextModel
 from netbox.graphql.scalars import BigInt
 from netbox.graphql.types import BaseObjectType
 from strawberry.types import Info
