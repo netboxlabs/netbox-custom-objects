@@ -32,10 +32,12 @@ import strawberry
 import strawberry_django
 from core.graphql.mixins import ChangelogMixin
 from extras.choices import CustomFieldTypeChoices
-from extras.graphql.mixins import TagsMixin
+from extras.graphql.mixins import JournalEntriesMixin, TagsMixin
+from extras.models.configs import ConfigContextModel
 from netbox.graphql.scalars import BigInt
 from netbox.graphql.types import BaseObjectType
 from strawberry.types import Info
+from users.graphql.mixins import OwnerMixin
 
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name, restrict_to_viewable
@@ -143,15 +145,18 @@ class CustomObjectRelatedObjectType:
 
 
 @strawberry.type
-class CustomObjectObjectType(ChangelogMixin, TagsMixin, BaseObjectType):
+class CustomObjectObjectType(ChangelogMixin, JournalEntriesMixin, TagsMixin, BaseObjectType):
     """
     Base GraphQL type for all custom object models.
 
     ``BaseObjectType`` provides ``display``/``class_type`` and, crucially,
     ``get_queryset()`` which enforces NetBox object-level view permissions.
-    ``ChangelogMixin`` and ``TagsMixin`` add change-log and tag access — both are
-    supported by the ``CustomObject`` base model.  Custom fields are added per
-    type by :func:`build_object_type`.
+    ``ChangelogMixin``, ``JournalEntriesMixin`` and ``TagsMixin`` add change-log,
+    journal-entry and tag access — all supported by the ``CustomObject`` base
+    model.  ``owner`` (``OwnerMixin``) is mixed in per type by
+    :func:`_build_object_type`, since a legacy COT field named ``owner`` can shadow
+    the base model's FK.  Custom fields are added per type by
+    :func:`build_object_type`.
     """
 
     pass
@@ -493,7 +498,8 @@ def build_object_type(custom_object_type):
 
     The returned class is a ``strawberry_django.type`` bound to the runtime
     model, with one GraphQL field per custom field plus the inherited base
-    fields (id, display, tags, changelog, created, last_updated).
+    fields (id, display, tags, changelog, journal_entries, owner, created,
+    last_updated, and local_context_data when config context is enabled).
     """
     model = custom_object_type.get_model()
     if model is None:
@@ -542,7 +548,8 @@ def _build_object_type(custom_object_type, model):
         "__annotations__": {},
     }
 
-    for field in custom_object_type.fields.all():
+    cot_fields = list(custom_object_type.fields.all())
+    for field in cot_fields:
         field_name = field.name
         if field.type in RELATIONSHIP_TYPES:
             resolver = _make_relationship_resolver(field)
@@ -564,11 +571,24 @@ def _build_object_type(custom_object_type, model):
         # Every custom field is nullable at the database level.
         namespace["__annotations__"][field_name] = Optional[annotation]
 
-    cls = type(type_name, (CustomObjectObjectType,), namespace)
+    # A COT field named 'owner' (predating the reserved-name check) shadows the
+    # OwnerMixin FK on the generated model, so only expose the FK when it is not
+    # shadowed — mirroring the REST serializer's has_owner_field_conflict.
+    bases = (CustomObjectObjectType,)
+    if not any(field.name == "owner" for field in cot_fields):
+        bases = (OwnerMixin, CustomObjectObjectType)
+
+    cls = type(type_name, bases, namespace)
+
+    fields = ["id", "created", "last_updated"]
+    # Types that opted in to config context support carry a local_context_data
+    # column (see CustomObjectConfigContextMixin).
+    if issubclass(model, ConfigContextModel):
+        fields.append("local_context_data")
 
     return strawberry_django.type(
         model,
         name=type_name,
-        fields=["id", "created", "last_updated"],
+        fields=fields,
         pagination=True,
     )(cls)
