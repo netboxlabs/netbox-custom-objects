@@ -626,8 +626,6 @@ class GraphQLEndpointTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(row["tags"], [])
 
     def test_owner_and_journal_entries(self):
-        # CustomObject mixes in OwnerMixin and JournalingMixin, so both must be
-        # queryable, matching core's PrimaryObjectType.
         cot = self.create_simple_custom_object_type(name="Owned", slug="owned")
         owner = Owner.objects.create(name="Owner 1")
         obj = cot.get_model().objects.create(name="O1", owner=owner)
@@ -650,9 +648,7 @@ class GraphQLEndpointTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(row["journal_entries"], [])
 
     def test_owner_field_shadowing_owner_fk(self):
-        # A (legacy) COT field named 'owner' shadows the OwnerMixin FK on the
-        # generated model, so the GraphQL 'owner' field must resolve the custom
-        # field rather than the FK's OwnerType.
+        # Simulate an existing schema from before "owner" became a reserved field name.
         cot = self.create_custom_object_type(name="Legacy", slug="legacy")
         self.create_custom_object_type_field(
             cot, name="name", label="Name", type="text", primary=True, required=True
@@ -663,8 +659,6 @@ class GraphQLEndpointTestCase(CustomObjectsTestCase, TestCase):
         data = self._gql("{ custom_objects_legacy_list { name owner journal_entries { id } } }")
         row = data["custom_objects_legacy_list"][0]
         self.assertEqual(row["owner"], "Alice")
-        # JournalEntriesMixin is on the shared base type, so it must still resolve
-        # when OwnerMixin is omitted.
         self.assertEqual(row["journal_entries"], [])
 
     def test_local_context_data_when_config_context_enabled(self):
@@ -682,8 +676,6 @@ class GraphQLEndpointTestCase(CustomObjectsTestCase, TestCase):
         )
 
     def test_local_context_data_absent_without_config_context(self):
-        # Types without config context support have no local_context_data column,
-        # so the field must not appear on their GraphQL type.
         cot = self.create_simple_custom_object_type(name="Plain", slug="plain")
         cot.get_model().objects.create(name="P1")
 

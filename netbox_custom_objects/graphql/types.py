@@ -151,12 +151,7 @@ class CustomObjectObjectType(ChangelogMixin, JournalEntriesMixin, TagsMixin, Bas
 
     ``BaseObjectType`` provides ``display``/``class_type`` and, crucially,
     ``get_queryset()`` which enforces NetBox object-level view permissions.
-    ``ChangelogMixin``, ``JournalEntriesMixin`` and ``TagsMixin`` add change-log,
-    journal-entry and tag access — all supported by the ``CustomObject`` base
-    model.  ``owner`` (``OwnerMixin``) is mixed in per type by
-    :func:`_build_object_type`, since a legacy COT field named ``owner`` can shadow
-    the base model's FK.  Custom fields are added per type by
-    :func:`build_object_type`.
+    Custom fields and ``owner`` are added per type by :func:`build_object_type`.
     """
 
     pass
@@ -571,9 +566,7 @@ def _build_object_type(custom_object_type, model):
         # Every custom field is nullable at the database level.
         namespace["__annotations__"][field_name] = Optional[annotation]
 
-    # A COT field named 'owner' (predating the reserved-name check) shadows the
-    # OwnerMixin FK on the generated model, so only expose the FK when it is not
-    # shadowed — mirroring the REST serializer's has_owner_field_conflict.
+    # Legacy schemas may define a custom "owner" field that shadows the inherited FK.
     bases = (CustomObjectObjectType,)
     if not any(field.name == "owner" for field in cot_fields):
         bases = (OwnerMixin, CustomObjectObjectType)
@@ -581,8 +574,6 @@ def _build_object_type(custom_object_type, model):
     cls = type(type_name, bases, namespace)
 
     fields = ["id", "created", "last_updated"]
-    # Types that opted in to config context support carry a local_context_data
-    # column (see CustomObjectConfigContextMixin).
     if issubclass(model, ConfigContextModel):
         fields.append("local_context_data")
 
