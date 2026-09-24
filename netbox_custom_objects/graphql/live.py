@@ -245,6 +245,29 @@ def _get_static_query_parts():
     return _static_query_parts
 
 
+def _schema_extensions():
+    """
+    Return fresh schema extension instances matching NetBox's own schema.
+
+    ``get_schema_extensions()`` only exists in NetBox >= 4.6.1; earlier releases
+    define this same list inline on ``netbox.graphql.schema.schema``.
+    """
+    import netbox.graphql.schema as ngs
+
+    get_schema_extensions = getattr(ngs, "get_schema_extensions", None)
+    if get_schema_extensions is not None:
+        return get_schema_extensions()
+
+    from django.conf import settings
+    from strawberry.extensions import MaxAliasesLimiter
+    from strawberry_django.optimizer import DjangoOptimizerExtension
+
+    return [
+        DjangoOptimizerExtension(prefetch_custom_queryset=True),
+        MaxAliasesLimiter(max_alias_count=settings.GRAPHQL_MAX_ALIASES),
+    ]
+
+
 def build_full_schema():
     """
     Assemble a complete NetBox GraphQL schema with the current custom object types.
@@ -256,8 +279,6 @@ def build_full_schema():
     NetBox's startup schema except for the live custom-object query.
     """
     import strawberry
-
-    import netbox.graphql.schema as ngs
 
     from .schema import build_query_classes
 
@@ -279,14 +300,14 @@ def build_full_schema():
         query=query_cls,
         config=config,
         # Built fresh per rebuild on purpose — unlike ``config`` (a read-only
-        # settings object), get_schema_extensions() returns extension *instances*
+        # settings object), _schema_extensions() returns extension *instances*
         # that strawberry mutates per request (``extension.execution_context = …``).
         # Each Schema must own its own set; sharing one set across our several live
         # schemas (main + per branch, plus an old schema still serving in-flight
         # requests during a rebuild) would let concurrent requests on different
         # schemas clobber each other's execution context.  This mirrors what NetBox
         # gets for its own schema, and rebuilds are rare, so the cost is irrelevant.
-        extensions=ngs.get_schema_extensions(),
+        extensions=_schema_extensions(),
     )
 
 
