@@ -27,7 +27,6 @@ from extras.choices import CustomFieldTypeChoices
 from netbox.registry import registry
 
 from dcim.models import Site
-from ipam.models import VRF
 
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.related_tabs.registry import _public_host_model_classes
@@ -87,8 +86,7 @@ class ReferenceQTests(TestCase):
 class GetBaseTemplateTests(TestCase):
     """
     ``_get_base_template()`` must fall back to ``generic/object.html`` for models
-    without an ``{app}/{model}.html`` detail template (e.g. ipam.VRF,
-    dcim.MACAddress) — otherwise the tab template's ``{% extends base_template %}``
+    without an ``{app}/{model}.html`` detail template — otherwise the tab template's ``{% extends base_template %}``
     raises TemplateDoesNotExist (HTTP 500) on those models' tab pages.
     """
 
@@ -96,7 +94,9 @@ class GetBaseTemplateTests(TestCase):
         self.assertEqual(_get_base_template(Site()), 'dcim/site.html')
 
     def test_model_without_detail_template_falls_back_to_generic(self):
-        self.assertEqual(_get_base_template(VRF()), 'generic/object.html')
+        model = SimpleNamespace(_meta=SimpleNamespace(app_label='ipam', model_name='nonexistentmodel'))
+        instance = SimpleNamespace(_meta=SimpleNamespace(app_label='ipam', model=model))
+        self.assertEqual(_get_base_template(instance), 'generic/object.html')
 
     def test_custom_object_app_uses_shared_template(self):
         instance = SimpleNamespace(_meta=SimpleNamespace(app_label=APP_LABEL))

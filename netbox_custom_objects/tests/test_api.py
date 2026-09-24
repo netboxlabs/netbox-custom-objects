@@ -4,11 +4,13 @@ Tests for API code paths.
 import json
 import uuid
 from decimal import Decimal
+from unittest import skipUnless
 
 from django.db import connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
+from netbox.api.viewsets import mixins as netbox_viewset_mixins
 
 from utilities.testing import TestCase as NetBoxTestCase, create_test_user
 from rest_framework import status
@@ -425,6 +427,10 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, NetB
         self.assertEqual(instances[0].test_field, 'Updated 001')
         self.assertEqual(instances[1].test_field, 'Updated 002')
 
+    # COMPAT(netbox<4.7): ?background=true is ignored, so the update applies normally.
+    @skipUnless(
+        hasattr(netbox_viewset_mixins, 'BackgroundOperationMixin'), 'NetBox < 4.7 has no background bulk writes'
+    )
     def test_background_bulk_update_rejected(self):
         """?background=true on a bulk write must be rejected rather than silently broken."""
         self._add_permission('change', 'Background bulk update perm')
