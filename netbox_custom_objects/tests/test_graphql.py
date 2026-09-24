@@ -321,9 +321,9 @@ class GraphQLLiveSchemaTestCase(CustomObjectsTestCase, TestCase):
         from strawberry.extensions import MaxAliasesLimiter
         from strawberry_django.optimizer import DjangoOptimizerExtension
 
-        self.create_simple_custom_object_type(name="Legacy NetBox", slug="legacy_netbox")
         with mock.patch.dict(ngs.__dict__):
             ngs.__dict__.pop("get_schema_extensions", None)
+            self.create_simple_custom_object_type(name="Legacy NetBox", slug="legacy_netbox")
             schema = live_module.get_live_schema()
 
         self.assertIsNotNone(schema)
@@ -341,6 +341,7 @@ class GraphQLLiveSchemaTestCase(CustomObjectsTestCase, TestCase):
             first = live_module._schema_extensions()
             second = live_module._schema_extensions()
 
+        self.assertEqual(len(first), 2)
         for a, b in zip(first, second):
             self.assertIsNot(a, b)
 
