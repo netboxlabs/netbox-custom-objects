@@ -44,6 +44,23 @@ from netbox_custom_objects.utilities import extract_cot_id_from_model_name, rest
 
 logger = logging.getLogger("netbox_custom_objects.graphql")
 
+
+def _build_gfk_prefetch_fallback(lookup, models):
+    """Fallback for NetBox < 4.6.8: a GenericPrefetch without per-field
+    GraphQL-selection trimming. Still fixes the N+1; just less targeted."""
+    from django.contrib.contenttypes.prefetch import GenericPrefetch
+
+    def prefetch(info):
+        return GenericPrefetch(lookup, [model.objects.all() for model in models])
+    return prefetch
+
+
+try:
+    # Added in NetBox 4.6.8; this plugin supports back to 4.5.2.
+    from netbox.graphql.optimization import build_gfk_prefetch
+except ImportError:
+    build_gfk_prefetch = _build_gfk_prefetch_fallback
+
 __all__ = (
     "CustomObjectObjectType",
     "CustomObjectRelatedObjectType",
@@ -395,16 +412,35 @@ def _make_relationship_resolver(field):
         return None
     annotation = _relationship_annotation(members, is_list, _relationship_union_name(field))
 
-    # Query-optimisation hints read by NetBox's DjangoOptimizerExtension. A
-    # non-polymorphic OBJECT field is a ForeignKey (select_related); a polymorphic
-    # one is a GenericForeignKey (prefetch_related only). A non-polymorphic
-    # MULTIOBJECT field is a real M2M (prefetch_related); a polymorphic one is a
-    # custom descriptor that can't be prefetched.
+    # A polymorphic OBJECT field is a GenericForeignKey, for which a bare
+    # prefetch_related string hint is inert -- build_gfk_prefetch() (core
+    # NetBox's helper) builds the GenericPrefetch it needs instead. A polymorphic
+    # MULTIOBJECT field's manager (field_types.py) already implements Django's
+    # get_prefetch_querysets() protocol, so a bare string hint works for it.
+    target_models = [
+        model for model in (
+            content_type.model_class() for content_type in _field_target_content_types(field)
+        )
+        if model is not None
+    ]
+
     if is_list:
-        hint = {} if field.is_polymorphic else {"prefetch_related": field_name}
+        hint = {"prefetch_related": field_name} if target_models else {}
         description = f"Related objects referenced by '{field_name}'"
+    elif field.is_polymorphic:
+        # `only` is required alongside the prefetch: without it the GFK's two
+        # backing columns get left out of the base SELECT and each is instead
+        # fetched with its own deferred-field query per row.
+        hint = (
+            {
+                "prefetch_related": build_gfk_prefetch(field_name, target_models),
+                "only": [f"{field_name}_content_type", f"{field_name}_object_id"],
+            }
+            if target_models else {}
+        )
+        description = f"Related object referenced by '{field_name}'"
     else:
-        hint = {"prefetch_related": field_name} if field.is_polymorphic else {"select_related": field_name}
+        hint = {"select_related": field_name}
         description = f"Related object referenced by '{field_name}'"
 
     def resolver(self, info: Info):
