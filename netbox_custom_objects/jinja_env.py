@@ -31,8 +31,8 @@ queryset-style calls onto either form (as in the examples above) renders no
 rows instead of crashing.
 
 Both of these hooks (the ``jinja_filters`` plugin resource and
-``PluginConfig.get_jinja_context()``) require NetBox 4.7+. On older NetBox,
-this module is simply never consulted by core, so it degrades to a no-op
+``PluginConfig.get_jinja_context()``) require NetBox 4.7+.
+COMPAT(netbox<4.7): this module is never consulted by core, so it degrades to a no-op
 (see ``CustomObjectsPluginConfig.ready()`` for the startup log message).
 """
 import logging

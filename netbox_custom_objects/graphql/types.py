@@ -46,7 +46,7 @@ logger = logging.getLogger("netbox_custom_objects.graphql")
 
 
 def _build_gfk_prefetch_fallback(lookup, models):
-    """Fallback for NetBox < 4.6.8: a GenericPrefetch without per-field
+    """COMPAT(netbox<4.6.8): a GenericPrefetch without per-field
     GraphQL-selection trimming. Still fixes the N+1; just less targeted."""
     from django.contrib.contenttypes.prefetch import GenericPrefetch
 
@@ -56,7 +56,7 @@ def _build_gfk_prefetch_fallback(lookup, models):
 
 
 try:
-    # Added in NetBox 4.6.8; this plugin supports back to 4.5.2.
+    # COMPAT(netbox<4.6.8): build_gfk_prefetch doesn't exist.
     from netbox.graphql.optimization import build_gfk_prefetch
 except ImportError:
     build_gfk_prefetch = _build_gfk_prefetch_fallback

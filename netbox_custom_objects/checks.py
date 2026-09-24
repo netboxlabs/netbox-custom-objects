@@ -23,6 +23,7 @@ from packaging.version import InvalidVersion, Version
 
 
 # Version floors enforced only when netbox-branching is installed.
+# COMPAT(netbox<4.6.2): E001 is redundant once min_version reaches this floor.
 REQUIRED_NETBOX_VERSION_FOR_BRANCHING = '4.6.2'
 REQUIRED_BRANCHING_VERSION = '1.0.4'
 

@@ -2,7 +2,7 @@
 
 ## Requirements
 
-* NetBox v4.4.0 or later (see [`COMPATIBILITY.md`](https://github.com/netboxlabs/netbox-custom-objects/blob/main/COMPATIBILITY.md) for the supported version matrix)
+* NetBox v4.5.2 or later (see [`COMPATIBILITY.md`](https://github.com/netboxlabs/netbox-custom-objects/blob/main/COMPATIBILITY.md) for the supported version matrix)
 * PostgreSQL (required — Custom Object Types are backed by real database tables)
 * Redis (required — used by background jobs such as search reindexing)
 

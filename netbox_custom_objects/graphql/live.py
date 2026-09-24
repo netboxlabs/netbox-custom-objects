@@ -249,7 +249,7 @@ def _schema_extensions():
     """
     Return fresh schema extension instances matching NetBox's own schema.
 
-    ``get_schema_extensions()`` only exists in NetBox >= 4.6.1; earlier releases
+    COMPAT(netbox<4.6.1): ``get_schema_extensions()`` doesn't exist; those releases
     define this same list inline on ``netbox.graphql.schema.schema``.
     """
     import netbox.graphql.schema as ngs

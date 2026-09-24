@@ -62,11 +62,14 @@ Defer all version pins to `pyproject.toml` and `netbox_custom_objects/__init__.p
 │       ├── test_schema_operations.py       — Schema creation/deletion/alteration.
 │       └── test_views.py                   — Web views.
 ├── docs/
-│   ├── api.md
 │   ├── branching.md
-│   ├── changelog.md
-│   ├── configuration.md
-│   └── index.md
+│   ├── field-attributes.md
+│   ├── graphql.md
+│   ├── index.md
+│   ├── installation.md
+│   ├── portable-schema.md
+│   ├── releases.md                     — Changelog.
+│   └── rest-api.md
 ├── testing/
 │   └── configuration.py            — NetBox config used by the test workflow.
 ├── .github/workflows/
@@ -231,15 +234,16 @@ GitHub Actions workflows in `.github/workflows/`:
 ### Bump the supported NetBox version
 
 1. Update `min_version` / `max_version` in `netbox_custom_objects/__init__.py`.
-2. Update `COMPATIBILITY.md`.
-3. Adjust the NetBox `ref` matrix in `.github/workflows/lint-tests.yaml`.
-4. Run the suite locally against the new version.
-5. Note any compatibility changes in `docs/changelog.md`.
+2. When raising `min_version`, remove the compatibility code whose `COMPAT(netbox<X)` marker is now at or below the floor (`grep -rn "COMPAT(" netbox_custom_objects`). `tests/test_compat_markers.py` fails until you do.
+3. Update `COMPATIBILITY.md` and the requirements in `docs/installation.md`.
+4. Adjust the NetBox `ref` matrix in `.github/workflows/lint-tests.yaml`, including the `min` row, which must match `min_version`.
+5. Run the suite locally against the new version.
+6. Note any compatibility changes in `docs/releases.md`.
 
 ### Cut a release
 
 1. Bump `version` in both `pyproject.toml` and `netbox_custom_objects/__init__.py`.
-2. Update `docs/changelog.md`.
+2. Update `docs/releases.md`.
 3. Tag and publish a GitHub release. `release.yaml` builds and publishes to PyPI.
 
 ## Conventions and Patterns
@@ -252,6 +256,7 @@ GitHub Actions workflows in `.github/workflows/`:
 - **`should_skip_dynamic_model_creation()` must stay accurate.** It is called in multiple hot paths. Adding new skip conditions there (e.g. for a new management command) is the correct pattern. Never call `get_model()` without first checking this guard.
 - **FK constraints for OBJECT fields are created explicitly.** Because models are `managed = False`, Django does not create FK constraints automatically. `_ensure_field_fk_constraint()` creates `ON DELETE CASCADE` constraints via raw SQL after the field is added.
 - **Migrations write data using `apps.get_model(...)`.** ContentType rows may not exist at migration time. Use `get_or_create`.
+- **Tag version-compatibility shims.** Code that only exists to support an older dependency release gets a `COMPAT(netbox<X.Y.Z)` or `COMPAT(netbox-branching<X.Y.Z)` marker in its comment or docstring, naming the first release that makes it unnecessary. `tests/test_compat_markers.py` fails once the supported floor reaches that version.
 - **Linting.** Config in `ruff.toml`. Line length 120, single quotes, Python 3.10 target. Enabled: `E4`, `E7`, `E9`, `F`, `E1`–`E3`, `E501`, `W`. Ignored: `F403`, `F405`. `preview = true`.
 
 ## Troubleshooting
