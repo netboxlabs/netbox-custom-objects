@@ -27,7 +27,8 @@ from rest_framework.test import APIClient
 
 from core.models import ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Region, Site
-from users.models import ObjectPermission
+from extras.models import JournalEntry
+from users.models import ObjectPermission, Owner
 
 from netbox_custom_objects.graphql import live as live_module
 from netbox_custom_objects.graphql import schema as schema_module
@@ -623,6 +624,70 @@ class GraphQLEndpointTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(row["display"], "D1")
         self.assertIsNotNone(row["id"])
         self.assertEqual(row["tags"], [])
+
+    def test_owner_and_journal_entries(self):
+        cot = self.create_simple_custom_object_type(name="Owned", slug="owned")
+        owner = Owner.objects.create(name="Owner 1")
+        obj = cot.get_model().objects.create(name="O1", owner=owner)
+        JournalEntry.objects.create(assigned_object=obj, created_by=self.user, comments="First entry")
+
+        data = self._gql(
+            "{ custom_objects_owned_list { owner { id name } journal_entries { comments } } }"
+        )
+        row = data["custom_objects_owned_list"][0]
+        self.assertEqual(row["owner"], {"id": str(owner.pk), "name": "Owner 1"})
+        self.assertEqual(row["journal_entries"], [{"comments": "First entry"}])
+
+    def test_owner_is_null_when_unset(self):
+        cot = self.create_simple_custom_object_type(name="Unowned", slug="unowned")
+        cot.get_model().objects.create(name="U1")
+
+        data = self._gql("{ custom_objects_unowned_list { owner { id } journal_entries { id } } }")
+        row = data["custom_objects_unowned_list"][0]
+        self.assertIsNone(row["owner"])
+        self.assertEqual(row["journal_entries"], [])
+
+    def test_owner_field_shadowing_owner_fk(self):
+        # Simulate an existing schema from before "owner" became a reserved field name.
+        cot = self.create_custom_object_type(name="Legacy", slug="legacy")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        self.create_custom_object_type_field(cot, name="owner", label="Owner", type="text")
+        cot.get_model().objects.create(name="L1", owner="Alice")
+
+        data = self._gql("{ custom_objects_legacy_list { name owner journal_entries { id } } }")
+        row = data["custom_objects_legacy_list"][0]
+        self.assertEqual(row["owner"], "Alice")
+        self.assertEqual(row["journal_entries"], [])
+
+    def test_local_context_data_when_config_context_enabled(self):
+        cot = self.create_custom_object_type(
+            name="Configured", slug="configured", config_context_enabled=True
+        )
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        cot.get_model().objects.create(name="C1", local_context_data={"ntp": "10.0.0.1"})
+
+        data = self._gql("{ custom_objects_configured_list { local_context_data } }")
+        self.assertEqual(
+            data["custom_objects_configured_list"][0]["local_context_data"], {"ntp": "10.0.0.1"}
+        )
+
+    def test_local_context_data_absent_without_config_context(self):
+        cot = self.create_simple_custom_object_type(name="Plain", slug="plain")
+        cot.get_model().objects.create(name="P1")
+
+        response = self.client.post(
+            self.url,
+            data={"query": "{ custom_objects_plain_list { local_context_data } }"},
+            format="json",
+            **self.header,
+        )
+        payload = json.loads(response.content)
+        self.assertIn("errors", payload)
+        self.assertIn("local_context_data", payload["errors"][0]["message"])
 
 
 @override_settings(LOGIN_REQUIRED=True)
