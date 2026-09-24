@@ -32,7 +32,7 @@ def _floors():
 def _markers():
     for path in sorted(PACKAGE_ROOT.rglob("*.py")):
         rel = path.relative_to(PACKAGE_ROOT)
-        if rel.parts[0] == "tests":
+        if rel == Path("tests") / "test_compat_markers.py":
             continue
         for lineno, line in enumerate(path.read_text().splitlines(), start=1):
             for match in MARKER_RE.finditer(line):

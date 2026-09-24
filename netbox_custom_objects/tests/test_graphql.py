@@ -323,7 +323,7 @@ class GraphQLLiveSchemaTestCase(CustomObjectsTestCase, TestCase):
 
         self.create_simple_custom_object_type(name="Legacy NetBox", slug="legacy_netbox")
         with mock.patch.dict(ngs.__dict__):
-            del ngs.__dict__["get_schema_extensions"]
+            ngs.__dict__.pop("get_schema_extensions", None)
             schema = live_module.get_live_schema()
 
         self.assertIsNotNone(schema)
@@ -337,7 +337,7 @@ class GraphQLLiveSchemaTestCase(CustomObjectsTestCase, TestCase):
         import netbox.graphql.schema as ngs
 
         with mock.patch.dict(ngs.__dict__):
-            del ngs.__dict__["get_schema_extensions"]
+            ngs.__dict__.pop("get_schema_extensions", None)
             first = live_module._schema_extensions()
             second = live_module._schema_extensions()
 
