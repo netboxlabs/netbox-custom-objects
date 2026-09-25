@@ -315,6 +315,36 @@ class GraphQLLiveSchemaTestCase(CustomObjectsTestCase, TestCase):
         CustomObjectType.objects.filter(pk=cot.pk).delete()
         self.assertNotIn("custom_objects_temp_type", str(live_module.get_live_schema()))
 
+    def test_get_live_schema_without_get_schema_extensions(self):
+        # NetBox < 4.6.1 has no get_schema_extensions(); its extensions are inline.
+        import netbox.graphql.schema as ngs
+        from strawberry.extensions import MaxAliasesLimiter
+        from strawberry_django.optimizer import DjangoOptimizerExtension
+
+        with mock.patch.dict(ngs.__dict__):
+            ngs.__dict__.pop("get_schema_extensions", None)
+            self.create_simple_custom_object_type(name="Legacy NetBox", slug="legacy_netbox")
+            schema = live_module.get_live_schema()
+
+        self.assertIsNotNone(schema)
+        self.assertIn("custom_objects_legacy_netbox", str(schema))
+        self.assertEqual(
+            {type(ext) for ext in schema.extensions},
+            {DjangoOptimizerExtension, MaxAliasesLimiter},
+        )
+
+    def test_schema_extensions_fallback_returns_fresh_instances(self):
+        import netbox.graphql.schema as ngs
+
+        with mock.patch.dict(ngs.__dict__):
+            ngs.__dict__.pop("get_schema_extensions", None)
+            first = live_module._schema_extensions()
+            second = live_module._schema_extensions()
+
+        self.assertEqual(len(first), 2)
+        for a, b in zip(first, second):
+            self.assertIsNot(a, b)
+
 
 class GraphQLSignalRegistrationTestCase(TestCase):
     """

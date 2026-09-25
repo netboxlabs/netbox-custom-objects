@@ -2,7 +2,7 @@
 Tests for all the different field types supported by Custom Object Type Fields.
 """
 from importlib import import_module
-from unittest import skip
+from unittest import skip, skipUnless
 from unittest.mock import Mock
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -13,6 +13,7 @@ from django.test import TestCase
 
 from core.models import ObjectType
 from dcim.models import Device, DeviceType, ModuleType
+from extras.models import CustomFieldChoiceSet
 from netbox_custom_objects.field_types import (
     CoordinatesFieldType,
     MultiObjectFieldType,
@@ -1181,6 +1182,8 @@ class SelectFieldTypeTestCase(FieldTypeTestCase):
         )
         self.assertEqual(cotf.get_choice_label("unknown"), "unknown")
 
+    # COMPAT(netbox<4.6.0): CustomFieldChoiceSet has no choice_colors.
+    @skipUnless(hasattr(CustomFieldChoiceSet, "get_choice_color"), "NetBox < 4.6.0 has no choice colors")
     def test_get_choice_color_returns_color_when_set(self):
         """get_choice_color() returns the color configured for a choice value."""
         from extras.models import CustomFieldChoiceSet

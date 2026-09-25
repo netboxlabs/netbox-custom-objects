@@ -2774,6 +2774,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
     def get_choice_color(self, value):
         if self.choice_set:
+            # COMPAT(netbox<4.6.0): CustomFieldChoiceSet has no get_choice_color().
             getter = getattr(self.choice_set, 'get_choice_color', None)
             return getter(value) if getter else None
         return None

@@ -1,10 +1,8 @@
 from django.apps import apps
-from django.conf import settings
 from django.urls import reverse_lazy
 from django.utils.translation import gettext_lazy as _
 from netbox.navigation import MenuGroup
 from netbox.plugins import PluginMenu, PluginMenuButton, PluginMenuItem
-from packaging import version
 from utilities.string import title
 
 from netbox_custom_objects.constants import APP_LABEL
@@ -68,9 +66,6 @@ class CustomObjectTypeMenuItems:
                 kwargs={"custom_object_type": custom_object_type.slug},
             )
             yield menu_item
-
-
-current_version = version.parse(settings.RELEASE.version)
 
 
 def get_grouped_menu_items():

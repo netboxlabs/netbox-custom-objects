@@ -27,8 +27,8 @@ def build_map_url(latitude, longitude):
     coordinates are appended as a comma-separated pair. Returns ``None`` when either
     coordinate is unset or no maps URL is configured.
 
-    NetBox's own ``build_coords_url`` helper is used when available (NetBox >= 4.6.2);
-    on earlier supported versions we replicate its (simple) behaviour locally.
+    NetBox's own ``build_coords_url`` helper is used when available.
+    COMPAT(netbox<4.6.2): replicate its (simple) behaviour locally.
     """
     if latitude is None or longitude is None:
         return None

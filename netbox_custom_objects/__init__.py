@@ -106,51 +106,38 @@ def _register_branching_hooks_once():
         return
 
     try:
-        from netbox_branching.signals import (
-            pre_merge, post_merge,
-            pre_sync, post_sync,
-            pre_revert, post_revert,
-        )
+        import netbox_branching.signals  # noqa: F401
     except ImportError:
         return
 
+    # Unguarded: netbox-branching >= 1.0.4 is required (checks.E002), and an
+    # older release should fail loudly rather than silently skip every hook.
+    from netbox_branching.signals import (
+        pre_merge, post_merge,
+        pre_sync, post_sync,
+        pre_revert, post_revert,
+        post_migrate as branching_post_migrate,
+        squash_dependency_graph_built,
+    )
+    from netbox_branching.utilities import (
+        register_branching_resolver,
+        register_objectchange_field_migrator,
+    )
+    from .branching import (
+        add_custom_object_dependencies,
+        objectchange_field_migrator,
+        supports_branching_resolver,
+    )
+
     for sig in (pre_merge, post_merge, pre_sync, post_sync, pre_revert, post_revert):
         sig.connect(_reset_deferred_co_field_data, weak=False)
+    branching_post_migrate.connect(_heal_branch_on_migrate, weak=False)
 
-    try:
-        from netbox_branching.signals import post_migrate as branching_post_migrate
-        branching_post_migrate.connect(_heal_branch_on_migrate, weak=False)
-    except ImportError:
-        pass
-
-    try:
-        from netbox_branching.utilities import (
-            register_branching_resolver,
-            register_objectchange_field_migrator,
-        )
-        from .branching import (
-            objectchange_field_migrator,
-            supports_branching_resolver,
-        )
-        register_branching_resolver(supports_branching_resolver)
-        register_objectchange_field_migrator(objectchange_field_migrator)
-        # Subscribe to the squash dependency-graph signal so CO-specific
-        # edges (M2M targets, polymorphic-M2M sidecar) get added before
-        # topological ordering.  Skipped silently on older netbox-branching
-        # that doesn't expose the signal yet.
-        try:
-            from netbox_branching.signals import (
-                squash_dependency_graph_built,
-            )
-            from .branching import add_custom_object_dependencies
-            squash_dependency_graph_built.connect(
-                add_custom_object_dependencies,
-                weak=False,
-            )
-        except ImportError:
-            pass
-    except ImportError:
-        pass
+    register_branching_resolver(supports_branching_resolver)
+    register_objectchange_field_migrator(objectchange_field_migrator)
+    # Subscribe to the squash dependency-graph signal so CO-specific edges
+    # (M2M targets, polymorphic-M2M sidecar) get added before topological ordering.
+    squash_dependency_graph_built.connect(add_custom_object_dependencies, weak=False)
 
     _branching_hooks_registered = True
 
@@ -317,9 +304,8 @@ class CustomObjectsPluginConfig(PluginConfig):
     # so the swallowed exception isn't invisible outside the logs.
     _register_tabs_error = None
     template_extensions = "template_content.template_extensions"
-    # Registers the custom_objects Jinja filter (jinja_env.filters). Requires NetBox
-    # 4.7+; on older NetBox this attribute is simply never read by core (see ready()
-    # for the startup log message covering that case).
+    # Registers the custom_objects Jinja filter (jinja_env.filters).
+    # COMPAT(netbox<4.7): older NetBox never reads this attribute (see ready()).
     jinja_filters = "jinja_env.filters"
     # Resolves dynamic CO models (table{n}model) to on-the-fly serializers —
     # they have no importable path at the conventional location.
@@ -446,11 +432,10 @@ class CustomObjectsPluginConfig(PluginConfig):
         super().ready()
         _super_ready_called = True
 
-        # On NetBox < 4.7 the jinja_filters resource and get_jinja_context() hook
+        # COMPAT(netbox<4.7): the jinja_filters resource and get_jinja_context() hook
         # don't exist, so super().ready() never calls _load_resource('jinja_filters')
         # and get_jinja_context() is never invoked by RenderTemplateMixin.get_context().
-        # This is every currently-supported NetBox version (4.7 isn't released yet), so
-        # log at DEBUG rather than INFO: it's an explanation to reach for when actively
+        # Logged at DEBUG rather than INFO: it's an explanation to reach for when
         # troubleshooting why 'custom_objects' isn't resolving, not a startup notice
         # every install should see by default.
         from netbox.registry import registry

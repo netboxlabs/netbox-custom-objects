@@ -48,6 +48,9 @@ jobs:
             name: "main"
           - netbox-ref: "feature"
             name: "feature"
+          # Oldest supported NetBox; keep in sync with min_version in __init__.py.
+          - netbox-ref: "v4.5.2"
+            name: "min (v4.5.2)"
           - netbox-ref: "main"
             name: "main, branching"
             with-branching: true

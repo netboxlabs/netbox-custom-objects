@@ -748,6 +748,7 @@ class SelectFieldType(FieldType):
         choices_dict = dict(field.choices)
         choice_set = field.choice_set
 
+        # COMPAT(netbox<4.6.0): CustomFieldChoiceSet has no get_choice_color().
         _get_color = getattr(choice_set, 'get_choice_color', None) if choice_set else None
 
         class _SelectLabelColumn(tables.Column):
@@ -923,6 +924,7 @@ class MultiSelectFieldType(FieldType):
             def render(self, value):
                 if not value:
                     return self.default
+                # COMPAT(netbox<4.6.0): CustomFieldChoiceSet has no get_choice_color().
                 _get_color = getattr(choice_set, 'get_choice_color', None) if choice_set else None
                 pairs = [
                     (choices_dict.get(v, v), _get_color(v) if _get_color else None)

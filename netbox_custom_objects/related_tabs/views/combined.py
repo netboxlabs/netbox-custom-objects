@@ -20,7 +20,22 @@ from netbox_custom_objects.models import CustomObjectTypeField
 from netbox_custom_objects.utilities import restrict_to_viewable
 from utilities.htmx import htmx_partial
 from utilities.paginator import EnhancedPaginator, get_paginate_count
-from utilities.views import ConditionalLoginRequiredMixin, ViewTab, get_default_template, register_model_view
+from utilities.views import ConditionalLoginRequiredMixin, ViewTab, register_model_view
+
+try:
+    from utilities.views import get_default_template
+except ImportError:
+    # COMPAT(netbox<4.6.0): replicate NetBox's helper.
+    def get_default_template(model):
+        from django.template import TemplateDoesNotExist
+        from django.template.loader import get_template
+
+        template_name = f'{model._meta.app_label}/{model._meta.model_name}.html'
+        try:
+            get_template(template_name)
+            return template_name
+        except TemplateDoesNotExist:
+            return 'generic/object.html'
 
 logger = logging.getLogger('netbox_custom_objects.related_tabs')
 

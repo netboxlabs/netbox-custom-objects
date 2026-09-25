@@ -1,6 +1,8 @@
 """
 Tests for all UI views.
 """
+from unittest import skipUnless
+
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection
 from django.test import RequestFactory, TestCase
@@ -1069,6 +1071,8 @@ class ComplexCustomObjectViewTestCase(
         ...
 
 
+# COMPAT(netbox<4.6.0): CustomFieldChoiceSet has no choice_colors.
+@skipUnless(hasattr(CustomFieldChoiceSet, 'get_choice_color'), 'NetBox < 4.6.0 has no choice colors')
 class SelectFieldColorDetailViewTestCase(CustomObjectsTestCase, TestCase):
     """Regression tests for #529: selection field colors render correctly in the detail view."""
 
