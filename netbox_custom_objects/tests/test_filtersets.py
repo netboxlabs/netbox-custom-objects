@@ -16,15 +16,22 @@ from extras.models import CustomFieldChoiceSet
 
 from netbox_custom_objects.field_types import MultiObjectFieldType, ObjectFieldType
 from netbox_custom_objects.filtersets import (
-    ArrayContainsFilter, NonPolymorphicMultiObjectFilter, NonPolymorphicObjectFilter,
+    ArrayContainsFilter, CustomObjectTypeFieldFilterSet, CustomObjectTypeFilterSet,
+    NonPolymorphicMultiObjectFilter, NonPolymorphicObjectFilter,
     PolymorphicMultiObjectFilter, PolymorphicObjectFilter,
     build_filter_for_field, get_filterset_class,
 )
-from netbox_custom_objects.models import CustomObjectTypeField
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from utilities.forms.fields import (
     DynamicModelChoiceField,
     DynamicModelMultipleChoiceField,
 )
+
+try:
+    from utilities.testing import ChangeLoggedFilterSetTestMixin
+except ImportError:
+    # COMPAT(netbox<4.7.0): NetBox < 4.7 exported this under its previous name.
+    from utilities.testing import ChangeLoggedFilterSetTests as ChangeLoggedFilterSetTestMixin
 
 from .base import CustomObjectsTestCase
 
@@ -1534,3 +1541,86 @@ class CoordinatesFieldFiltersetTestCase(CustomObjectsTestCase, TestCase):
 
     def test_no_filter_returns_all(self):
         self.assertEqual(self._filterset({}).qs.count(), 2)
+
+
+class CustomObjectTypeFilterSetTestCase(CustomObjectsTestCase, TestCase, ChangeLoggedFilterSetTestMixin):
+    queryset = CustomObjectType.objects.all()
+    filterset = CustomObjectTypeFilterSet
+    # Internal bookkeeping, not user-facing attributes.
+    ignore_fields = ("object_type", "schema_document", "next_schema_id", "cache_timestamp")
+
+    @classmethod
+    def setUpTestData(cls):
+        CustomObjectType.objects.create(
+            name="alpha", slug="alpha", verbose_name="Alpha", description="first", group_name="g1",
+        )
+        CustomObjectType.objects.create(
+            name="bravo", slug="bravo", verbose_name="Bravo", description="second", group_name="g1",
+        )
+        CustomObjectType.objects.create(
+            name="charlie", slug="charlie", verbose_name="Charlie", description="third", group_name="g2",
+        )
+
+    def test_q(self):
+        self.assertEqual(self.filterset({"q": "second"}, self.queryset).qs.get().name, "bravo")
+
+    def test_slug(self):
+        params = {"slug": ["alpha", "charlie"]}
+        self.assertEqual(self.filterset(params, self.queryset).qs.count(), 2)
+
+    def test_group_name(self):
+        params = {"group_name": ["g1"]}
+        self.assertEqual(self.filterset(params, self.queryset).qs.count(), 2)
+
+
+class CustomObjectTypeFieldFilterSetTestCase(CustomObjectsTestCase, TestCase, ChangeLoggedFilterSetTestMixin):
+    queryset = CustomObjectTypeField.objects.all()
+    filterset = CustomObjectTypeFieldFilterSet
+    ignore_fields = ("default", "related_object_filter")
+    # The M2M's expected filter name is derived from ObjectType's verbose name
+    # ("object_type"), which would read as the field's parent type.
+    filter_name_map = {"object_type": "related_object_types"}
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.cot1 = CustomObjectType.objects.create(name="field_fs_one", slug="field-fs-one")
+        cls.cot2 = CustomObjectType.objects.create(name="field_fs_two", slug="field-fs-two")
+        cls.site_ot = ObjectType.objects.get_for_model(Site)
+        cls.device_ot = ObjectType.objects.get_for_model(Device)
+
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.cot1, name="hostname", label="Host Name", type="text",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.cot1, name="rack_units", type="integer", description="height",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.cot2, name="site", type="object", related_object_type=cls.site_ot,
+        )
+        cls.poly_field = CustomObjectTypeField.objects.create(
+            custom_object_type=cls.cot2, name="target", type="object", is_polymorphic=True,
+        )
+        cls.poly_field.related_object_types.add(cls.device_ot)
+
+    def test_q(self):
+        self.assertEqual(self.filterset({"q": "Host"}, self.queryset).qs.get().name, "hostname")
+
+    def test_custom_object_type_id(self):
+        params = {"custom_object_type_id": [self.cot1.pk]}
+        self.assertEqual(self.filterset(params, self.queryset).qs.count(), 2)
+
+    def test_custom_object_type(self):
+        params = {"custom_object_type": ["field-fs-two"]}
+        self.assertEqual(self.filterset(params, self.queryset).qs.count(), 2)
+
+    def test_type(self):
+        params = {"type": ["text", "integer"]}
+        self.assertEqual(self.filterset(params, self.queryset).qs.count(), 2)
+
+    def test_related_object_type_id(self):
+        params = {"related_object_type_id": [self.site_ot.pk]}
+        self.assertEqual(self.filterset(params, self.queryset).qs.get().name, "site")
+
+    def test_related_object_types_id(self):
+        params = {"related_object_types_id": [self.device_ot.pk]}
+        self.assertEqual(self.filterset(params, self.queryset).qs.get().pk, self.poly_field.pk)

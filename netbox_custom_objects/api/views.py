@@ -25,7 +25,11 @@ from netbox.api.viewsets import NetBoxModelViewSet
 
 
 from netbox_custom_objects.constants import APP_LABEL
-from netbox_custom_objects.filtersets import get_filterset_class
+from netbox_custom_objects.filtersets import (
+    CustomObjectTypeFieldFilterSet,
+    CustomObjectTypeFilterSet,
+    get_filterset_class,
+)
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.schema.comparator import diff_document
 from netbox_custom_objects.schema.executor import (
@@ -114,11 +118,13 @@ class RootView(APIRootView):
 class CustomObjectTypeViewSet(NetBoxModelViewSet):
     queryset = CustomObjectType.objects.prefetch_related('fields__related_object_types')
     serializer_class = serializers.CustomObjectTypeSerializer
+    filterset_class = CustomObjectTypeFilterSet
 
 
 class CustomObjectTypeFieldViewSet(NetBoxModelViewSet):
     queryset = CustomObjectTypeField.objects.prefetch_related('related_object_types')
     serializer_class = serializers.CustomObjectTypeFieldSerializer
+    filterset_class = CustomObjectTypeFieldFilterSet
 
 
 # Schema generation cannot resolve the dynamic model without a URL slug.

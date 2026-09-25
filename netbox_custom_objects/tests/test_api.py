@@ -1066,6 +1066,155 @@ class CustomObjectTypeAndFieldViewSetPermissionTest(CustomObjectsTestCase, TestC
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
 
+class CustomObjectTypeAndFieldFilteringBulkAPITest(CustomObjectsTestCase, TestCase):
+    """
+    List filters on the type and field endpoints must narrow the result set, and bulk
+    writes must touch only the listed ids. pynetbox's ``filter(...).update()`` and
+    ``filter(...).delete()`` send a filtered GET and then a bulk write of the returned
+    ids, so an ignored filter would turn them into writes against every row (#584).
+    """
+
+    type_list_url = 'plugins-api:netbox_custom_objects-api:customobjecttype-list'
+    field_list_url = 'plugins-api:netbox_custom_objects-api:customobjecttypefield-list'
+
+    def setUp(self):
+        self.user = create_test_user('bulk_filter_user')
+        # APIClient honours format='json' on PATCH/DELETE (the plain Django client does not).
+        self.client = APIClient()
+        token_key = create_token(self.user)
+        self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
+
+        obj_perm = ObjectPermission(name='Bulk filter perm', actions=['view', 'change', 'delete'])
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        obj_perm.object_types.add(
+            ObjectType.objects.get_for_model(CustomObjectType),
+            ObjectType.objects.get_for_model(CustomObjectTypeField),
+        )
+
+        self.types = [
+            CustomObjectType.objects.create(name=f'bulk_type_{i}', slug=f'bulk-type-{i}', description=f'desc {i}')
+            for i in range(3)
+        ]
+        self.fields = [
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot,
+                name='label_text',
+                type='text',
+            )
+            for cot in self.types
+        ]
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.types[0],
+            name='count',
+            type='integer',
+        )
+
+    def _list(self, url_name, params):
+        response = self.client.get(reverse(url_name), params, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        return sorted(row['id'] for row in response.data['results'])
+
+    # Types: filtering
+
+    def test_type_list_filter_by_slug(self):
+        self.assertEqual(self._list(self.type_list_url, {'slug': 'bulk-type-1'}), [self.types[1].pk])
+
+    def test_type_list_filter_by_unknown_slug_returns_nothing(self):
+        self.assertEqual(self._list(self.type_list_url, {'slug': 'no-such-type'}), [])
+
+    def test_type_list_filter_by_multiple_ids(self):
+        ids = [self.types[0].pk, self.types[2].pk]
+        self.assertEqual(self._list(self.type_list_url, {'id': ids}), sorted(ids))
+
+    def test_type_list_search(self):
+        self.assertEqual(self._list(self.type_list_url, {'q': 'desc 2'}), [self.types[2].pk])
+
+    # Fields: filtering
+
+    def test_field_list_filter_by_custom_object_type_id(self):
+        expected = sorted(f.pk for f in CustomObjectTypeField.objects.filter(custom_object_type=self.types[0]))
+        self.assertEqual(
+            self._list(self.field_list_url, {'custom_object_type_id': self.types[0].pk}),
+            expected,
+        )
+
+    def test_field_list_filter_by_name(self):
+        self.assertEqual(
+            self._list(self.field_list_url, {'name': 'label_text'}),
+            sorted(f.pk for f in self.fields),
+        )
+
+    def test_field_list_filter_by_type(self):
+        expected = [CustomObjectTypeField.objects.get(name='count').pk]
+        self.assertEqual(self._list(self.field_list_url, {'type': 'integer'}), expected)
+
+    def test_field_list_filter_by_invalid_custom_object_type_id_is_rejected(self):
+        response = self.client.get(reverse(self.field_list_url), {'custom_object_type_id': 999999}, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # Types: bulk writes
+
+    def test_type_bulk_update_touches_only_listed_ids(self):
+        data = [{'id': cot.pk, 'description': 'bulk updated'} for cot in self.types[:2]]
+        response = self.client.patch(reverse(self.type_list_url), data, format='json', **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        for cot in self.types:
+            cot.refresh_from_db()
+        self.assertEqual([cot.description for cot in self.types], ['bulk updated', 'bulk updated', 'desc 2'])
+
+    def test_type_bulk_delete_touches_only_listed_ids(self):
+        survivor_table = self.types[2].get_model()._meta.db_table
+        data = [{'id': cot.pk} for cot in self.types[:2]]
+        response = self.client.delete(reverse(self.type_list_url), data, format='json', **self.header)
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(list(CustomObjectType.objects.values_list('pk', flat=True)), [self.types[2].pk])
+        self.assertIn(survivor_table, connection.introspection.table_names())
+
+    def test_type_filtered_bulk_delete_spares_non_matching_types(self):
+        """Mirror pynetbox ``custom_object_types.filter(slug=...).delete()``."""
+        ids = self._list(self.type_list_url, {'slug': 'bulk-type-0'})
+        response = self.client.delete(
+            reverse(self.type_list_url), [{'id': pk} for pk in ids], format='json', **self.header
+        )
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(
+            sorted(CustomObjectType.objects.values_list('pk', flat=True)),
+            [self.types[1].pk, self.types[2].pk],
+        )
+
+    # Fields: bulk writes
+
+    def test_field_bulk_update_touches_only_listed_ids(self):
+        data = [{'id': field.pk, 'label': 'Bulk Label'} for field in self.fields[:2]]
+        response = self.client.patch(reverse(self.field_list_url), data, format='json', **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        for field in self.fields:
+            field.refresh_from_db()
+        self.assertEqual([field.label for field in self.fields], ['Bulk Label', 'Bulk Label', ''])
+
+    def test_field_bulk_delete_touches_only_listed_ids(self):
+        data = [{'id': field.pk} for field in self.fields[:2]]
+        response = self.client.delete(reverse(self.field_list_url), data, format='json', **self.header)
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        remaining = set(CustomObjectTypeField.objects.values_list('pk', flat=True))
+        self.assertNotIn(self.fields[0].pk, remaining)
+        self.assertNotIn(self.fields[1].pk, remaining)
+        self.assertIn(self.fields[2].pk, remaining)
+
+    def test_field_filtered_bulk_delete_spares_non_matching_fields(self):
+        """Mirror pynetbox ``custom_object_type_fields.filter(type='integer').delete()``."""
+        ids = self._list(self.field_list_url, {'type': 'integer'})
+        response = self.client.delete(
+            reverse(self.field_list_url), [{'id': pk} for pk in ids], format='json', **self.header
+        )
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(
+            sorted(CustomObjectTypeField.objects.values_list('pk', flat=True)),
+            sorted(f.pk for f in self.fields),
+        )
+
+
 class SchemaGenerationTest(CustomObjectsTestCase, TestCase):
     """The OpenAPI schema must build without error even though CustomObjectViewSet's
     model/queryset depend on a URL slug that schema generation never provides."""
