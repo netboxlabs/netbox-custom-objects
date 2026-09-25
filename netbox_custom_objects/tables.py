@@ -1,3 +1,4 @@
+from importlib import import_module
 from urllib.parse import quote
 
 import django_tables2 as tables
@@ -9,10 +10,33 @@ from django.utils.translation import gettext_lazy as _
 from netbox.tables import NetBoxTable, columns
 from utilities.permissions import get_permission_for_model
 
-from netbox_custom_objects.models import CustomObject, CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.models import CustomObject, CustomObjectType, CustomObjectTypeField, DynamicAssignment
 from netbox_custom_objects.utilities import get_viewname
 
-__all__ = ("CustomObjectTable", "CustomObjectTypeFieldTable")
+__all__ = (
+    "CustomObjectTable",
+    "CustomObjectTypeFieldTable",
+    "DynamicAssignmentTable",
+    "get_table_for_model",
+)
+
+
+def get_table_for_model(model):
+    """Return the conventional NetBox table class for a model.
+
+    NetBox keeps each model's table class in its app's ``tables`` module and
+    names it after the model (for example, ``dcim.Device`` uses
+    ``dcim.tables.DeviceTable``).  Dynamic-assignment fields can return objects
+    from several apps, so their detail view cannot import one fixed table class.
+    """
+    table_module = import_module(f"{model._meta.app_config.name}.tables")
+    table_class_name = f"{model._meta.object_name}Table"
+    try:
+        return getattr(table_module, table_class_name)
+    except AttributeError as exc:
+        raise LookupError(
+            f"No table class named {table_class_name} exists in {table_module.__name__}"
+        ) from exc
 
 
 OBJECTCHANGE_FULL_NAME = """
@@ -104,7 +128,6 @@ class CustomObjectTypeTable(NetBoxTable):
             "created",
             "last_updated",
         )
-
 
 class CustomObjectTagColumn(columns.TagColumn):
     """
@@ -290,4 +313,57 @@ class CustomObjectTable(NetBoxTable):
             "custom_object_type",
             "created",
             "last_updated",
+        )
+
+
+class DynamicAssignmentTable(NetBoxTable):
+    name = tables.Column(
+        verbose_name=_("Name"),
+        linkify=True,
+    )
+    is_active = columns.BooleanColumn(
+        verbose_name=_("Active"),
+    )
+    weight = tables.Column(
+        verbose_name=_("Weight"),
+    )
+    assigned_object_types = columns.TemplateColumn(
+        template_code="""
+        {% for ot in value.all %}
+            <span class="badge bg-secondary">{{ ot }}</span>
+        {% empty %}
+            {{ ''|placeholder }}
+        {% endfor %}
+        """,
+        verbose_name=_("Assigned Object Types"),
+    )
+    description = tables.Column(
+        verbose_name=_("Description"),
+    )
+    actions = columns.ActionsColumn(
+        actions=("edit", "delete"),
+    )
+
+    class Meta(NetBoxTable.Meta):
+        model = DynamicAssignment
+        fields = (
+            "pk",
+            "id",
+            "name",
+            "is_active",
+            "weight",
+            "assigned_object_types",
+            "description",
+            "created",
+            "last_updated",
+            "actions",
+        )
+        default_columns = (
+            "pk",
+            "name",
+            "is_active",
+            "weight",
+            "assigned_object_types",
+            "description",
+            "actions",
         )

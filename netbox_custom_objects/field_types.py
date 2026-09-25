@@ -2718,6 +2718,65 @@ class CoordinatesFieldType(FieldType):
             )
 
 
+class DynamicAssignmentFieldType(FieldType):
+    """
+    A virtual field type that has no backing DB column.
+    At query time, DynamicAssignment.get_for_object() resolves which custom
+    objects match the requesting NetBox object via the filter defined on the
+    linked DynamicAssignment.  The result is surfaced via the dedicated
+    /api/plugins/custom-objects/dynamic-custom-objects/ endpoint.
+    """
+
+    def get_model_field(self, field, **kwargs):
+        return DynamicAssignmentDescriptor(field)
+
+    def get_serializer_field(self, field, **kwargs):
+        from rest_framework import serializers as drf_serializers
+        from netbox_custom_objects.models import DynamicAssignment
+
+        return drf_serializers.PrimaryKeyRelatedField(
+            queryset=DynamicAssignment.objects.all(),
+            required=False,
+            allow_null=True,
+        )
+
+    def get_filterform_field(self, field, **kwargs):
+        raise NotImplementedError
+
+    def get_form_field(self, field, **kwargs):
+        from utilities.forms.fields import DynamicModelChoiceField
+        from netbox_custom_objects.models import DynamicAssignment
+
+        return DynamicModelChoiceField(
+            queryset=DynamicAssignment.objects.all(),
+            required=False,
+        )
+
+    def get_table_column_field(self, field, **kwargs):
+        raise NotImplementedError
+
+
+class DynamicAssignmentDescriptor:
+    """Resolve a dynamic-assignment field to its matching NetBox objects."""
+
+    def __init__(self, field):
+        self.field = field
+
+    def __get__(self, instance, owner=None):
+        if instance is None:
+            return self
+        data = getattr(instance, 'dynamic_assignment_data', None) or {}
+        assignment_id = data.get(self.field.name)
+        if not assignment_id:
+            return []
+        from netbox_custom_objects.models import DynamicAssignment
+        try:
+            assignment = DynamicAssignment.objects.get(pk=assignment_id)
+        except DynamicAssignment.DoesNotExist:
+            return []
+        return assignment.get_matching_objects()
+
+
 FIELD_TYPE_CLASS = {
     CustomFieldTypeChoices.TYPE_TEXT: TextFieldType,
     CustomFieldTypeChoices.TYPE_LONGTEXT: LongTextFieldType,
@@ -2733,4 +2792,5 @@ FIELD_TYPE_CLASS = {
     CustomFieldTypeChoices.TYPE_OBJECT: ObjectFieldType,
     CustomFieldTypeChoices.TYPE_MULTIOBJECT: MultiObjectFieldType,
     CustomObjectFieldTypeChoices.TYPE_COORDINATES: CoordinatesFieldType,
+    CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT: DynamicAssignmentFieldType,
 }

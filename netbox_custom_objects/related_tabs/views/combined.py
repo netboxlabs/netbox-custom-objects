@@ -16,7 +16,8 @@ from netbox.context import current_request
 from netbox.plugins import get_plugin_config
 from netbox.registry import registry
 from netbox.tables import BaseTable
-from netbox_custom_objects.models import CustomObjectTypeField
+from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
+from netbox_custom_objects.models import CustomObjectTypeField, DynamicAssignment
 from netbox_custom_objects.utilities import restrict_to_viewable
 from utilities.htmx import htmx_partial
 from utilities.paginator import EnhancedPaginator, get_paginate_count
@@ -179,11 +180,16 @@ def _iter_linked_fields(instance):
     content_type = ContentType.objects.get_for_model(instance._meta.model)
     type_choices = [CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT]
 
+    dynamic_assignments = DynamicAssignment.get_for_object(instance)
+    dynamic_fields = CustomObjectTypeField.objects.filter(
+        type=CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT,
+    ).select_related('custom_object_type')
+
     # Fast path: the tab is registered on every public model, so this runs on every
     # detail-page render. One existence check short-circuits the two queries below
     # when nothing references this model. The predicate must mirror those two
     # querysets exactly so a False result guarantees both are empty.
-    if not CustomObjectTypeField.objects.filter(
+    if not dynamic_fields.exists() and not CustomObjectTypeField.objects.filter(
         Q(related_object_type=content_type, is_polymorphic=False)
         | Q(related_object_types=content_type, is_polymorphic=True),
         type__in=type_choices,
@@ -209,6 +215,25 @@ def _iter_linked_fields(instance):
     # One CustomObjectType can contribute several referencing fields (e.g. a
     # polymorphic and a non-polymorphic one); resolve its model once per render.
     model_cache = {}
+    for field in dynamic_fields:
+        cot_id = field.custom_object_type_id
+        model = model_cache.get(cot_id)
+        if model is None:
+            try:
+                model = field.custom_object_type.get_model()
+            except Exception:
+                logger.exception('Could not get model for CustomObjectType %s', cot_id)
+                continue
+            model_cache[cot_id] = model
+        matching_ids = [
+            obj.pk
+            for obj in model.objects.all()
+            if (getattr(obj, 'dynamic_assignment_data', None) or {}).get(field.name)
+            in set(dynamic_assignments.values_list('pk', flat=True))
+        ]
+        if matching_ids:
+            yield field, model, Q(pk__in=matching_ids)
+
     for field in list(non_poly) + list(poly):
         cot_id = field.custom_object_type_id
         model = model_cache.get(cot_id)
@@ -339,6 +364,8 @@ def _get_field_value(obj, field, user=None):
     polymorphic targets are a plain result list spanning several models, filtered
     via ``restrict_to_viewable``.
     """
+    if field.type == CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT:
+        return field.dynamic_assignment
     if field.type == CustomFieldTypeChoices.TYPE_OBJECT:
         return getattr(obj, field.name, None)
     if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:

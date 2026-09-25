@@ -726,6 +726,235 @@ def _set_with_collision_preference(result, key, value):
     result[key] = value
 
 
+class DynamicAssignment(ChangeLoggedModel):
+    """
+    A filter definition that dynamically resolves which NetBox objects a custom object
+    applies to, without storing explicit FK/M2M relations in the database.
+
+    Modelled after ConfigContext: each filter dimension is an M2M; all non-empty
+    dimensions are ANDed together.  An object matches when it satisfies every
+    non-empty dimension simultaneously.
+    """
+    name = models.CharField(
+        verbose_name=_("name"),
+        max_length=100,
+        unique=True,
+    )
+    weight = models.PositiveSmallIntegerField(
+        verbose_name=_("weight"),
+        default=1000,
+    )
+    description = models.CharField(
+        verbose_name=_("description"),
+        max_length=200,
+        blank=True,
+    )
+    is_active = models.BooleanField(
+        verbose_name=_("is active"),
+        default=True,
+    )
+    custom_field_data = models.JSONField(
+        blank=True,
+        default=dict,
+    )
+
+    def save(self, *args, **kwargs):
+        if self.custom_field_data is None:
+            self.custom_field_data = {}
+        return super().save(*args, **kwargs)
+
+    # Object types this assignment applies to (e.g. dcim.device, virtualization.virtualmachine)
+    assigned_object_types = models.ManyToManyField(
+        to="core.ObjectType",
+        related_name="dynamic_assignments",
+        verbose_name=_("assigned object types"),
+        blank=True,
+        help_text=_("The object type(s) this assignment applies to."),
+    )
+    # Filter dimensions — mirrors ConfigContext
+    regions = models.ManyToManyField(
+        to="dcim.Region", related_name="+", blank=True,
+    )
+    site_groups = models.ManyToManyField(
+        to="dcim.SiteGroup", related_name="+", blank=True,
+    )
+    sites = models.ManyToManyField(
+        to="dcim.Site", related_name="+", blank=True,
+    )
+    locations = models.ManyToManyField(
+        to="dcim.Location", related_name="+", blank=True,
+    )
+    device_types = models.ManyToManyField(
+        to="dcim.DeviceType", related_name="+", blank=True,
+    )
+    roles = models.ManyToManyField(
+        to="dcim.DeviceRole", related_name="+", blank=True,
+    )
+    platforms = models.ManyToManyField(
+        to="dcim.Platform", related_name="+", blank=True,
+    )
+    cluster_types = models.ManyToManyField(
+        to="virtualization.ClusterType", related_name="+", blank=True,
+    )
+    cluster_groups = models.ManyToManyField(
+        to="virtualization.ClusterGroup", related_name="+", blank=True,
+    )
+    clusters = models.ManyToManyField(
+        to="virtualization.Cluster", related_name="+", blank=True,
+    )
+    tenant_groups = models.ManyToManyField(
+        to="tenancy.TenantGroup", related_name="+", blank=True,
+    )
+    tenants = models.ManyToManyField(
+        to="tenancy.Tenant", related_name="+", blank=True,
+    )
+
+    class Meta:
+        ordering = ("weight", "name")
+        verbose_name = _("dynamic assignment")
+        verbose_name_plural = _("dynamic assignments")
+
+    def __str__(self):
+        return self.name
+
+    def get_absolute_url(self):
+        return reverse("plugins:netbox_custom_objects:dynamicassignment", args=[self.pk])
+
+    @classmethod
+    def get_for_object(cls, obj):
+        """
+        Return a queryset of active DynamicAssignment instances whose filter
+        dimensions all match *obj* (AND logic across every non-empty dimension).
+
+        Mirrors ConfigContext.get_for_object(): each dimension is optional; when
+        set it must match.  The object's content type must appear in
+        assigned_object_types (when that M2M is non-empty).
+
+        Supported attributes on *obj* (all optional / gracefully absent):
+          site, location, device_type, role, platform, tenant,
+          cluster (for VMs), and tags.
+        Region / site-group / tenant-group / cluster-type / cluster-group are
+        derived from the above via their parent hierarchies.
+        """
+        ct = ContentType.objects.get_for_model(obj)
+        qs = cls.objects.filter(is_active=True)
+
+        # Restrict to assignments that include this object type (or have no type filter)
+        qs = qs.filter(
+            Q(assigned_object_types__isnull=True) | Q(assigned_object_types=ct)
+        ).distinct()
+
+        # --- site / region / site_group ---
+        site = getattr(obj, "site", None) or getattr(obj, "site_id", None)
+        if site is not None and not isinstance(site, int):
+            site_id = site.pk
+        elif isinstance(site, int):
+            site_id = site
+        else:
+            site_id = None
+
+        if site_id is not None:
+            from dcim.models import Site  # noqa: PLC0415
+            try:
+                site_obj = Site.objects.get(pk=site_id)
+                # Collect ancestor region PKs
+                region_ids = []
+                r = site_obj.region
+                while r is not None:
+                    region_ids.append(r.pk)
+                    r = r.parent
+                # Collect ancestor site-group PKs
+                sg_ids = []
+                sg = site_obj.group
+                while sg is not None:
+                    sg_ids.append(sg.pk)
+                    sg = sg.parent
+                qs = qs.filter(
+                    Q(sites__isnull=True) | Q(sites=site_id)
+                ).filter(
+                    Q(regions__isnull=True) | Q(regions__in=region_ids) if region_ids else Q(regions__isnull=True)
+                ).filter(
+                    Q(site_groups__isnull=True) | Q(site_groups__in=sg_ids) if sg_ids else Q(site_groups__isnull=True)
+                )
+            except Exception:  # noqa: BLE001
+                qs = qs.filter(sites__isnull=True, regions__isnull=True, site_groups__isnull=True)
+        else:
+            qs = qs.filter(sites__isnull=True, regions__isnull=True, site_groups__isnull=True)
+
+        # --- location ---
+        location = getattr(obj, "location", None)
+        if location is not None:
+            qs = qs.filter(Q(locations__isnull=True) | Q(locations=location))
+        else:
+            qs = qs.filter(locations__isnull=True)
+
+        # --- device_type ---
+        device_type = getattr(obj, "device_type", None)
+        if device_type is not None:
+            qs = qs.filter(Q(device_types__isnull=True) | Q(device_types=device_type))
+        else:
+            qs = qs.filter(device_types__isnull=True)
+
+        # --- role ---
+        role = getattr(obj, "role", None)
+        if role is not None:
+            qs = qs.filter(Q(roles__isnull=True) | Q(roles=role))
+        else:
+            qs = qs.filter(roles__isnull=True)
+
+        # --- platform ---
+        platform = getattr(obj, "platform", None)
+        if platform is not None:
+            qs = qs.filter(Q(platforms__isnull=True) | Q(platforms=platform))
+        else:
+            qs = qs.filter(platforms__isnull=True)
+
+        # --- tenant / tenant_group ---
+        tenant = getattr(obj, "tenant", None)
+        if tenant is not None:
+            tenant_group_ids = []
+            tg = tenant.group
+            while tg is not None:
+                tenant_group_ids.append(tg.pk)
+                tg = tg.parent
+            qs = qs.filter(
+                Q(tenants__isnull=True) | Q(tenants=tenant)
+            ).filter(
+                Q(tenant_groups__isnull=True) | Q(tenant_groups__in=tenant_group_ids) if tenant_group_ids else Q(tenant_groups__isnull=True)
+            )
+        else:
+            qs = qs.filter(tenants__isnull=True, tenant_groups__isnull=True)
+
+        # --- cluster / cluster_type / cluster_group ---
+        cluster = getattr(obj, "cluster", None)
+        if cluster is not None:
+            cluster_type_ids = [cluster.type_id] if cluster.type_id else []
+            cluster_group_ids = [cluster.group_id] if cluster.group_id else []
+            qs = qs.filter(
+                Q(clusters__isnull=True) | Q(clusters=cluster)
+            ).filter(
+                Q(cluster_types__isnull=True) | Q(cluster_types__in=cluster_type_ids) if cluster_type_ids else Q(cluster_types__isnull=True)
+            ).filter(
+                Q(cluster_groups__isnull=True) | Q(cluster_groups__in=cluster_group_ids) if cluster_group_ids else Q(cluster_groups__isnull=True)
+            )
+        else:
+            qs = qs.filter(clusters__isnull=True, cluster_types__isnull=True, cluster_groups__isnull=True)
+
+        return qs.order_by("weight", "name")
+
+    def get_matching_objects(self):
+        """Return target objects matching this assignment's configured types."""
+        matching_objects = []
+        for object_type in self.assigned_object_types.all():
+            model = object_type.model_class()
+            if model is None:
+                continue
+            for obj in model.objects.all():
+                if self.pk in DynamicAssignment.get_for_object(obj).values_list('pk', flat=True):
+                    matching_objects.append(obj)
+        return sorted(matching_objects, key=str)
+
+
 class CustomObject(
     OwnerMixin,
     BookmarksMixin,
@@ -1538,6 +1767,8 @@ class CustomObjectType(NetBoxModel):
             try:
                 model_field = field_type.get_model_field(field)
             except NotImplementedError:
+                if field.type == CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT:
+                    continue
                 if field.related_object_type_id is None:
                     logger.debug(
                         "Skipping field %r (pk=%s) on COT %r: "
@@ -1570,6 +1801,9 @@ class CustomObjectType(NetBoxModel):
                 field_attrs["_primary_field_id"] = field.id
             if field.context:
                 field_attrs["_context_field_ids"].append(field.id)
+
+        if any(field.type == CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT for field in fields_query):
+            field_attrs["dynamic_assignment_data"] = models.JSONField(blank=True, default=dict)
 
         return field_attrs
 
@@ -2037,6 +2271,23 @@ class CustomObjectType(NetBoxModel):
                     fk_field.to = model
                     fk_field.__dict__.pop('path_infos', None)
                     fk_field.__dict__.pop('reverse_path_infos', None)
+
+                if 'dynamic_assignment_data' in {f.name for f in model._meta.local_fields}:
+                    schema_conn = _get_schema_connection()
+                    table_name = model._meta.db_table
+                    if table_name in schema_conn.introspection.table_names(schema_conn.cursor()):
+                        columns = {
+                            column.name
+                            for column in schema_conn.introspection.get_table_description(
+                                schema_conn.cursor(), table_name
+                            )
+                        }
+                        if 'dynamic_assignment_data' not in columns:
+                            with schema_conn.schema_editor() as schema_editor:
+                                schema_editor.add_field(
+                                    model,
+                                    model._meta.get_field('dynamic_assignment_data'),
+                                )
 
                 # Only cache fully-generated models.  Models generated with
                 # skip_object_fields=True or skip_cot_object_fields=True omit FK
@@ -2626,6 +2877,15 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         blank=True,
         null=True,
     )
+    dynamic_assignment = models.ForeignKey(
+        to="netbox_custom_objects.DynamicAssignment",
+        on_delete=models.PROTECT,
+        related_name="fields",
+        verbose_name=_("dynamic assignment"),
+        blank=True,
+        null=True,
+        help_text=_("Filter definition used to dynamically resolve matching objects (for Dynamic Assignment fields only)."),
+    )
     ui_visible = models.CharField(
         max_length=50,
         choices=CustomFieldUIVisibleChoices,
@@ -3023,6 +3283,29 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             raise ValidationError(
                 {"choice_set": _("Choices may be set only on selection fields.")}
             )
+
+        # Dynamic assignment is selected per Custom Object instance, not on the
+        # Custom Object Type field definition.
+        if self.type == CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT:
+            if self.required:
+                raise ValidationError(
+                    {"required": _("Dynamic assignment fields cannot be marked as required.")}
+                )
+            if self.unique:
+                raise ValidationError(
+                    {"unique": _("Uniqueness cannot be enforced for dynamic assignment fields.")}
+                )
+            if self.default is not None and self.default != "":
+                raise ValidationError(
+                    {"default": _("A default value cannot be set for dynamic assignment fields.")}
+                )
+            if self.primary:
+                raise ValidationError(
+                    {"primary": _("Dynamic assignment fields cannot be primary.")}
+                )
+            self.search_weight = 0
+        elif self.dynamic_assignment_id:
+            self.dynamic_assignment = None
 
         # Object fields must define an object_type; other fields must not
         if self.type in (
@@ -3804,6 +4087,14 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 ).update(next_schema_id=new_schema_id)
                 self.schema_id = new_schema_id
 
+        # Dynamic assignment is a virtual field: no DB columns to add, alter, or drop.
+        if self.type == CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT:
+            super().save(*args, **kwargs)
+            self.custom_object_type.clear_model_cache(self.custom_object_type.id)
+            self.custom_object_type.snapshot()
+            self.custom_object_type.save(update_fields=['cache_timestamp'])
+            return
+
         field_type = FIELD_TYPE_CLASS[self.type]()
         model = self.custom_object_type.get_model()
 
@@ -3998,6 +4289,13 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             transaction.on_commit(lambda: ReindexCustomObjectTypeJob.enqueue(cot_id=_cot_id))
 
     def delete(self, *args, **kwargs):
+        if self.type == CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT:
+            self.custom_object_type.clear_model_cache(self.custom_object_type.id)
+            self.custom_object_type.snapshot()
+            self.custom_object_type.save(update_fields=['cache_timestamp'])
+            super().delete(*args, **kwargs)
+            return
+
         field_type = FIELD_TYPE_CLASS[self.type]()
         model = self.custom_object_type.get_model()
         schema_conn = _get_schema_connection()

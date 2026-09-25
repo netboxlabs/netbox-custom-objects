@@ -39,13 +39,18 @@ from utilities.permissions import get_permission_for_model
 from utilities.views import ConditionalLoginRequiredMixin, ViewTab, get_viewname, register_model_view
 
 from netbox_custom_objects.filtersets import get_filterset_class
-from netbox_custom_objects.tables import CustomObjectTable, CustomObjectTypeFieldTable
+from netbox_custom_objects.tables import (
+    CustomObjectTable,
+    CustomObjectTypeFieldTable,
+    DynamicAssignmentTable,
+)
 from . import field_types, filtersets, forms, tables
-from .models import CustomObject, CustomObjectType, CustomObjectTypeField
+from .models import CustomObject, CustomObjectType, CustomObjectTypeField, DynamicAssignment
 from extras.choices import CustomFieldTypeChoices
 from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.dynamic_forms import build_filterset_form_class
+from netbox_custom_objects.templatetags.custom_object_utils import get_field_is_ui_visible
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name
 
 logger = logging.getLogger("netbox_custom_objects.views")
@@ -261,6 +266,7 @@ class CustomObjectTableMixin(TableMixin):
             field.name
             for field in model_fields
             if field.ui_visible != CustomFieldUIVisibleChoices.HIDDEN
+            and field.type != CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT
         ]
 
         meta = type(
@@ -282,6 +288,8 @@ class CustomObjectTableMixin(TableMixin):
 
         for field in model_fields:
             if field.ui_visible == CustomFieldUIVisibleChoices.HIDDEN:
+                continue
+            if field.type == CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT:
                 continue
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
             try:
@@ -631,17 +639,59 @@ class CustomObjectView(generic.ObjectView):
             "group_name", "weight", "name"
         )
 
-        # Group fields by group_name
+        # Dynamic-assignment fields are rendered as dedicated object tables below,
+        # not as scalar values in the normal attribute groups.
         field_groups = {}
+        da_fields = []
         for field in fields:
+            if field.type == CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT:
+                da_fields.append(field)
+                continue
             group_name = field.group_name or None  # Use None for ungrouped fields
             if group_name not in field_groups:
                 field_groups[group_name] = []
             field_groups[group_name].append(field)
 
+        dynamic_assignment_tables = []
+        for field in da_fields:
+            if not get_field_is_ui_visible(instance, field):
+                continue
+            matching_objects = getattr(instance, field.name, None) or []
+            # Filter objects user has permission to view
+            viewable_objects = [
+                obj for obj in matching_objects
+                if request.user.has_perm(
+                    f"{obj._meta.app_label}.view_{obj._meta.model_name}", obj
+                )
+            ]
+            if not viewable_objects:
+                continue
+
+            # Group matching viewable objects by model class
+            objects_by_model = {}
+            for obj in viewable_objects:
+                model_cls = obj._meta.model
+                if model_cls not in objects_by_model:
+                    objects_by_model[model_cls] = []
+                objects_by_model[model_cls].append(obj)
+
+            for model_cls, model_objs in objects_by_model.items():
+                table_cls = tables.get_table_for_model(model_cls)
+                table = table_cls(data=model_objs, orderable=False)
+                table.configure(request)
+                dynamic_assignment_tables.append({
+                    "field": field,
+                    "title": field.label or field.name.replace("_", " ").title(),
+                    "description": field.description,
+                    "model_verbose_name": model_cls._meta.verbose_name_plural.title(),
+                    "count": len(model_objs),
+                    "table": table,
+                })
+
         return {
             "fields": fields,
             "field_groups": field_groups,
+            "dynamic_assignment_tables": dynamic_assignment_tables,
         }
 
 
@@ -773,6 +823,8 @@ class CustomObjectEditView(generic.ObjectEditView):
                 poly_obj_raw_exclude += [f"{f.name}_content_type", f"{f.name}_object_id"]
 
         hidden_raw_exclude = _hidden_field_raw_columns(cot_fields)
+        if any(f.type == CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT for f in cot_fields):
+            hidden_raw_exclude.append('dynamic_assignment_data')
 
         meta = type(
             "Meta",
@@ -805,6 +857,7 @@ class CustomObjectEditView(generic.ObjectEditView):
             "custom_object_type_poly_obj_pairs": {},
             # Maps coordinates field name → (latitude_field_name, longitude_field_name)
             "custom_object_type_coordinates_fields": {},
+            "custom_object_type_dynamic_assignment_fields": {},
         }
 
         # Process custom object type fields (with grouping)
@@ -833,6 +886,17 @@ class CustomObjectEditView(generic.ObjectEditView):
                     attrs["custom_object_type_field_groups"][group_name] = []
                 attrs["custom_object_type_field_groups"][group_name].extend(sub_names)
                 attrs["custom_object_type_coordinates_fields"][field.name] = tuple(sub_names)
+                continue
+
+            if field.type == CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT:
+                field_name = field.name
+                attrs[field_name] = field_type.get_annotated_form_field(field)
+                attrs["custom_object_type_fields"][field_name] = field
+                attrs["custom_object_type_dynamic_assignment_fields"][field_name] = field
+                if group_name not in attrs["custom_object_type_field_groups"]:
+                    attrs["custom_object_type_field_groups"][group_name] = []
+                attrs["custom_object_type_field_groups"][group_name].append(field_name)
+                attrs["custom_object_type_rendered_names"].add(field_name)
                 continue
 
             # URL: one logical field rendered as two grouped url/title inputs. Unlike
@@ -920,6 +984,7 @@ class CustomObjectEditView(generic.ObjectEditView):
             self.custom_object_type_poly_obj_ct_names = attrs["custom_object_type_poly_obj_ct_names"]
             self.custom_object_type_poly_obj_pairs = attrs["custom_object_type_poly_obj_pairs"]
             self.custom_object_type_coordinates_fields = attrs["custom_object_type_coordinates_fields"]
+            self.custom_object_type_dynamic_assignment_fields = attrs["custom_object_type_dynamic_assignment_fields"]
             # A hidden MultiObject field has no rendered form field, so its resolved
             # default can't reach cleaned_data via kwargs['initial'] below -- custom_save
             # applies these directly on create instead. See the note in the loop above.
@@ -1012,6 +1077,14 @@ class CustomObjectEditView(generic.ObjectEditView):
             # Now call the parent __init__ with the modified kwargs
             forms.NetBoxModelForm.__init__(self, *args, **kwargs)
 
+            initial = kwargs.setdefault('initial', {})
+            assignment_data = getattr(self.instance, 'dynamic_assignment_data', None) or {}
+            for field_name in self.custom_object_type_dynamic_assignment_fields:
+                assignment_id = assignment_data.get(field_name)
+                if assignment_id and field_name not in initial:
+                    initial[field_name] = assignment_id
+                    self.initial[field_name] = assignment_id
+
             # After parent __init__, wire the object picker to the selected type.
             # This mirrors ScopedForm._set_scoped_values() in NetBox core.
             # get_field_value() reads from form.data (bound) or form.initial (unbound).
@@ -1056,6 +1129,13 @@ class CustomObjectEditView(generic.ObjectEditView):
                     setattr(instance, field_name, self.cleaned_data.get(obj_sub))
 
                 instance.save()
+
+                custom_field_data = getattr(instance, 'dynamic_assignment_data', None) or {}
+                for field_name in self.custom_object_type_dynamic_assignment_fields:
+                    assignment = self.cleaned_data.get(field_name)
+                    custom_field_data[field_name] = assignment.pk if assignment else None
+                instance.dynamic_assignment_data = custom_field_data
+                instance.save(update_fields=['dynamic_assignment_data'])
 
                 # Handle non-polymorphic M2M fields (require PK, so after save)
                 for field_name, field_obj in self.custom_object_type_fields.items():
@@ -1825,3 +1905,74 @@ class CustomObjectConfigContextView(ConditionalLoginRequiredMixin, View):
                 "tab": "configcontext",
             },
         )
+
+
+#
+# Dynamic Assignments
+#
+
+@register_model_view(DynamicAssignment, "list", path="", detail=False)
+class DynamicAssignmentListView(generic.ObjectListView):
+    queryset = DynamicAssignment.objects.all()
+    filterset = filtersets.DynamicAssignmentFilterSet
+    filterset_form = forms.DynamicAssignmentFilterForm
+    table = DynamicAssignmentTable
+
+
+@register_model_view(DynamicAssignment)
+class DynamicAssignmentView(generic.ObjectView):
+    queryset = DynamicAssignment.objects.all()
+
+    def get_extra_context(self, request, instance):
+        referencing_fields = (
+            CustomObjectTypeField.objects.restrict(request.user, "view")
+            .filter(
+                type=CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT,
+                dynamic_assignment=instance,
+            )
+            .select_related("custom_object_type")
+        )
+        dimension_specs = [
+            ("regions", _("Regions")),
+            ("site_groups", _("Site groups")),
+            ("sites", _("Sites")),
+            ("locations", _("Locations")),
+            ("device_types", _("Device types")),
+            ("roles", _("Device roles")),
+            ("platforms", _("Platforms")),
+            ("cluster_types", _("Cluster types")),
+            ("cluster_groups", _("Cluster groups")),
+            ("clusters", _("Clusters")),
+            ("tenant_groups", _("Tenant groups")),
+            ("tenants", _("Tenants")),
+        ]
+        filter_dimensions = []
+        for attr, label in dimension_specs:
+            values = list(getattr(instance, attr).all())
+            if values:
+                filter_dimensions.append((label, values))
+        return {
+            "referencing_fields": referencing_fields,
+            "assigned_object_types": instance.assigned_object_types.all(),
+            "filter_dimensions": filter_dimensions,
+        }
+
+
+@register_model_view(DynamicAssignment, "add", detail=False)
+@register_model_view(DynamicAssignment, "edit")
+class DynamicAssignmentEditView(generic.ObjectEditView):
+    queryset = DynamicAssignment.objects.all()
+    form = forms.DynamicAssignmentForm
+
+
+@register_model_view(DynamicAssignment, "delete")
+class DynamicAssignmentDeleteView(generic.ObjectDeleteView):
+    queryset = DynamicAssignment.objects.all()
+    default_return_url = "plugins:netbox_custom_objects:dynamicassignment_list"
+
+
+@register_model_view(DynamicAssignment, "bulk_delete", path="delete", detail=False)
+class DynamicAssignmentBulkDeleteView(generic.BulkDeleteView):
+    queryset = DynamicAssignment.objects.all()
+    filterset = filtersets.DynamicAssignmentFilterSet
+    table = DynamicAssignmentTable

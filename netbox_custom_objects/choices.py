@@ -10,9 +10,11 @@ class CustomObjectFieldTypeChoices(CustomFieldTypeChoices):
     """
 
     TYPE_COORDINATES = "coordinates"
+    TYPE_DYNAMIC_ASSIGNMENT = "dynamic_assignment"
 
     CHOICES = CustomFieldTypeChoices.CHOICES + (
         (TYPE_COORDINATES, _("Coordinates")),
+        (TYPE_DYNAMIC_ASSIGNMENT, _("Dynamic Assignment")),
     )
 
 

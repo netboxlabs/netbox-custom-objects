@@ -22,11 +22,12 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from netbox.api.authentication import IsAuthenticatedOrLoginNotRequired, TokenWritePermission
 from netbox.api.renderers import FormlessBrowsableAPIRenderer
 from netbox.api.viewsets import NetBoxModelViewSet
+from utilities.api import get_serializer_for_model
 
 
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.filtersets import get_filterset_class
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField, DynamicAssignment
 from netbox_custom_objects.schema.comparator import diff_document
 from netbox_custom_objects.schema.executor import (
     apply_document,
@@ -121,6 +122,114 @@ class CustomObjectTypeFieldViewSet(NetBoxModelViewSet):
     serializer_class = serializers.CustomObjectTypeFieldSerializer
 
 
+class DynamicAssignmentViewSet(NetBoxModelViewSet):
+    queryset = DynamicAssignment.objects.prefetch_related(
+        'assigned_object_types', 'regions', 'site_groups', 'sites', 'locations',
+        'device_types', 'roles', 'platforms', 'cluster_types', 'cluster_groups',
+        'clusters', 'tenant_groups', 'tenants',
+    )
+    serializer_class = serializers.DynamicAssignmentSerializer
+
+
+class DynamicCustomObjectsView(APIView):
+    """
+    Returns all custom objects that dynamically match a specific NetBox object
+    via Dynamic Assignment fields.
+
+    For each active DynamicAssignment whose filter matches the requested object,
+    every custom object whose COT has a Dynamic Assignment field pointing at that
+    DynamicAssignment is returned.
+
+    ## Query Parameters
+
+    * **`object_type`** *(required)* — target model in `app_label.model` form, e.g. `dcim.device`
+    * **`object_id`** *(required)* — primary key of the target object
+
+    ## Example Response
+
+        {
+            "count": 2,
+            "results": [
+                {
+                    "custom_object_type": {"id": 1, "name": "Maintenance Contract", "slug": "maintenance-contract"},
+                    "field_name": "covered_devices",
+                    "dynamic_assignment": {"id": 3, "name": "EMEA Core Switches"},
+                    "object": {"id": 42, "display": "Contract-2024-EMEA", ...}
+                }
+            ]
+        }
+    """
+
+    _ignore_model_permissions = True
+
+    def get(self, request, *args, **kwargs):
+        object_type_str = request.query_params.get('object_type')
+        object_id = request.query_params.get('object_id')
+
+        if not object_type_str or not object_id:
+            raise ValidationError(
+                _("Both 'object_type' and 'object_id' query parameters are required.")
+            )
+
+        try:
+            app_label, model_name = object_type_str.split('.', 1)
+        except ValueError:
+            raise ValidationError(
+                _("'object_type' must be in the format 'app_label.model'.")
+            )
+
+        try:
+            content_type = ContentType.objects.get(app_label=app_label, model=model_name)
+        except ContentType.DoesNotExist:
+            raise ValidationError(
+                _("Object type '%(object_type)s' does not exist.") % {'object_type': object_type_str}
+            )
+
+        model_class = content_type.model_class()
+        try:
+            target_obj = model_class.objects.get(pk=object_id)
+        except (model_class.DoesNotExist, ValueError):
+            raise Http404
+
+        # Find all DynamicAssignment instances whose filter matches this object
+        matching_assignments = DynamicAssignment.get_for_object(target_obj)
+        if not matching_assignments.exists():
+            return Response({'count': 0, 'results': []})
+
+        matching_ids = set(matching_assignments.values_list('pk', flat=True))
+
+        # Find all CustomObjectTypeFields of type dynamic_assignment pointing at any match
+        from netbox_custom_objects.choices import CustomObjectFieldTypeChoices  # noqa: PLC0415
+        da_fields = CustomObjectTypeField.objects.filter(
+            type=CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT,
+        ).select_related('custom_object_type', 'dynamic_assignment')
+
+        results = []
+        for field in da_fields:
+            custom_object_model = field.custom_object_type.get_model()
+            all_cos = custom_object_model.objects.restrict(request.user, 'view')
+            serializer_class = serializers.get_serializer_class(custom_object_model)
+            da_brief = {
+                'id': field.dynamic_assignment.pk,
+                'name': field.dynamic_assignment.name,
+            }
+            cot_brief = serializers.CustomObjectTypeSerializer(
+                field.custom_object_type, nested=True, context={'request': request}
+            ).data
+            for co in all_cos:
+                assignment_id = (getattr(co, 'dynamic_assignment_data', None) or {}).get(field.name)
+                if assignment_id not in matching_ids:
+                    continue
+                results.append({
+                    'custom_object_type': cot_brief,
+                    'field_name': field.name,
+                    'dynamic_assignment': da_brief,
+                    'object': serializer_class(co, context={'request': request}).data,
+                })
+
+        return Response({'count': len(results), 'results': results})
+
+
 # Schema generation cannot resolve the dynamic model without a URL slug.
 @extend_schema(exclude=True)
 class CustomObjectViewSet(NetBoxModelViewSet):
@@ -177,6 +286,61 @@ class CustomObjectViewSet(NetBoxModelViewSet):
     @property
     def filterset_class(self):
         return get_filterset_class(self.model)
+
+    def retrieve(self, request, *args, **kwargs):
+        response = super().retrieve(request, *args, **kwargs)
+        field_name = request.query_params.get('resolve')
+        if not field_name:
+            return response
+
+        try:
+            field = self.model.custom_object_type.fields.get(name=field_name)
+        except CustomObjectTypeField.DoesNotExist:
+            raise ValidationError({
+                'resolve': _("Unknown custom object field '%(field)s'.") % {'field': field_name},
+            })
+
+        from netbox_custom_objects.choices import CustomObjectFieldTypeChoices  # noqa: PLC0415
+        if field.type != CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT:
+            raise ValidationError({
+                'resolve': _("Field '%(field)s' is not a dynamic assignment field.") % {'field': field_name},
+            })
+
+        instance = self.get_object()
+        matching_objects = getattr(instance, field.name, None) or []
+        objects_by_model = {}
+        for obj in matching_objects:
+            objects_by_model.setdefault(obj._meta.model, []).append(obj.pk)
+
+        results = []
+        for model, object_ids in objects_by_model.items():
+            queryset = model.objects.filter(pk__in=object_ids)
+            if hasattr(queryset, 'restrict'):
+                queryset = queryset.restrict(request.user, 'view')
+            else:
+                queryset = [
+                    obj for obj in queryset
+                    if request.user.has_perm(f'{model._meta.app_label}.view_{model._meta.model_name}', obj)
+                ]
+
+            serializer_class = get_serializer_for_model(model)
+            for obj in queryset:
+                serialized = dict(
+                    serializer_class(obj, nested=True, context={'request': request}).data
+                )
+                serialized['object_type'] = model._meta.label_lower
+                results.append(serialized)
+
+        assignment_id = (getattr(instance, 'dynamic_assignment_data', None) or {}).get(field.name)
+        assignment = DynamicAssignment.objects.filter(pk=assignment_id).first()
+        response.data[field.name] = {
+            'dynamic_assignment': (
+                {'id': assignment.pk, 'name': assignment.name} if assignment else None
+            ),
+            'count': len(results),
+            'results': results,
+        }
+        return response
 
     def _enqueue_bulk_job(self, request, action, payload, action_kwargs=None):
         # AsyncAPIJob instantiates a fresh viewset without the URL kwargs and never calls

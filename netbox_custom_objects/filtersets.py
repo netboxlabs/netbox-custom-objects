@@ -9,18 +9,24 @@ from django.apps import apps as django_apps
 from django.db.models import QuerySet, Q
 from django.utils.dateparse import parse_date, parse_datetime
 from django.utils.timezone import make_aware, is_aware
+from django.utils.translation import gettext_lazy as _
 
+from core.models import ObjectType
+from dcim.models import DeviceRole, DeviceType, Location, Platform, Region, Site, SiteGroup
 from extras.choices import CustomFieldFilterLogicChoices, CustomFieldTypeChoices
-from netbox.filtersets import NetBoxModelFilterSet
+from netbox.filtersets import ChangeLoggedModelFilterSet, NetBoxModelFilterSet
+from tenancy.models import Tenant, TenantGroup
 from users.models import Owner, OwnerGroup
+from virtualization.models import Cluster, ClusterGroup, ClusterType
 
 from .choices import CustomObjectFieldTypeChoices
 from .constants import APP_LABEL
-from .models import CustomObjectType
+from .models import CustomObjectType, DynamicAssignment
 
 __all__ = (
     "ArrayContainsFilter",
     "CustomObjectTypeFilterSet",
+    "DynamicAssignmentFilterSet",
     "NonPolymorphicMultiObjectFilter",
     "NonPolymorphicObjectFilter",
     "NonPolymorphicObjectIdFilter",
@@ -306,6 +312,95 @@ class CustomObjectTypeFilterSet(NetBoxModelFilterSet):
             "name",
             "slug",
             "group_name",
+        )
+
+
+class DynamicAssignmentFilterSet(ChangeLoggedModelFilterSet):
+    q = django_filters.CharFilter(
+        method="search",
+        label=_("Search"),
+    )
+    assigned_object_types = django_filters.ModelMultipleChoiceFilter(
+        field_name="assigned_object_types",
+        queryset=ObjectType.objects.all(),
+        label=_("Assigned object types"),
+    )
+    region_id = django_filters.ModelMultipleChoiceFilter(
+        field_name="regions",
+        queryset=Region.objects.all(),
+        label=_("Region (ID)"),
+    )
+    site_group_id = django_filters.ModelMultipleChoiceFilter(
+        field_name="site_groups",
+        queryset=SiteGroup.objects.all(),
+        label=_("Site group (ID)"),
+    )
+    site_id = django_filters.ModelMultipleChoiceFilter(
+        field_name="sites",
+        queryset=Site.objects.all(),
+        label=_("Site (ID)"),
+    )
+    location_id = django_filters.ModelMultipleChoiceFilter(
+        field_name="locations",
+        queryset=Location.objects.all(),
+        label=_("Location (ID)"),
+    )
+    device_type_id = django_filters.ModelMultipleChoiceFilter(
+        field_name="device_types",
+        queryset=DeviceType.objects.all(),
+        label=_("Device type (ID)"),
+    )
+    role_id = django_filters.ModelMultipleChoiceFilter(
+        field_name="roles",
+        queryset=DeviceRole.objects.all(),
+        label=_("Device role (ID)"),
+    )
+    platform_id = django_filters.ModelMultipleChoiceFilter(
+        field_name="platforms",
+        queryset=Platform.objects.all(),
+        label=_("Platform (ID)"),
+    )
+    cluster_type_id = django_filters.ModelMultipleChoiceFilter(
+        field_name="cluster_types",
+        queryset=ClusterType.objects.all(),
+        label=_("Cluster type (ID)"),
+    )
+    cluster_group_id = django_filters.ModelMultipleChoiceFilter(
+        field_name="cluster_groups",
+        queryset=ClusterGroup.objects.all(),
+        label=_("Cluster group (ID)"),
+    )
+    cluster_id = django_filters.ModelMultipleChoiceFilter(
+        field_name="clusters",
+        queryset=Cluster.objects.all(),
+        label=_("Cluster (ID)"),
+    )
+    tenant_group_id = django_filters.ModelMultipleChoiceFilter(
+        field_name="tenant_groups",
+        queryset=TenantGroup.objects.all(),
+        label=_("Tenant group (ID)"),
+    )
+    tenant_id = django_filters.ModelMultipleChoiceFilter(
+        field_name="tenants",
+        queryset=Tenant.objects.all(),
+        label=_("Tenant (ID)"),
+    )
+
+    class Meta:
+        model = DynamicAssignment
+        fields = (
+            "id",
+            "name",
+            "weight",
+            "description",
+            "is_active",
+        )
+
+    def search(self, queryset, name, value):
+        if not value.strip():
+            return queryset
+        return queryset.filter(
+            Q(name__icontains=value) | Q(description__icontains=value)
         )
 
 

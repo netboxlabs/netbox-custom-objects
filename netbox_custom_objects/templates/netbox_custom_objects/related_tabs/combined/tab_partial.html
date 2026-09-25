@@ -64,7 +64,13 @@
                             {% endif %}
                             {% if 'value' in selected_columns %}
                                 <td>
-                                    {% if field.type == 'object' %}
+                                    {% if field.type == 'dynamic_assignment' %}
+                                        {% if value %}
+                                            <a href="{{ value.get_absolute_url }}">{{ value }}</a>
+                                        {% else %}
+                                            &mdash;
+                                        {% endif %}
+                                    {% elif field.type == 'object' %}
                                         {% if value %}
                                             <a href="{{ value.get_absolute_url }}">{{ value }}</a>
                                         {% else %}

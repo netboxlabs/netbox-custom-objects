@@ -212,6 +212,24 @@
       {% endfor %}
     </div>
   </div>
+  {% if dynamic_assignment_tables %}
+    {% for item in dynamic_assignment_tables %}
+      <div class="row mb-3">
+        <div class="col col-md-12">
+          <div class="card">
+            <h5 class="card-header">
+              <i class="mdi mdi-table text-secondary me-1"></i>
+              {{ item.title }} &mdash; {{ item.model_verbose_name }}
+              <span class="badge bg-secondary rounded-pill ms-1">{{ item.count }}</span>
+            </h5>
+            <div class="card-body table-responsive p-0">
+              {% render_table item.table %}
+            </div>
+          </div>
+        </div>
+      </div>
+    {% endfor %}
+  {% endif %}
   <div class="row mb-3">
     <div class="col col-md-12">
       {% plugin_full_width_page object %}

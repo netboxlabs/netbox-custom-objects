@@ -1,0 +1,8 @@
+.git
+.github
+.claude
+.venv
+__pycache__
+*.pyc
+docs
+docs_models

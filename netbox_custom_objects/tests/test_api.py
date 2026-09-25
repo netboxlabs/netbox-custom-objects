@@ -16,7 +16,7 @@ from utilities.testing import TestCase as NetBoxTestCase, create_test_user
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField, DynamicAssignment
 from .base import CustomObjectsTestCase, create_token
 from core.models import Job, ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Rack, Site
@@ -1073,6 +1073,73 @@ class SchemaGenerationTest(CustomObjectsTestCase, TestCase):
     def test_api_schema_generates_without_error(self):
         response = self.client.get(reverse('schema'))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+
+class DynamicAssignmentResolveAPITest(CustomObjectsTestCase, TestCase):
+    """Dynamic assignments are resolved only when explicitly requested."""
+
+    def setUp(self):
+        super().setUp()
+        self.user.is_superuser = True
+        self.user.save()
+        self.client = APIClient()
+        self.client.credentials(HTTP_AUTHORIZATION=f'Token {create_token(self.user)}')
+
+        self.cot = self.create_simple_custom_object_type(
+            name='MaintenanceContract',
+            slug='maintenance-contracts',
+        )
+        self.assignment = DynamicAssignment.objects.create(name='Assigned devices')
+        self.assignment.assigned_object_types.add(self.get_device_object_type())
+        self.field = self.create_custom_object_type_field(
+            self.cot,
+            name='assigned_devices',
+            label='Assigned Devices',
+            type='dynamic_assignment',
+        )
+
+        manufacturer = Manufacturer.objects.create(name='Resolve Manufacturer', slug='resolve-manufacturer')
+        device_type = DeviceType.objects.create(
+            manufacturer=manufacturer, model='Resolve Type', slug='resolve-type'
+        )
+        role = DeviceRole.objects.create(name='Resolve Role', slug='resolve-role')
+        site = Site.objects.create(name='Resolve Site', slug='resolve-site')
+        self.assignment.sites.add(site)
+        self.device = Device.objects.create(
+            name='resolved-device', site=site, device_type=device_type, role=role
+        )
+
+        self.model = self.cot.get_model()
+        self.instance = self.model.objects.create(
+            name='Contract 1',
+            dynamic_assignment_data={'assigned_devices': self.assignment.pk},
+        )
+        self.url = reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-detail',
+            kwargs={'custom_object_type': self.cot.slug, 'pk': self.instance.pk},
+        )
+
+    def test_default_response_omits_dynamic_assignment(self):
+        response = self.client.get(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertNotIn('assigned_devices', response.data)
+
+    def test_resolve_returns_matching_objects(self):
+        response = self.client.get(self.url, {'resolve': 'assigned_devices'})
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        resolved = response.data['assigned_devices']
+        self.assertEqual(resolved['dynamic_assignment']['id'], self.assignment.pk)
+        self.assertEqual(resolved['count'], 1)
+        self.assertEqual(resolved['results'][0]['id'], self.device.pk)
+        self.assertEqual(resolved['results'][0]['object_type'], 'dcim.device')
+
+    def test_resolve_rejects_non_dynamic_field(self):
+        response = self.client.get(self.url, {'resolve': 'name'})
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+        self.assertIn('resolve', response.data)
 
 
 class CustomObjectTypeFieldObjectResolutionTest(CustomObjectsTestCase, TestCase):

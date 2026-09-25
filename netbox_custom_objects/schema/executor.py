@@ -77,6 +77,10 @@ class UnknownObjectTypeError(Exception):
     """Raised when a related_object_type referenced in the schema does not exist."""
 
 
+class UnknownDynamicAssignmentError(Exception):
+    """Raised when a dynamic assignment referenced in the schema does not exist."""
+
+
 class UnknownFieldTypeError(Exception):
     """Raised when a field type string in the schema has no matching DB choice."""
 
@@ -320,7 +324,7 @@ def _apply_field_alter(cot, fc) -> None:
     """
     field = (
         cot.fields
-        .select_related("choice_set", "related_object_type")
+        .select_related("choice_set", "related_object_type", "dynamic_assignment")
         .get(schema_id=fc.schema_id)
     )
 

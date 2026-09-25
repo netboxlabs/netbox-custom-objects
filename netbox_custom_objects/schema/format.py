@@ -11,7 +11,7 @@ Format version history
 "1"  Initial version (introduced alongside schema_id / deprecated field support).
 """
 
-from extras.choices import CustomFieldTypeChoices
+from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
 
 # ── Format version ──────────────────────────────────────────────────────────
 # Bump this only when the format itself changes in a breaking way.
@@ -34,23 +34,25 @@ FIELD_TYPE_SELECT = "select"
 FIELD_TYPE_MULTISELECT = "multiselect"
 FIELD_TYPE_OBJECT = "object"
 FIELD_TYPE_MULTIOBJECT = "multiobject"
+FIELD_TYPE_DYNAMIC_ASSIGNMENT = "dynamic_assignment"
 
 # Mapping from CustomFieldTypeChoices values to schema type names.
 # Used by the exporter; the importer uses the inverse.
 CHOICES_TO_SCHEMA_TYPE = {
-    CustomFieldTypeChoices.TYPE_TEXT: FIELD_TYPE_TEXT,
-    CustomFieldTypeChoices.TYPE_LONGTEXT: FIELD_TYPE_LONGTEXT,
-    CustomFieldTypeChoices.TYPE_INTEGER: FIELD_TYPE_INTEGER,
-    CustomFieldTypeChoices.TYPE_DECIMAL: FIELD_TYPE_DECIMAL,
-    CustomFieldTypeChoices.TYPE_BOOLEAN: FIELD_TYPE_BOOLEAN,
-    CustomFieldTypeChoices.TYPE_DATE: FIELD_TYPE_DATE,
-    CustomFieldTypeChoices.TYPE_DATETIME: FIELD_TYPE_DATETIME,
-    CustomFieldTypeChoices.TYPE_URL: FIELD_TYPE_URL,
-    CustomFieldTypeChoices.TYPE_JSON: FIELD_TYPE_JSON,
-    CustomFieldTypeChoices.TYPE_SELECT: FIELD_TYPE_SELECT,
-    CustomFieldTypeChoices.TYPE_MULTISELECT: FIELD_TYPE_MULTISELECT,
-    CustomFieldTypeChoices.TYPE_OBJECT: FIELD_TYPE_OBJECT,
-    CustomFieldTypeChoices.TYPE_MULTIOBJECT: FIELD_TYPE_MULTIOBJECT,
+    CustomObjectFieldTypeChoices.TYPE_TEXT: FIELD_TYPE_TEXT,
+    CustomObjectFieldTypeChoices.TYPE_LONGTEXT: FIELD_TYPE_LONGTEXT,
+    CustomObjectFieldTypeChoices.TYPE_INTEGER: FIELD_TYPE_INTEGER,
+    CustomObjectFieldTypeChoices.TYPE_DECIMAL: FIELD_TYPE_DECIMAL,
+    CustomObjectFieldTypeChoices.TYPE_BOOLEAN: FIELD_TYPE_BOOLEAN,
+    CustomObjectFieldTypeChoices.TYPE_DATE: FIELD_TYPE_DATE,
+    CustomObjectFieldTypeChoices.TYPE_DATETIME: FIELD_TYPE_DATETIME,
+    CustomObjectFieldTypeChoices.TYPE_URL: FIELD_TYPE_URL,
+    CustomObjectFieldTypeChoices.TYPE_JSON: FIELD_TYPE_JSON,
+    CustomObjectFieldTypeChoices.TYPE_SELECT: FIELD_TYPE_SELECT,
+    CustomObjectFieldTypeChoices.TYPE_MULTISELECT: FIELD_TYPE_MULTISELECT,
+    CustomObjectFieldTypeChoices.TYPE_OBJECT: FIELD_TYPE_OBJECT,
+    CustomObjectFieldTypeChoices.TYPE_MULTIOBJECT: FIELD_TYPE_MULTIOBJECT,
+    CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT: FIELD_TYPE_DYNAMIC_ASSIGNMENT,
 }
 
 SCHEMA_TYPE_TO_CHOICES = {v: k for k, v in CHOICES_TO_SCHEMA_TYPE.items()}
@@ -112,6 +114,7 @@ FIELD_TYPE_ATTRS = {
         "is_polymorphic", "related_object_type", "related_object_types", "related_object_filter", "on_delete_behavior"
     },
     FIELD_TYPE_MULTIOBJECT: {"is_polymorphic", "related_object_type", "related_object_types", "related_object_filter"},
+    FIELD_TYPE_DYNAMIC_ASSIGNMENT: set(),
 }
 
 # ── Field base attributes ─────────────────────────────────────────────────────

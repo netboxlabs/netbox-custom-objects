@@ -45,7 +45,8 @@
         "select",
         "multiselect",
         "object",
-        "multiobject"
+        "multiobject",
+        "dynamic_assignment"
       ]
     },
 
@@ -257,6 +258,23 @@
       ]
     },
 
+    "dynamic_assignment_field": {
+      "unevaluatedProperties": false,
+      "allOf": [
+        { "$ref": "#/$defs/field_base" },
+        {
+          "properties": {
+            "type": { "const": "dynamic_assignment" },
+            "primary": { "const": false },
+            "required": { "const": false },
+            "unique": { "const": false },
+            "search_weight": { "const": 0 },
+            "default": { "const": null }
+          }
+        }
+      ]
+    },
+
     "simple_field": {
       "unevaluatedProperties": false,
       "allOf": [
@@ -281,6 +299,7 @@
         { "$ref": "#/$defs/multiselect_field" },
         { "$ref": "#/$defs/object_field" },
         { "$ref": "#/$defs/multiobject_field" },
+        { "$ref": "#/$defs/dynamic_assignment_field" },
         { "$ref": "#/$defs/simple_field" }
       ],
       "discriminator": {
