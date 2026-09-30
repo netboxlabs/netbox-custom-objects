@@ -380,3 +380,18 @@ Vary: Accept
 | Custom Object | `/api/plugins/custom-objects/<slug>/<id>/` |
 
 Standard NetBox filter parameters (e.g. `q=`, `tag=`, `created__gte=`) work against the list endpoints. Each Custom Object Type also exposes filters for every defined field — see the OpenAPI schema at `/api/schema/swagger-ui/` for the full list of filters available on a given type.
+
+The Custom Object Type and Custom Object Type Field list endpoints accept filters for their own attributes, for example `?slug=dhcp_scope` or `?name=hostname`. Fields can also be filtered by the type they belong to (`?custom_object_type_id=9` or `?custom_object_type=dhcp_scope`) and by field type (`?type=integer`).
+
+## Bulk Operations
+
+All three list endpoints accept bulk writes, the same as NetBox core endpoints. Send a list of objects, each identifying its target by `id`:
+
+| Method | Body | Effect |
+|--------|------|--------|
+| `POST` | `[{...}, {...}]` | Create several objects |
+| `PATCH` | `[{"id": 1, "description": "new"}, ...]` | Partially update each listed object |
+| `PUT` | `[{"id": 1, ...all fields...}, ...]` | Fully update each listed object |
+| `DELETE` | `[{"id": 1}, {"id": 2}]` | Delete each listed object |
+
+Each request is applied atomically: if any listed object cannot be created, updated, or deleted, none of them are changed. Deleting a Custom Object Type drops its database table along with every object of that type.
