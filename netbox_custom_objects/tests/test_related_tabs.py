@@ -175,6 +175,8 @@ class RegisterTabsAppInitWarningTests(TestCase):
                 list(ObjectType.objects.public())
 
     def test_register_tabs_suppresses_app_init_warning(self):
+        # Runs the real register_tabs(); safe to repeat because URL injection and
+        # tab registration both skip entries that already exist.
         with patch.object(apps, 'ready', False), warnings.catch_warnings():
             warnings.simplefilter('error', RuntimeWarning)
             self.app_config._register_tabs()
