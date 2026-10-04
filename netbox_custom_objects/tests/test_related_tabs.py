@@ -13,7 +13,7 @@ Focused on the surfaces most likely to regress:
 * ``register_combined_tabs()`` adds a ``custom_objects`` view to NetBox's view
   registry for each model, idempotently.
 * ``_register_tabs()`` doesn't emit Django's "database access during app
-  initialization" RuntimeWarning when run from ``ready()`` (#740).
+  initialization" RuntimeWarning when run from ``ready()``.
 * ``_count_linked_custom_objects()`` returns None for a model nothing references
   (the cheap ``.exists()`` fast path that keeps the per-detail-page badge cheap)
   and a positive count for a referenced one.
@@ -160,7 +160,7 @@ class RegisterTabsAppInitWarningTests(TestCase):
     """
     ``_register_tabs()`` runs from ``ready()``, before ``apps.ready`` is set, and
     queries ObjectType; it must suppress Django's RuntimeWarning about database
-    access during app initialization (#740).
+    access during app initialization.
     """
 
     def setUp(self):
