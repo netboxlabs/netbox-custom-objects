@@ -12,15 +12,19 @@ Focused on the surfaces most likely to regress:
   own app (custom-object hosts are served by the generic injected URL).
 * ``register_combined_tabs()`` adds a ``custom_objects`` view to NetBox's view
   registry for each model, idempotently.
+* ``_register_tabs()`` doesn't emit Django's "database access during app
+  initialization" RuntimeWarning when run from ``ready()`` (#740).
 * ``_count_linked_custom_objects()`` returns None for a model nothing references
   (the cheap ``.exists()`` fast path that keeps the per-detail-page badge cheap)
   and a positive count for a referenced one.
 """
 
+import warnings
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from core.models import ObjectType
+from django.apps import apps
 from django.db.models import Q
 from django.test import TestCase, TransactionTestCase
 from extras.choices import CustomFieldTypeChoices
@@ -150,6 +154,31 @@ class RegisterCombinedTabsTests(TestCase):
         register_combined_tabs([Site], COMBINED_LABEL, COMBINED_WEIGHT)
         register_combined_tabs([Site], COMBINED_LABEL, COMBINED_WEIGHT)
         self.assertEqual(self._site_tab_names().count('custom_objects'), 1)
+
+
+class RegisterTabsAppInitWarningTests(TestCase):
+    """
+    ``_register_tabs()`` runs from ``ready()``, before ``apps.ready`` is set, and
+    queries ObjectType; it must suppress Django's RuntimeWarning about database
+    access during app initialization (#740).
+    """
+
+    def setUp(self):
+        self.app_config = apps.get_app_config(APP_LABEL)
+        self.addCleanup(setattr, self.app_config, '_register_tabs_error', self.app_config._register_tabs_error)
+
+    def test_query_warns_during_app_init(self):
+        # Sanity check: the simulated app-init state does trigger the warning.
+        with patch.object(apps, 'ready', False), warnings.catch_warnings():
+            warnings.simplefilter('error', RuntimeWarning)
+            with self.assertRaises(RuntimeWarning):
+                list(ObjectType.objects.public())
+
+    def test_register_tabs_suppresses_app_init_warning(self):
+        with patch.object(apps, 'ready', False), warnings.catch_warnings():
+            warnings.simplefilter('error', RuntimeWarning)
+            self.app_config._register_tabs()
+        self.assertIsNone(self.app_config._register_tabs_error)
 
 
 class BadgeGateTests(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
