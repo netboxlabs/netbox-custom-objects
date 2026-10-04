@@ -80,6 +80,54 @@ query {
 > type — it is the value of the type's primary field. `name` exists only if the
 > type defines a custom field literally named `name`.
 
+## Filtering a list
+
+`<name>_list` takes a `filters:` argument, the same way NetBox's own list
+queries do, so filtering happens on the server:
+
+```graphql
+query {
+  custom_objects_server_list(
+    filters: {
+      name: {i_starts_with: "web"}
+      cpu_count: {gte: 4}
+      primary_site: {slug: {exact: "dc1"}}
+    }
+  ) {
+    id
+    name
+  }
+}
+```
+
+Filters can be combined with `AND`, `OR` and `NOT`, and `DISTINCT: true` removes
+duplicate rows (useful when filtering on a multi-object field). Every type can be
+filtered on `id`, `tags`, `journal_entries`, `created` and `last_updated` (plus
+`local_context_data` when config context is enabled). Each custom field adds a
+filter based on its type:
+
+| Custom field type | Filter | Example |
+|-------------------|--------|---------|
+| text, long text, URL, select | String lookups | `name: {i_contains: "web"}` |
+| integer, decimal | Comparison lookups | `cpu_count: {range: {start: 2, end: 8}}` |
+| boolean | `exact` / `is_null` | `active: {exact: true}` |
+| date, datetime | Comparison and date-part lookups | `purchased: {year: {exact: 2026}}` |
+| JSON | Path lookup | `data: {path: "env", lookup: {string_lookup: {exact: "prod"}}}` |
+| multi-select | Array lookups | `roles: {overlap: ["edge", "core"]}` |
+| object | The target's own filter, plus `<field>_id` | `primary_site_id: 7` |
+| multi-object | The target's own filter | `interfaces: {name: {exact: "eth0"}}` |
+
+Object and multi-object fields nest the target type's own filter, whether the
+target is a NetBox model (`primary_site: {region: {slug: {exact: "emea"}}}`) or
+another Custom Object Type. Multi-object fields that point at a Custom Object Type
+also take `filters:` on the field itself, to filter the related objects returned.
+
+Where Custom Object Types reference each other in a cycle (for example a type
+with a `parent` field pointing at itself), the field that closes the cycle has no
+nested filter; an object field there can still be filtered with `<field>_id`.
+Polymorphic object and multi-object fields, and coordinates fields, can't be
+filtered in GraphQL yet.
+
 ## Querying a single object
 
 ```graphql
