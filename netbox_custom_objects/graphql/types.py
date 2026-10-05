@@ -40,6 +40,11 @@ from strawberry.types import Info
 from users.graphql.mixins import OwnerMixin
 
 from netbox_custom_objects.constants import APP_LABEL
+from netbox_custom_objects.graphql.filters import (
+    build_filter_class,
+    relationship_filter_annotations,
+    scalar_filter_annotation,
+)
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name, restrict_to_viewable
 
 logger = logging.getLogger("netbox_custom_objects.graphql")
@@ -396,7 +401,7 @@ def _coerce_related(obj, native_models):
     return _related_repr(obj)
 
 
-def _make_relationship_resolver(field):
+def _make_relationship_resolver(field, members, native_models):
     """
     Build the field value for an OBJECT or MULTIOBJECT relationship field.
 
@@ -407,14 +412,14 @@ def _make_relationship_resolver(field):
     :func:`_make_declarative_multiobject_field`), in which case
     ``class_annotation`` is the type annotation the caller must set on the
     class instead. ``(None, None)`` means the field has no resolvable
-    targets and should be skipped. The resolver-based value returns the
+    targets and should be skipped. ``members``/``native_models`` come from
+    :func:`_resolve_relationship_members`. The resolver-based value returns the
     referenced object(s) as their native GraphQL type(s) (or the flat stub
     for targets without one), filtered to those the requesting user may view.
     """
     field_name = field.name
     is_list = field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
 
-    members, native_models = _resolve_relationship_members(field)
     if not members:
         return None, None
 
@@ -608,16 +613,26 @@ def _build_object_type(custom_object_type, model):
         "__annotations__": {},
     }
 
+    filter_annotations = {}
     cot_fields = list(custom_object_type.fields.all())
     for field in cot_fields:
         field_name = field.name
         if field.type in RELATIONSHIP_TYPES:
-            value, class_annotation = _make_relationship_resolver(field)
+            members, native_models = _resolve_relationship_members(field)
+            value, class_annotation = _make_relationship_resolver(field, members, native_models)
             if value is not None:
                 namespace[field_name] = value
                 if class_annotation is not None:
                     namespace["__annotations__"][field_name] = class_annotation
+                for name, annotation in relationship_filter_annotations(field, members).items():
+                    # A "<field>_id" filter must not override a custom field of that name.
+                    filter_annotations.setdefault(name, annotation)
             continue
+
+        scalar_filter = scalar_filter_annotation(field)
+        if scalar_filter is not None:
+            filter_annotations[field_name] = scalar_filter
+
         if field.type in CHOICE_TYPES:
             namespace[field_name] = _make_choice_resolver(field)
             continue
@@ -648,5 +663,6 @@ def _build_object_type(custom_object_type, model):
         model,
         name=type_name,
         fields=fields,
+        filters=build_filter_class(model, filter_annotations),
         pagination=True,
     )(cls)

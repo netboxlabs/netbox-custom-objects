@@ -27,7 +27,7 @@ from rest_framework.test import APIClient
 
 from core.models import ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Region, Site
-from extras.models import JournalEntry
+from extras.models import JournalEntry, Tag
 from users.models import ObjectPermission, Owner
 
 from netbox_custom_objects.graphql import live as live_module
@@ -413,10 +413,9 @@ class GraphQLSignalRegistrationTestCase(TestCase):
         self._assert_evict_handler_not_registered()
 
 
-@override_settings(LOGIN_REQUIRED=True)
-class GraphQLEndpointTestCase(CustomObjectsTestCase, TestCase):
+class GraphQLEndpointMixin:
     """
-    End-to-end tests against the real ``/graphql/`` HTTP endpoint.
+    Drive the real ``/graphql/`` HTTP endpoint.
 
     Patches the startup guard off so the live schema is built and bound to the
     (monkey-patched) GraphQL view per request, and authenticates with a token —
@@ -457,6 +456,14 @@ class GraphQLEndpointTestCase(CustomObjectsTestCase, TestCase):
         self.assertNotIn("errors", payload, msg=str(payload.get("errors")))
         return payload["data"]
 
+    def _make_site(self, name="Site", slug="site", region=None):
+        return Site.objects.create(name=name, slug=slug, region=region)
+
+
+@override_settings(LOGIN_REQUIRED=True)
+class GraphQLEndpointTestCase(GraphQLEndpointMixin, CustomObjectsTestCase, TestCase):
+    """End-to-end tests against the real ``/graphql/`` HTTP endpoint."""
+
     def _make_device(self, name="dev1"):
         manufacturer, _ = Manufacturer.objects.get_or_create(name="Mfr", slug="mfr")
         device_type, _ = DeviceType.objects.get_or_create(
@@ -467,9 +474,6 @@ class GraphQLEndpointTestCase(CustomObjectsTestCase, TestCase):
         return Device.objects.create(
             name=name, device_type=device_type, role=role, site=site
         )
-
-    def _make_site(self, name="Site", slug="site", region=None):
-        return Site.objects.create(name=name, slug=slug, region=region)
 
     def _site_object_field_type(self, name="Server", slug="server"):
         """A COT with a primary text field and a single-object field → Site."""
@@ -941,6 +945,280 @@ class GraphQLEndpointTestCase(CustomObjectsTestCase, TestCase):
         payload = json.loads(response.content)
         self.assertIn("errors", payload)
         self.assertIn("local_context_data", payload["errors"][0]["message"])
+
+
+@override_settings(LOGIN_REQUIRED=True)
+class GraphQLFilterTestCase(GraphQLEndpointMixin, CustomObjectsTestCase, TestCase):
+    """Server-side ``filters:`` on custom object list queries."""
+
+    def _names(self, list_field, filters):
+        data = self._gql(f"{{ {list_field}(filters: {filters}) {{ name }} }}")
+        return sorted(row["name"] for row in data[list_field])
+
+    def test_scalar_field_filters(self):
+        cot = self.create_custom_object_type(name="Asset", slug="asset")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        self.create_custom_object_type_field(cot, name="count", label="Count", type="integer")
+        self.create_custom_object_type_field(cot, name="price", label="Price", type="decimal")
+        self.create_custom_object_type_field(cot, name="active", label="Active", type="boolean")
+        self.create_custom_object_type_field(cot, name="bought", label="Bought", type="date")
+        self.create_custom_object_type_field(cot, name="seen", label="Seen", type="datetime")
+        self.create_custom_object_type_field(cot, name="notes", label="Notes", type="longtext")
+        self.create_custom_object_type_field(cot, name="link", label="Link", type="url")
+        model = cot.get_model()
+        model.objects.create(
+            name="Alpha", count=1, price=decimal.Decimal("1.50"), active=True,
+            bought="2026-01-15", seen="2026-01-15T10:00:00Z",
+            notes="Rack 4, top shelf", link="https://example.com/alpha",
+        )
+        model.objects.create(
+            name="Beta", count=5, price=decimal.Decimal("9.99"), active=False,
+            bought="2026-06-01", seen="2026-06-01T10:00:00Z",
+            notes="Spare", link="https://example.org/beta",
+        )
+        model.objects.create(name="Gamma", count=10)
+
+        field = "custom_objects_asset_list"
+        self.assertEqual(self._names(field, '{name: {i_contains: "ET"}}'), ["Beta"])
+        self.assertEqual(self._names(field, '{count: {gte: 5}}'), ["Beta", "Gamma"])
+        self.assertEqual(self._names(field, '{count: {range: {start: 2, end: 6}}}'), ["Beta"])
+        self.assertEqual(self._names(field, '{price: {lt: "5"}}'), ["Alpha"])
+        self.assertEqual(self._names(field, '{active: {exact: false}}'), ["Beta"])
+        self.assertEqual(self._names(field, '{active: {is_null: true}}'), ["Gamma"])
+        self.assertEqual(self._names(field, '{bought: {gte: "2026-03-01"}}'), ["Beta"])
+        self.assertEqual(self._names(field, '{bought: {year: {exact: 2026}}}'), ["Alpha", "Beta"])
+        self.assertEqual(self._names(field, '{seen: {lt: "2026-03-01T00:00:00Z"}}'), ["Alpha"])
+        self.assertEqual(self._names(field, '{notes: {i_contains: "shelf"}}'), ["Alpha"])
+        self.assertEqual(self._names(field, '{link: {ends_with: ".org/beta"}}'), ["Beta"])
+
+    def test_choice_field_filters(self):
+        cot = self.create_custom_object_type(name="Box", slug="box")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        choice_set = self.create_choice_set()
+        self.create_custom_object_type_field(
+            cot, name="status", label="Status", type="select", choice_set=choice_set,
+        )
+        self.create_custom_object_type_field(
+            cot, name="labels", label="Labels", type="multiselect", choice_set=choice_set,
+        )
+        model = cot.get_model()
+        model.objects.create(name="A", status="choice1", labels=["choice1", "choice2"])
+        model.objects.create(name="B", status="choice2", labels=["choice3"])
+
+        field = "custom_objects_box_list"
+        self.assertEqual(self._names(field, '{status: {exact: "choice2"}}'), ["B"])
+        self.assertEqual(self._names(field, '{status: {in_list: ["choice1", "choice2"]}}'), ["A", "B"])
+        self.assertEqual(self._names(field, '{labels: {contains: ["choice2"]}}'), ["A"])
+        self.assertEqual(self._names(field, '{labels: {overlap: ["choice2", "choice3"]}}'), ["A", "B"])
+
+    def test_integer_filter_beyond_32_bits(self):
+        cot = self.create_custom_object_type(name="Counter", slug="counter")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        self.create_custom_object_type_field(cot, name="total", label="Total", type="integer")
+        model = cot.get_model()
+        model.objects.create(name="small", total=1)
+        model.objects.create(name="big", total=2147483648)
+
+        field = "custom_objects_counter_list"
+        self.assertEqual(self._names(field, '{total: {exact: 2147483648}}'), ["big"])
+        self.assertEqual(self._names(field, '{total: {gt: 2147483647}}'), ["big"])
+
+    def test_field_named_like_a_lookup(self):
+        """Fields named like strawberry-django lookups (in_list, is_null, ...) filter on themselves."""
+        cot = self.create_custom_object_type(name="Alias", slug="alias")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        self.create_custom_object_type_field(cot, name="in_list", label="In list", type="text")
+        self.create_custom_object_type_field(cot, name="is_null", label="Is null", type="integer")
+        model = cot.get_model()
+        model.objects.create(name="a1", in_list="example", is_null=1)
+        model.objects.create(name="a2", in_list="other", is_null=2)
+
+        field = "custom_objects_alias_list"
+        self.assertEqual(self._names(field, '{in_list: {exact: "example"}}'), ["a1"])
+        self.assertEqual(self._names(field, '{is_null: {gte: 2}}'), ["a2"])
+        self.assertEqual(self._names(field, '{in_list: {i_contains: "OTH"}, OR: {is_null: {exact: 1}}}'), [
+            "a1", "a2",
+        ])
+
+    def test_json_field_filter(self):
+        cot = self.create_custom_object_type(name="Config", slug="config")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        self.create_custom_object_type_field(cot, name="data", label="Data", type="json")
+        model = cot.get_model()
+        model.objects.create(name="c1", data={"env": "prod", "replicas": 3})
+        model.objects.create(name="c2", data={"env": "dev", "replicas": 1})
+
+        field = "custom_objects_config_list"
+        self.assertEqual(
+            self._names(field, '{data: {path: "env", lookup: {string_lookup: {exact: "prod"}}}}'), ["c1"]
+        )
+        self.assertEqual(
+            self._names(field, '{data: {path: "replicas", lookup: {int_comparison_lookup: {lt: 2}}}}'), ["c2"]
+        )
+
+    def test_base_filters_and_logical_operators(self):
+        cot = self.create_custom_object_type(name="Thing", slug="thing")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        model = cot.get_model()
+        first = model.objects.create(name="One")
+        second = model.objects.create(name="Two")
+        model.objects.create(name="Three")
+        tag = Tag.objects.create(name="Gold", slug="gold")
+        second.tags.add(tag)
+
+        field = "custom_objects_thing_list"
+        self.assertEqual(
+            self._names(field, f'{{id: {{in_list: ["{first.pk}", "{second.pk}"]}}}}'), ["One", "Two"]
+        )
+        self.assertEqual(self._names(field, '{tags: {slug: {exact: "gold"}}}'), ["Two"])
+        self.assertEqual(
+            self._names(field, '{name: {exact: "One"}, OR: {name: {exact: "Three"}}}'), ["One", "Three"]
+        )
+        self.assertEqual(self._names(field, '{NOT: {name: {exact: "One"}}}'), ["Three", "Two"])
+
+    def test_object_field_filters(self):
+        cot = self.create_custom_object_type(name="Server", slug="server")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        self.create_custom_object_type_field(
+            cot, name="site", label="Site", type="object",
+            related_object_type=self.get_site_object_type(),
+        )
+        site_a = self._make_site(name="Site A", slug="site-a")
+        site_b = self._make_site(name="Site B", slug="site-b")
+        model = cot.get_model()
+        model.objects.create(name="s1", site=site_a)
+        model.objects.create(name="s2", site=site_b)
+        model.objects.create(name="s3")
+
+        field = "custom_objects_server_list"
+        self.assertEqual(self._names(field, f'{{site_id: "{site_b.pk}"}}'), ["s2"])
+        self.assertEqual(self._names(field, '{site: {slug: {exact: "site-a"}}}'), ["s1"])
+        self.assertEqual(self._names(field, f'{{site: {{id: {{in_list: ["{site_a.pk}", "{site_b.pk}"]}}}}}}'), [
+            "s1", "s2",
+        ])
+
+    def test_multiobject_field_filters(self):
+        cot = self.create_custom_object_type(name="Rack Group", slug="rack-group")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        self.create_custom_object_type_field(
+            cot, name="sites", label="Sites", type="multiobject",
+            related_object_type=self.get_site_object_type(),
+        )
+        site_a = self._make_site(name="Site A", slug="site-a")
+        site_b = self._make_site(name="Site B", slug="site-b")
+        model = cot.get_model()
+        model.objects.create(name="g1").sites.set([site_a, site_b])
+        model.objects.create(name="g2").sites.set([site_b])
+        model.objects.create(name="g3")
+
+        field = "custom_objects_rack_group_list"
+        self.assertEqual(self._names(field, '{sites: {slug: {exact: "site-a"}}}'), ["g1"])
+        both_sites = f'{{sites: {{id: {{in_list: ["{site_a.pk}", "{site_b.pk}"]}}}}, DISTINCT: true}}'
+        self.assertEqual(self._names(field, both_sites), ["g1", "g2"])
+
+    def test_custom_object_relationship_filters(self):
+        """Fields targeting another custom object type nest that type's own filter."""
+        vendor = self.create_custom_object_type(name="Vendor", slug="vendor")
+        self.create_custom_object_type_field(
+            vendor, name="name", label="Name", type="text", primary=True, required=True
+        )
+        self.create_custom_object_type_field(vendor, name="tier", label="Tier", type="integer")
+        vendor_object_type = ObjectType.objects.get_for_model(vendor.get_model())
+
+        product = self.create_custom_object_type(name="Product", slug="product")
+        self.create_custom_object_type_field(
+            product, name="name", label="Name", type="text", primary=True, required=True
+        )
+        self.create_custom_object_type_field(
+            product, name="vendor", label="Vendor", type="object", related_object_type=vendor_object_type,
+        )
+        self.create_custom_object_type_field(
+            product, name="resellers", label="Resellers", type="multiobject",
+            related_object_type=vendor_object_type,
+        )
+        # Source model first, then the refreshed target, so both share one target class.
+        product_model = product.get_model()
+        vendor.refresh_from_db()
+        vendor_model = vendor.get_model()
+        acme = vendor_model.objects.create(name="Acme", tier=1)
+        globex = vendor_model.objects.create(name="Globex", tier=2)
+        p1 = product_model.objects.create(name="p1", vendor=acme)
+        p1.resellers.set([globex])
+        p2 = product_model.objects.create(name="p2", vendor=globex)
+        p2.resellers.set([acme, globex])
+
+        field = "custom_objects_product_list"
+        self.assertEqual(self._names(field, '{vendor: {tier: {exact: 2}}}'), ["p2"])
+        self.assertEqual(self._names(field, f'{{vendor_id: "{acme.pk}"}}'), ["p1"])
+        self.assertEqual(self._names(field, '{resellers: {name: {exact: "Acme"}}}'), ["p2"])
+
+        # The multi-object field's own list now takes filters too.
+        data = self._gql(
+            '{ custom_objects_product_list(filters: {name: {exact: "p2"}}) '
+            '{ resellers(filters: {tier: {exact: 1}}) { name } } }'
+        )
+        self.assertEqual(data[field][0]["resellers"], [{"name": "Acme"}])
+
+    def test_self_referential_object_field_filter(self):
+        """The edge closing a relationship cycle has no nested filter, only "<field>_id"."""
+        cot = self.create_custom_object_type(name="Node", slug="node")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        model = cot.get_model()
+        self.create_custom_object_type_field(
+            cot, name="parent", label="Parent", type="object",
+            related_object_type=ObjectType.objects.get_for_model(model),
+        )
+        model = cot.get_model()
+        root = model.objects.create(name="root")
+        model.objects.create(name="child", parent=root)
+
+        self.assertEqual(self._names("custom_objects_node_list", f'{{parent_id: "{root.pk}"}}'), ["child"])
+
+        data = self._gql('{ __type(name: "Table%sModelFilter") { inputFields { name } } }' % cot.pk)
+        names = {f["name"] for f in data["__type"]["inputFields"]}
+        self.assertIn("parent_id", names)
+        self.assertNotIn("parent", names)
+
+    def test_polymorphic_and_coordinates_fields_have_no_filter(self):
+        cot = self.create_custom_object_type(name="Link", slug="link")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        self.create_polymorphic_field(
+            cot, [self.get_site_object_type(), self.get_device_object_type()], name="target", type="object",
+        )
+        self.create_polymorphic_field(
+            cot, [self.get_site_object_type(), self.get_device_object_type()], name="targets", type="multiobject",
+        )
+        self.create_custom_object_type_field(cot, name="location", label="Location", type="coordinates")
+        cot.get_model()
+
+        data = self._gql(
+            '{ __type(name: "Table%sModelFilter") { inputFields { name } } }' % cot.pk
+        )
+        names = {f["name"] for f in data["__type"]["inputFields"]}
+        self.assertIn("name", names)
+        self.assertIn("tags", names)
+        for excluded in ("target", "target_id", "targets", "location"):
+            self.assertNotIn(excluded, names)
 
 
 @override_settings(LOGIN_REQUIRED=True)
