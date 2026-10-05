@@ -31,7 +31,7 @@ from typing import Annotated, List, Optional, Union
 import strawberry
 import strawberry_django
 from core.graphql.mixins import ChangelogMixin
-from extras.choices import CustomFieldTypeChoices
+from extras.choices import CustomFieldFilterLogicChoices, CustomFieldTypeChoices
 from extras.graphql.mixins import JournalEntriesMixin, TagsMixin
 from extras.models import ConfigContextModel
 from netbox.graphql.scalars import BigInt
@@ -617,6 +617,8 @@ def _build_object_type(custom_object_type, model):
     cot_fields = list(custom_object_type.fields.all())
     for field in cot_fields:
         field_name = field.name
+        # Fields with filtering disabled get no filter, as in the REST filterset.
+        filterable = field.filter_logic != CustomFieldFilterLogicChoices.FILTER_DISABLED
         if field.type in RELATIONSHIP_TYPES:
             members, native_models = _resolve_relationship_members(field)
             value, class_annotation = _make_relationship_resolver(field, members, native_models)
@@ -624,12 +626,13 @@ def _build_object_type(custom_object_type, model):
                 namespace[field_name] = value
                 if class_annotation is not None:
                     namespace["__annotations__"][field_name] = class_annotation
-                for name, annotation in relationship_filter_annotations(field, members).items():
-                    # A "<field>_id" filter must not override a custom field of that name.
-                    filter_annotations.setdefault(name, annotation)
+                if filterable:
+                    for name, annotation in relationship_filter_annotations(field, members).items():
+                        # A "<field>_id" filter must not override a custom field of that name.
+                        filter_annotations.setdefault(name, annotation)
             continue
 
-        scalar_filter = scalar_filter_annotation(field)
+        scalar_filter = scalar_filter_annotation(field) if filterable else None
         if scalar_filter is not None:
             filter_annotations[field_name] = scalar_filter
 

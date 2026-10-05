@@ -1197,6 +1197,37 @@ class GraphQLFilterTestCase(GraphQLEndpointMixin, CustomObjectsTestCase, TestCas
         self.assertIn("parent_id", names)
         self.assertNotIn("parent", names)
 
+    def test_fields_with_filtering_disabled_have_no_filter(self):
+        cot = self.create_custom_object_type(name="Server", slug="server")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        self.create_custom_object_type_field(
+            cot, name="serial", label="Serial", type="text", filter_logic="disabled",
+        )
+        self.create_custom_object_type_field(
+            cot, name="site", label="Site", type="object",
+            related_object_type=self.get_site_object_type(), filter_logic="disabled",
+        )
+        model = cot.get_model()
+        model.objects.create(name="s1", serial="ABC")
+
+        data = self._gql('{ __type(name: "Table%sModelFilter") { inputFields { name } } }' % cot.pk)
+        names = {f["name"] for f in data["__type"]["inputFields"]}
+        self.assertIn("name", names)
+        for excluded in ("serial", "site", "site_id"):
+            self.assertNotIn(excluded, names)
+
+        response = self.client.post(
+            self.url,
+            data={"query": '{ custom_objects_server_list(filters: {serial: {exact: "ABC"}}) { name } }'},
+            format="json",
+            **self.header,
+        )
+        payload = json.loads(response.content)
+        self.assertIn("errors", payload)
+        self.assertIn("serial", payload["errors"][0]["message"])
+
     def test_polymorphic_and_coordinates_fields_have_no_filter(self):
         cot = self.create_custom_object_type(name="Link", slug="link")
         self.create_custom_object_type_field(

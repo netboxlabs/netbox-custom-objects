@@ -127,6 +127,9 @@ For single-object relationships, use `<field>_id` instead.
 Polymorphic object and multi-object fields, and coordinates fields, can't be
 filtered in GraphQL yet.
 
+A field whose **Filter logic** is set to **Disabled** has no filter, as in the
+REST API.
+
 ## Querying a single object
 
 ```graphql
