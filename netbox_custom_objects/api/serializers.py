@@ -7,6 +7,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
 from django.urls import NoReverseMatch
 from django.utils.translation import gettext_lazy as _
+from drf_spectacular.utils import extend_schema_field
 from extras.choices import CustomFieldTypeChoices
 from extras.models import ConfigContextModel
 from netbox.api.fields import ChoiceField as NetBoxChoiceField
@@ -20,7 +21,7 @@ from users.api.serializers_.owners import OwnerSerializer
 
 from netbox_custom_objects import constants, field_types
 from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
-from netbox_custom_objects.models import (CustomObject, CustomObjectType,
+from netbox_custom_objects.models import (ConfigContextRenderer, CustomObject, CustomObjectType,
                                           CustomObjectTypeField)
 
 # Public URL slug used in API paths (e.g. /api/plugins/custom-objects/)
@@ -515,11 +516,16 @@ def get_serializer_class(model, skip_object_fields=False):
     if not has_owner_field_conflict:
         base_fields.insert(3, "owner")
 
-    # Expose local_context_data when the type opted in to config context support
-    # (the generated model mixes in ConfigContextModel via
-    # CustomObjectConfigContextMixin).
-    if issubclass(model, ConfigContextModel):
+    # Expose local_context_data and the rendered config_context when the type opted
+    # in to config context support (the generated model mixes in ConfigContextModel
+    # via CustomObjectConfigContextMixin).  A custom field named "config_context"
+    # takes precedence over the rendered context, as with "owner" above.
+    has_config_context = issubclass(model, ConfigContextModel)
+    expose_config_context = has_config_context and not any(f.name == "config_context" for f in model_fields)
+    if has_config_context:
         base_fields.append("local_context_data")
+    if expose_config_context:
+        base_fields.append("config_context")
 
     # Include _context field when the model has designated context fields
     has_context_fields = bool(getattr(model, '_context_field_ids', []))
@@ -600,6 +606,12 @@ def get_serializer_class(model, skip_object_fields=False):
         for f in model_fields
         if f.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES
     ]
+
+    @extend_schema_field(serializers.JSONField(allow_null=True))
+    def get_config_context(self, obj):
+        """Rendered config context, sharing source-context lookups across a response."""
+        renderer = self.context.setdefault("_config_context_renderer", ConfigContextRenderer())
+        return renderer.render(obj)
 
     def get__context(self, obj):
         """Return context field values as a nested display object for APISelect secondary text."""
@@ -805,6 +817,10 @@ def get_serializer_class(model, skip_object_fields=False):
     if has_context_fields:
         attrs["_context"] = serializers.SerializerMethodField()
         attrs["get__context"] = get__context
+
+    if expose_config_context:
+        attrs["config_context"] = serializers.SerializerMethodField(read_only=True)
+        attrs["get_config_context"] = get_config_context
 
     for field in model_fields:
         # Coordinates fields have no column literally named field.name (only the

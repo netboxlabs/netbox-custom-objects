@@ -505,6 +505,38 @@ def _make_declarative_multiobject_field(field, gql_type):
     return value, List[gql_type]
 
 
+def _make_config_context_field(cot_fields):
+    """
+    Build the ``config_context`` field: the object's rendered config context.
+
+    One ``ConfigContextRenderer`` is shared per request so objects with the same
+    dimension objects and tags reuse each other's source contexts.  The hints load
+    what rendering reads -- ``local_context_data``, the dimension objects and tags --
+    with the list query instead of once per object.
+    """
+    from netbox_custom_objects.models import config_context_dimension_fields
+
+    dimension_fields = list(config_context_dimension_fields(cot_fields))
+
+    def resolver(self, info: Info) -> strawberry.scalars.JSON:
+        from netbox_custom_objects.models import ConfigContextRenderer
+
+        request = getattr(info.context, "request", None)
+        renderer = getattr(request, "_custom_objects_config_context_renderer", None)
+        if renderer is None:
+            renderer = ConfigContextRenderer()
+            if request is not None:
+                request._custom_objects_config_context_renderer = renderer
+        return renderer.render(self)
+
+    return strawberry_django.field(
+        description="Rendered config context",
+        only=["local_context_data"],
+        select_related=dimension_fields,
+        prefetch_related=["tags"],
+    )(resolver)
+
+
 CHOICE_TYPES = (
     CustomFieldTypeChoices.TYPE_SELECT,
     CustomFieldTypeChoices.TYPE_MULTISELECT,
@@ -647,6 +679,11 @@ def _build_object_type(custom_object_type, model):
             continue
         # Every custom field is nullable at the database level.
         namespace["__annotations__"][field_name] = Optional[annotation]
+
+    # A custom field named "config_context" takes precedence over the rendered context.
+    if issubclass(model, ConfigContextModel) and "config_context" not in namespace["__annotations__"] \
+            and "config_context" not in namespace:
+        namespace["config_context"] = _make_config_context_field(cot_fields)
 
     # Legacy schemas may define a custom "owner" field that shadows the inherited FK.
     bases = (CustomObjectObjectType,)

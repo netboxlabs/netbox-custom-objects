@@ -148,6 +148,7 @@ Each generated type exposes:
 | `display` | The object's display string (its primary field value). |
 | `created` / `last_updated` | Change-logging timestamps. |
 | `tags` | The object's tags. |
+| `local_context_data` / `config_context` | With config context support enabled: the local context data, and the rendered context (read-only). A custom field named `config_context` takes its place. |
 | One field per custom field | Named exactly as the field's `name`. |
 
 ### Scalar field types
