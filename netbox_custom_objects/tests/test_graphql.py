@@ -965,14 +965,18 @@ class GraphQLFilterTestCase(GraphQLEndpointMixin, CustomObjectsTestCase, TestCas
         self.create_custom_object_type_field(cot, name="active", label="Active", type="boolean")
         self.create_custom_object_type_field(cot, name="bought", label="Bought", type="date")
         self.create_custom_object_type_field(cot, name="seen", label="Seen", type="datetime")
+        self.create_custom_object_type_field(cot, name="notes", label="Notes", type="longtext")
+        self.create_custom_object_type_field(cot, name="link", label="Link", type="url")
         model = cot.get_model()
         model.objects.create(
             name="Alpha", count=1, price=decimal.Decimal("1.50"), active=True,
             bought="2026-01-15", seen="2026-01-15T10:00:00Z",
+            notes="Rack 4, top shelf", link="https://example.com/alpha",
         )
         model.objects.create(
             name="Beta", count=5, price=decimal.Decimal("9.99"), active=False,
             bought="2026-06-01", seen="2026-06-01T10:00:00Z",
+            notes="Spare", link="https://example.org/beta",
         )
         model.objects.create(name="Gamma", count=10)
 
@@ -986,6 +990,8 @@ class GraphQLFilterTestCase(GraphQLEndpointMixin, CustomObjectsTestCase, TestCas
         self.assertEqual(self._names(field, '{bought: {gte: "2026-03-01"}}'), ["Beta"])
         self.assertEqual(self._names(field, '{bought: {year: {exact: 2026}}}'), ["Alpha", "Beta"])
         self.assertEqual(self._names(field, '{seen: {lt: "2026-03-01T00:00:00Z"}}'), ["Alpha"])
+        self.assertEqual(self._names(field, '{notes: {i_contains: "shelf"}}'), ["Alpha"])
+        self.assertEqual(self._names(field, '{link: {ends_with: ".org/beta"}}'), ["Beta"])
 
     def test_choice_field_filters(self):
         cot = self.create_custom_object_type(name="Box", slug="box")
@@ -1138,7 +1144,7 @@ class GraphQLFilterTestCase(GraphQLEndpointMixin, CustomObjectsTestCase, TestCas
         self.assertEqual(data[field][0]["resellers"], [{"name": "Acme"}])
 
     def test_self_referential_object_field_filter(self):
-        """A relationship cycle still gets the "<field>_id" filter."""
+        """The edge closing a relationship cycle has no nested filter, only "<field>_id"."""
         cot = self.create_custom_object_type(name="Node", slug="node")
         self.create_custom_object_type_field(
             cot, name="name", label="Name", type="text", primary=True, required=True
@@ -1153,6 +1159,11 @@ class GraphQLFilterTestCase(GraphQLEndpointMixin, CustomObjectsTestCase, TestCas
         model.objects.create(name="child", parent=root)
 
         self.assertEqual(self._names("custom_objects_node_list", f'{{parent_id: "{root.pk}"}}'), ["child"])
+
+        data = self._gql('{ __type(name: "Table%sModelFilter") { inputFields { name } } }' % cot.pk)
+        names = {f["name"] for f in data["__type"]["inputFields"]}
+        self.assertIn("parent_id", names)
+        self.assertNotIn("parent", names)
 
     def test_polymorphic_and_coordinates_fields_have_no_filter(self):
         cot = self.create_custom_object_type(name="Link", slug="link")

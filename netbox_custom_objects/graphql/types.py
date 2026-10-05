@@ -624,9 +624,9 @@ def _build_object_type(custom_object_type, model):
                 namespace[field_name] = value
                 if class_annotation is not None:
                     namespace["__annotations__"][field_name] = class_annotation
-            for name, annotation in relationship_filter_annotations(field, members).items():
-                # A "<field>_id" filter must not override a custom field of that name.
-                filter_annotations.setdefault(name, annotation)
+                for name, annotation in relationship_filter_annotations(field, members).items():
+                    # A "<field>_id" filter must not override a custom field of that name.
+                    filter_annotations.setdefault(name, annotation)
             continue
 
         scalar_filter = scalar_filter_annotation(field)
