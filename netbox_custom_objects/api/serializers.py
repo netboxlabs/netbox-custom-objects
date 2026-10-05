@@ -610,8 +610,9 @@ def get_serializer_class(model, skip_object_fields=False):
     @extend_schema_field(serializers.JSONField(allow_null=True))
     def get_config_context(self, obj):
         """Rendered config context, sharing source-context lookups across a response."""
-        renderer = self.context.setdefault("_config_context_renderer", ConfigContextRenderer())
-        return renderer.render(obj)
+        if "_config_context_renderer" not in self.context:
+            self.context["_config_context_renderer"] = ConfigContextRenderer()
+        return self.context["_config_context_renderer"].render(obj)
 
     def get__context(self, obj):
         """Return context field values as a nested display object for APISelect secondary text."""
