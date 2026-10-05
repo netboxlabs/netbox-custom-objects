@@ -1209,13 +1209,17 @@ class GraphQLFilterTestCase(GraphQLEndpointMixin, CustomObjectsTestCase, TestCas
             cot, name="site", label="Site", type="object",
             related_object_type=self.get_site_object_type(), filter_logic="disabled",
         )
+        self.create_custom_object_type_field(
+            cot, name="sites", label="Sites", type="multiobject",
+            related_object_type=self.get_site_object_type(), filter_logic="disabled",
+        )
         model = cot.get_model()
         model.objects.create(name="s1", serial="ABC")
 
         data = self._gql('{ __type(name: "Table%sModelFilter") { inputFields { name } } }' % cot.pk)
         names = {f["name"] for f in data["__type"]["inputFields"]}
         self.assertIn("name", names)
-        for excluded in ("serial", "site", "site_id"):
+        for excluded in ("serial", "site", "site_id", "sites"):
             self.assertNotIn(excluded, names)
 
         response = self.client.post(
@@ -1226,7 +1230,7 @@ class GraphQLFilterTestCase(GraphQLEndpointMixin, CustomObjectsTestCase, TestCas
         )
         payload = json.loads(response.content)
         self.assertIn("errors", payload)
-        self.assertIn("serial", payload["errors"][0]["message"])
+        self.assertIn("serial", " ".join(error["message"] for error in payload["errors"]))
 
     def test_polymorphic_and_coordinates_fields_have_no_filter(self):
         cot = self.create_custom_object_type(name="Link", slug="link")
