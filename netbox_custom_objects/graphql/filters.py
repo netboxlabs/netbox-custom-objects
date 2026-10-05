@@ -43,9 +43,12 @@ from strawberry_django.utils.typing import get_django_definition
 try:
     from strawberry_django import StrFilterLookup
 except ImportError:
-    # COMPAT(netbox<4.6): strawberry-django < 0.84 doesn't export StrFilterLookup
-    # at the top level.
-    from strawberry_django.fields.filter_types import StrFilterLookup
+    # COMPAT(netbox<4.6): strawberry-django < 0.84 doesn't export StrFilterLookup.
+    # Use FilterLookup[str] as core does there: its own StrFilterLookup class would
+    # clash with the "StrFilterLookup" name strawberry gives FilterLookup[str].
+    from strawberry_django import FilterLookup
+
+    StrFilterLookup = FilterLookup
 
 logger = logging.getLogger("netbox_custom_objects.graphql")
 
