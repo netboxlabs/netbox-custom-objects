@@ -999,6 +999,19 @@ class GraphQLEndpointTestCase(GraphQLEndpointMixin, CustomObjectsTestCase, TestC
         data = self._gql("{ custom_objects_cc_list { config_context } }")
         self.assertEqual(data["custom_objects_cc_list"][0]["config_context"], "custom value")
 
+    def test_unexposed_custom_field_named_config_context_still_takes_precedence(self):
+        """A coordinates field has no GraphQL representation but still claims the name, as in REST."""
+        self._config_context_type(extra_fields=[
+            {"name": "config_context", "label": "Config context", "type": "coordinates"},
+        ])
+
+        response = self.client.post(
+            self.url, data={"query": "{ custom_objects_cc_list { config_context } }"}, format="json", **self.header,
+        )
+        payload = json.loads(response.content)
+        self.assertIn("errors", payload)
+        self.assertIn("config_context", payload["errors"][0]["message"])
+
     def test_config_context_query_count_stays_flat(self):
         site = self._make_site()
         ConfigContext.objects.create(name="site", weight=100, data={"ntp": "10.0.0.1"}).sites.add(site)

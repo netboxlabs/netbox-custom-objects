@@ -680,9 +680,9 @@ def _build_object_type(custom_object_type, model):
         # Every custom field is nullable at the database level.
         namespace["__annotations__"][field_name] = Optional[annotation]
 
-    # A custom field named "config_context" takes precedence over the rendered context.
-    if issubclass(model, ConfigContextModel) and "config_context" not in namespace["__annotations__"] \
-            and "config_context" not in namespace:
+    # A custom field named "config_context" takes precedence over the rendered context,
+    # even one GraphQL can't expose, matching the REST serializer.
+    if issubclass(model, ConfigContextModel) and not any(field.name == "config_context" for field in cot_fields):
         namespace["config_context"] = _make_config_context_field(cot_fields)
 
     # Legacy schemas may define a custom "owner" field that shadows the inherited FK.
