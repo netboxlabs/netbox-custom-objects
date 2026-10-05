@@ -295,7 +295,7 @@ class CustomObjectsPluginConfig(PluginConfig):
     name = "netbox_custom_objects"
     verbose_name = "Custom Objects"
     description = "A plugin to manage custom objects in NetBox"
-    version = "0.7.0"
+    version = "0.7.0+supra.tablabel"
     author = 'Netbox Labs'
     author_email = 'support@netboxlabs.com'
     base_url = "custom-objects"
@@ -308,6 +308,9 @@ class CustomObjectsPluginConfig(PluginConfig):
         # Max related objects shown per row in the combined tab's Value column
         # for a multi-object field before the rest are truncated to an ellipsis.
         'max_multiobject_display': 3,
+        # Label of the combined related-objects tab rendered on model detail
+        # pages. Falls back to "Custom Objects" when unset or blank.
+        'tab_label': 'Custom Objects',
     }
     required_settings = []
 

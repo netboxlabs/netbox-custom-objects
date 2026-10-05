@@ -1,5 +1,7 @@
 import logging
 
+from django.conf import settings
+
 from netbox_custom_objects.constants import APP_LABEL
 
 from .views.combined import COMBINED_LABEL, COMBINED_WEIGHT, make_co_combined_view, register_combined_tabs
@@ -97,6 +99,21 @@ def _public_host_model_classes():
     return result
 
 
+def resolve_tab_label():
+    """
+    Return the configured label for the combined related-objects tab.
+
+    Reads ``PLUGINS_CONFIG['netbox_custom_objects']['tab_label']`` (exposed as
+    the plugin's ``tab_label`` default setting) and falls back to the built-in
+    ``COMBINED_LABEL`` when unset or blank, so deployments can rename the tab
+    (e.g. to match a dominant object type) without code changes.
+    """
+    configured = settings.PLUGINS_CONFIG.get(APP_LABEL, {}).get('tab_label')
+    if isinstance(configured, str) and configured.strip():
+        return configured
+    return COMBINED_LABEL
+
+
 def register_tabs():
     """
     Register the combined "Custom Objects" tab.
@@ -131,7 +148,7 @@ def register_tabs():
         # custom-object host pages — including CustomObjectTypes created later
         # (CO→CO references).
         _inject_co_urls()
-        register_combined_tabs(_public_host_model_classes(), COMBINED_LABEL, COMBINED_WEIGHT)
+        register_combined_tabs(_public_host_model_classes(), resolve_tab_label(), COMBINED_WEIGHT)
     finally:
         # Always drop URL-resolver caches once we've mutated urlpatterns / the
         # view registry — even if model enumeration raised partway through.  A

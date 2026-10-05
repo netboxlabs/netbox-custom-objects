@@ -22,7 +22,7 @@ from unittest.mock import patch
 
 from core.models import ObjectType
 from django.db.models import Q
-from django.test import TestCase, TransactionTestCase
+from django.test import TestCase, TransactionTestCase, override_settings
 from extras.choices import CustomFieldTypeChoices
 from netbox.registry import registry
 
@@ -30,7 +30,10 @@ from dcim.models import Site
 from ipam.models import VRF
 
 from netbox_custom_objects.constants import APP_LABEL
-from netbox_custom_objects.related_tabs.registry import _public_host_model_classes
+from netbox_custom_objects.related_tabs.registry import (
+    _public_host_model_classes,
+    resolve_tab_label,
+)
 from netbox_custom_objects.related_tabs.views.combined import (
     COMBINED_LABEL,
     COMBINED_WEIGHT,
@@ -434,3 +437,27 @@ class CombinedTabQueryTests(TransactionCleanupMixin, CustomObjectsTestCase, Tran
                 {s.pk for s in resolved[(id(obj), id(field))]},
                 {target_a.pk, target_b.pk},
             )
+
+
+class ResolveTabLabelTest(TestCase):
+    """
+    resolve_tab_label() maps the ``tab_label`` plugin setting to the combined
+    tab's label, falling back to the built-in COMBINED_LABEL when unset, blank,
+    or not a string.
+    """
+
+    def test_falls_back_when_unset(self):
+        with override_settings(PLUGINS_CONFIG={APP_LABEL: {}}):
+            self.assertEqual(resolve_tab_label(), COMBINED_LABEL)
+
+    def test_uses_configured_label(self):
+        with override_settings(PLUGINS_CONFIG={APP_LABEL: {'tab_label': 'Attachments'}}):
+            self.assertEqual(resolve_tab_label(), 'Attachments')
+
+    def test_blank_falls_back(self):
+        with override_settings(PLUGINS_CONFIG={APP_LABEL: {'tab_label': '   '}}):
+            self.assertEqual(resolve_tab_label(), COMBINED_LABEL)
+
+    def test_non_string_falls_back(self):
+        with override_settings(PLUGINS_CONFIG={APP_LABEL: {'tab_label': 42}}):
+            self.assertEqual(resolve_tab_label(), COMBINED_LABEL)
