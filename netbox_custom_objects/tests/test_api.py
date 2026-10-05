@@ -2961,7 +2961,8 @@ class OpenAPISchemaTest(TestCase):
         self.assertEqual(set(paths[detail_path]) - {'parameters'}, {'get', 'put', 'patch', 'delete'})
 
         for path in (list_path, detail_path):
-            for operation in paths[path].values():
+            # Skip a path-level "parameters" list, if present.
+            for operation in (op for op in paths[path].values() if isinstance(op, dict)):
                 slug = [p for p in operation['parameters'] if p['name'] == 'custom_object_type']
                 self.assertEqual(len(slug), 1)
                 self.assertEqual(slug[0]['in'], 'path')
@@ -2977,6 +2978,15 @@ class OpenAPISchemaTest(TestCase):
         self.assertEqual(
             set(response['properties']), {'id', 'url', 'display', 'owner', 'tags', 'created', 'last_updated'}
         )
-        for name in ('CustomObjectRequest', 'PatchedCustomObjectRequest', 'BulkCustomObjectRequest'):
+        for name in ('CustomObjectRequest', 'PatchedCustomObjectRequest'):
             self.assertTrue(components[name]['additionalProperties'], name)
-        self.assertEqual(components['BulkCustomObjectRequest']['required'], ['id'])
+
+        # Follow the bulk operations' references: NetBox versions without dedicated
+        # bulk-update components reference CustomObjectRequest instead.
+        list_path = self.schema['paths']['/api/plugins/custom-objects/{custom_object_type}/']
+        for method in ('put', 'patch'):
+            body = list_path[method]['requestBody']['content']['application/json']['schema']
+            name = body['items']['$ref'].rsplit('/', 1)[-1]
+            self.assertTrue(components[name]['additionalProperties'], name)
+            if 'Bulk' in name:
+                self.assertEqual(components[name]['required'], ['id'])
