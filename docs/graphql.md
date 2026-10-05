@@ -122,9 +122,8 @@ target is a NetBox model (`primary_site: {region: {slug: {exact: "emea"}}}`) or
 another Custom Object Type. Multi-object fields that point at a Custom Object Type
 also take `filters:` on the field itself, to filter the related objects returned.
 
-Where Custom Object Types reference each other in a cycle (for example a type
-with a `parent` field pointing at itself), the field that closes the cycle has no
-nested filter; an object field there can still be filtered with `<field>_id`.
+Nested filters are unavailable for relationships that close a reference cycle.
+For single-object relationships, use `<field>_id` instead.
 Polymorphic object and multi-object fields, and coordinates fields, can't be
 filtered in GraphQL yet.
 

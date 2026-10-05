@@ -1015,6 +1015,39 @@ class GraphQLFilterTestCase(GraphQLEndpointMixin, CustomObjectsTestCase, TestCas
         self.assertEqual(self._names(field, '{labels: {contains: ["choice2"]}}'), ["A"])
         self.assertEqual(self._names(field, '{labels: {overlap: ["choice2", "choice3"]}}'), ["A", "B"])
 
+    def test_integer_filter_beyond_32_bits(self):
+        cot = self.create_custom_object_type(name="Counter", slug="counter")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        self.create_custom_object_type_field(cot, name="total", label="Total", type="integer")
+        model = cot.get_model()
+        model.objects.create(name="small", total=1)
+        model.objects.create(name="big", total=2147483648)
+
+        field = "custom_objects_counter_list"
+        self.assertEqual(self._names(field, '{total: {exact: 2147483648}}'), ["big"])
+        self.assertEqual(self._names(field, '{total: {gt: 2147483647}}'), ["big"])
+
+    def test_field_named_like_a_lookup(self):
+        """Fields named like strawberry-django lookups (in_list, is_null, ...) filter on themselves."""
+        cot = self.create_custom_object_type(name="Alias", slug="alias")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        self.create_custom_object_type_field(cot, name="in_list", label="In list", type="text")
+        self.create_custom_object_type_field(cot, name="is_null", label="Is null", type="integer")
+        model = cot.get_model()
+        model.objects.create(name="a1", in_list="example", is_null=1)
+        model.objects.create(name="a2", in_list="other", is_null=2)
+
+        field = "custom_objects_alias_list"
+        self.assertEqual(self._names(field, '{in_list: {exact: "example"}}'), ["a1"])
+        self.assertEqual(self._names(field, '{is_null: {gte: 2}}'), ["a2"])
+        self.assertEqual(self._names(field, '{in_list: {i_contains: "OTH"}, OR: {is_null: {exact: 1}}}'), [
+            "a1", "a2",
+        ])
+
     def test_json_field_filter(self):
         cot = self.create_custom_object_type(name="Config", slug="config")
         self.create_custom_object_type_field(
@@ -1096,9 +1129,8 @@ class GraphQLFilterTestCase(GraphQLEndpointMixin, CustomObjectsTestCase, TestCas
 
         field = "custom_objects_rack_group_list"
         self.assertEqual(self._names(field, '{sites: {slug: {exact: "site-a"}}}'), ["g1"])
-        self.assertEqual(
-            self._names(field, f'{{sites: {{id: {{exact: "{site_b.pk}"}}}}, DISTINCT: true}}'), ["g1", "g2"]
-        )
+        both_sites = f'{{sites: {{id: {{in_list: ["{site_a.pk}", "{site_b.pk}"]}}}}, DISTINCT: true}}'
+        self.assertEqual(self._names(field, both_sites), ["g1", "g2"])
 
     def test_custom_object_relationship_filters(self):
         """Fields targeting another custom object type nest that type's own filter."""
@@ -1173,6 +1205,10 @@ class GraphQLFilterTestCase(GraphQLEndpointMixin, CustomObjectsTestCase, TestCas
         self.create_polymorphic_field(
             cot, [self.get_site_object_type(), self.get_device_object_type()], name="target", type="object",
         )
+        self.create_polymorphic_field(
+            cot, [self.get_site_object_type(), self.get_device_object_type()], name="targets", type="multiobject",
+        )
+        self.create_custom_object_type_field(cot, name="location", label="Location", type="coordinates")
         cot.get_model()
 
         data = self._gql(
@@ -1181,8 +1217,8 @@ class GraphQLFilterTestCase(GraphQLEndpointMixin, CustomObjectsTestCase, TestCas
         names = {f["name"] for f in data["__type"]["inputFields"]}
         self.assertIn("name", names)
         self.assertIn("tags", names)
-        self.assertNotIn("target", names)
-        self.assertNotIn("target_id", names)
+        for excluded in ("target", "target_id", "targets", "location"):
+            self.assertNotIn(excluded, names)
 
 
 @override_settings(LOGIN_REQUIRED=True)
