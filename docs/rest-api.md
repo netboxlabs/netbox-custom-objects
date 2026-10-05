@@ -334,6 +334,22 @@ Example response:
 }
 ```
 
+## OpenAPI schema
+
+The Custom Object endpoints appear in NetBox's OpenAPI schema (`/api/schema/`)
+once, generically, with the Custom Object Type's slug as the `custom_object_type`
+path parameter:
+
+- `/api/plugins/custom-objects/{custom_object_type}/`
+- `/api/plugins/custom-objects/{custom_object_type}/{id}/`
+
+The `CustomObject` schema lists the fields every custom object has (`id`, `url`,
+`display`, `owner`, `tags`, `created`, `last_updated`) and allows additional
+properties, since each type's custom fields are defined at runtime. Clients
+generated from the schema therefore treat custom fields as free-form properties.
+The schema doesn't describe each Custom Object Type's own fields; use the
+[Custom Object Type Fields](#custom-object-type-fields) endpoint to discover them.
+
 ## Browsable API
 
 As with other NetBox objects, you can view the API output for Custom Objects in a browser by prepending `/api/` to the URL — for example, `/api/plugins/custom-objects/dhcp_scope/`:

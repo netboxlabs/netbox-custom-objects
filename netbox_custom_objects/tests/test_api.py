@@ -2936,3 +2936,47 @@ class SelectMultiSelectNumericChoiceValueAPITest(CustomObjectsTestCase, NetBoxTe
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("flags", response.data)
+
+
+class OpenAPISchemaTest(TestCase):
+    """The custom object endpoints appear in the OpenAPI schema, described generically."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        from drf_spectacular.generators import SchemaGenerator
+
+        cls.schema = SchemaGenerator().get_schema(request=None, public=True)
+
+    def test_schema_is_valid(self):
+        from drf_spectacular.validation import validate_schema
+
+        validate_schema(self.schema)
+
+    def test_custom_object_paths_and_operations(self):
+        paths = self.schema['paths']
+        list_path = '/api/plugins/custom-objects/{custom_object_type}/'
+        detail_path = '/api/plugins/custom-objects/{custom_object_type}/{id}/'
+        self.assertEqual(set(paths[list_path]) - {'parameters'}, {'get', 'post', 'put', 'patch', 'delete'})
+        self.assertEqual(set(paths[detail_path]) - {'parameters'}, {'get', 'put', 'patch', 'delete'})
+
+        for path in (list_path, detail_path):
+            for operation in paths[path].values():
+                slug = [p for p in operation['parameters'] if p['name'] == 'custom_object_type']
+                self.assertEqual(len(slug), 1)
+                self.assertEqual(slug[0]['in'], 'path')
+                self.assertEqual(slug[0]['schema']['type'], 'string')
+
+        list_response = paths[list_path]['get']['responses']['200']['content']['application/json']['schema']
+        self.assertEqual(list_response['$ref'], '#/components/schemas/PaginatedCustomObjectList')
+
+    def test_custom_object_components_allow_custom_fields(self):
+        components = self.schema['components']['schemas']
+        response = components['CustomObject']
+        self.assertTrue(response['additionalProperties'])
+        self.assertEqual(
+            set(response['properties']), {'id', 'url', 'display', 'owner', 'tags', 'created', 'last_updated'}
+        )
+        for name in ('CustomObjectRequest', 'PatchedCustomObjectRequest', 'BulkCustomObjectRequest'):
+            self.assertTrue(components[name]['additionalProperties'], name)
+        self.assertEqual(components['BulkCustomObjectRequest']['required'], ['id'])
