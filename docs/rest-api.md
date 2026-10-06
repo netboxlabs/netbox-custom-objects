@@ -398,10 +398,15 @@ Each request is applied atomically: if any listed object cannot be created, upda
 
 ## Export Templates
 
-A Custom Object list endpoint renders a NetBox [export template](https://netboxlabs.com/docs/netbox/models/extras/exporttemplate/) when you pass its name as `?export=`, as core list endpoints do. Assign the template to the Custom Object Type's object type; its `queryset` holds the objects the request would list, so filters and your object permissions apply:
+A Custom Object list endpoint can render a NetBox [export template](https://netboxlabs.com/docs/netbox/models/extras/exporttemplate/) instead of returning JSON, as core list endpoints do.
+
+1. Create an export template and add the Custom Object Type to its **Object types**.
+2. Request the type's list endpoint with `?export=` set to the export template's **name**.
+
+For example, with a Custom Object Type whose slug is `dhcp_scope` and an export template named `Scopes CSV`:
 
 ```
-GET /api/plugins/custom-objects/dhcp_scope/?export=scope-csv&status=active
+GET /api/plugins/custom-objects/dhcp_scope/?export=Scopes%20CSV&status=active
 ```
 
-The response has the template's MIME type and file settings. An unknown template name, or one assigned to a different type or that you can't view, returns 404.
+The template's `queryset` contains the objects the request would otherwise list, so other query parameters (here `status=active`) filter it, and your object permissions apply. The response uses the template's MIME type and file settings. If no export template with that name is assigned to this Custom Object Type, or you don't have permission to view it, the response is a 404.
