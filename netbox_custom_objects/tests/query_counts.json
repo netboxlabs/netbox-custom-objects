@@ -1,6 +1,6 @@
 {
-  "customobject-api-relational:api_get_object": 55,
-  "customobject-api-relational:api_list_objects": 49,
+  "customobject-api-relational:api_get_object": 56,
+  "customobject-api-relational:api_list_objects": 50,
   "customobject-complex:list_objects_with_permission": 39,
   "customobject-objectfields:list_objects_with_permission": 45,
   "customobject-simple:list_objects_with_permission": 31,

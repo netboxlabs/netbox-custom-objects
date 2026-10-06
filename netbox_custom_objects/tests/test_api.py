@@ -21,7 +21,7 @@ from .base import CustomObjectsTestCase, create_token
 from core.models import Job, ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Rack, Site
 from extras.models import Tag
-from users.models import ObjectPermission
+from users.models import ObjectPermission, Owner
 from virtualization.models import Cluster, ClusterType
 
 try:
@@ -2951,16 +2951,7 @@ class SelectMultiSelectNumericChoiceValueAPITest(CustomObjectsTestCase, NetBoxTe
 
 
 class CustomObjectAPIQueryCountTest(CustomObjectsTestCase, TestCase):
-    """
-    Query-count regression coverage for the custom object REST endpoints, on a
-    type with every relational field kind: object, multi-object, their polymorphic
-    variants, and tags.
-
-    The baseline tests compare against tests/query_counts.json like the UI list
-    view tests do; re-record with UPDATE_QUERY_COUNTS=1 (serially) after an
-    intentional change.  The flat-count test needs no baseline: list cost must
-    not grow with the number of rows.
-    """
+    """Query counts of the custom object list and detail endpoints, for a type with every relation kind."""
 
     query_count_model_label = 'customobject-api-relational'
 
@@ -2983,6 +2974,7 @@ class CustomObjectAPIQueryCountTest(CustomObjectsTestCase, TestCase):
         self.model = self.cot.get_model()
 
         self.tag = Tag.objects.create(name='Gold', slug='gold')
+        self.owner = Owner.objects.create(name='Query count owner')
         manufacturer = Manufacturer.objects.create(name='Mfr', slug='mfr')
         self.device_type = DeviceType.objects.create(manufacturer=manufacturer, model='Model', slug='model')
         self.role = DeviceRole.objects.create(name='Role', slug='role')
@@ -2999,7 +2991,7 @@ class CustomObjectAPIQueryCountTest(CustomObjectsTestCase, TestCase):
     def _make_row(self, i):
         site = Site.objects.create(name=f'Site {i}', slug=f'site-{i}')
         device = Device.objects.create(name=f'Device {i}', device_type=self.device_type, role=self.role, site=site)
-        obj = self.model.objects.create(name=f'row-{i}', site=site, target=device)
+        obj = self.model.objects.create(name=f'row-{i}', site=site, target=device, owner=self.owner)
         obj.sites.set([site])
         obj.targets.set([site, device])
         obj.tags.add(self.tag)
@@ -3011,10 +3003,12 @@ class CustomObjectAPIQueryCountTest(CustomObjectsTestCase, TestCase):
         return [self._make_row(start + i) for i in range(count)]
 
     def _list_url(self):
-        return reverse(
+        # One page for every row count used here, so each request serializes all rows.
+        url = reverse(
             'plugins-api:netbox_custom_objects-api:customobject-list',
             kwargs={'custom_object_type': self.cot.slug},
         )
+        return f'{url}?limit=100'
 
     def _detail_url(self, pk):
         return reverse(
@@ -3040,7 +3034,7 @@ class CustomObjectAPIQueryCountTest(CustomObjectsTestCase, TestCase):
 
         with assert_expected_query_count(self, 'api_list_objects'):
             response = self._get(self._list_url())
-        self.assertEqual(response.data['count'], 3)
+        self.assertEqual(len(response.data['results']), 3)
 
     def test_detail_query_count(self):
         self._skip_unless_baselines_apply()
@@ -3056,7 +3050,7 @@ class CustomObjectAPIQueryCountTest(CustomObjectsTestCase, TestCase):
             self._make_rows(rows)
             with CaptureQueriesContext(connection) as ctx:
                 response = self._get(self._list_url())
-            self.assertEqual(response.data['count'], rows)
+            self.assertEqual(len(response.data['results']), rows)
             return len(ctx.captured_queries)
 
         count_for(1)  # warm caches
