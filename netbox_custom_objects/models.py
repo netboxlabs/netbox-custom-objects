@@ -4419,19 +4419,15 @@ def clear_cache_on_choice_set_save(sender, instance, **kwargs):
 
 def __getattr__(name):
     """
-    Resolve a generated custom object model class (``Table<id>Model``) by name.
+    Resolve generated model classes (``Table<id>Model``) by name, so pickle can find them.
 
-    Pickle saves a class by module and name, so a queryset or prefetch cache holding a
-    custom object model (e.g. in an RQ webhook or script job) needs
-    ``netbox_custom_objects.models.Table<id>Model`` to resolve to that class, in any
-    process.  Generated classes are rebuilt whenever their type changes, so they aren't
-    stored on this module; this looks them up instead, through ``get_model()`` so the
-    active branch's class is returned.
+    They aren't stored on this module because they're rebuilt whenever their type changes;
+    ``get_model()`` returns the current class, for the active branch.
     """
     cot_id = extract_cot_id_from_model_name(name.lower())
     if cot_id is not None and name == CustomObjectType.get_table_model_name(cot_id):
         try:
             return CustomObjectType.objects.get(pk=int(cot_id)).get_model()
-        except CustomObjectType.DoesNotExist:
-            pass
+        except (CustomObjectType.DoesNotExist, ProgrammingError, OperationalError):
+            pass  # no such type, or the database isn't migrated yet
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

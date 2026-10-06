@@ -3316,6 +3316,7 @@ class CustomObjectPicklingTestCase(CustomObjectsTestCase, TestCase):
 
     def test_model_class_and_queryset_round_trip(self):
         self.assertEqual(self.model.__module__, 'netbox_custom_objects.models')
+        # Identity holds because get_model() returns the cached class; see the rebuilt-model test below.
         self.assertIs(pickle.loads(pickle.dumps(self.model)), self.model)
 
         queryset = pickle.loads(pickle.dumps(self.model.objects.all()))
@@ -3344,3 +3345,7 @@ class CustomObjectPicklingTestCase(CustomObjectsTestCase, TestCase):
         self.assertIs(getattr(nco_models, self.model.__name__), self.model)
         self.assertFalse(hasattr(nco_models, 'Table999999Model'))
         self.assertFalse(hasattr(nco_models, 'NotAModel'))
+
+        # An unmigrated database (e.g. a fresh install) is a missing attribute, not a DB error.
+        with patch.object(CustomObjectType.objects, 'get', side_effect=ProgrammingError):
+            self.assertFalse(hasattr(nco_models, self.model.__name__))
