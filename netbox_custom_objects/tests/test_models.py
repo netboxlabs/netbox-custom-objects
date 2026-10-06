@@ -1,6 +1,7 @@
 """
 Tests for the concrete and dynamically generated models that are managed by this plugin.
 """
+import pickle
 import sys
 from decimal import Decimal
 from unittest import skip
@@ -16,6 +17,7 @@ from django.urls import reverse
 from django.utils import timezone
 
 import netbox_custom_objects as nco
+import netbox_custom_objects.models as nco_models
 
 from core.choices import JobStatusChoices
 from core.models import ObjectType
@@ -3291,3 +3293,54 @@ class ChoiceSetCacheInvalidationTestCase(CustomObjectsTestCase, TestCase):
 
         other_cot.refresh_from_db()
         self.assertEqual(other_cot.cache_timestamp, timestamp_before)
+
+
+class CustomObjectPicklingTestCase(CustomObjectsTestCase, TestCase):
+    """
+    Generated models can be pickled by reference, as RQ webhook and script jobs do with
+    querysets and prefetch caches that hold them.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.cot = self.create_custom_object_type(name='Session', slug='session')
+        self.create_custom_object_type_field(
+            self.cot, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        self.create_custom_object_type_field(
+            self.cot, name='site', label='Site', type='object', related_object_type=self.get_site_object_type(),
+        )
+        self.model = self.cot.get_model()
+        self.site = Site.objects.create(name='Pickle Site', slug='pickle-site')
+        self.model.objects.create(name='s1', site=self.site)
+
+    def test_model_class_and_queryset_round_trip(self):
+        self.assertEqual(self.model.__module__, 'netbox_custom_objects.models')
+        self.assertIs(pickle.loads(pickle.dumps(self.model)), self.model)
+
+        queryset = pickle.loads(pickle.dumps(self.model.objects.all()))
+        self.assertEqual([obj.name for obj in queryset], ['s1'])
+
+    def test_prefetch_cache_round_trips(self):
+        """The reported path: a related object whose prefetch cache holds custom objects."""
+        accessor = next(
+            rel.get_accessor_name() for rel in Site._meta.related_objects if rel.related_model is self.model
+        )
+        site = Site.objects.prefetch_related(accessor).get(pk=self.site.pk)
+
+        restored = pickle.loads(pickle.dumps(site))
+        self.assertEqual([obj.name for obj in getattr(restored, accessor).all()], ['s1'])
+
+    def test_unpickling_resolves_a_rebuilt_model(self):
+        """A process that hasn't generated the model (e.g. an RQ worker) builds it on unpickling."""
+        data = pickle.dumps(self.model.objects.all())
+        CustomObjectType.clear_model_cache(self.cot.pk, all_branches=True)
+
+        queryset = pickle.loads(data)
+        self.assertIs(queryset.model, CustomObjectType.objects.get(pk=self.cot.pk).get_model())
+        self.assertEqual([obj.name for obj in queryset], ['s1'])
+
+    def test_module_attribute_lookup_only_resolves_existing_types(self):
+        self.assertIs(getattr(nco_models, self.model.__name__), self.model)
+        self.assertFalse(hasattr(nco_models, 'Table999999Model'))
+        self.assertFalse(hasattr(nco_models, 'NotAModel'))

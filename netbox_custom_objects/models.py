@@ -1943,7 +1943,8 @@ class CustomObjectType(NetBoxModel):
 
         attrs = {
             "Meta": meta,
-            "__module__": "database.models",
+            # Resolvable through this module's __getattr__, so the class can be pickled.
+            "__module__": __name__,
             "custom_object_type": self,
             "custom_object_type_id": self.id,
         }
@@ -4414,3 +4415,23 @@ def clear_cache_on_choice_set_save(sender, instance, **kwargs):
         CustomObjectType.clear_model_cache(cot.id)
         cot.snapshot()
         cot.save(update_fields=['cache_timestamp'])
+
+
+def __getattr__(name):
+    """
+    Resolve a generated custom object model class (``Table<id>Model``) by name.
+
+    Pickle saves a class by module and name, so a queryset or prefetch cache holding a
+    custom object model (e.g. in an RQ webhook or script job) needs
+    ``netbox_custom_objects.models.Table<id>Model`` to resolve to that class, in any
+    process.  Generated classes are rebuilt whenever their type changes, so they aren't
+    stored on this module; this looks them up instead, through ``get_model()`` so the
+    active branch's class is returned.
+    """
+    cot_id = extract_cot_id_from_model_name(name.lower())
+    if cot_id is not None and name == CustomObjectType.get_table_model_name(cot_id):
+        try:
+            return CustomObjectType.objects.get(pk=int(cot_id)).get_model()
+        except CustomObjectType.DoesNotExist:
+            pass
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
