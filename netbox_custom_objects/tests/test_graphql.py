@@ -30,6 +30,7 @@ from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Region, Si
 from extras.models import JournalEntry, Tag
 from users.models import ObjectPermission, Owner
 
+from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.graphql import live as live_module
 from netbox_custom_objects.graphql import schema as schema_module
 from netbox_custom_objects.graphql.schema import build_query_classes, _query_field_name
@@ -1232,28 +1233,135 @@ class GraphQLFilterTestCase(GraphQLEndpointMixin, CustomObjectsTestCase, TestCas
         self.assertIn("errors", payload)
         self.assertIn("serial", " ".join(error["message"] for error in payload["errors"]))
 
-    def test_polymorphic_and_coordinates_fields_have_no_filter(self):
-        cot = self.create_custom_object_type(name="Link", slug="link")
+    def _make_device(self, name, site):
+        manufacturer, _ = Manufacturer.objects.get_or_create(name="Mfr", slug="mfr")
+        device_type, _ = DeviceType.objects.get_or_create(manufacturer=manufacturer, model="Model", slug="model")
+        role, _ = DeviceRole.objects.get_or_create(name="Role", slug="role")
+        return Device.objects.create(name=name, device_type=device_type, role=role, site=site)
+
+    def _polymorphic_type(self, slug="link", **field_kwargs):
+        cot = self.create_custom_object_type(name=slug.title(), slug=slug)
         self.create_custom_object_type_field(
             cot, name="name", label="Name", type="text", primary=True, required=True
         )
-        self.create_polymorphic_field(
-            cot, [self.get_site_object_type(), self.get_device_object_type()], name="target", type="object",
-        )
-        self.create_polymorphic_field(
-            cot, [self.get_site_object_type(), self.get_device_object_type()], name="targets", type="multiobject",
+        targets = [self.get_site_object_type(), self.get_device_object_type()]
+        self.create_polymorphic_field(cot, targets, name="target", type="object", **field_kwargs)
+        self.create_polymorphic_field(cot, targets, name="targets", type="multiobject", **field_kwargs)
+        return cot
+
+    def _filter_input_names(self, cot):
+        data = self._gql('{ __type(name: "Table%sModelFilter") { inputFields { name } } }' % cot.pk)
+        return {f["name"] for f in data["__type"]["inputFields"]}
+
+    def test_coordinates_field_filters(self):
+        cot = self.create_custom_object_type(name="Spot", slug="spot")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True
         )
         self.create_custom_object_type_field(cot, name="location", label="Location", type="coordinates")
+        model = cot.get_model()
+        D = decimal.Decimal
+        model.objects.create(name="north", location_latitude=D("60"), location_longitude=D("10"))
+        model.objects.create(name="south", location_latitude=D("-30"), location_longitude=D("20"))
+        model.objects.create(name="nowhere")
+
+        field = "custom_objects_spot_list"
+        self.assertEqual(self._names(field, '{location_latitude: {gt: "0"}}'), ["north"])
+        self.assertEqual(self._names(field, '{location_longitude: {range: {start: "15", end: "25"}}}'), ["south"])
+        self.assertEqual(self._names(field, '{location_latitude: {is_null: true}}'), ["nowhere"])
+
+    def test_polymorphic_object_field_filters(self):
+        model = self._polymorphic_type().get_model()
+        site_a = self._make_site(name="Site A", slug="site-a")
+        site_b = self._make_site(name="Site B", slug="site-b")
+        device = self._make_device("dev-1", site_a)
+        model.objects.create(name="to-site-a", target=site_a)
+        model.objects.create(name="to-site-b", target=site_b)
+        model.objects.create(name="to-device", target=device)
+        model.objects.create(name="to-nothing")
+
+        field = "custom_objects_link_list"
+        self.assertEqual(self._names(field, '{target_dcim_site: {slug: {exact: "site-b"}}}'), ["to-site-b"])
+        self.assertEqual(self._names(field, '{target_dcim_device: {name: {exact: "dev-1"}}}'), ["to-device"])
+        self.assertEqual(self._names(field, f'{{target_dcim_site_id: "{site_a.pk}"}}'), ["to-site-a"])
+        # Each filter is scoped to its own type, even when primary keys coincide.
+        self.assertNotIn("to-site-a", self._names(field, f'{{target_dcim_device_id: "{site_a.pk}"}}'))
+        self.assertEqual(self._names(field, f'{{target_dcim_device_id: "{device.pk}"}}'), ["to-device"])
+
+    def test_polymorphic_multiobject_field_filters(self):
+        model = self._polymorphic_type().get_model()
+        site_a = self._make_site(name="Site A", slug="site-a")
+        site_b = self._make_site(name="Site B", slug="site-b")
+        device = self._make_device("dev-1", site_a)
+        model.objects.create(name="both").targets.set([site_a, site_b, device])
+        model.objects.create(name="device-only").targets.set([device])
+        model.objects.create(name="none")
+
+        field = "custom_objects_link_list"
+        # Both sites match "both", which must still be returned once.
+        self.assertEqual(self._names(field, '{targets_dcim_site: {name: {starts_with: "Site"}}}'), ["both"])
+        self.assertEqual(self._names(field, '{targets_dcim_device: {name: {exact: "dev-1"}}}'), ["both", "device-only"])
+        self.assertNotIn("targets_dcim_site_id", self._filter_input_names(model.custom_object_type))
+
+    def test_polymorphic_filters_nested_from_another_type(self):
+        link_model = self._polymorphic_type().get_model()
+        site_a = self._make_site(name="Site A", slug="site-a")
+        site_b = self._make_site(name="Site B", slug="site-b")
+        link_a = link_model.objects.create(name="link-a", target=site_a)
+        link_a.targets.set([site_a])
+        link_b = link_model.objects.create(name="link-b", target=site_b)
+
+        holder = self.create_custom_object_type(name="Holder", slug="holder")
+        self.create_custom_object_type_field(
+            holder, name="name", label="Name", type="text", primary=True, required=True
+        )
+        self.create_custom_object_type_field(
+            holder, name="link", label="Link", type="object",
+            related_object_type=ObjectType.objects.get_for_model(link_model),
+        )
+        holder_model = holder.get_model()
+        link_cot = link_model.custom_object_type
+        link_cot.refresh_from_db()
+        link_model = link_cot.get_model()
+        holder_model.objects.create(name="holds-a", link=link_model.objects.get(pk=link_a.pk))
+        holder_model.objects.create(name="holds-b", link=link_model.objects.get(pk=link_b.pk))
+
+        field = "custom_objects_holder_list"
+        self.assertEqual(self._names(field, '{link: {target_dcim_site: {slug: {exact: "site-b"}}}}'), ["holds-b"])
+        self.assertEqual(self._names(field, '{link: {targets_dcim_site: {slug: {exact: "site-a"}}}}'), ["holds-a"])
+
+    def test_polymorphic_custom_object_target_and_cycle(self):
+        """A polymorphic field allowing its own type gets only "<field>_<type>_id" for that type."""
+        cot = self.create_custom_object_type(name="Node", slug="node")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        self_ot = ObjectType.objects.get_for_model(cot.get_model())
+        self.create_polymorphic_field(cot, [self_ot, self.get_site_object_type()], name="parent", type="object")
+        model = cot.get_model()
+        root = model.objects.create(name="root")
+        model.objects.create(name="child", parent=root)
+
+        type_name = f"{APP_LABEL}_{self_ot.model}"
+        names = self._filter_input_names(cot)
+        self.assertIn(f"parent_{type_name}_id", names)
+        self.assertNotIn(f"parent_{type_name}", names)
+        self.assertIn("parent_dcim_site", names)
+        self.assertEqual(self._names("custom_objects_node_list", f'{{parent_{type_name}_id: "{root.pk}"}}'), ["child"])
+
+    def test_polymorphic_and_coordinates_filters_respect_disabled_filtering(self):
+        cot = self._polymorphic_type(filter_logic="disabled")
+        self.create_custom_object_type_field(
+            cot, name="location", label="Location", type="coordinates", filter_logic="disabled",
+        )
         cot.get_model()
 
-        data = self._gql(
-            '{ __type(name: "Table%sModelFilter") { inputFields { name } } }' % cot.pk
-        )
-        names = {f["name"] for f in data["__type"]["inputFields"]}
+        names = self._filter_input_names(cot)
         self.assertIn("name", names)
-        self.assertIn("tags", names)
-        for excluded in ("target", "target_id", "targets", "location"):
-            self.assertNotIn(excluded, names)
+        self.assertFalse(
+            {n for n in names if n.startswith(("target", "location"))},
+            "disabled polymorphic/coordinates fields must have no filters",
+        )
 
 
 @override_settings(LOGIN_REQUIRED=True)

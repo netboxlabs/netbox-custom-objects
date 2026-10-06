@@ -12,10 +12,13 @@ from typing import Optional
 
 import strawberry_django
 from core.graphql.filter_mixins import ChangeLoggingMixin
+from django.apps import apps as django_apps
 from django.db.models import Q, QuerySet
 from extras.choices import CustomFieldTypeChoices
 from extras.graphql.filter_mixins import ConfigContextFilterMixin, JournalEntriesFilterMixin, TagsFilterMixin
 from extras.models import ConfigContextModel
+
+from netbox_custom_objects.constants import APP_LABEL
 from netbox.graphql.filter_lookups import JSONFilter, StringArrayLookup
 from netbox.graphql.filters import BaseModelFilter
 from netbox.graphql.scalars import BigInt
@@ -38,6 +41,8 @@ except ImportError:
 
 __all__ = (
     "build_filter_class",
+    "coordinates_filter_annotations",
+    "polymorphic_filter_fields",
     "relationship_filter_annotations",
     "scalar_filter_annotation",
 )
@@ -99,6 +104,79 @@ def relationship_filter_annotations(field, members):
     return annotations
 
 
+def coordinates_filter_annotations(field):
+    """Return the ``<field>_latitude`` and ``<field>_longitude`` filters of a coordinates field."""
+    return {
+        f"{field.name}_latitude": ComparisonFilterLookup[decimal.Decimal],
+        f"{field.name}_longitude": ComparisonFilterLookup[decimal.Decimal],
+    }
+
+
+def _target_pks(value, model, info):
+    """Primary keys of the ``model`` objects matching the nested filter ``value``."""
+    targets, q = process_filters(value, model.objects.all(), info)
+    return targets.filter(q).values("pk")
+
+
+def _resolver_filter_field(name, annotation, resolve):
+    """A filter field named ``name`` whose ``resolve(info, value, prefix)`` returns a Q."""
+
+    def resolver(self, info: Info, queryset: QuerySet, value: annotation, prefix: str):
+        return queryset, resolve(info, value, prefix)
+
+    resolver.__name__ = name
+    return strawberry_django.filter_field(resolver)
+
+
+def polymorphic_filter_fields(field, targets):
+    """
+    Return ``{name: filter field}`` for a polymorphic OBJECT or MULTIOBJECT field.
+
+    ``targets`` pairs each allowed ContentType with its GraphQL type (or ``None``).
+    Each allowed type gets ``<field>_<app_label>_<model>``, named as in the REST
+    filterset, taking that type's own filter class; it is omitted when the type has
+    none (e.g. a custom object type still being built higher up a relationship
+    cycle).  An OBJECT field also gets ``<field>_<app_label>_<model>_id``.  Generic
+    relations can't be traversed in ORM lookups, so these filter the target model
+    first and match its primary keys.
+    """
+    fields = {}
+    is_multi = field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
+    for content_type, gql_type in targets:
+        model = content_type.model_class()
+        if model is None:
+            continue
+        name = f"{field.name}_{content_type.app_label}_{content_type.model}"
+        target_filter = _filter_class_for_type(gql_type) if gql_type is not None else None
+
+        if is_multi:
+            def match(pks, prefix, _ct=content_type.pk, _through=field.through_model_name):
+                through = django_apps.get_model(APP_LABEL, _through)
+                sources = through.objects.filter(content_type_id=_ct, object_id__in=pks).values("source_id")
+                return Q(**{f"{prefix}pk__in": sources})
+        else:
+            def match(pks, prefix, _ct=content_type.pk, _gfk=field.name):
+                lookup = "in" if isinstance(pks, QuerySet) else "exact"
+                return Q(**{
+                    f"{prefix}{_gfk}_content_type_id": _ct,
+                    f"{prefix}{_gfk}_object_id__{lookup}": pks,
+                })
+
+        if target_filter is not None:
+            fields[name] = _resolver_filter_field(
+                name, Optional[target_filter],
+                lambda info, value, prefix, _model=model, _match=match: _match(
+                    _target_pks(value, _model, info), prefix
+                ),
+            )
+        if not is_multi:
+            fields[f"{name}_id"] = _resolver_filter_field(
+                f"{name}_id", Optional[ID],
+                lambda info, value, prefix, _match=match: _match(value, prefix),
+            )
+    return fields
+
+
 def _aliased_filter_field(name, annotation):
     """
     Build a filter field that filters on ``name`` itself.
@@ -117,12 +195,13 @@ def _aliased_filter_field(name, annotation):
     return strawberry_django.filter_field(resolver)
 
 
-def build_filter_class(model, field_annotations):
+def build_filter_class(model, field_annotations, filter_fields=None):
     """
     Build the strawberry_django filter class for a custom object ``model``.
 
     ``field_annotations`` maps filter names to their (non-optional) annotations,
-    as collected by ``types._build_object_type``.
+    as collected by ``types._build_object_type``; ``filter_fields`` maps names to
+    ready-made filter fields (see ``polymorphic_filter_fields``).
     """
     bases = [TagsFilterMixin, JournalEntriesFilterMixin, ChangeLoggingMixin, BaseModelFilter]
     if issubclass(model, ConfigContextModel):
@@ -135,6 +214,8 @@ def build_filter_class(model, field_annotations):
             continue
         namespace["__annotations__"][name] = Optional[annotation]
         namespace[name] = strawberry_django.filter_field()
+    for name, filter_field in (filter_fields or {}).items():
+        namespace.setdefault(name, filter_field)
 
     name = f"{model.__name__}Filter"
     cls = type(name, tuple(bases), namespace)
