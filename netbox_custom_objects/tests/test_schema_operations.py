@@ -11,12 +11,13 @@ from unittest.mock import patch
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
-from django.db import IntegrityError, connection
+from django.db import IntegrityError, ProgrammingError, connection
 from django.test import TransactionTestCase
 from django.urls import reverse
 
 from core.models import ObjectType
 from dcim.models import Site
+from psycopg.errors import DuplicateTable
 from extras.choices import CustomFieldTypeChoices
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
@@ -587,6 +588,11 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
         commit and release that Postgres-level wait, neither thread can make progress. Confirmed
         empirically: this exact scenario hung a live test run before the lock was narrowed to
         cover only the build+register+repoint step, not the DDL.
+
+        The losing thread fails in one of two ways, depending on timing: at the field row's
+        (name, custom_object_type) UniqueConstraint (IntegrityError, also what concurrent CREATE
+        TABLEs for one name raise), or, if it checked for the through table before the winner
+        committed but creates it after, at its own CREATE TABLE (DuplicateTable).
         """
         cot = self.create_simple_custom_object_type(name='doublesubmit', slug='double-submit')
         self_ot = ObjectType.objects.get_for_model(cot.get_model())
@@ -608,7 +614,10 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
             except IntegrityError as e:
                 # Expected for exactly one of the two: the (name, custom_object_type)
                 # UniqueConstraint has only one winner.
-                results[key] = {'integrity_error': e}
+                results[key] = {'lost': e}
+            except ProgrammingError as e:
+                # The other way to lose (see the docstring); anything else is a real error.
+                results[key] = {'lost': e} if isinstance(e.__cause__, DuplicateTable) else {'error': e}
             except Exception as e:  # noqa: BLE001 - surfaced via the assertion below
                 results[key] = {'error': e}
             finally:
@@ -627,9 +636,9 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
             self.assertNotIn('error', result, f"thread {key} raised an unexpected error: {result.get('error')!r}")
 
         succeeded = [key for key, result in results.items() if 'field' in result]
-        failed = [key for key, result in results.items() if 'integrity_error' in result]
+        lost = [key for key, result in results.items() if 'lost' in result]
         self.assertEqual(len(succeeded), 1, f"expected exactly one winner: {results!r}")
-        self.assertEqual(len(failed), 1, f"expected exactly one IntegrityError: {results!r}")
+        self.assertEqual(len(lost), 1, f"expected exactly one loser: {results!r}")
 
     def test_field_creation_via_public_save_path_with_two_type_setup_yields_consistent_through_model(self):
         """
