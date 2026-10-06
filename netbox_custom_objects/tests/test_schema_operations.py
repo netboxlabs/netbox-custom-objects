@@ -14,10 +14,10 @@ from django.core.management import call_command
 from django.db import IntegrityError, ProgrammingError, connection
 from django.test import TransactionTestCase
 from django.urls import reverse
+from psycopg.errors import DuplicateTable
 
 from core.models import ObjectType
 from dcim.models import Site
-from psycopg.errors import DuplicateTable
 from extras.choices import CustomFieldTypeChoices
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
