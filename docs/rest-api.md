@@ -409,4 +409,6 @@ For example, with a Custom Object Type whose slug is `dhcp_scope` and an export 
 GET /api/plugins/custom-objects/dhcp_scope/?export=Scopes%20CSV&status=active
 ```
 
-The template's `queryset` contains the objects the request would otherwise list, so other query parameters (here `status=active`) filter it, and your object permissions apply. The response uses the template's MIME type and file settings. If no export template with that name is assigned to this Custom Object Type, or (on NetBox 4.6.1 and later) you don't have permission to view it, the response is a 404.
+The template's `queryset` contains **every** object that matches the request's filters (here `status=active`) and that you have permission to view. Exports aren't paginated, so `limit` and `offset` have no effect. The response uses the template's MIME type and file settings.
+
+The response is a 404 if no export template with that name is assigned to this Custom Object Type, or, on NetBox 4.6.1 and later, if you don't have permission to view the template.
