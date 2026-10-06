@@ -6,11 +6,13 @@ import uuid
 from decimal import Decimal
 from unittest import skipUnless
 
+from django.conf import settings
 from django.db import connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from netbox.api.viewsets import mixins as netbox_viewset_mixins
+from packaging.version import Version
 
 from utilities.testing import TestCase as NetBoxTestCase, create_test_user
 from rest_framework import status
@@ -3114,15 +3116,22 @@ class ExportTemplateAPITest(CustomObjectsTestCase, TestCase):
         response = self.client.get(f'{self.url}?export=names', **self.header)
         self.assertEqual(response.content.decode(), 'alpha;')
 
-    def test_export_unknown_or_unviewable_template_returns_404(self):
+    def test_export_unknown_template_returns_404(self):
         self._grant_view(self.model)
+        self._grant_view(ExportTemplate)
 
-        # The user can't view the template.
-        response = self.client.get(f'{self.url}?export=names', **self.header)
+        response = self.client.get(f'{self.url}?export=missing', **self.header)
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
-        self._grant_view(ExportTemplate)
-        response = self.client.get(f'{self.url}?export=missing', **self.header)
+    # COMPAT(netbox<4.6.1): core's ExportTemplatesMixin doesn't check view permission on the template.
+    @skipUnless(
+        Version(settings.RELEASE.version) >= Version('4.6.1'),
+        'NetBox < 4.6.1 renders export templates regardless of view permission',
+    )
+    def test_export_unviewable_template_returns_404(self):
+        self._grant_view(self.model)
+
+        response = self.client.get(f'{self.url}?export=names', **self.header)
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_export_template_for_another_type_returns_404(self):
