@@ -17,8 +17,6 @@ from django.db.models import Q, QuerySet
 from extras.choices import CustomFieldTypeChoices
 from extras.graphql.filter_mixins import ConfigContextFilterMixin, JournalEntriesFilterMixin, TagsFilterMixin
 from extras.models import ConfigContextModel
-
-from netbox_custom_objects.constants import APP_LABEL
 from netbox.graphql.filter_lookups import JSONFilter, StringArrayLookup
 from netbox.graphql.filters import BaseModelFilter
 from netbox.graphql.scalars import BigInt
@@ -27,6 +25,8 @@ from strawberry.types import Info
 from strawberry_django import BaseFilterLookup, ComparisonFilterLookup, DateFilterLookup, DatetimeFilterLookup
 from strawberry_django.filters import lookup_name_conversion_map, process_filters
 from strawberry_django.utils.typing import get_django_definition
+
+from netbox_custom_objects.constants import APP_LABEL
 
 try:
     from strawberry_django import StrFilterLookup

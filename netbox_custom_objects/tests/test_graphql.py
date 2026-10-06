@@ -1288,6 +1288,21 @@ class GraphQLFilterTestCase(GraphQLEndpointMixin, CustomObjectsTestCase, TestCas
         self.assertNotIn("to-site-a", self._names(field, f'{{target_dcim_device_id: "{site_a.pk}"}}'))
         self.assertEqual(self._names(field, f'{{target_dcim_device_id: "{device.pk}"}}'), ["to-device"])
 
+    def test_null_polymorphic_filters_are_ignored(self):
+        """A null filter value is skipped, as for any strawberry-django filter field."""
+        model = self._polymorphic_type().get_model()
+        site = self._make_site(name="Site A", slug="site-a")
+        model.objects.create(name="to-site", target=site).targets.set([site])
+        model.objects.create(name="to-nothing")
+
+        field = "custom_objects_link_list"
+        for filters in (
+            "{target_dcim_site_id: null}",
+            "{target_dcim_site: null}",
+            "{targets_dcim_site: null}",
+        ):
+            self.assertEqual(self._names(field, filters), ["to-nothing", "to-site"], filters)
+
     def test_polymorphic_multiobject_field_filters(self):
         model = self._polymorphic_type().get_model()
         site_a = self._make_site(name="Site A", slug="site-a")
