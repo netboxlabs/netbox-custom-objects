@@ -82,7 +82,9 @@ def _public_host_model_classes():
             )
             continue
         if model is None:
-            logger.warning(
+            # Routine: NetBox keeps an uninstalled plugin's ObjectTypes until
+            # remove_stale_contenttypes is run, so don't warn on every startup.
+            logger.debug(
                 'skipping ObjectType pk=%s (%s.%s): no installed model — likely a stale row from an '
                 'uninstalled plugin or a deleted Custom Object Type',
                 ot.pk, ot.app_label, ot.model,

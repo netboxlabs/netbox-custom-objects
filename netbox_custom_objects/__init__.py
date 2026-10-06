@@ -568,9 +568,25 @@ class CustomObjectsPluginConfig(PluginConfig):
 
         # Register the combined "Custom Objects" tab (see related_tabs/__init__.py),
         # once at startup before Django freezes the root URLconf.
+        self._register_tabs()
+
+    def _register_tabs(self):
         try:
             from netbox_custom_objects.related_tabs.registry import register_tabs
-            register_tabs()
+
+            # register_tabs() queries ObjectType while apps aren't ready yet; suppress
+            # Django's warning about it (and netbox-branching's, when it's loaded after
+            # this plugin), as for the model registration above.
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore", category=RuntimeWarning,
+                    module=r"django\.db\.backends\..*",
+                )
+                warnings.filterwarnings(
+                    "ignore", category=UserWarning,
+                    module=r"netbox_branching\..*",
+                )
+                register_tabs()
             self._register_tabs_error = None
         except Exception as exc:
             # Surface the failure both in the logs and via a system check
