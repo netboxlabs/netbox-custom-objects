@@ -126,6 +126,17 @@ class PublicHostModelsTests(TestCase):
         labels = [(m._meta.app_label, m._meta.model_name) for m in _public_host_model_classes()]
         self.assertEqual(len(labels), len(set(labels)))
 
+    def test_stale_object_type_is_skipped_quietly(self):
+        """An uninstalled plugin's leftover ObjectType is logged at debug level, not as a warning."""
+        ObjectType.objects.create(app_label='uninstalled_plugin', model='gone', public=True)
+        logger = 'netbox_custom_objects.related_tabs'
+
+        with self.assertNoLogs(logger, level='INFO'):
+            _public_host_model_classes()
+        with self.assertLogs(logger, level='DEBUG') as logs:
+            _public_host_model_classes()
+        self.assertTrue(any('uninstalled_plugin.gone' in line for line in logs.output))
+
 
 class RegisterCombinedTabsTests(TestCase):
     """
@@ -179,6 +190,20 @@ class RegisterTabsAppInitWarningTests(TestCase):
         # tab registration both skip entries that already exist.
         with patch.object(apps, 'ready', False), warnings.catch_warnings():
             warnings.simplefilter('error', RuntimeWarning)
+            self.app_config._register_tabs()
+        self.assertIsNone(self.app_config._register_tabs_error)
+
+    def test_register_tabs_suppresses_branching_routing_warning(self):
+        """netbox-branching warns about routing that query when it's loaded after this plugin."""
+        def routed_query():
+            warnings.warn_explicit(
+                'Routing database query before branching support is initialized.',
+                UserWarning, 'database.py', 1, module='netbox_branching.database',
+            )
+
+        target = 'netbox_custom_objects.related_tabs.registry.register_tabs'
+        with patch(target, side_effect=routed_query), warnings.catch_warnings():
+            warnings.simplefilter('error', UserWarning)
             self.app_config._register_tabs()
         self.assertIsNone(self.app_config._register_tabs_error)
 
