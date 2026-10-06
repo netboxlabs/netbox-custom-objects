@@ -20,7 +20,7 @@ from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from .base import CustomObjectsTestCase, create_token
 from core.models import Job, ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Rack, Site
-from extras.models import Tag
+from extras.models import ExportTemplate, Tag
 from users.models import ObjectPermission, Owner
 from virtualization.models import Cluster, ClusterType
 
@@ -3055,3 +3055,84 @@ class CustomObjectAPIQueryCountTest(CustomObjectsTestCase, TestCase):
 
         count_for(1)  # warm caches
         self.assertEqual(count_for(3), count_for(9))
+
+
+class ExportTemplateAPITest(CustomObjectsTestCase, TestCase):
+    """?export=<template> on the custom object list endpoint renders an export template."""
+
+    def setUp(self):
+        super().setUp()
+        self.cot = self.create_custom_object_type(name='Server', slug='server')
+        self.create_custom_object_type_field(
+            self.cot, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        self.model = self.cot.get_model()
+        self.model.objects.create(name='alpha')
+        self.model.objects.create(name='beta')
+
+        self.template = ExportTemplate.objects.create(
+            name='names',
+            template_code='{% for obj in queryset %}{{ obj.name }};{% endfor %}',
+            mime_type='text/plain',
+        )
+        self.template.object_types.set([ObjectType.objects.get_for_model(self.model)])
+
+        self.client = APIClient()
+        self.header = {'HTTP_AUTHORIZATION': f'Token {create_token(self.user)}'}
+        self.url = reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-list',
+            kwargs={'custom_object_type': self.cot.slug},
+        )
+
+    def _grant_view(self, model, constraints=None):
+        perm = ObjectPermission.objects.create(
+            name=f'view-{model._meta.model_name}', actions=['view'], constraints=constraints,
+        )
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(model))
+
+    def test_export_renders_template(self):
+        self._grant_view(self.model)
+        self._grant_view(ExportTemplate)
+
+        response = self.client.get(f'{self.url}?export=names', **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response['Content-Type'], 'text/plain')
+        self.assertEqual(response.content.decode(), 'alpha;beta;')
+
+    def test_export_applies_filters(self):
+        self._grant_view(self.model)
+        self._grant_view(ExportTemplate)
+
+        response = self.client.get(f'{self.url}?export=names&name=beta', **self.header)
+        self.assertEqual(response.content.decode(), 'beta;')
+
+    def test_export_respects_object_permissions(self):
+        self._grant_view(self.model, constraints={'name': 'alpha'})
+        self._grant_view(ExportTemplate)
+
+        response = self.client.get(f'{self.url}?export=names', **self.header)
+        self.assertEqual(response.content.decode(), 'alpha;')
+
+    def test_export_unknown_or_unviewable_template_returns_404(self):
+        self._grant_view(self.model)
+
+        # The user can't view the template.
+        response = self.client.get(f'{self.url}?export=names', **self.header)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+        self._grant_view(ExportTemplate)
+        response = self.client.get(f'{self.url}?export=missing', **self.header)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_export_template_for_another_type_returns_404(self):
+        other = self.create_custom_object_type(name='Rack', slug='rack')
+        self.create_custom_object_type_field(
+            other, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        self.template.object_types.set([ObjectType.objects.get_for_model(other.get_model())])
+        self._grant_view(self.model)
+        self._grant_view(ExportTemplate)
+
+        response = self.client.get(f'{self.url}?export=names', **self.header)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)

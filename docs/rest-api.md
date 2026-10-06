@@ -395,3 +395,13 @@ All three list endpoints accept bulk writes, the same as NetBox core endpoints. 
 | `DELETE` | `[{"id": 1}, {"id": 2}]` | Delete each listed object |
 
 Each request is applied atomically: if any listed object cannot be created, updated, or deleted, none of them are changed. Deleting a Custom Object Type drops its database table along with every object of that type.
+
+## Export Templates
+
+A Custom Object list endpoint renders a NetBox [export template](https://netboxlabs.com/docs/netbox/models/extras/exporttemplate/) when you pass its name as `?export=`, as core list endpoints do. Assign the template to the Custom Object Type's object type; its `queryset` holds the objects the request would list, so filters and your object permissions apply:
+
+```
+GET /api/plugins/custom-objects/dhcp_scope/?export=scope-csv&status=active
+```
+
+The response has the template's MIME type and file settings. An unknown template name, or one assigned to a different type or that you can't view, returns 404.
