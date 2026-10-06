@@ -6,11 +6,13 @@ import uuid
 from decimal import Decimal
 from unittest import skipUnless
 
+from django.conf import settings
 from django.db import connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from netbox.api.viewsets import mixins as netbox_viewset_mixins
+from packaging.version import Version
 
 from utilities.testing import TestCase as NetBoxTestCase, create_test_user
 from rest_framework import status
@@ -20,7 +22,7 @@ from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from .base import CustomObjectsTestCase, create_token
 from core.models import Job, ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Rack, Site
-from extras.models import Tag
+from extras.models import ExportTemplate, Tag
 from users.models import ObjectPermission, Owner
 from virtualization.models import Cluster, ClusterType
 
@@ -319,6 +321,80 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, NetB
         self.assertHttpStatus(response, 200)
         self.assertEqual(response.data['count'], 1)
         self.assertEqual(response.data['results'][0]['id'], instance.pk)
+
+    def _add_export_template(self, *, viewable=True, model=None):
+        """An export template listing each object's test_field, assigned to ``model`` (default: this type)."""
+        template = ExportTemplate.objects.create(
+            name='Values',
+            template_code='{% for obj in queryset %}{{ obj.test_field }};{% endfor %}',
+            mime_type='text/plain',
+        )
+        template.object_types.set([ObjectType.objects.get_for_model(model or self.model)])
+        if viewable:
+            perm = ObjectPermission.objects.create(name='Export template view perm', actions=['view'])
+            perm.users.add(self.user)
+            perm.object_types.add(ObjectType.objects.get_for_model(ExportTemplate))
+        return template
+
+    def _export(self, query=''):
+        return self.client.get(f'{self._get_list_url()}?export=Values{query}', **self.header)
+
+    @staticmethod
+    def _exported_values(response):
+        return sorted(value for value in response.content.decode().split(';') if value)
+
+    def test_export_renders_template(self):
+        self._add_permission('view', 'Export list perm')
+        self._add_export_template()
+
+        response = self._export()
+        self.assertHttpStatus(response, 200)
+        self.assertEqual(response['Content-Type'], 'text/plain')
+        self.assertEqual(self._exported_values(response), ['Test 001', 'Test 002', 'Test 003'])
+
+    def test_export_applies_filters_but_not_pagination(self):
+        self._add_permission('view', 'Export list perm')
+        self._add_export_template()
+
+        self.assertEqual(self._exported_values(self._export('&test_field=002')), ['Test 002'])
+        # limit/offset don't apply: the export renders every matching object.
+        self.assertEqual(
+            self._exported_values(self._export('&limit=1&offset=1')), ['Test 001', 'Test 002', 'Test 003'],
+        )
+
+    def test_export_respects_object_level_permission_constraints(self):
+        instance = self._get_queryset().get(test_field='Test 001')
+        perm = ObjectPermission(name='Constrained export perm', actions=['view'], constraints={'pk': instance.pk})
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+        self._add_export_template()
+
+        self.assertEqual(self._exported_values(self._export()), ['Test 001'])
+
+    def test_export_unknown_template_returns_404(self):
+        self._add_permission('view', 'Export list perm')
+        self._add_export_template()
+
+        response = self.client.get(f'{self._get_list_url()}?export=Missing', **self.header)
+        self.assertHttpStatus(response, 404)
+
+    def test_export_template_for_another_type_returns_404(self):
+        self._add_permission('view', 'Export list perm')
+        self._add_export_template(model=self.custom_object_type2.get_model())
+
+        self.assertHttpStatus(self._export(), 404)
+
+    # COMPAT(netbox<4.6.1): core's ExportTemplatesMixin doesn't check view permission on the template.
+    @skipUnless(
+        Version(settings.RELEASE.version) >= Version('4.6.1'),
+        'NetBox < 4.6.1 renders export templates regardless of view permission',
+    )
+    def test_export_unviewable_template_returns_404(self):
+        self._add_permission('view', 'Export list perm')
+        self._add_export_template(viewable=False)
+
+        self.assertHttpStatus(self._export(), 404)
 
     def test_list_objects_brief(self):
         """?brief=true trims the response to the brief field set."""
