@@ -2308,6 +2308,28 @@ class ConfigContextAPITest(CustomObjectsTestCase, TestCase):
         self.assertIn('local_context_data', response.data['results'][0])
         self.assertLess(len(without_context.captured_queries), len(with_context.captured_queries))
 
+    def test_linked_objects_share_config_context_lookups(self):
+        """Linked objects with the same dimensions share one source-context lookup."""
+        site = Site.objects.create(name='CC Site', slug='cc-site')
+        ConfigContext.objects.create(name='site', weight=100, data={'ntp': '10.0.0.1'}).sites.add(site)
+        self._add_site_field()
+        self._add_perm('view')
+        url = reverse('plugins-api:netbox_custom_objects-api:linked-objects')
+        url = f'{url}?object_type=dcim.site&object_id={site.pk}'
+
+        def context_queries_for(rows):
+            self.model.objects.all().delete()
+            for i in range(rows):
+                self.model.objects.create(name=f'row-{i}', site=site)
+            with CaptureQueriesContext(connection) as ctx:
+                response = self.client.get(url, **self.header)
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            self.assertEqual(len(response.data['results']), rows)
+            self.assertEqual(response.data['results'][0]['object']['config_context'], {'ntp': '10.0.0.1'})
+            return sum('"extras_configcontext"' in q['sql'] for q in ctx.captured_queries)
+
+        self.assertEqual(context_queries_for(2), context_queries_for(6))
+
     def test_config_context_list_query_count_stays_flat(self):
         site = Site.objects.create(name='CC Site', slug='cc-site')
         ConfigContext.objects.create(name='site', weight=100, data={'ntp': '10.0.0.1'}).sites.add(site)
