@@ -484,6 +484,10 @@ class CustomObjectsPluginConfig(PluginConfig):
         from .graphql.live import connect_signature_invalidation
         connect_signature_invalidation()
 
+        # Evict models of Custom Object Types deleted in another worker process.
+        from .stale_models import connect_stale_model_eviction
+        connect_stale_model_eviction()
+
         # Register netbox-branching integration hooks (deferred-data reset
         # receivers, branchable resolver, ObjectChange field-name migrator,
         # squash dependency-graph receiver).  Guarded so the plugin still
