@@ -7,11 +7,13 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
 from django.urls import NoReverseMatch
 from django.utils.translation import gettext_lazy as _
+from drf_spectacular.extensions import OpenApiSerializerExtension
 from drf_spectacular.utils import extend_schema_field
 from extras.choices import CustomFieldTypeChoices
 from extras.models import ConfigContextModel
 from netbox.api.fields import ChoiceField as NetBoxChoiceField
 from netbox.api.serializers import NetBoxModelSerializer
+from netbox.api.serializers.nested import NestedTagSerializer
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from rest_framework.reverse import reverse
@@ -396,6 +398,46 @@ class CustomObjectTypeSerializer(NetBoxModelSerializer):
 
     def get_object_type_name(self, obj):
         return f"{constants.APP_LABEL}.{obj.get_table_model_name(obj.id).lower()}"
+
+
+class CustomObjectSchemaSerializer(serializers.Serializer):
+    """
+    OpenAPI description of a custom object, shared by every Custom Object Type.
+
+    Each type's real serializer is generated at runtime from its fields (see
+    get_serializer_class()), so the schema can't list them.  This documents the
+    fields every custom object has; CustomObjectSchemaSerializerExtension allows
+    additional properties for the custom fields.  Used only for schema generation.
+    """
+
+    id = serializers.IntegerField(read_only=True)
+    url = serializers.URLField(read_only=True)
+    display = serializers.CharField(read_only=True)
+    owner = OwnerSerializer(nested=True, required=False, allow_null=True)
+    tags = NestedTagSerializer(many=True, required=False)
+    created = serializers.DateTimeField(read_only=True, allow_null=True)
+    last_updated = serializers.DateTimeField(read_only=True, allow_null=True)
+
+    class Meta:
+        # Read by NetBox's bulk-update schema serializers (get_bulk_update_serializer_class).
+        fields = ("id", "url", "display", "owner", "tags", "created", "last_updated")
+
+
+class CustomObjectSchemaSerializerExtension(OpenApiSerializerExtension):
+    """Allow a custom object's per-type custom fields as additional properties."""
+
+    target_class = CustomObjectSchemaSerializer
+    match_subclasses = True  # NetBox's bulk-update schema serializers
+
+    def get_name(self, auto_schema, direction):
+        # CustomObject, BulkCustomObject, ...: per class, so the bulk variants don't
+        # collide with the base component.
+        return type(self.target).__name__.replace("Schema", "")
+
+    def map_serializer(self, auto_schema, direction):
+        schema = auto_schema._map_basic_serializer(self.target, direction)
+        schema["additionalProperties"] = True
+        return schema
 
 
 # TODO: Remove or reduce to a stub (not needed as all custom object serializers are generated via get_serializer_class)

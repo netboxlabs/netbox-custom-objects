@@ -9,7 +9,8 @@ from django.apps import apps as django_apps
 from django.contrib.contenttypes.models import ContentType
 from django.http import Http404
 from django.utils.translation import gettext_lazy as _
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.types import OpenApiTypes
+from drf_spectacular.utils import OpenApiParameter, extend_schema
 from extras.choices import CustomFieldTypeChoices
 from rest_framework import status
 from rest_framework.parsers import JSONParser
@@ -127,11 +128,42 @@ class CustomObjectTypeFieldViewSet(NetBoxModelViewSet):
     filterset_class = CustomObjectTypeFieldFilterSet
 
 
-# Schema generation cannot resolve the dynamic model without a URL slug.
-@extend_schema(exclude=True)
+@extend_schema(parameters=[
+    OpenApiParameter(
+        "custom_object_type", OpenApiTypes.STR, OpenApiParameter.PATH,
+        description="Slug of the Custom Object Type",
+    ),
+])
 class CustomObjectViewSet(NetBoxModelViewSet):
+    """
+    Custom objects of the Custom Object Type identified by its slug in the URL.
+
+    Besides the fields listed here, each object has one property per field of its
+    Custom Object Type, as defined by that type.
+    """
+
     serializer_class = serializers.CustomObjectSerializer
     model = None
+    _queryset = None
+
+    @property
+    def _is_schema_generation(self):
+        # drf-spectacular builds the schema from a request-less "fake" view, so no
+        # Custom Object Type (and no dynamic model) can be resolved: describe the
+        # shape every custom object shares instead.
+        return getattr(self, "swagger_fake_view", False)
+
+    @property
+    def queryset(self):
+        # Set per request in initial().  NetBox reads view.queryset.model directly
+        # (e.g. for the serializer context), so schema generation gets a placeholder.
+        if self._queryset is None and self._is_schema_generation:
+            return CustomObjectType.objects.none()
+        return self._queryset
+
+    @queryset.setter
+    def queryset(self, value):
+        self._queryset = value
 
     def get_view_name(self):
         if self.model:
@@ -139,9 +171,13 @@ class CustomObjectViewSet(NetBoxModelViewSet):
         return 'Custom Object'
 
     def get_serializer_class(self):
+        if self._is_schema_generation:
+            return serializers.CustomObjectSchemaSerializer
         return serializers.get_serializer_class(self.model)
 
     def get_queryset(self):
+        if self._is_schema_generation:
+            return self.queryset
         if self.model is None:
             raise Http404
         qs = super().get_queryset()
@@ -182,6 +218,8 @@ class CustomObjectViewSet(NetBoxModelViewSet):
 
     @property
     def filterset_class(self):
+        if self._is_schema_generation:
+            return None
         return get_filterset_class(self.model)
 
     def _enqueue_bulk_job(self, request, action, payload, action_kwargs=None):

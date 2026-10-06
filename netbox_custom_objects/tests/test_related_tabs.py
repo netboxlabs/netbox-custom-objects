@@ -12,15 +12,19 @@ Focused on the surfaces most likely to regress:
   own app (custom-object hosts are served by the generic injected URL).
 * ``register_combined_tabs()`` adds a ``custom_objects`` view to NetBox's view
   registry for each model, idempotently.
+* ``_register_tabs()`` doesn't emit Django's "database access during app
+  initialization" RuntimeWarning when run from ``ready()``.
 * ``_count_linked_custom_objects()`` returns None for a model nothing references
   (the cheap ``.exists()`` fast path that keeps the per-detail-page badge cheap)
   and a positive count for a referenced one.
 """
 
+import warnings
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from core.models import ObjectType
+from django.apps import apps
 from django.db.models import Q
 from django.test import TestCase, TransactionTestCase
 from extras.choices import CustomFieldTypeChoices
@@ -122,6 +126,17 @@ class PublicHostModelsTests(TestCase):
         labels = [(m._meta.app_label, m._meta.model_name) for m in _public_host_model_classes()]
         self.assertEqual(len(labels), len(set(labels)))
 
+    def test_stale_object_type_is_skipped_quietly(self):
+        """An uninstalled plugin's leftover ObjectType is logged at debug level, not as a warning."""
+        ObjectType.objects.create(app_label='uninstalled_plugin', model='gone', public=True)
+        logger = 'netbox_custom_objects.related_tabs'
+
+        with self.assertNoLogs(logger, level='INFO'):
+            _public_host_model_classes()
+        with self.assertLogs(logger, level='DEBUG') as logs:
+            _public_host_model_classes()
+        self.assertTrue(any('uninstalled_plugin.gone' in line for line in logs.output))
+
 
 class RegisterCombinedTabsTests(TestCase):
     """
@@ -150,6 +165,47 @@ class RegisterCombinedTabsTests(TestCase):
         register_combined_tabs([Site], COMBINED_LABEL, COMBINED_WEIGHT)
         register_combined_tabs([Site], COMBINED_LABEL, COMBINED_WEIGHT)
         self.assertEqual(self._site_tab_names().count('custom_objects'), 1)
+
+
+class RegisterTabsAppInitWarningTests(TestCase):
+    """
+    ``_register_tabs()`` runs from ``ready()``, before ``apps.ready`` is set, and
+    queries ObjectType; it must suppress Django's RuntimeWarning about database
+    access during app initialization.
+    """
+
+    def setUp(self):
+        self.app_config = apps.get_app_config(APP_LABEL)
+        self.addCleanup(setattr, self.app_config, '_register_tabs_error', self.app_config._register_tabs_error)
+
+    def test_query_warns_during_app_init(self):
+        # Sanity check: the simulated app-init state does trigger the warning.
+        with patch.object(apps, 'ready', False), warnings.catch_warnings():
+            warnings.simplefilter('error', RuntimeWarning)
+            with self.assertRaises(RuntimeWarning):
+                list(ObjectType.objects.public())
+
+    def test_register_tabs_suppresses_app_init_warning(self):
+        # Runs the real register_tabs(); safe to repeat because URL injection and
+        # tab registration both skip entries that already exist.
+        with patch.object(apps, 'ready', False), warnings.catch_warnings():
+            warnings.simplefilter('error', RuntimeWarning)
+            self.app_config._register_tabs()
+        self.assertIsNone(self.app_config._register_tabs_error)
+
+    def test_register_tabs_suppresses_branching_routing_warning(self):
+        """netbox-branching warns about routing that query when it's loaded after this plugin."""
+        def routed_query():
+            warnings.warn_explicit(
+                'Routing database query before branching support is initialized.',
+                UserWarning, 'database.py', 1, module='netbox_branching.database',
+            )
+
+        target = 'netbox_custom_objects.related_tabs.registry.register_tabs'
+        with patch(target, side_effect=routed_query), warnings.catch_warnings():
+            warnings.simplefilter('error', UserWarning)
+            self.app_config._register_tabs()
+        self.assertIsNone(self.app_config._register_tabs_error)
 
 
 class BadgeGateTests(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
