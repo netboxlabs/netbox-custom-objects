@@ -283,6 +283,18 @@ The response includes the created object with its assigned ID and standard metad
 }
 ```
 
+### Config context
+
+For a Custom Object Type with config context support enabled, each object also
+includes `local_context_data` (writable) and `config_context` (read-only): the
+rendered context, as a Device or VM has. See
+[Config Context](index.md#config-context) for which source contexts apply.
+Rendering costs extra queries, so leave it out with `?omit=config_context` when
+you don't need it.
+
+If the type has a custom field named `config_context`, that field is returned
+instead of the rendered context.
+
 ## Custom Validation
 
 NetBox's [`CUSTOM_VALIDATORS`](https://netboxlabs.com/docs/netbox/en/stable/configuration/data-validation/#custom_validators) setting is supported for Custom Objects. Use `netbox_custom_objects.<cot-slug>` as the key, where `<cot-slug>` is the slug of the Custom Object Type:

@@ -577,6 +577,25 @@ class CustomObjectTypeConfigContextTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(rendered["ntp"], "10.0.0.1")        # from source context
         self.assertEqual(rendered["dns"], "1.1.1.1")         # local overrides source
 
+    def test_renderer_shares_source_data_without_leaking_local_overrides(self):
+        """Objects sharing source contexts don't see each other's nested local overrides."""
+        from extras.models import ConfigContext
+
+        from netbox_custom_objects.models import ConfigContextRenderer
+
+        site = Site.objects.create(name="CC Shared", slug="cc-shared")
+        cc = ConfigContext.objects.create(name="cc-shared-ctx", weight=1000, is_active=True,
+                                          data={"ntp": {"primary": "10.0.0.1", "secondary": "10.0.0.2"}})
+        cc.sites.add(site)
+        cot = self._site_cot("cc_shared", "cc-shared")
+        model = cot.get_model(no_cache=True)
+        overridden = model.objects.create(name="o1", site=site, local_context_data={"ntp": {"primary": "local"}})
+        plain = model.objects.create(name="o2", site=site)
+
+        renderer = ConfigContextRenderer()
+        self.assertEqual(renderer.render(overridden)["ntp"], {"primary": "local", "secondary": "10.0.0.2"})
+        self.assertEqual(renderer.render(plain)["ntp"], {"primary": "10.0.0.1", "secondary": "10.0.0.2"})
+
     def test_no_convention_field_returns_local_only(self):
         """Without a convention-named dimension field, no source aggregation happens."""
         from extras.models import ConfigContext

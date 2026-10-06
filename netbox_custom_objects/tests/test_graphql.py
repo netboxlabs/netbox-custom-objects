@@ -27,7 +27,7 @@ from rest_framework.test import APIClient
 
 from core.models import ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Region, Site
-from extras.models import JournalEntry, Tag
+from extras.models import ConfigContext, JournalEntry, Tag
 from users.models import ObjectPermission, Owner
 
 from netbox_custom_objects.graphql import live as live_module
@@ -709,8 +709,7 @@ class GraphQLEndpointTestCase(GraphQLEndpointMixin, CustomObjectsTestCase, TestC
         self.assertEqual(
             count_at_3, count_at_9,
             f"query count scaled with row count ({count_at_3} at 3 rows vs "
-            f"{count_at_9} at 9 rows) -- N+1 regression in polymorphic "
-            "relationship resolution",
+            f"{count_at_9} at 9 rows) -- N+1 regression",
         )
 
     def test_polymorphic_object_field_query_count_stays_flat(self):
@@ -945,6 +944,83 @@ class GraphQLEndpointTestCase(GraphQLEndpointMixin, CustomObjectsTestCase, TestC
         payload = json.loads(response.content)
         self.assertIn("errors", payload)
         self.assertIn("local_context_data", payload["errors"][0]["message"])
+
+    def _config_context_type(self, slug="cc", extra_fields=()):
+        cot = self.create_custom_object_type(name=slug.title(), slug=slug, config_context_enabled=True)
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        self.create_custom_object_type_field(
+            cot, name="site", label="Site", type="object", related_object_type=self.get_site_object_type(),
+        )
+        for kwargs in extra_fields:
+            self.create_custom_object_type_field(cot, **kwargs)
+        return cot
+
+    def test_config_context_renders_source_and_local_data(self):
+        site = self._make_site()
+        site_context = ConfigContext.objects.create(name="site", weight=100, data={"ntp": "10.0.0.1", "dns": "a"})
+        site_context.sites.add(site)
+        tag = Tag.objects.create(name="Gold", slug="gold")
+        tag_context = ConfigContext.objects.create(name="gold", weight=200, data={"tier": "gold"})
+        tag_context.tags.add(tag)
+
+        cot = self._config_context_type()
+        model = cot.get_model()
+        tagged = model.objects.create(name="tagged", site=site, local_context_data={"dns": "b"})
+        tagged.tags.add(tag)
+        model.objects.create(name="plain", site=site)
+
+        data = self._gql("{ custom_objects_cc_list { name config_context } }")
+        rendered = {row["name"]: row["config_context"] for row in data["custom_objects_cc_list"]}
+        self.assertEqual(rendered["tagged"], {"ntp": "10.0.0.1", "dns": "b", "tier": "gold"})
+        self.assertEqual(rendered["plain"], {"ntp": "10.0.0.1", "dns": "a"})
+
+    def test_config_context_absent_without_config_context(self):
+        cot = self.create_simple_custom_object_type(name="Plain", slug="plain")
+        cot.get_model().objects.create(name="P1")
+
+        response = self.client.post(
+            self.url,
+            data={"query": "{ custom_objects_plain_list { config_context } }"},
+            format="json",
+            **self.header,
+        )
+        payload = json.loads(response.content)
+        self.assertIn("errors", payload)
+        self.assertIn("config_context", payload["errors"][0]["message"])
+
+    def test_custom_field_named_config_context_takes_precedence(self):
+        cot = self._config_context_type(extra_fields=[
+            {"name": "config_context", "label": "Config context", "type": "text"},
+        ])
+        cot.get_model().objects.create(name="C1", config_context="custom value")
+
+        data = self._gql("{ custom_objects_cc_list { config_context } }")
+        self.assertEqual(data["custom_objects_cc_list"][0]["config_context"], "custom value")
+
+    def test_unexposed_custom_field_named_config_context_still_takes_precedence(self):
+        """A coordinates field has no GraphQL representation but still claims the name, as in REST."""
+        self._config_context_type(extra_fields=[
+            {"name": "config_context", "label": "Config context", "type": "coordinates"},
+        ])
+
+        response = self.client.post(
+            self.url, data={"query": "{ custom_objects_cc_list { config_context } }"}, format="json", **self.header,
+        )
+        payload = json.loads(response.content)
+        self.assertIn("errors", payload)
+        self.assertIn("config_context", payload["errors"][0]["message"])
+
+    def test_config_context_query_count_stays_flat(self):
+        site = self._make_site()
+        ConfigContext.objects.create(name="site", weight=100, data={"ntp": "10.0.0.1"}).sites.add(site)
+        model = self._config_context_type().get_model()
+
+        def make_row(model, i):
+            model.objects.create(name=f"row-{i}", site=site, local_context_data={"index": str(i)})
+
+        self._assert_query_count_flat(model, "{ custom_objects_cc_list { name config_context } }", make_row)
 
 
 @override_settings(LOGIN_REQUIRED=True)

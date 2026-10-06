@@ -1179,36 +1179,38 @@ class CustomObjectConfigContextMixin(ConfigContextModel):
     class Meta:
         abstract = True
 
-    def _config_context_source(self):
+    def _config_context_dimension_fields(self):
+        """Return this type's convention fields that feed a config context dimension."""
+        return config_context_dimension_fields(
+            self.custom_object_type.fields.filter(
+                type=CustomFieldTypeChoices.TYPE_OBJECT,
+                is_polymorphic=False,
+                name__in=CONFIG_CONTEXT_DIMENSION_FIELDS.keys(),
+            ).select_related("related_object_type")
+        )
+
+    def _config_context_source(self, dimension_fields=None):
         """Proxy populated from convention-named OBJECT fields, or None if none match.
 
         Only honours a field whose *name* and *target model* both match the
         convention, so a mistyped/mispointed field is silently ignored rather
-        than feeding the wrong dimension.
+        than feeding the wrong dimension.  *dimension_fields* lets a caller that
+        renders many objects of one type look the fields up once.
         """
         from types import SimpleNamespace
 
-        cot = self.custom_object_type
-        by_name = {
-            f.name: f
-            for f in cot.fields.filter(
-                type=CustomFieldTypeChoices.TYPE_OBJECT,
-                is_polymorphic=False,
-                name__in=CONFIG_CONTEXT_DIMENSION_FIELDS.keys(),
-            )
-        }
-        dims = {name: None for name in CONFIG_CONTEXT_DIMENSION_FIELDS}
-        used = False
-        for name, (app_label, model_name) in CONFIG_CONTEXT_DIMENSION_FIELDS.items():
-            f = by_name.get(name)
-            ct = getattr(f, "related_object_type", None)
-            if f and ct and (ct.app_label, ct.model) == (app_label, model_name):
-                dims[name] = getattr(self, name, None)
-                used = True
-        if not used:
+        if dimension_fields is None:
+            dimension_fields = self._config_context_dimension_fields()
+        if not dimension_fields:
             return None
+        dims = {name: None for name in CONFIG_CONTEXT_DIMENSION_FIELDS}
+        for name in dimension_fields:
+            dims[name] = getattr(self, name, None)
         proxy = SimpleNamespace(**dims)
-        proxy.tags = self.tags  # custom objects are taggable
+        # get_for_object() only calls tags.slugs(); read them via all() so prefetched
+        # tags don't cost a query.
+        tag_slugs = sorted(tag.slug for tag in self.tags.all())
+        proxy.tags = SimpleNamespace(slugs=lambda: tag_slugs)
         return proxy
 
     def get_config_context(self):
@@ -1216,21 +1218,79 @@ class CustomObjectConfigContextMixin(ConfigContextModel):
         overlay ``local_context_data`` (which takes precedence)."""
         return self._render_config_context(self._config_context_source())
 
-    def _render_config_context(self, source):
+    def _render_config_context(self, source, source_data=None):
         """Merge the ConfigContexts for *source* (a proxy from
         ``_config_context_source()``, or ``None``), then overlay
         ``local_context_data``.  Takes a pre-built *source* so a caller that also
         needs the source-context list (the detail tab) can build the proxy once
-        instead of paying for the ``cot.fields`` lookup twice.
+        instead of paying for the ``cot.fields`` lookup twice.  *source_data*, if
+        given, is the already-merged source context data to use instead.
         """
-        data = {}
-        if source is not None:
-            contexts = ConfigContext.objects.get_for_object(source, aggregate_data=True) or []
-            for context in contexts:
-                data = deepmerge(data, context)
+        if source_data is None:
+            source_data = _merged_source_context_data(source)
+        # Copy: source_data may be shared with other objects (see ConfigContextRenderer).
+        data = dict(source_data)
         if self.local_context_data:
             data = deepmerge(data, self.local_context_data)
         return data
+
+
+def config_context_dimension_fields(fields):
+    """
+    Return ``{name: field}`` for the fields among *fields* that feed a config
+    context dimension: a non-polymorphic OBJECT field whose name and target model
+    both match ``CONFIG_CONTEXT_DIMENSION_FIELDS``.
+    """
+    dimension_fields = {}
+    for field in fields:
+        target = CONFIG_CONTEXT_DIMENSION_FIELDS.get(field.name)
+        if target is None or field.type != CustomFieldTypeChoices.TYPE_OBJECT or field.is_polymorphic:
+            continue
+        ct = field.related_object_type
+        if ct is not None and (ct.app_label, ct.model) == target:
+            dimension_fields[field.name] = field
+    return dimension_fields
+
+
+def _merged_source_context_data(source):
+    """Merge the data of every ConfigContext that applies to *source* (or ``{}``)."""
+    data = {}
+    if source is not None:
+        contexts = ConfigContext.objects.get_for_object(source, aggregate_data=True) or []
+        for context in contexts:
+            data = deepmerge(data, context)
+    return data
+
+
+class ConfigContextRenderer:
+    """
+    Render config context for many custom objects, sharing work between them.
+
+    Finding the source contexts for an object takes several queries.  Objects with
+    the same dimension objects and tags get the same source contexts, so their
+    merged data is computed once per distinct combination, and each type's
+    dimension fields are looked up once.  Use one renderer per request: it
+    remembers source data for its lifetime.
+    """
+
+    def __init__(self):
+        self._dimension_fields = {}
+        self._source_data = {}
+
+    def render(self, obj):
+        cot_id = obj.custom_object_type.pk
+        if cot_id not in self._dimension_fields:
+            self._dimension_fields[cot_id] = obj._config_context_dimension_fields()
+        source = obj._config_context_source(self._dimension_fields[cot_id])
+        if source is None:
+            return obj._render_config_context(None, source_data={})
+        key = (
+            tuple(getattr(getattr(source, name), "pk", None) for name in CONFIG_CONTEXT_DIMENSION_FIELDS),
+            tuple(source.tags.slugs()),
+        )
+        if key not in self._source_data:
+            self._source_data[key] = _merged_source_context_data(source)
+        return obj._render_config_context(source, source_data=self._source_data[key])
 
 
 def validate_pep440(value):

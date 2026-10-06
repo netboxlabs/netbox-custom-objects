@@ -299,6 +299,8 @@ class LinkedObjectsView(APIView):
             type__in=[CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT],
         ).select_related('custom_object_type')
 
+        # One context for every object, so they share its config context renderer.
+        context = {'request': request}
         results = []
         for field in list(non_poly_fields) + list(poly_fields):
             custom_object_model = field.custom_object_type.get_model()
@@ -330,10 +332,10 @@ class LinkedObjectsView(APIView):
             for linked_obj in linked_objects:
                 results.append({
                     'custom_object_type': serializers.CustomObjectTypeSerializer(
-                        field.custom_object_type, nested=True, context={'request': request}
+                        field.custom_object_type, nested=True, context=context
                     ).data,
                     'field_name': field.name,
-                    'object': serializer_class(linked_obj, context={'request': request}).data,
+                    'object': serializer_class(linked_obj, context=context).data,
                 })
 
         return Response({'count': len(results), 'results': results})
