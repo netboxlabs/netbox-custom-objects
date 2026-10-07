@@ -227,6 +227,25 @@ def _patch_object_selector_view():
     ObjectSelectorView._get_filterset_class = _patched_get_filterset_class
 
 
+def _patch_choice_set_clean():
+    """
+    Extend CustomFieldChoiceSet.clean() to refuse removing a choice a custom object still uses.
+
+    Core checks only core custom fields; see models.check_removed_choices().
+    """
+    from extras.models import CustomFieldChoiceSet
+
+    from netbox_custom_objects.models import check_removed_choices
+
+    _original_clean = CustomFieldChoiceSet.clean
+
+    def _patched_clean(self):
+        _original_clean(self)
+        check_removed_choices(self)
+
+    CustomFieldChoiceSet.clean = _patched_clean
+
+
 _graphql_view_patched = False
 
 
@@ -473,6 +492,9 @@ class CustomObjectsPluginConfig(PluginConfig):
 
         # Patch ObjectSelectorView to support dynamically-generated custom object models
         _patch_object_selector_view()
+
+        # Validate choice set edits against custom objects, as core does for custom fields
+        _patch_choice_set_clean()
 
         # Patch the GraphQL view so custom object types added/removed at runtime
         # are reflected in the schema without a NetBox restart.
