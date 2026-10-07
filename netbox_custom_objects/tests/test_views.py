@@ -10,6 +10,7 @@ from django.db import connection
 from django.test import RequestFactory, TestCase
 from django.urls import reverse
 from extras.models import CustomFieldChoiceSet
+from netbox.context import current_request, events_queue, query_cache
 from netbox.jobs import AsyncViewJob
 from users.models import ObjectPermission
 from utilities.request import copy_safe_request
@@ -503,6 +504,11 @@ class CustomObjectViewTestCase(
         request.user = self.user
         request.id = uuid.uuid4()
         job = Job.objects.create(name='Background bulk operation', user=self.user, job_id=uuid.uuid4())
+        # COMPAT(netbox<4.6): if the view raises, event_tracking() leaves this request current, which
+        # would leak into later tests.
+        self.addCleanup(current_request.set, None)
+        self.addCleanup(events_queue.set, {})
+        self.addCleanup(query_cache.set, None)
         request_copy = copy_safe_request(request)
         # NetBox 4.7's BulkEditView reads request.htmx, which copy_safe_request() doesn't carry,
         # so a background bulk edit fails there for every model, core's included.

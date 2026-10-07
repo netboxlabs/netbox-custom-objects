@@ -266,7 +266,9 @@ class BackgroundJobURLKwargsMixin:
     def _url_kwargs(request, kwargs):
         if "custom_object_type" in kwargs:
             return kwargs
-        return {**resolve(request.path_info).kwargs, **kwargs}
+        # COMPAT(netbox<4.7): copy_safe_request() carries only `path`, not `path_info`.
+        path = getattr(request, "path_info", None) or request.path
+        return {**resolve(path).kwargs, **kwargs}
 
     def setup(self, request, *args, **kwargs):
         super().setup(request, *args, **self._url_kwargs(request, kwargs))
