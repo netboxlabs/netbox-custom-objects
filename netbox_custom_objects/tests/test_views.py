@@ -510,9 +510,10 @@ class CustomObjectViewTestCase(
         self.addCleanup(events_queue.set, {})
         self.addCleanup(query_cache.set, None)
         request_copy = copy_safe_request(request)
-        # NetBox 4.7's BulkEditView reads request.htmx, which copy_safe_request() doesn't carry,
-        # so a background bulk edit fails there for every model, core's included.
-        request_copy.htmx = None
+        # COMPAT(netbox<4.7.3): BulkEditView reads request.htmx, which request copies lacked until
+        # NetBox 4.7.3, so a background bulk edit failed for every model, core's included.
+        if not hasattr(request_copy, 'htmx'):
+            request_copy.htmx = False
         AsyncViewJob(job).run(view_cls=view_class, request=request_copy)
 
     def test_bulk_edit_as_background_job(self):
