@@ -4428,6 +4428,9 @@ def __getattr__(name):
     if cot_id is not None and name == CustomObjectType.get_table_model_name(cot_id):
         try:
             return CustomObjectType.objects.get(pk=int(cot_id)).get_model()
-        except (CustomObjectType.DoesNotExist, ProgrammingError, OperationalError):
-            pass  # no such type, or the database isn't migrated yet
+        except CustomObjectType.DoesNotExist:
+            pass
+        except (ProgrammingError, OperationalError):
+            # Unapplied migrations, or a real database failure: keep the traceback.
+            logger.warning("Could not resolve %s.%s", __name__, name, exc_info=True)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

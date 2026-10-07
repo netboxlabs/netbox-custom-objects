@@ -3333,7 +3333,7 @@ class CustomObjectPicklingTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual([obj.name for obj in getattr(restored, accessor).all()], ['s1'])
 
     def test_unpickling_resolves_a_rebuilt_model(self):
-        """A process that hasn't generated the model (e.g. an RQ worker) builds it on unpickling."""
+        """Unpickling resolves the model after its cache is cleared."""
         data = pickle.dumps(self.model.objects.all())
         CustomObjectType.clear_model_cache(self.cot.pk, all_branches=True)
 
@@ -3343,9 +3343,15 @@ class CustomObjectPicklingTestCase(CustomObjectsTestCase, TestCase):
 
     def test_module_attribute_lookup_only_resolves_existing_types(self):
         self.assertIs(getattr(nco_models, self.model.__name__), self.model)
-        self.assertFalse(hasattr(nco_models, 'Table999999Model'))
-        self.assertFalse(hasattr(nco_models, 'NotAModel'))
+        with self.assertNoLogs(nco_models.logger):
+            self.assertFalse(hasattr(nco_models, 'Table999999Model'))
+            self.assertFalse(hasattr(nco_models, 'NotAModel'))
 
-        # An unmigrated database (e.g. a fresh install) is a missing attribute, not a DB error.
-        with patch.object(CustomObjectType.objects, 'get', side_effect=ProgrammingError):
-            self.assertFalse(hasattr(nco_models, self.model.__name__))
+    def test_module_attribute_lookup_logs_database_errors(self):
+        # Unapplied migrations or a database failure: a missing attribute, with the error logged.
+        for error in (ProgrammingError, OperationalError):
+            with self.subTest(error=error.__name__):
+                with patch.object(CustomObjectType.objects, 'get', side_effect=error('boom')):
+                    with self.assertLogs(nco_models.logger, level='WARNING') as logs:
+                        self.assertFalse(hasattr(nco_models, self.model.__name__))
+                self.assertIs(logs.records[0].exc_info[0], error)
