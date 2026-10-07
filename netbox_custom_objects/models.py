@@ -1944,7 +1944,8 @@ class CustomObjectType(NetBoxModel):
 
         attrs = {
             "Meta": meta,
-            "__module__": "database.models",
+            # Resolvable through this module's __getattr__, so the class can be pickled.
+            "__module__": __name__,
             "custom_object_type": self,
             "custom_object_type_id": self.id,
         }
@@ -4445,3 +4446,22 @@ def clear_cache_on_choice_set_save(sender, instance, **kwargs):
         CustomObjectType.clear_model_cache(cot.id)
         cot.snapshot()
         cot.save(update_fields=['cache_timestamp'])
+
+
+def __getattr__(name):
+    """
+    Resolve generated model classes (``Table<id>Model``) by name, so pickle can find them.
+
+    They aren't stored on this module because they're rebuilt whenever their type changes;
+    ``get_model()`` returns the current class, for the active branch.
+    """
+    cot_id = extract_cot_id_from_model_name(name.lower())
+    if cot_id is not None and name == CustomObjectType.get_table_model_name(cot_id):
+        try:
+            return CustomObjectType.objects.get(pk=int(cot_id)).get_model()
+        except CustomObjectType.DoesNotExist:
+            pass
+        except (ProgrammingError, OperationalError):
+            # Unapplied migrations, or a real database failure: keep the traceback.
+            logger.warning("Could not resolve %s.%s", __name__, name, exc_info=True)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

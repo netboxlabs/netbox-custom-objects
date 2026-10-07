@@ -1,6 +1,7 @@
 """
 Tests for the concrete and dynamically generated models that are managed by this plugin.
 """
+import pickle
 import sys
 from decimal import Decimal
 from unittest import skip
@@ -17,6 +18,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 import netbox_custom_objects as nco
+import netbox_custom_objects.models as nco_models
 
 from core.choices import JobStatusChoices
 from core.models import ObjectType
@@ -3346,3 +3348,65 @@ class ChoiceSetRemovedChoiceTestCase(CustomObjectsTestCase, TestCase):
         self.assertIn("Cannot remove choice three", response.content.decode())
         self.choice_set.refresh_from_db()
         self.assertEqual(len(self.choice_set.extra_choices), 3)
+
+
+class CustomObjectPicklingTestCase(CustomObjectsTestCase, TestCase):
+    """
+    Generated models can be pickled by reference, as RQ webhook and script jobs do with
+    querysets and prefetch caches that hold them.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.cot = self.create_custom_object_type(name='Session', slug='session')
+        self.create_custom_object_type_field(
+            self.cot, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        self.create_custom_object_type_field(
+            self.cot, name='site', label='Site', type='object', related_object_type=self.get_site_object_type(),
+        )
+        self.model = self.cot.get_model()
+        self.site = Site.objects.create(name='Pickle Site', slug='pickle-site')
+        self.model.objects.create(name='s1', site=self.site)
+
+    def test_model_class_and_queryset_round_trip(self):
+        self.assertEqual(self.model.__module__, 'netbox_custom_objects.models')
+        # Identity holds because get_model() returns the cached class; see the rebuilt-model test below.
+        self.assertIs(pickle.loads(pickle.dumps(self.model)), self.model)
+
+        queryset = pickle.loads(pickle.dumps(self.model.objects.all()))
+        self.assertEqual([obj.name for obj in queryset], ['s1'])
+
+    def test_prefetch_cache_round_trips(self):
+        """The reported path: a related object whose prefetch cache holds custom objects."""
+        accessor = next(
+            rel.get_accessor_name() for rel in Site._meta.related_objects if rel.related_model is self.model
+        )
+        site = Site.objects.prefetch_related(accessor).get(pk=self.site.pk)
+
+        restored = pickle.loads(pickle.dumps(site))
+        self.assertEqual([obj.name for obj in getattr(restored, accessor).all()], ['s1'])
+
+    def test_unpickling_resolves_a_rebuilt_model(self):
+        """Unpickling resolves the model after its cache is cleared."""
+        data = pickle.dumps(self.model.objects.all())
+        CustomObjectType.clear_model_cache(self.cot.pk, all_branches=True)
+
+        queryset = pickle.loads(data)
+        self.assertIs(queryset.model, CustomObjectType.objects.get(pk=self.cot.pk).get_model())
+        self.assertEqual([obj.name for obj in queryset], ['s1'])
+
+    def test_module_attribute_lookup_only_resolves_existing_types(self):
+        self.assertIs(getattr(nco_models, self.model.__name__), self.model)
+        with self.assertNoLogs(nco_models.logger):
+            self.assertFalse(hasattr(nco_models, 'Table999999Model'))
+            self.assertFalse(hasattr(nco_models, 'NotAModel'))
+
+    def test_module_attribute_lookup_logs_database_errors(self):
+        # Unapplied migrations or a database failure: a missing attribute, with the error logged.
+        for error in (ProgrammingError, OperationalError):
+            with self.subTest(error=error.__name__):
+                with patch.object(CustomObjectType.objects, 'get', side_effect=error('boom')):
+                    with self.assertLogs(nco_models.logger, level='WARNING') as logs:
+                        self.assertFalse(hasattr(nco_models, self.model.__name__))
+                self.assertIs(logs.records[0].exc_info[0], error)
