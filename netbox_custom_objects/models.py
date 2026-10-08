@@ -35,6 +35,7 @@ from extras.choices import (
     CustomFieldUIEditableChoices,
     CustomFieldUIVisibleChoices,
 )
+from extras.data import CHOICE_SETS
 from extras.models import ConfigContext, ConfigContextModel, CustomField, CustomFieldChoiceSet
 from extras.models.customfields import SEARCH_TYPES
 from extras.utils import is_taggable, run_validators
@@ -4397,6 +4398,33 @@ def clear_cache_on_field_delete(sender, instance, **kwargs):
     """
     if instance.custom_object_type_id:
         CustomObjectType.clear_model_cache(instance.custom_object_type_id)
+
+
+def check_removed_choices(choice_set):
+    """
+    Reject removal of choices that are still used by custom objects.
+    """
+    original = {value for value, _label in choice_set._original_extra_choices or ()}
+    current = {value for value, _label in choice_set.extra_choices or ()}
+    if choice_set.base_choices:
+        current.update(value for value, _label in CHOICE_SETS.get(choice_set.base_choices))
+    if choice_set.pk is None or not (removed := original - current):
+        return
+
+    fields = CustomObjectTypeField.objects.filter(choice_set=choice_set).select_related('custom_object_type')
+    for field in fields:
+        model = field.custom_object_type.get_model()
+        for choice in sorted(removed):
+            if field.type == CustomFieldTypeChoices.TYPE_MULTISELECT:
+                lookup = {f'{field.name}__contains': [choice]}
+            else:
+                lookup = {field.name: choice}
+            if model.objects.filter(**lookup).exists():
+                raise ValidationError(
+                    _("Cannot remove choice {choice} as there are {model} objects which reference it.").format(
+                        choice=choice, model=field.custom_object_type.get_verbose_name()
+                    )
+                )
 
 
 @receiver(post_save, sender=CustomFieldChoiceSet)
