@@ -308,6 +308,27 @@
       }
     },
 
+    "constraint": {
+      "type": "object",
+      "description": "A database-enforced constraint across fields of a COT.",
+      "required": ["name", "fields"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "$ref": "#/$defs/identifier" },
+        "type": { "type": "string", "enum": ["unique"], "default": "unique" },
+        "fields": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 1 },
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "The ids of the fields the constraint covers."
+        },
+        "case_insensitive": { "type": "boolean", "default": false },
+        "nulls_distinct": { "type": "boolean", "default": true },
+        "description": { "type": "string", "maxLength": 200 }
+      }
+    },
+
     "cot_definition": {
       "$comment": "The 'comments' field present on both CustomObjectType and CustomObjectTypeField is intentionally excluded from this schema format. It is editorial annotation, not structural schema, and would create noise in diffs and cross-installation sharing.",
       "type": "object",
@@ -330,6 +351,16 @@
           "type": "array",
           "items": { "$ref": "#/$defs/removed_field" },
           "description": "Tombstone records for permanently removed fields. IDs here must not appear in 'fields'."
+        },
+        "constraints": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/constraint" },
+          "description": "Constraints on this COT. Each name must be unique within this COT."
+        },
+        "removed_constraints": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/identifier" },
+          "description": "Names of constraints to remove. Names here must not appear in 'constraints'."
         }
       }
     }

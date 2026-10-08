@@ -235,6 +235,32 @@ A polymorphic `object` or `multiobject` field can reference objects of multiple 
 !!! note
     The `is_polymorphic` flag and the set of allowed `related_object_types` cannot be changed after the field is created. To convert between a polymorphic and a non-polymorphic field, delete and recreate the field.
 
+## Custom Object Type Constraints
+
+Require a combination of field values to be unique by creating a constraint with a POST request to `/api/plugins/custom-objects/custom-object-type-constraints/`. `fields` lists the IDs of the fields it covers:
+
+```json
+{
+  "custom_object_type": 9,
+  "name": "vendor_serial",
+  "fields": [41, 42],
+  "case_insensitive": false,
+  "nulls_distinct": true
+}
+```
+
+| Attribute | Required | Description |
+|---|---|---|
+| `custom_object_type` | yes | ID of the Custom Object Type. |
+| `name` | yes | Internal name. Lowercase alphanumeric with underscores only; unique within the Custom Object Type. |
+| `type` | no | `unique` (the only type at present). |
+| `fields` | yes | IDs of the fields whose combined values must be unique: at least two, or one when `case_insensitive` is `true`. Responses list each field's `id`, `url`, `name` and `schema_id`. |
+| `case_insensitive` | no | Compare `text`, `longtext` and `url` fields without regard to case. Default: `false`. |
+| `nulls_distinct` | no | When `true`, objects that leave any constrained field empty never conflict. Default: `true`. |
+| `description` | no | A short description. |
+
+Creating or changing a constraint returns `400 Bad Request` if existing objects already violate it. Writes to custom objects that would violate a constraint also return `400 Bad Request`.
+
 ## Custom Objects
 
 Once a Custom Object Type's schema is defined, create Custom Objects (instances) with a `POST` to `/api/plugins/custom-objects/<slug>/`, where `<slug>` is the slug of the Custom Object Type:

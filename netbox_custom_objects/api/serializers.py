@@ -24,7 +24,7 @@ from users.api.serializers_.owners import OwnerSerializer
 from netbox_custom_objects import constants, field_types
 from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
 from netbox_custom_objects.models import (ConfigContextRenderer, CustomObject, CustomObjectType,
-                                          CustomObjectTypeField)
+                                          CustomObjectTypeConstraint, CustomObjectTypeField)
 
 # Public URL slug used in API paths (e.g. /api/plugins/custom-objects/)
 _PUBLIC_APP_LABEL = "custom-objects"
@@ -344,6 +344,93 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
         # DDL and the field row are both rolled back (PostgreSQL DDL is transactional).
         with transaction.atomic():
             return super().create(validated_data)
+
+
+@extend_schema_field({
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "id": {"type": "integer"},
+            "url": {"type": "string", "format": "uri"},
+            "name": {"type": "string"},
+            "schema_id": {"type": "integer"},
+        },
+    },
+    "description": "Field IDs on write; brief field objects on read.",
+})
+class ConstraintFieldsField(serializers.Field):
+    """
+    The fields a constraint covers: written as a list of field IDs, read as brief field objects.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(source="*", **kwargs)
+
+    def to_representation(self, constraint):
+        request = self.context.get("request")
+        return [
+            {
+                "id": field.pk,
+                "url": reverse(
+                    "plugins-api:netbox_custom_objects-api:customobjecttypefield-detail",
+                    kwargs={"pk": field.pk},
+                    request=request,
+                ),
+                "name": field.name,
+                "schema_id": field.schema_id,
+            }
+            for field in constraint.get_fields()
+        ]
+
+    def to_internal_value(self, data):
+        if not isinstance(data, list) or not data:
+            raise ValidationError(_("Expected a non-empty list of field IDs."))
+        try:
+            pks = [int(pk) for pk in data]
+        except (TypeError, ValueError):
+            raise ValidationError(_("Expected a list of field IDs."))
+        by_pk = CustomObjectTypeField.objects.in_bulk(pks)
+        missing = [pk for pk in pks if pk not in by_pk]
+        if missing:
+            raise ValidationError(_("Unknown field ID(s): {ids}").format(ids=", ".join(map(str, missing))))
+        return {"_constraint_fields": [by_pk[pk] for pk in pks]}
+
+
+class CustomObjectTypeConstraintSerializer(NetBoxModelSerializer):
+    url = serializers.HyperlinkedIdentityField(
+        view_name="plugins-api:netbox_custom_objects-api:customobjecttypeconstraint-detail"
+    )
+    fields = ConstraintFieldsField()
+
+    class Meta:
+        model = CustomObjectTypeConstraint
+        fields = (
+            "id",
+            "url",
+            "display",
+            "custom_object_type",
+            "name",
+            "type",
+            "fields",
+            "case_insensitive",
+            "nulls_distinct",
+            "description",
+            "created",
+            "last_updated",
+        )
+        brief_fields = ("id", "url", "display", "name", "description")
+
+    def validate(self, data):
+        members = data.pop("_constraint_fields", None)
+        if members is not None:
+            cot = data.get("custom_object_type") or getattr(self.instance, "custom_object_type", None)
+            if any(f.custom_object_type_id != getattr(cot, "pk", None) for f in members):
+                raise ValidationError({"fields": _("Every field must belong to this custom object type.")})
+            data["field_schema_ids"] = [f.schema_id for f in members]
+        elif self.instance is None:
+            raise ValidationError({"fields": _("This field is required.")})
+        return super().validate(data)
 
 
 class CustomObjectTypeSerializer(NetBoxModelSerializer):

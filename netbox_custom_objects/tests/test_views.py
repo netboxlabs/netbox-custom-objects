@@ -12,7 +12,7 @@ from users.models import ObjectPermission
 from utilities.testing import ViewTestCases, create_test_user
 
 from netbox_custom_objects import views
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
 from .base import CustomObjectsTestCase
 from core.models.object_types import ObjectType
 
@@ -254,6 +254,78 @@ class CustomObjectTypeFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.Pri
 
     def test_bulk_delete_objects_with_constrained_permission(self):
         ...
+
+
+class CustomObjectTypeConstraintViewTestCase(
+    CustomObjectsTestCase,
+    ViewTestCases.GetObjectChangelogViewTestCase,
+    ViewTestCases.CreateObjectViewTestCase,
+    ViewTestCases.EditObjectViewTestCase,
+    ViewTestCases.DeleteObjectViewTestCase,
+):
+    """Add, edit and delete views for constraints, plus the type's Constraints tab."""
+
+    model = CustomObjectTypeConstraint
+    # The form takes field IDs; the model stores their schema IDs (checked separately).
+    validation_excluded_fields = ["field_schema_ids"]
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.custom_object_type = CustomObjectType.objects.create(name="asset", slug="assets")
+        cls.f1, cls.f2, cls.f3, cls.f4 = (
+            CustomObjectTypeField.objects.create(custom_object_type=cls.custom_object_type, name=name, type="text")
+            for name in ("vendor", "serial", "model", "tag")
+        )
+        for name, fields in (("c1", (cls.f1, cls.f2)), ("c2", (cls.f1, cls.f3)), ("c3", (cls.f2, cls.f3))):
+            CustomObjectTypeConstraint.objects.create(
+                custom_object_type=cls.custom_object_type, name=name, field_schema_ids=[f.schema_id for f in fields]
+            )
+        cls.form_data = {
+            "custom_object_type": cls.custom_object_type.pk,
+            "name": "c4",
+            "type": "unique",
+            "field_schema_ids": [cls.f1.pk, cls.f4.pk],
+            "case_insensitive": True,
+            "nulls_distinct": True,
+        }
+
+    def _get_base_url(self):
+        return 'plugins:{}:{}_{{}}'.format(self.model._meta.app_label, self.model._meta.model_name)
+
+    def test_create_object_with_permission(self):
+        super().test_create_object_with_permission()
+        constraint = CustomObjectTypeConstraint.objects.get(name="c4")
+        self.assertCountEqual(constraint.field_schema_ids, [self.f1.schema_id, self.f4.schema_id])
+
+    def test_constraints_tab(self):
+        self.user.is_superuser = True
+        self.user.save()
+        url = reverse(
+            "plugins:netbox_custom_objects:customobjecttype_constraints", kwargs={"pk": self.custom_object_type.pk}
+        )
+        response = self.client.get(url)
+        self.assertHttpStatus(response, 200)
+        self.assertContains(response, "c1")
+        self.assertContains(response, "Vendor, Serial")
+
+    def test_field_delete_page_lists_constraints(self):
+        self.user.is_superuser = True
+        self.user.save()
+        url = reverse("plugins:netbox_custom_objects:customobjecttypefield_delete", kwargs={"pk": self.f3.pk})
+        response = self.client.get(url)
+        self.assertHttpStatus(response, 200)
+        self.assertContains(response, "will also be deleted: c2, c3")
+
+    def test_custom_object_form_reports_duplicate(self):
+        self.user.is_superuser = True
+        self.user.save()
+        model = self.custom_object_type.get_model()
+        model.objects.create(vendor="acme", serial="1")
+        url = reverse("plugins:netbox_custom_objects:customobject_add", kwargs={"custom_object_type": "assets"})
+        response = self.client.post(url, {"vendor": "acme", "serial": "1"})
+        self.assertHttpStatus(response, 200)
+        self.assertContains(response, "already exists")
+        self.assertEqual(model.objects.count(), 1)
 
 
 class CustomObjectViewTestCase(

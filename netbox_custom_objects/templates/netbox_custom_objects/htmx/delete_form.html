@@ -17,6 +17,13 @@
           You are deleting a field that is in use on {{ num_dependent_objects }} Custom Objects. This will lead to irreversible data loss. Are you sure?
         {% endblocktrans %}
         </p>
+    {% if constraints %}
+      <p>
+        {% blocktrans trimmed with names=constraints|join:", " %}
+          The following constraints include this field and will also be deleted: {{ names }}
+        {% endblocktrans %}
+      </p>
+    {% endif %}
     {% render_form form %}
   </div>
   <div class="modal-footer">

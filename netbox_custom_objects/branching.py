@@ -108,6 +108,22 @@ def _collect_co_refs(model_class, data, model_label=None):
     return refs
 
 
+def _constraint_field_refs(data, fields_by_schema_id):
+    """Return the field refs a constraint's *data* covers, for fields changed in the same squash.
+
+    Constraints reference fields by ``schema_id`` (an integer list that the generic
+    walker would misread as self-references), so map them to field keys explicitly.
+    """
+    if not data:
+        return set()
+    cot_id = data.get('custom_object_type')
+    return {
+        fields_by_schema_id[(cot_id, sid)]
+        for sid in data.get('field_schema_ids') or ()
+        if (cot_id, sid) in fields_by_schema_id
+    }
+
+
 def add_custom_object_dependencies(sender, collapsed_changes, **kwargs):
     """Extend squash's dependency graph with CO-specific edges.
 
@@ -122,10 +138,18 @@ def add_custom_object_dependencies(sender, collapsed_changes, **kwargs):
     """
     from .constants import APP_LABEL
 
+    field_label = f'{APP_LABEL}.customobjecttypefield'
+    constraint_label = f'{APP_LABEL}.customobjecttypeconstraint'
+
     deletes_map = {}
     updates_map = {}
     creates_map = {}
+    fields_by_schema_id = {}
     for key, cc in collapsed_changes.items():
+        if isinstance(key, tuple) and key[0] == field_label:
+            data = cc.postchange_data or cc.prechange_data or {}
+            if data.get('schema_id') is not None:
+                fields_by_schema_id[(data.get('custom_object_type'), data['schema_id'])] = key
         action = cc.final_action.value if cc.final_action else None
         if action == 'create':
             creates_map[key] = cc
@@ -153,22 +177,29 @@ def add_custom_object_dependencies(sender, collapsed_changes, **kwargs):
             continue
         action = cc.final_action.value if cc.final_action else None
 
+        if model_label == constraint_label:
+            def collect_refs(data):
+                return _constraint_field_refs(data, fields_by_schema_id)
+        else:
+            def collect_refs(data, model_class=cc.model_class, model_label=model_label):
+                return _collect_co_refs(model_class, data, model_label=model_label)
+
         if action == 'update':
-            for ref in _collect_co_refs(cc.model_class, cc.prechange_data, model_label=model_label):
+            for ref in collect_refs(cc.prechange_data):
                 if ref in deletes_map:
                     deletes_map[ref].depends_on.add(cc.key)
                     cc.depended_by.add(ref)
-            for ref in _collect_co_refs(cc.model_class, cc.postchange_data, model_label=model_label):
+            for ref in collect_refs(cc.postchange_data):
                 if ref in creates_map:
                     cc.depends_on.add(ref)
                     creates_map[ref].depended_by.add(cc.key)
         elif action == 'create':
-            for ref in _collect_co_refs(cc.model_class, cc.postchange_data, model_label=model_label):
+            for ref in collect_refs(cc.postchange_data):
                 if ref != cc.key and ref in creates_map:
                     cc.depends_on.add(ref)
                     creates_map[ref].depended_by.add(cc.key)
         elif action == 'delete':
-            for ref in _collect_co_refs(cc.model_class, cc.prechange_data, model_label=model_label):
+            for ref in collect_refs(cc.prechange_data):
                 if ref != cc.key and ref in deletes_map:
                     deletes_map[ref].depends_on.add(cc.key)
                     cc.depended_by.add(ref)

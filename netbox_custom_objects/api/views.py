@@ -27,16 +27,18 @@ from netbox.api.viewsets import NetBoxModelViewSet
 
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.filtersets import (
+    CustomObjectTypeConstraintFilterSet,
     CustomObjectTypeFieldFilterSet,
     CustomObjectTypeFilterSet,
     get_filterset_class,
 )
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
 from netbox_custom_objects.schema.comparator import diff_document
 from netbox_custom_objects.schema.executor import (
     apply_document,
     CircularDependencyError,
     DestructiveChangesError,
+    InvalidConstraintError,
     UnknownChoiceSetError,
     UnknownFieldTypeError,
     UnknownObjectTypeError,
@@ -98,6 +100,17 @@ def _serialize_field_change(fc) -> dict:
     return result
 
 
+def _serialize_constraint_change(cc) -> dict:
+    result = {
+        "op": cc.op.value,
+        "name": cc.name,
+        "schema_def": cc.schema_def,
+    }
+    if cc.changed_attrs:
+        result["changed_attrs"] = {k: list(v) for k, v in cc.changed_attrs.items()}
+    return result
+
+
 def _serialize_diff(diff) -> dict:
     return {
         "slug": diff.slug,
@@ -107,6 +120,7 @@ def _serialize_diff(diff) -> dict:
         "has_destructive_changes": diff.has_destructive_changes,
         "cot_changes": {k: list(v) for k, v in diff.cot_changes.items()},
         "field_changes": [_serialize_field_change(fc) for fc in diff.field_changes],
+        "constraint_changes": [_serialize_constraint_change(cc) for cc in diff.constraint_changes],
         "warnings": diff.warnings,
     }
 
@@ -126,6 +140,12 @@ class CustomObjectTypeFieldViewSet(NetBoxModelViewSet):
     queryset = CustomObjectTypeField.objects.prefetch_related('related_object_types')
     serializer_class = serializers.CustomObjectTypeFieldSerializer
     filterset_class = CustomObjectTypeFieldFilterSet
+
+
+class CustomObjectTypeConstraintViewSet(NetBoxModelViewSet):
+    queryset = CustomObjectTypeConstraint.objects.select_related('custom_object_type')
+    serializer_class = serializers.CustomObjectTypeConstraintSerializer
+    filterset_class = CustomObjectTypeConstraintFilterSet
 
 
 @extend_schema(parameters=[
@@ -429,8 +449,8 @@ class SchemaApplyView(APIView):
         detail: "Schema contains destructive ..."
         destructive_slugs: [my-cot]
 
-    **400 Bad Request** — circular COT dependency, unresolvable FK target,
-    or invalid schema document structure.
+    **400 Bad Request** — circular COT dependency, unresolvable FK target, a constraint
+    that fails validation, or invalid schema document structure.
 
     Unexpected DB errors (e.g. ``IntegrityError`` from a constraint violation
     unrelated to the COT schema logic) are not caught and will surface as
@@ -493,6 +513,11 @@ class SchemaApplyView(APIView):
         except (UnknownChoiceSetError, UnknownFieldTypeError, UnknownObjectTypeError) as exc:
             return Response(
                 {"error": "unresolvable_reference", "detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except InvalidConstraintError as exc:
+            return Response(
+                {"error": "invalid_constraint", "detail": str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

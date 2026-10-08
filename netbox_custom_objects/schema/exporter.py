@@ -26,6 +26,7 @@ import logging
 from netbox_custom_objects import constants
 from netbox_custom_objects.schema.format import (
     CHOICES_TO_SCHEMA_TYPE,
+    CONSTRAINT_DEFAULTS,
     CUSTOM_OBJECTS_APP_LABEL_SLUG,
     FIELD_DEFAULTS,
     FIELD_TYPE_ATTRS,
@@ -150,6 +151,29 @@ def _export_field(field) -> dict:
     return result
 
 
+def _export_constraint(constraint) -> dict:
+    """Serialise a ``CustomObjectTypeConstraint`` to a schema constraint dict."""
+    result = {
+        "name": constraint.name,
+        "fields": list(constraint.field_schema_ids),
+    }
+    for attr, default in CONSTRAINT_DEFAULTS.items():
+        value = getattr(constraint, attr)
+        if value != default:
+            result[attr] = value
+    return result
+
+
+def _removed_constraints_from_document(cot) -> list:
+    """Return the ``removed_constraints`` names for *cot* from its stored ``schema_document``."""
+    if not cot.schema_document:
+        return []
+    for type_def in cot.schema_document.get("types", []):
+        if type_def.get("slug") == cot.slug:
+            return list(type_def.get("removed_constraints", []))
+    return []
+
+
 def _removed_fields_from_document(cot) -> list:
     """
     Extract the ``removed_fields`` tombstone list for *cot* from its stored
@@ -213,6 +237,15 @@ def export_cot(cot) -> dict:
     removed = _removed_fields_from_document(cot)
     if removed:
         result["removed_fields"] = removed
+
+    constraints = [_export_constraint(c) for c in cot.constraints.order_by("name")]
+    if constraints:
+        result["constraints"] = constraints
+    # A removed name may since have been reused for a new constraint.
+    current_names = {c["name"] for c in constraints}
+    removed_constraints = [n for n in _removed_constraints_from_document(cot) if n not in current_names]
+    if removed_constraints:
+        result["removed_constraints"] = removed_constraints
 
     return result
 

@@ -92,6 +92,7 @@ router = NetBoxRouter()
 router.APIRootView = CustomObjectsAPIRootView
 router.register("custom-object-types", views.CustomObjectTypeViewSet)
 router.register("custom-object-type-fields", views.CustomObjectTypeFieldViewSet)
+router.register("custom-object-type-constraints", views.CustomObjectTypeConstraintViewSet)
 
 urlpatterns = [
     path("", include(router.urls)),

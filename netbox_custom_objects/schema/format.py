@@ -136,3 +136,16 @@ FIELD_BASE_ATTRS = (
     "deprecated_since",
     "scheduled_removal",
 )
+
+# ── Constraint attributes ─────────────────────────────────────────────────────
+# Constraints are matched by name. Attributes equal to these defaults MAY be
+# omitted from the schema document; 'fields' (a list of field ids) is required.
+CONSTRAINT_DEFAULTS = {
+    "type": "unique",
+    "case_insensitive": False,
+    "nulls_distinct": True,
+    "description": "",
+}
+
+# Attributes compared by the comparator and applied by the executor, besides 'name'.
+CONSTRAINT_ATTRS = ("type", "fields", "case_insensitive", "nulls_distinct", "description")

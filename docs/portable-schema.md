@@ -160,6 +160,8 @@ YAML or JSON, and is used by the API endpoints before any DB access.
 | `group_name` | no | Navigation menu grouping. |
 | `fields` | yes | Array of active field definitions. |
 | `removed_fields` | no | Array of tombstone records for previously removed fields. |
+| `constraints` | no | Array of [constraint definitions](#constraint-definition). |
+| `removed_constraints` | no | Names of constraints to remove. |
 
 !!! note
     The `comments` attribute on Custom Object Types and Custom Object Type Fields is intentionally **excluded** from the schema document format. It is editorial annotation rather than structural schema, and including it would create noise in diffs and across-installation sharing.
@@ -213,6 +215,31 @@ Attributes that match their defaults are omitted from exported documents to keep
 
 - **Built-in NetBox model:** `"dcim/device"`, `"ipam/prefix"`
 - **Custom Object Type:** `"custom-objects/<cot-slug>"`, e.g. `"custom-objects/circuit"`
+
+### Constraint Definition
+
+```yaml
+constraints:
+  - name: vendor_serial
+    fields: [1, 2]
+  - name: serial_ci
+    fields: [2]
+    case_insensitive: true
+```
+
+| Key | Required | Description |
+|-----|----------|-------------|
+| `name` | yes | Constraint name, must match identifier pattern. Used as the lookup key when applying. |
+| `fields` | yes | The `id`s of the fields whose combined values must be unique. |
+| `type` | no | `"unique"`. Default: `"unique"`. |
+| `case_insensitive` | no | Compare text and URL fields without regard to case. Default: `false`. |
+| `nulls_distinct` | no | Objects that leave a constrained field empty never conflict. Default: `true`. |
+| `description` | no | Short description (max 200 characters). |
+
+Constraints are matched by name. As with fields, a constraint in the DB but absent from
+`constraints` is left in place (with a warning) unless its name is listed in
+`removed_constraints`. Removing a constraint doesn't delete data, so it doesn't need
+`allow_destructive`.
 
 ### Tombstone Record
 
@@ -478,6 +505,7 @@ diff  = diff_cot(type_def)          # COTDiff
 | `is_new` | `bool` | `True` if no COT with this slug exists in the DB |
 | `cot_changes` | `dict[str, tuple]` | `{attr: (db_value, schema_value)}` for changed top-level attributes |
 | `field_changes` | `list[FieldChange]` | Per-field operations |
+| `constraint_changes` | `list[ConstraintChange]` | Per-constraint operations (`op`, `name`, `schema_def`, `changed_attrs`), matched by name |
 | `warnings` | `list[str]` | Non-fatal issues (untracked fields, ambiguous absences) |
 
 Convenience properties: `has_changes`, `has_destructive_changes`, `adds`, `removes`, `alters`.
@@ -529,9 +557,16 @@ full rollback.
 | `UnknownChoiceSetError` | A `choice_set` name cannot be resolved |
 | `UnknownObjectTypeError` | A `related_object_type` string cannot be resolved |
 | `UnknownFieldTypeError` | A `type` value is not one of the supported field type strings |
+| `InvalidConstraintError` | A constraint fails validation, e.g. existing objects already violate it |
 
 `DestructiveChangesError` is raised **before** the transaction opens, so the DB is never
 touched. The other exceptions may be raised mid-transaction, triggering a full rollback.
+
+### Constraint Ordering
+
+Removed and changed constraints are deleted before any field operations, and added and
+changed constraints are created after them, so a constraint can cover a field added in the
+same document and never blocks a field change that the document also makes.
 
 ### Dependency Ordering
 

@@ -15,8 +15,9 @@ from django.db import IntegrityError, transaction
 from django.db.models.fields import NOT_PROVIDED
 from django.test import TestCase, TransactionTestCase
 
-from netbox_custom_objects.models import CustomObjectTypeField
+from netbox_custom_objects.models import CustomObjectTypeConstraint, CustomObjectTypeField
 from netbox_custom_objects.schema.format import (
+    CONSTRAINT_DEFAULTS,
     CHOICES_TO_SCHEMA_TYPE,
     FIELD_DEFAULTS,
     SCHEMA_FORMAT_VERSION,
@@ -492,6 +493,13 @@ class FieldDefaultsConsistencyTestCase(TestCase):
                     # Field may not exist on the model (type-specific virtual attrs).
                     pass
 
+    def test_constraint_defaults_match_model_defaults(self):
+        """CONSTRAINT_DEFAULTS must match the CustomObjectTypeConstraint model defaults."""
+        for attr, default in CONSTRAINT_DEFAULTS.items():
+            with self.subTest(attr=attr):
+                model_default = CustomObjectTypeConstraint._meta.get_field(attr).default
+                self.assertEqual("" if model_default is NOT_PROVIDED else model_default, default)
+
 
 class SchemaFormatConstantsTestCase(TestCase):
     """Sanity checks on schema_format module constants."""
@@ -595,6 +603,34 @@ class COTJsonSchemaTestCase(TestCase):
                 }
             ],
         })
+
+    def test_constraints(self):
+        type_def = {
+            "name": "asset",
+            "slug": "asset",
+            "fields": [
+                {"id": 1, "name": "vendor", "type": "text"},
+                {"id": 2, "name": "serial", "type": "text"},
+            ],
+            "constraints": [
+                {"name": "vendor_serial", "fields": [1, 2]},
+                {"name": "serial_ci", "type": "unique", "fields": [2], "case_insensitive": True,
+                 "nulls_distinct": False, "description": "Serial, ignoring case"},
+            ],
+            "removed_constraints": ["old_constraint"],
+        }
+        self._assert_valid({"schema_version": "1", "types": [type_def]})
+        invalid = {
+            "missing fields": {"name": "c"},
+            "empty fields": {"name": "c", "fields": []},
+            "unknown type": {"name": "c", "fields": [1], "type": "check"},
+            "unknown key": {"name": "c", "fields": [1], "condition": {}},
+        }
+        for label, constraint in invalid.items():
+            with self.subTest(label):
+                self._assert_invalid(
+                    {"schema_version": "1", "types": [{**type_def, "constraints": [constraint]}]}
+                )
 
     def test_cot_reference_to_another_cot(self):
         """related_object_type using 'custom-objects/<slug>' format is valid."""

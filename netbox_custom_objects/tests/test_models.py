@@ -10,7 +10,7 @@ from unittest.mock import patch
 from django.apps import apps as django_apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldDoesNotExist, ValidationError
-from django.db import connection, transaction
+from django.db import IntegrityError, connection, transaction
 from django.db.utils import OperationalError, ProgrammingError
 from django.test import TestCase, override_settings, tag
 from django.urls import reverse
@@ -30,7 +30,7 @@ from netbox_custom_objects.api.serializers import get_serializer_class
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.field_types import LazyForeignKey, ObjectFieldType, TextFieldType
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name
 from .base import CustomObjectsTestCase, create_token
 
@@ -3427,3 +3427,175 @@ class CustomObjectPicklingTestCase(CustomObjectsTestCase, TestCase):
                     with self.assertLogs(nco_models.logger, level='WARNING') as logs:
                         self.assertFalse(hasattr(nco_models, self.model.__name__))
                 self.assertIs(logs.records[0].exc_info[0], error)
+
+
+class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
+    """Compound unique constraints on a custom object type, enforced by the database."""
+
+    def setUp(self):
+        super().setUp()
+        self.cot = self.create_custom_object_type(name="Asset", slug="assets")
+        self.vendor = self.create_custom_object_type_field(self.cot, name="vendor", type="text", primary=True)
+        self.serial = self.create_custom_object_type_field(self.cot, name="serial", type="text")
+
+    def _constraint(self, fields=None, **kwargs):
+        """Validate and save a constraint over *fields* (default: vendor and serial)."""
+        fields = fields or [self.vendor, self.serial]
+        constraint = CustomObjectTypeConstraint(
+            custom_object_type=self.cot,
+            name=kwargs.pop("name", "vendor_serial"),
+            field_schema_ids=[f.schema_id for f in fields],
+            **kwargs,
+        )
+        constraint.full_clean()
+        constraint.save()
+        return constraint
+
+    def _model(self):
+        self.cot.refresh_from_db()
+        return self.cot.get_model()
+
+    def _db_constraint_names(self):
+        with connection.cursor() as cursor:
+            return set(connection.introspection.get_constraints(cursor, self.cot.get_database_table_name()))
+
+    def _assert_duplicate_rejected(self, model, **values):
+        """A duplicate fails full_clean() and, if saved anyway, the database."""
+        with self.assertRaises(ValidationError):
+            model(**values).full_clean()
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            model.objects.create(**values)
+
+    def test_rejects_duplicate_combination(self):
+        constraint = self._constraint()
+        self.assertIn(constraint.db_name, self._db_constraint_names())
+        model = self._model()
+        model.objects.create(vendor="acme", serial="1")
+
+        self._assert_duplicate_rejected(model, vendor="acme", serial="1")
+        # Each value alone may repeat.
+        model(vendor="acme", serial="2").full_clean()
+        model(vendor="other", serial="1").full_clean()
+
+    def test_case_insensitive(self):
+        self._constraint(case_insensitive=True)
+        model = self._model()
+        model.objects.create(vendor="Acme", serial="ABC")
+        self._assert_duplicate_rejected(model, vendor="acme", serial="abc")
+
+    def test_single_field_case_insensitive(self):
+        self._constraint(fields=[self.vendor], case_insensitive=True)
+        model = self._model()
+        model.objects.create(vendor="Acme")
+        self._assert_duplicate_rejected(model, vendor="ACME")
+
+    def test_nulls_distinct(self):
+        self._constraint()
+        model = self._model()
+        model.objects.create(vendor="acme")
+        model.objects.create(vendor="acme")  # empty serials never conflict
+
+    def test_nulls_not_distinct(self):
+        self._constraint(nulls_distinct=False)
+        model = self._model()
+        model.objects.create(vendor="acme")
+        self._assert_duplicate_rejected(model, vendor="acme")
+
+    def test_polymorphic_object_field(self):
+        poly = self.create_polymorphic_field(self.cot, [self.get_site_object_type()], name="location")
+        self._constraint(fields=[self.vendor, poly])
+        model = self._model()
+        site = Site.objects.create(name="Site 1", slug="site-1")
+        model.objects.create(vendor="acme", location=site)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            model.objects.create(vendor="acme", location=site)
+        model.objects.create(vendor="other", location=site)
+
+    def test_existing_duplicates_block_constraint(self):
+        model = self._model()
+        model.objects.create(vendor="acme", serial="1")
+        model.objects.create(vendor="acme", serial="1")
+        with self.assertRaisesMessage(ValidationError, "already have duplicate values"):
+            self._constraint()
+        self.assertFalse(CustomObjectTypeConstraint.objects.exists())
+
+    def test_validation(self):
+        choice_set = self.create_choice_set()
+        tags = self.create_custom_object_type_field(
+            self.cot, name="tags", type="multiselect", choice_set=choice_set
+        )
+        count = self.create_custom_object_type_field(self.cot, name="count", type="integer")
+        self._constraint()
+        cases = {
+            "one field": dict(fields=[self.vendor]),
+            "repeated field": dict(fields=[self.vendor, self.vendor]),
+            "ineligible type": dict(fields=[self.vendor, tags]),
+            "case-insensitive without text": dict(fields=[count], case_insensitive=True),
+            "same fields as another constraint": dict(fields=[self.serial, self.vendor]),
+        }
+        for label, kwargs in cases.items():
+            with self.subTest(label), self.assertRaises(ValidationError):
+                self._constraint(name="invalid", **kwargs)
+        with self.subTest("unknown field"), self.assertRaises(ValidationError):
+            CustomObjectTypeConstraint(
+                custom_object_type=self.cot, name="invalid",
+                field_schema_ids=[self.vendor.schema_id, 999],
+            ).full_clean()
+
+    def test_rename_field_keeps_constraint(self):
+        constraint = self._constraint()
+        serial = CustomObjectTypeField.objects.get(pk=self.serial.pk)
+        serial.name = "serial_number"
+        serial.save()
+
+        self.assertEqual([f.name for f in constraint.get_fields()], ["vendor", "serial_number"])
+        model = self._model()
+        model.objects.create(vendor="acme", serial_number="1")
+        self._assert_duplicate_rejected(model, vendor="acme", serial_number="1")
+
+    def test_type_change_rejected(self):
+        self._constraint()
+        serial = CustomObjectTypeField.objects.get(pk=self.serial.pk)
+        serial.type = "longtext"
+        with self.assertRaisesMessage(ValidationError, "vendor_serial"):
+            serial.full_clean()
+
+    def test_field_delete_deletes_constraint(self):
+        constraint = self._constraint()
+        CustomObjectTypeField.objects.get(pk=self.serial.pk).delete()
+
+        self.assertFalse(CustomObjectTypeConstraint.objects.filter(pk=constraint.pk).exists())
+        self.assertNotIn(constraint.db_name, self._db_constraint_names())
+        self.assertEqual(self._model()._meta.constraints, [])
+
+    def test_delete_constraint(self):
+        constraint = self._constraint()
+        model = self._model()
+        model.objects.create(vendor="acme", serial="1")
+
+        constraint.delete()
+        self.assertNotIn(constraint.db_name, self._db_constraint_names())
+        model = self._model()
+        model(vendor="acme", serial="1").full_clean()
+        model.objects.create(vendor="acme", serial="1")
+
+    def test_edit_constraint(self):
+        constraint = self._constraint()
+        old_db_name = constraint.db_name
+        constraint.name = "renamed"
+        constraint.case_insensitive = True
+        constraint.full_clean()
+        constraint.save()
+
+        names = self._db_constraint_names()
+        self.assertNotIn(old_db_name, names)
+        self.assertIn(constraint.db_name, names)
+        model = self._model()
+        model.objects.create(vendor="acme", serial="X")
+        self._assert_duplicate_rejected(model, vendor="ACME", serial="x")
+
+    def test_save_is_idempotent(self):
+        # Branch merges replay a constraint's save() where it may already exist.
+        constraint = self._constraint()
+        constraint.save()
+        self.assertIn(constraint.db_name, self._db_constraint_names())

@@ -23,7 +23,7 @@ from core.models import ObjectType
 from dcim.models import Site
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
-from django.db import OperationalError, connection as main_conn, connections
+from django.db import IntegrityError, OperationalError, connection as main_conn, connections, transaction
 from django.test import RequestFactory, TransactionTestCase, override_settings
 from django.urls import reverse
 from extras.models import CustomFieldChoiceSet
@@ -38,7 +38,7 @@ try:
 except ImportError:
     HAS_BRANCHING = False
 
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
 from netbox_custom_objects.tests.base import (
     TransactionCleanupMixin,
     _recreate_contenttypes,
@@ -825,6 +825,46 @@ class BaseBranchingTests(BranchingTestBase):
             RevertedModel.objects.filter(pk=co_branch_pk).exists(),
             'CO created in branch must be gone after revert',
         )
+
+    def test_constraint_merge_and_revert(self):
+        """
+        A branch adds a field and a constraint covering it to a COT from main. The
+        constraint must be created after the field on merge and dropped before it on revert.
+        """
+        with event_tracking(self.request):
+            cot = CustomObjectType.objects.create(name='constraint_cot', slug='constraint-cot')
+            vendor = CustomObjectTypeField.objects.create(custom_object_type=cot, name='vendor', type='text')
+
+        branch = _provision_branch('Constraint Branch', self.MERGE_STRATEGY, self.user)
+        with activate_branch(branch), event_tracking(_make_request(self.user)):
+            serial = CustomObjectTypeField.objects.create(custom_object_type=cot, name='serial', type='text')
+            constraint = CustomObjectTypeConstraint.objects.create(
+                custom_object_type=CustomObjectType.objects.get(pk=cot.pk),
+                name='vendor_serial',
+                field_schema_ids=[vendor.schema_id, serial.schema_id],
+            )
+
+        def db_constraint_names():
+            with main_conn.cursor() as cursor:
+                return set(main_conn.introspection.get_constraints(cursor, cot.get_database_table_name()))
+
+        self.assertNotIn(constraint.db_name, db_constraint_names())
+
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+        self.assertTrue(CustomObjectTypeConstraint.objects.filter(pk=constraint.pk).exists())
+        self.assertIn(constraint.db_name, db_constraint_names())
+        model = CustomObjectType.objects.get(pk=cot.pk).get_model()
+        model.objects.create(vendor='acme', serial='1')
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            model.objects.create(vendor='acme', serial='1')
+        model.objects.all().delete()
+
+        branch.revert(user=self.user, commit=True)
+        self.assertFalse(CustomObjectTypeConstraint.objects.filter(pk=constraint.pk).exists())
+        self.assertFalse(CustomObjectTypeField.objects.filter(pk=serial.pk).exists())
+        self.assertNotIn(constraint.db_name, db_constraint_names())
 
     # ── COT deleted inside branch → merge / revert ────────────────────────
 
