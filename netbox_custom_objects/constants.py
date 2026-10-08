@@ -64,3 +64,7 @@ RESERVED_FIELD_NAMES = [
     "tags",
     "to_objectchange",
 ]
+
+# Search weight for a custom object's rendered display_expression (see CustomObject._display).
+# Matches the weight NetBox gives primary names, e.g. Site.name.
+DISPLAY_EXPRESSION_SEARCH_WEIGHT = 100

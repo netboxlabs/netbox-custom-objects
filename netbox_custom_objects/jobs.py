@@ -1,4 +1,5 @@
-from netbox.jobs import JobRunner
+from core.choices import JobIntervalChoices
+from netbox.jobs import JobRunner, system_job
 from netbox.search.backends import get_backend
 
 
@@ -7,7 +8,9 @@ class ReindexCustomObjectTypeJob(JobRunner):
     Background job to reindex all CustomObject instances for a given CustomObjectType.
 
     Triggered when a CustomObjectTypeField's search_weight changes, a new searchable
-    field is added, or a searchable field is deleted.
+    field is added, or a searchable field is deleted; when a type's display_expression
+    changes; and hourly for types with a display_expression (see
+    RefreshDisplayExpressionSearchJob).
     """
 
     class Meta:
@@ -58,3 +61,23 @@ class ReindexCustomObjectTypeJob(JobRunner):
             raise ValueError('cot_id is required to run ReindexCustomObjectTypeJob')
         cot = CustomObjectType.objects.get(pk=cot_id)
         get_backend().cache(cot.get_model().objects.all())
+
+
+@system_job(interval=JobIntervalChoices.INTERVAL_HOURLY)
+class RefreshDisplayExpressionSearchJob(JobRunner):
+    """
+    Hourly reindex of every Custom Object Type with a display_expression.
+
+    The rendered expression is cached for search when an object is saved, but it can
+    reference related objects (e.g. ``{{ interface.device.name }}``), and changes to those
+    don't touch the custom object. This bounds how long the cached text can be stale.
+    """
+
+    class Meta:
+        name = 'Refresh custom object display names in search'
+
+    def run(self, *args, **kwargs):
+        # Deferred to avoid circular import: models.py imports this module at the top level
+        from netbox_custom_objects.models import CustomObjectType
+        for cot_id in CustomObjectType.objects.exclude(display_expression='').values_list('pk', flat=True):
+            ReindexCustomObjectTypeJob.enqueue(cot_id=cot_id)
