@@ -63,7 +63,7 @@ _signature_keys_seen = set()
 def _active_branch_key():
     """
     Identifier for the active branch (``None`` for main), used to key the per-branch
-    schema and signature caches.  ``None`` when netbox-branching is not installed.
+    schema and signature caches.  ``None`` when netbox-branching is not enabled.
     """
     if not branching_enabled():
         return None
@@ -207,7 +207,7 @@ def connect_signature_invalidation():
             )
 
     # Evict a branch's cached schema when the branch itself is deleted.  No-op when
-    # netbox-branching is not installed or not in INSTALLED_APPS.
+    # netbox-branching is not enabled.
     if not branching_enabled():
         return
     from netbox_branching.models import Branch
