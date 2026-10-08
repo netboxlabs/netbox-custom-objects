@@ -9,6 +9,7 @@ from netbox_custom_objects.constants import APP_LABEL
 
 __all__ = (
     "AppsProxy",
+    "branching_enabled",
     "build_map_url",
     "extract_cot_id_from_model_name",
     "generate_model",
@@ -16,6 +17,17 @@ __all__ = (
     "install_clear_cache_suppressor",
     "restrict_to_viewable",
 )
+
+
+def branching_enabled():
+    """
+    True if netbox-branching is enabled (listed in PLUGINS), not merely installed.
+
+    Check this before importing anything from netbox_branching: importing the package
+    registers its request processor, which then runs on every request and job and fails
+    when the plugin isn't enabled.
+    """
+    return apps.is_installed("netbox_branching")
 
 
 def build_map_url(latitude, longitude):

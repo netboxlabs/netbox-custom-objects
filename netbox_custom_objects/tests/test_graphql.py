@@ -386,7 +386,7 @@ class GraphQLSignalRegistrationTestCase(TestCase):
         post_delete.disconnect(dispatch_uid="nco_graphql_evict_branch")
 
         with mock.patch(
-            "netbox_custom_objects.graphql.live.django_apps.is_installed",
+            "django.apps.apps.is_installed",
             side_effect=lambda app: app != "netbox_branching",
         ):
             # Must not raise — previously raised RuntimeError here.
@@ -405,7 +405,7 @@ class GraphQLSignalRegistrationTestCase(TestCase):
         post_delete.disconnect(dispatch_uid="nco_graphql_evict_branch")
 
         with mock.patch(
-            "netbox_custom_objects.graphql.live.django_apps.is_installed",
+            "django.apps.apps.is_installed",
             side_effect=lambda app: app != "netbox_branching",
         ):
             connect_signature_invalidation()  # must not raise

@@ -19,6 +19,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.utilities import branching_enabled
 from .base import CustomObjectsTestCase, create_token
 from core.models import Job, ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Rack, Site
@@ -32,11 +33,7 @@ except ImportError:
     # COMPAT(netbox<4.6.2): NetBox has no query-count baseline helper.
     assert_expected_query_count = None
 
-try:
-    import netbox_branching  # noqa: F401
-    _HAS_BRANCHING = True
-except ImportError:
-    _HAS_BRANCHING = False
+_HAS_BRANCHING = branching_enabled()
 
 
 class CustomObjectAPITestCaseMixin:

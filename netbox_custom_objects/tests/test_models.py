@@ -1,6 +1,7 @@
 """
 Tests for the concrete and dynamically generated models that are managed by this plugin.
 """
+import importlib.abc
 import pickle
 import sys
 from decimal import Decimal
@@ -27,7 +28,9 @@ from netbox.search import registry
 from netbox.search.backends import get_backend
 from netbox_custom_objects.api.serializers import get_serializer_class
 from netbox_custom_objects.constants import APP_LABEL
+from netbox_custom_objects import views
 from netbox_custom_objects.field_types import LazyForeignKey, ObjectFieldType, TextFieldType
+from netbox_custom_objects.graphql.live import _active_branch_key
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name
@@ -3355,3 +3358,55 @@ class CustomObjectPicklingTestCase(CustomObjectsTestCase, TestCase):
                     with self.assertLogs(nco_models.logger, level='WARNING') as logs:
                         self.assertFalse(hasattr(nco_models, self.model.__name__))
                 self.assertIs(logs.records[0].exc_info[0], error)
+
+
+class _BranchingImportBlocker(importlib.abc.MetaPathFinder):
+    """Fail on any import of netbox_branching."""
+
+    def find_spec(self, name, path, target=None):
+        if name == 'netbox_branching' or name.startswith('netbox_branching.'):
+            raise AssertionError(f'{name} was imported while netbox-branching is not enabled')
+        return None
+
+
+class BranchingInstalledNotEnabledTestCase(CustomObjectsTestCase, TestCase):
+    """
+    Nothing imports netbox-branching when it's installed but not in PLUGINS: importing it
+    registers its request processor, which then fails on every request and job.
+    """
+
+    def setUp(self):
+        super().setUp()
+        is_installed = django_apps.is_installed
+        patcher = patch.object(
+            django_apps, 'is_installed', side_effect=lambda name: name != 'netbox_branching' and is_installed(name)
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        # Unload netbox_branching (restored afterwards) so any import of it reaches the blocker.
+        modules = patch.dict(sys.modules)
+        modules.start()
+        self.addCleanup(modules.stop)
+        for name in [m for m in sys.modules if m == 'netbox_branching' or m.startswith('netbox_branching.')]:
+            del sys.modules[name]
+        blocker = _BranchingImportBlocker()
+        sys.meta_path.insert(0, blocker)
+        self.addCleanup(sys.meta_path.remove, blocker)
+
+    def test_hooks_and_branch_context_helpers(self):
+        with patch.object(nco, '_branching_hooks_registered', False):
+            nco._register_branching_hooks_once()
+            self.assertFalse(nco._branching_hooks_registered)
+        self.assertIs(nco_models._get_schema_connection(), connection)
+        self.assertIsNone(CustomObjectType._active_branch_id())
+        self.assertFalse(views._is_in_branch())
+        self.assertIsNone(_active_branch_key())
+
+    def test_field_rename_and_type_delete(self):
+        cot = self.create_custom_object_type(name='NotBranched', slug='not-branched')
+        field = self.create_custom_object_type_field(cot, name='label', type='text')
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.name = 'title'
+        field.save()
+        cot.delete()
+        self.assertFalse(CustomObjectType.objects.filter(pk=cot.pk).exists())
