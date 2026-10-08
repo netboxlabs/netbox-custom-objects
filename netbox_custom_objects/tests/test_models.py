@@ -2808,6 +2808,13 @@ class StaleFKReferenceRegressionTest(CustomObjectsTestCase, TestCase):
             type="object",
             related_object_type=self.cot_a.object_type,
         )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot_b,
+            name="refs_a",
+            label="Refs A",
+            type="multiobject",
+            related_object_type=self.cot_a.object_type,
+        )
         # Generate B's model; this resolves the LazyForeignKey to model_a_v1
         self.cot_b.get_model()
         # Fetch fresh from cache to get the fully-resolved model
@@ -2858,6 +2865,17 @@ class StaleFKReferenceRegressionTest(CustomObjectsTestCase, TestCase):
             "B's FK field must be patched to the newly generated A class; "
             "a stale reference would cause ValueError on FK assignment",
         )
+
+    def test_b_m2m_is_patched_after_a_regeneration(self):
+        """After A is regenerated, B's multi-object field must reference the new A class, as its through model does."""
+        model_a_v2 = self.cot_a.get_model(no_cache=True)
+        obj_a = model_a_v2.objects.create(name="a")
+
+        m2m = next(f for f in self.model_b._meta.local_many_to_many if f.name == 'refs_a')
+        self.assertIs(m2m.remote_field.model, model_a_v2)
+        self.assertIs(m2m.remote_field.through._meta.get_field('target').remote_field.model, model_a_v2)
+        # Filtering joins through the through model; a mismatch breaks the join.
+        self.assertEqual(self.model_b.objects.filter(refs_a=obj_a.pk).count(), 0)
 
 
 class LazySerializerRegistrationTestCase(CustomObjectsTestCase, TestCase):
