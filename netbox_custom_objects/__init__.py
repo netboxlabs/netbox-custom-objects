@@ -227,23 +227,32 @@ def _patch_object_selector_view():
     ObjectSelectorView._get_filterset_class = _patched_get_filterset_class
 
 
+_choice_set_clean_patched = False
+
+
 def _patch_choice_set_clean():
     """
     Extend CustomFieldChoiceSet.clean() to refuse removing a choice a custom object still uses.
 
-    Core checks only core custom fields; see models.check_removed_choices().
+    Core's clean() makes this check only for core custom fields (its ``choices_for``
+    relation), so custom object fields need their own check.
     """
+    global _choice_set_clean_patched
+    if _choice_set_clean_patched:
+        return
+
     from extras.models import CustomFieldChoiceSet
 
-    from netbox_custom_objects.models import check_removed_choices
+    from netbox_custom_objects import models
 
     _original_clean = CustomFieldChoiceSet.clean
 
     def _patched_clean(self):
         _original_clean(self)
-        check_removed_choices(self)
+        models.check_removed_choices(self)
 
     CustomFieldChoiceSet.clean = _patched_clean
+    _choice_set_clean_patched = True
 
 
 _graphql_view_patched = False

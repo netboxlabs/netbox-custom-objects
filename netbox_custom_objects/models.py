@@ -4402,10 +4402,7 @@ def clear_cache_on_field_delete(sender, instance, **kwargs):
 
 def check_removed_choices(choice_set):
     """
-    Raise ValidationError if a choice removed from *choice_set* is still set on a custom object.
-
-    Core's CustomFieldChoiceSet.clean() makes this check only for core custom fields (its
-    ``choices_for`` relation), so it's added to clean() in AppConfig.ready().
+    Reject removal of choices that are still used by custom objects.
     """
     original = {value for value, _label in choice_set._original_extra_choices or ()}
     current = {value for value, _label in choice_set.extra_choices or ()}

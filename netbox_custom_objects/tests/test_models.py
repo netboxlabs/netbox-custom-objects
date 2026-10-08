@@ -3297,7 +3297,7 @@ class ChoiceSetCacheInvalidationTestCase(CustomObjectsTestCase, TestCase):
 
 
 class ChoiceSetRemovedChoiceTestCase(CustomObjectsTestCase, TestCase):
-    """A choice set can't drop a choice that custom objects still use, as core enforces for custom fields."""
+    """A choice set can't drop a choice that custom objects still use."""
 
     def setUp(self):
         super().setUp()
@@ -3334,6 +3334,23 @@ class ChoiceSetRemovedChoiceTestCase(CustomObjectsTestCase, TestCase):
         choice_set.save()
         self.assertEqual([c[0] for c in CustomFieldChoiceSet.objects.get(pk=self.choice_set.pk).extra_choices],
                          ["one", "two"])
+
+    def test_removing_used_extra_choice_still_in_base_choices_is_allowed(self):
+        self.choice_set.base_choices = "ISO_3166"
+        self.choice_set.extra_choices = [*self.choice_set.extra_choices, ["US", "United States"]]
+        self.choice_set.save()
+        self.cot.get_model().objects.create(name="obj", opt="US", opts=["US"])
+        choice_set = self._remove("US")
+        choice_set.full_clean()
+        choice_set.save()
+        self.assertNotIn("US", [c[0] for c in CustomFieldChoiceSet.objects.get(pk=self.choice_set.pk).extra_choices])
+
+    def test_patch_installed_twice_checks_once(self):
+        nco._patch_choice_set_clean()
+        nco._patch_choice_set_clean()
+        with patch.object(nco_models, "check_removed_choices") as check:
+            self._remove("three").full_clean()
+        check.assert_called_once()
 
     def test_removing_used_choice_via_api_is_rejected(self):
         self.model.objects.create(name="obj", opt="three")
