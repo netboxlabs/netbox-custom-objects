@@ -15,7 +15,8 @@ FK-ordering problems when multiple new COTs reference each other:
   Phase 2 — Fields
     ADD, REMOVE, and ALTER operations are applied using the existing
     CustomObjectTypeField.save() / delete() mechanisms, which encapsulate all
-    required DDL.
+    required DDL.  Removed and altered constraints are deleted before this
+    phase; added and altered constraints are created after it.
 
   Finalisation
     schema_document is updated on every affected COT so that tombstone records
@@ -31,13 +32,15 @@ Public API
 import logging
 
 from core.models import ObjectType
+from django.core.exceptions import ValidationError
 from django.db import transaction
 from extras.models import CustomFieldChoiceSet
 
 from netbox_custom_objects import constants
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
 from netbox_custom_objects.schema.comparator import FieldOp, diff_document
 from netbox_custom_objects.schema.format import (
+    CONSTRAINT_DEFAULTS,
     CUSTOM_OBJECTS_APP_LABEL_SLUG,
     FIELD_BASE_ATTRS,
     FIELD_DEFAULTS,
@@ -67,6 +70,10 @@ class DestructiveChangesError(Exception):
             f"Schema contains destructive field removals for COT(s): {names}. "
             "Pass allow_destructive=True to apply them."
         )
+
+
+class InvalidConstraintError(Exception):
+    """Raised when a constraint in the schema fails validation, e.g. existing objects violate it."""
 
 
 class UnknownChoiceSetError(Exception):
@@ -351,6 +358,15 @@ def _apply_field_alter(cot, fc) -> None:
         else:
             setattr(field, attr, schema_val)
 
+    # Constraints the document removes or redefines are already gone (see _remove_constraints).
+    if {"type", "is_polymorphic"} & fc.changed_attrs.keys():
+        constraint_names = list(field.constraints.values_list("name", flat=True))
+        if constraint_names:
+            raise InvalidConstraintError(
+                f"Field {field.name!r} on COT {cot.slug!r} is part of constraint(s) "
+                f"{', '.join(constraint_names)}; remove it from them before changing its type."
+            )
+
     field.save()
 
     if "related_object_types" in pending_m2m:
@@ -491,6 +507,48 @@ def _phase2_fields(ordered_diffs, cot_map, *, allow_destructive: bool) -> None:
                 _apply_field_alter(cot, fc)
 
 
+def _remove_constraints(ordered_diffs, cot_map) -> None:
+    """
+    Delete constraints that are removed or altered, before any field changes.
+
+    An altered constraint is deleted here and re-created by :func:`_add_constraints`,
+    so field changes in between never run against a constraint's old definition.
+    """
+    for diff in ordered_diffs:
+        names = [cc.name for cc in diff.constraint_changes if cc.op in (FieldOp.REMOVE, FieldOp.ALTER)]
+        if diff.is_new or not names:
+            continue
+        for constraint in CustomObjectTypeConstraint.objects.filter(
+            custom_object_type=cot_map[diff.slug], name__in=names
+        ):
+            constraint.delete()
+            logger.info("Removed constraint %r from COT %r", constraint.name, diff.slug)
+
+
+def _add_constraints(ordered_diffs, cot_map) -> None:
+    """Create added and altered constraints, after all field changes."""
+    for diff in ordered_diffs:
+        cot = cot_map[diff.slug]
+        for cc in diff.constraint_changes:
+            if cc.op is FieldOp.REMOVE:
+                continue
+            schema_def = cc.schema_def
+            constraint = CustomObjectTypeConstraint(
+                custom_object_type=cot,
+                name=schema_def["name"],
+                field_schema_ids=list(schema_def["fields"]),
+                **{attr: schema_def.get(attr, default) for attr, default in CONSTRAINT_DEFAULTS.items()},
+            )
+            try:
+                constraint.full_clean()
+            except ValidationError as exc:
+                raise InvalidConstraintError(
+                    f"Constraint {constraint.name!r} on COT {diff.slug!r}: {' '.join(exc.messages)}"
+                ) from exc
+            constraint.save()
+            logger.info("Created constraint %r on COT %r", constraint.name, diff.slug)
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -519,6 +577,7 @@ def apply_diffs(
                                    cycle among new COTs.
         UnknownChoiceSetError    – a choice_set name cannot be resolved.
         UnknownObjectTypeError   – a related_object_type cannot be resolved.
+        InvalidConstraintError   – a constraint fails validation.
     """
     if not allow_destructive:
         destructive = [d for d in diffs if d.has_destructive_changes]
@@ -529,7 +588,9 @@ def apply_diffs(
 
     with transaction.atomic():
         cot_map = _phase1_cots(ordered, type_defs_by_slug)
+        _remove_constraints(ordered, cot_map)
         _phase2_fields(ordered, cot_map, allow_destructive=allow_destructive)
+        _add_constraints(ordered, cot_map)
 
         # Finalise: persist schema_document and sync next_schema_id counters.
         for diff in ordered:

@@ -18,7 +18,7 @@ from utilities.testing import TestCase as NetBoxTestCase, create_test_user
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
 from .base import CustomObjectsTestCase, create_token
 from core.models import Job, ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Rack, Site
@@ -3132,6 +3132,110 @@ class SelectMultiSelectNumericChoiceValueAPITest(CustomObjectsTestCase, NetBoxTe
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("flags", response.data)
+
+
+class CustomObjectTypeConstraintAPITest(CustomObjectsTestCase, TestCase):
+    """Constraints are managed through their own endpoint and enforced on custom object writes."""
+
+    constraint_list_url = 'plugins-api:netbox_custom_objects-api:customobjecttypeconstraint-list'
+
+    def setUp(self):
+        super().setUp()
+        self.user.is_superuser = True
+        self.user.save()
+        self.client = APIClient()
+        self.header = {'HTTP_AUTHORIZATION': f'Token {create_token(self.user)}'}
+        self.cot = self.create_custom_object_type(name='asset', slug='assets')
+        self.vendor = self.create_custom_object_type_field(self.cot, name='vendor', type='text', primary=True)
+        self.serial = self.create_custom_object_type_field(self.cot, name='serial', type='text')
+
+    def _create_constraint(self, fields, **extra):
+        return self.client.post(
+            reverse(self.constraint_list_url),
+            {'custom_object_type': self.cot.pk, 'name': 'vendor_serial', 'fields': fields, **extra},
+            format='json', **self.header,
+        )
+
+    def test_create_and_enforce(self):
+        response = self._create_constraint([self.vendor.pk, self.serial.pk])
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.content)
+        self.assertEqual([f['name'] for f in response.data['fields']], ['vendor', 'serial'])
+        self.assertEqual(
+            CustomObjectTypeConstraint.objects.get().field_schema_ids,
+            [self.vendor.schema_id, self.serial.schema_id],
+        )
+
+        self.cot.refresh_from_db()
+        model = self.cot.get_model()
+        url = reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-list', kwargs={'custom_object_type': 'assets'}
+        )
+        data = {'vendor': 'acme', 'serial': '1'}
+        response = self.client.post(url, data, format='json', **self.header)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.content)
+        response = self.client.post(url, data, format='json', **self.header)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.content)
+        self.assertEqual(model.objects.count(), 1)
+
+    def test_rejects_field_of_another_type(self):
+        other = self.create_custom_object_type(name='other', slug='others')
+        foreign = self.create_custom_object_type_field(other, name='foreign', type='text')
+        response = self._create_constraint([self.vendor.pk, foreign.pk])
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.content)
+        self.assertIn('fields', response.data)
+
+    def test_rejects_invalid_constraint(self):
+        response = self._create_constraint([self.vendor.pk])
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.content)
+        self.assertFalse(CustomObjectTypeConstraint.objects.exists())
+
+    def test_update_and_filter(self):
+        response = self._create_constraint([self.vendor.pk, self.serial.pk])
+        url = reverse(
+            'plugins-api:netbox_custom_objects-api:customobjecttypeconstraint-detail',
+            kwargs={'pk': response.data['id']},
+        )
+        response = self.client.patch(url, {'case_insensitive': True}, format='json', **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.content)
+        self.assertTrue(CustomObjectTypeConstraint.objects.get().case_insensitive)
+
+        # Schema IDs are numbered per type, so another type's fields can match the constraint's.
+        other = self.create_custom_object_type(name='other', slug='others')
+        self.create_custom_object_type_field(other, name='vendor', type='text', primary=True)
+        self.create_custom_object_type_field(other, name='serial', type='text')
+        response = self.client.patch(url, {'custom_object_type': other.pk}, format='json', **self.header)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.content)
+        self.assertIn('custom_object_type', response.data)
+        self.assertEqual(CustomObjectTypeConstraint.objects.get().custom_object_type, self.cot)
+
+        response = self.client.get(
+            reverse(self.constraint_list_url), {'custom_object_type_id': other.pk}, **self.header
+        )
+        self.assertEqual(response.data['count'], 0)
+        response = self.client.get(
+            reverse(self.constraint_list_url), {'custom_object_type': 'assets'}, **self.header
+        )
+        self.assertEqual(response.data['count'], 1)
+
+    def test_list_query_count_does_not_grow_with_constraints(self):
+        model_field = self.create_custom_object_type_field(self.cot, name='model', type='text')
+
+        def list_queries():
+            with CaptureQueriesContext(connection) as ctx:
+                response = self.client.get(reverse(self.constraint_list_url), **self.header)
+            self.assertEqual(response.status_code, status.HTTP_200_OK, response.content)
+            # Ignore core's own per-request queries (auth, config), which vary by NetBox version.
+            return len([q for q in ctx.captured_queries if 'netbox_custom_objects_' in q['sql']])
+
+        CustomObjectTypeConstraint.objects.create(
+            custom_object_type=self.cot, name='c1', field_schema_ids=[self.vendor.schema_id, self.serial.schema_id]
+        )
+        one = list_queries()
+        for name, fields in (('c2', (self.vendor, model_field)), ('c3', (self.serial, model_field))):
+            CustomObjectTypeConstraint.objects.create(
+                custom_object_type=self.cot, name=name, field_schema_ids=[f.schema_id for f in fields]
+            )
+        self.assertEqual(list_queries(), one)
 
 
 class OpenAPISchemaTest(TestCase):

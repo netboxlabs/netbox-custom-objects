@@ -31,7 +31,7 @@ The following attributes are available when creating or editing a Custom Object 
 | `Description` | Help text shown below the field in forms. |
 | `Group name` | Fields sharing the same group name are displayed together. |
 | `Required` | When enabled, a value must be provided when creating or editing an object. |
-| `Must be unique` | When enabled, no two objects of this type may share the same value for this field. Not supported for `boolean` or `multiobject` fields. |
+| `Must be unique` | When enabled, no two objects of this type may share the same value for this field. Not supported for `boolean` or `multiobject` fields. To make a combination of fields unique, add a [constraint](index.md#adding-constraints-to-the-custom-object-type) instead. |
 | `Primary name field` | When enabled, this field's value is used as the object's display name. |
 | `Context field` | When enabled, this field's value is shown as context when this object is referenced by another object. |
 | `Default` | Default value pre-populated when creating a new object. Must be a valid JSON value. |

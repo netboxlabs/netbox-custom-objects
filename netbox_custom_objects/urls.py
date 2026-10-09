@@ -21,6 +21,17 @@ urlpatterns = [
         name="customobjecttypefield_add",
     ),
 
+    # Custom Object Type Constraints
+    path(
+        "custom-object-type-constraints/<int:pk>/",
+        include(get_model_urls(APP_LABEL, "customobjecttypeconstraint")),
+    ),
+    path(
+        "custom-object-type-constraints/add/",
+        views.CustomObjectTypeConstraintEditView.as_view(),
+        name="customobjecttypeconstraint_add",
+    ),
+
     # Journal Entries (must come before custom object patterns)
     path(
         "journal-entries/add/",

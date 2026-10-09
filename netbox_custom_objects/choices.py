@@ -63,3 +63,12 @@ class SearchWeightChoices(ChoiceSet):
         (WEIGHT_LOW, _('Low (1000)')),
         (WEIGHT_NONE, _('Not searchable')),
     )
+
+
+class ConstraintTypeChoices(ChoiceSet):
+    """The kinds of constraint a Custom Object Type can enforce on its objects."""
+    UNIQUE = "unique"
+
+    CHOICES = (
+        (UNIQUE, _("Unique")),
+    )

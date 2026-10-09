@@ -111,6 +111,18 @@ Additional optional fields include `Description`, `Version`, `Group name`, and `
 
 See [Field Attributes](field-attributes.md) for the full list of attributes available on each field type.
 
+### Adding Constraints to the Custom Object Type
+
+A field's `Must be unique` setting makes its values unique on their own. To require that a *combination* of field values is unique, for example a serial number that only has to be unique per vendor, add a constraint: open the Custom Object Type, go to the `Constraints` tab and click `+ Add Constraint`.
+
+- **Fields** — the fields whose combined values must be unique. Pick at least two, or one when the constraint is case-insensitive. Text, long text, integer, decimal, boolean, date, datetime, URL, selection and object fields (including polymorphic object fields, which count as both the object's type and its ID) can be included.
+- **Case-insensitive** — compare text and URL fields without regard to case, so `ACME` and `acme` conflict.
+- **Empty values are distinct** — enabled by default, so objects that leave any of the constrained fields empty never conflict. Disable it to treat empty values as equal.
+
+The database enforces constraints, so they apply to the UI, the REST API, imports and scripts alike, and a constraint can't be added while existing objects already break it. Saving an object that would break one shows a validation error.
+
+A constrained field can be renamed. Its type can't be changed until it's removed from its constraints, and deleting it deletes the constraints that include it.
+
 ### Interacting with Custom Objects
 
 Typically, NetBox administrators are responsible for thinking through modelling requirements and creating Custom Object Types for other users to interact with day-to-day. Having created a `DHCP Scope` Custom Object Type, here is how others interact with it.
@@ -205,7 +217,7 @@ Deleting a Custom Object Type drops an entire database table and should be done 
 
 #### Deleting Custom Object Type Fields
 
-Deleting a Custom Object Type Field drops an entire database column and should be done with caution. You will be warned about the impact before you proceed. We recommend that only administrators have permission to delete Custom Object Type Fields.
+Deleting a Custom Object Type Field drops an entire database column and should be done with caution. You will be warned about the impact before you proceed, including any constraints that will be deleted with the field. We recommend that only administrators have permission to delete Custom Object Type Fields.
 
 #### Deleting Custom Objects
 

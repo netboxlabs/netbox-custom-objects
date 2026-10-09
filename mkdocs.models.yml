@@ -7,3 +7,4 @@ plugins: []
 nav:
   - netbox_custom_objects:
       - Custom Object Type: netbox_custom_objects/customobjecttype.md
+      - Custom Object Type Constraint: netbox_custom_objects/customobjecttypeconstraint.md

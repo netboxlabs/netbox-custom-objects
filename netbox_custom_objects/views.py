@@ -29,6 +29,7 @@ from netbox.views import generic
 from netbox.views.generic.mixins import TableMixin
 from utilities.forms import ConfirmationForm, DeleteForm, restrict_form_fields
 from utilities.querydict import normalize_querydict
+from utilities.request import safe_for_redirect
 from utilities.forms.fields import ContentTypeChoiceField, DynamicModelChoiceField, DynamicModelMultipleChoiceField
 from utilities.forms.utils import get_field_value as _get_field_value
 from utilities.forms.widgets import HTMXSelect
@@ -39,9 +40,10 @@ from utilities.permissions import get_permission_for_model
 from utilities.views import ConditionalLoginRequiredMixin, ViewTab, get_viewname, register_model_view
 
 from netbox_custom_objects.filtersets import get_filterset_class
-from netbox_custom_objects.tables import CustomObjectTable, CustomObjectTypeFieldTable
+from netbox_custom_objects.tables import (CustomObjectTable, CustomObjectTypeConstraintTable,
+                                          CustomObjectTypeFieldTable)
 from . import field_types, filtersets, forms, tables
-from .models import CustomObject, CustomObjectType, CustomObjectTypeField
+from .models import CustomObject, CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
 from extras.choices import CustomFieldTypeChoices
 from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
 from netbox_custom_objects.constants import APP_LABEL
@@ -408,6 +410,25 @@ class CustomObjectTypeFieldsView(generic.ObjectChildrenView):
         return CustomObjectTypeField.objects.restrict(request.user, 'view').filter(custom_object_type=parent)
 
 
+@register_model_view(CustomObjectType, 'constraints', path='constraints')
+class CustomObjectTypeConstraintsView(generic.ObjectChildrenView):
+    queryset = CustomObjectType.objects.all()
+    table = CustomObjectTypeConstraintTable
+    template_name = 'netbox_custom_objects/constraints.html'
+    tab = ViewTab(
+        label=_('Constraints'),
+        badge=lambda obj: CustomObjectTypeConstraint.objects.filter(custom_object_type=obj).count(),
+        permission='netbox_custom_objects.view_customobjecttypeconstraint',
+        weight=525,
+        hide_if_empty=False
+    )
+
+    def get_children(self, request, parent):
+        return CustomObjectTypeConstraint.objects.restrict(request.user, 'view').filter(
+            custom_object_type=parent
+        ).prefetch_related('custom_object_type__fields')
+
+
 #
 # Custom Object Type Fields
 #
@@ -437,13 +458,45 @@ class CustomObjectTypeFieldEditView(generic.ObjectEditView):
         return {'branch_bypass_warning': _is_in_branch()}
 
 
+@register_model_view(CustomObjectTypeConstraint, "edit")
+class CustomObjectTypeConstraintEditView(generic.ObjectEditView):
+    queryset = CustomObjectTypeConstraint.objects.all()
+    form = forms.CustomObjectTypeConstraintForm
+
+    def alter_object(self, obj, request, url_args, url_kwargs):
+        # New constraints take their custom object type from the Add link's query parameter.
+        if not obj.pk:
+            cot_pk = request.GET.get('custom_object_type') or request.POST.get('custom_object_type')
+            if cot_pk:
+                try:
+                    obj.custom_object_type_id = int(cot_pk)
+                except (ValueError, TypeError):
+                    pass
+        return obj
+
+
+@register_model_view(CustomObjectTypeConstraint, "delete")
+class CustomObjectTypeConstraintDeleteView(generic.ObjectDeleteView):
+    queryset = CustomObjectTypeConstraint.objects.all()
+
+    def get_return_url(self, request, obj=None):
+        # Core's fallback needs obj.pk, which is gone after the delete.
+        return_url = request.GET.get("return_url")
+        if return_url and safe_for_redirect(return_url):
+            return return_url
+        return obj.get_absolute_url()
+
+
 @register_model_view(CustomObjectTypeField, "delete")
 class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
     template_name = "netbox_custom_objects/field_delete.html"
     queryset = CustomObjectTypeField.objects.all()
 
     def get_return_url(self, request, obj=None):
-        return request.GET.get("return_url") or obj.custom_object_type.get_absolute_url()
+        return_url = request.GET.get("return_url")
+        if return_url and safe_for_redirect(return_url):
+            return return_url
+        return obj.custom_object_type.get_absolute_url()
 
     def get(self, request, *args, **kwargs):
         """
@@ -478,6 +531,8 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
         else:
             num_dependent_objects = model.objects.filter(**{f"{obj.name}__isnull": False}).count()
 
+        constraints = list(obj.constraints)
+
         # If this is an HTMX request, return only the rendered deletion form as modal content
         if htmx_partial(request):
             viewname = get_viewname(self.queryset.model, action="delete")
@@ -491,6 +546,7 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
                     "form": form,
                     "form_url": form_url,
                     "num_dependent_objects": num_dependent_objects,
+                    "constraints": constraints,
                     **self.get_extra_context(request, obj),
                 },
             )
@@ -503,6 +559,7 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
                 "form": form,
                 "return_url": self.get_return_url(request, obj),
                 "num_dependent_objects": num_dependent_objects,
+                "constraints": constraints,
                 **self.get_extra_context(request, obj),
             },
         )

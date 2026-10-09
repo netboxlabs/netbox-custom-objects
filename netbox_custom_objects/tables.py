@@ -9,10 +9,11 @@ from django.utils.translation import gettext_lazy as _
 from netbox.tables import NetBoxTable, columns
 from utilities.permissions import get_permission_for_model
 
-from netbox_custom_objects.models import CustomObject, CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.models import (CustomObject, CustomObjectType, CustomObjectTypeConstraint,
+                                          CustomObjectTypeField)
 from netbox_custom_objects.utilities import get_viewname
 
-__all__ = ("CustomObjectTable", "CustomObjectTypeFieldTable")
+__all__ = ("CustomObjectTable", "CustomObjectTypeConstraintTable", "CustomObjectTypeFieldTable")
 
 
 OBJECTCHANGE_FULL_NAME = """
@@ -290,4 +291,46 @@ class CustomObjectTable(NetBoxTable):
             "custom_object_type",
             "created",
             "last_updated",
+        )
+
+
+class CustomObjectTypeConstraintTable(NetBoxTable):
+    name = tables.Column(
+        verbose_name=_('Name'),
+    )
+    constrained_fields = tables.TemplateColumn(
+        verbose_name=_('Fields'),
+        template_code='{{ record.get_fields|join:", " }}',
+        orderable=False,
+    )
+    case_insensitive = columns.BooleanColumn(
+        verbose_name=_('Case-insensitive')
+    )
+    nulls_distinct = columns.BooleanColumn(
+        verbose_name=_('Empty values distinct')
+    )
+
+    exempt_columns = ('actions',)
+
+    class Meta(NetBoxTable.Meta):
+        model = CustomObjectTypeConstraint
+        fields = (
+            "pk",
+            "id",
+            "name",
+            "type",
+            "constrained_fields",
+            "case_insensitive",
+            "nulls_distinct",
+            "description",
+            "created",
+            "last_updated",
+        )
+        default_columns = (
+            "name",
+            "type",
+            "constrained_fields",
+            "case_insensitive",
+            "nulls_distinct",
+            "description",
         )

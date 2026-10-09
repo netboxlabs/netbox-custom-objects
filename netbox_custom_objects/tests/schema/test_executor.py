@@ -12,6 +12,7 @@ Covers:
 - schema_document persisted after apply
 - next_schema_id counter synced after explicit-schema_id ADD
 - Transaction atomicity: partial failure rolls back entirely
+- Constraint ADD, ALTER and REMOVE, and their ordering around field changes
 """
 
 from django.test import SimpleTestCase, TransactionTestCase
@@ -20,10 +21,12 @@ from netbox_custom_objects.schema.comparator import (
     COTDiff,
     FieldChange,
     FieldOp,
+    diff_document,
 )
 from netbox_custom_objects.schema.executor import (
     CircularDependencyError,
     DestructiveChangesError,
+    InvalidConstraintError,
     UnknownChoiceSetError,
     UnknownFieldTypeError,
     UnknownObjectTypeError,
@@ -32,7 +35,7 @@ from netbox_custom_objects.schema.executor import (
     apply_diffs,
 )
 from netbox_custom_objects.schema.exporter import export_cot
-from netbox_custom_objects.models import CustomObjectType
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint
 
 from ..base import CustomObjectsTestCase, TransactionCleanupMixin
 
@@ -898,3 +901,102 @@ class ExecutorPolymorphicFieldTestCase(_ExecutorTestBase):
         apply_document(schema_doc)
         self.assertTrue(CustomObjectType.objects.filter(slug="cot-poly-a").exists())
         self.assertTrue(CustomObjectType.objects.filter(slug="cot-poly-b").exists())
+
+
+# ---------------------------------------------------------------------------
+# Constraints
+# ---------------------------------------------------------------------------
+
+class ExecutorConstraintTestCase(_ExecutorTestBase):
+    """Constraints are exported, diffed by name, and applied around field changes."""
+
+    def setUp(self):
+        super().setUp()
+        self.cot = self.create_custom_object_type(name='asset', slug='assets')
+        self.vendor = self.create_custom_object_type_field(self.cot, name='vendor', type='text')
+        self.serial = self.create_custom_object_type_field(self.cot, name='serial', type='text')
+
+    def _document(self, **changes):
+        type_def = {**export_cot(self.cot), **changes}
+        return {"schema_version": "1", "types": [type_def]}
+
+    def _constraint_def(self, **kwargs):
+        return {"name": "vendor_serial", "fields": [self.vendor.schema_id, self.serial.schema_id], **kwargs}
+
+    def test_new_cot_with_constraint(self):
+        apply_document({"schema_version": "1", "types": [{
+            "name": "fresh",
+            "slug": "fresh",
+            "fields": [{"id": 1, "name": "a", "type": "text"}, {"id": 2, "name": "b", "type": "text"}],
+            "constraints": [{"name": "a_b", "fields": [1, 2], "case_insensitive": True}],
+        }]})
+        constraint = CustomObjectTypeConstraint.objects.get(custom_object_type__slug="fresh")
+        self.assertEqual(constraint.field_schema_ids, [1, 2])
+        self.assertTrue(constraint.case_insensitive)
+
+    def test_add_export_and_round_trip(self):
+        apply_document(self._document(constraints=[self._constraint_def(description="Serials")]))
+        self.cot.refresh_from_db()
+        self.assertEqual(
+            export_cot(self.cot)["constraints"],
+            [{**self._constraint_def(), "description": "Serials"}],
+        )
+        # Re-applying the export changes nothing.
+        diff = diff_document(self._document())[0]
+        self.assertEqual(diff.constraint_changes, [])
+
+    def test_alter(self):
+        apply_document(self._document(constraints=[self._constraint_def()]))
+        diff = apply_document(self._document(constraints=[self._constraint_def(nulls_distinct=False)]))[0]
+        self.assertEqual(diff.constraint_changes[0].op, FieldOp.ALTER)
+        self.assertEqual(diff.constraint_changes[0].changed_attrs, {"nulls_distinct": (True, False)})
+        self.assertFalse(CustomObjectTypeConstraint.objects.get().nulls_distinct)
+
+    def test_remove_needs_removed_constraints(self):
+        apply_document(self._document(constraints=[self._constraint_def()]))
+
+        diff = apply_document(self._document(constraints=[]))[0]
+        self.assertEqual(diff.constraint_changes, [])
+        self.assertTrue(any("vendor_serial" in w for w in diff.warnings))
+        self.assertTrue(CustomObjectTypeConstraint.objects.exists())
+
+        diff = apply_document(self._document(constraints=[], removed_constraints=["vendor_serial"]))[0]
+        self.assertEqual(diff.constraint_changes[0].op, FieldOp.REMOVE)
+        self.assertFalse(diff.has_destructive_changes)
+        self.assertFalse(CustomObjectTypeConstraint.objects.exists())
+        self.cot.refresh_from_db()
+        self.assertEqual(export_cot(self.cot)["removed_constraints"], ["vendor_serial"])
+
+    def test_constraint_on_field_added_in_same_document(self):
+        doc = self._document()
+        doc["types"][0]["fields"].append({"id": 50, "name": "model", "type": "text"})
+        doc["types"][0]["constraints"] = [{"name": "vendor_model", "fields": [self.vendor.schema_id, 50]}]
+        apply_document(doc)
+        self.assertEqual(CustomObjectTypeConstraint.objects.get().field_schema_ids, [self.vendor.schema_id, 50])
+
+    def test_type_change_of_constrained_field_rejected(self):
+        apply_document(self._document(constraints=[self._constraint_def()]))
+        doc = self._document()
+        serial = next(f for f in doc["types"][0]["fields"] if f["name"] == "serial")
+        serial["type"] = "integer"
+        with self.assertRaisesMessage(InvalidConstraintError, "vendor_serial"):
+            apply_document(doc, allow_destructive=True)
+        self.serial.refresh_from_db()
+        self.assertEqual(self.serial.type, "text")
+
+        # Removing the constraint in the same document allows the change.
+        doc["types"][0].update(constraints=[], removed_constraints=["vendor_serial"])
+        apply_document(doc, allow_destructive=True)
+        self.serial.refresh_from_db()
+        self.assertEqual(self.serial.type, "integer")
+
+    def test_invalid_constraint_rolls_back(self):
+        model = self.cot.get_model()
+        model.objects.create(vendor="acme", serial="1")
+        model.objects.create(vendor="acme", serial="1")
+        doc = self._document(description="changed", constraints=[self._constraint_def()])
+        with self.assertRaises(InvalidConstraintError):
+            apply_document(doc)
+        self.assertFalse(CustomObjectTypeConstraint.objects.exists())
+        self.cot.refresh_from_db()
+        self.assertEqual(self.cot.description, "A test custom object type")

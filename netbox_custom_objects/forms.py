@@ -5,6 +5,7 @@ from extras.choices import CustomFieldTypeChoices
 from extras.forms import CustomFieldForm
 from netbox.forms import (NetBoxModelBulkEditForm, NetBoxModelFilterSetForm,
                           NetBoxModelForm, NetBoxModelImportForm)
+from netbox.forms.mixins import ChangelogMessageMixin
 from utilities.forms.fields import (CommentField, ContentTypeChoiceField,
                                     ContentTypeMultipleChoiceField,
                                     DynamicModelChoiceField, SlugField, TagFilterField)
@@ -19,8 +20,10 @@ from netbox_custom_objects.field_types import (
     PolymorphicObjectReverseDescriptor,
     PolymorphicMultiObjectReverseDescriptor,
 )
-from netbox_custom_objects.models import (CustomObjectObjectType,
+from netbox_custom_objects.models import (CONSTRAINT_FIELD_TYPES,
+                                          CustomObjectObjectType,
                                           CustomObjectType,
+                                          CustomObjectTypeConstraint,
                                           CustomObjectTypeField)
 
 __all__ = (
@@ -29,6 +32,7 @@ __all__ = (
     "CustomObjectTypeImportForm",
     "CustomObjectTypeFilterForm",
     "CustomObjectTypeFieldForm",
+    "CustomObjectTypeConstraintForm",
     "CustomObjectType",
 )
 
@@ -432,3 +436,55 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
                 if not model_field.exists():
                     model_field.set(qs)
         return obj
+
+
+class CustomObjectTypeConstraintForm(ChangelogMessageMixin, forms.ModelForm):
+    custom_object_type = DynamicModelChoiceField(
+        queryset=CustomObjectType.objects.all(),
+        label=_("Custom object type"),
+        disabled=True,
+    )
+    field_schema_ids = forms.ModelMultipleChoiceField(
+        queryset=CustomObjectTypeField.objects.none(),
+        label=_("Fields"),
+        help_text=_("The fields whose combined values must be unique"),
+    )
+
+    fieldsets = (
+        FieldSet(
+            "custom_object_type",
+            "name",
+            "type",
+            "field_schema_ids",
+            "case_insensitive",
+            "nulls_distinct",
+            "description",
+            name=_("Constraint"),
+        ),
+    )
+
+    class Meta:
+        model = CustomObjectTypeConstraint
+        fields = (
+            "custom_object_type",
+            "name",
+            "type",
+            "field_schema_ids",
+            "case_insensitive",
+            "nulls_distinct",
+            "description",
+        )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # The custom object type is set by the view (from the instance or the
+        # ?custom_object_type= query parameter); offer only its eligible fields.
+        self.fields["field_schema_ids"].queryset = CustomObjectTypeField.objects.filter(
+            custom_object_type_id=self.instance.custom_object_type_id,
+            type__in=CONSTRAINT_FIELD_TYPES,
+        )
+        if self.instance.pk:
+            self.initial["field_schema_ids"] = [f.pk for f in self.instance.get_fields()]
+
+    def clean_field_schema_ids(self):
+        return [f.schema_id for f in self.cleaned_data["field_schema_ids"]]

@@ -17,11 +17,12 @@ from django.conf import settings
 # from django.contrib.contenttypes.management import create_contenttypes
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
+from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import FieldDoesNotExist
 from django.core.validators import RegexValidator, ValidationError
 from django.db import DEFAULT_DB_ALIAS, connection, connections, IntegrityError, models, transaction
 from django.db.utils import OperationalError, ProgrammingError
-from django.db.models import Q
+from django.db.models import F, Q
 from django.db.models.fields.related import ForeignKey, ManyToManyField
 from django.db.models.functions import Lower
 from django.db.models.signals import m2m_changed, pre_delete, post_save
@@ -70,7 +71,7 @@ from utilities.serialization import deserialize_object as _deserialize_object
 from utilities.string import title
 from utilities.validators import validate_regex
 
-from netbox_custom_objects.choices import (CustomObjectFieldTypeChoices,
+from netbox_custom_objects.choices import (ConstraintTypeChoices, CustomObjectFieldTypeChoices,
                                             ObjectFieldOnDeleteChoices)
 from netbox_custom_objects.constants import (
     APP_LABEL,
@@ -78,7 +79,7 @@ from netbox_custom_objects.constants import (
     RESERVED_FIELD_NAMES,
 )
 from netbox_custom_objects.field_types import (
-    FIELD_TYPE_CLASS, LazyForeignKey, safe_table_name,
+    FIELD_TYPE_CLASS, LazyForeignKey, _safe_pg_identifier, safe_table_name,
     PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor,
 )
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
@@ -1960,6 +1961,20 @@ class CustomObjectType(NetBoxModel):
 
         attrs.update(**field_attrs)
 
+        # Declare the type's constraints so full_clean() reports violations as validation
+        # errors. Skipped while this app's migrations may be unapplied (the table may not
+        # exist yet); the database enforces them regardless.
+        if not skip_cot_object_fields:
+            fields_by_schema_id = {
+                entry["field"].schema_id: entry["field"] for entry in field_attrs["_field_objects"].values()
+            }
+            meta.constraints = [
+                c for c in (
+                    constraint.to_model_constraint(fields_by_schema_id, self.get_verbose_name())
+                    for constraint in self.constraints.all()
+                ) if c is not None
+            ]
+
         # Track which fields were skipped due to recursion for after_model_generation
         if '_skipped_fields' not in attrs:
             attrs['_skipped_fields'] = set()
@@ -2803,6 +2818,16 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         return not self.many
 
     @property
+    def constraints(self):
+        """The constraints on this field's custom object type that include this field."""
+        if self.schema_id is None:
+            return CustomObjectTypeConstraint.objects.none()
+        return CustomObjectTypeConstraint.objects.filter(
+            custom_object_type_id=self.custom_object_type_id,
+            field_schema_ids__contains=[self.schema_id],
+        )
+
+    @property
     def many(self):
         return self.type in ["multiobject"]
 
@@ -3203,6 +3228,21 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     "(coordinates, URL) after creation."
                 )}
             )
+
+        # A constraint covers this field's column(s) as they are now; changing the type
+        # or polymorphic flag would change them under it.
+        if (
+            self.pk
+            and not self._state.adding
+            and (self.type != self._original_type or self.is_polymorphic != self._original_is_polymorphic)
+        ):
+            constraint_names = list(self.constraints.values_list("name", flat=True))
+            if constraint_names:
+                raise ValidationError(
+                    {"type": _(
+                        "This field is part of constraint(s) {names}; remove it from them before changing its type."
+                    ).format(names=", ".join(constraint_names))}
+                )
 
         # Guard against backing-column name collisions.
         #
@@ -4060,6 +4100,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             transaction.on_commit(lambda: ReindexCustomObjectTypeJob.enqueue(cot_id=_cot_id))
 
     def delete(self, *args, **kwargs):
+        # Dropping the column would drop the database constraint anyway; delete the
+        # constraint records first so they are change-logged and leave the model.
+        for constraint in self.constraints:
+            constraint.delete()
+
         field_type = FIELD_TYPE_CLASS[self.type]()
         model = self.custom_object_type.get_model()
         schema_conn = _get_schema_connection()
@@ -4135,6 +4180,308 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         if self.search_weight > 0:
             _cot_id = self.custom_object_type_id
             transaction.on_commit(lambda: ReindexCustomObjectTypeJob.enqueue(cot_id=_cot_id))
+
+
+# Field types a constraint may include. Multi-object and multi-select values aren't
+# columns on the type's table, and JSON or coordinates values have no useful equality.
+CONSTRAINT_FIELD_TYPES = {
+    CustomFieldTypeChoices.TYPE_TEXT,
+    CustomFieldTypeChoices.TYPE_LONGTEXT,
+    CustomFieldTypeChoices.TYPE_INTEGER,
+    CustomFieldTypeChoices.TYPE_DECIMAL,
+    CustomFieldTypeChoices.TYPE_BOOLEAN,
+    CustomFieldTypeChoices.TYPE_DATE,
+    CustomFieldTypeChoices.TYPE_DATETIME,
+    CustomFieldTypeChoices.TYPE_URL,
+    CustomFieldTypeChoices.TYPE_SELECT,
+    CustomFieldTypeChoices.TYPE_OBJECT,
+}
+
+# Field types compared case-insensitively when a constraint is case-insensitive.
+CASE_INSENSITIVE_FIELD_TYPES = {
+    CustomFieldTypeChoices.TYPE_TEXT,
+    CustomFieldTypeChoices.TYPE_LONGTEXT,
+    CustomFieldTypeChoices.TYPE_URL,
+}
+
+
+def _constraint_columns(field):
+    """Return the model field names a constraint on *field* covers."""
+    if field.is_polymorphic:
+        return [f"{field.name}_content_type", f"{field.name}_object_id"]
+    return [field.name]
+
+
+def _drop_db_constraint(schema_editor, model, name):
+    """Drop the unique constraint or unique index *name* from *model*'s table, if present."""
+    conn = schema_editor.connection
+    with conn.cursor() as cursor:
+        existing = conn.introspection.get_constraints(cursor, model._meta.db_table)
+    if name not in existing:
+        return
+    if existing[name]["index"]:
+        # Expression constraints are created as unique indexes.
+        schema_editor.execute(schema_editor._delete_index_sql(model, name))
+    else:
+        schema_editor.execute(schema_editor._delete_constraint_sql(schema_editor.sql_delete_unique, model, name))
+
+
+class CustomObjectTypeConstraint(ChangeLoggedModel):
+    """
+    A constraint across one or more fields of a Custom Object Type, enforced by the database.
+    """
+    custom_object_type = models.ForeignKey(
+        CustomObjectType, on_delete=models.CASCADE, related_name="constraints"
+    )
+    name = models.CharField(
+        verbose_name=_("name"),
+        max_length=50,
+        help_text=_("Internal constraint name, e.g. \"unique_serial_per_vendor\""),
+        validators=(
+            RegexValidator(
+                regex=r"^[a-z0-9]+(_[a-z0-9]+)*$",
+                message=_(
+                    "Only lowercase alphanumeric characters and underscores are allowed. "
+                    "Names may not start or end with an underscore, and double underscores are not permitted."
+                ),
+            ),
+        ),
+    )
+    type = models.CharField(
+        verbose_name=_("type"),
+        max_length=50,
+        choices=ConstraintTypeChoices,
+        default=ConstraintTypeChoices.UNIQUE,
+    )
+    # Fields are referenced by schema_id, which survives renames and is available
+    # before save() (unlike an M2M), where the database constraint is created.
+    field_schema_ids = ArrayField(
+        base_field=models.PositiveIntegerField(),
+        verbose_name=_("fields"),
+        help_text=_("Schema IDs of the fields the constraint covers, in order"),
+    )
+    case_insensitive = models.BooleanField(
+        verbose_name=_("case-insensitive"),
+        default=False,
+        help_text=_("Compare text and URL fields without regard to case"),
+    )
+    nulls_distinct = models.BooleanField(
+        verbose_name=_("empty values are distinct"),
+        default=True,
+        help_text=_(
+            "Objects that leave any of these fields empty never conflict. Disable to treat empty values as equal."
+        ),
+    )
+    description = models.CharField(
+        verbose_name=_("description"), max_length=200, blank=True
+    )
+
+    class Meta:
+        ordering = ["custom_object_type", "name"]
+        verbose_name = _("custom object type constraint")
+        verbose_name_plural = _("custom object type constraints")
+        constraints = (
+            models.UniqueConstraint(
+                fields=("custom_object_type", "name"),
+                name="%(app_label)s_%(class)s_unique_name",
+            ),
+        )
+
+    def __str__(self):
+        return self.name
+
+    def get_absolute_url(self):
+        return reverse(
+            "plugins:netbox_custom_objects:customobjecttype_constraints",
+            args=[self.custom_object_type_id],
+        )
+
+    @property
+    def docs_url(self):
+        return f"{settings.STATIC_URL}docs/models/{APP_LABEL}/customobjecttypeconstraint/"
+
+    @staticmethod
+    def get_db_name(cot_id, name):
+        return _safe_pg_identifier(f"custom_objects_{cot_id}_{name}_uniq")
+
+    @property
+    def db_name(self):
+        return self.get_db_name(self.custom_object_type_id, self.name)
+
+    def get_fields(self):
+        """Return the constrained fields in order, omitting any that no longer exist."""
+        if not self.custom_object_type_id or not self.field_schema_ids:
+            return []
+        # Filtered in Python so a prefetch of custom_object_type__fields serves lists.
+        by_schema_id = {f.schema_id: f for f in self.custom_object_type.fields.all()}
+        return [by_schema_id[sid] for sid in self.field_schema_ids if sid in by_schema_id]
+
+    def to_model_constraint(self, fields_by_schema_id, verbose_name=None):
+        """
+        Build the Django constraint for the generated model, or None if a field is missing.
+        """
+        try:
+            members = [fields_by_schema_id[sid] for sid in self.field_schema_ids]
+        except KeyError:
+            return None
+        kwargs = {
+            "name": self.db_name,
+            "nulls_distinct": None if self.nulls_distinct else False,
+        }
+        if not self.case_insensitive:
+            return models.UniqueConstraint(
+                fields=[col for f in members for col in _constraint_columns(f)], **kwargs
+            )
+        expressions = [
+            Lower(F(col)) if f.type in CASE_INSENSITIVE_FIELD_TYPES else F(col)
+            for f in members
+            for col in _constraint_columns(f)
+        ]
+        # Django only names the fields in its message for field-based constraints.
+        message = _("{model} with this {fields} already exists.").format(
+            model=verbose_name or self.custom_object_type.get_verbose_name(),
+            fields=_(" and ").join(str(f) for f in members),
+        )
+        return models.UniqueConstraint(*expressions, violation_error_message=message, **kwargs)
+
+    def clean(self):
+        super().clean()
+        if not self.custom_object_type_id or not self.field_schema_ids:
+            return
+
+        if len(set(self.field_schema_ids)) != len(self.field_schema_ids):
+            raise ValidationError({"field_schema_ids": _("A field can be listed only once.")})
+        members = self.get_fields()
+        if len(members) != len(self.field_schema_ids):
+            raise ValidationError({"field_schema_ids": _("Every field must belong to this custom object type.")})
+        for field in members:
+            if field.type not in CONSTRAINT_FIELD_TYPES:
+                raise ValidationError({
+                    "field_schema_ids": _("{field} is a {type} field, which a constraint can't include.").format(
+                        field=field, type=field.get_type_display()
+                    )
+                })
+        if len(members) < 2 and not self.case_insensitive:
+            raise ValidationError({
+                "field_schema_ids": _(
+                    "A constraint needs at least two fields; use the field's own \"must be unique\" "
+                    "setting for one field."
+                )
+            })
+        if self.case_insensitive and not any(f.type in CASE_INSENSITIVE_FIELD_TYPES for f in members):
+            raise ValidationError({
+                "case_insensitive": _("Case-insensitive constraints need at least one text or URL field.")
+            })
+        # Without database support (PostgreSQL < 15), Django silently skips the constraint.
+        if not self.nulls_distinct and not _get_schema_connection().features.supports_nulls_distinct_unique_constraints:
+            raise ValidationError({
+                "nulls_distinct": _("Treating empty values as equal requires PostgreSQL 15 or later.")
+            })
+
+        siblings = CustomObjectTypeConstraint.objects.filter(
+            custom_object_type_id=self.custom_object_type_id
+        ).exclude(pk=self.pk)
+        for sibling in siblings:
+            if (
+                set(sibling.field_schema_ids) == set(self.field_schema_ids)
+                and sibling.case_insensitive == self.case_insensitive
+                and sibling.nulls_distinct == self.nulls_distinct
+            ):
+                raise ValidationError({
+                    "field_schema_ids": _("Constraint {name} already covers these fields.").format(name=sibling)
+                })
+
+        self._check_existing_objects(members)
+
+    def _check_existing_objects(self, members):
+        """Raise ValidationError if existing objects already violate this constraint."""
+        if self.pk and not self._definition_changed():
+            return
+        model = self.custom_object_type.get_model()
+        constraint = self.to_model_constraint({f.schema_id: f for f in members})
+        # Route through the branch's connection so the probe runs in the active schema.
+        probe_conn = _get_schema_connection()
+        try:
+            with transaction.atomic(using=probe_conn.alias):
+                with probe_conn.schema_editor() as schema_editor:
+                    _drop_db_constraint(schema_editor, model, constraint.name)
+                    schema_editor.add_constraint(model, constraint)
+                    raise UniquenessConstraintTestError()
+        except UniquenessConstraintTestError:
+            pass
+        except IntegrityError:
+            raise ValidationError(
+                _("Existing {model} objects already have duplicate values for these fields.").format(
+                    model=self.custom_object_type.get_verbose_name()
+                )
+            )
+
+    def _definition_changed(self):
+        # Compared against the stored row rather than a from_db() snapshot so that
+        # branch merges and reverts (which deserialize without from_db) are covered.
+        stored = CustomObjectTypeConstraint.objects.filter(pk=self.pk).values(
+            "name", "type", "field_schema_ids", "case_insensitive", "nulls_distinct"
+        ).first()
+        return stored != {
+            "name": self.name,
+            "type": self.type,
+            "field_schema_ids": self.field_schema_ids,
+            "case_insensitive": self.case_insensitive,
+            "nulls_distinct": self.nulls_distinct,
+        }
+
+    @classmethod
+    def deserialize_object(cls, data, pk=None):
+        """Branching merge/revert hook; replays through the real ``save()`` so the DDL runs."""
+        inner = _deserialize_object(cls, data, pk=pk)
+
+        class _SchemaAwareDeserialized:
+            def __init__(self, deserialized):
+                self.object = deserialized.object
+
+            def save(self, using=None, **kwargs):
+                self.object.save()
+
+        return _SchemaAwareDeserialized(inner)
+
+    def save(self, *args, **kwargs):
+        schema_conn = _get_schema_connection()
+        previous_name = None
+        if not self._state.adding:
+            previous_name = CustomObjectTypeConstraint.objects.using(schema_conn.alias).filter(
+                pk=self.pk
+            ).values_list("name", flat=True).first()
+
+        model = self.custom_object_type.get_model()
+        constraint = self.to_model_constraint({f.schema_id: f for f in self.get_fields()})
+
+        with transaction.atomic(using=schema_conn.alias):
+            with schema_conn.schema_editor() as schema_editor:
+                if previous_name and previous_name != self.name:
+                    _drop_db_constraint(
+                        schema_editor, model, self.get_db_name(self.custom_object_type_id, previous_name)
+                    )
+                # Drop and re-create, so a replayed save (branch merge) is idempotent.
+                _drop_db_constraint(schema_editor, model, self.db_name)
+                if constraint is not None:
+                    schema_editor.add_constraint(model, constraint)
+
+            self.custom_object_type.clear_model_cache(self.custom_object_type_id)
+            # snapshot() first so change logging records a correct pre-state.
+            self.custom_object_type.snapshot()
+            self.custom_object_type.save(update_fields=["cache_timestamp"])
+            super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        schema_conn = _get_schema_connection()
+        model = self.custom_object_type.get_model()
+        with transaction.atomic(using=schema_conn.alias):
+            with schema_conn.schema_editor() as schema_editor:
+                _drop_db_constraint(schema_editor, model, self.db_name)
+            self.custom_object_type.clear_model_cache(self.custom_object_type_id)
+            self.custom_object_type.snapshot()
+            self.custom_object_type.save(update_fields=["cache_timestamp"])
+            return super().delete(*args, **kwargs)
 
 
 class CustomObjectObjectTypeManager(ObjectTypeManager):

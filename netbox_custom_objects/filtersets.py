@@ -17,12 +17,13 @@ from extras.models import CustomFieldChoiceSet
 from netbox.filtersets import ChangeLoggedModelFilterSet, NetBoxModelFilterSet
 from users.models import Owner, OwnerGroup
 
-from .choices import CustomObjectFieldTypeChoices
+from .choices import ConstraintTypeChoices, CustomObjectFieldTypeChoices
 from .constants import APP_LABEL
-from .models import CustomObjectType, CustomObjectTypeField
+from .models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
 
 __all__ = (
     "ArrayContainsFilter",
+    "CustomObjectTypeConstraintFilterSet",
     "CustomObjectTypeFieldFilterSet",
     "CustomObjectTypeFilterSet",
     "NonPolymorphicMultiObjectFilter",
@@ -407,6 +408,44 @@ class CustomObjectTypeFieldFilterSet(ChangeLoggedModelFilterSet):
             | Q(label__icontains=value)
             | Q(description__icontains=value)
         )
+
+
+class CustomObjectTypeConstraintFilterSet(ChangeLoggedModelFilterSet):
+    q = django_filters.CharFilter(
+        method="search",
+        label=_("Search"),
+    )
+    custom_object_type_id = django_filters.ModelMultipleChoiceFilter(
+        queryset=CustomObjectType.objects.all(),
+        distinct=False,
+        label=_("Custom object type (ID)"),
+    )
+    custom_object_type = django_filters.ModelMultipleChoiceFilter(
+        field_name="custom_object_type__slug",
+        queryset=CustomObjectType.objects.all(),
+        distinct=False,
+        to_field_name="slug",
+        label=_("Custom object type (slug)"),
+    )
+    type = django_filters.MultipleChoiceFilter(
+        choices=ConstraintTypeChoices,
+        distinct=False,
+    )
+
+    class Meta:
+        model = CustomObjectTypeConstraint
+        fields = (
+            "id",
+            "name",
+            "description",
+            "case_insensitive",
+            "nulls_distinct",
+        )
+
+    def search(self, queryset, name, value):
+        if not value.strip():
+            return queryset
+        return queryset.filter(Q(name__icontains=value) | Q(description__icontains=value))
 
 
 def _build_polymorphic_filters(field) -> dict:
