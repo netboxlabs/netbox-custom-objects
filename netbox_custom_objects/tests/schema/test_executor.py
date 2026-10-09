@@ -974,6 +974,22 @@ class ExecutorConstraintTestCase(_ExecutorTestBase):
         apply_document(doc)
         self.assertEqual(CustomObjectTypeConstraint.objects.get().field_schema_ids, [self.vendor.schema_id, 50])
 
+    def test_type_change_of_constrained_field_rejected(self):
+        apply_document(self._document(constraints=[self._constraint_def()]))
+        doc = self._document()
+        serial = next(f for f in doc["types"][0]["fields"] if f["name"] == "serial")
+        serial["type"] = "integer"
+        with self.assertRaisesMessage(InvalidConstraintError, "vendor_serial"):
+            apply_document(doc, allow_destructive=True)
+        self.serial.refresh_from_db()
+        self.assertEqual(self.serial.type, "text")
+
+        # Removing the constraint in the same document allows the change.
+        doc["types"][0].update(constraints=[], removed_constraints=["vendor_serial"])
+        apply_document(doc, allow_destructive=True)
+        self.serial.refresh_from_db()
+        self.assertEqual(self.serial.type, "integer")
+
     def test_invalid_constraint_rolls_back(self):
         model = self.cot.get_model()
         model.objects.create(vendor="acme", serial="1")

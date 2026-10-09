@@ -4372,6 +4372,11 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
             raise ValidationError({
                 "case_insensitive": _("Case-insensitive constraints need at least one text or URL field.")
             })
+        # Without database support (PostgreSQL < 15), Django silently skips the constraint.
+        if not self.nulls_distinct and not _get_schema_connection().features.supports_nulls_distinct_unique_constraints:
+            raise ValidationError({
+                "nulls_distinct": _("Treating empty values as equal requires PostgreSQL 15 or later.")
+            })
 
         siblings = CustomObjectTypeConstraint.objects.filter(
             custom_object_type_id=self.custom_object_type_id

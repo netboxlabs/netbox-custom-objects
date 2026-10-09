@@ -358,6 +358,15 @@ def _apply_field_alter(cot, fc) -> None:
         else:
             setattr(field, attr, schema_val)
 
+    # Constraints the document removes or redefines are already gone (see _remove_constraints).
+    if {"type", "is_polymorphic"} & fc.changed_attrs.keys():
+        constraint_names = list(field.constraints.values_list("name", flat=True))
+        if constraint_names:
+            raise InvalidConstraintError(
+                f"Field {field.name!r} on COT {cot.slug!r} is part of constraint(s) "
+                f"{', '.join(constraint_names)}; remove it from them before changing its type."
+            )
+
     field.save()
 
     if "related_object_types" in pending_m2m:

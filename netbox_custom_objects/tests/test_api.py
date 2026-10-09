@@ -3199,7 +3199,15 @@ class CustomObjectTypeConstraintAPITest(CustomObjectsTestCase, TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.content)
         self.assertTrue(CustomObjectTypeConstraint.objects.get().case_insensitive)
 
+        # Schema IDs are numbered per type, so another type's fields can match the constraint's.
         other = self.create_custom_object_type(name='other', slug='others')
+        self.create_custom_object_type_field(other, name='vendor', type='text', primary=True)
+        self.create_custom_object_type_field(other, name='serial', type='text')
+        response = self.client.patch(url, {'custom_object_type': other.pk}, format='json', **self.header)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.content)
+        self.assertIn('custom_object_type', response.data)
+        self.assertEqual(CustomObjectTypeConstraint.objects.get().custom_object_type, self.cot)
+
         response = self.client.get(
             reverse(self.constraint_list_url), {'custom_object_type_id': other.pk}, **self.header
         )

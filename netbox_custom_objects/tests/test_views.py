@@ -320,6 +320,20 @@ class CustomObjectTypeConstraintViewTestCase(
         self.custom_object_type.get_model().objects.create(model="m1")
         self.assertContains(self.client.get(url), "in use on 1 Custom Objects")
 
+    def test_delete_ignores_offsite_return_url(self):
+        self.user.is_superuser = True
+        self.user.save()
+        constraint = CustomObjectTypeConstraint.objects.get(name="c1")
+        cases = (
+            ("customobjecttypeconstraint_delete", constraint, constraint.get_absolute_url()),
+            ("customobjecttypefield_delete", self.f4, self.custom_object_type.get_absolute_url()),
+        )
+        for viewname, obj, expected in cases:
+            with self.subTest(viewname):
+                url = reverse(f"plugins:netbox_custom_objects:{viewname}", kwargs={"pk": obj.pk})
+                response = self.client.post(f"{url}?return_url=https://evil.example/", {"confirm": True})
+                self.assertRedirects(response, expected, fetch_redirect_response=False)
+
     def test_custom_object_form_reports_duplicate(self):
         self.user.is_superuser = True
         self.user.save()

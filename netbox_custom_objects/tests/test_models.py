@@ -3510,6 +3510,10 @@ class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
         model.objects.create(vendor="acme")  # empty serials never conflict
 
     def test_nulls_not_distinct(self):
+        # PostgreSQL < 15 would silently skip the database constraint.
+        with patch.object(connection.features, "supports_nulls_distinct_unique_constraints", False):
+            with self.assertRaisesMessage(ValidationError, "PostgreSQL 15"):
+                self._constraint(nulls_distinct=False)
         self._constraint(nulls_distinct=False)
         model = self._model()
         model.objects.create(vendor="acme")

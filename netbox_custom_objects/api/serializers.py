@@ -422,6 +422,10 @@ class CustomObjectTypeConstraintSerializer(NetBoxModelSerializer):
         brief_fields = ("id", "url", "display", "name", "description")
 
     def validate(self, data):
+        # The database constraint lives on the type's table; moving it would orphan the old one.
+        new_cot = data.get("custom_object_type")
+        if self.instance is not None and new_cot is not None and new_cot != self.instance.custom_object_type:
+            raise ValidationError({"custom_object_type": _("A constraint can't be moved to another type.")})
         members = data.pop("_constraint_fields", None)
         if members is not None:
             cot = data.get("custom_object_type") or getattr(self.instance, "custom_object_type", None)

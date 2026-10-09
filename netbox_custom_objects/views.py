@@ -29,6 +29,7 @@ from netbox.views import generic
 from netbox.views.generic.mixins import TableMixin
 from utilities.forms import ConfirmationForm, DeleteForm, restrict_form_fields
 from utilities.querydict import normalize_querydict
+from utilities.request import safe_for_redirect
 from utilities.forms.fields import ContentTypeChoiceField, DynamicModelChoiceField, DynamicModelMultipleChoiceField
 from utilities.forms.utils import get_field_value as _get_field_value
 from utilities.forms.widgets import HTMXSelect
@@ -479,7 +480,11 @@ class CustomObjectTypeConstraintDeleteView(generic.ObjectDeleteView):
     queryset = CustomObjectTypeConstraint.objects.all()
 
     def get_return_url(self, request, obj=None):
-        return request.GET.get("return_url") or obj.get_absolute_url()
+        # Core's fallback needs obj.pk, which is gone after the delete.
+        return_url = request.GET.get("return_url")
+        if return_url and safe_for_redirect(return_url):
+            return return_url
+        return obj.get_absolute_url()
 
 
 @register_model_view(CustomObjectTypeField, "delete")
@@ -488,7 +493,10 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
     queryset = CustomObjectTypeField.objects.all()
 
     def get_return_url(self, request, obj=None):
-        return request.GET.get("return_url") or obj.custom_object_type.get_absolute_url()
+        return_url = request.GET.get("return_url")
+        if return_url and safe_for_redirect(return_url):
+            return return_url
+        return obj.custom_object_type.get_absolute_url()
 
     def get(self, request, *args, **kwargs):
         """
