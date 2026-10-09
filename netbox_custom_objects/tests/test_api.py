@@ -3216,12 +3216,12 @@ class CustomObjectTypeConstraintAPITest(CustomObjectsTestCase, TestCase):
             with CaptureQueriesContext(connection) as ctx:
                 response = self.client.get(reverse(self.constraint_list_url), **self.header)
             self.assertEqual(response.status_code, status.HTTP_200_OK, response.content)
-            return len(ctx.captured_queries)
+            # Ignore core's own per-request queries (auth, config), which vary by NetBox version.
+            return len([q for q in ctx.captured_queries if 'netbox_custom_objects_' in q['sql']])
 
         CustomObjectTypeConstraint.objects.create(
             custom_object_type=self.cot, name='c1', field_schema_ids=[self.vendor.schema_id, self.serial.schema_id]
         )
-        list_queries()  # warm per-request caches
         one = list_queries()
         for name, fields in (('c2', (self.vendor, model_field)), ('c3', (self.serial, model_field))):
             CustomObjectTypeConstraint.objects.create(
