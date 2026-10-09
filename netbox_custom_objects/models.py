@@ -87,6 +87,7 @@ from netbox_custom_objects.utilities import (
     _suppress_clear_cache,
     extract_cot_id_from_model_name,
     generate_model,
+    is_branching_enabled,
 )
 
 logger = logging.getLogger(__name__)
@@ -186,13 +187,11 @@ def _apply_poly_m2m_rows(schema_conn, through_table, co_pk, rows):
 
 def _get_schema_connection():
     """Active branch's connection if any, else the default — so DDL targets the right schema."""
-    try:
+    if is_branching_enabled():
         from netbox_branching.contextvars import active_branch
         branch = active_branch.get()
         if branch is not None:
             return connections[branch.connection_name]
-    except ImportError:
-        pass
     return connection
 
 
@@ -1462,10 +1461,9 @@ class CustomObjectType(NetBoxModel):
     @staticmethod
     def _active_branch_id():
         """Active Branch id, or None for main — second component of the cache key."""
-        try:
-            from netbox_branching.contextvars import active_branch
-        except ImportError:
+        if not is_branching_enabled():
             return None
+        from netbox_branching.contextvars import active_branch
         branch = active_branch.get()
         return branch.id if branch is not None else None
 
@@ -2355,11 +2353,9 @@ class CustomObjectType(NetBoxModel):
         if not in_branch:
             # ChangeDiff has a PROTECT FK to ContentType/ObjectType — delete those
             # records first so object_type.delete() is not blocked.
-            try:
+            if is_branching_enabled():
                 from netbox_branching.models import ChangeDiff
                 ChangeDiff.objects.filter(object_type=object_type).delete()
-            except ImportError:
-                pass
             # Temporarily disconnect the pre_delete handler to skip the ObjectType deletion
             # TODO: Remove this disconnect/reconnect after ObjectType has been exempted from handle_deleted_object
             pre_delete.disconnect(handle_deleted_object)
@@ -2437,7 +2433,7 @@ def custom_object_type_post_save_handler(sender, instance, created, **kwargs):
 
 def _rename_objectchange_field_key(fi, old_name, new_name):
     """Rewrite *old_name* → *new_name* JSON keys in ObjectChange (and
-    ChangeDiff when netbox-branching is installed) for this field's COT.
+    ChangeDiff when netbox-branching is enabled) for this field's COT.
 
     Runs inside ``CustomObjectTypeField.save()``'s atomic so it rolls back
     cleanly.  JSON column names are literals and field names are validated
@@ -2480,9 +2476,7 @@ def _rename_objectchange_field_key(fi, old_name, new_name):
 
     logger.debug('_rename_objectchange_field_key: %r -> %r for %s', old_name, new_name, ct)
 
-    try:
-        from netbox_branching.models import ChangeDiff  # noqa: F401
-    except ImportError:
+    if not is_branching_enabled():
         return
 
     cd_sql = (

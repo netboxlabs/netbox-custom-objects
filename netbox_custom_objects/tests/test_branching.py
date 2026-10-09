@@ -29,21 +29,23 @@ from django.urls import reverse
 from extras.models import CustomFieldChoiceSet
 from rest_framework.test import APIClient
 
-try:
-    from netbox.context_managers import event_tracking
-    from netbox_branching.choices import BranchStatusChoices
-    from netbox_branching.models import Branch
-    from netbox_branching.utilities import activate_branch
-    HAS_BRANCHING = True
-except ImportError:
-    HAS_BRANCHING = False
-
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.tests.base import (
     TransactionCleanupMixin,
     _recreate_contenttypes,
     create_token,
 )
+from netbox_custom_objects.utilities import is_branching_enabled
+
+# Installed but not in PLUGINS, importing netbox_branching.models raises RuntimeError
+# rather than ImportError, so check that it's enabled instead.
+HAS_BRANCHING = is_branching_enabled()
+if HAS_BRANCHING:
+    from netbox.context_managers import event_tracking
+    from netbox_branching.choices import BranchStatusChoices
+    from netbox_branching.models import Branch
+    from netbox_branching.utilities import activate_branch
+
 
 logger = logging.getLogger(__name__)
 User = get_user_model()

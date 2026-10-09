@@ -46,18 +46,17 @@ from extras.choices import CustomFieldTypeChoices
 from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.dynamic_forms import build_filterset_form_class
-from netbox_custom_objects.utilities import extract_cot_id_from_model_name
+from netbox_custom_objects.utilities import extract_cot_id_from_model_name, is_branching_enabled
 
 logger = logging.getLogger("netbox_custom_objects.views")
 
 
 def _is_in_branch():
     """True if a netbox-branching branch is active in this context."""
-    try:
-        from netbox_branching.contextvars import active_branch
-        return active_branch.get() is not None
-    except ImportError:
+    if not is_branching_enabled():
         return False
+    from netbox_branching.contextvars import active_branch
+    return active_branch.get() is not None
 
 
 def _hidden_field_raw_columns(fields):

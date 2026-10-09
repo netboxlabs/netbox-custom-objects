@@ -17,8 +17,20 @@ __all__ = (
     "get_viewname",
     "install_clear_cache_suppressor",
     "install_collector_patch",
+    "is_branching_enabled",
     "restrict_to_viewable",
 )
+
+
+def is_branching_enabled():
+    """
+    True if netbox-branching is enabled (listed in PLUGINS), not merely installed.
+
+    Check this before importing anything from netbox_branching: importing the package
+    registers its request processor, which then runs on every request and job and fails
+    when the plugin isn't enabled.
+    """
+    return apps.is_installed("netbox_branching")
 
 
 def build_map_url(latitude, longitude):

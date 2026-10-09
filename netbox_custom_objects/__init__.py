@@ -11,7 +11,12 @@ from django.db.utils import OperationalError, ProgrammingError
 from netbox.plugins import PluginConfig
 
 from .constants import APP_LABEL as APP_LABEL
-from .utilities import extract_cot_id_from_model_name, install_clear_cache_suppressor, install_collector_patch
+from .utilities import (
+    extract_cot_id_from_model_name,
+    install_clear_cache_suppressor,
+    install_collector_patch,
+    is_branching_enabled,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -105,9 +110,7 @@ def _register_branching_hooks_once():
     if _branching_hooks_registered:
         return
 
-    try:
-        import netbox_branching.signals  # noqa: F401
-    except ImportError:
+    if not is_branching_enabled():
         return
 
     # Unguarded: netbox-branching >= 1.0.4 is required (checks.E002), and an
