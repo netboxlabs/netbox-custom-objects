@@ -2060,10 +2060,15 @@ class CustomObjectType(NetBoxModel):
                     type=CustomFieldTypeChoices.TYPE_MULTIOBJECT,
                     is_polymorphic=False,
                 ).iterator():
+                    # Patch only this branch context's classes; apps.all_models holds main's.
+                    through_model = CustomObjectType.get_cached_through_model(
+                        inbound_field.custom_object_type_id, inbound_field.through_model_name, branch_id
+                    )
+                    if through_model is None:
+                        continue
                     try:
-                        through_model = apps.get_model(APP_LABEL, inbound_field.through_model_name)
                         target_field = through_model._meta.get_field('target')
-                    except (LookupError, FieldDoesNotExist):
+                    except FieldDoesNotExist:
                         continue
                     target_field.remote_field.model = model
                     target_field.related_model = model
@@ -2078,7 +2083,7 @@ class CustomObjectType(NetBoxModel):
                     # The owning COT's cached model holds the M2M field itself, which must
                     # agree with the through model's target; otherwise Django can't build the
                     # join and filtering on the field fails.
-                    owner_model = CustomObjectType.get_cached_model(inbound_field.custom_object_type_id)
+                    owner_model = CustomObjectType.get_cached_model(inbound_field.custom_object_type_id, branch_id)
                     if owner_model is None:
                         continue
                     m2m_field = next(
@@ -2101,7 +2106,7 @@ class CustomObjectType(NetBoxModel):
                     type=CustomFieldTypeChoices.TYPE_OBJECT,
                     is_polymorphic=False,
                 ).iterator():
-                    owner_model = CustomObjectType.get_cached_model(inbound_fk_field.custom_object_type_id)
+                    owner_model = CustomObjectType.get_cached_model(inbound_fk_field.custom_object_type_id, branch_id)
                     if owner_model is None:
                         continue
                     # Use local_fields list — avoids _relation_tree → get_models() recursion.

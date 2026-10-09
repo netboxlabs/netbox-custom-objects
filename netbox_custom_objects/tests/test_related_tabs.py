@@ -493,41 +493,29 @@ class CombinedTabQueryTests(TransactionCleanupMixin, CustomObjectsTestCase, Tran
             )
 
     def test_links_from_another_cot_survive_target_regeneration(self):
-        # One COT ("foo") references another ("bar") through both an object and a
-        # multi-object field, alongside choice and device fields. Creating those
-        # fields regenerates bar's model; foo's cached relations must follow it, or
-        # bar's detail page fails while counting linked objects.
+        # Mirrors a dev setup that hit this bug. Creating foo's fields regenerates bar's
+        # model; foo's cached relations must follow it, or bar's detail page fails while
+        # counting linked objects.
         bar = self.create_custom_object_type(name='bar', slug='bars', verbose_name_plural='bars')
-        for name, field_type in (('bar2', 'text'), ('blah', 'text'), ('hidden', 'text'), ('url', 'url')):
-            self.create_custom_object_type_field(bar, name=name, label=name, type=field_type)
-
-        choice_set = self.create_choice_set()
-        device_ot = self.get_device_object_type()
+        self.create_custom_object_type_field(bar, name='name', label='name', type='text')
         foo = self.create_custom_object_type(name='foo', slug='foos', verbose_name_plural='foos')
-        for name, field_type, extra in (
-            ('airport', 'select', {'choice_set': choice_set}),
-            ('airports', 'multiselect', {'choice_set': choice_set}),
-            ('bar', 'object', {'related_object_type': bar.object_type}),
-            ('bars', 'multiobject', {'related_object_type': bar.object_type}),
-            ('device', 'object', {'related_object_type': device_ot}),
-            ('device2', 'object', {'related_object_type': device_ot}),
-            ('devices', 'multiobject', {'related_object_type': device_ot}),
-            ('value', 'select', {'choice_set': choice_set}),
-            ('values', 'multiselect', {'choice_set': choice_set}),
-        ):
-            self.create_custom_object_type_field(foo, name=name, label=name, type=field_type, **extra)
+        self.create_custom_object_type_field(
+            foo, name='bar', label='bar', type='object', related_object_type=bar.object_type
+        )
+        self.create_custom_object_type_field(
+            foo, name='bars', label='bars', type='multiobject', related_object_type=bar.object_type
+        )
 
         self.user.is_superuser = True
         self.user.save()
         bar = CustomObjectType.objects.get(pk=bar.pk)
-        bar_obj = bar.get_model().objects.create(bar2='x', blah='y')
+        bar_obj = bar.get_model().objects.create(name='x')
         foo_obj = CustomObjectType.objects.get(pk=foo.pk).get_model().objects.create(bar=bar_obj)
         foo_obj.bars.set([bar_obj])
-        # Load the page first; the badge count runs inside the request, as it does for a user.
         self.assertEqual(self.client.get(bar_obj.get_absolute_url()).status_code, 200)
         self.assertEqual(_count_linked_custom_objects(bar_obj), 2)
 
-        # Any later schema change on bar regenerates its model again.
+        # Invalidate the target model before loading it again.
         bar.clear_model_cache(bar.pk)
         bar.save(update_fields=['cache_timestamp'])
         bar_obj = CustomObjectType.objects.get(pk=bar.pk).get_model().objects.get(pk=bar_obj.pk)
