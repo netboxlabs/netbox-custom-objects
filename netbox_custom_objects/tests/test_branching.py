@@ -1610,6 +1610,85 @@ class BranchDeletionTestCase(BranchingTestBase, _TestBase):
 # ── Sync test ─────────────────────────────────────────────────────────────────
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
+class BranchContextDeletionTestCase(BranchingTestBase, _TestBase):
+    """
+    Deleting custom objects keeps working in main and in a branch after the same
+    process has used both.
+
+    Each context generates its own model classes, and Django relates them all by
+    model label, so the deletion collector sees relations whose target is the
+    other context's class.  Covers object, multi-object and polymorphic
+    multi-object fields, deleted from both the source and the target side.
+    """
+
+    def test_delete_in_main_and_branch_after_switching_context(self):
+        site_ot = ObjectType.objects.get(app_label='dcim', model='site')
+        target_cot = CustomObjectType.objects.create(name='ctx_target', slug='ctx-target')
+        CustomObjectTypeField.objects.create(
+            custom_object_type=target_cot, name='label', label='Label', type='text',
+        )
+        source_cot = CustomObjectType.objects.create(name='ctx_source', slug='ctx-source')
+        CustomObjectTypeField.objects.create(
+            custom_object_type=source_cot, name='label', label='Label', type='text',
+        )
+        for name, field_type in (('ref', 'object'), ('refs', 'multiobject')):
+            CustomObjectTypeField.objects.create(
+                custom_object_type=source_cot, name=name, label=name, type=field_type,
+                related_object_type=target_cot.object_type,
+            )
+        poly = CustomObjectTypeField.objects.create(
+            custom_object_type=source_cot, name='poly', label='poly', type='multiobject',
+            is_polymorphic=True,
+        )
+        poly.related_object_types.set([target_cot.object_type, site_ot])
+
+        def models():
+            source_cot.refresh_from_db()
+            target_cot.refresh_from_db()
+            return source_cot.get_model(), target_cot.get_model()
+
+        source_model, target_model = models()
+        targets = [target_model.objects.create(label=f'target {i}') for i in range(4)]
+        sources = []
+        for i in range(4):
+            source = source_model.objects.create(label=f'source {i}', ref=targets[i])
+            source.refs.set(targets)
+            source.poly.set(targets)
+            sources.append(source)
+
+        branch = _provision_branch('Context Branch', 'iterative', self.user)
+        branch_request = _make_request(self.user)
+
+        def delete(source_pk, target_pk):
+            source_model, target_model = models()
+            source_model.objects.get(pk=source_pk).delete()
+            target_model.objects.get(pk=target_pk).delete()
+            self.assertFalse(source_model.objects.filter(pk=source_pk).exists())
+            self.assertFalse(target_model.objects.filter(pk=target_pk).exists())
+
+        # Main first, then the branch, then main again: each switch leaves the
+        # other context's classes in the shared relation graph.
+        with event_tracking(self.request):
+            delete(sources[0].pk, targets[0].pk)
+        with activate_branch(branch), event_tracking(branch_request):
+            delete(sources[1].pk, targets[1].pk)
+        with event_tracking(self.request):
+            delete(sources[2].pk, targets[2].pk)
+
+        source_model, target_model = models()
+        self.assertEqual(list(source_model.objects.values_list('pk', flat=True)), [sources[1].pk, sources[3].pk])
+        self.assertEqual(list(target_model.objects.values_list('pk', flat=True)), [targets[1].pk, targets[3].pk])
+        with activate_branch(branch):
+            source_model, target_model = models()
+            self.assertEqual(
+                list(source_model.objects.values_list('pk', flat=True)), [sources[0].pk, sources[2].pk, sources[3].pk]
+            )
+            self.assertEqual(
+                list(target_model.objects.values_list('pk', flat=True)), [targets[0].pk, targets[2].pk, targets[3].pk]
+            )
+
+
+@unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
 class BranchSyncTestCase(BranchingTestBase, _TestBase):
     """
     Test that objects created in main after a branch is provisioned are not
