@@ -3466,6 +3466,20 @@ class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
         with self.assertRaises(IntegrityError), transaction.atomic():
             model.objects.create(**values)
 
+    def test_passes_model_system_checks(self):
+        from django.core.checks.model_checks import check_all_models
+
+        constraint = self._constraint()
+        self._model()
+        # Include generated models, as outside the test runner.
+        with patch.object(nco, '_app_ready', True), patch.object(
+            nco.CustomObjectsPluginConfig, 'should_skip_dynamic_model_creation', return_value=False
+        ):
+            django_apps.get_models.cache_clear()
+            errors = [e for e in check_all_models(None) if constraint.db_name in e.msg]
+        django_apps.get_models.cache_clear()
+        self.assertEqual(errors, [])
+
     def test_rejects_duplicate_combination(self):
         constraint = self._constraint()
         self.assertIn(constraint.db_name, self._db_constraint_names())
