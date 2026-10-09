@@ -31,7 +31,7 @@ from typing import Annotated, List, Optional, Union
 import strawberry
 import strawberry_django
 from core.graphql.mixins import ChangelogMixin
-from extras.choices import CustomFieldTypeChoices
+from extras.choices import CustomFieldFilterLogicChoices, CustomFieldTypeChoices
 from extras.graphql.mixins import JournalEntriesMixin, TagsMixin
 from extras.models import ConfigContextModel
 from netbox.graphql.scalars import BigInt
@@ -40,8 +40,11 @@ from strawberry.types import Info
 from users.graphql.mixins import OwnerMixin
 
 from netbox_custom_objects.constants import APP_LABEL
+from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
 from netbox_custom_objects.graphql.filters import (
     build_filter_class,
+    coordinates_filter_annotations,
+    polymorphic_filter_fields,
     relationship_filter_annotations,
     scalar_filter_annotation,
 )
@@ -646,9 +649,12 @@ def _build_object_type(custom_object_type, model):
     }
 
     filter_annotations = {}
+    filter_fields = {}
     cot_fields = list(custom_object_type.fields.all())
     for field in cot_fields:
         field_name = field.name
+        # Fields with filtering disabled get no filter, as in the REST filterset.
+        filterable = field.filter_logic != CustomFieldFilterLogicChoices.FILTER_DISABLED
         if field.type in RELATIONSHIP_TYPES:
             members, native_models = _resolve_relationship_members(field)
             value, class_annotation = _make_relationship_resolver(field, members, native_models)
@@ -656,12 +662,23 @@ def _build_object_type(custom_object_type, model):
                 namespace[field_name] = value
                 if class_annotation is not None:
                     namespace["__annotations__"][field_name] = class_annotation
-                for name, annotation in relationship_filter_annotations(field, members).items():
-                    # A "<field>_id" filter must not override a custom field of that name.
-                    filter_annotations.setdefault(name, annotation)
+                if filterable:
+                    for name, annotation in relationship_filter_annotations(field, members).items():
+                        # A "<field>_id" filter must not override a custom field of that name.
+                        filter_annotations.setdefault(name, annotation)
+                    if field.is_polymorphic:
+                        targets = [
+                            (content_type, _graphql_type_for_content_type(content_type))
+                            for content_type in _field_target_content_types(field)
+                        ]
+                        filter_fields.update(polymorphic_filter_fields(field, targets))
             continue
 
-        scalar_filter = scalar_filter_annotation(field)
+        if filterable and field.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+            for name, annotation in coordinates_filter_annotations(field).items():
+                filter_annotations.setdefault(name, annotation)
+
+        scalar_filter = scalar_filter_annotation(field) if filterable else None
         if scalar_filter is not None:
             filter_annotations[field_name] = scalar_filter
 
@@ -700,6 +717,6 @@ def _build_object_type(custom_object_type, model):
         model,
         name=type_name,
         fields=fields,
-        filters=build_filter_class(model, filter_annotations),
+        filters=build_filter_class(model, filter_annotations, filter_fields),
         pagination=True,
     )(cls)
