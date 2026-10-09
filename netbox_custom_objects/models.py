@@ -2060,10 +2060,15 @@ class CustomObjectType(NetBoxModel):
                     type=CustomFieldTypeChoices.TYPE_MULTIOBJECT,
                     is_polymorphic=False,
                 ).iterator():
+                    # Patch only this branch context's classes; apps.all_models holds main's.
+                    through_model = CustomObjectType.get_cached_through_model(
+                        inbound_field.custom_object_type_id, inbound_field.through_model_name, branch_id
+                    )
+                    if through_model is None:
+                        continue
                     try:
-                        through_model = apps.get_model(APP_LABEL, inbound_field.through_model_name)
                         target_field = through_model._meta.get_field('target')
-                    except (LookupError, FieldDoesNotExist):
+                    except FieldDoesNotExist:
                         continue
                     target_field.remote_field.model = model
                     target_field.related_model = model
@@ -2075,6 +2080,23 @@ class CustomObjectType(NetBoxModel):
                     target_field.__dict__.pop('path_infos', None)
                     target_field.__dict__.pop('reverse_path_infos', None)
 
+                    # The owning COT's cached model holds the M2M field itself, which must
+                    # agree with the through model's target; otherwise Django can't build the
+                    # join and filtering on the field fails.
+                    owner_model = CustomObjectType.get_cached_model(inbound_field.custom_object_type_id, branch_id)
+                    if owner_model is None:
+                        continue
+                    m2m_field = next(
+                        (f for f in owner_model._meta.local_many_to_many if f.name == inbound_field.name),
+                        None,
+                    )
+                    if m2m_field is None:
+                        continue
+                    m2m_field.remote_field.model = model
+                    m2m_field.related_model = model
+                    m2m_field.__dict__.pop('path_infos', None)
+                    m2m_field.__dict__.pop('reverse_path_infos', None)
+
                 # Same staleness problem exists for direct FK fields (TYPE_OBJECT):
                 # when this COT is regenerated, any cached model for another COT that
                 # holds a LazyForeignKey pointing here still references the old class.
@@ -2084,7 +2106,7 @@ class CustomObjectType(NetBoxModel):
                     type=CustomFieldTypeChoices.TYPE_OBJECT,
                     is_polymorphic=False,
                 ).iterator():
-                    owner_model = CustomObjectType.get_cached_model(inbound_fk_field.custom_object_type_id)
+                    owner_model = CustomObjectType.get_cached_model(inbound_fk_field.custom_object_type_id, branch_id)
                     if owner_model is None:
                         continue
                     # Use local_fields list — avoids _relation_tree → get_models() recursion.
