@@ -6,11 +6,14 @@ setup and teardown are not wrapped in Django's per-test rollback transaction.  T
 lets us verify table-level changes and FK SET NULL/CASCADE/PROTECT behaviour that
 cannot be observed inside a rolled-back savepoint.
 """
+from unittest import mock
+
 from django.apps import apps as django_apps
 from django.db import connection
 from django.db.utils import IntegrityError
 from django.test import TransactionTestCase
 
+from core.models import ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
 from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
 from netbox_custom_objects.constants import APP_LABEL
@@ -798,3 +801,68 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         obj_target = target_model.objects.create(name='Target Object')
         obj_source = source_model.objects.create(name='Source Object', ref_target=obj_target)
         self.assertEqual(obj_source.ref_target, obj_target)
+
+    def test_delete_co_after_model_generated_in_another_context(self):
+        """Deleting a CO works after its type's model was also generated for another context.
+
+        netbox-branching gets a separate model class per branch, and Django relates all of
+        them to main's by model label, so the deletion collector sees relations whose target
+        is another context's class.  Simulated here by generating the models under a fake
+        branch id; covers object, multi-object and polymorphic multi-object fields, deleted
+        from both the source and the target side.
+        """
+        cot_source = self.create_simple_custom_object_type(name='ctxsrc', slug='ctx-src')
+        cot_target = self.create_simple_custom_object_type(name='ctxtrg', slug='ctx-trg')
+        self.create_custom_object_type_field(
+            cot_source, name='ref', label='Reference', type='object',
+            related_object_type=cot_target.object_type,
+        )
+        self.create_custom_object_type_field(
+            cot_source, name='refs', label='References', type='multiobject',
+            related_object_type=cot_target.object_type,
+        )
+        poly_field = self.create_custom_object_type_field(
+            cot_source, name='poly', label='Polymorphic', type='multiobject', is_polymorphic=True,
+        )
+        poly_field.related_object_types.set([cot_target.object_type, ObjectType.objects.get_for_model(Site)])
+
+        model_source = cot_source.get_model()
+        cot_target.refresh_from_db()
+        model_target = cot_target.get_model()
+        targets = [model_target.objects.create(name=f'Target {i}') for i in (1, 2)]
+        sources = []
+        for i in (1, 2):
+            source = model_source.objects.create(name=f'Source {i}', ref=targets[i - 1])
+            source.refs.add(*targets)
+            source.poly.add(*targets)
+            sources.append(source)
+
+        self.addCleanup(CustomObjectType.clear_model_cache)
+        with mock.patch.object(CustomObjectType, '_active_branch_id', return_value=-1):
+            for cot, main_model in ((cot_target, model_target), (cot_source, model_source)):
+                cot.refresh_from_db()
+                self.assertIsNot(cot.get_model(), main_model)
+
+        # Back in main, with main's (cached) classes.
+        for cot in (cot_source, cot_target):
+            cot.refresh_from_db()
+        self.assertIs(cot_source.get_model(), model_source)
+        self.assertIs(cot_target.get_model(), model_target)
+
+        model_source.objects.get(pk=sources[0].pk).delete()
+        model_target.objects.get(pk=targets[1].pk).delete()
+
+        refs_through = model_source._meta.get_field('refs').remote_field.through
+        self.assertFalse(model_source.objects.filter(pk=sources[0].pk).exists())
+        self.assertFalse(model_target.objects.filter(pk=targets[1].pk).exists())
+        self.assertFalse(refs_through.objects.filter(source_id=sources[0].pk).exists())
+        self.assertFalse(refs_through.objects.filter(target_id=targets[1].pk).exists())
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f'SELECT COUNT(*) FROM "{poly_field.through_table_name}" WHERE source_id = %s', [sources[0].pk]
+            )
+            self.assertEqual(cursor.fetchone()[0], 0)
+        # The surviving source lost its references to the deleted target.
+        sources[1].refresh_from_db()
+        self.assertIsNone(sources[1].ref_id)
+        self.assertEqual(list(sources[1].refs.values_list('pk', flat=True)), [targets[0].pk])

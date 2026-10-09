@@ -10,7 +10,7 @@ from django.db import router, transaction
 from django.db.models import ProtectedError, Q, RestrictedError
 from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
-from django.urls import reverse
+from django.urls import resolve, reverse
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
@@ -251,6 +251,29 @@ class CustomJournalEntryEditView(generic.ObjectEditView):
         obj = instance.assigned_object
         viewname = get_viewname(obj, "journal")
         return reverse(viewname, kwargs={"pk": obj.pk})
+
+
+class BackgroundJobURLKwargsMixin:
+    """
+    Restore the URL kwargs (the type's slug) when a bulk view runs as a background job.
+
+    NetBox's AsyncViewJob calls the view with only a copy of the request, so they're
+    resolved again from the request's path.
+    """
+
+    @staticmethod
+    def _url_kwargs(request, kwargs):
+        if "custom_object_type" in kwargs:
+            return kwargs
+        # COMPAT(netbox<4.7): copy_safe_request() carries only `path`, not `path_info`.
+        path = getattr(request, "path_info", None) or request.path
+        return {**resolve(path).kwargs, **kwargs}
+
+    def setup(self, request, *args, **kwargs):
+        super().setup(request, *args, **self._url_kwargs(request, kwargs))
+
+    def dispatch(self, request, *args, **kwargs):
+        return super().dispatch(request, *args, **self._url_kwargs(request, kwargs))
 
 
 class CustomObjectTableMixin(TableMixin):
@@ -1212,7 +1235,7 @@ class CustomObjectDeleteView(generic.ObjectDeleteView):
 
 
 @register_model_view(CustomObject, "bulk_edit", path="edit", detail=False)
-class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
+class CustomObjectBulkEditView(BackgroundJobURLKwargsMixin, CustomObjectTableMixin, generic.BulkEditView):
     template_name = "netbox_custom_objects/custom_object_bulk_edit.html"
     queryset = None
     custom_object_type = None
@@ -1493,7 +1516,7 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
 
 
 @register_model_view(CustomObject, "bulk_delete", path="delete", detail=False)
-class CustomObjectBulkDeleteView(CustomObjectTableMixin, generic.BulkDeleteView):
+class CustomObjectBulkDeleteView(BackgroundJobURLKwargsMixin, CustomObjectTableMixin, generic.BulkDeleteView):
     queryset = None
     custom_object_type = None
     table = None
@@ -1518,7 +1541,7 @@ class CustomObjectBulkDeleteView(CustomObjectTableMixin, generic.BulkDeleteView)
 
 
 @register_model_view(CustomObject, "bulk_import", path="import", detail=False)
-class CustomObjectBulkImportView(generic.BulkImportView):
+class CustomObjectBulkImportView(BackgroundJobURLKwargsMixin, generic.BulkImportView):
     template_name = "netbox_custom_objects/custom_object_bulk_import.html"
     queryset = None
     model_form = None

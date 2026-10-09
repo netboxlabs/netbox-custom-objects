@@ -16,6 +16,7 @@ from django.db.utils import OperationalError, ProgrammingError
 from django.test import TestCase, override_settings, tag
 from django.urls import reverse
 from django.utils import timezone
+from rest_framework.test import APIClient
 
 import netbox_custom_objects as nco
 import netbox_custom_objects.models as nco_models
@@ -23,7 +24,7 @@ import netbox_custom_objects.models as nco_models
 from core.choices import JobStatusChoices
 from core.models import ObjectType
 from dcim.models import Site
-from extras.models import CachedValue, Tag, TaggedItem
+from extras.models import CachedValue, CustomFieldChoiceSet, Tag, TaggedItem
 from netbox.search import registry
 from netbox.search.backends import get_backend
 from netbox_custom_objects.api.serializers import get_serializer_class
@@ -34,7 +35,7 @@ from netbox_custom_objects.graphql.live import _active_branch_key
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name
-from .base import CustomObjectsTestCase
+from .base import CustomObjectsTestCase, create_token
 
 
 class ExtractCotIdFromModelNameTestCase(TestCase):
@@ -2810,6 +2811,13 @@ class StaleFKReferenceRegressionTest(CustomObjectsTestCase, TestCase):
             type="object",
             related_object_type=self.cot_a.object_type,
         )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot_b,
+            name="refs_a",
+            label="Refs A",
+            type="multiobject",
+            related_object_type=self.cot_a.object_type,
+        )
         # Generate B's model; this resolves the LazyForeignKey to model_a_v1
         self.cot_b.get_model()
         # Fetch fresh from cache to get the fully-resolved model
@@ -2860,6 +2868,17 @@ class StaleFKReferenceRegressionTest(CustomObjectsTestCase, TestCase):
             "B's FK field must be patched to the newly generated A class; "
             "a stale reference would cause ValueError on FK assignment",
         )
+
+    def test_b_m2m_is_patched_after_a_regeneration(self):
+        """After A is regenerated, B's multi-object field must reference the new A class, as its through model does."""
+        model_a_v2 = self.cot_a.get_model(no_cache=True)
+        obj_a = model_a_v2.objects.create(name="a")
+
+        m2m = next(f for f in self.model_b._meta.local_many_to_many if f.name == 'refs_a')
+        self.assertIs(m2m.remote_field.model, model_a_v2)
+        self.assertIs(m2m.remote_field.through._meta.get_field('target').remote_field.model, model_a_v2)
+        # Filtering joins through the through model; a mismatch breaks the join.
+        self.assertEqual(self.model_b.objects.filter(refs_a=obj_a.pk).count(), 0)
 
 
 class LazySerializerRegistrationTestCase(CustomObjectsTestCase, TestCase):
@@ -3296,6 +3315,77 @@ class ChoiceSetCacheInvalidationTestCase(CustomObjectsTestCase, TestCase):
 
         other_cot.refresh_from_db()
         self.assertEqual(other_cot.cache_timestamp, timestamp_before)
+
+
+class ChoiceSetRemovedChoiceTestCase(CustomObjectsTestCase, TestCase):
+    """A choice set can't drop a choice that custom objects still use."""
+
+    def setUp(self):
+        super().setUp()
+        self.choice_set = self.create_choice_set(
+            name="RemovalChoices",
+            extra_choices=[["one", "One"], ["two", "Two"], ["three", "Three"]],
+        )
+        self.cot = self.create_custom_object_type(name="RemovalCheck", slug="removal-check")
+        self.create_custom_object_type_field(self.cot, name="name", type="text", primary=True, required=True)
+        self.create_custom_object_type_field(self.cot, name="opt", type="select", choice_set=self.choice_set)
+        self.create_custom_object_type_field(self.cot, name="opts", type="multiselect", choice_set=self.choice_set)
+        self.model = self.cot.get_model()
+
+    def _remove(self, *values):
+        """Return the choice set, freshly loaded, with *values* removed from its extra choices."""
+        choice_set = CustomFieldChoiceSet.objects.get(pk=self.choice_set.pk)
+        choice_set.extra_choices = [c for c in choice_set.extra_choices if c[0] not in values]
+        return choice_set
+
+    def test_removing_choice_used_by_select_field_is_rejected(self):
+        self.model.objects.create(name="obj", opt="three")
+        with self.assertRaisesMessage(ValidationError, "Cannot remove choice three"):
+            self._remove("three").full_clean()
+
+    def test_removing_choice_used_by_multiselect_field_is_rejected(self):
+        self.model.objects.create(name="obj", opts=["one", "three"])
+        with self.assertRaisesMessage(ValidationError, "Cannot remove choice three"):
+            self._remove("three").full_clean()
+
+    def test_removing_unused_choice_is_allowed(self):
+        self.model.objects.create(name="obj", opt="one", opts=["one", "two"])
+        choice_set = self._remove("three")
+        choice_set.full_clean()
+        choice_set.save()
+        self.assertEqual([c[0] for c in CustomFieldChoiceSet.objects.get(pk=self.choice_set.pk).extra_choices],
+                         ["one", "two"])
+
+    def test_removing_used_extra_choice_still_in_base_choices_is_allowed(self):
+        self.choice_set.base_choices = "ISO_3166"
+        self.choice_set.extra_choices = [*self.choice_set.extra_choices, ["US", "United States"]]
+        self.choice_set.save()
+        self.cot.get_model().objects.create(name="obj", opt="US", opts=["US"])
+        choice_set = self._remove("US")
+        choice_set.full_clean()
+        choice_set.save()
+        self.assertNotIn("US", [c[0] for c in CustomFieldChoiceSet.objects.get(pk=self.choice_set.pk).extra_choices])
+
+    def test_patch_installed_twice_checks_once(self):
+        nco._patch_choice_set_clean()
+        nco._patch_choice_set_clean()
+        with patch.object(nco_models, "check_removed_choices") as check:
+            self._remove("three").full_clean()
+        check.assert_called_once()
+
+    def test_removing_used_choice_via_api_is_rejected(self):
+        self.model.objects.create(name="obj", opt="three")
+        self.user.is_superuser = True
+        self.user.save()
+        url = reverse("extras-api:customfieldchoiceset-detail", kwargs={"pk": self.choice_set.pk})
+        response = APIClient().patch(
+            url, {"extra_choices": [["one", "One"], ["two", "Two"]]}, format="json",
+            HTTP_AUTHORIZATION=f"Token {create_token(self.user)}",
+        )
+        self.assertEqual(response.status_code, 400, response.content)
+        self.assertIn("Cannot remove choice three", response.content.decode())
+        self.choice_set.refresh_from_db()
+        self.assertEqual(len(self.choice_set.extra_choices), 3)
 
 
 class CustomObjectPicklingTestCase(CustomObjectsTestCase, TestCase):

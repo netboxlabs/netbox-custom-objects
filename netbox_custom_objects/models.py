@@ -35,6 +35,7 @@ from extras.choices import (
     CustomFieldUIEditableChoices,
     CustomFieldUIVisibleChoices,
 )
+from extras.data import CHOICE_SETS
 from extras.models import ConfigContext, ConfigContextModel, CustomField, CustomFieldChoiceSet
 from extras.models.customfields import SEARCH_TYPES
 from extras.utils import is_taggable, run_validators
@@ -2057,10 +2058,15 @@ class CustomObjectType(NetBoxModel):
                     type=CustomFieldTypeChoices.TYPE_MULTIOBJECT,
                     is_polymorphic=False,
                 ).iterator():
+                    # Patch only this branch context's classes; apps.all_models holds main's.
+                    through_model = CustomObjectType.get_cached_through_model(
+                        inbound_field.custom_object_type_id, inbound_field.through_model_name, branch_id
+                    )
+                    if through_model is None:
+                        continue
                     try:
-                        through_model = apps.get_model(APP_LABEL, inbound_field.through_model_name)
                         target_field = through_model._meta.get_field('target')
-                    except (LookupError, FieldDoesNotExist):
+                    except FieldDoesNotExist:
                         continue
                     target_field.remote_field.model = model
                     target_field.related_model = model
@@ -2072,6 +2078,23 @@ class CustomObjectType(NetBoxModel):
                     target_field.__dict__.pop('path_infos', None)
                     target_field.__dict__.pop('reverse_path_infos', None)
 
+                    # The owning COT's cached model holds the M2M field itself, which must
+                    # agree with the through model's target; otherwise Django can't build the
+                    # join and filtering on the field fails.
+                    owner_model = CustomObjectType.get_cached_model(inbound_field.custom_object_type_id, branch_id)
+                    if owner_model is None:
+                        continue
+                    m2m_field = next(
+                        (f for f in owner_model._meta.local_many_to_many if f.name == inbound_field.name),
+                        None,
+                    )
+                    if m2m_field is None:
+                        continue
+                    m2m_field.remote_field.model = model
+                    m2m_field.related_model = model
+                    m2m_field.__dict__.pop('path_infos', None)
+                    m2m_field.__dict__.pop('reverse_path_infos', None)
+
                 # Same staleness problem exists for direct FK fields (TYPE_OBJECT):
                 # when this COT is regenerated, any cached model for another COT that
                 # holds a LazyForeignKey pointing here still references the old class.
@@ -2081,7 +2104,7 @@ class CustomObjectType(NetBoxModel):
                     type=CustomFieldTypeChoices.TYPE_OBJECT,
                     is_polymorphic=False,
                 ).iterator():
-                    owner_model = CustomObjectType.get_cached_model(inbound_fk_field.custom_object_type_id)
+                    owner_model = CustomObjectType.get_cached_model(inbound_fk_field.custom_object_type_id, branch_id)
                     if owner_model is None:
                         continue
                     # Use local_fields list — avoids _relation_tree → get_models() recursion.
@@ -4391,6 +4414,33 @@ def clear_cache_on_field_delete(sender, instance, **kwargs):
     """
     if instance.custom_object_type_id:
         CustomObjectType.clear_model_cache(instance.custom_object_type_id)
+
+
+def check_removed_choices(choice_set):
+    """
+    Reject removal of choices that are still used by custom objects.
+    """
+    original = {value for value, _label in choice_set._original_extra_choices or ()}
+    current = {value for value, _label in choice_set.extra_choices or ()}
+    if choice_set.base_choices:
+        current.update(value for value, _label in CHOICE_SETS.get(choice_set.base_choices))
+    if choice_set.pk is None or not (removed := original - current):
+        return
+
+    fields = CustomObjectTypeField.objects.filter(choice_set=choice_set).select_related('custom_object_type')
+    for field in fields:
+        model = field.custom_object_type.get_model()
+        for choice in sorted(removed):
+            if field.type == CustomFieldTypeChoices.TYPE_MULTISELECT:
+                lookup = {f'{field.name}__contains': [choice]}
+            else:
+                lookup = {field.name: choice}
+            if model.objects.filter(**lookup).exists():
+                raise ValidationError(
+                    _("Cannot remove choice {choice} as there are {model} objects which reference it.").format(
+                        choice=choice, model=field.custom_object_type.get_verbose_name()
+                    )
+                )
 
 
 @receiver(post_save, sender=CustomFieldChoiceSet)

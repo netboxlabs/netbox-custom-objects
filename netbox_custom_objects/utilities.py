@@ -4,6 +4,8 @@ import warnings
 from contextlib import contextmanager
 
 from django.apps import apps
+from django.db.models import Q, QuerySet
+from django.db.models.deletion import Collector
 
 from netbox_custom_objects.constants import APP_LABEL
 
@@ -15,6 +17,7 @@ __all__ = (
     "generate_model",
     "get_viewname",
     "install_clear_cache_suppressor",
+    "install_collector_patch",
     "restrict_to_viewable",
 )
 
@@ -110,6 +113,56 @@ def install_clear_cache_suppressor():
         return  # already installed
     _real_clear_cache = apps.clear_cache
     apps.clear_cache = _wrapped_clear_cache
+
+
+_real_related_objects = None
+
+
+def _related_objects(self, related_model, related_fields, objs):
+    """
+    ``Collector.related_objects``, but matching custom objects by key rather than instance.
+
+    With netbox-branching, main and each branch generate their own class for a custom
+    object type, and Django keys relations by model label, so a relation's target class
+    may belong to another context than the objects being deleted.  Filtering by instance
+    then raises "Cannot query 'X': Must be 'TableNModel' instance."; filtering by the
+    target field's values runs the same query without that class check.
+    """
+    model = objs.model if isinstance(objs, QuerySet) else type(objs[0]) if objs else None
+    if model is None or not _is_custom_object_model(model):
+        return _real_related_objects(self, related_model, related_fields, objs)
+
+    def keys(field):
+        attname = field.target_field.attname
+        if isinstance(objs, QuerySet):
+            return objs.values_list(attname, flat=True)
+        return [getattr(obj, attname) for obj in objs]
+
+    predicate = Q.create(
+        [(f"{field.name}__in", keys(field)) for field in related_fields],
+        connector=Q.OR,
+    )
+    return related_model._base_manager.using(self.using).filter(predicate)
+
+
+def install_collector_patch():
+    """Install the custom-object-aware ``Collector.related_objects`` (idempotent).
+
+    Like ``install_clear_cache_suppressor()``, called once from AppConfig.ready().
+    """
+    global _real_related_objects
+    if Collector.related_objects is _related_objects:
+        return  # already installed
+    _real_related_objects = Collector.related_objects
+    Collector.related_objects = _related_objects
+
+
+def _is_custom_object_model(model):
+    """True if *model* is a generated custom object model (``Table<id>Model``)."""
+    return (
+        model._meta.app_label == APP_LABEL
+        and extract_cot_id_from_model_name(model._meta.model_name) is not None
+    )
 
 
 @contextmanager
