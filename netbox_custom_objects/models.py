@@ -2401,22 +2401,35 @@ class CustomObjectType(NetBoxModel):
                     through._meta.auto_created = original
 
         # Unregister from apps.all_models so cascade-delete doesn't query the
-        # dropped table.  _global_lock guards against a concurrent get_model()
-        # racing and re-registering mid-cleanup.
-        with self._global_lock:
-            model_name = model.__name__.lower()
-            if model_name in apps.all_models.get(APP_LABEL, {}):
-                del apps.all_models[APP_LABEL][model_name]
-
-            for through_model in getattr(model, '_through_models', []):
-                through_name = through_model.__name__.lower()
-                if through_name in apps.all_models.get(APP_LABEL, {}):
-                    del apps.all_models[APP_LABEL][through_name]
-
-        apps.clear_cache()
+        # dropped table.
+        self.unregister_model(model)
 
         # Re-clear in case anything re-cached during cleanup.
         self.clear_model_cache(self.id, all_branches=True)
+
+        if not in_branch:
+            # Other worker processes still have this model registered; tell them to
+            # evict it once the delete is committed (see stale_models).
+            from netbox_custom_objects.stale_models import signal_custom_object_type_deleted
+            transaction.on_commit(signal_custom_object_type_deleted)
+
+    @classmethod
+    def unregister_model(cls, model):
+        """
+        Remove a generated model and its through models from the app registry.
+
+        Otherwise the model stays in other models' ``_meta.related_objects``, so a
+        cascade delete (or core's ``handle_deleted_object``) queries its dropped
+        table.  ``_global_lock`` guards against a concurrent ``get_model()``
+        re-registering it mid-cleanup.
+        """
+        with cls._global_lock:
+            registry = apps.all_models.get(APP_LABEL, {})
+            registry.pop(model.__name__.lower(), None)
+            for through_model in getattr(model, '_through_models', []):
+                registry.pop(through_model.__name__.lower(), None)
+
+        apps.clear_cache()
 
 
 @receiver(post_save, sender=CustomObjectType)
