@@ -12,11 +12,13 @@
         Are you sure you want to <strong class="text-danger">delete</strong> {{ object_type }} <strong>{{ object }}</strong>?
       {% endblocktrans %}
     </p>
+    {% if num_dependent_objects %}
       <p>
         {% blocktrans trimmed %}
           You are deleting a field that is in use on {{ num_dependent_objects }} Custom Objects. This will lead to irreversible data loss. Are you sure?
         {% endblocktrans %}
-        </p>
+      </p>
+    {% endif %}
     {% if constraints %}
       <p>
         {% blocktrans trimmed with names=constraints|join:", " %}

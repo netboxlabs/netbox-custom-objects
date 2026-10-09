@@ -3608,6 +3608,13 @@ class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
         model.objects.create(vendor="acme", serial="X")
         self._assert_duplicate_rejected(model, vendor="ACME", serial="x")
 
+    def test_type_change_is_a_definition_change(self):
+        # A changed definition makes clean() re-check existing objects.
+        constraint = self._constraint()
+        self.assertFalse(constraint._definition_changed())
+        constraint.type = "other"
+        self.assertTrue(constraint._definition_changed())
+
     def test_save_is_idempotent(self):
         # Branch merges replay a constraint's save() where it may already exist.
         constraint = self._constraint()

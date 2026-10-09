@@ -143,7 +143,9 @@ class CustomObjectTypeFieldViewSet(NetBoxModelViewSet):
 
 
 class CustomObjectTypeConstraintViewSet(NetBoxModelViewSet):
-    queryset = CustomObjectTypeConstraint.objects.select_related('custom_object_type')
+    queryset = CustomObjectTypeConstraint.objects.select_related('custom_object_type').prefetch_related(
+        'custom_object_type__fields'
+    )
     serializer_class = serializers.CustomObjectTypeConstraintSerializer
     filterset_class = CustomObjectTypeConstraintFilterSet
 

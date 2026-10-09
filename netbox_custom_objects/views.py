@@ -423,7 +423,9 @@ class CustomObjectTypeConstraintsView(generic.ObjectChildrenView):
     )
 
     def get_children(self, request, parent):
-        return CustomObjectTypeConstraint.objects.restrict(request.user, 'view').filter(custom_object_type=parent)
+        return CustomObjectTypeConstraint.objects.restrict(request.user, 'view').filter(
+            custom_object_type=parent
+        ).prefetch_related('custom_object_type__fields')
 
 
 #

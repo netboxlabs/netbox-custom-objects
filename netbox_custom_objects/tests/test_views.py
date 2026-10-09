@@ -315,6 +315,10 @@ class CustomObjectTypeConstraintViewTestCase(
         response = self.client.get(url)
         self.assertHttpStatus(response, 200)
         self.assertContains(response, "will also be deleted: c2, c3")
+        # The data-loss warning appears only when objects have a value for the field.
+        self.assertNotContains(response, "in use on")
+        self.custom_object_type.get_model().objects.create(model="m1")
+        self.assertContains(self.client.get(url), "in use on 1 Custom Objects")
 
     def test_custom_object_form_reports_duplicate(self):
         self.user.is_superuser = True

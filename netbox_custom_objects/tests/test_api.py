@@ -3209,6 +3209,26 @@ class CustomObjectTypeConstraintAPITest(CustomObjectsTestCase, TestCase):
         )
         self.assertEqual(response.data['count'], 1)
 
+    def test_list_query_count_does_not_grow_with_constraints(self):
+        model_field = self.create_custom_object_type_field(self.cot, name='model', type='text')
+
+        def list_queries():
+            with CaptureQueriesContext(connection) as ctx:
+                response = self.client.get(reverse(self.constraint_list_url), **self.header)
+            self.assertEqual(response.status_code, status.HTTP_200_OK, response.content)
+            return len(ctx.captured_queries)
+
+        CustomObjectTypeConstraint.objects.create(
+            custom_object_type=self.cot, name='c1', field_schema_ids=[self.vendor.schema_id, self.serial.schema_id]
+        )
+        list_queries()  # warm per-request caches
+        one = list_queries()
+        for name, fields in (('c2', (self.vendor, model_field)), ('c3', (self.serial, model_field))):
+            CustomObjectTypeConstraint.objects.create(
+                custom_object_type=self.cot, name=name, field_schema_ids=[f.schema_id for f in fields]
+            )
+        self.assertEqual(list_queries(), one)
+
 
 class OpenAPISchemaTest(TestCase):
     """The custom object endpoints appear in the OpenAPI schema, described generically."""

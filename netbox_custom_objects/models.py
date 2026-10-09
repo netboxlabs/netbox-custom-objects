@@ -4312,10 +4312,8 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
         """Return the constrained fields in order, omitting any that no longer exist."""
         if not self.custom_object_type_id or not self.field_schema_ids:
             return []
-        by_schema_id = {
-            f.schema_id: f
-            for f in self.custom_object_type.fields.filter(schema_id__in=self.field_schema_ids)
-        }
+        # Filtered in Python so a prefetch of custom_object_type__fields serves lists.
+        by_schema_id = {f.schema_id: f for f in self.custom_object_type.fields.all()}
         return [by_schema_id[sid] for sid in self.field_schema_ids if sid in by_schema_id]
 
     def to_model_constraint(self, fields_by_schema_id, verbose_name=None):
@@ -4417,10 +4415,11 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
         # Compared against the stored row rather than a from_db() snapshot so that
         # branch merges and reverts (which deserialize without from_db) are covered.
         stored = CustomObjectTypeConstraint.objects.filter(pk=self.pk).values(
-            "name", "field_schema_ids", "case_insensitive", "nulls_distinct"
+            "name", "type", "field_schema_ids", "case_insensitive", "nulls_distinct"
         ).first()
         return stored != {
             "name": self.name,
+            "type": self.type,
             "field_schema_ids": self.field_schema_ids,
             "case_insensitive": self.case_insensitive,
             "nulls_distinct": self.nulls_distinct,
