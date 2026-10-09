@@ -11,18 +11,18 @@ from netbox_custom_objects.constants import APP_LABEL
 
 __all__ = (
     "AppsProxy",
-    "branching_enabled",
     "build_map_url",
     "extract_cot_id_from_model_name",
     "generate_model",
     "get_viewname",
     "install_clear_cache_suppressor",
     "install_collector_patch",
+    "is_branching_enabled",
     "restrict_to_viewable",
 )
 
 
-def branching_enabled():
+def is_branching_enabled():
     """
     True if netbox-branching is enabled (listed in PLUGINS), not merely installed.
 

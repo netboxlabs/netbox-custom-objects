@@ -35,11 +35,11 @@ from netbox_custom_objects.tests.base import (
     _recreate_contenttypes,
     create_token,
 )
-from netbox_custom_objects.utilities import branching_enabled
+from netbox_custom_objects.utilities import is_branching_enabled
 
 # Installed but not in PLUGINS, importing netbox_branching.models raises RuntimeError
 # rather than ImportError, so check that it's enabled instead.
-HAS_BRANCHING = branching_enabled()
+HAS_BRANCHING = is_branching_enabled()
 if HAS_BRANCHING:
     from netbox.context_managers import event_tracking
     from netbox_branching.choices import BranchStatusChoices

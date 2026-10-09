@@ -35,7 +35,7 @@ import logging
 
 from django.db import DEFAULT_DB_ALIAS, connections
 
-from netbox_custom_objects.utilities import branching_enabled
+from netbox_custom_objects.utilities import is_branching_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -416,7 +416,7 @@ def heal_all_branches(verbosity=1, dry_run=False):
     heal_branch()'s docstring for why that signal can't be relied on.
 
     Returns immediately (all-zero summary) when netbox-branching isn't
-    enabled -- checked via branching_enabled(), NOT a bare
+    enabled -- checked via is_branching_enabled(), NOT a bare
     "import netbox_branching" try/except: netbox-branching can be pip-
     installed in the environment without being enabled in PLUGINS (e.g. a
     shared venv, or during the version-check window in checks.py), and in
@@ -461,7 +461,7 @@ def heal_all_branches(verbosity=1, dry_run=False):
       "healed"   : number of branches with at least one COT healed
       "warnings" : total number of non-auto-fixable issues across all branches
     """
-    if not branching_enabled():
+    if not is_branching_enabled():
         return {"total": 0, "healed": 0, "warnings": 0}
 
     from netbox_branching.choices import BranchStatusChoices  # noqa: PLC0415

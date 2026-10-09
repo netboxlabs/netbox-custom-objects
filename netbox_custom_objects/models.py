@@ -85,9 +85,9 @@ from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
 from netbox_custom_objects.mixin_migration import heal_unmasked_fields
 from netbox_custom_objects.utilities import (
     _suppress_clear_cache,
-    branching_enabled,
     extract_cot_id_from_model_name,
     generate_model,
+    is_branching_enabled,
 )
 
 logger = logging.getLogger(__name__)
@@ -187,7 +187,7 @@ def _apply_poly_m2m_rows(schema_conn, through_table, co_pk, rows):
 
 def _get_schema_connection():
     """Active branch's connection if any, else the default — so DDL targets the right schema."""
-    if branching_enabled():
+    if is_branching_enabled():
         from netbox_branching.contextvars import active_branch
         branch = active_branch.get()
         if branch is not None:
@@ -1461,7 +1461,7 @@ class CustomObjectType(NetBoxModel):
     @staticmethod
     def _active_branch_id():
         """Active Branch id, or None for main — second component of the cache key."""
-        if not branching_enabled():
+        if not is_branching_enabled():
             return None
         from netbox_branching.contextvars import active_branch
         branch = active_branch.get()
@@ -2353,7 +2353,7 @@ class CustomObjectType(NetBoxModel):
         if not in_branch:
             # ChangeDiff has a PROTECT FK to ContentType/ObjectType — delete those
             # records first so object_type.delete() is not blocked.
-            if branching_enabled():
+            if is_branching_enabled():
                 from netbox_branching.models import ChangeDiff
                 ChangeDiff.objects.filter(object_type=object_type).delete()
             # Temporarily disconnect the pre_delete handler to skip the ObjectType deletion
@@ -2476,7 +2476,7 @@ def _rename_objectchange_field_key(fi, old_name, new_name):
 
     logger.debug('_rename_objectchange_field_key: %r -> %r for %s', old_name, new_name, ct)
 
-    if not branching_enabled():
+    if not is_branching_enabled():
         return
 
     cd_sql = (

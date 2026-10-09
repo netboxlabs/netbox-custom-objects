@@ -36,7 +36,7 @@ assigns the result to the view before it executes the operation.
 import logging
 import threading
 
-from netbox_custom_objects.utilities import branching_enabled
+from netbox_custom_objects.utilities import is_branching_enabled
 
 logger = logging.getLogger("netbox_custom_objects.graphql")
 
@@ -65,7 +65,7 @@ def _active_branch_key():
     Identifier for the active branch (``None`` for main), used to key the per-branch
     schema and signature caches.  ``None`` when netbox-branching is not enabled.
     """
-    if not branching_enabled():
+    if not is_branching_enabled():
         return None
     from netbox_branching.contextvars import active_branch
     branch = active_branch.get()
@@ -208,7 +208,7 @@ def connect_signature_invalidation():
 
     # Evict a branch's cached schema when the branch itself is deleted.  No-op when
     # netbox-branching is not enabled.
-    if not branching_enabled():
+    if not is_branching_enabled():
         return
     from netbox_branching.models import Branch
     post_delete.connect(

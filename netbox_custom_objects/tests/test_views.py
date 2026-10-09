@@ -18,11 +18,11 @@ from utilities.testing import ViewTestCases, create_test_user
 
 from netbox_custom_objects import views
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
-from netbox_custom_objects.utilities import branching_enabled
+from netbox_custom_objects.utilities import is_branching_enabled
 from .base import CustomObjectsTestCase
 from core.models.object_types import ObjectType
 
-_HAS_BRANCHING = branching_enabled()
+_HAS_BRANCHING = is_branching_enabled()
 
 
 class _SkipQueryCountsWhenBranching:
