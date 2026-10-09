@@ -75,6 +75,7 @@ from netbox_custom_objects.choices import (CustomObjectFieldTypeChoices,
 from netbox_custom_objects.constants import (
     APP_LABEL,
     CONFIG_CONTEXT_DIMENSION_FIELDS,
+    DISPLAY_EXPRESSION_SEARCH_WEIGHT,
     RESERVED_FIELD_NAMES,
 )
 from netbox_custom_objects.field_types import (
@@ -975,6 +976,17 @@ class CustomObject(
         except Exception:  # noqa: BLE001
             return None
 
+    @property
+    def _display(self):
+        """
+        The rendered display_expression, or None without one.
+
+        Indexed for search (see register_custom_object_search_index()), so global and quick
+        search match the name users see. Field names can't start with an underscore, so this
+        can't clash with a field.
+        """
+        return self._render_display_expression()
+
     def __str__(self):
         # If the COT defines a Jinja2 display expression, try that first.
         rendered = self._render_display_expression()
@@ -1860,6 +1872,9 @@ class CustomObjectType(NetBoxModel):
             if field.context and field.type != CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                 display_attrs.append(field.name)
 
+        if self.display_expression:
+            fields.append(("_display", DISPLAY_EXPRESSION_SEARCH_WEIGHT))
+
         attrs = {
             "model": model,
             "fields": tuple(fields),
@@ -2306,6 +2321,16 @@ class CustomObjectType(NetBoxModel):
     def save(self, *args, **kwargs):
         needs_db_create = self._state.adding
 
+        # The rendered display_expression is in the search cache; a changed expression needs a reindex.
+        update_fields = kwargs.get('update_fields')
+        needs_reindex = (
+            not needs_db_create
+            and (update_fields is None or 'display_expression' in update_fields)
+            and CustomObjectType.objects.filter(pk=self.pk)
+            .exclude(display_expression=self.display_expression)
+            .exists()
+        )
+
         super().save(*args, **kwargs)
 
         if needs_db_create:
@@ -2313,6 +2338,9 @@ class CustomObjectType(NetBoxModel):
         else:
             # Clear the model cache when the CustomObjectType is modified
             self.clear_model_cache(self.id)
+            if needs_reindex:
+                _cot_id = self.pk
+                transaction.on_commit(lambda: ReindexCustomObjectTypeJob.enqueue(cot_id=_cot_id))
 
     def delete(self, *args, **kwargs):
         # COT is going away — every branch's cached class is stale.

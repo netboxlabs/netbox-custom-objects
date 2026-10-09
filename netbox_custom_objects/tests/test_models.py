@@ -2,6 +2,7 @@
 Tests for the concrete and dynamically generated models that are managed by this plugin.
 """
 import pickle
+import uuid
 import sys
 from decimal import Decimal
 from unittest import skip
@@ -20,16 +21,17 @@ from rest_framework.test import APIClient
 import netbox_custom_objects as nco
 import netbox_custom_objects.models as nco_models
 
-from core.choices import JobStatusChoices
-from core.models import ObjectType
+from core.choices import JobIntervalChoices, JobStatusChoices
+from core.models import Job, ObjectType
 from dcim.models import Site
 from extras.models import CachedValue, CustomFieldChoiceSet, Tag, TaggedItem
 from netbox.search import registry
 from netbox.search.backends import get_backend
 from netbox_custom_objects.api.serializers import get_serializer_class
-from netbox_custom_objects.constants import APP_LABEL
+from netbox_custom_objects.constants import APP_LABEL, DISPLAY_EXPRESSION_SEARCH_WEIGHT
 from netbox_custom_objects.field_types import LazyForeignKey, ObjectFieldType, TextFieldType
-from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
+from netbox_custom_objects.filtersets import get_filterset_class
+from netbox_custom_objects.jobs import RefreshDisplayExpressionSearchJob, ReindexCustomObjectTypeJob
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name
 from .base import CustomObjectsTestCase, create_token
@@ -1865,6 +1867,91 @@ class SearchReindexTestCase(CustomObjectsTestCase, TestCase):
             second_job = ReindexCustomObjectTypeJob.enqueue(cot_id=self.cot.pk)
 
         self.assertEqual(first_job.pk, second_job.pk)
+
+
+class DisplayExpressionSearchTestCase(CustomObjectsTestCase, TestCase):
+    """The rendered display_expression is cached for search and matched by quick search (q)."""
+
+    def setUp(self):
+        super().setUp()
+        self.cot = self.create_custom_object_type(
+            name="Service", slug="display-search", display_expression="{{ site.name }} / {{ name }}",
+        )
+        self.create_custom_object_type_field(self.cot, name="name", type="text", primary=True, required=True)
+        self.create_custom_object_type_field(
+            self.cot, name="site", type="object", related_object_type=self.get_site_object_type(),
+        )
+        self.model = self.cot.get_model()
+        self.site = Site.objects.create(name="Alpha", slug="alpha")
+        self.obj = self.model.objects.create(name="svc1", site=self.site)
+        self.object_type = ContentType.objects.get_for_model(self.model)
+
+    def _cached_display(self):
+        return list(
+            CachedValue.objects.filter(object_type=self.object_type, object_id=self.obj.pk, field='_display')
+            .values_list('value', 'weight')
+        )
+
+    def _quick_search(self, value):
+        filterset = get_filterset_class(self.model)({'q': value}, self.model.objects.all())
+        return list(filterset.qs.values_list('pk', flat=True))
+
+    def test_rendered_display_is_cached(self):
+        get_backend().cache(self.model.objects.all())
+        self.assertEqual(self._cached_display(), [("Alpha / svc1", DISPLAY_EXPRESSION_SEARCH_WEIGHT)])
+
+    def test_nothing_cached_without_display_expression(self):
+        self.cot.display_expression = ""
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue'):
+            self.cot.save()
+        self.cot.refresh_from_db()
+        model = self.cot.get_model()
+        get_backend().cache(model.objects.all())
+        self.assertEqual(self._cached_display(), [])
+
+    def test_quick_search_matches_related_values_in_display(self):
+        get_backend().cache(self.model.objects.all())
+        # "Alpha" comes only from the related site, not from the object's own columns.
+        self.assertEqual(self._quick_search("alpha"), [self.obj.pk])
+        self.assertEqual(self._quick_search("svc1"), [self.obj.pk])
+        self.assertEqual(self._quick_search("nothing"), [])
+
+    def test_reindex_picks_up_related_changes(self):
+        get_backend().cache(self.model.objects.all())
+        self.site.name = "Beta"
+        self.site.save()
+        # Renaming the site doesn't touch the custom object, so its cached display is stale...
+        self.assertEqual(self._quick_search("beta"), [])
+        # ...until the type is reindexed, as the hourly job does.
+        ReindexCustomObjectTypeJob.enqueue(cot_id=self.cot.pk, immediate=True)
+        self.assertEqual(self._quick_search("beta"), [self.obj.pk])
+
+    def test_reindex_enqueued_when_display_expression_changes(self):
+        cot = CustomObjectType.objects.get(pk=self.cot.pk)
+        cot.display_expression = "{{ name }}"
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
+            with self.captureOnCommitCallbacks(execute=True):
+                cot.save()
+        mock_enqueue.assert_called_once_with(cot_id=self.cot.pk)
+
+    def test_reindex_not_enqueued_for_other_changes(self):
+        cot = CustomObjectType.objects.get(pk=self.cot.pk)
+        cot.description = "Changed"
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
+            with self.captureOnCommitCallbacks(execute=True):
+                cot.save()
+                cot.save(update_fields=['cache_timestamp'])
+        mock_enqueue.assert_not_called()
+
+    def test_hourly_job_reindexes_types_with_display_expression(self):
+        self.assertEqual(
+            registry['system_jobs'][RefreshDisplayExpressionSearchJob]['interval'], JobIntervalChoices.INTERVAL_HOURLY,
+        )
+        self.create_custom_object_type(name="NoExpression", slug="no-expression")
+        job = Job.objects.create(name='Refresh', job_id=uuid.uuid4())
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
+            RefreshDisplayExpressionSearchJob(job).run()
+        mock_enqueue.assert_called_once_with(cot_id=self.cot.pk)
 
 
 class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
