@@ -5,7 +5,7 @@ import pickle
 import sys
 from decimal import Decimal
 from unittest import skip
-from unittest.mock import patch
+from unittest.mock import PropertyMock, patch
 
 from django.apps import apps as django_apps
 from django.contrib.contenttypes.models import ContentType
@@ -3511,7 +3511,11 @@ class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
 
     def test_nulls_not_distinct(self):
         # PostgreSQL < 15 would silently skip the database constraint.
-        with patch.object(connection.features, "supports_nulls_distinct_unique_constraints", False):
+        # A property on Django 5.2, a class attribute on 6.x; patch the class to cover both.
+        with patch.object(
+            type(connection.features), "supports_nulls_distinct_unique_constraints",
+            new_callable=PropertyMock, return_value=False,
+        ):
             with self.assertRaisesMessage(ValidationError, "PostgreSQL 15"):
                 self._constraint(nulls_distinct=False)
         self._constraint(nulls_distinct=False)
