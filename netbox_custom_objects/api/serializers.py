@@ -22,7 +22,7 @@ from rest_framework.utils import model_meta
 from users.api.serializers_.owners import OwnerSerializer
 
 from netbox_custom_objects import constants, field_types
-from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
+from netbox_custom_objects.choices import ConstraintLookupChoices, CustomObjectFieldTypeChoices
 from netbox_custom_objects.models import (ConfigContextRenderer, CustomObject, CustomObjectType,
                                           CustomObjectTypeConstraint, CustomObjectTypeField)
 
@@ -346,17 +346,33 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
             return super().create(validated_data)
 
 
+def _brief_constraint_field(field, request):
+    return {
+        "id": field.pk,
+        "url": reverse(
+            "plugins-api:netbox_custom_objects-api:customobjecttypefield-detail",
+            kwargs={"pk": field.pk},
+            request=request,
+        ),
+        "name": field.name,
+        "schema_id": field.schema_id,
+    }
+
+
+_BRIEF_CONSTRAINT_FIELD_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "id": {"type": "integer"},
+        "url": {"type": "string", "format": "uri"},
+        "name": {"type": "string"},
+        "schema_id": {"type": "integer"},
+    },
+}
+
+
 @extend_schema_field({
     "type": "array",
-    "items": {
-        "type": "object",
-        "properties": {
-            "id": {"type": "integer"},
-            "url": {"type": "string", "format": "uri"},
-            "name": {"type": "string"},
-            "schema_id": {"type": "integer"},
-        },
-    },
+    "items": _BRIEF_CONSTRAINT_FIELD_SCHEMA,
     "description": "Field IDs on write; brief field objects on read.",
 })
 class ConstraintFieldsField(serializers.Field):
@@ -369,19 +385,7 @@ class ConstraintFieldsField(serializers.Field):
 
     def to_representation(self, constraint):
         request = self.context.get("request")
-        return [
-            {
-                "id": field.pk,
-                "url": reverse(
-                    "plugins-api:netbox_custom_objects-api:customobjecttypefield-detail",
-                    kwargs={"pk": field.pk},
-                    request=request,
-                ),
-                "name": field.name,
-                "schema_id": field.schema_id,
-            }
-            for field in constraint.get_fields()
-        ]
+        return [_brief_constraint_field(field, request) for field in constraint.get_fields()]
 
     def to_internal_value(self, data):
         if not isinstance(data, list) or not data:
@@ -397,11 +401,63 @@ class ConstraintFieldsField(serializers.Field):
         return {"_constraint_fields": [by_pk[pk] for pk in pks]}
 
 
+@extend_schema_field({
+    "type": "array",
+    "items": {
+        "type": "object",
+        "properties": {
+            "field": _BRIEF_CONSTRAINT_FIELD_SCHEMA,
+            "lookup": {"type": "string", "enum": ConstraintLookupChoices.values()},
+            "value": {},
+        },
+    },
+    "description": "Predicates that must all hold for the constraint to apply. Field IDs on write; "
+                   "brief field objects on read.",
+})
+class ConstraintConditionField(serializers.Field):
+    """
+    A constraint's condition: predicates that name a field by ID on write and as a brief field object on read.
+    """
+
+    def __init__(self, **kwargs):
+        super().__init__(source="*", **kwargs)
+
+    def to_representation(self, constraint):
+        request = self.context.get("request")
+        by_schema_id = {f.schema_id: f for f in constraint.custom_object_type.fields.all()}
+        result = []
+        for predicate in constraint.condition or ():
+            field = by_schema_id.get(predicate.get("field"))
+            result.append({
+                **predicate,
+                "field": _brief_constraint_field(field, request) if field else None,
+            })
+        return result
+
+    def to_internal_value(self, data):
+        if data is None:
+            return {"_condition": []}
+        if not isinstance(data, list):
+            raise ValidationError(_("Expected a list of predicates."))
+        if not all(isinstance(p, dict) and "field" in p for p in data):
+            raise ValidationError(_("Each predicate needs a field ID."))
+        try:
+            pks = [int(p["field"]) for p in data]
+        except (TypeError, ValueError):
+            raise ValidationError(_("Each predicate needs a field ID."))
+        by_pk = CustomObjectTypeField.objects.in_bulk(pks)
+        missing = [pk for pk in pks if pk not in by_pk]
+        if missing:
+            raise ValidationError(_("Unknown field ID(s): {ids}").format(ids=", ".join(map(str, missing))))
+        return {"_condition": [{**p, "field": by_pk[pk]} for p, pk in zip(data, pks)]}
+
+
 class CustomObjectTypeConstraintSerializer(NetBoxModelSerializer):
     url = serializers.HyperlinkedIdentityField(
         view_name="plugins-api:netbox_custom_objects-api:customobjecttypeconstraint-detail"
     )
     fields = ConstraintFieldsField()
+    condition = ConstraintConditionField(required=False)
 
     class Meta:
         model = CustomObjectTypeConstraint
@@ -415,6 +471,7 @@ class CustomObjectTypeConstraintSerializer(NetBoxModelSerializer):
             "fields",
             "case_insensitive",
             "nulls_distinct",
+            "condition",
             "description",
             "created",
             "last_updated",
@@ -426,14 +483,19 @@ class CustomObjectTypeConstraintSerializer(NetBoxModelSerializer):
         new_cot = data.get("custom_object_type")
         if self.instance is not None and new_cot is not None and new_cot != self.instance.custom_object_type:
             raise ValidationError({"custom_object_type": _("A constraint can't be moved to another type.")})
+        cot = data.get("custom_object_type") or getattr(self.instance, "custom_object_type", None)
         members = data.pop("_constraint_fields", None)
         if members is not None:
-            cot = data.get("custom_object_type") or getattr(self.instance, "custom_object_type", None)
             if any(f.custom_object_type_id != getattr(cot, "pk", None) for f in members):
                 raise ValidationError({"fields": _("Every field must belong to this custom object type.")})
             data["field_schema_ids"] = [f.schema_id for f in members]
         elif self.instance is None:
             raise ValidationError({"fields": _("This field is required.")})
+        condition = data.pop("_condition", None)
+        if condition is not None:
+            if any(p["field"].custom_object_type_id != getattr(cot, "pk", None) for p in condition):
+                raise ValidationError({"condition": _("Every field must belong to this custom object type.")})
+            data["condition"] = [{**p, "field": p["field"].schema_id} for p in condition]
         return super().validate(data)
 
 

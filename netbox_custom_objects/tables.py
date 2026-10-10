@@ -309,6 +309,11 @@ class CustomObjectTypeConstraintTable(NetBoxTable):
     nulls_distinct = columns.BooleanColumn(
         verbose_name=_('Empty values distinct')
     )
+    condition = tables.TemplateColumn(
+        verbose_name=_('Condition'),
+        template_code='{{ record.get_condition_display|placeholder }}',
+        orderable=False,
+    )
 
     exempt_columns = ('actions',)
 
@@ -322,6 +327,7 @@ class CustomObjectTypeConstraintTable(NetBoxTable):
             "constrained_fields",
             "case_insensitive",
             "nulls_distinct",
+            "condition",
             "description",
             "created",
             "last_updated",
@@ -332,5 +338,6 @@ class CustomObjectTypeConstraintTable(NetBoxTable):
             "constrained_fields",
             "case_insensitive",
             "nulls_distinct",
+            "condition",
             "description",
         )

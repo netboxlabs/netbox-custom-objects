@@ -266,8 +266,8 @@ class CustomObjectTypeConstraintViewTestCase(
     """Add, edit and delete views for constraints, plus the type's Constraints tab."""
 
     model = CustomObjectTypeConstraint
-    # The form takes field IDs; the model stores their schema IDs (checked separately).
-    validation_excluded_fields = ["field_schema_ids"]
+    # The form takes field IDs and names; the model stores schema IDs (checked separately).
+    validation_excluded_fields = ["field_schema_ids", "condition"]
 
     @classmethod
     def setUpTestData(cls):
@@ -287,6 +287,7 @@ class CustomObjectTypeConstraintViewTestCase(
             "field_schema_ids": [cls.f1.pk, cls.f4.pk],
             "case_insensitive": True,
             "nulls_distinct": True,
+            "condition": '[{"field": "serial", "lookup": "isnull", "value": false}]',
         }
 
     def _get_base_url(self):
@@ -296,6 +297,29 @@ class CustomObjectTypeConstraintViewTestCase(
         super().test_create_object_with_permission()
         constraint = CustomObjectTypeConstraint.objects.get(name="c4")
         self.assertCountEqual(constraint.field_schema_ids, [self.f1.schema_id, self.f4.schema_id])
+        self.assertEqual(constraint.condition, [{"field": self.f2.schema_id, "lookup": "isnull", "value": False}])
+
+    def test_condition_uses_field_names(self):
+        self.user.is_superuser = True
+        self.user.save()
+        constraint = CustomObjectTypeConstraint.objects.create(
+            custom_object_type=self.custom_object_type, name="c5", field_schema_ids=[self.f4.schema_id],
+            condition=[{"field": self.f3.schema_id, "lookup": "isnull", "value": True}],
+        )
+        url = reverse("plugins:netbox_custom_objects:customobjecttypeconstraint_edit", kwargs={"pk": constraint.pk})
+        self.assertContains(self.client.get(url), "&quot;field&quot;: &quot;model&quot;")
+        tab_url = reverse(
+            "plugins:netbox_custom_objects:customobjecttype_constraints", kwargs={"pk": self.custom_object_type.pk}
+        )
+        self.assertContains(self.client.get(tab_url), "Model is empty")
+
+        response = self.client.post(url, {
+            "custom_object_type": self.custom_object_type.pk, "name": "c5", "type": "unique",
+            "field_schema_ids": [self.f4.pk], "nulls_distinct": True,
+            "condition": '[{"field": "nope", "lookup": "isnull", "value": true}]',
+        })
+        self.assertHttpStatus(response, 200)
+        self.assertContains(response, "Unknown field(s): nope")
 
     def test_constraints_tab(self):
         self.user.is_superuser = True

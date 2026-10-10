@@ -109,7 +109,7 @@ def _collect_co_refs(model_class, data, model_label=None):
 
 
 def _constraint_field_refs(data, fields_by_schema_id):
-    """Return the field refs a constraint's *data* covers, for fields changed in the same squash.
+    """Return the field refs a constraint's *data* covers or tests, for fields changed in the same squash.
 
     Constraints reference fields by ``schema_id`` (an integer list that the generic
     walker would misread as self-references), so map them to field keys explicitly.
@@ -117,9 +117,11 @@ def _constraint_field_refs(data, fields_by_schema_id):
     if not data:
         return set()
     cot_id = data.get('custom_object_type')
+    schema_ids = list(data.get('field_schema_ids') or ())
+    schema_ids += [p.get('field') for p in data.get('condition') or () if isinstance(p, dict)]
     return {
         fields_by_schema_id[(cot_id, sid)]
-        for sid in data.get('field_schema_ids') or ()
+        for sid in schema_ids
         if (cot_id, sid) in fields_by_schema_id
     }
 

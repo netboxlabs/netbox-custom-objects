@@ -144,8 +144,9 @@ CONSTRAINT_DEFAULTS = {
     "type": "unique",
     "case_insensitive": False,
     "nulls_distinct": True,
+    "condition": [],
     "description": "",
 }
 
 # Attributes compared by the comparator and applied by the executor, besides 'name'.
-CONSTRAINT_ATTRS = ("type", "fields", "case_insensitive", "nulls_distinct", "description")
+CONSTRAINT_ATTRS = ("type", "fields", "case_insensitive", "nulls_distinct", "condition", "description")

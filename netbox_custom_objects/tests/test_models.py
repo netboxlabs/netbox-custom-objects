@@ -3523,6 +3523,54 @@ class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
         model.objects.create(vendor="acme")
         self._assert_duplicate_rejected(model, vendor="acme")
 
+    @staticmethod
+    def _predicate(field, lookup, value):
+        return {"field": field.schema_id, "lookup": lookup, "value": value}
+
+    def test_condition_on_empty_object_field(self):
+        # A serial unique only among objects with no holder.
+        holder = self.create_custom_object_type_field(
+            self.cot, name="holder", label="Holder", type="object", related_object_type=self.get_site_object_type()
+        )
+        model = self._model()
+        site = Site.objects.create(name="Site 1", slug="site-1")
+        # Duplicates the condition excludes don't block the constraint.
+        model.objects.create(vendor="a", serial="1", holder=site)
+        model.objects.create(vendor="b", serial="1", holder=site)
+
+        constraint = self._constraint(fields=[self.serial], condition=[self._predicate(holder, "isnull", True)])
+        self.assertEqual(constraint.get_condition_display(), "Holder is empty")
+        model = self._model()
+        model.objects.create(vendor="c", serial="1")
+        self._assert_duplicate_rejected(model, vendor="d", serial="1")
+        model(vendor="d", serial="1", holder=site).full_clean()
+
+    def test_condition_lookups(self):
+        status = self.create_custom_object_type_field(self.cot, name="status", label="Status", type="text")
+        # condition, statuses it constrains, statuses it leaves free, display
+        cases = {
+            "exact": ("exact", "active", {"active"}, {"retired", None}, "Status equals active"),
+            "n": ("n", "retired", {"active", None}, {"retired"}, "Status does not equal retired"),
+            "in": ("in", ["active", "planned"], {"active", "planned"}, {"retired", None},
+                   "Status is one of active, planned"),
+            "isnull": ("isnull", False, {"active"}, {None}, "Status is not empty"),
+        }
+        for label, (lookup, value, constrained, free, display) in cases.items():
+            with self.subTest(label):
+                constraint = self._constraint(
+                    fields=[self.serial], name="by_status", condition=[self._predicate(status, lookup, value)]
+                )
+                self.assertEqual(constraint.get_condition_display(), display)
+                model = self._model()
+                for st in constrained:
+                    model.objects.create(serial=f"c-{st}", status=st)
+                    self._assert_duplicate_rejected(model, serial=f"c-{st}", status=st)
+                for st in free:
+                    model.objects.create(serial=f"f-{st}", status=st)
+                    model.objects.create(serial=f"f-{st}", status=st)
+                constraint.delete()
+                model.objects.all().delete()
+
     def test_polymorphic_object_field(self):
         poly = self.create_polymorphic_field(self.cot, [self.get_site_object_type()], name="location")
         self._constraint(fields=[self.vendor, poly])
@@ -3547,6 +3595,12 @@ class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
             self.cot, name="tags", type="multiselect", choice_set=choice_set
         )
         count = self.create_custom_object_type_field(self.cot, name="count", type="integer")
+        color = self.create_custom_object_type_field(
+            self.cot, name="color", type="select", choice_set=choice_set
+        )
+        site = self.create_custom_object_type_field(
+            self.cot, name="site", type="object", related_object_type=self.get_site_object_type()
+        )
         self._constraint()
         cases = {
             "one field": dict(fields=[self.vendor]),
@@ -3554,6 +3608,19 @@ class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
             "ineligible type": dict(fields=[self.vendor, tags]),
             "case-insensitive without text": dict(fields=[count], case_insensitive=True),
             "same fields as another constraint": dict(fields=[self.serial, self.vendor]),
+            "condition not a list": dict(condition={"field": self.vendor.schema_id, "lookup": "isnull"}),
+            "condition without lookup": dict(condition=[{"field": self.vendor.schema_id}]),
+            "condition extra key": dict(condition=[{**self._predicate(self.vendor, "isnull", True), "not": True}]),
+            "condition unknown field": dict(condition=[{"field": 999, "lookup": "isnull", "value": True}]),
+            "condition ineligible field": dict(condition=[self._predicate(tags, "exact", "choice1")]),
+            "condition unknown lookup": dict(condition=[self._predicate(self.vendor, "contains", "a")]),
+            "isnull without a boolean": dict(condition=[self._predicate(self.vendor, "isnull", "yes")]),
+            "in without a list": dict(condition=[self._predicate(self.vendor, "in", "a")]),
+            "in with an empty list": dict(condition=[self._predicate(self.vendor, "in", [])]),
+            "compare to null": dict(condition=[self._predicate(self.vendor, "exact", None)]),
+            "value of the wrong type": dict(condition=[self._predicate(count, "exact", "many")]),
+            "value not a choice": dict(condition=[self._predicate(color, "exact", "nope")]),
+            "object field compared by value": dict(condition=[self._predicate(site, "exact", 1)]),
         }
         for label, kwargs in cases.items():
             with self.subTest(label), self.assertRaises(ValidationError):
@@ -3576,18 +3643,27 @@ class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
         self._assert_duplicate_rejected(model, vendor="acme", serial_number="1")
 
     def test_type_change_rejected(self):
-        self._constraint()
-        serial = CustomObjectTypeField.objects.get(pk=self.serial.pk)
-        serial.type = "longtext"
-        with self.assertRaisesMessage(ValidationError, "vendor_serial"):
-            serial.full_clean()
+        status = self.create_custom_object_type_field(self.cot, name="status", type="text")
+        self._constraint(condition=[self._predicate(status, "exact", "active")])
+        for field in (self.serial, status):
+            with self.subTest(field.name):
+                field = CustomObjectTypeField.objects.get(pk=field.pk)
+                field.type = "longtext"
+                with self.assertRaisesMessage(ValidationError, "vendor_serial"):
+                    field.full_clean()
 
     def test_field_delete_deletes_constraint(self):
+        status = self.create_custom_object_type_field(self.cot, name="status", type="text")
         constraint = self._constraint()
+        conditional = self._constraint(
+            fields=[self.vendor], name="by_status", condition=[self._predicate(status, "exact", "active")]
+        )
         CustomObjectTypeField.objects.get(pk=self.serial.pk).delete()
+        CustomObjectTypeField.objects.get(pk=status.pk).delete()
 
-        self.assertFalse(CustomObjectTypeConstraint.objects.filter(pk=constraint.pk).exists())
-        self.assertNotIn(constraint.db_name, self._db_constraint_names())
+        for c in (constraint, conditional):
+            self.assertFalse(CustomObjectTypeConstraint.objects.filter(pk=c.pk).exists())
+            self.assertNotIn(c.db_name, self._db_constraint_names())
         self.assertEqual(self._model()._meta.constraints, [])
 
     def test_delete_constraint(self):
@@ -3621,6 +3697,9 @@ class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
         constraint = self._constraint()
         self.assertFalse(constraint._definition_changed())
         constraint.type = "other"
+        self.assertTrue(constraint._definition_changed())
+        constraint.type = "unique"
+        constraint.condition = [self._predicate(self.vendor, "isnull", False)]
         self.assertTrue(constraint._definition_changed())
 
     def test_save_is_idempotent(self):

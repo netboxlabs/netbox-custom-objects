@@ -115,13 +115,20 @@ See [Field Attributes](field-attributes.md) for the full list of attributes avai
 
 A field's `Must be unique` setting makes its values unique on their own. To require that a *combination* of field values is unique, for example a serial number that only has to be unique per vendor, add a constraint: open the Custom Object Type, go to the `Constraints` tab and click `+ Add Constraint`.
 
-- **Fields** — the fields whose combined values must be unique. Pick at least two, or one when the constraint is case-insensitive. Text, long text, integer, decimal, boolean, date, datetime, URL, selection and object fields (including polymorphic object fields, which count as both the object's type and its ID) can be included.
+- **Fields** — the fields whose combined values must be unique. Pick at least two, or one when the constraint is case-insensitive or has a condition. Text, long text, integer, decimal, boolean, date, datetime, URL, selection and object fields (including polymorphic object fields, which count as both the object's type and its ID) can be included.
 - **Case-insensitive** — compare text and URL fields without regard to case, so `ACME` and `acme` conflict.
 - **Empty values are distinct** — enabled by default, so objects that leave any of the constrained fields empty never conflict. Disable it to treat empty values as equal.
+- **Condition** — optionally, apply the constraint only to objects that match all of a list of predicates, for example to make `name` unique only among objects with no `parent`:
+
+    ```json
+    [{"field": "parent", "lookup": "isnull", "value": true}]
+    ```
+
+    Each predicate names a field and a lookup: `exact`, `n` (does not equal), `in` (a list of values) or `isnull` (`true` for empty, `false` for not empty). The same field types as above can be tested; object fields can only be tested with `isnull`.
 
 The database enforces constraints, so they apply to the UI, the REST API, imports and scripts alike, and a constraint can't be added while existing objects already break it. Saving an object that would break one shows a validation error.
 
-A constrained field can be renamed. Its type can't be changed until it's removed from its constraints, and deleting it deletes the constraints that include it.
+A constrained field can be renamed. Its type can't be changed until it's removed from its constraints (including their conditions), and deleting it deletes the constraints that include or test it.
 
 ### Interacting with Custom Objects
 

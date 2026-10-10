@@ -828,8 +828,9 @@ class BaseBranchingTests(BranchingTestBase):
 
     def test_constraint_merge_and_revert(self):
         """
-        A branch adds a field and a constraint covering it to a COT from main. The
-        constraint must be created after the field on merge and dropped before it on revert.
+        A branch adds fields and a constraint covering one and testing another to a COT from
+        main. The constraint must be created after the fields on merge and dropped before them
+        on revert.
         """
         with event_tracking(self.request):
             cot = CustomObjectType.objects.create(name='constraint_cot', slug='constraint-cot')
@@ -838,10 +839,12 @@ class BaseBranchingTests(BranchingTestBase):
         branch = _provision_branch('Constraint Branch', self.MERGE_STRATEGY, self.user)
         with activate_branch(branch), event_tracking(_make_request(self.user)):
             serial = CustomObjectTypeField.objects.create(custom_object_type=cot, name='serial', type='text')
+            status = CustomObjectTypeField.objects.create(custom_object_type=cot, name='status', type='text')
             constraint = CustomObjectTypeConstraint.objects.create(
                 custom_object_type=CustomObjectType.objects.get(pk=cot.pk),
                 name='vendor_serial',
                 field_schema_ids=[vendor.schema_id, serial.schema_id],
+                condition=[{'field': status.schema_id, 'lookup': 'n', 'value': 'retired'}],
             )
 
         def db_constraint_names():
@@ -859,11 +862,13 @@ class BaseBranchingTests(BranchingTestBase):
         model.objects.create(vendor='acme', serial='1')
         with self.assertRaises(IntegrityError), transaction.atomic():
             model.objects.create(vendor='acme', serial='1')
+        model.objects.create(vendor='acme', serial='1', status='retired')
+        model.objects.create(vendor='acme', serial='1', status='retired')
         model.objects.all().delete()
 
         branch.revert(user=self.user, commit=True)
         self.assertFalse(CustomObjectTypeConstraint.objects.filter(pk=constraint.pk).exists())
-        self.assertFalse(CustomObjectTypeField.objects.filter(pk=serial.pk).exists())
+        self.assertFalse(CustomObjectTypeField.objects.filter(pk__in=[serial.pk, status.pk]).exists())
         self.assertNotIn(constraint.db_name, db_constraint_names())
 
     # ── COT deleted inside branch → merge / revert ────────────────────────

@@ -498,6 +498,8 @@ class FieldDefaultsConsistencyTestCase(TestCase):
         for attr, default in CONSTRAINT_DEFAULTS.items():
             with self.subTest(attr=attr):
                 model_default = CustomObjectTypeConstraint._meta.get_field(attr).default
+                if model_default is not NOT_PROVIDED and callable(model_default):
+                    model_default = model_default()
                 self.assertEqual("" if model_default is NOT_PROVIDED else model_default, default)
 
 
@@ -616,6 +618,10 @@ class COTJsonSchemaTestCase(TestCase):
                 {"name": "vendor_serial", "fields": [1, 2]},
                 {"name": "serial_ci", "type": "unique", "fields": [2], "case_insensitive": True,
                  "nulls_distinct": False, "description": "Serial, ignoring case"},
+                {"name": "serial_if_vendor", "fields": [2], "condition": [
+                    {"field": 1, "lookup": "isnull", "value": False},
+                    {"field": 1, "lookup": "in", "value": ["acme", "globex"]},
+                ]},
             ],
             "removed_constraints": ["old_constraint"],
         }
@@ -624,7 +630,13 @@ class COTJsonSchemaTestCase(TestCase):
             "missing fields": {"name": "c"},
             "empty fields": {"name": "c", "fields": []},
             "unknown type": {"name": "c", "fields": [1], "type": "check"},
-            "unknown key": {"name": "c", "fields": [1], "condition": {}},
+            "unknown key": {"name": "c", "fields": [1], "check": "x"},
+            "condition not a list": {"name": "c", "fields": [1], "condition": {}},
+            "predicate without lookup": {"name": "c", "fields": [1], "condition": [{"field": 1}]},
+            "unknown lookup": {"name": "c", "fields": [1], "condition": [{"field": 1, "lookup": "lt", "value": 1}]},
+            "predicate unknown key": {
+                "name": "c", "fields": [1], "condition": [{"field": 1, "lookup": "exact", "value": 1, "not": True}]
+            },
         }
         for label, constraint in invalid.items():
             with self.subTest(label):
