@@ -283,6 +283,18 @@ The response includes the created object with its assigned ID and standard metad
 }
 ```
 
+### Config context
+
+For a Custom Object Type with config context support enabled, each object also
+includes `local_context_data` (writable) and `config_context` (read-only): the
+rendered context, as a Device or VM has. See
+[Config Context](index.md#config-context) for which source contexts apply.
+Rendering costs extra queries, so leave it out with `?omit=config_context` when
+you don't need it.
+
+If the type has a custom field named `config_context`, that field is returned
+instead of the rendered context.
+
 ## Custom Validation
 
 NetBox's [`CUSTOM_VALIDATORS`](https://netboxlabs.com/docs/netbox/en/stable/configuration/data-validation/#custom_validators) setting is supported for Custom Objects. Use `netbox_custom_objects.<cot-slug>` as the key, where `<cot-slug>` is the slug of the Custom Object Type:
@@ -334,6 +346,22 @@ Example response:
 }
 ```
 
+## OpenAPI schema
+
+The Custom Object endpoints appear in NetBox's OpenAPI schema (`/api/schema/`)
+once, generically, with the Custom Object Type's slug as the `custom_object_type`
+path parameter:
+
+- `/api/plugins/custom-objects/{custom_object_type}/`
+- `/api/plugins/custom-objects/{custom_object_type}/{id}/`
+
+The `CustomObject` schema lists the fields every custom object has (`id`, `url`,
+`display`, `owner`, `tags`, `created`, `last_updated`) and allows additional
+properties, since each type's custom fields are defined at runtime. Clients
+generated from the schema therefore treat custom fields as free-form properties.
+The schema doesn't describe each Custom Object Type's own fields; use the
+[Custom Object Type Fields](#custom-object-type-fields) endpoint to discover them.
+
 ## Browsable API
 
 As with other NetBox objects, you can view the API output for Custom Objects in a browser by prepending `/api/` to the URL — for example, `/api/plugins/custom-objects/dhcp_scope/`:
@@ -380,3 +408,35 @@ Vary: Accept
 | Custom Object | `/api/plugins/custom-objects/<slug>/<id>/` |
 
 Standard NetBox filter parameters (e.g. `q=`, `tag=`, `created__gte=`) work against the list endpoints. Each Custom Object Type also exposes filters for every defined field — see the OpenAPI schema at `/api/schema/swagger-ui/` for the full list of filters available on a given type.
+
+The Custom Object Type and Custom Object Type Field list endpoints accept filters for their own attributes, for example `?slug=dhcp_scope` or `?name=hostname`. Fields can also be filtered by the type they belong to (`?custom_object_type_id=9` or `?custom_object_type=dhcp_scope`) and by field type (`?type=integer`).
+
+## Bulk Operations
+
+All three list endpoints accept bulk writes, the same as NetBox core endpoints. Send a list of objects, each identifying its target by `id`:
+
+| Method | Body | Effect |
+|--------|------|--------|
+| `POST` | `[{...}, {...}]` | Create several objects |
+| `PATCH` | `[{"id": 1, "description": "new"}, ...]` | Partially update each listed object |
+| `PUT` | `[{"id": 1, ...all fields...}, ...]` | Fully update each listed object |
+| `DELETE` | `[{"id": 1}, {"id": 2}]` | Delete each listed object |
+
+Each request is applied atomically: if any listed object cannot be created, updated, or deleted, none of them are changed. Deleting a Custom Object Type drops its database table along with every object of that type.
+
+## Export Templates
+
+A Custom Object list endpoint can render a NetBox [export template](https://netboxlabs.com/docs/netbox/models/extras/exporttemplate/) instead of returning JSON, as core list endpoints do.
+
+1. Create an export template and add the Custom Object Type to its **Object types**.
+2. Request the type's list endpoint with `?export=` set to the export template's **name**.
+
+For example, with a Custom Object Type whose slug is `dhcp_scope` and an export template named `Scopes CSV`:
+
+```
+GET /api/plugins/custom-objects/dhcp_scope/?export=Scopes%20CSV&status=active
+```
+
+The template's `queryset` contains **every** object that matches the request's filters (here `status=active`) and that you have permission to view. Exports aren't paginated, so `limit` and `offset` have no effect. The response uses the template's MIME type and file settings.
+
+The response is a 404 if no export template with that name is assigned to this Custom Object Type, or, on NetBox 4.6.1 and later, if you don't have permission to view the template.

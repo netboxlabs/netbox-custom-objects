@@ -133,7 +133,8 @@ A Custom Object Type can opt in to NetBox's [config context](https://netboxlabs.
 
 When enabled, every object of that type gains:
 
-- A **Local Context Data** field (arbitrary JSON), stored per object and exposed in the REST API — useful for building configurations (e.g. with Ansible).
+- A **Local Context Data** field (arbitrary JSON), stored per object and exposed in the REST and GraphQL APIs — useful for building configurations (e.g. with Ansible).
+- A read-only **`config_context`** field in the REST and GraphQL APIs, holding the rendered context (source contexts merged with the local context data), as Devices and VMs have.
 - A **Config Context** tab on the object's detail view, showing the rendered context, the local context, and any source contexts.
 
 #### Aggregating source config contexts

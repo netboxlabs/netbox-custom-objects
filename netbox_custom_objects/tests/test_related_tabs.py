@@ -12,15 +12,19 @@ Focused on the surfaces most likely to regress:
   own app (custom-object hosts are served by the generic injected URL).
 * ``register_combined_tabs()`` adds a ``custom_objects`` view to NetBox's view
   registry for each model, idempotently.
+* ``_register_tabs()`` doesn't emit Django's "database access during app
+  initialization" RuntimeWarning when run from ``ready()``.
 * ``_count_linked_custom_objects()`` returns None for a model nothing references
   (the cheap ``.exists()`` fast path that keeps the per-detail-page badge cheap)
   and a positive count for a referenced one.
 """
 
+import warnings
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from core.models import ObjectType
+from django.apps import apps
 from django.db.models import Q
 from django.test import TestCase, TransactionTestCase
 from extras.choices import CustomFieldTypeChoices
@@ -29,6 +33,7 @@ from netbox.registry import registry
 from dcim.models import Site
 
 from netbox_custom_objects.constants import APP_LABEL
+from netbox_custom_objects.models import CustomObjectType
 from netbox_custom_objects.related_tabs.registry import _public_host_model_classes
 from netbox_custom_objects.related_tabs.views.combined import (
     COMBINED_LABEL,
@@ -122,6 +127,17 @@ class PublicHostModelsTests(TestCase):
         labels = [(m._meta.app_label, m._meta.model_name) for m in _public_host_model_classes()]
         self.assertEqual(len(labels), len(set(labels)))
 
+    def test_stale_object_type_is_skipped_quietly(self):
+        """An uninstalled plugin's leftover ObjectType is logged at debug level, not as a warning."""
+        ObjectType.objects.create(app_label='uninstalled_plugin', model='gone', public=True)
+        logger = 'netbox_custom_objects.related_tabs'
+
+        with self.assertNoLogs(logger, level='INFO'):
+            _public_host_model_classes()
+        with self.assertLogs(logger, level='DEBUG') as logs:
+            _public_host_model_classes()
+        self.assertTrue(any('uninstalled_plugin.gone' in line for line in logs.output))
+
 
 class RegisterCombinedTabsTests(TestCase):
     """
@@ -150,6 +166,47 @@ class RegisterCombinedTabsTests(TestCase):
         register_combined_tabs([Site], COMBINED_LABEL, COMBINED_WEIGHT)
         register_combined_tabs([Site], COMBINED_LABEL, COMBINED_WEIGHT)
         self.assertEqual(self._site_tab_names().count('custom_objects'), 1)
+
+
+class RegisterTabsAppInitWarningTests(TestCase):
+    """
+    ``_register_tabs()`` runs from ``ready()``, before ``apps.ready`` is set, and
+    queries ObjectType; it must suppress Django's RuntimeWarning about database
+    access during app initialization.
+    """
+
+    def setUp(self):
+        self.app_config = apps.get_app_config(APP_LABEL)
+        self.addCleanup(setattr, self.app_config, '_register_tabs_error', self.app_config._register_tabs_error)
+
+    def test_query_warns_during_app_init(self):
+        # Sanity check: the simulated app-init state does trigger the warning.
+        with patch.object(apps, 'ready', False), warnings.catch_warnings():
+            warnings.simplefilter('error', RuntimeWarning)
+            with self.assertRaises(RuntimeWarning):
+                list(ObjectType.objects.public())
+
+    def test_register_tabs_suppresses_app_init_warning(self):
+        # Runs the real register_tabs(); safe to repeat because URL injection and
+        # tab registration both skip entries that already exist.
+        with patch.object(apps, 'ready', False), warnings.catch_warnings():
+            warnings.simplefilter('error', RuntimeWarning)
+            self.app_config._register_tabs()
+        self.assertIsNone(self.app_config._register_tabs_error)
+
+    def test_register_tabs_suppresses_branching_routing_warning(self):
+        """netbox-branching warns about routing that query when it's loaded after this plugin."""
+        def routed_query():
+            warnings.warn_explicit(
+                'Routing database query before branching support is initialized.',
+                UserWarning, 'database.py', 1, module='netbox_branching.database',
+            )
+
+        target = 'netbox_custom_objects.related_tabs.registry.register_tabs'
+        with patch(target, side_effect=routed_query), warnings.catch_warnings():
+            warnings.simplefilter('error', UserWarning)
+            self.app_config._register_tabs()
+        self.assertIsNone(self.app_config._register_tabs_error)
 
 
 class BadgeGateTests(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
@@ -434,3 +491,33 @@ class CombinedTabQueryTests(TransactionCleanupMixin, CustomObjectsTestCase, Tran
                 {s.pk for s in resolved[(id(obj), id(field))]},
                 {target_a.pk, target_b.pk},
             )
+
+    def test_links_from_another_cot_survive_target_regeneration(self):
+        # Mirrors a dev setup that hit this bug. Creating foo's fields regenerates bar's
+        # model; foo's cached relations must follow it, or bar's detail page fails while
+        # counting linked objects.
+        bar = self.create_custom_object_type(name='bar', slug='bars', verbose_name_plural='bars')
+        self.create_custom_object_type_field(bar, name='name', label='name', type='text')
+        foo = self.create_custom_object_type(name='foo', slug='foos', verbose_name_plural='foos')
+        self.create_custom_object_type_field(
+            foo, name='bar', label='bar', type='object', related_object_type=bar.object_type
+        )
+        self.create_custom_object_type_field(
+            foo, name='bars', label='bars', type='multiobject', related_object_type=bar.object_type
+        )
+
+        self.user.is_superuser = True
+        self.user.save()
+        bar = CustomObjectType.objects.get(pk=bar.pk)
+        bar_obj = bar.get_model().objects.create(name='x')
+        foo_obj = CustomObjectType.objects.get(pk=foo.pk).get_model().objects.create(bar=bar_obj)
+        foo_obj.bars.set([bar_obj])
+        self.assertEqual(self.client.get(bar_obj.get_absolute_url()).status_code, 200)
+        self.assertEqual(_count_linked_custom_objects(bar_obj), 2)
+
+        # Invalidate the target model before loading it again.
+        bar.clear_model_cache(bar.pk)
+        bar.save(update_fields=['cache_timestamp'])
+        bar_obj = CustomObjectType.objects.get(pk=bar.pk).get_model().objects.get(pk=bar_obj.pk)
+        self.assertEqual(self.client.get(bar_obj.get_absolute_url()).status_code, 200)
+        self.assertEqual(_count_linked_custom_objects(bar_obj), 2)

@@ -6,11 +6,13 @@ import uuid
 from decimal import Decimal
 from unittest import skipUnless
 
+from django.conf import settings
 from django.db import connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from netbox.api.viewsets import mixins as netbox_viewset_mixins
+from packaging.version import Version
 
 from utilities.testing import TestCase as NetBoxTestCase, create_test_user
 from rest_framework import status
@@ -20,9 +22,21 @@ from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from .base import CustomObjectsTestCase, create_token
 from core.models import Job, ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Rack, Site
-from extras.models import Tag
-from users.models import ObjectPermission
+from extras.models import ConfigContext, ExportTemplate, Tag
+from users.models import ObjectPermission, Owner
 from virtualization.models import Cluster, ClusterType
+
+try:
+    from utilities.testing.query_counts import assert_expected_query_count
+except ImportError:
+    # COMPAT(netbox<4.6.2): NetBox has no query-count baseline helper.
+    assert_expected_query_count = None
+
+try:
+    import netbox_branching  # noqa: F401
+    _HAS_BRANCHING = True
+except ImportError:
+    _HAS_BRANCHING = False
 
 
 class CustomObjectAPITestCaseMixin:
@@ -307,6 +321,80 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, NetB
         self.assertHttpStatus(response, 200)
         self.assertEqual(response.data['count'], 1)
         self.assertEqual(response.data['results'][0]['id'], instance.pk)
+
+    def _add_export_template(self, *, viewable=True, model=None):
+        """An export template listing each object's test_field, assigned to ``model`` (default: this type)."""
+        template = ExportTemplate.objects.create(
+            name='Values',
+            template_code='{% for obj in queryset %}{{ obj.test_field }};{% endfor %}',
+            mime_type='text/plain',
+        )
+        template.object_types.set([ObjectType.objects.get_for_model(model or self.model)])
+        if viewable:
+            perm = ObjectPermission.objects.create(name='Export template view perm', actions=['view'])
+            perm.users.add(self.user)
+            perm.object_types.add(ObjectType.objects.get_for_model(ExportTemplate))
+        return template
+
+    def _export(self, query=''):
+        return self.client.get(f'{self._get_list_url()}?export=Values{query}', **self.header)
+
+    @staticmethod
+    def _exported_values(response):
+        return sorted(value for value in response.content.decode().split(';') if value)
+
+    def test_export_renders_template(self):
+        self._add_permission('view', 'Export list perm')
+        self._add_export_template()
+
+        response = self._export()
+        self.assertHttpStatus(response, 200)
+        self.assertEqual(response['Content-Type'], 'text/plain')
+        self.assertEqual(self._exported_values(response), ['Test 001', 'Test 002', 'Test 003'])
+
+    def test_export_applies_filters_but_not_pagination(self):
+        self._add_permission('view', 'Export list perm')
+        self._add_export_template()
+
+        self.assertEqual(self._exported_values(self._export('&test_field=002')), ['Test 002'])
+        # limit/offset don't apply: the export renders every matching object.
+        self.assertEqual(
+            self._exported_values(self._export('&limit=1&offset=1')), ['Test 001', 'Test 002', 'Test 003'],
+        )
+
+    def test_export_respects_object_level_permission_constraints(self):
+        instance = self._get_queryset().get(test_field='Test 001')
+        perm = ObjectPermission(name='Constrained export perm', actions=['view'], constraints={'pk': instance.pk})
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+        self._add_export_template()
+
+        self.assertEqual(self._exported_values(self._export()), ['Test 001'])
+
+    def test_export_unknown_template_returns_404(self):
+        self._add_permission('view', 'Export list perm')
+        self._add_export_template()
+
+        response = self.client.get(f'{self._get_list_url()}?export=Missing', **self.header)
+        self.assertHttpStatus(response, 404)
+
+    def test_export_template_for_another_type_returns_404(self):
+        self._add_permission('view', 'Export list perm')
+        self._add_export_template(model=self.custom_object_type2.get_model())
+
+        self.assertHttpStatus(self._export(), 404)
+
+    # COMPAT(netbox<4.6.1): core's ExportTemplatesMixin doesn't check view permission on the template.
+    @skipUnless(
+        Version(settings.RELEASE.version) >= Version('4.6.1'),
+        'NetBox < 4.6.1 renders export templates regardless of view permission',
+    )
+    def test_export_unviewable_template_returns_404(self):
+        self._add_permission('view', 'Export list perm')
+        self._add_export_template(viewable=False)
+
+        self.assertHttpStatus(self._export(), 404)
 
     def test_list_objects_brief(self):
         """?brief=true trims the response to the brief field set."""
@@ -1064,6 +1152,155 @@ class CustomObjectTypeAndFieldViewSetPermissionTest(CustomObjectsTestCase, TestC
         url = reverse('plugins-api:netbox_custom_objects-api:customobjecttypefield-list')
         response = self.client.get(url, **self.header)
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class CustomObjectTypeAndFieldFilteringBulkAPITest(CustomObjectsTestCase, TestCase):
+    """
+    List filters on the type and field endpoints must narrow the result set, and bulk
+    writes must touch only the listed ids. pynetbox's ``filter(...).update()`` and
+    ``filter(...).delete()`` send a filtered GET and then a bulk write of the returned
+    ids, so an ignored filter would turn them into writes against every row (#584).
+    """
+
+    type_list_url = 'plugins-api:netbox_custom_objects-api:customobjecttype-list'
+    field_list_url = 'plugins-api:netbox_custom_objects-api:customobjecttypefield-list'
+
+    def setUp(self):
+        self.user = create_test_user('bulk_filter_user')
+        # APIClient honours format='json' on PATCH/DELETE (the plain Django client does not).
+        self.client = APIClient()
+        token_key = create_token(self.user)
+        self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
+
+        obj_perm = ObjectPermission(name='Bulk filter perm', actions=['view', 'change', 'delete'])
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        obj_perm.object_types.add(
+            ObjectType.objects.get_for_model(CustomObjectType),
+            ObjectType.objects.get_for_model(CustomObjectTypeField),
+        )
+
+        self.types = [
+            CustomObjectType.objects.create(name=f'bulk_type_{i}', slug=f'bulk-type-{i}', description=f'desc {i}')
+            for i in range(3)
+        ]
+        self.fields = [
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot,
+                name='label_text',
+                type='text',
+            )
+            for cot in self.types
+        ]
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.types[0],
+            name='count',
+            type='integer',
+        )
+
+    def _list(self, url_name, params):
+        response = self.client.get(reverse(url_name), params, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        return sorted(row['id'] for row in response.data['results'])
+
+    # Types: filtering
+
+    def test_type_list_filter_by_slug(self):
+        self.assertEqual(self._list(self.type_list_url, {'slug': 'bulk-type-1'}), [self.types[1].pk])
+
+    def test_type_list_filter_by_unknown_slug_returns_nothing(self):
+        self.assertEqual(self._list(self.type_list_url, {'slug': 'no-such-type'}), [])
+
+    def test_type_list_filter_by_multiple_ids(self):
+        ids = [self.types[0].pk, self.types[2].pk]
+        self.assertEqual(self._list(self.type_list_url, {'id': ids}), sorted(ids))
+
+    def test_type_list_search(self):
+        self.assertEqual(self._list(self.type_list_url, {'q': 'desc 2'}), [self.types[2].pk])
+
+    # Fields: filtering
+
+    def test_field_list_filter_by_custom_object_type_id(self):
+        expected = sorted(f.pk for f in CustomObjectTypeField.objects.filter(custom_object_type=self.types[0]))
+        self.assertEqual(
+            self._list(self.field_list_url, {'custom_object_type_id': self.types[0].pk}),
+            expected,
+        )
+
+    def test_field_list_filter_by_name(self):
+        self.assertEqual(
+            self._list(self.field_list_url, {'name': 'label_text'}),
+            sorted(f.pk for f in self.fields),
+        )
+
+    def test_field_list_filter_by_type(self):
+        expected = [CustomObjectTypeField.objects.get(name='count').pk]
+        self.assertEqual(self._list(self.field_list_url, {'type': 'integer'}), expected)
+
+    def test_field_list_filter_by_invalid_custom_object_type_id_is_rejected(self):
+        response = self.client.get(reverse(self.field_list_url), {'custom_object_type_id': 999999}, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # Types: bulk writes
+
+    def test_type_bulk_update_touches_only_listed_ids(self):
+        data = [{'id': cot.pk, 'description': 'bulk updated'} for cot in self.types[:2]]
+        response = self.client.patch(reverse(self.type_list_url), data, format='json', **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        for cot in self.types:
+            cot.refresh_from_db()
+        self.assertEqual([cot.description for cot in self.types], ['bulk updated', 'bulk updated', 'desc 2'])
+
+    def test_type_bulk_delete_touches_only_listed_ids(self):
+        survivor_table = self.types[2].get_model()._meta.db_table
+        data = [{'id': cot.pk} for cot in self.types[:2]]
+        response = self.client.delete(reverse(self.type_list_url), data, format='json', **self.header)
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(list(CustomObjectType.objects.values_list('pk', flat=True)), [self.types[2].pk])
+        self.assertIn(survivor_table, connection.introspection.table_names())
+
+    def test_type_filtered_bulk_delete_spares_non_matching_types(self):
+        """Mirror pynetbox ``custom_object_types.filter(slug=...).delete()``."""
+        ids = self._list(self.type_list_url, {'slug': 'bulk-type-0'})
+        response = self.client.delete(
+            reverse(self.type_list_url), [{'id': pk} for pk in ids], format='json', **self.header
+        )
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(
+            sorted(CustomObjectType.objects.values_list('pk', flat=True)),
+            [self.types[1].pk, self.types[2].pk],
+        )
+
+    # Fields: bulk writes
+
+    def test_field_bulk_update_touches_only_listed_ids(self):
+        data = [{'id': field.pk, 'label': 'Bulk Label'} for field in self.fields[:2]]
+        response = self.client.patch(reverse(self.field_list_url), data, format='json', **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        for field in self.fields:
+            field.refresh_from_db()
+        self.assertEqual([field.label for field in self.fields], ['Bulk Label', 'Bulk Label', ''])
+
+    def test_field_bulk_delete_touches_only_listed_ids(self):
+        data = [{'id': field.pk} for field in self.fields[:2]]
+        response = self.client.delete(reverse(self.field_list_url), data, format='json', **self.header)
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        remaining = set(CustomObjectTypeField.objects.values_list('pk', flat=True))
+        self.assertNotIn(self.fields[0].pk, remaining)
+        self.assertNotIn(self.fields[1].pk, remaining)
+        self.assertIn(self.fields[2].pk, remaining)
+
+    def test_field_filtered_bulk_delete_spares_non_matching_fields(self):
+        """Mirror pynetbox ``custom_object_type_fields.filter(type='integer').delete()``."""
+        ids = self._list(self.field_list_url, {'type': 'integer'})
+        response = self.client.delete(
+            reverse(self.field_list_url), [{'id': pk} for pk in ids], format='json', **self.header
+        )
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(
+            sorted(CustomObjectTypeField.objects.values_list('pk', flat=True)),
+            sorted(f.pk for f in self.fields),
+        )
 
 
 class SchemaGenerationTest(CustomObjectsTestCase, TestCase):
@@ -2076,7 +2313,7 @@ class OwnerAPITest(CustomObjectsTestCase, TestCase):
 
 
 class ConfigContextAPITest(CustomObjectsTestCase, TestCase):
-    """REST API exposure of local_context_data for config-context-enabled types (#98)."""
+    """REST API exposure of local_context_data and config_context for config-context-enabled types."""
 
     def setUp(self):
         super().setUp()
@@ -2158,6 +2395,114 @@ class ConfigContextAPITest(CustomObjectsTestCase, TestCase):
         response = self.client.get(url, **self.header)
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertNotIn('local_context_data', response.data)
+        self.assertNotIn('config_context', response.data)
+
+    def _add_site_field(self):
+        self.create_custom_object_type_field(
+            self.cot, name='site', label='Site', type='object', related_object_type=self.get_site_object_type(),
+        )
+        self.model = self.cot.get_model()
+
+    def test_config_context_renders_source_and_local_data(self):
+        site = Site.objects.create(name='CC Site', slug='cc-site')
+        ConfigContext.objects.create(name='site', weight=100, data={'ntp': '10.0.0.1', 'dns': 'a'}).sites.add(site)
+        tag = Tag.objects.create(name='Gold', slug='gold')
+        ConfigContext.objects.create(name='gold', weight=200, data={'tier': 'gold'}).tags.add(tag)
+        self._add_site_field()
+        obj = self.model.objects.create(name='obj-1', site=site, local_context_data={'dns': 'b'})
+        obj.tags.add(tag)
+        self._add_perm('view')
+
+        response = self.client.get(self._detail_url(obj.pk), **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['config_context'], {'ntp': '10.0.0.1', 'dns': 'b', 'tier': 'gold'})
+
+    def test_config_context_is_local_data_without_dimension_fields(self):
+        ConfigContext.objects.create(name='global', weight=100, data={'global': True})
+        obj = self.model.objects.create(name='obj-1', local_context_data={'local': 1})
+        self._add_perm('view')
+
+        response = self.client.get(self._detail_url(obj.pk), **self.header)
+        self.assertEqual(response.data['config_context'], {'local': 1})
+
+    def test_config_context_is_read_only(self):
+        obj = self.model.objects.create(name='obj-1')
+        self._add_perm('change')
+
+        response = self.client.patch(
+            self._detail_url(obj.pk), {'config_context': {'x': 1}}, format='json', **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['config_context'], {})
+
+    def test_custom_field_named_config_context_takes_precedence(self):
+        self.create_custom_object_type_field(
+            self.cot, name='config_context', label='Config context', type='text',
+        )
+        model = self.cot.get_model()
+        obj = model.objects.create(name='obj-1', config_context='custom value')
+        self._add_perm('view')
+
+        response = self.client.get(self._detail_url(obj.pk), **self.header)
+        self.assertEqual(response.data['config_context'], 'custom value')
+
+    def test_config_context_can_be_omitted(self):
+        site = Site.objects.create(name='CC Site', slug='cc-site')
+        ConfigContext.objects.create(name='site', weight=100, data={'ntp': '10.0.0.1'}).sites.add(site)
+        self._add_site_field()
+        self.model.objects.create(name='obj-1', site=site)
+        self._add_perm('view')
+        self.client.get(self._list_url(), **self.header)  # warm caches
+
+        with CaptureQueriesContext(connection) as with_context:
+            response = self.client.get(self._list_url(), **self.header)
+        self.assertIn('config_context', response.data['results'][0])
+        with CaptureQueriesContext(connection) as without_context:
+            response = self.client.get(f'{self._list_url()}?omit=config_context', **self.header)
+        self.assertNotIn('config_context', response.data['results'][0])
+        self.assertIn('local_context_data', response.data['results'][0])
+        self.assertLess(len(without_context.captured_queries), len(with_context.captured_queries))
+
+    def test_linked_objects_share_config_context_lookups(self):
+        """Linked objects with the same dimensions share one source-context lookup."""
+        site = Site.objects.create(name='CC Site', slug='cc-site')
+        ConfigContext.objects.create(name='site', weight=100, data={'ntp': '10.0.0.1'}).sites.add(site)
+        self._add_site_field()
+        self._add_perm('view')
+        url = reverse('plugins-api:netbox_custom_objects-api:linked-objects')
+        url = f'{url}?object_type=dcim.site&object_id={site.pk}'
+
+        def context_queries_for(rows):
+            self.model.objects.all().delete()
+            for i in range(rows):
+                self.model.objects.create(name=f'row-{i}', site=site)
+            with CaptureQueriesContext(connection) as ctx:
+                response = self.client.get(url, **self.header)
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            self.assertEqual(len(response.data['results']), rows)
+            self.assertEqual(response.data['results'][0]['object']['config_context'], {'ntp': '10.0.0.1'})
+            return sum('"extras_configcontext"' in q['sql'] for q in ctx.captured_queries)
+
+        self.assertEqual(context_queries_for(2), context_queries_for(6))
+
+    def test_config_context_list_query_count_stays_flat(self):
+        site = Site.objects.create(name='CC Site', slug='cc-site')
+        ConfigContext.objects.create(name='site', weight=100, data={'ntp': '10.0.0.1'}).sites.add(site)
+        self._add_site_field()
+        self._add_perm('view')
+
+        def count_for(rows):
+            self.model.objects.all().delete()
+            for i in range(rows):
+                self.model.objects.create(name=f'row-{i}', site=site, local_context_data={'index': i})
+            with CaptureQueriesContext(connection) as ctx:
+                response = self.client.get(self._list_url(), **self.header)
+            self.assertEqual(response.status_code, status.HTTP_200_OK)
+            self.assertEqual(response.data['results'][0]['config_context']['ntp'], '10.0.0.1')
+            return len(ctx.captured_queries)
+
+        count_for(1)  # warm caches
+        self.assertEqual(count_for(3), count_for(9))
 
 
 class NullOptionalObjectFieldTest(CustomObjectsTestCase, TestCase):
@@ -2854,3 +3199,164 @@ class SelectMultiSelectNumericChoiceValueAPITest(CustomObjectsTestCase, NetBoxTe
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("flags", response.data)
+
+
+class OpenAPISchemaTest(TestCase):
+    """The custom object endpoints appear in the OpenAPI schema, described generically."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        from drf_spectacular.generators import SchemaGenerator
+
+        cls.schema = SchemaGenerator().get_schema(request=None, public=True)
+
+    def test_schema_is_valid(self):
+        from drf_spectacular.validation import validate_schema
+
+        validate_schema(self.schema)
+
+    def test_custom_object_paths_and_operations(self):
+        paths = self.schema['paths']
+        list_path = '/api/plugins/custom-objects/{custom_object_type}/'
+        detail_path = '/api/plugins/custom-objects/{custom_object_type}/{id}/'
+        self.assertEqual(set(paths[list_path]) - {'parameters'}, {'get', 'post', 'put', 'patch', 'delete'})
+        self.assertEqual(set(paths[detail_path]) - {'parameters'}, {'get', 'put', 'patch', 'delete'})
+
+        for path in (list_path, detail_path):
+            # Skip a path-level "parameters" list, if present.
+            for operation in (op for op in paths[path].values() if isinstance(op, dict)):
+                slug = [p for p in operation['parameters'] if p['name'] == 'custom_object_type']
+                self.assertEqual(len(slug), 1)
+                self.assertEqual(slug[0]['in'], 'path')
+                self.assertEqual(slug[0]['schema']['type'], 'string')
+
+        list_response = paths[list_path]['get']['responses']['200']['content']['application/json']['schema']
+        self.assertEqual(list_response['$ref'], '#/components/schemas/PaginatedCustomObjectList')
+
+    def test_custom_object_components_allow_custom_fields(self):
+        components = self.schema['components']['schemas']
+        response = components['CustomObject']
+        self.assertTrue(response['additionalProperties'])
+        self.assertEqual(
+            set(response['properties']), {'id', 'url', 'display', 'owner', 'tags', 'created', 'last_updated'}
+        )
+        for name in ('CustomObjectRequest', 'PatchedCustomObjectRequest'):
+            self.assertTrue(components[name]['additionalProperties'], name)
+
+        # Follow the bulk operations' references: NetBox versions without dedicated
+        # bulk-update components reference CustomObjectRequest instead.
+        list_path = self.schema['paths']['/api/plugins/custom-objects/{custom_object_type}/']
+        for method in ('put', 'patch'):
+            body = list_path[method]['requestBody']['content']['application/json']['schema']
+            name = body['items']['$ref'].rsplit('/', 1)[-1]
+            self.assertTrue(components[name]['additionalProperties'], name)
+            if 'Bulk' in name:
+                self.assertEqual(components[name]['required'], ['id'])
+
+
+class CustomObjectAPIQueryCountTest(CustomObjectsTestCase, TestCase):
+    """Query counts of the custom object list and detail endpoints, for a type with every relation kind."""
+
+    query_count_model_label = 'customobject-api-relational'
+
+    def setUp(self):
+        super().setUp()
+        self.cot = self.create_custom_object_type(name='Relational', slug='relational')
+        self.create_custom_object_type_field(
+            self.cot, name='name', label='Name', type='text', primary=True, required=True,
+        )
+        self.create_custom_object_type_field(
+            self.cot, name='site', label='Site', type='object', related_object_type=self.get_site_object_type(),
+        )
+        self.create_custom_object_type_field(
+            self.cot, name='sites', label='Sites', type='multiobject',
+            related_object_type=self.get_site_object_type(),
+        )
+        targets = [self.get_site_object_type(), self.get_device_object_type()]
+        self.create_polymorphic_field(self.cot, targets, name='target', type='object')
+        self.create_polymorphic_field(self.cot, targets, name='targets', type='multiobject')
+        self.model = self.cot.get_model()
+
+        self.tag = Tag.objects.create(name='Gold', slug='gold')
+        self.owner = Owner.objects.create(name='Query count owner')
+        manufacturer = Manufacturer.objects.create(name='Mfr', slug='mfr')
+        self.device_type = DeviceType.objects.create(manufacturer=manufacturer, model='Model', slug='model')
+        self.role = DeviceRole.objects.create(name='Role', slug='role')
+
+        perm = ObjectPermission(name='view-relational', actions=['view'])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+        token = create_token(self.user)
+        self.header = {'HTTP_AUTHORIZATION': f'Token {token}'}
+        self.client = APIClient()
+
+    def _make_row(self, i):
+        site = Site.objects.create(name=f'Site {i}', slug=f'site-{i}')
+        device = Device.objects.create(name=f'Device {i}', device_type=self.device_type, role=self.role, site=site)
+        obj = self.model.objects.create(name=f'row-{i}', site=site, target=device, owner=self.owner)
+        obj.sites.set([site])
+        obj.targets.set([site, device])
+        obj.tags.add(self.tag)
+        return obj
+
+    def _make_rows(self, count):
+        self.model.objects.all().delete()
+        start = Site.objects.count()
+        return [self._make_row(start + i) for i in range(count)]
+
+    def _list_url(self):
+        # One page for every row count used here, so each request serializes all rows.
+        url = reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-list',
+            kwargs={'custom_object_type': self.cot.slug},
+        )
+        return f'{url}?limit=100'
+
+    def _detail_url(self, pk):
+        return reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-detail',
+            kwargs={'custom_object_type': self.cot.slug, 'pk': pk},
+        )
+
+    def _get(self, url):
+        response = self.client.get(url, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        return response
+
+    def _skip_unless_baselines_apply(self):
+        if assert_expected_query_count is None:
+            self.skipTest('query-count baselines need NetBox 4.6.2 or later')
+        if _HAS_BRANCHING:
+            self.skipTest('query-count baselines not valid with netbox-branching installed')
+
+    def test_list_query_count(self):
+        self._skip_unless_baselines_apply()
+        self._make_rows(3)
+        self._get(self._list_url())  # warm caches
+
+        with assert_expected_query_count(self, 'api_list_objects'):
+            response = self._get(self._list_url())
+        self.assertEqual(len(response.data['results']), 3)
+
+    def test_detail_query_count(self):
+        self._skip_unless_baselines_apply()
+        obj = self._make_rows(1)[0]
+        self._get(self._detail_url(obj.pk))  # warm caches
+
+        with assert_expected_query_count(self, 'api_get_object'):
+            response = self._get(self._detail_url(obj.pk))
+        self.assertEqual(response.data['name'], obj.name)
+
+    def test_list_query_count_does_not_grow_with_rows(self):
+        def count_for(rows):
+            self._make_rows(rows)
+            with CaptureQueriesContext(connection) as ctx:
+                response = self._get(self._list_url())
+            self.assertEqual(len(response.data['results']), rows)
+            return len(ctx.captured_queries)
+
+        count_for(1)  # warm caches
+        self.assertEqual(count_for(3), count_for(9))

@@ -31,7 +31,7 @@ from typing import Annotated, List, Optional, Union
 import strawberry
 import strawberry_django
 from core.graphql.mixins import ChangelogMixin
-from extras.choices import CustomFieldTypeChoices
+from extras.choices import CustomFieldFilterLogicChoices, CustomFieldTypeChoices
 from extras.graphql.mixins import JournalEntriesMixin, TagsMixin
 from extras.models import ConfigContextModel
 from netbox.graphql.scalars import BigInt
@@ -40,6 +40,14 @@ from strawberry.types import Info
 from users.graphql.mixins import OwnerMixin
 
 from netbox_custom_objects.constants import APP_LABEL
+from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
+from netbox_custom_objects.graphql.filters import (
+    build_filter_class,
+    coordinates_filter_annotations,
+    polymorphic_filter_fields,
+    relationship_filter_annotations,
+    scalar_filter_annotation,
+)
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name, restrict_to_viewable
 
 logger = logging.getLogger("netbox_custom_objects.graphql")
@@ -396,7 +404,7 @@ def _coerce_related(obj, native_models):
     return _related_repr(obj)
 
 
-def _make_relationship_resolver(field):
+def _make_relationship_resolver(field, members, native_models):
     """
     Build the field value for an OBJECT or MULTIOBJECT relationship field.
 
@@ -407,14 +415,14 @@ def _make_relationship_resolver(field):
     :func:`_make_declarative_multiobject_field`), in which case
     ``class_annotation`` is the type annotation the caller must set on the
     class instead. ``(None, None)`` means the field has no resolvable
-    targets and should be skipped. The resolver-based value returns the
+    targets and should be skipped. ``members``/``native_models`` come from
+    :func:`_resolve_relationship_members`. The resolver-based value returns the
     referenced object(s) as their native GraphQL type(s) (or the flat stub
     for targets without one), filtered to those the requesting user may view.
     """
     field_name = field.name
     is_list = field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
 
-    members, native_models = _resolve_relationship_members(field)
     if not members:
         return None, None
 
@@ -498,6 +506,38 @@ def _make_declarative_multiobject_field(field, gql_type):
         description=f"Related objects referenced by '{field_name}'",
     )
     return value, List[gql_type]
+
+
+def _make_config_context_field(cot_fields):
+    """
+    Build the ``config_context`` field: the object's rendered config context.
+
+    One ``ConfigContextRenderer`` is shared per request so objects with the same
+    dimension objects and tags reuse each other's source contexts.  The hints load
+    what rendering reads -- ``local_context_data``, the dimension objects and tags --
+    with the list query instead of once per object.
+    """
+    from netbox_custom_objects.models import config_context_dimension_fields
+
+    dimension_fields = list(config_context_dimension_fields(cot_fields))
+
+    def resolver(self, info: Info) -> strawberry.scalars.JSON:
+        from netbox_custom_objects.models import ConfigContextRenderer
+
+        request = getattr(info.context, "request", None)
+        renderer = getattr(request, "_custom_objects_config_context_renderer", None)
+        if renderer is None:
+            renderer = ConfigContextRenderer()
+            if request is not None:
+                request._custom_objects_config_context_renderer = renderer
+        return renderer.render(self)
+
+    return strawberry_django.field(
+        description="Rendered config context",
+        only=["local_context_data"],
+        select_related=dimension_fields,
+        prefetch_related=["tags"],
+    )(resolver)
 
 
 CHOICE_TYPES = (
@@ -608,16 +648,40 @@ def _build_object_type(custom_object_type, model):
         "__annotations__": {},
     }
 
+    filter_annotations = {}
+    filter_fields = {}
     cot_fields = list(custom_object_type.fields.all())
     for field in cot_fields:
         field_name = field.name
+        # Fields with filtering disabled get no filter, as in the REST filterset.
+        filterable = field.filter_logic != CustomFieldFilterLogicChoices.FILTER_DISABLED
         if field.type in RELATIONSHIP_TYPES:
-            value, class_annotation = _make_relationship_resolver(field)
+            members, native_models = _resolve_relationship_members(field)
+            value, class_annotation = _make_relationship_resolver(field, members, native_models)
             if value is not None:
                 namespace[field_name] = value
                 if class_annotation is not None:
                     namespace["__annotations__"][field_name] = class_annotation
+                if filterable:
+                    for name, annotation in relationship_filter_annotations(field, members).items():
+                        # A "<field>_id" filter must not override a custom field of that name.
+                        filter_annotations.setdefault(name, annotation)
+                    if field.is_polymorphic:
+                        targets = [
+                            (content_type, _graphql_type_for_content_type(content_type))
+                            for content_type in _field_target_content_types(field)
+                        ]
+                        filter_fields.update(polymorphic_filter_fields(field, targets))
             continue
+
+        if filterable and field.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+            for name, annotation in coordinates_filter_annotations(field).items():
+                filter_annotations.setdefault(name, annotation)
+
+        scalar_filter = scalar_filter_annotation(field) if filterable else None
+        if scalar_filter is not None:
+            filter_annotations[field_name] = scalar_filter
+
         if field.type in CHOICE_TYPES:
             namespace[field_name] = _make_choice_resolver(field)
             continue
@@ -632,6 +696,11 @@ def _build_object_type(custom_object_type, model):
             continue
         # Every custom field is nullable at the database level.
         namespace["__annotations__"][field_name] = Optional[annotation]
+
+    # A custom field named "config_context" takes precedence over the rendered context,
+    # even one GraphQL can't expose, matching the REST serializer.
+    if issubclass(model, ConfigContextModel) and not any(field.name == "config_context" for field in cot_fields):
+        namespace["config_context"] = _make_config_context_field(cot_fields)
 
     # Legacy schemas may define a custom "owner" field that shadows the inherited FK.
     bases = (CustomObjectObjectType,)
@@ -648,5 +717,6 @@ def _build_object_type(custom_object_type, model):
         model,
         name=type_name,
         fields=fields,
+        filters=build_filter_class(model, filter_annotations, filter_fields),
         pagination=True,
     )(cls)

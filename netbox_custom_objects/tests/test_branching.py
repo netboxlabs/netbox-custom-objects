@@ -3244,6 +3244,44 @@ class ChoiceSetSearchLifecycleTestCase(BranchingTestBase, _TestBase):
 
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
+class InboundRelationBranchIsolationTestCase(BranchingTestBase, _TestBase):
+    """Regenerating a type's model in a branch must not repoint main's cached
+    relations from other types to the branch's class."""
+
+    def test_branch_regeneration_leaves_main_relations_alone(self):
+        with event_tracking(self.request):
+            bar = CustomObjectType.objects.create(name='bar', slug='bars')
+            CustomObjectTypeField.objects.create(custom_object_type=bar, name='name', label='Name', type='text')
+            foo = CustomObjectType.objects.create(name='foo', slug='foos')
+            for name, field_type in (('bar', 'object'), ('bars', 'multiobject')):
+                CustomObjectTypeField.objects.create(
+                    custom_object_type=foo, name=name, label=name, type=field_type,
+                    related_object_type=bar.object_type,
+                )
+
+        bar_model = CustomObjectType.objects.get(pk=bar.pk).get_model()
+        foo_model = CustomObjectType.objects.get(pk=foo.pk).get_model()
+        bar_obj = bar_model.objects.create(name='x')
+        foo_obj = foo_model.objects.create(bar=bar_obj)
+        foo_obj.bars.set([bar_obj])
+
+        branch = _provision_branch('Inbound Relation Branch', user=self.user)
+        with activate_branch(branch):
+            branch_foo_model = CustomObjectType.objects.get(pk=foo.pk).get_model()
+            branch_bar_model = CustomObjectType.objects.get(pk=bar.pk).get_model(no_cache=True)
+            self.assertIs(branch_foo_model._meta.get_field('bars').related_model, branch_bar_model)
+            self.assertIs(branch_foo_model._meta.get_field('bar').related_model, branch_bar_model)
+
+        self.assertIsNot(branch_bar_model, bar_model)
+        bars_field = foo_model._meta.get_field('bars')
+        self.assertIs(bars_field.related_model, bar_model)
+        self.assertIs(bars_field.remote_field.through._meta.get_field('target').related_model, bar_model)
+        self.assertIs(foo_model._meta.get_field('bar').related_model, bar_model)
+        self.assertEqual(foo_model.objects.filter(bars=bar_obj).count(), 1)
+        self.assertEqual(foo_model.objects.filter(bar=bar_obj).count(), 1)
+
+
+@unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
 class GraphQLBranchIsolationTestCase(BranchingTestBase, _TestBase):
     """
     GraphQL resolves against whichever branch netbox-branching activated for the

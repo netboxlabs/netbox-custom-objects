@@ -227,6 +227,34 @@ def _patch_object_selector_view():
     ObjectSelectorView._get_filterset_class = _patched_get_filterset_class
 
 
+_choice_set_clean_patched = False
+
+
+def _patch_choice_set_clean():
+    """
+    Extend CustomFieldChoiceSet.clean() to refuse removing a choice a custom object still uses.
+
+    Core's clean() makes this check only for core custom fields (its ``choices_for``
+    relation), so custom object fields need their own check.
+    """
+    global _choice_set_clean_patched
+    if _choice_set_clean_patched:
+        return
+
+    from extras.models import CustomFieldChoiceSet
+
+    from netbox_custom_objects import models
+
+    _original_clean = CustomFieldChoiceSet.clean
+
+    def _patched_clean(self):
+        _original_clean(self)
+        models.check_removed_choices(self)
+
+    CustomFieldChoiceSet.clean = _patched_clean
+    _choice_set_clean_patched = True
+
+
 _graphql_view_patched = False
 
 
@@ -474,6 +502,9 @@ class CustomObjectsPluginConfig(PluginConfig):
         # Patch ObjectSelectorView to support dynamically-generated custom object models
         _patch_object_selector_view()
 
+        # Validate choice set edits against custom objects, as core does for custom fields
+        _patch_choice_set_clean()
+
         # Patch the GraphQL view so custom object types added/removed at runtime
         # are reflected in the schema without a NetBox restart.
         _patch_graphql_view()
@@ -568,9 +599,25 @@ class CustomObjectsPluginConfig(PluginConfig):
 
         # Register the combined "Custom Objects" tab (see related_tabs/__init__.py),
         # once at startup before Django freezes the root URLconf.
+        self._register_tabs()
+
+    def _register_tabs(self):
         try:
             from netbox_custom_objects.related_tabs.registry import register_tabs
-            register_tabs()
+
+            # register_tabs() queries ObjectType while apps aren't ready yet; suppress
+            # Django's warning about it (and netbox-branching's, when it's loaded after
+            # this plugin), as for the model registration above.
+            with warnings.catch_warnings():
+                warnings.filterwarnings(
+                    "ignore", category=RuntimeWarning,
+                    module=r"django\.db\.backends\..*",
+                )
+                warnings.filterwarnings(
+                    "ignore", category=UserWarning,
+                    module=r"netbox_branching\..*",
+                )
+                register_tabs()
             self._register_tabs_error = None
         except Exception as exc:
             # Surface the failure both in the logs and via a system check

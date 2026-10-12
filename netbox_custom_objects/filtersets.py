@@ -14,6 +14,7 @@ from django.utils.translation import gettext_lazy as _
 from core.models import ObjectType
 from dcim.models import DeviceRole, DeviceType, Location, Platform, Region, Site, SiteGroup
 from extras.choices import CustomFieldFilterLogicChoices, CustomFieldTypeChoices
+from extras.models import CustomFieldChoiceSet
 from netbox.filtersets import ChangeLoggedModelFilterSet, NetBoxModelFilterSet
 from tenancy.models import Tenant, TenantGroup
 from users.models import Owner, OwnerGroup
@@ -21,10 +22,11 @@ from virtualization.models import Cluster, ClusterGroup, ClusterType
 
 from .choices import CustomObjectFieldTypeChoices
 from .constants import APP_LABEL
-from .models import CustomObjectType, DynamicAssignment
+from .models import CustomObjectType, CustomObjectTypeField, DynamicAssignment
 
 __all__ = (
     "ArrayContainsFilter",
+    "CustomObjectTypeFieldFilterSet",
     "CustomObjectTypeFilterSet",
     "DynamicAssignmentFilterSet",
     "NonPolymorphicMultiObjectFilter",
@@ -312,6 +314,102 @@ class CustomObjectTypeFilterSet(NetBoxModelFilterSet):
             "name",
             "slug",
             "group_name",
+            "verbose_name",
+            "verbose_name_plural",
+            "description",
+            "version",
+            "display_expression",
+            "config_context_enabled",
+        )
+
+    def search(self, queryset, name, value):
+        if not value.strip():
+            return queryset
+        return queryset.filter(
+            Q(name__icontains=value)
+            | Q(slug__icontains=value)
+            | Q(verbose_name__icontains=value)
+            | Q(description__icontains=value)
+        )
+
+
+class CustomObjectTypeFieldFilterSet(ChangeLoggedModelFilterSet):
+    q = django_filters.CharFilter(
+        method="search",
+        label=_("Search"),
+    )
+    custom_object_type_id = django_filters.ModelMultipleChoiceFilter(
+        queryset=CustomObjectType.objects.all(),
+        distinct=False,
+        label=_("Custom object type (ID)"),
+    )
+    custom_object_type = django_filters.ModelMultipleChoiceFilter(
+        field_name="custom_object_type__slug",
+        queryset=CustomObjectType.objects.all(),
+        distinct=False,
+        to_field_name="slug",
+        label=_("Custom object type (slug)"),
+    )
+    type = django_filters.MultipleChoiceFilter(
+        choices=CustomObjectFieldTypeChoices,
+        distinct=False,
+    )
+    related_object_type_id = django_filters.ModelMultipleChoiceFilter(
+        queryset=ObjectType.objects.all(),
+        field_name="related_object_type",
+        distinct=False,
+        label=_("Related object type (ID)"),
+    )
+    # Polymorphic object/multiobject fields store their targets on this M2M rather
+    # than on related_object_type.
+    related_object_types_id = django_filters.ModelMultipleChoiceFilter(
+        queryset=ObjectType.objects.all(),
+        field_name="related_object_types",
+        label=_("Polymorphic related object type (ID)"),
+    )
+    choice_set_id = django_filters.ModelMultipleChoiceFilter(
+        queryset=CustomFieldChoiceSet.objects.all(),
+        distinct=False,
+        label=_("Choice set (ID)"),
+    )
+
+    class Meta:
+        model = CustomObjectTypeField
+        fields = (
+            "id",
+            "name",
+            "label",
+            "group_name",
+            "description",
+            "required",
+            "unique",
+            "primary",
+            "context",
+            "is_polymorphic",
+            "search_weight",
+            "filter_logic",
+            "ui_visible",
+            "ui_editable",
+            "weight",
+            "is_cloneable",
+            "related_name",
+            "on_delete_behavior",
+            "validation_minimum",
+            "validation_maximum",
+            "validation_regex",
+            "schema_id",
+            "deprecated",
+            "deprecated_since",
+            "scheduled_removal",
+        )
+
+    def search(self, queryset, name, value):
+        if not value.strip():
+            return queryset
+        return queryset.filter(
+            Q(name__icontains=value)
+            | Q(label__icontains=value)
+            | Q(description__icontains=value)
         )
 
 
