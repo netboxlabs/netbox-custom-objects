@@ -3550,7 +3550,7 @@ class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
         # condition, statuses it constrains, statuses it leaves free, display
         cases = {
             "exact": ("exact", "active", {"active"}, {"retired", None}, "Status equals active"),
-            "n": ("n", "retired", {"active", None}, {"retired"}, "Status does not equal retired"),
+            "n": ("n", "retired", {"active", None}, {"retired"}, "Status does not equal retired (or is empty)"),
             "in": ("in", ["active", "planned"], {"active", "planned"}, {"retired", None},
                    "Status is one of active, planned"),
             "isnull": ("isnull", False, {"active"}, {None}, "Status is not empty"),

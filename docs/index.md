@@ -124,7 +124,7 @@ A field's `Must be unique` setting makes its values unique on their own. To requ
     [{"field": "parent", "lookup": "isnull", "value": true}]
     ```
 
-    Each predicate names a field and a lookup: `exact`, `n` (does not equal), `in` (a list of values) or `isnull` (`true` for empty, `false` for not empty). The same field types as above can be tested; object fields can only be tested with `isnull`.
+    Each predicate names a field and a lookup: `exact`, `n` (does not equal, or is empty), `in` (a list of values) or `isnull` (`true` for empty, `false` for not empty). The same field types as above can be tested; object fields can only be tested with `isnull`.
 
 The database enforces constraints, so they apply to the UI, the REST API, imports and scripts alike, and a constraint can't be added while existing objects already break it. Saving an object that would break one shows a validation error.
 

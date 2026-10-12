@@ -83,7 +83,7 @@ class ConstraintLookupChoices(ChoiceSet):
 
     CHOICES = (
         (EXACT, _("Equals")),
-        (NOT_EQUAL, _("Does not equal")),
+        (NOT_EQUAL, _("Does not equal (or is empty)")),
         (IN, _("Is one of")),
         (ISNULL, _("Is empty")),
     )

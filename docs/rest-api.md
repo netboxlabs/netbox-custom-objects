@@ -257,7 +257,7 @@ Require a combination of field values to be unique by creating a constraint with
 | `fields` | yes | IDs of the fields whose combined values must be unique: at least two, or one when `case_insensitive` is `true` or there's a `condition`. Responses list each field's `id`, `url`, `name` and `schema_id`. |
 | `case_insensitive` | no | Compare `text`, `longtext` and `url` fields without regard to case. Default: `false`. |
 | `nulls_distinct` | no | When `true`, objects that leave any constrained field empty never conflict. Default: `true`. |
-| `condition` | no | Apply the constraint only to objects matching all of these predicates, e.g. `[{"field": 43, "lookup": "isnull", "value": true}]`. `field` is a field ID (responses show the brief field object); `lookup` is `exact`, `n` (does not equal), `in` (`value` is a list) or `isnull` (`value` is `true` or `false`). Object fields can only be tested with `isnull`. Default: `[]`. |
+| `condition` | no | Apply the constraint only to objects matching all of these predicates, e.g. `[{"field": 43, "lookup": "isnull", "value": true}]`. `field` is a field ID (responses show the brief field object); `lookup` is `exact`, `n` (does not equal, or is empty), `in` (`value` is a list) or `isnull` (`value` is `true` or `false`). Object fields can only be tested with `isnull`. Default: `[]`. |
 | `description` | no | A short description. |
 
 Creating or changing a constraint returns `400 Bad Request` if existing objects already violate it. Writes to custom objects that would violate a constraint also return `400 Bad Request`.

@@ -4336,7 +4336,7 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
         return {f.schema_id: f for f in self.custom_object_type.fields.all()}
 
     def get_condition_display(self):
-        """Describe the condition in words, e.g. "Parent is empty and Status does not equal retired"."""
+        """Describe the condition in words, e.g. "Parent is empty and Status does not equal retired (or is empty)"."""
         if not self.condition:
             return ""
         by_schema_id = self._fields_by_schema_id()
@@ -4349,6 +4349,8 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
                 text = _("is empty") if value else _("is not empty")
             elif lookup == ConstraintLookupChoices.IN:
                 text = _("is one of {values}").format(values=", ".join(map(str, value or ())))
+            elif lookup == ConstraintLookupChoices.NOT_EQUAL:
+                text = _("does not equal {value} (or is empty)").format(value=value)
             else:
                 text = f"{str(dict(ConstraintLookupChoices).get(lookup, lookup)).lower()} {value}"
             parts.append(f"{name} {text}")

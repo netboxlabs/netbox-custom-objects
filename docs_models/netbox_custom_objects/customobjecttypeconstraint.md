@@ -26,7 +26,7 @@ When enabled (the default), objects that leave any of the constrained fields emp
 
 ### Condition
 
-Optionally, apply the constraint only to objects that match all of a list of predicates, e.g. `[{"field": "parent", "lookup": "isnull", "value": true}]`. Each predicate names a field and a lookup: `exact`, `n` (does not equal), `in` (a list of values) or `isnull` (`true` for empty, `false` for not empty). Object fields can only be tested with `isnull`.
+Optionally, apply the constraint only to objects that match all of a list of predicates, e.g. `[{"field": "parent", "lookup": "isnull", "value": true}]`. Each predicate names a field and a lookup: `exact`, `n` (does not equal, or is empty), `in` (a list of values) or `isnull` (`true` for empty, `false` for not empty). Object fields can only be tested with `isnull`.
 
 ### Description
 
