@@ -35,7 +35,7 @@ from django.db import transaction
 from extras.models import CustomFieldChoiceSet
 
 from netbox_custom_objects import constants
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField, DynamicAssignment
 from netbox_custom_objects.schema.comparator import FieldOp, diff_document
 from netbox_custom_objects.schema.format import (
     CUSTOM_OBJECTS_APP_LABEL_SLUG,
@@ -276,12 +276,31 @@ def _schema_def_to_field_kwargs(schema_def: dict) -> dict:
             "on_delete_behavior", FIELD_DEFAULTS.get("on_delete_behavior")
         )
 
+    if "dynamic_assignment" in type_specific:
+        assignment_name = schema_def.get("dynamic_assignment")
+        if not assignment_name:
+            raise UnknownDynamicAssignmentError(
+                f"Field {schema_def['name']!r} is type {schema_type!r} but "
+                "has no dynamic_assignment specified in the schema."
+            )
+        kwargs["dynamic_assignment"] = _resolve_dynamic_assignment(assignment_name)
+
     return kwargs
 
 
 def _resolve_related_object_types(rot_list: list) -> list:
     """Resolve a list of encoded ROT strings to ObjectType instances."""
     return [_resolve_related_object_type(s) for s in rot_list]
+
+
+def _resolve_dynamic_assignment(name: str) -> DynamicAssignment:
+    """Resolve a portable dynamic-assignment name to its database object."""
+    try:
+        return DynamicAssignment.objects.get(name=name)
+    except DynamicAssignment.DoesNotExist:
+        raise UnknownDynamicAssignmentError(
+            f"Dynamic assignment {name!r} not found in DB."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -352,6 +371,8 @@ def _apply_field_alter(cot, fc) -> None:
         elif attr == "related_object_types":
             # M2M — defer until after save().
             pending_m2m["related_object_types"] = schema_val or []
+        elif attr == "dynamic_assignment":
+            field.dynamic_assignment = _resolve_dynamic_assignment(schema_val)
         else:
             setattr(field, attr, schema_val)
 

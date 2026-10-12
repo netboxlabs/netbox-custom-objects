@@ -917,10 +917,10 @@ class DynamicAssignment(ChangeLoggedModel):
             while tg is not None:
                 tenant_group_ids.append(tg.pk)
                 tg = tg.parent
-            qs = qs.filter(
-                Q(tenants__isnull=True) | Q(tenants=tenant)
-            ).filter(
-                Q(tenant_groups__isnull=True) | Q(tenant_groups__in=tenant_group_ids) if tenant_group_ids else Q(tenant_groups__isnull=True)
+            qs = qs.filter(Q(tenants__isnull=True) | Q(tenants=tenant)).filter(
+                Q(tenant_groups__isnull=True) | Q(tenant_groups__in=tenant_group_ids)
+                if tenant_group_ids
+                else Q(tenant_groups__isnull=True)
             )
         else:
             qs = qs.filter(tenants__isnull=True, tenant_groups__isnull=True)
@@ -930,12 +930,18 @@ class DynamicAssignment(ChangeLoggedModel):
         if cluster is not None:
             cluster_type_ids = [cluster.type_id] if cluster.type_id else []
             cluster_group_ids = [cluster.group_id] if cluster.group_id else []
-            qs = qs.filter(
-                Q(clusters__isnull=True) | Q(clusters=cluster)
-            ).filter(
-                Q(cluster_types__isnull=True) | Q(cluster_types__in=cluster_type_ids) if cluster_type_ids else Q(cluster_types__isnull=True)
-            ).filter(
-                Q(cluster_groups__isnull=True) | Q(cluster_groups__in=cluster_group_ids) if cluster_group_ids else Q(cluster_groups__isnull=True)
+            qs = (
+                qs.filter(Q(clusters__isnull=True) | Q(clusters=cluster))
+                .filter(
+                    Q(cluster_types__isnull=True) | Q(cluster_types__in=cluster_type_ids)
+                    if cluster_type_ids
+                    else Q(cluster_types__isnull=True)
+                )
+                .filter(
+                    Q(cluster_groups__isnull=True) | Q(cluster_groups__in=cluster_group_ids)
+                    if cluster_group_ids
+                    else Q(cluster_groups__isnull=True)
+                )
             )
         else:
             qs = qs.filter(clusters__isnull=True, cluster_types__isnull=True, cluster_groups__isnull=True)
@@ -2962,7 +2968,9 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         verbose_name=_("dynamic assignment"),
         blank=True,
         null=True,
-        help_text=_("Filter definition used to dynamically resolve matching objects (for Dynamic Assignment fields only)."),
+        help_text=_(
+            "Filter definition used to dynamically resolve matching objects (for Dynamic Assignment fields only)."
+        ),
     )
     ui_visible = models.CharField(
         max_length=50,

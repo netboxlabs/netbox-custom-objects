@@ -129,6 +129,7 @@ class CustomObjectTypeTable(NetBoxTable):
             "last_updated",
         )
 
+
 class CustomObjectTagColumn(columns.TagColumn):
     """
     Custom TagColumn that generates tag filter URLs with the custom_object_type slug.

@@ -1152,12 +1152,13 @@ class CustomObjectEditView(generic.ObjectEditView):
 
                 instance.save()
 
-                custom_field_data = getattr(instance, 'dynamic_assignment_data', None) or {}
-                for field_name in self.custom_object_type_dynamic_assignment_fields:
-                    assignment = self.cleaned_data.get(field_name)
-                    custom_field_data[field_name] = assignment.pk if assignment else None
-                instance.dynamic_assignment_data = custom_field_data
-                instance.save(update_fields=['dynamic_assignment_data'])
+                if self.custom_object_type_dynamic_assignment_fields:
+                    assignment_data = getattr(instance, 'dynamic_assignment_data', None) or {}
+                    for field_name in self.custom_object_type_dynamic_assignment_fields:
+                        assignment = self.cleaned_data.get(field_name)
+                        assignment_data[field_name] = assignment.pk if assignment else None
+                    instance.dynamic_assignment_data = assignment_data
+                    instance.save(update_fields=['dynamic_assignment_data'])
 
                 # Handle non-polymorphic M2M fields (require PK, so after save)
                 for field_name, field_obj in self.custom_object_type_fields.items():

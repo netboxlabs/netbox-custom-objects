@@ -37,8 +37,14 @@ class Migration(migrations.Migration):
                 ("device_types", models.ManyToManyField(blank=True, related_name="+", to="dcim.devicetype")),
                 ("roles", models.ManyToManyField(blank=True, related_name="+", to="dcim.devicerole")),
                 ("platforms", models.ManyToManyField(blank=True, related_name="+", to="dcim.platform")),
-                ("cluster_types", models.ManyToManyField(blank=True, related_name="+", to="virtualization.clustertype")),
-                ("cluster_groups", models.ManyToManyField(blank=True, related_name="+", to="virtualization.clustergroup")),
+                (
+                    "cluster_types",
+                    models.ManyToManyField(blank=True, related_name="+", to="virtualization.clustertype"),
+                ),
+                (
+                    "cluster_groups",
+                    models.ManyToManyField(blank=True, related_name="+", to="virtualization.clustergroup"),
+                ),
                 ("clusters", models.ManyToManyField(blank=True, related_name="+", to="virtualization.cluster")),
                 ("tenant_groups", models.ManyToManyField(blank=True, related_name="+", to="tenancy.tenantgroup")),
                 ("tenants", models.ManyToManyField(blank=True, related_name="+", to="tenancy.tenant")),
@@ -54,7 +60,10 @@ class Migration(migrations.Migration):
             name="dynamic_assignment",
             field=models.ForeignKey(
                 blank=True,
-                help_text="Filter definition used to dynamically resolve matching objects (for Dynamic Assignment fields only).",
+                help_text=(
+                    "Filter definition used to dynamically resolve matching objects "
+                    "(for Dynamic Assignment fields only)."
+                ),
                 null=True,
                 on_delete=django.db.models.deletion.PROTECT,
                 related_name="fields",

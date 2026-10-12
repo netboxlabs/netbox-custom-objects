@@ -114,7 +114,7 @@ FIELD_TYPE_ATTRS = {
         "is_polymorphic", "related_object_type", "related_object_types", "related_object_filter", "on_delete_behavior"
     },
     FIELD_TYPE_MULTIOBJECT: {"is_polymorphic", "related_object_type", "related_object_types", "related_object_filter"},
-    FIELD_TYPE_DYNAMIC_ASSIGNMENT: set(),
+    FIELD_TYPE_DYNAMIC_ASSIGNMENT: {"dynamic_assignment"},
 }
 
 # ── Field base attributes ─────────────────────────────────────────────────────
