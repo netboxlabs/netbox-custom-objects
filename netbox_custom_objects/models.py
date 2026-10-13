@@ -2313,15 +2313,20 @@ class CustomObjectType(NetBoxModel):
             self.clear_model_cache(self.id)
 
     def delete(self, *args, **kwargs):
-        # COT is going away — every branch's cached class is stale.
-        self.clear_model_cache(self.id, all_branches=True)
+        # super().delete() resets self.id to None; keep it for the final cache clear.
+        cot_id = self.id
+        schema_conn = _get_schema_connection()
+        in_branch = schema_conn is not connection
+
+        # Deleted in main, the COT is gone everywhere, so every context's cached
+        # class is stale.  Deleted in a branch, main and other branches still
+        # have it, so only this branch's entry goes.
+        self.clear_model_cache(cot_id, all_branches=not in_branch)
 
         # Regenerate against the current context so the model used for the
         # DDL drop below reflects this branch's column set, not whatever
         # stale class an earlier context cached.
         model = self.get_model()
-        schema_conn = _get_schema_connection()
-        in_branch = schema_conn is not connection
 
         # Delete all CustomObjectTypeFields that reference this CustomObjectType (non-polymorphic)
         for field in CustomObjectTypeField.objects.filter(related_object_type=self.object_type):
@@ -2398,21 +2403,20 @@ class CustomObjectType(NetBoxModel):
 
         # Unregister from apps.all_models so cascade-delete doesn't query the
         # dropped table.  _global_lock guards against a concurrent get_model()
-        # racing and re-registering mid-cleanup.
+        # racing and re-registering mid-cleanup.  In a branch the registered
+        # classes are normally main's, which stay live; only drop one that is
+        # this branch's own class (registered when main's wasn't generated yet).
         with self._global_lock:
-            model_name = model.__name__.lower()
-            if model_name in apps.all_models.get(APP_LABEL, {}):
-                del apps.all_models[APP_LABEL][model_name]
-
-            for through_model in getattr(model, '_through_models', []):
-                through_name = through_model.__name__.lower()
-                if through_name in apps.all_models.get(APP_LABEL, {}):
-                    del apps.all_models[APP_LABEL][through_name]
+            registered = apps.all_models[APP_LABEL]
+            for dropped in (model, *getattr(model, '_through_models', [])):
+                name = dropped.__name__.lower()
+                if name in registered and (not in_branch or registered[name] is dropped):
+                    del registered[name]
 
         apps.clear_cache()
 
         # Re-clear in case anything re-cached during cleanup.
-        self.clear_model_cache(self.id, all_branches=True)
+        self.clear_model_cache(cot_id, all_branches=not in_branch)
 
 
 @receiver(post_save, sender=CustomObjectType)
