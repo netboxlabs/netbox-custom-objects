@@ -29,7 +29,7 @@ from django.urls import reverse
 from extras.models import CustomFieldChoiceSet
 from rest_framework.test import APIClient
 
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.models import USER_TABLE_DATABASE_NAME_PREFIX, CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.tests.base import (
     TransactionCleanupMixin,
     _recreate_contenttypes,
@@ -1261,7 +1261,7 @@ class BaseBranchingTests(BranchingTestBase):
         it.  Merge replay must target the hashed name, not the raw one.
         """
         field_name = 'polymorphic_targets_with_a_very_long_field_name'
-        self.assertGreater(len(f'custom_objects_1_{field_name}'), 63)
+        self.assertGreater(len(f'{USER_TABLE_DATABASE_NAME_PREFIX}1_{field_name}'), 63)
         self._assert_polymorphic_multiobject_field_merge_and_revert(field_name)
 
     def _assert_polymorphic_multiobject_field_merge_and_revert(self, field_name):
