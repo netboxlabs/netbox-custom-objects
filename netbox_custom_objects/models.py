@@ -113,6 +113,18 @@ def _table_exists(table_name, conn=None):
 
 USER_TABLE_DATABASE_NAME_PREFIX = "custom_objects_"
 
+
+def through_table_name_for(cot_id, field_name):
+    """Physical table name of the M2M through table for field *field_name* on COT *cot_id*.
+
+    Single source of truth for the formula behind
+    ``CustomObjectTypeField.through_table_name``; anything that needs the name
+    without a field instance (e.g. branch-merge replay) must call this rather
+    than rebuilding the raw string, which is hashed when it exceeds 63 chars.
+    """
+    return safe_table_name(f"{USER_TABLE_DATABASE_NAME_PREFIX}{cot_id}_{field_name}")
+
+
 # Per-context storage for CO field values deferred during squash merge.
 # Using ContextVar instead of a class-level dict so that concurrent merges
 # (different threads or coroutines) each get an isolated copy.
@@ -937,9 +949,7 @@ class CustomObject(
                 # handle_changed_object, which can route across DB aliases.
                 schema_conn_local = connections[_using]
                 for field_name, rows in poly_m2m_data.items():
-                    through_table = (
-                        f'{USER_TABLE_DATABASE_NAME_PREFIX}{cot_id}_{field_name}'
-                    )
+                    through_table = through_table_name_for(cot_id, field_name)
                     _apply_poly_m2m_rows(schema_conn_local, through_table, obj_pk, rows)
                 # Stash full data for deferred column updates (squash ordering fix).
                 deferred = _deferred_co_field_data.get()
@@ -3823,9 +3833,9 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         #
         # If the formula must change, write a data migration that renames every
         # affected table with ALTER TABLE … RENAME TO before deploying the new
-        # code, and update through_model_name to match.
-        raw = f"custom_objects_{self.custom_object_type_id}_{self.name}"
-        return safe_table_name(raw)
+        # code, and update through_model_name to match.  The formula itself
+        # lives in through_table_name_for(), shared with branch-merge replay.
+        return through_table_name_for(self.custom_object_type_id, self.name)
 
     @property
     def through_model_name(self):
