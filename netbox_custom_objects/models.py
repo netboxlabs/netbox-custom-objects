@@ -23,6 +23,7 @@ from django.db import DEFAULT_DB_ALIAS, connection, connections, IntegrityError,
 from django.db.utils import OperationalError, ProgrammingError
 from django.db.models import Q
 from django.db.models.fields.related import ForeignKey, ManyToManyField
+from django.db.models.fields.related_descriptors import ReverseManyToOneDescriptor
 from django.db.models.functions import Lower
 from django.db.models.signals import m2m_changed, pre_delete, post_save
 from django.dispatch import receiver
@@ -91,6 +92,25 @@ from netbox_custom_objects.utilities import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+_MISSING = object()
+
+
+def _is_custom_object_reverse_accessor(attr):
+    """Return True if *attr* is a reverse accessor installed by a custom object field.
+
+    Such accessors may be safely replaced when a field claims (or re-claims) the
+    name; conflicts between live custom object fields are caught separately by the
+    related_name uniqueness checks.  Anything else (a model field, method, property,
+    or a reverse accessor from a core NetBox relation) must not be overwritten.
+    """
+    if isinstance(attr, (PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor)):
+        return True
+    # ManyToManyDescriptor subclasses ReverseManyToOneDescriptor; exclude its forward side.
+    if isinstance(attr, ReverseManyToOneDescriptor) and getattr(attr, 'reverse', True):
+        return attr.rel.field.model._meta.app_label == APP_LABEL
+    return False
 
 
 class UniquenessConstraintTestError(Exception):
@@ -3369,6 +3389,23 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                         )
                     }
                 )
+
+            # Guard against clobbering an existing attribute on the target model class.
+            # Django installs the reverse accessor with a plain setattr() and its E302/E303
+            # clash checks never run for dynamic models, so related_name="save" would
+            # silently replace Device.save process-wide.
+            target_cls = self.related_object_type.model_class()
+            if target_cls is not None:
+                existing = getattr(target_cls, self.related_name, _MISSING)
+                if existing is not _MISSING and not _is_custom_object_reverse_accessor(existing):
+                    raise ValidationError(
+                        {
+                            "related_name": _(
+                                'Reverse relation name "{name}" conflicts with an existing '
+                                'attribute on model "{model}". Choose a different name.'
+                            ).format(name=self.related_name, model=target_cls.__name__)
+                        }
+                    )
 
         # on_delete_behavior is only meaningful for non-polymorphic Object-type fields.
         # Polymorphic GFK fields have no real DB FK constraint to enforce (the content_type

@@ -8,7 +8,7 @@ from unittest import skipUnless
 
 from django.conf import settings
 from django.db import connection
-from django.test import TestCase
+from django.test import TestCase, tag
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from netbox.api.viewsets import mixins as netbox_viewset_mixins
@@ -1413,6 +1413,24 @@ class CustomObjectTypeFieldObjectResolutionTest(CustomObjectsTestCase, TestCase)
         """An unknown app_label must still return 400."""
         response = self._post_field('invalid-app', self._internal_model_name())
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    @tag('regression')  # #761
+    def test_related_name_colliding_with_target_attribute_returns_400(self):
+        """A related_name that would overwrite an attribute on the target model must be rejected."""
+        original_save = Site.save
+        data = {
+            'name': 'site',
+            'custom_object_type': self.parent_cot.pk,
+            'type': 'object',
+            'label': 'Site',
+            'app_label': 'dcim',
+            'model': 'site',
+            'related_name': 'save',
+        }
+        response = self.client.post(reverse(self.field_url), data, format='json', **self.header)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+        self.assertIn('related_name', response.data)
+        self.assertIs(Site.save, original_save)
 
 
 class SerializerFieldCoverageTest(CustomObjectsTestCase, TestCase):

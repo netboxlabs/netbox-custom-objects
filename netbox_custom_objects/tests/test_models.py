@@ -1563,6 +1563,60 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
         )
         field.full_clean()  # blank related_name is excluded from the uniqueness constraint.
 
+    @tag('regression')  # #761
+    def test_related_name_colliding_with_target_model_attribute_rejected(self):
+        """related_name must not overwrite an existing attribute on a core target model."""
+        site_ct = self.get_site_object_type()
+        original_save = Site.save
+        # A method, a concrete field, and a core NetBox reverse accessor.
+        for field_type in ("object", "multiobject"):
+            for name in ("save", "slug", "devices"):
+                with self.subTest(field_type=field_type, related_name=name):
+                    field = CustomObjectTypeField(
+                        custom_object_type=self.cert_cot,
+                        name="site",
+                        type=field_type,
+                        related_object_type=site_ct,
+                        related_name=name,
+                    )
+                    with self.assertRaises(ValidationError) as cm:
+                        field.full_clean()
+                    self.assertIn("related_name", cm.exception.message_dict)
+        self.assertIs(Site.save, original_save)
+
+    @tag('regression')  # #761
+    def test_related_name_colliding_with_custom_object_target_field_rejected(self):
+        """related_name must not overwrite a field on a custom object target model."""
+        self.slb_cot.get_model()
+        field = CustomObjectTypeField(
+            custom_object_type=self.cert_cot,
+            name="slb",
+            type="object",
+            related_object_type=self.slb_object_type,
+            related_name="name",
+        )
+        with self.assertRaises(ValidationError) as cm:
+            field.full_clean()
+        self.assertIn("related_name", cm.exception.message_dict)
+
+    @tag('regression')  # #761
+    def test_existing_field_owning_reverse_accessor_revalidates(self):
+        """Re-cleaning a field whose own reverse accessor is already installed must succeed."""
+        for field_type, name in (("object", "certificates"), ("multiobject", "certificate_set")):
+            with self.subTest(field_type=field_type):
+                field = self.create_custom_object_type_field(
+                    self.cert_cot,
+                    name=f"slb_{field_type}",
+                    type=field_type,
+                    related_object_type=self.slb_object_type,
+                    related_name=name,
+                )
+                self.cert_cot.refresh_from_db()
+                self.cert_cot.get_model()
+                self.assertTrue(hasattr(self.slb_object_type.model_class(), name))
+                field.refresh_from_db()
+                field.full_clean()  # Should not raise.
+
     # ------------------------------------------------------------------ #
     # Object (FK) reverse accessor                                        #
     # ------------------------------------------------------------------ #
