@@ -1604,13 +1604,27 @@ class MultiObjectFieldTypeTestCase(FieldTypeTestCase):
             field.full_clean()
         self.assertIn("type", cm.exception.message_dict)
 
+    def _create_device(self, name):
+        from dcim.models import DeviceRole, Manufacturer, Site
+
+        site, _ = Site.objects.get_or_create(name="Test Site", slug="test-site")
+        manufacturer, _ = Manufacturer.objects.get_or_create(name="Test Manufacturer", slug="test-manufacturer")
+        device_type, _ = DeviceType.objects.get_or_create(
+            manufacturer=manufacturer, model="Test Model", slug="test-model",
+        )
+        role, _ = DeviceRole.objects.get_or_create(name="Test Role", slug="test-role")
+        return Device.objects.create(name=name, site=site, device_type=device_type, role=role)
+
     def test_change_object_field_to_multiobject_save_without_clean_raises(self):
         """save() refuses the conversion even when clean() is bypassed, leaving
-        the stored type and the schema untouched."""
+        the stored type, the schema and existing data untouched."""
         field = self.create_custom_object_type_field(
             self.custom_object_type, name="device", label="Device",
             type="object", related_object_type=self.device_object_type,
         )
+        device = self._create_device("Device 1")
+        instance = self.custom_object_type.get_model().objects.create(name="Test", device=device)
+
         field = CustomObjectTypeField.objects.get(pk=field.pk)
         field.type = "multiobject"
         with self.assertRaises(ValidationError):
@@ -1618,10 +1632,34 @@ class MultiObjectFieldTypeTestCase(FieldTypeTestCase):
 
         field.refresh_from_db()
         self.assertEqual(field.type, "object")
-        # The type's model is still queryable against the unchanged table.
+        # The FK column and its value survive on the unchanged table.
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)
         model = self.custom_object_type.get_model()
-        self.assertEqual(model.objects.filter(device__isnull=True).count(), 0)
+        self.assertEqual(model.objects.get(pk=instance.pk).device, device)
+
+    def test_change_multiobject_field_to_object_save_without_clean_raises(self):
+        """save() refuses the reverse conversion even when clean() is bypassed,
+        leaving the stored type, the through table and existing data untouched."""
+        field = self.create_custom_object_type_field(
+            self.custom_object_type, name="devices", label="Devices",
+            type="multiobject", related_object_type=self.device_object_type,
+        )
+        device1 = self._create_device("Device 1")
+        device2 = self._create_device("Device 2")
+        instance = self.custom_object_type.get_model().objects.create(name="Test")
+        instance.devices.add(device1, device2)
+
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.type = "object"
+        with self.assertRaises(ValidationError):
+            field.save()
+
+        field.refresh_from_db()
+        self.assertEqual(field.type, "multiobject")
+        # The through table and its rows survive.
+        self.custom_object_type.clear_model_cache(self.custom_object_type.id)
+        model = self.custom_object_type.get_model()
+        self.assertEqual(set(model.objects.get(pk=instance.pk).devices.all()), {device1, device2})
 
 
 class SelfReferentialFieldTestCase(FieldTypeTestCase):
