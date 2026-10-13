@@ -2363,6 +2363,9 @@ class PolymorphicManyToManyManager:
     @staticmethod
     def _keys_q(keys):
         """One Q matching every ``(content_type_id, object_id)`` key."""
+        if not keys:
+            # A bare Q() matches every row; match nothing instead.
+            return models.Q(pk__in=[])
         by_ct: dict[int, set] = {}
         for ct_id, obj_pk in keys:
             by_ct.setdefault(ct_id, set()).add(obj_pk)
