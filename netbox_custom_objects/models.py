@@ -1730,7 +1730,7 @@ class CustomObjectType(NetBoxModel):
             except LookupError:
                 pass
             else:
-                if self._is_branch_through(through_model):
+                if self._is_branch_through(self.pk, through_model):
                     through_model = None
 
         if through_model is None:
@@ -1754,12 +1754,15 @@ class CustomObjectType(NetBoxModel):
         return through_model
 
     @classmethod
-    def _is_branch_through(cls, through_model):
-        """True if *through_model* is cached for a branch context."""
+    def _is_branch_through(cls, cot_id, through_model):
+        """True if *through_model* is cached for one of *cot_id*'s branch contexts.
+
+        Reads ``_through_model_cache`` unlocked, so the caller must hold ``_global_lock``.
+        """
         return any(
             bucket.get(through_model.__name__) is through_model
-            for (_cot_id, branch_id), bucket in cls._through_model_cache.items()
-            if branch_id is not None
+            for (bucket_cot_id, branch_id), bucket in cls._through_model_cache.items()
+            if branch_id is not None and bucket_cot_id == cot_id
         )
 
     def _register_context_through(self, branch_id, through_model):
