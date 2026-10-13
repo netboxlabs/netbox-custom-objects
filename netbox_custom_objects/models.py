@@ -3331,16 +3331,12 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
                 # Guard against clobbering an existing attribute on the target model class
                 # (e.g. a FK, method, or property that already uses that name).  We allow
-                # the name only if the class already carries one of our own descriptors —
-                # which means this field (or a field being renamed to/from it) is the one
-                # that set it.
+                # the name only if the class already carries a reverse accessor installed by
+                # a custom object field — live conflicts are caught by the cross-checks above.
                 target_cls = ot.model_class()
                 if target_cls is not None:
-                    existing = getattr(target_cls, self.related_name, None)
-                    if existing is not None and not isinstance(
-                        existing,
-                        (PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor),
-                    ):
+                    existing = getattr(target_cls, self.related_name, _MISSING)
+                    if existing is not _MISSING and not _is_custom_object_reverse_accessor(existing):
                         raise ValidationError(
                             {
                                 "related_name": _(

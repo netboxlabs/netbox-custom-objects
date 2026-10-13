@@ -1588,16 +1588,18 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
     def test_related_name_colliding_with_custom_object_target_field_rejected(self):
         """related_name must not overwrite a field on a custom object target model."""
         self.slb_cot.get_model()
-        field = CustomObjectTypeField(
-            custom_object_type=self.cert_cot,
-            name="slb",
-            type="object",
-            related_object_type=self.slb_object_type,
-            related_name="name",
-        )
-        with self.assertRaises(ValidationError) as cm:
-            field.full_clean()
-        self.assertIn("related_name", cm.exception.message_dict)
+        for field_type in ("object", "multiobject"):
+            with self.subTest(field_type=field_type):
+                field = CustomObjectTypeField(
+                    custom_object_type=self.cert_cot,
+                    name="slb",
+                    type=field_type,
+                    related_object_type=self.slb_object_type,
+                    related_name="name",
+                )
+                with self.assertRaises(ValidationError) as cm:
+                    field.full_clean()
+                self.assertIn("related_name", cm.exception.message_dict)
 
     @tag('regression')  # #761
     def test_existing_field_owning_reverse_accessor_revalidates(self):
