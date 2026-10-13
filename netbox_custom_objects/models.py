@@ -1671,37 +1671,7 @@ class CustomObjectType(NetBoxModel):
                     # Polymorphic GFK: no through model.
                     pass
                 elif field_instance.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                    # Reuse the apps-registered through if present; otherwise
-                    # create one.  Avoids parallel through instances diverging
-                    # from apps.all_models (collector class-identity mismatch).
-                    _apps = model._meta.apps
-                    try:
-                        through_model = _apps.get_model(APP_LABEL, field_instance.through_model_name)
-                        # Always update source FK to point to the current model class.
-                        # get_model() may be called multiple times (e.g. cache invalidation
-                        # after a field save changes cache_timestamp).  Without this update
-                        # the through model's source FK would keep pointing at the old class,
-                        # causing Django's Collector to raise ValueError during cascade delete:
-                        # "Cannot query 'X': Must be 'TableYModel' instance."
-                        source_field = through_model._meta.get_field("source")
-                        source_field.remote_field.model = model
-                        source_field.related_model = model
-                        # Clear @cached_property so deletion collector rebuilds path from updated model.
-                        source_field.__dict__.pop('path_infos', None)
-                        source_field.__dict__.pop('reverse_path_infos', None)
-                    except LookupError:
-                        field_type_obj = FIELD_TYPE_CLASS[CustomFieldTypeChoices.TYPE_MULTIOBJECT]()
-                        source_model_str = f"{APP_LABEL}.{model.__name__}"
-                        through_model = field_type_obj.get_polymorphic_through_model(
-                            field_instance, source_model_str
-                        )
-                        source_field = through_model._meta.get_field("source")
-                        source_field.remote_field.model = model
-                        source_field.related_model = model
-                        # Clear @cached_property so deletion collector rebuilds path from updated model.
-                        source_field.__dict__.pop('path_infos', None)
-                        source_field.__dict__.pop('reverse_path_infos', None)
-                        _apps.register_model(APP_LABEL, through_model)
+                    through_model = self._get_or_build_polymorphic_through(field_instance, model, branch_id)
                     self._register_context_through(branch_id, through_model)
                     if through_model and through_model not in through_models:
                         through_models.append(through_model)
@@ -1742,6 +1712,55 @@ class CustomObjectType(NetBoxModel):
             related_object_types=own_ot,
         ).exclude(related_name=''):
             _wire_polymorphic_reverse_descriptors(inbound_field)
+
+    def _get_or_build_polymorphic_through(self, field_instance, model, branch_id):
+        """Return this context's through for a polymorphic MultiObject field,
+        with its ``source`` FK pointing at *model*.
+
+        Main reuses the apps-registered through so it doesn't diverge from
+        apps.all_models (collector class-identity mismatch).  A branch always
+        builds its own: the registered one is main's, and repointing its source
+        FK would rewire main's class (#765).  For the same reason main never
+        adopts a through that a branch built.
+        """
+        through_model = None
+        if branch_id is None:
+            try:
+                through_model = model._meta.apps.get_model(APP_LABEL, field_instance.through_model_name)
+            except LookupError:
+                pass
+            else:
+                if self._is_branch_through(through_model):
+                    through_model = None
+
+        if through_model is None:
+            field_type_obj = FIELD_TYPE_CLASS[CustomFieldTypeChoices.TYPE_MULTIOBJECT]()
+            through_model = field_type_obj.get_polymorphic_through_model(
+                field_instance, f"{APP_LABEL}.{model.__name__}"
+            )
+            if branch_id is None:
+                model._meta.apps.register_model(APP_LABEL, through_model)
+
+        # Point the source FK at this generation's class.  get_model() may run
+        # several times (e.g. cache invalidation after a field save); a stale
+        # source FK makes Django's Collector raise "Cannot query 'X': Must be
+        # 'TableYModel' instance." during cascade delete.
+        source_field = through_model._meta.get_field("source")
+        source_field.remote_field.model = model
+        source_field.related_model = model
+        # Clear @cached_property so deletion collector rebuilds path from updated model.
+        source_field.__dict__.pop('path_infos', None)
+        source_field.__dict__.pop('reverse_path_infos', None)
+        return through_model
+
+    @classmethod
+    def _is_branch_through(cls, through_model):
+        """True if *through_model* is cached for a branch context."""
+        return any(
+            bucket.get(through_model.__name__) is through_model
+            for (_cot_id, branch_id), bucket in cls._through_model_cache.items()
+            if branch_id is not None
+        )
 
     def _register_context_through(self, branch_id, through_model):
         """Cache *through_model* under (self.pk, branch_id) and, for branch
