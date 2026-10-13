@@ -2415,7 +2415,9 @@ class CustomObjectType(NetBoxModel):
 
         apps.clear_cache()
 
-        # Re-clear in case anything re-cached during cleanup.
+        # Re-clear: the get_model() call above re-cached this context's entry
+        # (and its throughs) for the DDL drop.  Cascaded field deletes clear it
+        # via their pre_delete handler, but a type with no fields has none.
         self.clear_model_cache(cot_id, all_branches=not in_branch)
 
 

@@ -3388,6 +3388,10 @@ class BranchCOTDeletionIsolationTestCase(BranchingTestBase, _TestBase):
             CustomObjectType.objects.get(pk=cot.pk).delete()
             self.assertFalse(CustomObjectType.objects.filter(pk=cot.pk).exists())
 
+        # The branch's own entries are gone; only main's survive.
+        self.assertFalse(CustomObjectType.is_model_cached(cot.pk, branch.pk))
+        self.assertIsNone(CustomObjectType.get_cached_through_model(cot.pk, main_through.__name__, branch.pk))
+
         registered = apps.all_models['netbox_custom_objects']
         self.assertIs(registered.get(model_key), main_model)
         self.assertIs(registered.get(through_key), main_through)
@@ -3395,6 +3399,20 @@ class BranchCOTDeletionIsolationTestCase(BranchingTestBase, _TestBase):
         self.assertIs(CustomObjectType.get_cached_through_model(cot.pk, main_through.__name__), main_through)
         self.assertIs(CustomObjectType.objects.get(pk=cot.pk).get_model(), main_model)
         self.assertEqual(list(main_model.objects.values_list('name', flat=True)), ['kept'])
+
+    def test_branch_delete_clears_branch_cache_entry(self):
+        # No fields, so no cascaded field pre_delete clears the branch entry;
+        # only delete()'s own final clear can.
+        with event_tracking(self.request):
+            cot = CustomObjectType.objects.create(name='bare', slug='bare')
+        main_model = CustomObjectType.objects.get(pk=cot.pk).get_model()
+
+        branch = _provision_branch('COT Bare Delete Branch', user=self.user)
+        with activate_branch(branch), event_tracking(_make_request(self.user)):
+            CustomObjectType.objects.get(pk=cot.pk).delete()
+
+        self.assertFalse(CustomObjectType.is_model_cached(cot.pk, branch.pk))
+        self.assertIs(CustomObjectType.get_cached_model(cot.pk), main_model)
 
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
