@@ -719,7 +719,7 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
         )
 
         obj = final_model.objects.create(name='Instance 1')
-        obj.depends_on.set([Site.objects.create(name='Public Race Site', slug='public-race-site')])
+        obj.depends_on.set([other_cot.get_model().objects.create(name='Public Race Target')])
         obj.delete()  # Must not raise ValueError: "Cannot query ...: Must be ... instance."
 
 

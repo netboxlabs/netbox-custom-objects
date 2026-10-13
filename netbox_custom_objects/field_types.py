@@ -1415,6 +1415,9 @@ class CustomManyToManyManager(Manager):
         missing = pks - set(through_qs.filter(target_id__in=pks).values_list('target_id', flat=True))
         if not missing:
             return
+        # Like Django's ManyRelatedManager._add_items(), post_add reports the
+        # pre-computed missing set; a row a concurrent writer inserted first is
+        # skipped by ignore_conflicts but still reported.
         self._fire_m2m_changed('pre_add', missing)
         self.through.objects.using(db).bulk_create(
             [self.through(source_id=self.instance.pk, target_id=pk) for pk in missing],
@@ -1435,15 +1438,15 @@ class CustomManyToManyManager(Manager):
         self._fire_m2m_changed('post_remove', linked)
 
     def add(self, *objs):
-        self._remove_prefetched_objects()
         pks = {self._resolve_pk(obj) for obj in objs}
+        self._remove_prefetched_objects()
         db = router.db_for_write(self.through, instance=self.instance)
         with transaction.atomic(using=db, savepoint=False):
             self._add_pks(pks, db)
 
     def remove(self, *objs):
-        self._remove_prefetched_objects()
         pks = {self._resolve_pk(obj) for obj in objs}
+        self._remove_prefetched_objects()
         db = router.db_for_write(self.through, instance=self.instance)
         with transaction.atomic(using=db, savepoint=False):
             self._remove_pks(pks, db)
@@ -2405,16 +2408,16 @@ class PolymorphicManyToManyManager:
         self._fire_m2m_changed('post_remove', pks)
 
     def add(self, *objs):
-        self._remove_prefetched_objects()
         keys = self._resolve_keys(objs)
+        self._remove_prefetched_objects()
         through = self._get_through_model()
         db = router.db_for_write(through, instance=self.instance)
         with transaction.atomic(using=db, savepoint=False):
             self._add_keys(through, keys, db)
 
     def remove(self, *objs):
-        self._remove_prefetched_objects()
         keys = self._resolve_keys(objs)
+        self._remove_prefetched_objects()
         through = self._get_through_model()
         db = router.db_for_write(through, instance=self.instance)
         with transaction.atomic(using=db, savepoint=False):

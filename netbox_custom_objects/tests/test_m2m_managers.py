@@ -152,6 +152,16 @@ class CustomManyToManyManagerWriteTest(TransactionCleanupMixin, CustomObjectsTes
         obj.sites.clear()
         self.assertEqual(list(obj.sites.all()), [])
 
+    def test_rejected_write_keeps_prefetch_cache(self):
+        self.obj.sites.add(self.sites[0])
+        obj = self.model.objects.prefetch_related('sites').get(pk=self.obj.pk)
+        tenant = Tenant.objects.create(name='T', slug='t')
+        for write in (obj.sites.add, obj.sites.remove):
+            with self.assertRaises(TypeError):
+                write(tenant)
+        with self.assertNumQueries(0):
+            self.assertEqual(list(obj.sites.all()), [self.sites[0]])
+
     def test_set_is_atomic(self):
         self.obj.sites.add(self.sites[0])
         with _FailOn('post_add'), self.assertRaises(RuntimeError):
@@ -259,6 +269,16 @@ class PolymorphicManyToManyManagerWriteTest(TransactionCleanupMixin, CustomObjec
         obj.targets.clear()
         self.assertEqual(list(obj.targets.all()), [])
 
+    def test_rejected_write_keeps_prefetch_cache(self):
+        self.obj.targets.add(self.site)
+        obj = self.model.objects.prefetch_related('targets').get(pk=self.obj.pk)
+        tenant = Tenant.objects.create(name='T', slug='t')
+        for write in (obj.targets.add, obj.targets.remove):
+            with self.assertRaises(TypeError):
+                write(tenant)
+        with self.assertNumQueries(0):
+            self.assertEqual(list(obj.targets.all()), [self.site])
+
     def test_set_is_atomic(self):
         self.obj.targets.add(self.site)
         with _FailOn('post_add'), self.assertRaises(RuntimeError):
@@ -270,3 +290,13 @@ class PolymorphicManyToManyManagerWriteTest(TransactionCleanupMixin, CustomObjec
         with _FailOn('post_add'), self.assertRaises(RuntimeError):
             self.obj.targets.set([self.prefix], clear=True)
         self.assertEqual(self._linked(), {self._key(self.site)})
+
+    def test_set_diffs(self):
+        self.obj.targets.add(self.site, self.site2)
+        with _SignalRecorder(self.through) as rec:
+            self.obj.targets.set([self.site2, self.prefix])
+        self.assertEqual(rec.calls, [
+            ('pre_remove', {self.site.pk}), ('post_remove', {self.site.pk}),
+            ('pre_add', {self.prefix.pk}), ('post_add', {self.prefix.pk}),
+        ])
+        self.assertEqual(self._linked(), {self._key(self.site2), self._key(self.prefix)})
