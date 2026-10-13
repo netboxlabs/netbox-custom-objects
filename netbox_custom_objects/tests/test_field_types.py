@@ -1580,6 +1580,49 @@ class MultiObjectFieldTypeTestCase(FieldTypeTestCase):
         self.assertEqual(form_field.to_field_name, 'model',
                          "ModuleType multi-object CSV import must use 'model', not 'name'")
 
+    def test_change_multiobject_field_to_object_rejected(self):
+        """An existing multiobject field cannot be converted to a scalar type."""
+        field = self.create_custom_object_type_field(
+            self.custom_object_type, name="devices", label="Devices",
+            type="multiobject", related_object_type=self.device_object_type,
+        )
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.type = "object"
+        with self.assertRaises(ValidationError) as cm:
+            field.full_clean()
+        self.assertIn("type", cm.exception.message_dict)
+
+    def test_change_object_field_to_multiobject_rejected(self):
+        """An existing object field cannot be converted to multiobject."""
+        field = self.create_custom_object_type_field(
+            self.custom_object_type, name="device", label="Device",
+            type="object", related_object_type=self.device_object_type,
+        )
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.type = "multiobject"
+        with self.assertRaises(ValidationError) as cm:
+            field.full_clean()
+        self.assertIn("type", cm.exception.message_dict)
+
+    def test_change_object_field_to_multiobject_save_without_clean_raises(self):
+        """save() refuses the conversion even when clean() is bypassed, leaving
+        the stored type and the schema untouched."""
+        field = self.create_custom_object_type_field(
+            self.custom_object_type, name="device", label="Device",
+            type="object", related_object_type=self.device_object_type,
+        )
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.type = "multiobject"
+        with self.assertRaises(ValidationError):
+            field.save()
+
+        field.refresh_from_db()
+        self.assertEqual(field.type, "object")
+        # The type's model is still queryable against the unchanged table.
+        self.custom_object_type.clear_model_cache(self.custom_object_type.id)
+        model = self.custom_object_type.get_model()
+        self.assertEqual(model.objects.filter(device__isnull=True).count(), 0)
+
 
 class SelfReferentialFieldTestCase(FieldTypeTestCase):
     """Test cases for self-referential object fields.

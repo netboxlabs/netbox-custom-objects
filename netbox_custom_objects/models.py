@@ -548,18 +548,17 @@ def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, exist
     M2M renames go through ``_rename_or_create_m2m_through`` first.  When
     neither old nor new column exists (rename conflict — branch A→X vs main
     A→Y), looks up the live field record to find the actual current column.
-    MULTIOBJECT↔scalar type changes are unsupported — caller must remove+add.
+    MULTIOBJECT↔scalar type changes are unsupported and rejected in
+    ``CustomObjectTypeField.clean()``; raise here if one slipped through rather
+    than letting the caller persist a type the schema doesn't match.
     """
     old_is_m2m = old_fi.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
     new_is_m2m = new_fi.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
 
     if old_is_m2m != new_is_m2m:
-        logger.warning(
-            '_schema_alter_field: skipping unsupported type change %r→%r on %s '
-            '(MULTIOBJECT ↔ scalar changes require remove+add, not alter)',
-            old_fi.type, new_fi.type, model._meta.db_table,
+        raise ValidationError(
+            {"type": _("Cannot change a field's type to or from multi-object after creation.")}
         )
-        return
 
     old_mf = _primary_model_field(old_fi)
     new_mf = _primary_model_field(new_fi)
@@ -3218,6 +3217,22 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     "Cannot change a field's type to or from a multi-column type "
                     "(coordinates, URL) after creation."
                 )}
+            )
+
+        # Prevent converting an existing field to or from multi-object.
+        #
+        # A multi-object field has no column on the parent table; its data lives in a
+        # separate through table. The save() path has no logic to migrate between a
+        # column and a through table, so the conversion would persist the new type with
+        # no matching schema and break every later query against the type.
+        if (
+            self.pk
+            and not self._state.adding
+            and self.type != self._original_type
+            and CustomFieldTypeChoices.TYPE_MULTIOBJECT in (self.type, self._original_type)
+        ):
+            raise ValidationError(
+                {"type": _("Cannot change a field's type to or from multi-object after creation.")}
             )
 
         # Guard against backing-column name collisions.
