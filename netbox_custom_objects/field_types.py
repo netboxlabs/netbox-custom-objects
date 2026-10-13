@@ -17,7 +17,7 @@ from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.core.validators import (MaxValueValidator, MinValueValidator,
                                      RegexValidator)
-from django.db import models, router
+from django.db import models, router, transaction
 from django.db.utils import OperationalError, ProgrammingError
 from django.db.models.fields.related import ForeignKey, ManyToManyDescriptor
 from django.db.models.manager import Manager
@@ -1380,83 +1380,104 @@ class CustomManyToManyManager(Manager):
             using=db,
         )
 
-    @staticmethod
-    def _resolve_pk(obj):
-        """Accept an instance or raw PK — mirrors Django's ManyRelatedManager."""
-        return obj.pk if hasattr(obj, 'pk') else obj
+    def _remove_prefetched_objects(self):
+        """Drop this field's prefetch_related() result so reads after a write
+        hit the database, like Django's ManyRelatedManager."""
+        try:
+            self.instance._prefetched_objects_cache.pop(self.prefetch_cache_name)
+        except (AttributeError, KeyError):
+            pass
+
+    def _resolve_pk(self, obj):
+        """Accept an instance or raw PK — mirrors Django's ManyRelatedManager.
+
+        Instances are matched by model label rather than isinstance(): a
+        regenerated dynamic model is a new class, and objects loaded before the
+        regeneration must still be accepted.
+        """
+        if isinstance(obj, models.Model):
+            if obj._meta.label_lower != self.model._meta.label_lower:
+                raise TypeError(
+                    f"'{self.model._meta.object_name}' instance expected, got {obj!r}"
+                )
+            if obj.pk is None:
+                raise ValueError(
+                    f'Cannot link "{obj!r}" through {self.field_name!r}: it has not been saved.'
+                )
+            return obj.pk
+        return self.model._meta.pk.get_prep_value(obj)
+
+    def _add_pks(self, pks, db):
+        """Link ``pks`` not already linked; caller holds the transaction."""
+        if not pks:
+            return
+        through_qs = self.through.objects.using(db).filter(source_id=self.instance.pk)
+        missing = pks - set(through_qs.filter(target_id__in=pks).values_list('target_id', flat=True))
+        if not missing:
+            return
+        self._fire_m2m_changed('pre_add', missing)
+        self.through.objects.using(db).bulk_create(
+            [self.through(source_id=self.instance.pk, target_id=pk) for pk in missing],
+            ignore_conflicts=True,
+        )
+        self._fire_m2m_changed('post_add', missing)
+
+    def _remove_pks(self, pks, db):
+        """Unlink whichever of ``pks`` are linked; caller holds the transaction."""
+        if not pks:
+            return
+        through_qs = self.through.objects.using(db).filter(source_id=self.instance.pk)
+        linked = set(through_qs.filter(target_id__in=pks).values_list('target_id', flat=True))
+        if not linked:
+            return
+        self._fire_m2m_changed('pre_remove', linked)
+        through_qs.filter(target_id__in=linked).delete()
+        self._fire_m2m_changed('post_remove', linked)
 
     def add(self, *objs):
-        candidate_pks = {self._resolve_pk(obj) for obj in objs}
-        if not candidate_pks:
-            return
-        self._fire_m2m_changed('pre_add', candidate_pks)
-        added = set()
-        for pk in candidate_pks:
-            _, created = self.through.objects.get_or_create(
-                source_id=self.instance.pk, target_id=pk
-            )
-            if created:
-                added.add(pk)
-        if added:
-            self._fire_m2m_changed('post_add', added)
+        self._remove_prefetched_objects()
+        pks = {self._resolve_pk(obj) for obj in objs}
+        db = router.db_for_write(self.through, instance=self.instance)
+        with transaction.atomic(using=db, savepoint=False):
+            self._add_pks(pks, db)
 
     def remove(self, *objs):
-        candidate_pks = {self._resolve_pk(obj) for obj in objs}
-        if not candidate_pks:
-            return
-        self._fire_m2m_changed('pre_remove', candidate_pks)
-        removed = set()
-        for pk in candidate_pks:
-            n, _ = self.through.objects.filter(
-                source_id=self.instance.pk, target_id=pk
-            ).delete()
-            if n:
-                removed.add(pk)
-        if removed:
-            self._fire_m2m_changed('post_remove', removed)
+        self._remove_prefetched_objects()
+        pks = {self._resolve_pk(obj) for obj in objs}
+        db = router.db_for_write(self.through, instance=self.instance)
+        with transaction.atomic(using=db, savepoint=False):
+            self._remove_pks(pks, db)
 
     def clear(self):
-        existing = set(
-            self.through.objects.filter(source_id=self.instance.pk)
-            .values_list('target_id', flat=True)
-        )
-        if not existing:
-            return
-        # pre_clear follows Django's contract; post_clear deliberately does
-        # not — see the class docstring.
-        self._fire_m2m_changed('pre_clear', None)
-        self.through.objects.filter(source_id=self.instance.pk).delete()
-        self._fire_m2m_changed('post_clear', existing)
+        self._remove_prefetched_objects()
+        db = router.db_for_write(self.through, instance=self.instance)
+        with transaction.atomic(using=db, savepoint=False):
+            through_qs = self.through.objects.using(db).filter(source_id=self.instance.pk)
+            existing = set(through_qs.values_list('target_id', flat=True))
+            if not existing:
+                return
+            # pre_clear follows Django's contract; post_clear deliberately does
+            # not — see the class docstring.
+            self._fire_m2m_changed('pre_clear', None)
+            through_qs.delete()
+            self._fire_m2m_changed('post_clear', existing)
 
     def set(self, objs, clear=False):
-        objs = tuple(objs)  # force evaluation before any mutation
-        if clear:
-            self.clear()
-            self.add(*objs)
-        else:
-            new_pks = {self._resolve_pk(obj) for obj in objs}
+        # Resolve (and type-check) everything before any mutation.
+        new_pks = {self._resolve_pk(obj) for obj in objs}
+        self._remove_prefetched_objects()
+        db = router.db_for_write(self.through, instance=self.instance)
+        with transaction.atomic(using=db, savepoint=False):
+            if clear:
+                self.clear()
+                self._add_pks(new_pks, db)
+                return
             old_pks = set(
-                self.through.objects.filter(source_id=self.instance.pk)
+                self.through.objects.using(db).filter(source_id=self.instance.pk)
                 .values_list('target_id', flat=True)
             )
-            # Remove relationships no longer in the target set
-            to_remove = old_pks - new_pks
-            if to_remove:
-                self._fire_m2m_changed('pre_remove', to_remove)
-                self.through.objects.filter(
-                    source_id=self.instance.pk,
-                    target_id__in=to_remove,
-                ).delete()
-                self._fire_m2m_changed('post_remove', to_remove)
-            # Add only genuinely new relationships
-            to_add = new_pks - old_pks
-            if to_add:
-                self._fire_m2m_changed('pre_add', to_add)
-                for pk in to_add:
-                    self.through.objects.get_or_create(
-                        source_id=self.instance.pk, target_id=pk
-                    )
-                self._fire_m2m_changed('post_add', to_add)
+            self._remove_pks(old_pks - new_pks, db)
+            self._add_pks(new_pks - old_pks, db)
 
 
 class CustomManyToManyDescriptor(ManyToManyDescriptor):
@@ -2298,96 +2319,138 @@ class PolymorphicManyToManyManager:
             using=db,
         )
 
-    def add(self, *objs):
-        through = self._get_through_model()
-        candidate_keys = []
+    def _remove_prefetched_objects(self):
+        """Drop this field's prefetch_related() result so reads after a write
+        hit the database, like Django's ManyRelatedManager."""
+        try:
+            self.instance._prefetched_objects_cache.pop(self.field_name)
+        except (AttributeError, KeyError):
+            pass
+
+    def _resolve_keys(self, objs):
+        """Map model instances to ``(content_type_id, object_id)`` keys,
+        rejecting anything that isn't a saved instance of an allowed type."""
+        keys = set()
         for obj in objs:
-            ct = ContentType.objects.get_for_model(obj)
-            candidate_keys.append((ct.pk, obj.pk))
-        if not candidate_keys:
-            return
-        self._fire_m2m_changed('pre_add', {pk for _, pk in candidate_keys})
-        added = set()
-        for ct_pk, obj_pk in candidate_keys:
-            _, created = through.objects.get_or_create(
-                source_id=self.instance.pk,
-                content_type_id=ct_pk,
-                object_id=obj_pk,
+            if not isinstance(obj, models.Model):
+                raise TypeError(
+                    f"{self.field_name!r} links model instances; got {obj!r}"
+                )
+            if obj.pk is None:
+                raise ValueError(
+                    f'Cannot link "{obj!r}" through {self.field_name!r}: it has not been saved.'
+                )
+            keys.add((ContentType.objects.get_for_model(obj).pk, obj.pk))
+        if keys:
+            from netbox_custom_objects.models import CustomObjectTypeField  # noqa: PLC0415
+            allowed = set(
+                CustomObjectTypeField.objects.filter(
+                    custom_object_type_id=self.instance.custom_object_type_id,
+                    name=self.field_name,
+                ).values_list('related_object_types', flat=True)
             )
-            if created:
-                added.add(obj_pk)
-        if added:
-            self._fire_m2m_changed('post_add', added)
+            for ct_id, obj_pk in keys:
+                if ct_id not in allowed:
+                    model = ContentType.objects.get_for_id(ct_id).model_class()
+                    raise TypeError(
+                        f"{self.field_name!r} does not accept {model._meta.verbose_name} objects"
+                    )
+        return keys
+
+    @staticmethod
+    def _keys_q(keys):
+        """One Q matching every ``(content_type_id, object_id)`` key."""
+        by_ct: dict[int, set] = {}
+        for ct_id, obj_pk in keys:
+            by_ct.setdefault(ct_id, set()).add(obj_pk)
+        q = models.Q()
+        for ct_id, obj_pks in by_ct.items():
+            q |= models.Q(content_type_id=ct_id, object_id__in=obj_pks)
+        return q
+
+    def _existing_keys(self, through, db, keys=None):
+        qs = through.objects.using(db).filter(source_id=self.instance.pk)
+        if keys is not None:
+            qs = qs.filter(self._keys_q(keys))
+        return set(qs.values_list('content_type_id', 'object_id'))
+
+    def _add_keys(self, through, keys, db):
+        """Link ``keys`` not already linked; caller holds the transaction."""
+        if not keys:
+            return
+        missing = keys - self._existing_keys(through, db, keys)
+        if not missing:
+            return
+        pks = {obj_pk for _, obj_pk in missing}
+        self._fire_m2m_changed('pre_add', pks)
+        through.objects.using(db).bulk_create(
+            [
+                through(source_id=self.instance.pk, content_type_id=ct_id, object_id=obj_pk)
+                for ct_id, obj_pk in missing
+            ],
+            ignore_conflicts=True,
+        )
+        self._fire_m2m_changed('post_add', pks)
+
+    def _remove_keys(self, through, keys, db):
+        """Unlink whichever of ``keys`` are linked; caller holds the transaction."""
+        if not keys:
+            return
+        linked = self._existing_keys(through, db, keys)
+        if not linked:
+            return
+        pks = {obj_pk for _, obj_pk in linked}
+        self._fire_m2m_changed('pre_remove', pks)
+        through.objects.using(db).filter(source_id=self.instance.pk).filter(self._keys_q(linked)).delete()
+        self._fire_m2m_changed('post_remove', pks)
+
+    def add(self, *objs):
+        self._remove_prefetched_objects()
+        keys = self._resolve_keys(objs)
+        through = self._get_through_model()
+        db = router.db_for_write(through, instance=self.instance)
+        with transaction.atomic(using=db, savepoint=False):
+            self._add_keys(through, keys, db)
 
     def remove(self, *objs):
+        self._remove_prefetched_objects()
+        keys = self._resolve_keys(objs)
         through = self._get_through_model()
-        candidate_keys = []
-        for obj in objs:
-            ct = ContentType.objects.get_for_model(obj)
-            candidate_keys.append((ct.pk, obj.pk))
-        if not candidate_keys:
-            return
-        self._fire_m2m_changed('pre_remove', {pk for _, pk in candidate_keys})
-        removed = set()
-        for ct_pk, obj_pk in candidate_keys:
-            n, _ = through.objects.filter(
-                source_id=self.instance.pk,
-                content_type_id=ct_pk,
-                object_id=obj_pk,
-            ).delete()
-            if n:
-                removed.add(obj_pk)
-        if removed:
-            self._fire_m2m_changed('post_remove', removed)
+        db = router.db_for_write(through, instance=self.instance)
+        with transaction.atomic(using=db, savepoint=False):
+            self._remove_keys(through, keys, db)
 
     def clear(self):
+        self._remove_prefetched_objects()
         through = self._get_through_model()
-        existing = set(
-            through.objects.filter(source_id=self.instance.pk)
-            .values_list('object_id', flat=True)
-        )
-        if not existing:
-            return
-        # pre_clear follows Django's contract; post_clear deliberately does
-        # not — see the class docstring.
-        self._fire_m2m_changed('pre_clear', None)
-        through.objects.filter(source_id=self.instance.pk).delete()
-        self._fire_m2m_changed('post_clear', existing)
+        db = router.db_for_write(through, instance=self.instance)
+        with transaction.atomic(using=db, savepoint=False):
+            through_qs = through.objects.using(db).filter(source_id=self.instance.pk)
+            existing = set(through_qs.values_list('object_id', flat=True))
+            if not existing:
+                return
+            # pre_clear follows Django's contract; post_clear deliberately does
+            # not — see the class docstring.
+            self._fire_m2m_changed('pre_clear', None)
+            through_qs.delete()
+            self._fire_m2m_changed('post_clear', existing)
 
     def set(self, objs, clear=False):
-        if clear:
-            self.clear()
-            self.add(*objs)
-            return
-
-        # Diff-based replacement: add new, remove old.  Matches Django's
-        # standard ManyRelatedManager.set(clear=False) behaviour.
-        objs = tuple(objs)
+        # Resolve (and type-check) everything before any mutation.
+        new_keys = self._resolve_keys(objs)
+        self._remove_prefetched_objects()
         through = self._get_through_model()
-        existing = {
-            (ct_id, obj_id)
-            for ct_id, obj_id in through.objects.filter(source_id=self.instance.pk)
-            .values_list("content_type_id", "object_id")
-        }
-        # Pre-compute (ct_id, obj_pk) once per object to avoid duplicate CT lookups.
-        new_items = [
-            (ContentType.objects.get_for_model(obj).pk, obj.pk, obj) for obj in objs
-        ]
-        new_keys = {(ct_id, obj_pk) for ct_id, obj_pk, _ in new_items}
-        to_add = [obj for ct_id, obj_pk, obj in new_items if (ct_id, obj_pk) not in existing]
-        to_remove = existing - new_keys
-        if to_add:
-            self.add(*to_add)
-        if to_remove:
-            remove_pks = {obj_id for _, obj_id in to_remove}
-            self._fire_m2m_changed('pre_remove', remove_pks)
-            for ct_id, obj_id in to_remove:
-                through.objects.filter(
-                    source_id=self.instance.pk,
-                    content_type_id=ct_id,
-                    object_id=obj_id,
-                ).delete()
-            self._fire_m2m_changed('post_remove', remove_pks)
+        db = router.db_for_write(through, instance=self.instance)
+        with transaction.atomic(using=db, savepoint=False):
+            if clear:
+                self.clear()
+                self._add_keys(through, new_keys, db)
+                return
+            # Diff-based replacement, matching Django's
+            # ManyRelatedManager.set(clear=False).
+            old_keys = self._existing_keys(through, db)
+            self._remove_keys(through, old_keys - new_keys, db)
+            self._add_keys(through, new_keys - old_keys, db)
 
     def __iter__(self):
         return iter(self.all())
