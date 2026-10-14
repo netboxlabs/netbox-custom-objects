@@ -85,6 +85,7 @@ from netbox_custom_objects.field_types import (
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
 from netbox_custom_objects.mixin_migration import heal_unmasked_fields
 from netbox_custom_objects.utilities import (
+    _is_custom_object_model,
     _suppress_clear_cache,
     extract_cot_id_from_model_name,
     generate_model,
@@ -108,8 +109,10 @@ def _is_custom_object_reverse_accessor(attr):
     if isinstance(attr, (PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor)):
         return True
     # ManyToManyDescriptor subclasses ReverseManyToOneDescriptor; exclude its forward side.
+    # Only generated Table<id>Model relations qualify: static plugin models share APP_LABEL
+    # (e.g. CustomObjectTypeField.choice_set -> CustomFieldChoiceSet.choices_for_object_type).
     if isinstance(attr, ReverseManyToOneDescriptor) and getattr(attr, 'reverse', True):
-        return attr.rel.field.model._meta.app_label == APP_LABEL
+        return _is_custom_object_model(attr.rel.field.model)
     return False
 
 
@@ -3075,12 +3078,18 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
                 # Guard against clobbering an existing attribute on the target model class
                 # (e.g. a FK, method, or property that already uses that name).  We allow
-                # the name only if the class already carries a reverse accessor installed by
-                # a custom object field — live conflicts are caught by the cross-checks above.
+                # the name only if the class already carries one of our own polymorphic
+                # descriptors — which means this field (or a field being renamed to/from it)
+                # is the one that set it.  Unlike the non-polymorphic path below, a stale
+                # non-polymorphic accessor is NOT accepted here: the polymorphic wiring paths
+                # refuse to replace it, so the field would save without its accessor.
                 target_cls = ot.model_class()
                 if target_cls is not None:
                     existing = getattr(target_cls, self.related_name, _MISSING)
-                    if existing is not _MISSING and not _is_custom_object_reverse_accessor(existing):
+                    if existing is not _MISSING and not isinstance(
+                        existing,
+                        (PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor),
+                    ):
                         raise ValidationError(
                             {
                                 "related_name": _(
