@@ -866,3 +866,66 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         sources[1].refresh_from_db()
         self.assertIsNone(sources[1].ref_id)
         self.assertEqual(list(sources[1].refs.values_list('pk', flat=True)), [targets[0].pk])
+
+    def test_model_generated_in_another_context_leaves_main_classes_alone(self):
+        """Generating models for a branch must not rewire main's classes (#765).
+
+        Main's object FK, multi-object through and polymorphic through must keep
+        pointing at main's classes, so main can still assign related objects and
+        bulk-delete (which skips ``CustomObject.delete()``'s FK realignment).
+        """
+        cot_source = self.create_simple_custom_object_type(name='rwsrc', slug='rw-src')
+        cot_target = self.create_simple_custom_object_type(name='rwtrg', slug='rw-trg')
+        self.create_custom_object_type_field(
+            cot_source, name='ref', label='Reference', type='object',
+            related_object_type=cot_target.object_type,
+        )
+        self.create_custom_object_type_field(
+            cot_source, name='refs', label='References', type='multiobject',
+            related_object_type=cot_target.object_type,
+        )
+        poly_field = self.create_custom_object_type_field(
+            cot_source, name='poly', label='Polymorphic', type='multiobject', is_polymorphic=True,
+        )
+        poly_field.related_object_types.set([cot_target.object_type, ObjectType.objects.get_for_model(Site)])
+
+        model_source = cot_source.get_model()
+        cot_target.refresh_from_db()
+        model_target = cot_target.get_model()
+        main_poly_through = django_apps.get_model(APP_LABEL, poly_field.through_model_name)
+
+        self.addCleanup(CustomObjectType.clear_model_cache)
+        with mock.patch.object(CustomObjectType, '_active_branch_id', return_value=-1):
+            for cot, main_model in ((cot_target, model_target), (cot_source, model_source)):
+                cot.refresh_from_db()
+                self.assertIsNot(cot.get_model(), main_model)
+            # And the target once more, after the source exists in this context.
+            cot_target.refresh_from_db()
+            cot_target.get_model(no_cache=True)
+        branch_poly_through = CustomObjectType.get_cached_through_model(
+            cot_source.pk, poly_field.through_model_name, -1,
+        )
+        self.assertIsNotNone(branch_poly_through)
+        self.assertIsNot(branch_poly_through, main_poly_through)
+
+        for cot in (cot_source, cot_target):
+            cot.refresh_from_db()
+        self.assertIs(cot_source.get_model(), model_source)
+        self.assertIs(cot_target.get_model(), model_target)
+
+        self.assertIs(model_source._meta.get_field('ref').remote_field.model, model_target)
+        refs_through = model_source._meta.get_field('refs').remote_field.through
+        self.assertIs(refs_through._meta.get_field('source').remote_field.model, model_source)
+        self.assertIs(refs_through._meta.get_field('target').remote_field.model, model_target)
+        poly_through = django_apps.get_model(APP_LABEL, poly_field.through_model_name)
+        self.assertIs(poly_through, main_poly_through)
+        self.assertIs(poly_through._meta.get_field('source').remote_field.model, model_source)
+
+        # Main still works end to end: assign, then bulk-delete.
+        target = model_target.objects.create(name='Target')
+        source = model_source.objects.create(name='Source', ref=target)
+        source.refs.add(target)
+        source.poly.add(target)
+        model_source.objects.filter(pk=source.pk).delete()
+        self.assertFalse(refs_through.objects.filter(source_id=source.pk).exists())
+        self.assertFalse(poly_through.objects.filter(source_id=source.pk).exists())
