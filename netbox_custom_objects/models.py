@@ -2231,8 +2231,11 @@ class CustomObjectType(NetBoxModel):
             self.clear_model_cache(self.id)
 
     def delete(self, *args, **kwargs):
+        # super().delete() clears self.id; keep it for the cleanup afterwards.
+        cot_id = self.id
+
         # COT is going away — every branch's cached class is stale.
-        self.clear_model_cache(self.id, all_branches=True)
+        self.clear_model_cache(cot_id, all_branches=True)
 
         # Regenerate against the current context so the model used for the
         # DDL drop below reflects this branch's column set, not whatever
@@ -2321,13 +2324,13 @@ class CustomObjectType(NetBoxModel):
         self.unregister_model(model)
 
         # Re-clear in case anything re-cached during cleanup.
-        self.clear_model_cache(self.id, all_branches=True)
+        self.clear_model_cache(cot_id, all_branches=True)
 
         if not in_branch:
             # Other worker processes still have this model registered; tell them to
             # evict it once the delete is committed (see stale_models).
             from netbox_custom_objects.stale_models import signal_custom_object_type_deleted
-            transaction.on_commit(signal_custom_object_type_deleted)
+            transaction.on_commit(lambda: signal_custom_object_type_deleted(cot_id))
 
     @classmethod
     def unregister_model(cls, model):
