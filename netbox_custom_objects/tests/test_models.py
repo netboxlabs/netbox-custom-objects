@@ -1585,6 +1585,28 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
         self.assertIs(Site.save, original_save)
 
     @tag('regression')  # #761
+    def test_related_name_collision_rejected_when_making_existing_field_unique(self):
+        """The clobber guard must run before the uniqueness probe installs the reverse accessor."""
+        site_ct = self.get_site_object_type()
+        original_save = Site.save
+        # Restore Site.save even if the guard regresses, so the clobber doesn't leak into other tests.
+        self.addCleanup(setattr, Site, 'save', original_save)
+        created = self.create_custom_object_type_field(
+            self.cert_cot,
+            name="site",
+            type="object",
+            related_object_type=site_ct,
+        )
+        # Load from the DB so _original is populated and the unique=False -> True probe runs.
+        field = CustomObjectTypeField.objects.get(pk=created.pk)
+        field.unique = True
+        field.related_name = "save"
+        with self.assertRaises(ValidationError) as cm:
+            field.full_clean()
+        self.assertIn("related_name", cm.exception.message_dict)
+        self.assertIs(Site.save, original_save)
+
+    @tag('regression')  # #761
     def test_related_name_colliding_with_custom_object_target_field_rejected(self):
         """related_name must not overwrite a field on a custom object target model."""
         self.slb_cot.get_model()
