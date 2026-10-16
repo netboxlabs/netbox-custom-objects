@@ -3427,6 +3427,44 @@ class BranchCOTDeletionIsolationTestCase(BranchingTestBase, _TestBase):
         self.assertFalse(CustomObjectType.is_model_cached(cot.pk, branch.pk))
         self.assertIs(CustomObjectType.get_cached_model(cot.pk), main_model)
 
+    def test_branch_delete_of_multiobject_target_leaves_main_through(self):
+        # Deleting B in a branch cascades to A's multiobject field; main still has
+        # that field, so main's through must stay registered.
+        with event_tracking(self.request):
+            target = CustomObjectType.objects.create(name='target', slug='target')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=target, name='name', label='Name', type='text',
+            )
+            source = CustomObjectType.objects.create(name='source', slug='source')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=source, name='name', label='Name', type='text',
+            )
+            CustomObjectTypeField.objects.create(
+                custom_object_type=source, name='targets', label='Targets', type='multiobject',
+                related_object_type=target.object_type,
+            )
+
+        target_model = CustomObjectType.objects.get(pk=target.pk).get_model()
+        source_model = CustomObjectType.objects.get(pk=source.pk).get_model()
+        main_through = source_model._meta.get_field('targets').remote_field.through
+        through_key = main_through.__name__.lower()
+        linked = target_model.objects.create(name='linked')
+        source_model.objects.create(name='src').targets.add(linked)
+
+        branch = _provision_branch('Inbound M2M Delete Branch', user=self.user)
+        with activate_branch(branch), event_tracking(_make_request(self.user)):
+            CustomObjectType.objects.get(pk=target.pk).delete()
+            self.assertFalse(CustomObjectTypeField.objects.filter(custom_object_type=source, name='targets').exists())
+
+        registered = apps.all_models['netbox_custom_objects']
+        registered = apps.all_models['netbox_custom_objects']
+        self.assertIs(registered.get(through_key), main_through)
+        self.assertIs(CustomObjectType.get_cached_through_model(source.pk, main_through.__name__), main_through)
+        source_model = CustomObjectType.objects.get(pk=source.pk).get_model()
+        self.assertEqual(
+            list(source_model.objects.get(name='src').targets.values_list('name', flat=True)), ['linked'],
+        )
+
     def test_branch_only_self_referencing_delete_unregisters_replacement(self):
         # Deleting the self-referencing field mid-delete regenerates the model,
         # registering a replacement class that delete()'s own class isn't.

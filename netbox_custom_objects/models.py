@@ -2467,14 +2467,20 @@ class CustomObjectType(NetBoxModel):
         With ``branch_id``, only entries built for that branch context are removed,
         whichever generation they are, so main's classes stay registered.
         """
+        names = [m.__name__ for m in (model, *getattr(model, '_through_models', []))]
+        cls._unregister_model_names(names, branch_id=branch_id)
+
+    @classmethod
+    def _unregister_model_names(cls, names, branch_id=None):
+        """Remove the classes registered under *names*; see ``unregister_model``."""
         with cls._global_lock:
             registry = apps.all_models.get(APP_LABEL, {})
-            for dropped in (model, *getattr(model, '_through_models', [])):
-                name = dropped.__name__.lower()
+            for name in names:
+                name = name.lower()
                 registered = registry.get(name)
                 if registered is None:
                     continue
-                if branch_id is None or registered is dropped:
+                if branch_id is None or getattr(registered, '_context_branch_id', None) == branch_id:
                     del registry[name]
 
         apps.clear_cache()
@@ -4206,11 +4212,22 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         # Deregister the dropped through model (both polymorphic and plain MULTIOBJECT)
         # so the cascade-delete collector no longer queries the now-missing table.
         if _dropped_through_model is not None:
-            through_name = _dropped_through_model.__name__.lower()
-            with CustomObjectType._global_lock:
-                if through_name in apps.all_models.get(APP_LABEL, {}):
-                    del apps.all_models[APP_LABEL][through_name]
-            apps.clear_cache()
+            if schema_conn is connection:
+                CustomObjectType._unregister_model_names([_dropped_through_model.__name__])
+            else:
+                # In a branch the captured through is normally main's, whose table
+                # is untouched, so it stays; the removal above built a fresh through
+                # that Django auto-registered over it, so put main's back.  Only a
+                # through built for this branch goes.
+                through_name = _dropped_through_model.__name__.lower()
+                branch_id = CustomObjectType._active_branch_id()
+                with CustomObjectType._global_lock:
+                    registry = apps.all_models[APP_LABEL]
+                    if getattr(_dropped_through_model, '_context_branch_id', None) == branch_id:
+                        registry.pop(through_name, None)
+                    else:
+                        registry[through_name] = _dropped_through_model
+                apps.clear_cache()
 
         # Clear the model cache for this CustomObjectType when a field is deleted
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)
