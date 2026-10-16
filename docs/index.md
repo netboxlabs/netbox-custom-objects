@@ -124,7 +124,7 @@ A field's `Must be unique` setting makes its values unique on their own. To requ
     [{"field": "parent", "lookup": "isnull", "value": true}]
     ```
 
-    Each predicate names a field and a lookup: `exact`, `n` (does not equal, or is empty), `in` (a list of values), `isnull` (`true` for empty, `false` for not empty), or `gt`, `gte`, `lt` and `lte` (greater than, at least, less than, at most; integer, decimal, date and datetime fields only). Instead of a value, `{"field": "other_field"}` compares with another field of the same kind (text, URL and selection; integer and decimal; date; datetime; or boolean). The same field types as above can be tested; object fields can only be tested with `isnull`.
+    Each predicate names a field and a lookup: `exact`, `n` (does not equal, or is empty), `in` (a list of values), `isnull` (`true` for empty, `false` for not empty), or `gt`, `gte`, `lt` and `lte` (greater than, at least, less than, at most; integer, decimal, date and datetime fields only). Instead of a value, `{"field": "other_field"}` compares with another field of the same kind (text, URL and selection; integer and decimal; date; datetime; or boolean). The same field types as above can be tested; object fields can only be tested with `isnull`. Blank text counts as empty, so test for it with `isnull` rather than comparing with `""`; in a condition, a comparison with an empty value doesn't match.
 
 To require something of every object instead, such as an end date after its start date, add a constraint of type **Check**:
 

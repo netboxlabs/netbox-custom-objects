@@ -3757,6 +3757,9 @@ class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
             "in with a field": ({"rule": [self._predicate(end, "in", {"field": start.schema_id})]}, "rule"),
             "unknown field": ({"rule": [self._predicate(end, "gt", {"field": 999})]}, "rule"),
             "bad value": ({"rule": [self._predicate(count, "gt", "many")]}, "rule"),
+            # "Is empty" tests for blank text.
+            "blank value": ({"rule": [self._predicate(self.serial, "exact", "")]}, "rule"),
+            "blank in a list": ({"rule": [self._predicate(self.serial, "in", ["a", ""])]}, "rule"),
         }
         for label, (kwargs, key) in cases.items():
             with self.subTest(label):
@@ -3782,6 +3785,28 @@ class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
 
         # A unique constraint's condition can compare too.
         self._constraint(condition=[self._predicate(count, "gte", 1)])
+
+        # A field deleted after the fields were validated.
+        constraint = CustomObjectTypeConstraint(custom_object_type=self.cot, name="gone", type="check", rule=rule)
+        with patch.object(CustomObjectTypeConstraint, "to_model_constraint", return_value=None):
+            with self.assertRaisesMessage(ValidationError, "A field this constraint uses no longer exists."):
+                constraint.full_clean()
+
+    def test_condition_compares_fields(self):
+        part = self.create_custom_object_type_field(self.cot, name="part", type="text")
+        # Vendor unique among objects whose serial matches their part.
+        self._constraint(
+            fields=[self.vendor], name="by_match",
+            condition=[self._predicate(self.serial, "exact", {"field": part.schema_id})],
+        )
+        model = self._model()
+        model.objects.create(vendor="acme", serial="x", part="x")
+        self._assert_duplicate_rejected(model, vendor="acme", serial="y", part="y")
+        model.objects.create(vendor="acme", serial="x", part="z")
+        # Blank text is empty, and a comparison with an empty value doesn't match.
+        for _ in range(2):
+            model(vendor="blank", serial="", part="").full_clean()
+            model.objects.create(vendor="blank", serial="", part="")
 
     def test_field_delete_deletes_constraint(self):
         status = self.create_custom_object_type_field(self.cot, name="status", type="text")

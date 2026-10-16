@@ -27,6 +27,7 @@ from netbox_custom_objects.choices import (
     ConstraintTypeChoices,
     CustomObjectFieldTypeChoices,
 )
+from netbox_custom_objects.utilities import predicate_field_ref
 from netbox_custom_objects.models import (ConfigContextRenderer, CustomObject, CustomObjectType,
                                           CustomObjectTypeConstraint, CustomObjectTypeField)
 
@@ -420,13 +421,6 @@ _CONSTRAINT_PREDICATES_SCHEMA = {
 }
 
 
-def _predicate_field_ref(value):
-    """Return the field a predicate's value refers to, or None for a literal value."""
-    if isinstance(value, dict) and value.keys() == {"field"}:
-        return value["field"]
-    return None
-
-
 class ConstraintPredicatesField(serializers.Field):
     """
     A constraint's condition or rule: predicates that name fields (including a value
@@ -448,7 +442,7 @@ class ConstraintPredicatesField(serializers.Field):
         result = []
         for predicate in getattr(constraint, self.attr) or ():
             predicate = {**predicate, "field": brief(predicate.get("field"))}
-            other = _predicate_field_ref(predicate.get("value"))
+            other = predicate_field_ref(predicate.get("value"))
             if other is not None:
                 predicate["value"] = {"field": brief(other)}
             result.append(predicate)
@@ -463,7 +457,7 @@ class ConstraintPredicatesField(serializers.Field):
         if not all(isinstance(p, dict) and "field" in p for p in data):
             raise ValidationError(_("Each predicate needs a field ID."))
         refs = [p["field"] for p in data] + [
-            ref for p in data if (ref := _predicate_field_ref(p.get("value"))) is not None
+            ref for p in data if (ref := predicate_field_ref(p.get("value"))) is not None
         ]
         try:
             pks = [int(ref) for ref in refs]
@@ -476,7 +470,7 @@ class ConstraintPredicatesField(serializers.Field):
         predicates = []
         for p in data:
             predicate = {**p, "field": by_pk[int(p["field"])]}
-            other = _predicate_field_ref(p.get("value"))
+            other = predicate_field_ref(p.get("value"))
             if other is not None:
                 predicate["value"] = {"field": by_pk[int(other)]}
             predicates.append(predicate)
@@ -554,7 +548,7 @@ class CustomObjectTypeConstraintSerializer(NetBoxModelSerializer):
             if predicates is None:
                 continue
             fields = [p["field"] for p in predicates] + [
-                ref for p in predicates if (ref := _predicate_field_ref(p.get("value"))) is not None
+                ref for p in predicates if (ref := predicate_field_ref(p.get("value"))) is not None
             ]
             if any(f.custom_object_type_id != cot_pk for f in fields):
                 raise ValidationError({attr: _("Every field must belong to this custom object type.")})
@@ -564,7 +558,7 @@ class CustomObjectTypeConstraintSerializer(NetBoxModelSerializer):
 
 def _predicate_to_schema_ids(predicate):
     predicate = {**predicate, "field": predicate["field"].schema_id}
-    other = _predicate_field_ref(predicate.get("value"))
+    other = predicate_field_ref(predicate.get("value"))
     if other is not None:
         predicate["value"] = {"field": other.schema_id}
     return predicate

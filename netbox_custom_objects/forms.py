@@ -14,7 +14,7 @@ from utilities.forms.utils import get_field_value
 from utilities.object_types import object_type_name
 
 from netbox_custom_objects.choices import ConstraintTypeChoices, SearchWeightChoices
-from netbox_custom_objects.utilities import extract_cot_id_from_model_name
+from netbox_custom_objects.utilities import extract_cot_id_from_model_name, predicate_field_ref
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.field_types import (
     PolymorphicObjectReverseDescriptor,
@@ -438,13 +438,6 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
         return obj
 
 
-def _predicate_field_ref(value):
-    """Return the field a predicate's value refers to, or None for a literal value."""
-    if isinstance(value, dict) and value.keys() == {"field"}:
-        return value["field"]
-    return None
-
-
 class CustomObjectTypeConstraintForm(ChangelogMessageMixin, forms.ModelForm):
     custom_object_type = DynamicModelChoiceField(
         queryset=CustomObjectType.objects.all(),
@@ -542,7 +535,7 @@ class CustomObjectTypeConstraintForm(ChangelogMessageMixin, forms.ModelForm):
     @staticmethod
     def _map_fields(predicate, convert):
         predicate = {**predicate, "field": convert(predicate.get("field"))}
-        other = _predicate_field_ref(predicate.get("value"))
+        other = predicate_field_ref(predicate.get("value"))
         if other is not None:
             predicate["value"] = {"field": convert(other)}
         return predicate
@@ -558,7 +551,7 @@ class CustomObjectTypeConstraintForm(ChangelogMessageMixin, forms.ModelForm):
             raise forms.ValidationError(_("Expected a list of predicates."))
         schema_ids = {f.name: f.schema_id for f in self._cot_fields()}
         refs = [p.get("field") for p in predicates] + [
-            ref for p in predicates if (ref := _predicate_field_ref(p.get("value"))) is not None
+            ref for p in predicates if (ref := predicate_field_ref(p.get("value"))) is not None
         ]
         unknown = [str(ref) for ref in refs if not isinstance(ref, str) or ref not in schema_ids]
         if unknown:

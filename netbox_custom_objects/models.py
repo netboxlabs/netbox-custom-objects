@@ -88,6 +88,7 @@ from netbox_custom_objects.utilities import (
     _suppress_clear_cache,
     extract_cot_id_from_model_name,
     generate_model,
+    predicate_field_ref,
 )
 
 logger = logging.getLogger(__name__)
@@ -4261,13 +4262,6 @@ def _condition_column(field):
     return field.name
 
 
-def _field_ref(value):
-    """Return the schema ID a predicate's value refers to, or None for a literal value."""
-    if isinstance(value, dict) and value.keys() == {"field"}:
-        return value["field"]
-    return None
-
-
 def _empty_q(field):
     """Match objects that leave *field* empty."""
     column = _condition_column(field)
@@ -4291,7 +4285,7 @@ def _predicate_q(predicate, fields_by_schema_id, empty_passes=False):
     if lookup == ConstraintLookupChoices.ISNULL:
         return _empty_q(field) if value else ~_empty_q(field)
     operands = [field]
-    other_sid = _field_ref(value)
+    other_sid = predicate_field_ref(value)
     if other_sid is not None:
         other = fields_by_schema_id[other_sid]
         operands.append(other)
@@ -4299,7 +4293,7 @@ def _predicate_q(predicate, fields_by_schema_id, empty_passes=False):
     set_q = Q()
     empty = Q()
     for operand in operands:
-        set_q &= Q(**{f"{_condition_column(operand)}__isnull": False})
+        set_q &= ~_empty_q(operand)
         empty |= _empty_q(operand)
     if lookup == ConstraintLookupChoices.NOT_EQUAL:
         return (~Q(**{column: value}) & set_q) | empty
@@ -4421,8 +4415,8 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
         return f"{settings.STATIC_URL}docs/models/{APP_LABEL}/customobjecttypeconstraint/"
 
     @staticmethod
-    def get_db_name(cot_id, name, type=ConstraintTypeChoices.UNIQUE):
-        suffix = "check" if type == ConstraintTypeChoices.CHECK else "uniq"
+    def get_db_name(cot_id, name, constraint_type=ConstraintTypeChoices.UNIQUE):
+        suffix = "check" if constraint_type == ConstraintTypeChoices.CHECK else "uniq"
         return _safe_pg_identifier(f"custom_objects_{cot_id}_{name}_{suffix}")
 
     @property
@@ -4458,7 +4452,7 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
             field = by_schema_id.get(predicate.get("field"))
             lookup, value = predicate.get("lookup"), predicate.get("value")
             name = str(field) if field else "?"
-            other_sid = _field_ref(value)
+            other_sid = predicate_field_ref(value)
             if other_sid is not None:
                 value = by_schema_id.get(other_sid, "?")
             if lookup == ConstraintLookupChoices.ISNULL:
@@ -4658,7 +4652,7 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
                     _("{field} is a {type} field, which can't be compared as greater or less."),
                     field=field, type=field.get_type_display(),
                 )
-            other_sid = _field_ref(value)
+            other_sid = predicate_field_ref(value)
             if other_sid is not None:
                 if lookup == ConstraintLookupChoices.IN:
                     raise error(_("{field}: \"is one of\" needs a list of values, not a field."), field=field)
@@ -4678,7 +4672,7 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
 
     @staticmethod
     def _clean_predicate_value(attr, model, field, value):
-        if value is None or isinstance(value, (dict, list)):
+        if value is None or value == "" or isinstance(value, (dict, list)):
             raise ValidationError({
                 attr: _("{field}: compare to a single value or another field, or test whether it's empty.").format(
                     field=field
@@ -4703,6 +4697,9 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
             return
         model = self.custom_object_type.get_model()
         constraint = self.to_model_constraint(self._fields_by_schema_id())
+        if constraint is None:
+            # A field was deleted after the fields were validated.
+            raise ValidationError(_("A field this constraint uses no longer exists."))
         # Route through the branch's connection so the probe runs in the active schema.
         probe_conn = _get_schema_connection()
         try:
