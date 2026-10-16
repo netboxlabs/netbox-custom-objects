@@ -1,5 +1,7 @@
+import copy
 import datetime
 import decimal
+import functools
 import hashlib
 import json
 import logging
@@ -14,7 +16,11 @@ from django.apps import apps
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
+from django.contrib.postgres.utils import prefix_validation_error
+from django.contrib.postgres.validators import ArrayMaxLengthValidator, ArrayMinLengthValidator
 from django.core.exceptions import FieldDoesNotExist, ValidationError
+from django.core.serializers.json import DjangoJSONEncoder
+from django.forms.fields import InvalidJSONInput
 from django.core.validators import (MaxValueValidator, MinValueValidator,
                                      RegexValidator)
 from django.db import models, router
@@ -46,7 +52,7 @@ from utilities.templatetags.builtins.filters import linkify, render_markdown
 from netbox.config import get_config
 from netbox.tables.columns import BooleanColumn
 
-from netbox_custom_objects.choices import (CustomObjectFieldTypeChoices,
+from netbox_custom_objects.choices import (ArrayElementTypeChoices, CustomObjectFieldTypeChoices,
                                            ObjectFieldOnDeleteChoices)
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name, generate_model
@@ -244,7 +250,7 @@ class FieldType:
     # annotation sets it on its own subclass.
     graphql_annotation = None
 
-    def get_graphql_annotation(self):
+    def get_graphql_annotation(self, field=None):
         return self.graphql_annotation
 
     def get_display_value(self, instance, field_name):
@@ -2718,6 +2724,248 @@ class CoordinatesFieldType(FieldType):
             )
 
 
+class CustomArrayField(ArrayField):
+    """
+    An ArrayField that also converts each item of list input (from a JSON form, the
+    API or CSV), not only of the JSON strings Django deserializes.
+    """
+
+    def to_python(self, value):
+        if isinstance(value, str):
+            return super().to_python(value)
+        if value is None:
+            return value
+        if not isinstance(value, (list, tuple)):
+            # Not "invalid": a ModelForm would replace that with its form field's own message.
+            raise ValidationError(_("Enter a list of values."), code="not_a_list")
+        nested = isinstance(self.base_field, ArrayField)
+        if nested and not all(isinstance(item, (list, tuple)) for item in value):
+            raise ValidationError(_("Each item must itself be a list of values."), code="item_not_a_list")
+        # Check tuple sizes first, rather than Django's "nested arrays must have the same length".
+        size = getattr(self.base_field, "size", None) if nested else None
+        for index, item in enumerate(value, start=1):
+            if size and len(item) != size:
+                raise ValidationError(
+                    _("Item %(nth)s must have exactly %(size)s values."),
+                    code="tuple_size",
+                    params={"nth": index, "size": size},
+                )
+        result = []
+        for index, item in enumerate(value, start=1):
+            try:
+                result.append(self.base_field.to_python(item))
+            except ValidationError as error:
+                raise prefix_validation_error(
+                    error, prefix=self.error_messages["item_invalid"], code="item_invalid", params={"nth": index},
+                )
+        return result
+
+
+class ArrayJSONField(JSONField):
+    """A JSON form field that shows an array compactly: one line, or one tuple per line."""
+
+    def prepare_value(self, value):
+        if isinstance(value, str) and not isinstance(value, InvalidJSONInput):
+            try:
+                value = json.loads(value, cls=self.decoder)
+            except json.JSONDecodeError:
+                return super().prepare_value(value)
+        if not isinstance(value, list):
+            return super().prepare_value(value)
+        dump = functools.partial(json.dumps, ensure_ascii=False, cls=self.encoder)
+        if value and all(isinstance(item, list) for item in value):
+            return "[\n" + ",\n".join(f"    {dump(item)}" for item in value) + "\n]"
+        return dump(value)
+
+
+def format_array_value(value):
+    """Format an array value for display: "1, 2, 3", or "(1, 2, 3), (4, 5, 6)" for tuples."""
+    if not value:
+        return ""
+    return ", ".join(
+        f"({', '.join(map(str, item))})" if isinstance(item, (list, tuple)) else str(item)
+        for item in value
+    )
+
+
+class ArrayFieldType(FieldType):
+    """
+    A list of values of one scalar type, optionally of fixed-size tuples (e.g. a
+    list of (x, y, z) points), stored in a PostgreSQL array column.
+    """
+
+    _GRAPHQL_ELEMENT_TYPES = {
+        ArrayElementTypeChoices.TEXT: str,
+        ArrayElementTypeChoices.INTEGER: int,
+        ArrayElementTypeChoices.DECIMAL: decimal.Decimal,
+        ArrayElementTypeChoices.BOOLEAN: bool,
+        ArrayElementTypeChoices.DATE: datetime.date,
+        ArrayElementTypeChoices.DATETIME: datetime.datetime,
+    }
+
+    def get_graphql_annotation(self, field=None):
+        element = self._GRAPHQL_ELEMENT_TYPES.get(getattr(field, "array_element_type", None))
+        if element is None:
+            return None
+        if field.array_tuple_size:
+            return list[list[element]]
+        return list[element]
+
+    @staticmethod
+    def _element_model_field(field):
+        element_type = field.array_element_type
+        validators = []
+        if element_type in (ArrayElementTypeChoices.INTEGER, ArrayElementTypeChoices.DECIMAL):
+            if field.validation_minimum is not None:
+                validators.append(MinValueValidator(field.validation_minimum))
+            if field.validation_maximum is not None:
+                validators.append(MaxValueValidator(field.validation_maximum))
+        if element_type == ArrayElementTypeChoices.TEXT and field.validation_regex:
+            validators.append(RegexValidator(field.validation_regex))
+        if element_type == ArrayElementTypeChoices.INTEGER:
+            return models.BigIntegerField(validators=validators)
+        if element_type == ArrayElementTypeChoices.DECIMAL:
+            return models.DecimalField(max_digits=8, decimal_places=2, validators=validators)
+        if element_type == ArrayElementTypeChoices.BOOLEAN:
+            return models.BooleanField()
+        if element_type == ArrayElementTypeChoices.DATE:
+            return models.DateField()
+        if element_type == ArrayElementTypeChoices.DATETIME:
+            return models.DateTimeField()
+        return models.TextField(validators=validators)
+
+    def get_model_field(self, field, **kwargs):
+        field_kwargs = self._safe_kwargs(**kwargs)
+        # A copy per object, so objects never share (and mutate) one default list.
+        default = functools.partial(copy.deepcopy, field.default) if field.default is not None else None
+        field_kwargs.update({"default": default, "unique": field.unique})
+        base_field = self._element_model_field(field)
+        if field.array_tuple_size:
+            # size= only caps an array's length; the validator makes it exact.
+            base_field = CustomArrayField(
+                base_field,
+                size=field.array_tuple_size,
+                validators=[ArrayMinLengthValidator(field.array_tuple_size)],
+                error_messages={"item_invalid": _("value %(nth)s:")},
+            )
+        # Errors read "Item 2: ...", or "Item 2, value 3: ..." for a tuple's value.
+        field_kwargs["error_messages"] = {
+            "item_invalid": _("Item %(nth)s,") if field.array_tuple_size else _("Item %(nth)s:"),
+        }
+        validators = []
+        if field.array_min_length is not None:
+            validators.append(ArrayMinLengthValidator(field.array_min_length))
+        if field.array_max_length is not None:
+            validators.append(ArrayMaxLengthValidator(field.array_max_length))
+        if validators:
+            field_kwargs["validators"] = validators
+        return CustomArrayField(base_field, null=True, blank=not field.required, **field_kwargs)
+
+    @staticmethod
+    def _element_serializer_field(field):
+        element_type = field.array_element_type
+        if element_type == ArrayElementTypeChoices.INTEGER:
+            return drf_serializers.IntegerField(min_value=field.validation_minimum, max_value=field.validation_maximum)
+        if element_type == ArrayElementTypeChoices.DECIMAL:
+            return drf_serializers.DecimalField(
+                max_digits=8, decimal_places=2, min_value=field.validation_minimum, max_value=field.validation_maximum,
+            )
+        if element_type == ArrayElementTypeChoices.BOOLEAN:
+            return drf_serializers.BooleanField()
+        if element_type == ArrayElementTypeChoices.DATE:
+            return drf_serializers.DateField()
+        if element_type == ArrayElementTypeChoices.DATETIME:
+            return drf_serializers.DateTimeField()
+        validators = [RegexValidator(field.validation_regex)] if field.validation_regex else []
+        return drf_serializers.CharField(allow_blank=True, validators=validators)
+
+    def get_serializer_field(self, field, **kwargs):
+        child = self._element_serializer_field(field)
+        if field.array_tuple_size:
+            child = drf_serializers.ListField(
+                child=child, min_length=field.array_tuple_size, max_length=field.array_tuple_size,
+            )
+        return drf_serializers.ListField(
+            child=child,
+            required=field.required,
+            allow_null=not field.required,
+            allow_empty=not field.required,
+            min_length=field.array_min_length,
+            max_length=field.array_max_length,
+        )
+
+    @staticmethod
+    def describe(field):
+        """Describe the expected value, e.g. "A list of 3-value integer tuples, at least 2."."""
+        element = dict(ArrayElementTypeChoices).get(field.array_element_type, field.array_element_type)
+        element = str(element).lower()
+        if field.array_tuple_size:
+            text = _("A list of {size}-value {element} tuples").format(size=field.array_tuple_size, element=element)
+        else:
+            text = _("A list of {element} values").format(element=element)
+        minimum, maximum = field.array_min_length, field.array_max_length
+        if minimum is not None and maximum is not None:
+            text += _(", {minimum} to {maximum}").format(minimum=minimum, maximum=maximum)
+        elif minimum is not None:
+            text += _(", at least {minimum}").format(minimum=minimum)
+        elif maximum is not None:
+            text += _(", at most {maximum}").format(maximum=maximum)
+        return text + "."
+
+    # Two example values per element type, for the form's help text.
+    _EXAMPLE_VALUES = {
+        ArrayElementTypeChoices.TEXT: ('"a"', '"b"'),
+        ArrayElementTypeChoices.INTEGER: ("0", "10"),
+        ArrayElementTypeChoices.DECIMAL: ("0.5", "1.25"),
+        ArrayElementTypeChoices.BOOLEAN: ("true", "false"),
+        ArrayElementTypeChoices.DATE: ('"2026-01-15"', '"2026-07-01"'),
+        ArrayElementTypeChoices.DATETIME: ('"2026-01-15T09:00:00"', '"2026-07-01T17:30:00"'),
+    }
+
+    @classmethod
+    def example(cls, field):
+        """An example value, e.g. "[0, 10]", or "[[0, 0, 0], [10, 10, 10]]" for 3-value tuples."""
+        first, second = cls._EXAMPLE_VALUES.get(field.array_element_type, ("0", "10"))
+        if field.array_tuple_size:
+            first, second = (f"[{', '.join([value] * field.array_tuple_size)}]" for value in (first, second))
+        return f"[{first}, {second}]"
+
+    def get_form_field(self, field, **kwargs):
+        example = self.example(field)
+        return ArrayJSONField(
+            required=field.required,
+            initial=field.default or None,
+            encoder=DjangoJSONEncoder,
+            help_text=_("{description} Enter it as JSON, e.g. <code>{example}</code>.").format(
+                description=self.describe(field), example=example,
+            ),
+        )
+
+    def get_annotated_form_field(self, field, enforce_visibility=True, **kwargs):
+        form_field = super().get_annotated_form_field(field, enforce_visibility=enforce_visibility, **kwargs)
+        # Keep the shape description alongside the field's own description.
+        if field.description:
+            form_field.help_text = mark_safe(f"{form_field.help_text}<br>{self.get_form_field(field).help_text}")
+        return form_field
+
+    def get_filterform_field(self, field, **kwargs):
+        return forms.CharField(
+            label=field,
+            required=False,
+            help_text=_("Objects containing all of these comma-separated values"),
+        )
+
+    def get_display_value(self, instance, field_name):
+        return format_array_value(getattr(instance, field_name))
+
+    def get_table_column_field(self, field, **kwargs):
+        class _ArrayColumn(tables.Column):
+            def render(self, value):
+                return format_array_value(value) or self.default
+
+        return _ArrayColumn(verbose_name=str(field), orderable=False)
+
+
 FIELD_TYPE_CLASS = {
     CustomFieldTypeChoices.TYPE_TEXT: TextFieldType,
     CustomFieldTypeChoices.TYPE_LONGTEXT: LongTextFieldType,
@@ -2733,4 +2981,5 @@ FIELD_TYPE_CLASS = {
     CustomFieldTypeChoices.TYPE_OBJECT: ObjectFieldType,
     CustomFieldTypeChoices.TYPE_MULTIOBJECT: MultiObjectFieldType,
     CustomObjectFieldTypeChoices.TYPE_COORDINATES: CoordinatesFieldType,
+    CustomObjectFieldTypeChoices.TYPE_ARRAY: ArrayFieldType,
 }

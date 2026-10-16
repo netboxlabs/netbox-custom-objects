@@ -1284,6 +1284,58 @@ class MultiSelectFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
         self.assertIsInstance(fs_class.base_filters.get('colors'), ArrayContainsFilter)
 
 
+class ArrayFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
+    """An array field gets a "contains all these values" filter, a length filter and quick search."""
+
+    match_params = {'readings': '1, 3'}
+    total_count = 3
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(name='ArrayFS', slug='array-fs')
+        cls.create_custom_object_type_field(
+            cls.cot, name='name', label='Name', type='text', primary=True, required=True
+        )
+        cls.create_custom_object_type_field(
+            cls.cot, name='readings', label='Readings', type='array', array_element_type='integer'
+        )
+        cls.create_custom_object_type_field(
+            cls.cot, name='points', label='Points', type='array', array_element_type='integer',
+            array_tuple_size=3,
+        )
+        cls.create_custom_object_type_field(
+            cls.cot, name='tags_list', label='Tags', type='array', array_element_type='text'
+        )
+
+        model = cls.cot.get_model()
+        cls.obj_match = model.objects.create(
+            name='a', readings=[1, 2, 3], points=[[0, 0, 0], [7, 8, 9]], tags_list=['edge', 'core']
+        )
+        cls.obj_no_match = model.objects.create(name='b', readings=[1, 2], points=[[1, 1, 1]], tags_list=['edge'])
+        cls.obj_none = model.objects.create(name='c')
+
+    def _pks(self, params):
+        return set(self._filterset(params).qs.values_list('pk', flat=True))
+
+    def test_contains_all_values(self):
+        self.assertEqual(self._pks({'readings': '1'}), {self.obj_match.pk, self.obj_no_match.pk})
+        self.assertEqual(self._pks({'readings': '2,3'}), {self.obj_match.pk})
+        self.assertEqual(self._pks({'tags_list': 'core'}), {self.obj_match.pk})
+        self.assertEqual(self._pks({'points': '7,8,9'}), {self.obj_match.pk})
+        # A value that isn't of the element type matches nothing.
+        self.assertEqual(self._pks({'readings': 'x'}), set())
+
+    def test_length(self):
+        self.assertEqual(self._pks({'readings__len': 2}), {self.obj_no_match.pk})
+        self.assertEqual(self._pks({'points__len': 2}), {self.obj_match.pk})
+
+    def test_quick_search(self):
+        self.assertEqual(self._pks({'q': 'core'}), {self.obj_match.pk})
+        self.assertEqual(self._pks({'q': '3'}), {self.obj_match.pk})
+        self.assertEqual(self._pks({'q': '9'}), {self.obj_match.pk})
+
+
 # ---------------------------------------------------------------------------
 # Polymorphic Object field — filter form fields and filterset queryset
 # ---------------------------------------------------------------------------

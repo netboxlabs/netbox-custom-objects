@@ -27,6 +27,7 @@ from netbox_custom_objects.schema.executor import (
     CircularDependencyError,
     DestructiveChangesError,
     InvalidConstraintError,
+    UnsupportedFieldChangeError,
     UnknownChoiceSetError,
     UnknownFieldTypeError,
     UnknownObjectTypeError,
@@ -522,6 +523,46 @@ class ExecutorFieldAlterTestCase(_ExecutorTestBase):
         self.assertEqual(
             obj_field.related_object_type, site_ot,
         )
+
+    def test_array_field(self):
+        cot = self.create_custom_object_type(name='zone', slug='zone')
+        cot.refresh_from_db()
+        type_def = export_cot(cot)
+        type_def.setdefault("fields", []).append({
+            "id": cot.next_schema_id + 1, "name": "points", "type": "array", "array_element_type": "integer",
+            "array_tuple_size": 3, "array_min_length": 2,
+        })
+        apply_document({"schema_version": "1", "types": [type_def]})
+        field = cot.fields.get(name="points")
+        self.assertEqual(
+            (field.type, field.array_element_type, field.array_tuple_size, field.array_min_length),
+            ("array", "integer", 3, 2),
+        )
+        model = CustomObjectType.objects.get(pk=cot.pk).get_model()
+        model.objects.create(points=[[0, 0, 0], [1, 2, 3]])
+
+        # The length limits can change.
+        type_def = export_cot(cot)
+        type_def["fields"][-1]["array_max_length"] = 10
+        apply_document({"schema_version": "1", "types": [type_def]})
+        field.refresh_from_db()
+        self.assertEqual(field.array_max_length, 10)
+
+        # The element type, tuple size and the type itself can't.
+        changes = {
+            "element type": {"array_element_type": "decimal"},
+            "tuple size": {"array_tuple_size": 2},
+            "type": {"type": "text", "array_element_type": None},
+        }
+        for label, change in changes.items():
+            with self.subTest(label):
+                type_def = export_cot(cot)
+                type_def["fields"][-1].update(change)
+                type_def["fields"][-1] = {k: v for k, v in type_def["fields"][-1].items() if v is not None}
+                with self.assertRaises(UnsupportedFieldChangeError):
+                    apply_document({"schema_version": "1", "types": [type_def]})
+        field.refresh_from_db()
+        self.assertEqual((field.type, field.array_element_type, field.array_tuple_size), ("array", "integer", 3))
 
     def test_alter_field_type(self):
         type_def = export_cot(self.cot)

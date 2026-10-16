@@ -14,7 +14,7 @@ The kind of constraint. Only `Unique` is currently supported.
 
 ### Fields
 
-The fields whose combined values must be unique. Choose at least two, or one when the constraint is case-insensitive or has a condition. Multi-object, multi-select, JSON and coordinates fields can't be included.
+The fields whose combined values must be unique. Choose at least two, or one when the constraint is case-insensitive or has a condition. Multi-object, multi-select, JSON, coordinates and array fields can't be included.
 
 ### Case-Insensitive
 
