@@ -29,21 +29,23 @@ from django.urls import reverse
 from extras.models import CustomFieldChoiceSet
 from rest_framework.test import APIClient
 
-try:
-    from netbox.context_managers import event_tracking
-    from netbox_branching.choices import BranchStatusChoices
-    from netbox_branching.models import Branch
-    from netbox_branching.utilities import activate_branch
-    HAS_BRANCHING = True
-except ImportError:
-    HAS_BRANCHING = False
-
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.models import USER_TABLE_DATABASE_NAME_PREFIX, CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.tests.base import (
     TransactionCleanupMixin,
     _recreate_contenttypes,
     create_token,
 )
+from netbox_custom_objects.utilities import is_branching_enabled
+
+# Installed but not in PLUGINS, importing netbox_branching.models raises RuntimeError
+# rather than ImportError, so check that it's enabled instead.
+HAS_BRANCHING = is_branching_enabled()
+if HAS_BRANCHING:
+    from netbox.context_managers import event_tracking
+    from netbox_branching.choices import BranchStatusChoices
+    from netbox_branching.models import Branch
+    from netbox_branching.utilities import activate_branch
+
 
 logger = logging.getLogger(__name__)
 User = get_user_model()
@@ -1250,6 +1252,19 @@ class BaseBranchingTests(BranchingTestBase):
     # ── polymorphic MULTIOBJECT field merge/revert ────────────────────────
 
     def test_polymorphic_multiobject_field_merge_and_revert(self):
+        self._assert_polymorphic_multiobject_field_merge_and_revert('targets')
+
+    def test_polymorphic_multiobject_long_field_name_merge_and_revert(self):
+        """
+        Regression for #762: a field name long enough that the raw through-table
+        name exceeds PostgreSQL's 63-char limit, so ``safe_table_name()`` hashes
+        it.  Merge replay must target the hashed name, not the raw one.
+        """
+        field_name = 'polymorphic_targets_with_a_very_long_field_name'
+        self.assertGreater(len(f'{USER_TABLE_DATABASE_NAME_PREFIX}1_{field_name}'), 63)
+        self._assert_polymorphic_multiobject_field_merge_and_revert(field_name)
+
+    def _assert_polymorphic_multiobject_field_merge_and_revert(self, field_name):
         """
         Polymorphic MULTIOBJECT field — through table has
         (source_id, content_type_id, object_id) columns.  Asserts the
@@ -1281,7 +1296,7 @@ class BaseBranchingTests(BranchingTestBase):
             cot = CustomObjectType.objects.create(name='poly_m2m_cot', slug='poly-m2m-cot')
             field = CustomObjectTypeField.objects.create(
                 custom_object_type=cot,
-                name='targets',
+                name=field_name,
                 label='Targets',
                 type='multiobject',
                 is_polymorphic=True,
@@ -1290,8 +1305,8 @@ class BaseBranchingTests(BranchingTestBase):
             Model = cot.get_model()
             co = Model.objects.create()
             co.snapshot()
-            co.targets.add(site_a)
-            co.targets.add(site_b)
+            getattr(co, field_name).add(site_a)
+            getattr(co, field_name).add(site_b)
 
         cot_pk, field_pk, co_pk = cot.pk, field.pk, co.pk
         through_table = field.through_table_name
@@ -1608,6 +1623,85 @@ class BranchDeletionTestCase(BranchingTestBase, _TestBase):
 
 
 # ── Sync test ─────────────────────────────────────────────────────────────────
+
+@unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
+class BranchContextDeletionTestCase(BranchingTestBase, _TestBase):
+    """
+    Deleting custom objects keeps working in main and in a branch after the same
+    process has used both.
+
+    Each context generates its own model classes, and Django relates them all by
+    model label, so the deletion collector sees relations whose target is the
+    other context's class.  Covers object, multi-object and polymorphic
+    multi-object fields, deleted from both the source and the target side.
+    """
+
+    def test_delete_in_main_and_branch_after_switching_context(self):
+        site_ot = ObjectType.objects.get(app_label='dcim', model='site')
+        target_cot = CustomObjectType.objects.create(name='ctx_target', slug='ctx-target')
+        CustomObjectTypeField.objects.create(
+            custom_object_type=target_cot, name='label', label='Label', type='text',
+        )
+        source_cot = CustomObjectType.objects.create(name='ctx_source', slug='ctx-source')
+        CustomObjectTypeField.objects.create(
+            custom_object_type=source_cot, name='label', label='Label', type='text',
+        )
+        for name, field_type in (('ref', 'object'), ('refs', 'multiobject')):
+            CustomObjectTypeField.objects.create(
+                custom_object_type=source_cot, name=name, label=name, type=field_type,
+                related_object_type=target_cot.object_type,
+            )
+        poly = CustomObjectTypeField.objects.create(
+            custom_object_type=source_cot, name='poly', label='poly', type='multiobject',
+            is_polymorphic=True,
+        )
+        poly.related_object_types.set([target_cot.object_type, site_ot])
+
+        def models():
+            source_cot.refresh_from_db()
+            target_cot.refresh_from_db()
+            return source_cot.get_model(), target_cot.get_model()
+
+        source_model, target_model = models()
+        targets = [target_model.objects.create(label=f'target {i}') for i in range(4)]
+        sources = []
+        for i in range(4):
+            source = source_model.objects.create(label=f'source {i}', ref=targets[i])
+            source.refs.set(targets)
+            source.poly.set(targets)
+            sources.append(source)
+
+        branch = _provision_branch('Context Branch', 'iterative', self.user)
+        branch_request = _make_request(self.user)
+
+        def delete(source_pk, target_pk):
+            source_model, target_model = models()
+            source_model.objects.get(pk=source_pk).delete()
+            target_model.objects.get(pk=target_pk).delete()
+            self.assertFalse(source_model.objects.filter(pk=source_pk).exists())
+            self.assertFalse(target_model.objects.filter(pk=target_pk).exists())
+
+        # Main first, then the branch, then main again: each switch leaves the
+        # other context's classes in the shared relation graph.
+        with event_tracking(self.request):
+            delete(sources[0].pk, targets[0].pk)
+        with activate_branch(branch), event_tracking(branch_request):
+            delete(sources[1].pk, targets[1].pk)
+        with event_tracking(self.request):
+            delete(sources[2].pk, targets[2].pk)
+
+        source_model, target_model = models()
+        self.assertEqual(list(source_model.objects.values_list('pk', flat=True)), [sources[1].pk, sources[3].pk])
+        self.assertEqual(list(target_model.objects.values_list('pk', flat=True)), [targets[1].pk, targets[3].pk])
+        with activate_branch(branch):
+            source_model, target_model = models()
+            self.assertEqual(
+                list(source_model.objects.values_list('pk', flat=True)), [sources[0].pk, sources[2].pk, sources[3].pk]
+            )
+            self.assertEqual(
+                list(target_model.objects.values_list('pk', flat=True)), [targets[0].pk, targets[2].pk, targets[3].pk]
+            )
+
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
 class BranchSyncTestCase(BranchingTestBase, _TestBase):
@@ -3241,6 +3335,44 @@ class ChoiceSetSearchLifecycleTestCase(BranchingTestBase, _TestBase):
             co.label, 'edited after sync',
             'Edit made after sync must propagate to main on merge',
         )
+
+
+@unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
+class InboundRelationBranchIsolationTestCase(BranchingTestBase, _TestBase):
+    """Regenerating a type's model in a branch must not repoint main's cached
+    relations from other types to the branch's class."""
+
+    def test_branch_regeneration_leaves_main_relations_alone(self):
+        with event_tracking(self.request):
+            bar = CustomObjectType.objects.create(name='bar', slug='bars')
+            CustomObjectTypeField.objects.create(custom_object_type=bar, name='name', label='Name', type='text')
+            foo = CustomObjectType.objects.create(name='foo', slug='foos')
+            for name, field_type in (('bar', 'object'), ('bars', 'multiobject')):
+                CustomObjectTypeField.objects.create(
+                    custom_object_type=foo, name=name, label=name, type=field_type,
+                    related_object_type=bar.object_type,
+                )
+
+        bar_model = CustomObjectType.objects.get(pk=bar.pk).get_model()
+        foo_model = CustomObjectType.objects.get(pk=foo.pk).get_model()
+        bar_obj = bar_model.objects.create(name='x')
+        foo_obj = foo_model.objects.create(bar=bar_obj)
+        foo_obj.bars.set([bar_obj])
+
+        branch = _provision_branch('Inbound Relation Branch', user=self.user)
+        with activate_branch(branch):
+            branch_foo_model = CustomObjectType.objects.get(pk=foo.pk).get_model()
+            branch_bar_model = CustomObjectType.objects.get(pk=bar.pk).get_model(no_cache=True)
+            self.assertIs(branch_foo_model._meta.get_field('bars').related_model, branch_bar_model)
+            self.assertIs(branch_foo_model._meta.get_field('bar').related_model, branch_bar_model)
+
+        self.assertIsNot(branch_bar_model, bar_model)
+        bars_field = foo_model._meta.get_field('bars')
+        self.assertIs(bars_field.related_model, bar_model)
+        self.assertIs(bars_field.remote_field.through._meta.get_field('target').related_model, bar_model)
+        self.assertIs(foo_model._meta.get_field('bar').related_model, bar_model)
+        self.assertEqual(foo_model.objects.filter(bars=bar_obj).count(), 1)
+        self.assertEqual(foo_model.objects.filter(bar=bar_obj).count(), 1)
 
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')

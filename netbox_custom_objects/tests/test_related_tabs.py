@@ -33,6 +33,7 @@ from netbox.registry import registry
 from dcim.models import Site
 
 from netbox_custom_objects.constants import APP_LABEL
+from netbox_custom_objects.models import CustomObjectType
 from netbox_custom_objects.related_tabs.registry import _public_host_model_classes
 from netbox_custom_objects.related_tabs.views.combined import (
     COMBINED_LABEL,
@@ -490,3 +491,33 @@ class CombinedTabQueryTests(TransactionCleanupMixin, CustomObjectsTestCase, Tran
                 {s.pk for s in resolved[(id(obj), id(field))]},
                 {target_a.pk, target_b.pk},
             )
+
+    def test_links_from_another_cot_survive_target_regeneration(self):
+        # Mirrors a dev setup that hit this bug. Creating foo's fields regenerates bar's
+        # model; foo's cached relations must follow it, or bar's detail page fails while
+        # counting linked objects.
+        bar = self.create_custom_object_type(name='bar', slug='bars', verbose_name_plural='bars')
+        self.create_custom_object_type_field(bar, name='name', label='name', type='text')
+        foo = self.create_custom_object_type(name='foo', slug='foos', verbose_name_plural='foos')
+        self.create_custom_object_type_field(
+            foo, name='bar', label='bar', type='object', related_object_type=bar.object_type
+        )
+        self.create_custom_object_type_field(
+            foo, name='bars', label='bars', type='multiobject', related_object_type=bar.object_type
+        )
+
+        self.user.is_superuser = True
+        self.user.save()
+        bar = CustomObjectType.objects.get(pk=bar.pk)
+        bar_obj = bar.get_model().objects.create(name='x')
+        foo_obj = CustomObjectType.objects.get(pk=foo.pk).get_model().objects.create(bar=bar_obj)
+        foo_obj.bars.set([bar_obj])
+        self.assertEqual(self.client.get(bar_obj.get_absolute_url()).status_code, 200)
+        self.assertEqual(_count_linked_custom_objects(bar_obj), 2)
+
+        # Invalidate the target model before loading it again.
+        bar.clear_model_cache(bar.pk)
+        bar.save(update_fields=['cache_timestamp'])
+        bar_obj = CustomObjectType.objects.get(pk=bar.pk).get_model().objects.get(pk=bar_obj.pk)
+        self.assertEqual(self.client.get(bar_obj.get_absolute_url()).status_code, 200)
+        self.assertEqual(_count_linked_custom_objects(bar_obj), 2)

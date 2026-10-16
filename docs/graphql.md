@@ -116,16 +116,26 @@ filter based on its type:
 | multi-select | Array lookups | `roles: {overlap: ["edge", "core"]}` |
 | object | The target's own filter, plus `<field>_id` | `primary_site_id: 7` |
 | multi-object | The target's own filter | `interfaces: {name: {exact: "eth0"}}` |
+| polymorphic object | Per allowed type: that type's filter, plus `_id` | `target_dcim_device_id: 7` |
+| polymorphic multi-object | Per allowed type: that type's filter | `targets_dcim_site: {slug: {exact: "dc1"}}` |
+| coordinates | `<field>_latitude` and `<field>_longitude` comparison lookups | `location_latitude: {gte: "40"}` |
 
 Object and multi-object fields nest the target type's own filter, whether the
 target is a NetBox model (`primary_site: {region: {slug: {exact: "emea"}}}`) or
 another Custom Object Type. Multi-object fields that point at a Custom Object Type
 also take `filters:` on the field itself, to filter the related objects returned.
 
+Polymorphic fields get one filter per type they can point at, named
+`<field>_<app_label>_<model>` as in the REST API, e.g. `target_dcim_site` and
+`target_dcim_device` for a field `target` allowing Sites and Devices. Each one only
+matches objects pointing at that type.
+
 Nested filters are unavailable for relationships that close a reference cycle.
-For single-object relationships, use `<field>_id` instead.
-Polymorphic object and multi-object fields, and coordinates fields, can't be
-filtered in GraphQL yet.
+For single-object relationships, use `<field>_id` (or, for a polymorphic field,
+`<field>_<app_label>_<model>_id`) instead.
+
+A field whose **Filter logic** is set to **Disabled** has no filter, as in the
+REST API.
 
 ## Querying a single object
 

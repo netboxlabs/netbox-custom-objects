@@ -11,7 +11,12 @@ from django.db.utils import OperationalError, ProgrammingError
 from netbox.plugins import PluginConfig
 
 from .constants import APP_LABEL as APP_LABEL
-from .utilities import extract_cot_id_from_model_name, install_clear_cache_suppressor
+from .utilities import (
+    extract_cot_id_from_model_name,
+    install_clear_cache_suppressor,
+    install_collector_patch,
+    is_branching_enabled,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -105,9 +110,7 @@ def _register_branching_hooks_once():
     if _branching_hooks_registered:
         return
 
-    try:
-        import netbox_branching.signals  # noqa: F401
-    except ImportError:
+    if not is_branching_enabled():
         return
 
     # Unguarded: netbox-branching >= 1.0.4 is required (checks.E002), and an
@@ -225,6 +228,34 @@ def _patch_object_selector_view():
 
     ObjectSelectorView._get_form_class = _patched_get_form_class
     ObjectSelectorView._get_filterset_class = _patched_get_filterset_class
+
+
+_choice_set_clean_patched = False
+
+
+def _patch_choice_set_clean():
+    """
+    Extend CustomFieldChoiceSet.clean() to refuse removing a choice a custom object still uses.
+
+    Core's clean() makes this check only for core custom fields (its ``choices_for``
+    relation), so custom object fields need their own check.
+    """
+    global _choice_set_clean_patched
+    if _choice_set_clean_patched:
+        return
+
+    from extras.models import CustomFieldChoiceSet
+
+    from netbox_custom_objects import models
+
+    _original_clean = CustomFieldChoiceSet.clean
+
+    def _patched_clean(self):
+        _original_clean(self)
+        models.check_removed_choices(self)
+
+    CustomFieldChoiceSet.clean = _patched_clean
+    _choice_set_clean_patched = True
 
 
 _graphql_view_patched = False
@@ -456,6 +487,9 @@ class CustomObjectsPluginConfig(PluginConfig):
         # model is registered (must happen exactly once, before get_model() runs).
         install_clear_cache_suppressor()
 
+        # Let deletes match custom objects across branch contexts' model classes.
+        install_collector_patch()
+
         # Register Django system checks (import triggers @register).  These
         # enforce the conditional NetBox/netbox-branching version floors that
         # PluginConfig's static min_version/max_version can't express.
@@ -474,6 +508,9 @@ class CustomObjectsPluginConfig(PluginConfig):
         # Patch ObjectSelectorView to support dynamically-generated custom object models
         _patch_object_selector_view()
 
+        # Validate choice set edits against custom objects, as core does for custom fields
+        _patch_choice_set_clean()
+
         # Patch the GraphQL view so custom object types added/removed at runtime
         # are reflected in the schema without a NetBox restart.
         _patch_graphql_view()
@@ -483,6 +520,10 @@ class CustomObjectsPluginConfig(PluginConfig):
         # polling the database.
         from .graphql.live import connect_signature_invalidation
         connect_signature_invalidation()
+
+        # Evict models of Custom Object Types deleted in another worker process.
+        from .stale_models import connect_stale_model_eviction
+        connect_stale_model_eviction()
 
         # Register netbox-branching integration hooks (deferred-data reset
         # receivers, branchable resolver, ObjectChange field-name migrator,
