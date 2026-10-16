@@ -100,15 +100,24 @@ class UniquenessConstraintTestError(Exception):
 
 
 def _table_exists(table_name, conn=None):
-    """Return True if *table_name* exists in the database reachable via *conn*.
+    """Return True if *table_name* exists in *conn*'s own schema.
 
     Defaults to the global ``connection`` (main schema).  When the caller is
     operating inside a branch context, pass the branch's connection so the
-    lookup runs against the active branch's PostgreSQL schema.
+    lookup runs against the active branch's PostgreSQL schema.  Only that
+    schema counts: a branch connection's search_path falls through to main, so
+    ``introspection.table_names()`` would report main's table and an unqualified
+    DROP would then remove it.
     """
     if conn is None:
         conn = connection
-    return table_name in conn.introspection.table_names()
+    with conn.cursor() as cursor:
+        cursor.execute(
+            'SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_tables '
+            'WHERE schemaname = current_schema() AND tablename = %s)',
+            [table_name],
+        )
+        return cursor.fetchone()[0]
 
 
 USER_TABLE_DATABASE_NAME_PREFIX = "custom_objects_"
@@ -2436,16 +2445,12 @@ class CustomObjectType(NetBoxModel):
                 for through, original in cleared:
                     through._meta.auto_created = original
 
-        # Unregister from apps.all_models so cascade-delete doesn't query the
-        # dropped table.  In a branch the registered classes are normally main's,
-        # which stay live; only drop ones built for this branch (registered when
-        # main's wasn't generated yet).  That can be a replacement for *model*:
-        # a cascaded field delete above regenerates the type mid-delete.
+        # Unregister dropped models so cascade deletion doesn't query missing tables.
+        # In a branch, preserve main's classes but drop any built for this branch,
+        # including one a cascaded field delete above regenerated.
         self.unregister_model(model, branch_id=self._active_branch_id() if in_branch else None)
 
-        # Re-clear: the get_model() call above re-cached this context's entry
-        # (and its throughs) for the DDL drop.  Cascaded field deletes clear it
-        # via their pre_delete handler, but a type with no fields has none.
+        # Clear the model and through models cached by get_model() above.
         self.clear_model_cache(cot_id, all_branches=not in_branch)
 
         if not in_branch:

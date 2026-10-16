@@ -3391,7 +3391,8 @@ class BranchCOTDeletionIsolationTestCase(BranchingTestBase, _TestBase):
             )
 
         main_model = CustomObjectType.objects.get(pk=cot.pk).get_model()
-        main_model.objects.create(name='kept')
+        site = Site.objects.create(name='Kept Site', slug='kept-site')
+        main_model.objects.create(name='kept').sites.add(site)
         main_through = main_model._meta.get_field('sites').remote_field.through
         model_key = main_model.__name__.lower()
         through_key = main_through.__name__.lower()
@@ -3412,6 +3413,9 @@ class BranchCOTDeletionIsolationTestCase(BranchingTestBase, _TestBase):
         self.assertIs(CustomObjectType.get_cached_through_model(cot.pk, main_through.__name__), main_through)
         self.assertIs(CustomObjectType.objects.get(pk=cot.pk).get_model(), main_model)
         self.assertEqual(list(main_model.objects.values_list('name', flat=True)), ['kept'])
+        # Main's through table and its rows are intact.
+        self.assertEqual(list(main_model.objects.get(name='kept').sites.all()), [site])
+        self.assertEqual(main_through.objects.count(), 1)
 
     def test_branch_delete_clears_branch_cache_entry(self):
         # No fields, so no cascaded field pre_delete clears the branch entry;
