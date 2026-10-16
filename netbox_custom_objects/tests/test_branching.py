@@ -30,7 +30,7 @@ from django.urls import reverse
 from extras.models import CustomFieldChoiceSet
 from rest_framework.test import APIClient
 
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.models import USER_TABLE_DATABASE_NAME_PREFIX, CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.tests.base import (
     TransactionCleanupMixin,
     _recreate_contenttypes,
@@ -1253,6 +1253,19 @@ class BaseBranchingTests(BranchingTestBase):
     # ── polymorphic MULTIOBJECT field merge/revert ────────────────────────
 
     def test_polymorphic_multiobject_field_merge_and_revert(self):
+        self._assert_polymorphic_multiobject_field_merge_and_revert('targets')
+
+    def test_polymorphic_multiobject_long_field_name_merge_and_revert(self):
+        """
+        Regression for #762: a field name long enough that the raw through-table
+        name exceeds PostgreSQL's 63-char limit, so ``safe_table_name()`` hashes
+        it.  Merge replay must target the hashed name, not the raw one.
+        """
+        field_name = 'polymorphic_targets_with_a_very_long_field_name'
+        self.assertGreater(len(f'{USER_TABLE_DATABASE_NAME_PREFIX}1_{field_name}'), 63)
+        self._assert_polymorphic_multiobject_field_merge_and_revert(field_name)
+
+    def _assert_polymorphic_multiobject_field_merge_and_revert(self, field_name):
         """
         Polymorphic MULTIOBJECT field — through table has
         (source_id, content_type_id, object_id) columns.  Asserts the
@@ -1284,7 +1297,7 @@ class BaseBranchingTests(BranchingTestBase):
             cot = CustomObjectType.objects.create(name='poly_m2m_cot', slug='poly-m2m-cot')
             field = CustomObjectTypeField.objects.create(
                 custom_object_type=cot,
-                name='targets',
+                name=field_name,
                 label='Targets',
                 type='multiobject',
                 is_polymorphic=True,
@@ -1293,8 +1306,8 @@ class BaseBranchingTests(BranchingTestBase):
             Model = cot.get_model()
             co = Model.objects.create()
             co.snapshot()
-            co.targets.add(site_a)
-            co.targets.add(site_b)
+            getattr(co, field_name).add(site_a)
+            getattr(co, field_name).add(site_b)
 
         cot_pk, field_pk, co_pk = cot.pk, field.pk, co.pk
         through_table = field.through_table_name

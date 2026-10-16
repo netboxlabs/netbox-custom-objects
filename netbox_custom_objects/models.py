@@ -113,6 +113,18 @@ def _table_exists(table_name, conn=None):
 
 USER_TABLE_DATABASE_NAME_PREFIX = "custom_objects_"
 
+
+def through_table_name_for(cot_id, field_name):
+    """Physical table name of the M2M through table for field *field_name* on COT *cot_id*.
+
+    Single source of truth for the formula behind
+    ``CustomObjectTypeField.through_table_name``; anything that needs the name
+    without a field instance (e.g. branch-merge replay) must call this rather
+    than rebuilding the raw string, which is hashed when it exceeds 63 chars.
+    """
+    return safe_table_name(f"{USER_TABLE_DATABASE_NAME_PREFIX}{cot_id}_{field_name}")
+
+
 # Per-context storage for CO field values deferred during squash merge.
 # Using ContextVar instead of a class-level dict so that concurrent merges
 # (different threads or coroutines) each get an isolated copy.
@@ -548,18 +560,17 @@ def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, exist
     M2M renames go through ``_rename_or_create_m2m_through`` first.  When
     neither old nor new column exists (rename conflict — branch A→X vs main
     A→Y), looks up the live field record to find the actual current column.
-    MULTIOBJECT↔scalar type changes are unsupported — caller must remove+add.
+    MULTIOBJECT↔scalar type changes are unsupported and rejected in
+    ``CustomObjectTypeField.clean()``; raise here if one slipped through rather
+    than letting the caller persist a type the schema doesn't match.
     """
     old_is_m2m = old_fi.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
     new_is_m2m = new_fi.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
 
     if old_is_m2m != new_is_m2m:
-        logger.warning(
-            '_schema_alter_field: skipping unsupported type change %r→%r on %s '
-            '(MULTIOBJECT ↔ scalar changes require remove+add, not alter)',
-            old_fi.type, new_fi.type, model._meta.db_table,
+        raise ValidationError(
+            {"type": _("Cannot change a field's type to or from multi-object after creation.")}
         )
-        return
 
     old_mf = _primary_model_field(old_fi)
     new_mf = _primary_model_field(new_fi)
@@ -937,9 +948,7 @@ class CustomObject(
                 # handle_changed_object, which can route across DB aliases.
                 schema_conn_local = connections[_using]
                 for field_name, rows in poly_m2m_data.items():
-                    through_table = (
-                        f'{USER_TABLE_DATABASE_NAME_PREFIX}{cot_id}_{field_name}'
-                    )
+                    through_table = through_table_name_for(cot_id, field_name)
                     _apply_poly_m2m_rows(schema_conn_local, through_table, obj_pk, rows)
                 # Stash full data for deferred column updates (squash ordering fix).
                 deferred = _deferred_co_field_data.get()
@@ -1671,37 +1680,7 @@ class CustomObjectType(NetBoxModel):
                     # Polymorphic GFK: no through model.
                     pass
                 elif field_instance.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                    # Reuse the apps-registered through if present; otherwise
-                    # create one.  Avoids parallel through instances diverging
-                    # from apps.all_models (collector class-identity mismatch).
-                    _apps = model._meta.apps
-                    try:
-                        through_model = _apps.get_model(APP_LABEL, field_instance.through_model_name)
-                        # Always update source FK to point to the current model class.
-                        # get_model() may be called multiple times (e.g. cache invalidation
-                        # after a field save changes cache_timestamp).  Without this update
-                        # the through model's source FK would keep pointing at the old class,
-                        # causing Django's Collector to raise ValueError during cascade delete:
-                        # "Cannot query 'X': Must be 'TableYModel' instance."
-                        source_field = through_model._meta.get_field("source")
-                        source_field.remote_field.model = model
-                        source_field.related_model = model
-                        # Clear @cached_property so deletion collector rebuilds path from updated model.
-                        source_field.__dict__.pop('path_infos', None)
-                        source_field.__dict__.pop('reverse_path_infos', None)
-                    except LookupError:
-                        field_type_obj = FIELD_TYPE_CLASS[CustomFieldTypeChoices.TYPE_MULTIOBJECT]()
-                        source_model_str = f"{APP_LABEL}.{model.__name__}"
-                        through_model = field_type_obj.get_polymorphic_through_model(
-                            field_instance, source_model_str
-                        )
-                        source_field = through_model._meta.get_field("source")
-                        source_field.remote_field.model = model
-                        source_field.related_model = model
-                        # Clear @cached_property so deletion collector rebuilds path from updated model.
-                        source_field.__dict__.pop('path_infos', None)
-                        source_field.__dict__.pop('reverse_path_infos', None)
-                        _apps.register_model(APP_LABEL, through_model)
+                    through_model = self._get_or_build_polymorphic_through(field_instance, model, branch_id)
                     self._register_context_through(branch_id, through_model)
                     if through_model and through_model not in through_models:
                         through_models.append(through_model)
@@ -1742,6 +1721,58 @@ class CustomObjectType(NetBoxModel):
             related_object_types=own_ot,
         ).exclude(related_name=''):
             _wire_polymorphic_reverse_descriptors(inbound_field)
+
+    def _get_or_build_polymorphic_through(self, field_instance, model, branch_id):
+        """Return this context's through for a polymorphic MultiObject field,
+        with its ``source`` FK pointing at *model*.
+
+        Main reuses the apps-registered through so it doesn't diverge from
+        apps.all_models (collector class-identity mismatch).  A branch always
+        builds its own: the registered one is main's, and repointing its source
+        FK would rewire main's class (#765).  For the same reason main never
+        adopts a through that a branch built.
+        """
+        through_model = None
+        if branch_id is None:
+            try:
+                through_model = model._meta.apps.get_model(APP_LABEL, field_instance.through_model_name)
+            except LookupError:
+                pass
+            else:
+                if self._is_branch_through(self.pk, through_model):
+                    through_model = None
+
+        if through_model is None:
+            field_type_obj = FIELD_TYPE_CLASS[CustomFieldTypeChoices.TYPE_MULTIOBJECT]()
+            through_model = field_type_obj.get_polymorphic_through_model(
+                field_instance, f"{APP_LABEL}.{model.__name__}"
+            )
+            if branch_id is None:
+                model._meta.apps.register_model(APP_LABEL, through_model)
+
+        # Point the source FK at this generation's class.  get_model() may run
+        # several times (e.g. cache invalidation after a field save); a stale
+        # source FK makes Django's Collector raise "Cannot query 'X': Must be
+        # 'TableYModel' instance." during cascade delete.
+        source_field = through_model._meta.get_field("source")
+        source_field.remote_field.model = model
+        source_field.related_model = model
+        # Clear @cached_property so deletion collector rebuilds path from updated model.
+        source_field.__dict__.pop('path_infos', None)
+        source_field.__dict__.pop('reverse_path_infos', None)
+        return through_model
+
+    @classmethod
+    def _is_branch_through(cls, cot_id, through_model):
+        """True if *through_model* is cached for one of *cot_id*'s branch contexts.
+
+        Reads ``_through_model_cache`` unlocked, so the caller must hold ``_global_lock``.
+        """
+        return any(
+            bucket.get(through_model.__name__) is through_model
+            for (bucket_cot_id, branch_id), bucket in cls._through_model_cache.items()
+            if branch_id is not None and bucket_cot_id == cot_id
+        )
 
     def _register_context_through(self, branch_id, through_model):
         """Cache *through_model* under (self.pk, branch_id) and, for branch
@@ -2313,7 +2344,7 @@ class CustomObjectType(NetBoxModel):
             self.clear_model_cache(self.id)
 
     def delete(self, *args, **kwargs):
-        # super().delete() resets self.id to None; keep it for the final cache clear.
+        # super().delete() resets self.id to None; keep it for the cleanup afterwards.
         cot_id = self.id
         schema_conn = _get_schema_connection()
         in_branch = schema_conn is not connection
@@ -2402,23 +2433,43 @@ class CustomObjectType(NetBoxModel):
                     through._meta.auto_created = original
 
         # Unregister from apps.all_models so cascade-delete doesn't query the
-        # dropped table.  _global_lock guards against a concurrent get_model()
-        # racing and re-registering mid-cleanup.  In a branch the registered
-        # classes are normally main's, which stay live; only drop one that is
-        # this branch's own class (registered when main's wasn't generated yet).
-        with self._global_lock:
-            registered = apps.all_models[APP_LABEL]
-            for dropped in (model, *getattr(model, '_through_models', [])):
-                name = dropped.__name__.lower()
-                if name in registered and (not in_branch or registered[name] is dropped):
-                    del registered[name]
-
-        apps.clear_cache()
+        # dropped table.  In a branch the registered classes are normally main's,
+        # which stay live; only drop one that is this branch's own class
+        # (registered when main's wasn't generated yet).
+        self.unregister_model(model, only_this_class=in_branch)
 
         # Re-clear: the get_model() call above re-cached this context's entry
         # (and its throughs) for the DDL drop.  Cascaded field deletes clear it
         # via their pre_delete handler, but a type with no fields has none.
         self.clear_model_cache(cot_id, all_branches=not in_branch)
+
+        if not in_branch:
+            # Other worker processes still have this model registered; tell them to
+            # evict it once the delete is committed (see stale_models).
+            from netbox_custom_objects.stale_models import signal_custom_object_type_deleted
+            transaction.on_commit(lambda: signal_custom_object_type_deleted(cot_id))
+
+    @classmethod
+    def unregister_model(cls, model, only_this_class=False):
+        """
+        Remove a generated model and its through models from the app registry.
+
+        Otherwise the model stays in other models' ``_meta.related_objects``, so a
+        cascade delete (or core's ``handle_deleted_object``) queries its dropped
+        table.  ``_global_lock`` guards against a concurrent ``get_model()``
+        re-registering it mid-cleanup.
+
+        With ``only_this_class``, an entry is removed only when it is this exact
+        class, leaving a different class registered under the same name alone.
+        """
+        with cls._global_lock:
+            registry = apps.all_models.get(APP_LABEL, {})
+            for dropped in (model, *getattr(model, '_through_models', [])):
+                name = dropped.__name__.lower()
+                if name in registry and (not only_this_class or registry[name] is dropped):
+                    del registry[name]
+
+        apps.clear_cache()
 
 
 @receiver(post_save, sender=CustomObjectType)
@@ -3226,6 +3277,22 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 )}
             )
 
+        # Prevent converting an existing field to or from multi-object.
+        #
+        # A multi-object field has no column on the parent table; its data lives in a
+        # separate through table. The save() path has no logic to migrate between a
+        # column and a through table, so the conversion would persist the new type with
+        # no matching schema and break every later query against the type.
+        if (
+            self.pk
+            and not self._state.adding
+            and self.type != self._original_type
+            and CustomFieldTypeChoices.TYPE_MULTIOBJECT in (self.type, self._original_type)
+        ):
+            raise ValidationError(
+                {"type": _("Cannot change a field's type to or from multi-object after creation.")}
+            )
+
         # Guard against backing-column name collisions.
         #
         # A multi-column field expands into more than one real column (see above). If a
@@ -3829,9 +3896,9 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         #
         # If the formula must change, write a data migration that renames every
         # affected table with ALTER TABLE … RENAME TO before deploying the new
-        # code, and update through_model_name to match.
-        raw = f"custom_objects_{self.custom_object_type_id}_{self.name}"
-        return safe_table_name(raw)
+        # code, and update through_model_name to match.  The formula itself
+        # lives in through_table_name_for(), shared with branch-merge replay.
+        return through_table_name_for(self.custom_object_type_id, self.name)
 
     @property
     def through_model_name(self):
