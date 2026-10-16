@@ -13,7 +13,7 @@ from django.utils.translation import gettext_lazy as _
 
 from core.models import ObjectType
 from extras.choices import CustomFieldFilterLogicChoices, CustomFieldTypeChoices
-from extras.models import CustomFieldChoiceSet
+from extras.models import CachedValue, CustomFieldChoiceSet
 from netbox.filtersets import ChangeLoggedModelFilterSet, NetBoxModelFilterSet
 from users.models import Owner, OwnerGroup
 
@@ -577,6 +577,14 @@ def get_filterset_class(model):
                     if not is_aware(parsed):
                         parsed = make_aware(parsed)
                     q |= Q(**{f"{field.name}__exact": parsed})
+        if model.custom_object_type.display_expression:
+            # The rendered display_expression can draw on related objects, so match it via
+            # the search cache rather than the table (see CustomObject._display).
+            q |= Q(pk__in=CachedValue.objects.filter(
+                object_type=ObjectType.objects.get_for_model(model),
+                field='_display',
+                value__icontains=value,
+            ).values('object_id'))
         if not q:
             return queryset.none()
         return queryset.filter(q)

@@ -1,5 +1,6 @@
 import contextvars
 import decimal
+import functools
 import logging
 import re
 import threading
@@ -58,11 +59,12 @@ from netbox.models.features import (
 )
 from netbox.plugins import get_plugin_config
 from netbox.registry import registry
-from netbox.search import SearchIndex
+from netbox.search import FieldTypes, SearchIndex
 from utilities import filters
 from utilities.data import deepmerge, get_config_value_ci
 from utilities.datetime import datetime_from_timestamp
 from jinja2 import Undefined as _JinjaUndefined
+from jinja2 import meta as _jinja_meta
 from jinja2.sandbox import SandboxedEnvironment as _JinjaSandbox
 from utilities.object_types import object_type_name
 from utilities.querysets import RestrictedQuerySet
@@ -75,6 +77,7 @@ from netbox_custom_objects.choices import (CustomObjectFieldTypeChoices,
 from netbox_custom_objects.constants import (
     APP_LABEL,
     CONFIG_CONTEXT_DIMENSION_FIELDS,
+    DISPLAY_EXPRESSION_SEARCH_WEIGHT,
     RESERVED_FIELD_NAMES,
 )
 from netbox_custom_objects.field_types import (
@@ -725,6 +728,24 @@ def _build_rename_map(cot, attrs):
     return result
 
 
+_display_expression_env = _JinjaSandbox(undefined=_JinjaUndefined)
+
+
+@functools.lru_cache(maxsize=256)
+def _compile_display_expression(expression):
+    """Return a display expression's template and the top-level names it references."""
+    template = _display_expression_env.from_string(expression)
+    names = frozenset(_jinja_meta.find_undeclared_variables(_display_expression_env.parse(expression)))
+    return template, names
+
+
+def _search_attr_type(instance, field_name):
+    """``SearchIndex.get_attr_type()``, without rendering ``_display`` just to learn its type."""
+    if field_name == "_display":
+        return FieldTypes.STRING
+    return SearchIndex.get_attr_type(instance, field_name)
+
+
 def _set_with_collision_preference(result, key, value):
     """Set ``result[key] = value``; on collision prefer the non-None side.
 
@@ -969,19 +990,34 @@ class CustomObject(
             expression = getattr(self.custom_object_type, 'display_expression', '')
             if not expression:
                 return None
+            template, names = _compile_display_expression(expression)
+            # Only the fields the expression names, since a related field's value costs queries.
             ctx = {}
             for field_info in self._field_objects.values():
                 field_name = field_info["name"]
+                if field_name not in names:
+                    continue
                 field_type = FIELD_TYPE_CLASS[field_info["field"].type]()
                 try:
                     value = field_type.get_display_value(self, field_name)
                     ctx[field_name] = '' if value is None else value
                 except Exception:  # noqa: BLE001
                     ctx[field_name] = ''
-            rendered = _JinjaSandbox(undefined=_JinjaUndefined).from_string(expression).render(**ctx).strip()
+            rendered = template.render(**ctx).strip()
             return rendered or None
         except Exception:  # noqa: BLE001
             return None
+
+    @property
+    def _display(self):
+        """
+        The rendered display_expression, or None without one.
+
+        Indexed for search (see register_custom_object_search_index()), so global and quick
+        search match the name users see. Field names can't start with an underscore, so this
+        can't clash with a field.
+        """
+        return self._render_display_expression()
 
     def __str__(self):
         # If the COT defines a Jinja2 display expression, try that first.
@@ -1862,6 +1898,16 @@ class CustomObjectType(NetBoxModel):
         custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
         return f"Custom Objects > {custom_object_type.display_name}"
 
+    def get_display_expression_fields(self):
+        """Return the fields the display_expression references."""
+        if not self.display_expression:
+            return []
+        try:
+            _, names = _compile_display_expression(self.display_expression)
+        except Exception:  # noqa: BLE001 - an invalid expression renders nothing
+            return []
+        return [field for field in self.fields.all() if field.name in names]
+
     def register_custom_object_search_index(self, model):
         # Use local_fields / local_many_to_many directly — calling _meta.get_field()
         # triggers Django's lazy _relation_tree which re-enters get_models() and
@@ -1889,10 +1935,14 @@ class CustomObjectType(NetBoxModel):
             if field.context and field.type != CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                 display_attrs.append(field.name)
 
+        if self.display_expression:
+            fields.append(("_display", DISPLAY_EXPRESSION_SEARCH_WEIGHT))
+
         attrs = {
             "model": model,
             "fields": tuple(fields),
             "display_attrs": tuple(display_attrs),
+            "get_attr_type": staticmethod(_search_attr_type),
         }
         search_index = type(
             f"{self.name}SearchIndex",
@@ -2335,6 +2385,16 @@ class CustomObjectType(NetBoxModel):
     def save(self, *args, **kwargs):
         needs_db_create = self._state.adding
 
+        # The rendered display_expression is in the search cache; a changed expression needs a reindex.
+        update_fields = kwargs.get('update_fields')
+        needs_reindex = (
+            not needs_db_create
+            and (update_fields is None or 'display_expression' in update_fields)
+            and CustomObjectType.objects.filter(pk=self.pk)
+            .exclude(display_expression=self.display_expression)
+            .exists()
+        )
+
         super().save(*args, **kwargs)
 
         if needs_db_create:
@@ -2342,6 +2402,9 @@ class CustomObjectType(NetBoxModel):
         else:
             # Clear the model cache when the CustomObjectType is modified
             self.clear_model_cache(self.id)
+            if needs_reindex:
+                _cot_id = self.pk
+                transaction.on_commit(lambda: ReindexCustomObjectTypeJob.enqueue(cot_id=_cot_id))
 
     def delete(self, *args, **kwargs):
         # super().delete() clears self.id; keep it for the cleanup afterwards.
