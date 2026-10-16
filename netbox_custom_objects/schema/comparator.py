@@ -275,6 +275,12 @@ def _compare_field_attrs(db_field, schema_field: dict, cot_slug_cache: dict, war
         if dv != sv:
             changes["related_object_filter"] = (dv, sv)
 
+    if "related_name" in type_specific:
+        dv = db_field.related_name or FIELD_DEFAULTS["related_name"]
+        sv = schema_field.get("related_name", FIELD_DEFAULTS["related_name"])
+        if dv != sv:
+            changes["related_name"] = (dv, sv)
+
     if "on_delete_behavior" in type_specific:
         dv = db_field.on_delete_behavior or FIELD_DEFAULTS["on_delete_behavior"]
         sv = schema_field.get("on_delete_behavior", FIELD_DEFAULTS["on_delete_behavior"])
