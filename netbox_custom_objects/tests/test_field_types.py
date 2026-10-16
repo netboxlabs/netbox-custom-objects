@@ -15,6 +15,7 @@ from core.models import ObjectType
 from dcim.models import Device, DeviceType, ModuleType
 from extras.models import CustomFieldChoiceSet
 from netbox_custom_objects.field_types import (
+    ArrayFieldType,
     CoordinatesFieldType,
     MultiObjectFieldType,
     MultiSelectFieldType,
@@ -627,6 +628,200 @@ class CoordinatesFieldTypeTestCase(FieldTypeTestCase):
         )
         with self.assertRaises(ValidationError):
             field.full_clean()
+
+
+class ArrayFieldTypeTestCase(FieldTypeTestCase):
+    """Test cases for the array field type."""
+
+    def _array_field(self, name="points", **kwargs):
+        kwargs = {"array_element_type": "integer", **kwargs}
+        return self.create_custom_object_type_field(
+            self.custom_object_type, name=name, label=name.replace("_", " ").capitalize(), type="array", **kwargs
+        )
+
+    def _model(self):
+        self.custom_object_type.refresh_from_db()
+        return self.custom_object_type.get_model()
+
+    def _clean(self, model, **values):
+        instance = model(name="Test", **values)
+        instance.full_clean()
+        return instance
+
+    def test_flat_and_tuple_arrays_round_trip(self):
+        self._array_field(name="readings")
+        self._array_field(name="points", array_tuple_size=3, array_min_length=2)
+        self._array_field(name="days", array_element_type="date")
+        model = self._model()
+
+        # Form, API and CSV input arrive as lists of strings and numbers; each item is converted.
+        instance = self._clean(
+            model, readings=[1, "2", 3], points=[[0, 0, 0], [10, 0, 5]], days=["2026-01-01", "2026-02-01"],
+        )
+        instance.save()
+        instance.refresh_from_db()
+        self.assertEqual(instance.readings, [1, 2, 3])
+        self.assertEqual(instance.points, [[0, 0, 0], [10, 0, 5]])
+        self.assertEqual(instance.days, [date(2026, 1, 1), date(2026, 2, 1)])
+
+    def test_value_validation(self):
+        self._array_field(name="points", array_tuple_size=3, array_min_length=2, array_max_length=3)
+        self._array_field(name="readings", validation_minimum=0, validation_maximum=100)
+        self._array_field(name="codes", array_element_type="text", validation_regex="^[A-Z]+$")
+        self._array_field(name="amounts", array_element_type="decimal")
+        model = self._model()
+        valid = {"points": [[0, 0, 0], [1, 1, 1]]}
+        self._clean(model, **valid)
+        self._clean(model, **valid, readings=[0, 100], codes=["AB"], amounts=["1.50", 2])
+        cases = {
+            "tuple too short": {"points": [[0, 0, 0], [1, 1]]},
+            "tuple too long": {"points": [[0, 0, 0], [1, 1, 1, 1]]},
+            "not a tuple": {"points": [[0, 0, 0], 1]},
+            "too few items": {"points": [[0, 0, 0]]},
+            "too many items": {"points": [[0, 0, 0]] * 4},
+            "not a list": {"points": {"x": 1}},
+            "not an integer": {**valid, "readings": ["many"]},
+            "below the minimum": {**valid, "readings": [-1]},
+            "above the maximum": {**valid, "readings": [101]},
+            "not matching the regex": {**valid, "codes": ["ab"]},
+            "not a decimal": {**valid, "amounts": ["x"]},
+        }
+        for label, values in cases.items():
+            with self.subTest(label):
+                with self.assertRaises(ValidationError):
+                    self._clean(model, **values)
+
+        # Errors name the item, and the value within a tuple.
+        messages = {
+            "Item 2 must have exactly 3 values.": {"points": [[0, 0, 0], [1, 1]]},
+            "Item 2, value 3: “x” value must be an integer.": {"points": [[0, 0, 0], [1, 1, "x"]]},
+            "Item 2: Ensure this value is less than or equal to 100.": {**valid, "readings": [0, 101]},
+        }
+        for message, values in messages.items():
+            with self.subTest(message):
+                with self.assertRaises(ValidationError) as cm:
+                    self._clean(model, **values)
+                self.assertIn(message, " ".join(cm.exception.messages))
+
+    def test_display_and_table_formatting(self):
+        self._array_field(name="readings")
+        self._array_field(name="points", array_tuple_size=3)
+        model = self._model()
+        instance = model.objects.create(name="Test", readings=[1, 2, 3], points=[[0, 0, 0], [10, 0, 5]])
+        field_type = ArrayFieldType()
+        self.assertEqual(field_type.get_display_value(instance, "readings"), "1, 2, 3")
+        self.assertEqual(field_type.get_display_value(instance, "points"), "(0, 0, 0), (10, 0, 5)")
+        column = field_type.get_table_column_field(self.custom_object_type.fields.get(name="points"))
+        self.assertEqual(column.render([[1, 2, 3]]), "(1, 2, 3)")
+        self.assertEqual(column.render([]), column.default)
+
+    def test_form_field(self):
+        points = self._array_field(name="points", array_tuple_size=3, array_min_length=2)
+        days = self._array_field(name="days", array_element_type="date")
+        points_field = ArrayFieldType().get_form_field(points)
+        days_field = ArrayFieldType().get_form_field(days)
+
+        # The help text's example matches the element type and tuple size.
+        self.assertIn("<code>[[0, 0, 0], [10, 10, 10]]</code>", points_field.help_text)
+        self.assertIn('<code>["2026-01-15", "2026-07-01"]</code>', days_field.help_text)
+
+        # Values are shown compactly: one tuple per line, or a flat array on one line.
+        self.assertEqual(points_field.prepare_value([[0, 0, 0], [10, 0, 5]]), "[\n    [0, 0, 0],\n    [10, 0, 5]\n]")
+        self.assertEqual(points_field.prepare_value("[[0, 0, 0], [10, 0, 5]]"), "[\n    [0, 0, 0],\n    [10, 0, 5]\n]")
+        self.assertEqual(days_field.prepare_value([date(2026, 1, 1)]), '["2026-01-01"]')
+        self.assertEqual(days_field.prepare_value(None), "")
+
+    def test_graphql_annotation(self):
+        flat = self._array_field(name="readings", array_element_type="decimal")
+        points = self._array_field(name="points", array_tuple_size=3)
+        self.assertEqual(ArrayFieldType().get_graphql_annotation(flat), list[Decimal])
+        self.assertEqual(ArrayFieldType().get_graphql_annotation(points), list[list[int]])
+
+    def test_default(self):
+        self._array_field(name="readings", default=[1, 2])
+        model = self._model()
+        first, second = model(name="A"), model(name="B")
+        self.assertEqual(first.readings, [1, 2])
+        # Each object gets its own copy of the default.
+        first.readings.append(3)
+        self.assertEqual(second.readings, [1, 2])
+
+        field = CustomObjectTypeField(
+            custom_object_type=self.custom_object_type, name="bad", type="array",
+            array_element_type="integer", default=["x"],
+        )
+        with self.assertRaises(ValidationError) as cm:
+            field.full_clean()
+        self.assertIn("default", cm.exception.message_dict)
+
+    def test_field_definition_validation(self):
+        cases = {
+            "no element type": ({"type": "array"}, "array_element_type"),
+            "tuple size of one": ({"type": "array", "array_element_type": "integer", "array_tuple_size": 1},
+                                  "array_tuple_size"),
+            "minimum above maximum": ({"type": "array", "array_element_type": "integer", "array_min_length": 3,
+                                       "array_max_length": 2}, "array_max_length"),
+            "numeric limits on text elements": ({"type": "array", "array_element_type": "text",
+                                                 "validation_minimum": 1}, "validation_minimum"),
+            "regex on integer elements": ({"type": "array", "array_element_type": "integer",
+                                           "validation_regex": "^1$"}, "validation_regex"),
+            "array settings on a text field": ({"type": "text", "array_element_type": "integer"},
+                                               "array_element_type"),
+            "length on an integer field": ({"type": "integer", "array_max_length": 2}, "array_max_length"),
+        }
+        for label, (kwargs, key) in cases.items():
+            with self.subTest(label):
+                field = CustomObjectTypeField(custom_object_type=self.custom_object_type, name="values", **kwargs)
+                with self.assertRaises(ValidationError) as cm:
+                    field.full_clean()
+                self.assertIn(key, cm.exception.message_dict)
+
+        # Element validation that fits the element type is allowed.
+        CustomObjectTypeField(
+            custom_object_type=self.custom_object_type, name="codes", type="array",
+            array_element_type="text", validation_regex="^[A-Z]+$",
+        ).full_clean()
+        CustomObjectTypeField(
+            custom_object_type=self.custom_object_type, name="readings", type="array",
+            array_element_type="decimal", validation_minimum=0, validation_maximum=10,
+        ).full_clean()
+
+    def test_shape_and_type_are_fixed_after_creation(self):
+        changes = {
+            "element type": ("array_element_type", "text"),
+            "tuple size": ("array_tuple_size", 2),
+            "type": ("type", "text"),
+        }
+        for label, (attr, value) in changes.items():
+            with self.subTest(label):
+                field = self._array_field(name="points", array_tuple_size=3)
+                field = CustomObjectTypeField.objects.get(pk=field.pk)
+                setattr(field, attr, value)
+                if attr == "type":
+                    field.array_element_type, field.array_tuple_size = "", None
+                with self.assertRaises(ValidationError) as cm:
+                    field.full_clean()
+                self.assertIn(attr, cm.exception.message_dict)
+                field.delete()
+
+        # The length limits can change.
+        field = CustomObjectTypeField.objects.get(pk=self._array_field(name="points", array_tuple_size=3).pk)
+        field.array_max_length = 10
+        field.full_clean()
+
+        text = self.create_custom_object_type_field(self.custom_object_type, name="label", type="text")
+        text.type, text.array_element_type = "array", "text"
+        with self.assertRaises(ValidationError) as cm:
+            text.full_clean()
+        self.assertIn("type", cm.exception.message_dict)
+
+    def test_instances_are_picklable(self):
+        import pickle
+
+        self._array_field(name="points", array_tuple_size=3)
+        model = self._model()
+        instance = model.objects.create(name="Test", points=[[1, 2, 3]])
+        self.assertEqual(pickle.loads(pickle.dumps(instance)).points, [[1, 2, 3]])
 
 
 class BooleanFieldTypeTestCase(FieldTypeTestCase):

@@ -124,8 +124,9 @@ also take `filters:` on the field itself, to filter the related objects returned
 
 Nested filters are unavailable for relationships that close a reference cycle.
 For single-object relationships, use `<field>_id` instead.
-Polymorphic object and multi-object fields, and coordinates fields, can't be
-filtered in GraphQL yet.
+Polymorphic object and multi-object fields, coordinates fields and array fields
+can't be filtered in GraphQL yet. Array fields are returned as lists (of lists, for
+tuples).
 
 ## Querying a single object
 

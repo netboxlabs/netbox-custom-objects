@@ -19,7 +19,7 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import FieldDoesNotExist
-from django.core.validators import RegexValidator, ValidationError
+from django.core.validators import MinValueValidator, RegexValidator, ValidationError
 from django.db import DEFAULT_DB_ALIAS, connection, connections, IntegrityError, models, transaction
 from django.db.utils import OperationalError, ProgrammingError
 from django.db.models import F, Q
@@ -71,7 +71,7 @@ from utilities.serialization import deserialize_object as _deserialize_object
 from utilities.string import title
 from utilities.validators import validate_regex
 
-from netbox_custom_objects.choices import (ConstraintLookupChoices, ConstraintTypeChoices,
+from netbox_custom_objects.choices import (ArrayElementTypeChoices, ConstraintLookupChoices, ConstraintTypeChoices,
                                             CustomObjectFieldTypeChoices, ObjectFieldOnDeleteChoices)
 from netbox_custom_objects.constants import (
     APP_LABEL,
@@ -2695,6 +2695,35 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             "example, <code>^[A-Z]{3}$</code> will limit values to exactly three uppercase letters."
         ),
     )
+    array_element_type = models.CharField(
+        max_length=50,
+        choices=ArrayElementTypeChoices,
+        blank=True,
+        verbose_name=_("element type"),
+        help_text=_("The type of each value (for array fields)"),
+    )
+    array_tuple_size = models.PositiveSmallIntegerField(
+        blank=True,
+        null=True,
+        validators=[MinValueValidator(2)],
+        verbose_name=_("tuple size"),
+        help_text=_(
+            "Store a list of tuples of this many values, e.g. 3 for (x, y, z) points; leave blank for a list of "
+            "single values (for array fields)"
+        ),
+    )
+    array_min_length = models.PositiveIntegerField(
+        blank=True,
+        null=True,
+        verbose_name=_("minimum length"),
+        help_text=_("Minimum number of items (for array fields)"),
+    )
+    array_max_length = models.PositiveIntegerField(
+        blank=True,
+        null=True,
+        verbose_name=_("maximum length"),
+        help_text=_("Maximum number of items (for array fields)"),
+    )
     choice_set = models.ForeignKey(
         to="extras.CustomFieldChoiceSet",
         on_delete=models.PROTECT,
@@ -2801,6 +2830,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         self._original_related_object_type_id = self.related_object_type_id
         self._original_is_polymorphic = self.is_polymorphic
         self._original_on_delete_behavior = self.on_delete_behavior
+        self._original_array_element_type = self.array_element_type
+        self._original_array_tuple_size = self.array_tuple_size
 
     def __str__(self):
         return self.label or self.name.replace("_", " ").capitalize()
@@ -2906,6 +2937,25 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             return CustomObjectType.get_content_type_label(custom_object_type_id)
         return object_type_name(self.related_object_type, include_app=True)
 
+    def _clean_array_attributes(self):
+        """The array_* attributes are required (element type) or allowed only on array fields."""
+        array_attrs = ("array_element_type", "array_tuple_size", "array_min_length", "array_max_length")
+        if self.type != CustomObjectFieldTypeChoices.TYPE_ARRAY:
+            for attr in array_attrs:
+                if getattr(self, attr) not in (None, ""):
+                    raise ValidationError({attr: _("This may be set only for array fields.")})
+            return
+        if not self.array_element_type:
+            raise ValidationError({"array_element_type": _("Array fields must specify an element type.")})
+        if (
+            self.array_min_length is not None
+            and self.array_max_length is not None
+            and self.array_min_length > self.array_max_length
+        ):
+            raise ValidationError(
+                {"array_max_length": _("The maximum length can't be less than the minimum length.")}
+            )
+
     def clean(self):
         super().clean()
 
@@ -2945,10 +2995,15 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     }
                 )
 
-        # Minimum/maximum values can be set only for numeric fields
+        is_array = self.type == CustomObjectFieldTypeChoices.TYPE_ARRAY
+
+        # Minimum/maximum values can be set only for numeric fields (or arrays of numbers)
         if self.type not in (
             CustomFieldTypeChoices.TYPE_INTEGER,
             CustomFieldTypeChoices.TYPE_DECIMAL,
+        ) and not (
+            is_array
+            and self.array_element_type in (ArrayElementTypeChoices.INTEGER, ArrayElementTypeChoices.DECIMAL)
         ):
             if self.validation_minimum:
                 raise ValidationError(
@@ -2973,7 +3028,9 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             CustomFieldTypeChoices.TYPE_LONGTEXT,
             CustomFieldTypeChoices.TYPE_URL,
         )
-        if self.validation_regex and self.type not in regex_types:
+        if self.validation_regex and self.type not in regex_types and not (
+            is_array and self.array_element_type == ArrayElementTypeChoices.TEXT
+        ):
             raise ValidationError(
                 {
                     "validation_regex": _(
@@ -2981,6 +3038,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     )
                 }
             )
+
+        self._clean_array_attributes()
 
         # Uniqueness can not be enforced for boolean or multiobject fields
         if self.unique and self.type in [CustomFieldTypeChoices.TYPE_BOOLEAN, CustomFieldTypeChoices.TYPE_MULTIOBJECT]:
@@ -3228,6 +3287,25 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     "(coordinates, URL) after creation."
                 )}
             )
+
+        # An array column can't be converted to or from another type's column, and its
+        # element type and tuple size are part of the column's type.
+        if self.pk and not self._state.adding:
+            if self.type != self._original_type and CustomObjectFieldTypeChoices.TYPE_ARRAY in (
+                self.type, self._original_type
+            ):
+                raise ValidationError(
+                    {"type": _("Cannot change a field's type to or from array after creation.")}
+                )
+            if self.type == CustomObjectFieldTypeChoices.TYPE_ARRAY:
+                if self.array_element_type != self._original_array_element_type:
+                    raise ValidationError(
+                        {"array_element_type": _("Cannot change an array's element type after creation.")}
+                    )
+                if self.array_tuple_size != self._original_array_tuple_size:
+                    raise ValidationError(
+                        {"array_tuple_size": _("Cannot change an array's tuple size after creation.")}
+                    )
 
         # A constraint covers this field's column(s) as they are now; changing the type
         # or polymorphic flag would change them under it.
@@ -3653,6 +3731,13 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         """
         Validate a value according to the field's type validation rules.
         """
+        if value not in [None, ""] and self.type == CustomObjectFieldTypeChoices.TYPE_ARRAY:
+            try:
+                FIELD_TYPE_CLASS[self.type]().get_model_field(self).clean(value, None)
+            except ValidationError as exc:
+                raise ValidationError(" ".join(exc.messages))
+            return
+
         if value not in [None, ""]:
 
             # Validate text field

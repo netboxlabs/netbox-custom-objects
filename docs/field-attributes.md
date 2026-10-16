@@ -20,6 +20,7 @@ The following attributes are available when creating or editing a Custom Object 
 | `object` | Reference to a single object (built-in NetBox object or Custom Object) |
 | `multiobject` | Reference to multiple objects of the same type |
 | `coordinates` | A geographic latitude/longitude pair (with a map link) |
+| `array` | A list of values of one type, or of fixed-size tuples such as (x, y, z) points |
 
 ## Common Attributes
 
@@ -107,6 +108,37 @@ Behaviour:
 - **Map link.** Detail views render the coordinates with a **Map** button that opens the location
   using NetBox's `MAPS_URL` configuration parameter (Google Maps by default).
 - `Must be unique` and `Default` are not supported for `coordinates` fields.
+
+## Array Fields
+
+Field type: `array`
+
+An `array` field stores a list of values of one type in a single PostgreSQL array column. Set
+**Tuple size** to store a list of fixed-size tuples instead, such as (x, y, z) points.
+
+| Attribute | Description |
+|-----------|-------------|
+| `Element type` | The type of each value: `Text`, `Integer`, `Decimal`, `Boolean`, `Date` or `Date & time`. Required. Cannot be changed after the field is created. |
+| `Tuple size` | Store a list of tuples of this many values (at least 2), e.g. `3` for (x, y, z) points. Leave blank for a list of single values. Cannot be changed after the field is created. |
+| `Minimum length` / `Maximum length` | The minimum and maximum number of items (values, or tuples). |
+| `Validation regex` | For text elements: a regular expression every value must match. |
+| `Minimum value` / `Maximum value` | For integer and decimal elements: the range every value must fall in. |
+
+For example, a `coordinates` field with element type `Integer`, tuple size `3` and minimum length
+`2` accepts `[[0, 0, 0], [10, 0, 5]]`, and rejects `[[0, 0]]` (a tuple of the wrong size) and
+`[[0, 0, 0]]` (too few items).
+
+Behaviour:
+
+- **Forms and CSV import.** Enter the value as JSON, e.g. `[1, 2, 3]` or `[[0, 0, 0], [10, 0, 5]]`;
+  dates and times as strings, e.g. `["2026-01-01"]`. In a CSV file, quote the JSON as usual.
+- **REST API and GraphQL.** The value is a JSON list (of lists, for tuples).
+- **Display.** Lists show as `1, 2, 3`, and tuples as `(0, 0, 0), (10, 0, 5)`.
+- **Filtering.** `?<name>=1,3` matches objects whose array contains all of the comma-separated
+  values (for tuples, anywhere in any tuple), and `?<name>__len=2` matches by the number of items.
+  Quick search matches objects whose array contains the searched value.
+- A field's type cannot be changed to or from `array`, and arrays can't be included in
+  [constraints](index.md#adding-constraints-to-the-custom-object-type).
 
 ## URL Fields
 

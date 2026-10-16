@@ -10,9 +10,30 @@ class CustomObjectFieldTypeChoices(CustomFieldTypeChoices):
     """
 
     TYPE_COORDINATES = "coordinates"
+    TYPE_ARRAY = "array"
 
     CHOICES = CustomFieldTypeChoices.CHOICES + (
         (TYPE_COORDINATES, _("Coordinates")),
+        (TYPE_ARRAY, _("Array")),
+    )
+
+
+class ArrayElementTypeChoices(ChoiceSet):
+    """The type of each value in an array field."""
+    TEXT = "text"
+    INTEGER = "integer"
+    DECIMAL = "decimal"
+    BOOLEAN = "boolean"
+    DATE = "date"
+    DATETIME = "datetime"
+
+    CHOICES = (
+        (TEXT, _("Text")),
+        (INTEGER, _("Integer")),
+        (DECIMAL, _("Decimal")),
+        (BOOLEAN, _("Boolean")),
+        (DATE, _("Date")),
+        (DATETIME, _("Date & time")),
     )
 
 

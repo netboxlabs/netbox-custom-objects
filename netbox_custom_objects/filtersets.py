@@ -152,6 +152,46 @@ class ArrayContainsFilter(django_filters.MultipleChoiceFilter):
         return qs.filter(q).distinct()
 
 
+def array_contains_lookup(field, values):
+    """
+    Return the ``__contains`` value matching an array that contains all *values*, or
+    None if a value isn't of the array's element type. PostgreSQL compares array
+    elements regardless of nesting, so a tuple array takes the values as one tuple.
+    """
+    from netbox_custom_objects.field_types import ArrayFieldType
+
+    element_field = ArrayFieldType._element_model_field(field)
+    try:
+        coerced = [element_field.to_python(value) for value in values]
+    except django_forms.ValidationError:
+        return None
+    return [coerced] if field.array_tuple_size else coerced
+
+
+class ArrayValuesFilter(django_filters.Filter):
+    """
+    Filter for an array field: objects whose array contains all of the comma-separated values.
+
+    A plain Filter rather than a CharFilter, so NetBox doesn't derive string lookup
+    variants (__ic, __n, ...) from it, which don't apply to arrays.
+    """
+
+    field_class = django_forms.CharField
+
+    def __init__(self, *args, custom_field, **kwargs):
+        self.custom_field = custom_field
+        super().__init__(*args, **kwargs)
+
+    def filter(self, qs, value):
+        values = [v.strip() for v in (value or "").split(",") if v.strip()]
+        if not values:
+            return qs
+        lookup = array_contains_lookup(self.custom_field, values)
+        if lookup is None:
+            return qs.none()
+        return qs.filter(**{f"{self.field_name}__contains": lookup})
+
+
 class NonPolymorphicObjectFilter(django_filters.Filter):
     """
     Filter for non-polymorphic FK Object fields on dynamically-generated COT models.
@@ -394,6 +434,10 @@ class CustomObjectTypeFieldFilterSet(ChangeLoggedModelFilterSet):
             "validation_minimum",
             "validation_maximum",
             "validation_regex",
+            "array_element_type",
+            "array_tuple_size",
+            "array_min_length",
+            "array_max_length",
             "schema_id",
             "deprecated",
             "deprecated_since",
@@ -507,6 +551,15 @@ def build_filter_for_field(field) -> dict:
             ),
         }
 
+    if field.type == CustomObjectFieldTypeChoices.TYPE_ARRAY:
+        label = field.label or field.name
+        return {
+            field.name: ArrayValuesFilter(field_name=field.name, label=label, custom_field=field),
+            f"{field.name}__len": django_filters.NumberFilter(
+                field_name=field.name, lookup_expr="len", label=f"{label} (length)"
+            ),
+        }
+
     spec = FIELD_TYPE_FILTERS.get(field.type)
     if not spec:
         return {}
@@ -597,6 +650,11 @@ def get_filterset_class(model):
                 # ArrayField does not support icontains; use array containment
                 # to check whether the searched value is an element in the array.
                 q |= Q(**{f"{field.name}__contains": [value]})
+            elif field.type == CustomObjectFieldTypeChoices.TYPE_ARRAY:
+                # Arrays holding the searched value as an element.
+                lookup = array_contains_lookup(field, [value])
+                if lookup is not None:
+                    q |= Q(**{f"{field.name}__contains": lookup})
             elif field.type in [
                 CustomFieldTypeChoices.TYPE_INTEGER,
                 CustomFieldTypeChoices.TYPE_DECIMAL,

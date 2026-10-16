@@ -13,7 +13,7 @@ from utilities.forms.rendering import FieldSet
 from utilities.forms.utils import get_field_value
 from utilities.object_types import object_type_name
 
-from netbox_custom_objects.choices import SearchWeightChoices
+from netbox_custom_objects.choices import ArrayElementTypeChoices, CustomObjectFieldTypeChoices, SearchWeightChoices
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.field_types import (
@@ -187,6 +187,16 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
         help_text=_("The type(s) of object that have this custom field"),
         required=False,
     )
+    # Core's choices omit this plugin's own field types (coordinates, array).
+    type = forms.ChoiceField(
+        label=_("Type"),
+        choices=CustomObjectFieldTypeChoices,
+        initial=CustomObjectFieldTypeChoices.TYPE_TEXT,
+        help_text=_(
+            "The type of data stored in this field. For object/multi-object fields, select the related object "
+            "type below."
+        ),
+    )
     custom_object_type = DynamicModelChoiceField(
         queryset=CustomObjectType.objects.all(),
         required=True,
@@ -318,6 +328,8 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
                 if not all(isinstance(item, str) and item in _related_names for item in fs.items)
             )
 
+        self._init_array_fields(field_type)
+
         # custom_object_type is always read-only: new fields are always created in the
         # context of a specific COT (passed via URL param), and existing fields cannot
         # be moved to a different COT.
@@ -356,6 +368,39 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
         else:
             del self.fields["related_name"]
             del self.fields["on_delete_behavior"]
+
+    def _init_array_fields(self, field_type):
+        """Show the array settings, and the validation that applies to its element type, for array fields."""
+        array_fields = ("array_element_type", "array_tuple_size", "array_min_length", "array_max_length")
+        if field_type != CustomObjectFieldTypeChoices.TYPE_ARRAY:
+            for name in array_fields:
+                self.fields.pop(name, None)
+            return
+        # Changing the element type re-renders the form with its validation settings.
+        self.fields["array_element_type"].widget.attrs.update({
+            'hx-get': '.',
+            'hx-include': '#form_fields',
+            'hx-target': '#form_fields',
+        })
+        element_type = get_field_value(self, "array_element_type")
+        if element_type in (ArrayElementTypeChoices.INTEGER, ArrayElementTypeChoices.DECIMAL):
+            validation = ("validation_minimum", "validation_maximum")
+        elif element_type == ArrayElementTypeChoices.TEXT:
+            validation = ("validation_regex",)
+        else:
+            validation = ()
+        # The parent form drops these for types it doesn't know.
+        for name in validation:
+            if name not in self.fields:
+                self.fields[name] = CustomObjectTypeField._meta.get_field(name).formfield()
+        self.fieldsets = (
+            self.fieldsets[0],
+            FieldSet(*array_fields, *validation, name=_("Array")),
+            *self.fieldsets[1:],
+        )
+        if self.instance.pk:
+            self.fields["array_element_type"].disabled = True
+            self.fields["array_tuple_size"].disabled = True
 
     def clean(self):
         cleaned_data = super().clean()
