@@ -139,6 +139,9 @@ def _export_field(field) -> dict:
             value = field.related_object_filter
             if value != FIELD_DEFAULTS.get("related_object_filter"):
                 result["related_object_filter"] = value
+        elif attr == "related_name":
+            if field.related_name:
+                result["related_name"] = field.related_name
         elif attr == "on_delete_behavior":
             value = field.on_delete_behavior or FIELD_DEFAULTS["on_delete_behavior"]
             if value != FIELD_DEFAULTS["on_delete_behavior"]:

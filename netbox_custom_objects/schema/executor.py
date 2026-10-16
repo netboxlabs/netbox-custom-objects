@@ -76,6 +76,10 @@ class InvalidConstraintError(Exception):
     """Raised when a constraint in the schema fails validation, e.g. existing objects violate it."""
 
 
+class InvalidRelatedNameError(Exception):
+    """Raised when a field's related_name is already used for its object type, or clashes with an attribute."""
+
+
 class UnknownChoiceSetError(Exception):
     """Raised when a choice_set name referenced in the schema does not exist in the DB."""
 
@@ -274,6 +278,9 @@ def _schema_def_to_field_kwargs(schema_def: dict) -> dict:
             "related_object_filter", FIELD_DEFAULTS.get("related_object_filter")
         )
 
+    if "related_name" in type_specific:
+        kwargs["related_name"] = schema_def.get("related_name", FIELD_DEFAULTS["related_name"])
+
     if "on_delete_behavior" in type_specific:
         kwargs["on_delete_behavior"] = schema_def.get(
             "on_delete_behavior", FIELD_DEFAULTS.get("on_delete_behavior")
@@ -291,6 +298,18 @@ def _resolve_related_object_types(rot_list: list) -> list:
 # Per-operation helpers
 # ---------------------------------------------------------------------------
 
+def _validate_related_name(cot, field) -> None:
+    """Raise InvalidRelatedNameError if *field*'s related_name is taken (see clean_related_name())."""
+    if not field.related_name:
+        return
+    try:
+        field.clean_related_name()
+    except ValidationError as exc:
+        raise InvalidRelatedNameError(
+            f"Field {field.name!r} on COT {cot.slug!r}: {' '.join(exc.messages)}"
+        ) from exc
+
+
 def _apply_field_add(cot, fc) -> None:
     """Create a new field on *cot* as described by the ADD FieldChange *fc*."""
     kwargs = _schema_def_to_field_kwargs(fc.schema_def)
@@ -304,6 +323,8 @@ def _apply_field_add(cot, fc) -> None:
     # related_object_types.
     with transaction.atomic():
         field = CustomObjectTypeField(**kwargs)
+        # A polymorphic field's targets are only known after save(), so it's checked again below.
+        _validate_related_name(cot, field)
         field.save()
 
         # Wire up M2M related_object_types for polymorphic fields (must be after save).
@@ -311,6 +332,7 @@ def _apply_field_add(cot, fc) -> None:
             rot_list = fc.schema_def.get("related_object_types", [])
             if rot_list:
                 field.related_object_types.set(_resolve_related_object_types(rot_list))
+            _validate_related_name(cot, field)
 
     logger.debug(
         "ADD field %r (schema_id=%s) on COT %r",
@@ -367,12 +389,14 @@ def _apply_field_alter(cot, fc) -> None:
                 f"{', '.join(constraint_names)}; remove it from them before changing its type."
             )
 
+    _validate_related_name(cot, field)
     field.save()
 
     if "related_object_types" in pending_m2m:
         field.related_object_types.set(
             _resolve_related_object_types(pending_m2m["related_object_types"])
         )
+        _validate_related_name(cot, field)
 
     logger.debug(
         "ALTER field %r (schema_id=%s) on COT %r — changed: %s",
