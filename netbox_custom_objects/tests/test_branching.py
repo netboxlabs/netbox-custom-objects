@@ -21,6 +21,7 @@ from unittest import mock
 
 from core.models import ObjectType
 from dcim.models import Site
+from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.db import OperationalError, connection as main_conn, connections
@@ -3373,6 +3374,133 @@ class InboundRelationBranchIsolationTestCase(BranchingTestBase, _TestBase):
         self.assertIs(foo_model._meta.get_field('bar').related_model, bar_model)
         self.assertEqual(foo_model.objects.filter(bars=bar_obj).count(), 1)
         self.assertEqual(foo_model.objects.filter(bar=bar_obj).count(), 1)
+
+
+@unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
+class BranchCOTDeletionIsolationTestCase(BranchingTestBase, _TestBase):
+    """Deleting a type in a branch must leave main's registered model, throughs
+    and cache entry alone; main still has the type until the branch merges."""
+
+    def test_branch_delete_leaves_main_model_registered(self):
+        with event_tracking(self.request):
+            cot = CustomObjectType.objects.create(name='doomed', slug='doomed')
+            CustomObjectTypeField.objects.create(custom_object_type=cot, name='name', label='Name', type='text')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='sites', label='Sites', type='multiobject',
+                related_object_type=ObjectType.objects.get(app_label='dcim', model='site'),
+            )
+
+        main_model = CustomObjectType.objects.get(pk=cot.pk).get_model()
+        site = Site.objects.create(name='Kept Site', slug='kept-site')
+        main_model.objects.create(name='kept').sites.add(site)
+        main_through = main_model._meta.get_field('sites').remote_field.through
+        model_key = main_model.__name__.lower()
+        through_key = main_through.__name__.lower()
+
+        branch = _provision_branch('COT Delete Branch', user=self.user)
+        with activate_branch(branch), event_tracking(_make_request(self.user)):
+            CustomObjectType.objects.get(pk=cot.pk).delete()
+            self.assertFalse(CustomObjectType.objects.filter(pk=cot.pk).exists())
+
+        # The branch's own entries are gone; only main's survive.
+        self.assertFalse(CustomObjectType.is_model_cached(cot.pk, branch.pk))
+        self.assertIsNone(CustomObjectType.get_cached_through_model(cot.pk, main_through.__name__, branch.pk))
+
+        registered = apps.all_models['netbox_custom_objects']
+        self.assertIs(registered.get(model_key), main_model)
+        self.assertIs(registered.get(through_key), main_through)
+        self.assertIs(CustomObjectType.get_cached_model(cot.pk), main_model)
+        self.assertIs(CustomObjectType.get_cached_through_model(cot.pk, main_through.__name__), main_through)
+        self.assertIs(CustomObjectType.objects.get(pk=cot.pk).get_model(), main_model)
+        self.assertEqual(list(main_model.objects.values_list('name', flat=True)), ['kept'])
+        # Main's through table and its rows are intact.
+        self.assertEqual(list(main_model.objects.get(name='kept').sites.all()), [site])
+        self.assertEqual(main_through.objects.count(), 1)
+
+    def test_branch_delete_clears_branch_cache_entry(self):
+        # No fields, so no cascaded field pre_delete clears the branch entry;
+        # only delete()'s own final clear can.
+        with event_tracking(self.request):
+            cot = CustomObjectType.objects.create(name='bare', slug='bare')
+        main_model = CustomObjectType.objects.get(pk=cot.pk).get_model()
+
+        branch = _provision_branch('COT Bare Delete Branch', user=self.user)
+        with activate_branch(branch), event_tracking(_make_request(self.user)):
+            CustomObjectType.objects.get(pk=cot.pk).delete()
+
+        self.assertFalse(CustomObjectType.is_model_cached(cot.pk, branch.pk))
+        self.assertIs(CustomObjectType.get_cached_model(cot.pk), main_model)
+
+    def test_branch_delete_of_multiobject_target_leaves_main_through(self):
+        # Deleting B in a branch cascades to A's multiobject field; main still has
+        # that field, so main's through must stay registered.
+        with event_tracking(self.request):
+            target = CustomObjectType.objects.create(name='target', slug='target')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=target, name='name', label='Name', type='text',
+            )
+            source = CustomObjectType.objects.create(name='source', slug='source')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=source, name='name', label='Name', type='text',
+            )
+            CustomObjectTypeField.objects.create(
+                custom_object_type=source, name='targets', label='Targets', type='multiobject',
+                related_object_type=target.object_type,
+            )
+
+        target_model = CustomObjectType.objects.get(pk=target.pk).get_model()
+        source_model = CustomObjectType.objects.get(pk=source.pk).get_model()
+        main_through = source_model._meta.get_field('targets').remote_field.through
+        through_key = main_through.__name__.lower()
+        linked = target_model.objects.create(name='linked')
+        source_model.objects.create(name='src').targets.add(linked)
+
+        branch = _provision_branch('Inbound M2M Delete Branch', user=self.user)
+        with activate_branch(branch), event_tracking(_make_request(self.user)):
+            CustomObjectType.objects.get(pk=target.pk).delete()
+            self.assertFalse(CustomObjectTypeField.objects.filter(custom_object_type=source, name='targets').exists())
+
+        registered = apps.all_models['netbox_custom_objects']
+        registered = apps.all_models['netbox_custom_objects']
+        self.assertIs(registered.get(through_key), main_through)
+        self.assertIs(CustomObjectType.get_cached_through_model(source.pk, main_through.__name__), main_through)
+        source_model = CustomObjectType.objects.get(pk=source.pk).get_model()
+        self.assertEqual(
+            list(source_model.objects.get(name='src').targets.values_list('name', flat=True)), ['linked'],
+        )
+
+    def test_branch_only_self_referencing_delete_unregisters_replacement(self):
+        # Deleting the self-referencing field mid-delete regenerates the model,
+        # registering a replacement class that delete()'s own class isn't.
+        with event_tracking(self.request):
+            keeper = CustomObjectType.objects.create(name='keeper', slug='keeper')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=keeper, name='name', label='Name', type='text',
+            )
+        keeper_model = CustomObjectType.objects.get(pk=keeper.pk).get_model()
+        keeper_key = keeper_model.__name__.lower()
+
+        branch = _provision_branch('Self Ref Delete Branch', user=self.user)
+        with activate_branch(branch), event_tracking(_make_request(self.user)):
+            cot = CustomObjectType.objects.create(name='selfref', slug='selfref')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='name', label='Name', type='text',
+            )
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='parent', label='Parent', type='object',
+                related_object_type=cot.object_type,
+            )
+            model_key = cot.get_model().__name__.lower()
+            CustomObjectType.objects.get(pk=cot.pk).get_model().objects.create(name='child')
+
+            CustomObjectType.objects.get(pk=cot.pk).delete()
+
+        registered = apps.all_models['netbox_custom_objects']
+        self.assertNotIn(model_key, registered)
+        self.assertFalse(CustomObjectType.is_model_cached(cot.pk, branch.pk))
+        # Main's classes for other types are untouched.
+        self.assertIs(registered.get(keeper_key), keeper_model)
+        self.assertIs(CustomObjectType.get_cached_model(keeper.pk), keeper_model)
 
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
