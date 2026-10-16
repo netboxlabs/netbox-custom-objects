@@ -969,7 +969,10 @@ class CustomObject(
             expression = getattr(self.custom_object_type, 'display_expression', '')
             if not expression:
                 return None
-            ctx = {}
+            ctx = {
+                'id': self.id,
+                'pk': self.pk
+            }
             for field_info in self._field_objects.values():
                 field_name = field_info["name"]
                 field_type = FIELD_TYPE_CLASS[field_info["field"].type]()
