@@ -267,7 +267,7 @@ class CustomObjectTypeConstraintViewTestCase(
 
     model = CustomObjectTypeConstraint
     # The form takes field IDs and names; the model stores schema IDs (checked separately).
-    validation_excluded_fields = ["field_schema_ids", "condition"]
+    validation_excluded_fields = ["field_schema_ids", "condition", "rule"]
 
     @classmethod
     def setUpTestData(cls):
@@ -328,6 +328,37 @@ class CustomObjectTypeConstraintViewTestCase(
         })
         self.assertHttpStatus(response, 200)
         self.assertContains(response, "Unknown field(s): [&#x27;model&#x27;]")
+
+    def test_check_rule_uses_field_names(self):
+        self.user.is_superuser = True
+        self.user.save()
+        add_url = reverse("plugins:netbox_custom_objects:customobjecttypeconstraint_add")
+        response = self.client.post(f"{add_url}?custom_object_type={self.custom_object_type.pk}", {
+            # The unique-only checkboxes are left unticked.
+            "custom_object_type": self.custom_object_type.pk, "name": "c6", "type": "check",
+            "rule": '[{"field": "serial", "lookup": "n", "value": {"field": "model"}}]',
+            "error_message": "Serial and model must differ.",
+        })
+        self.assertHttpStatus(response, 302)
+        constraint = CustomObjectTypeConstraint.objects.get(name="c6")
+        self.assertEqual(constraint.field_schema_ids, [])
+        self.assertEqual(
+            constraint.rule, [{"field": self.f2.schema_id, "lookup": "n", "value": {"field": self.f3.schema_id}}]
+        )
+
+        url = reverse("plugins:netbox_custom_objects:customobjecttypeconstraint_edit", kwargs={"pk": constraint.pk})
+        self.assertContains(self.client.get(url), "&quot;field&quot;: &quot;model&quot;")
+        tab_url = reverse(
+            "plugins:netbox_custom_objects:customobjecttype_constraints", kwargs={"pk": self.custom_object_type.pk}
+        )
+        self.assertContains(self.client.get(tab_url), "Serial does not equal Model (or is empty)")
+
+        response = self.client.post(url, {
+            "custom_object_type": self.custom_object_type.pk, "name": "c6", "type": "check", "nulls_distinct": True,
+            "rule": '[{"field": "serial", "lookup": "n", "value": {"field": "nope"}}]',
+        })
+        self.assertHttpStatus(response, 200)
+        self.assertContains(response, "Unknown field(s): nope")
 
     def test_constraints_tab(self):
         self.user.is_superuser = True

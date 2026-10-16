@@ -300,7 +300,7 @@ class CustomObjectTypeConstraintTable(NetBoxTable):
     )
     constrained_fields = tables.TemplateColumn(
         verbose_name=_('Fields'),
-        template_code='{{ record.get_fields|join:", " }}',
+        template_code='{{ record.get_fields|join:", "|placeholder }}',
         orderable=False,
     )
     case_insensitive = columns.BooleanColumn(
@@ -312,6 +312,11 @@ class CustomObjectTypeConstraintTable(NetBoxTable):
     condition = tables.TemplateColumn(
         verbose_name=_('Condition'),
         template_code='{{ record.get_condition_display|placeholder }}',
+        orderable=False,
+    )
+    rule = tables.TemplateColumn(
+        verbose_name=_('Rule'),
+        template_code='{{ record.get_rule_display|placeholder }}',
         orderable=False,
     )
 
@@ -328,6 +333,8 @@ class CustomObjectTypeConstraintTable(NetBoxTable):
             "case_insensitive",
             "nulls_distinct",
             "condition",
+            "rule",
+            "error_message",
             "description",
             "created",
             "last_updated",
@@ -339,5 +346,6 @@ class CustomObjectTypeConstraintTable(NetBoxTable):
             "case_insensitive",
             "nulls_distinct",
             "condition",
+            "rule",
             "description",
         )

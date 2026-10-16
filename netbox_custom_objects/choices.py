@@ -68,22 +68,32 @@ class SearchWeightChoices(ChoiceSet):
 class ConstraintTypeChoices(ChoiceSet):
     """The kinds of constraint a Custom Object Type can enforce on its objects."""
     UNIQUE = "unique"
+    CHECK = "check"
 
     CHOICES = (
         (UNIQUE, _("Unique")),
+        (CHECK, _("Check")),
     )
 
 
 class ConstraintLookupChoices(ChoiceSet):
-    """How a constraint condition compares a field's value."""
+    """How a constraint condition or rule compares a field's value."""
     EXACT = "exact"
     NOT_EQUAL = "n"
     IN = "in"
     ISNULL = "isnull"
+    GT = "gt"
+    GTE = "gte"
+    LT = "lt"
+    LTE = "lte"
 
     CHOICES = (
         (EXACT, _("Equals")),
         (NOT_EQUAL, _("Does not equal (or is empty)")),
         (IN, _("Is one of")),
         (ISNULL, _("Is empty")),
+        (GT, _("Is greater than")),
+        (GTE, _("Is at least")),
+        (LT, _("Is less than")),
+        (LTE, _("Is at most")),
     )
