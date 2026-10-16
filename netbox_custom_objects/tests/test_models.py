@@ -1563,6 +1563,140 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
         )
         field.full_clean()  # blank related_name is excluded from the uniqueness constraint.
 
+    @tag('regression')  # #761
+    def test_related_name_colliding_with_target_model_attribute_rejected(self):
+        """related_name must not overwrite an existing attribute on a core target model."""
+        site_ct = self.get_site_object_type()
+        original_save = Site.save
+        # A method, a concrete field, and a core NetBox reverse accessor.
+        for field_type in ("object", "multiobject"):
+            for name in ("save", "slug", "devices"):
+                with self.subTest(field_type=field_type, related_name=name):
+                    field = CustomObjectTypeField(
+                        custom_object_type=self.cert_cot,
+                        name="site",
+                        type=field_type,
+                        related_object_type=site_ct,
+                        related_name=name,
+                    )
+                    with self.assertRaises(ValidationError) as cm:
+                        field.full_clean()
+                    self.assertIn("related_name", cm.exception.message_dict)
+        self.assertIs(Site.save, original_save)
+
+    @tag('regression')  # #761
+    def test_related_name_colliding_with_static_plugin_reverse_accessor_rejected(self):
+        """Reverse accessors from the plugin's own static models share APP_LABEL but must not be overwritten."""
+        choice_set_ot = ObjectType.objects.get_for_model(CustomFieldChoiceSet)
+        original = CustomFieldChoiceSet.choices_for_object_type
+        for field_type in ("object", "multiobject"):
+            with self.subTest(field_type=field_type):
+                field = CustomObjectTypeField(
+                    custom_object_type=self.cert_cot,
+                    name="choice_set_ref",
+                    type=field_type,
+                    related_object_type=choice_set_ot,
+                    related_name="choices_for_object_type",
+                )
+                with self.assertRaises(ValidationError) as cm:
+                    field.full_clean()
+                self.assertIn("related_name", cm.exception.message_dict)
+        self.assertIs(CustomFieldChoiceSet.choices_for_object_type, original)
+
+    @tag('regression')  # #761
+    def test_polymorphic_related_name_rejects_stale_non_polymorphic_accessor(self):
+        """A polymorphic field must not claim a name held by a stale non-polymorphic accessor.
+
+        The polymorphic wiring paths refuse to replace a non-polymorphic accessor, so accepting
+        the name would save the field without ever installing its reverse descriptor.
+        """
+        site_ct = self.get_site_object_type()
+        name = "stale_certificates"
+        self.addCleanup(lambda: name in Site.__dict__ and delattr(Site, name))
+
+        # Leave a stale FK reverse accessor behind on Site.
+        np_field = self.create_custom_object_type_field(
+            self.cert_cot,
+            name="site",
+            type="object",
+            related_object_type=site_ct,
+            related_name=name,
+        )
+        self.cert_cot.refresh_from_db()
+        self.cert_cot.get_model()
+        np_field.delete()
+        self.assertIn(name, Site.__dict__)
+
+        poly_field = self.create_custom_object_type_field(
+            self.cert_cot,
+            name="assigned_to",
+            type="object",
+            is_polymorphic=True,
+        )
+        poly_field.related_object_types.set([site_ct])
+        poly_field = CustomObjectTypeField.objects.get(pk=poly_field.pk)
+        poly_field.related_name = name
+        with self.assertRaises(ValidationError) as cm:
+            poly_field.full_clean()
+        self.assertIn("related_name", cm.exception.message_dict)
+
+    @tag('regression')  # #761
+    def test_related_name_collision_rejected_when_making_existing_field_unique(self):
+        """The clobber guard must run before the uniqueness probe installs the reverse accessor."""
+        site_ct = self.get_site_object_type()
+        original_save = Site.save
+        # Restore Site.save even if the guard regresses, so the clobber doesn't leak into other tests.
+        self.addCleanup(setattr, Site, 'save', original_save)
+        created = self.create_custom_object_type_field(
+            self.cert_cot,
+            name="site",
+            type="object",
+            related_object_type=site_ct,
+        )
+        # Load from the DB so _original is populated and the unique=False -> True probe runs.
+        field = CustomObjectTypeField.objects.get(pk=created.pk)
+        field.unique = True
+        field.related_name = "save"
+        with self.assertRaises(ValidationError) as cm:
+            field.full_clean()
+        self.assertIn("related_name", cm.exception.message_dict)
+        self.assertIs(Site.save, original_save)
+
+    @tag('regression')  # #761
+    def test_related_name_colliding_with_custom_object_target_field_rejected(self):
+        """related_name must not overwrite a field on a custom object target model."""
+        self.slb_cot.get_model()
+        for field_type in ("object", "multiobject"):
+            with self.subTest(field_type=field_type):
+                field = CustomObjectTypeField(
+                    custom_object_type=self.cert_cot,
+                    name="slb",
+                    type=field_type,
+                    related_object_type=self.slb_object_type,
+                    related_name="name",
+                )
+                with self.assertRaises(ValidationError) as cm:
+                    field.full_clean()
+                self.assertIn("related_name", cm.exception.message_dict)
+
+    @tag('regression')  # #761
+    def test_existing_field_owning_reverse_accessor_revalidates(self):
+        """Re-cleaning a field whose own reverse accessor is already installed must succeed."""
+        for field_type, name in (("object", "certificates"), ("multiobject", "certificate_set")):
+            with self.subTest(field_type=field_type):
+                field = self.create_custom_object_type_field(
+                    self.cert_cot,
+                    name=f"slb_{field_type}",
+                    type=field_type,
+                    related_object_type=self.slb_object_type,
+                    related_name=name,
+                )
+                self.cert_cot.refresh_from_db()
+                self.cert_cot.get_model()
+                self.assertTrue(hasattr(self.slb_object_type.model_class(), name))
+                field.refresh_from_db()
+                field.full_clean()  # Should not raise.
+
     # ------------------------------------------------------------------ #
     # Object (FK) reverse accessor                                        #
     # ------------------------------------------------------------------ #

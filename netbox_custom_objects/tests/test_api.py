@@ -8,7 +8,7 @@ from unittest import skipUnless
 
 from django.conf import settings
 from django.db import connection
-from django.test import TestCase
+from django.test import TestCase, tag
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from netbox.api.viewsets import mixins as netbox_viewset_mixins
@@ -1413,6 +1413,42 @@ class CustomObjectTypeFieldObjectResolutionTest(CustomObjectsTestCase, TestCase)
         """An unknown app_label must still return 400."""
         response = self._post_field('invalid-app', self._internal_model_name())
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class CustomObjectTypeFieldValidationAPITest(CustomObjectsTestCase, TestCase):
+    """Field-level validation errors from CustomObjectTypeField.clean() surface as 400s via the API."""
+
+    field_url = 'plugins-api:netbox_custom_objects-api:customobjecttypefield-list'
+
+    def setUp(self):
+        self.user = create_test_user('fieldvalidationuser')
+        token_key = create_token(self.user)
+        self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
+
+        obj_perm = ObjectPermission(name='Field validation add perm', actions=['add'])
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        obj_perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectTypeField))
+
+        self.parent_cot = CustomObjectType.objects.create(name='ParentObject', slug='parent-object')
+
+    @tag('regression')  # #761
+    def test_related_name_colliding_with_target_attribute_returns_400(self):
+        """A related_name that would overwrite an attribute on the target model must be rejected."""
+        original_save = Site.save
+        data = {
+            'name': 'site',
+            'custom_object_type': self.parent_cot.pk,
+            'type': 'object',
+            'label': 'Site',
+            'app_label': 'dcim',
+            'model': 'site',
+            'related_name': 'save',
+        }
+        response = self.client.post(reverse(self.field_url), data, format='json', **self.header)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+        self.assertIn('related_name', response.data)
+        self.assertIs(Site.save, original_save)
 
 
 class SerializerFieldCoverageTest(CustomObjectsTestCase, TestCase):
