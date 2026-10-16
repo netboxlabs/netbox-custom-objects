@@ -33,6 +33,18 @@ $ ./manage.py collectstatic
 sudo systemctl restart netbox netbox-rq
 ```
 
+## Local Docker Setup
+
+Docker Desktop users can start a local NetBox instance with the plugin from this checkout:
+
+```
+./scripts/netbox-docker.sh up
+```
+
+Open [http://localhost:8000](http://localhost:8000) and sign in with `admin` / `admin`. On the first start, the script loads the NetBox v4.7 demo database from [netbox-demo-data](https://github.com/netbox-community/netbox-demo-data) before running migrations. It then builds a local NetBox image, installs the plugin in editable mode, and starts PostgreSQL, Redis, NetBox, and the background worker. Use `./scripts/netbox-docker.sh down` to stop it or `./scripts/netbox-docker.sh destroy` to also remove the local database and Redis volumes.
+
+Set `NETBOX_IMAGE`, `NETBOX_PORT`, `SUPERUSER_NAME`, and `SUPERUSER_PASSWORD` before running the script to override the local defaults. Set `LOAD_DEMO_DATA=false` to skip the demo import or `DEMO_DATA_URL` to use another compatible SQL dump. The demo data is only imported when the PostgreSQL volume is created for the first time.
+
 ## Related Objects Tab
 
 When a Custom Object Type has an Object or Multi-object field that points at another model — a built-in NetBox model such as Device or Site, or another Custom Object Type — a **Custom Objects** tab is added to the detail page of every referenced object. The tab lists all custom objects that link to the object being viewed, across every referencing field and type, with:

@@ -21,6 +21,20 @@ custom_object_type_plugin_menu_item = PluginMenuItem(
     permissions=['netbox_custom_objects.view_customobjecttype'],
 )
 
+dynamic_assignment_plugin_menu_item = PluginMenuItem(
+    link="plugins:netbox_custom_objects:dynamicassignment_list",
+    link_text=_("Dynamic Assignments"),
+    buttons=(
+        PluginMenuButton(
+            "plugins:netbox_custom_objects:dynamicassignment_add",
+            _("Add"),
+            "mdi mdi-plus-thick",
+        ),
+    ),
+    auth_required=True,
+    permissions=['netbox_custom_objects.view_dynamicassignment'],
+)
+
 
 class CustomObjectTypeMenuItems:
     group_name = ""
@@ -83,7 +97,7 @@ def get_grouped_menu_items():
 
 def get_groups():
     return [
-        (_("Object Types"), (custom_object_type_plugin_menu_item,))
+        (_("Object Types"), (custom_object_type_plugin_menu_item, dynamic_assignment_plugin_menu_item))
     ] + get_grouped_menu_items() + [
         (_("Objects"), CustomObjectTypeMenuItems())
     ]

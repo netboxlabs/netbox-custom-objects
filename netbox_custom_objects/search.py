@@ -11,3 +11,13 @@ class CustomObjectTypeIndex(SearchIndex):
         ('comments', 5000),
     )
     display_attrs = ('description', 'description')
+
+
+@register_search
+class DynamicAssignmentIndex(SearchIndex):
+    model = models.DynamicAssignment
+    fields = (
+        ('name', 100),
+        ('description', 500),
+    )
+    display_attrs = ('description', 'description')

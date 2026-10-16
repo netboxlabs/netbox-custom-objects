@@ -92,10 +92,12 @@ router = NetBoxRouter()
 router.APIRootView = CustomObjectsAPIRootView
 router.register("custom-object-types", views.CustomObjectTypeViewSet)
 router.register("custom-object-type-fields", views.CustomObjectTypeFieldViewSet)
+router.register("dynamic-assignments", views.DynamicAssignmentViewSet)
 
 urlpatterns = [
     path("", include(router.urls)),
     path("linked-objects/", views.LinkedObjectsView.as_view(), name="linked-objects"),
+    path("dynamic-custom-objects/", views.DynamicCustomObjectsView.as_view(), name="dynamic-custom-objects"),
     path("schema/preview/", views.SchemaPreviewView.as_view(), name="schema-preview"),
     path("schema/apply/", views.SchemaApplyView.as_view(), name="schema-apply"),
     path("<str:custom_object_type>/", custom_object_list, name="customobject-list"),

@@ -1,18 +1,24 @@
 from django import forms
 from django.utils.translation import gettext_lazy as _
 from jinja2.sandbox import SandboxedEnvironment as _JinjaSandbox
+from core.models import ObjectType
+from dcim.models import DeviceRole, DeviceType, Location, Platform, Region, Site, SiteGroup
 from extras.choices import CustomFieldTypeChoices
 from extras.forms import CustomFieldForm
 from netbox.forms import (NetBoxModelBulkEditForm, NetBoxModelFilterSetForm,
                           NetBoxModelForm, NetBoxModelImportForm)
+from tenancy.models import Tenant, TenantGroup
 from utilities.forms.fields import (CommentField, ContentTypeChoiceField,
                                     ContentTypeMultipleChoiceField,
-                                    DynamicModelChoiceField, SlugField, TagFilterField)
+                                    DynamicModelChoiceField,
+                                    DynamicModelMultipleChoiceField,
+                                    SlugField, TagFilterField)
 from utilities.forms.rendering import FieldSet
 from utilities.forms.utils import get_field_value
 from utilities.object_types import object_type_name
+from virtualization.models import Cluster, ClusterGroup, ClusterType
 
-from netbox_custom_objects.choices import SearchWeightChoices
+from netbox_custom_objects.choices import CustomObjectFieldTypeChoices, SearchWeightChoices
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.field_types import (
@@ -21,7 +27,8 @@ from netbox_custom_objects.field_types import (
 )
 from netbox_custom_objects.models import (CustomObjectObjectType,
                                           CustomObjectType,
-                                          CustomObjectTypeField)
+                                          CustomObjectTypeField,
+                                          DynamicAssignment)
 
 __all__ = (
     "CustomObjectTypeForm",
@@ -29,6 +36,8 @@ __all__ = (
     "CustomObjectTypeImportForm",
     "CustomObjectTypeFilterForm",
     "CustomObjectTypeFieldForm",
+    "DynamicAssignmentForm",
+    "DynamicAssignmentFilterForm",
     "CustomObjectType",
 )
 
@@ -176,6 +185,128 @@ class CustomContentTypeMultipleChoiceField(ContentTypeMultipleChoiceField):
             return super().label_from_instance(obj)
 
 
+class DynamicAssignmentForm(NetBoxModelForm):
+    assigned_object_types = CustomContentTypeMultipleChoiceField(
+        queryset=ObjectType.objects.all(),
+        required=False,
+        label=_("Assigned object types"),
+        help_text=_("The object type(s) this assignment applies to (leave empty to match all types)."),
+    )
+    regions = DynamicModelMultipleChoiceField(
+        queryset=Region.objects.all(),
+        required=False,
+        label=_("Regions"),
+    )
+    site_groups = DynamicModelMultipleChoiceField(
+        queryset=SiteGroup.objects.all(),
+        required=False,
+        label=_("Site groups"),
+    )
+    sites = DynamicModelMultipleChoiceField(
+        queryset=Site.objects.all(),
+        required=False,
+        label=_("Sites"),
+    )
+    locations = DynamicModelMultipleChoiceField(
+        queryset=Location.objects.all(),
+        required=False,
+        label=_("Locations"),
+    )
+    device_types = DynamicModelMultipleChoiceField(
+        queryset=DeviceType.objects.all(),
+        required=False,
+        label=_("Device types"),
+    )
+    roles = DynamicModelMultipleChoiceField(
+        queryset=DeviceRole.objects.all(),
+        required=False,
+        label=_("Device roles"),
+    )
+    platforms = DynamicModelMultipleChoiceField(
+        queryset=Platform.objects.all(),
+        required=False,
+        label=_("Platforms"),
+    )
+    cluster_types = DynamicModelMultipleChoiceField(
+        queryset=ClusterType.objects.all(),
+        required=False,
+        label=_("Cluster types"),
+    )
+    cluster_groups = DynamicModelMultipleChoiceField(
+        queryset=ClusterGroup.objects.all(),
+        required=False,
+        label=_("Cluster groups"),
+    )
+    clusters = DynamicModelMultipleChoiceField(
+        queryset=Cluster.objects.all(),
+        required=False,
+        label=_("Clusters"),
+    )
+    tenant_groups = DynamicModelMultipleChoiceField(
+        queryset=TenantGroup.objects.all(),
+        required=False,
+        label=_("Tenant groups"),
+    )
+    tenants = DynamicModelMultipleChoiceField(
+        queryset=Tenant.objects.all(),
+        required=False,
+        label=_("Tenants"),
+    )
+
+    fieldsets = (
+        FieldSet("name", "weight", "description", "is_active", name=_("Dynamic Assignment")),
+        FieldSet("assigned_object_types", name=_("Assigned Object Types")),
+        FieldSet(
+            "regions", "site_groups", "sites", "locations", "device_types", "roles",
+            "platforms", "cluster_types", "cluster_groups", "clusters", "tenant_groups", "tenants",
+            name=_("Filter Dimensions"),
+        ),
+    )
+
+    class Meta:
+        model = DynamicAssignment
+        fields = (
+            "name", "weight", "description", "is_active",
+            "assigned_object_types",
+            "regions", "site_groups", "sites", "locations", "device_types", "roles",
+            "platforms", "cluster_types", "cluster_groups", "clusters", "tenant_groups", "tenants",
+        )
+
+
+class DynamicAssignmentFilterForm(NetBoxModelFilterSetForm):
+    model = DynamicAssignment
+    fieldsets = (
+        FieldSet("q", "filter_id", name=_("Search")),
+        FieldSet("is_active", "assigned_object_types", name=_("Attributes")),
+        FieldSet("regions", "sites", "roles", "tenants", name=_("Dimensions")),
+    )
+    assigned_object_types = CustomContentTypeMultipleChoiceField(
+        queryset=ObjectType.objects.all(),
+        required=False,
+        label=_("Assigned object types"),
+    )
+    regions = DynamicModelMultipleChoiceField(
+        queryset=Region.objects.all(),
+        required=False,
+        label=_("Regions"),
+    )
+    sites = DynamicModelMultipleChoiceField(
+        queryset=Site.objects.all(),
+        required=False,
+        label=_("Sites"),
+    )
+    roles = DynamicModelMultipleChoiceField(
+        queryset=DeviceRole.objects.all(),
+        required=False,
+        label=_("Device roles"),
+    )
+    tenants = DynamicModelMultipleChoiceField(
+        queryset=Tenant.objects.all(),
+        required=False,
+        label=_("Tenants"),
+    )
+
+
 class CustomObjectTypeFieldForm(CustomFieldForm):
     # This field should be removed or at least "required" should be defeated
     object_types = forms.CharField(
@@ -258,6 +389,13 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+        # CustomFieldForm keeps only NetBox's built-in field types. Restore the
+        # plugin-specific choices for custom object fields.
+        self.fields['type'].choices = CustomObjectFieldTypeChoices.CHOICES
+        # The assignment is selected per Custom Object instance, never on the
+        # shared field definition.
+        self.fields.pop('dynamic_assignment', None)
+
         # Toggling the polymorphic checkbox should re-render the form so only the
         # relevant related-object field is shown.
         self.fields['is_polymorphic'].widget.attrs.update({
@@ -331,6 +469,16 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
         # Multi-object fields may not be set unique
         if get_field_value(self, 'type') == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
             self.fields["unique"].disabled = True
+
+        # Handle Dynamic Assignment field type
+        if field_type == CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT:
+            for f in ('primary', 'unique', 'required', 'default', 'search_weight'):
+                if f in self.fields:
+                    self.fields[f].disabled = True
+            self.fieldsets = (
+                CustomObjectTypeFieldForm.fieldsets[0],
+                CustomObjectTypeFieldForm.fieldsets[2],
+            )
 
         # Add related_name (and on_delete_behavior for non-polymorphic single-object
         # fields) to the Related Object fieldset.  Polymorphic mode removes

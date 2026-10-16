@@ -1,0 +1,87 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${DB_NAME:-netbox}
+      POSTGRES_USER: ${DB_USER:-netbox}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-netbox}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-netbox} -d ${DB_NAME:-netbox}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    volumes:
+      - netbox-postgres:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    volumes:
+      - netbox-redis:/data
+
+  netbox:
+    build:
+      context: .
+      dockerfile: docker/netbox/Dockerfile
+      args:
+        NETBOX_IMAGE: ${NETBOX_IMAGE:-netboxcommunity/netbox:v4.7-5.1.1}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      ALLOWED_HOSTS: "*"
+      DB_HOST: postgres
+      DB_NAME: ${DB_NAME:-netbox}
+      DB_PASSWORD: ${DB_PASSWORD:-netbox}
+      DB_USER: ${DB_USER:-netbox}
+      REDIS_HOST: redis
+      REDIS_DATABASE: 0
+      REDIS_CACHE_DATABASE: 1
+      SECRET_KEY: ${SECRET_KEY:-local-development-only-secret-key-change-me-please-1234567890}
+      SUPERUSER_API_TOKEN: ${SUPERUSER_API_TOKEN:-0123456789abcdef0123456789abcdef01234567}
+      SUPERUSER_EMAIL: ${SUPERUSER_EMAIL:-admin@example.com}
+      SUPERUSER_NAME: ${SUPERUSER_NAME:-admin}
+      SUPERUSER_PASSWORD: ${SUPERUSER_PASSWORD:-admin}
+    healthcheck:
+      test: ["CMD", "/opt/netbox/health.sh"]
+      start_period: 90s
+      interval: 15s
+      timeout: 3s
+      retries: 5
+    ports:
+      - "${NETBOX_PORT:-8000}:8080"
+
+  netbox-worker:
+    build:
+      context: .
+      dockerfile: docker/netbox/Dockerfile
+      args:
+        NETBOX_IMAGE: ${NETBOX_IMAGE:-netboxcommunity/netbox:v4.7-5.1.1}
+    command: /opt/netbox/venv/bin/python /opt/netbox/netbox/manage.py rqworker high default low
+    depends_on:
+      netbox:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      ALLOWED_HOSTS: "*"
+      DB_HOST: postgres
+      DB_NAME: ${DB_NAME:-netbox}
+      DB_PASSWORD: ${DB_PASSWORD:-netbox}
+      DB_USER: ${DB_USER:-netbox}
+      REDIS_HOST: redis
+      REDIS_DATABASE: 0
+      REDIS_CACHE_DATABASE: 1
+      SECRET_KEY: ${SECRET_KEY:-local-development-only-secret-key-change-me-please-1234567890}
+
+volumes:
+  netbox-postgres:
+  netbox-redis:

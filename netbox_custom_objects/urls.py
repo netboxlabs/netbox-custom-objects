@@ -10,6 +10,16 @@ urlpatterns = [
     path('custom-object-types/', include(get_model_urls(APP_LABEL, 'customobjecttype', detail=False))),
     path('custom-object-types/<int:pk>/', include(get_model_urls(APP_LABEL, 'customobjecttype'))),
 
+    # Dynamic Assignments
+    path(
+        "dynamic-assignments/",
+        include(get_model_urls(APP_LABEL, "dynamicassignment", detail=False)),
+    ),
+    path(
+        "dynamic-assignments/<int:pk>/",
+        include(get_model_urls(APP_LABEL, "dynamicassignment")),
+    ),
+
     # Custom Object Type Fields
     path(
         "custom-object-type-fields/<int:pk>/",

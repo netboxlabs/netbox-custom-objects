@@ -1,0 +1,60 @@
+{% extends 'generic/object.html' %}
+{% load helpers %}
+{% load i18n %}
+
+{% block content %}
+  <div class="row">
+    <div class="col col-md-6">
+      <div class="card">
+        <h2 class="card-header">{% trans "Assignment Overview" %}</h2>
+        <table class="table table-hover attr-table">
+          <tr><th scope="row">{% trans "Name" %}</th><td>{{ object.name }}</td></tr>
+          <tr><th scope="row">{% trans "Weight" %}</th><td>{{ object.weight }}</td></tr>
+          <tr><th scope="row">{% trans "Active" %}</th><td>{% checkmark object.is_active %}</td></tr>
+          <tr><th scope="row">{% trans "Description" %}</th><td>{{ object.description|placeholder }}</td></tr>
+        </table>
+      </div>
+      <div class="card">
+        <h2 class="card-header">{% trans "Assigned Object Types" %}</h2>
+        <div class="card-body">
+          {% for object_type in assigned_object_types %}
+            <span class="badge bg-secondary">{{ object_type }}</span>
+          {% empty %}
+            {{ ''|placeholder }}
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+    <div class="col col-md-6">
+      <div class="card">
+        <h2 class="card-header">{% trans "Filter Dimensions" %}</h2>
+        <table class="table table-hover">
+          {% for label, values in filter_dimensions %}
+            <tr>
+              <th scope="row">{{ label }}</th>
+              <td>{% for value in values %}{{ value }}{% if not forloop.last %}, {% endif %}{% endfor %}</td>
+            </tr>
+          {% empty %}
+            <tr><td class="text-muted">{% trans "No filter dimensions configured." %}</td></tr>
+          {% endfor %}
+        </table>
+      </div>
+      <div class="card">
+        <h2 class="card-header">{% trans "Referencing Custom Object Fields" %}</h2>
+        <table class="table table-hover">
+          <thead><tr><th>{% trans "Custom Object Type" %}</th><th>{% trans "Field" %}</th></tr></thead>
+          <tbody>
+            {% for field in referencing_fields %}
+              <tr>
+                <td>{{ field.custom_object_type|linkify:"name" }}</td>
+                <td>{{ field }}</td>
+              </tr>
+            {% empty %}
+              <tr><td colspan="2" class="text-muted">{% trans "None found" %}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+{% endblock %}

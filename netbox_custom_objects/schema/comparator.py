@@ -197,7 +197,8 @@ def _compare_field_attrs(db_field, schema_field: dict, cot_slug_cache: dict, war
     # ── base scalar attributes ───────────────────────────────────────────────
     for attr in FIELD_BASE_ATTRS:
         db_val = getattr(db_field, attr)
-        schema_val = schema_field.get(attr, FIELD_DEFAULTS.get(attr))
+        default = 0 if schema_type == "dynamic_assignment" and attr == "search_weight" else FIELD_DEFAULTS.get(attr)
+        schema_val = schema_field.get(attr, default)
         if db_val != schema_val:
             changes[attr] = (db_val, schema_val)
 
@@ -266,6 +267,12 @@ def _compare_field_attrs(db_field, schema_field: dict, cot_slug_cache: dict, war
         sv = schema_field.get("on_delete_behavior", FIELD_DEFAULTS["on_delete_behavior"])
         if dv != sv:
             changes["on_delete_behavior"] = (dv, sv)
+
+    if "dynamic_assignment" in type_specific:
+        dv = db_field.dynamic_assignment.name if db_field.dynamic_assignment_id else None
+        sv = schema_field.get("dynamic_assignment")
+        if dv != sv:
+            changes["dynamic_assignment"] = (dv, sv)
 
     return changes
 
@@ -347,7 +354,9 @@ def diff_cot(type_def: dict) -> COTDiff:
     }
     # Single query for all fields; partition into tracked/untracked in Python.
     db_fields: dict[int, object] = {}
-    for f in cot.fields.select_related("choice_set", "related_object_type").prefetch_related("related_object_types"):
+    for f in cot.fields.select_related(
+        "choice_set", "related_object_type", "dynamic_assignment"
+    ).prefetch_related("related_object_types"):
         if f.schema_id is None:
             diff.warnings.append(
                 f"Field {f.name!r} (pk={f.pk}) has no schema_id and cannot be "
