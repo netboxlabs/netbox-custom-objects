@@ -3550,10 +3550,12 @@ class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
         # condition, statuses it constrains, statuses it leaves free, display
         cases = {
             "exact": ("exact", "active", {"active"}, {"retired", None}, "Status equals active"),
-            "n": ("n", "retired", {"active", None}, {"retired"}, "Status does not equal retired (or is empty)"),
+            "n": ("n", "retired", {"active", None, ""}, {"retired"}, "Status does not equal retired (or is empty)"),
             "in": ("in", ["active", "planned"], {"active", "planned"}, {"retired", None},
                    "Status is one of active, planned"),
-            "isnull": ("isnull", False, {"active"}, {None}, "Status is not empty"),
+            # A blank text value can be stored as NULL or ''; both are empty.
+            "isnull": ("isnull", True, {None, ""}, {"active"}, "Status is empty"),
+            "not isnull": ("isnull", False, {"active"}, {None, ""}, "Status is not empty"),
         }
         for label, (lookup, value, constrained, free, display) in cases.items():
             with self.subTest(label):

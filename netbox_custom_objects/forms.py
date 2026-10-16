@@ -453,8 +453,8 @@ class CustomObjectTypeConstraintForm(ChangelogMessageMixin, forms.ModelForm):
         required=False,
         label=_("Condition"),
         help_text=_(
-            "Apply the constraint only to objects matching all of these predicates. Lookups: exact, n (not equal), "
-            'in (a list of values), isnull (true or false). Example: '
+            "Apply the constraint only to objects matching all of these predicates. Lookups: exact, "
+            'n (does not equal, or is empty), in (a list of values), isnull (true or false). Example: '
             '<code>[{"field": "parent", "lookup": "isnull", "value": true}]</code>'
         ),
     )
@@ -516,7 +516,10 @@ class CustomObjectTypeConstraintForm(ChangelogMessageMixin, forms.ModelForm):
         if not isinstance(condition, list) or not all(isinstance(p, dict) for p in condition):
             raise forms.ValidationError(_("The condition must be a list of predicates."))
         schema_ids = {f.name: f.schema_id for f in self._cot_fields()}
-        unknown = [str(p.get("field")) for p in condition if p.get("field") not in schema_ids]
+        unknown = [
+            str(p.get("field")) for p in condition
+            if not isinstance(p.get("field"), str) or p["field"] not in schema_ids
+        ]
         if unknown:
             raise forms.ValidationError(
                 _("Unknown field(s): {names}").format(names=", ".join(unknown))

@@ -4212,6 +4212,15 @@ def _constraint_columns(field):
     return [field.name]
 
 
+# Field types that store a blank value as either NULL or '', depending on how it was saved.
+_BLANK_STRING_FIELD_TYPES = {
+    CustomFieldTypeChoices.TYPE_TEXT,
+    CustomFieldTypeChoices.TYPE_LONGTEXT,
+    CustomFieldTypeChoices.TYPE_URL,
+    CustomFieldTypeChoices.TYPE_SELECT,
+}
+
+
 def _condition_column(field):
     """Return the model field name a constraint condition on *field* tests."""
     if field.is_polymorphic:
@@ -4360,11 +4369,15 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
         """Build the Q for the condition; raises KeyError if a field is missing."""
         q = Q()
         for predicate in self.condition:
-            column = _condition_column(fields_by_schema_id[predicate["field"]])
+            field = fields_by_schema_id[predicate["field"]]
+            column = _condition_column(field)
             lookup, value = predicate["lookup"], predicate.get("value")
             if lookup == ConstraintLookupChoices.NOT_EQUAL:
                 # Spell out that empty values match; full_clean() evaluates NOT (NULL = x) as false.
                 q &= ~Q(**{column: value}) | Q(**{f"{column}__isnull": True})
+            elif lookup == ConstraintLookupChoices.ISNULL and field.type in _BLANK_STRING_FIELD_TYPES:
+                empty = Q(**{f"{column}__isnull": True}) | Q(**{column: ""})
+                q &= empty if value else Q(**{f"{column}__isnull": False}) & ~Q(**{column: ""})
             else:
                 q &= Q(**{f"{column}__{lookup}": value})
         return q

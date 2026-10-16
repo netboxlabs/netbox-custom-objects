@@ -321,6 +321,14 @@ class CustomObjectTypeConstraintViewTestCase(
         self.assertHttpStatus(response, 200)
         self.assertContains(response, "Unknown field(s): nope")
 
+        response = self.client.post(url, {
+            "custom_object_type": self.custom_object_type.pk, "name": "c5", "type": "unique",
+            "field_schema_ids": [self.f4.pk], "nulls_distinct": True,
+            "condition": '[{"field": ["model"], "lookup": "isnull", "value": true}]',
+        })
+        self.assertHttpStatus(response, 200)
+        self.assertContains(response, "Unknown field(s): [&#x27;model&#x27;]")
+
     def test_constraints_tab(self):
         self.user.is_superuser = True
         self.user.save()
