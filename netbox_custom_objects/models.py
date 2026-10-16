@@ -1782,6 +1782,7 @@ class CustomObjectType(NetBoxModel):
         key = (self.pk, branch_id)
         bucket = type(self)._through_model_cache.setdefault(key, {})
         bucket[through_model.__name__] = through_model
+        through_model._context_branch_id = branch_id
         if branch_id is not None:
             self._restore_main_through_registration(self.pk, through_model.__name__)
 
@@ -1977,6 +1978,9 @@ class CustomObjectType(NetBoxModel):
             "__module__": __name__,
             "custom_object_type": self,
             "custom_object_type_id": self.id,
+            # Branch context this class was built for (None for main); lets a
+            # branch-side delete tell its own registrations from main's.
+            "_context_branch_id": branch_id,
         }
 
         # Pass the generating models set to field generation
@@ -2434,9 +2438,10 @@ class CustomObjectType(NetBoxModel):
 
         # Unregister from apps.all_models so cascade-delete doesn't query the
         # dropped table.  In a branch the registered classes are normally main's,
-        # which stay live; only drop one that is this branch's own class
-        # (registered when main's wasn't generated yet).
-        self.unregister_model(model, only_this_class=in_branch)
+        # which stay live; only drop ones built for this branch (registered when
+        # main's wasn't generated yet).  That can be a replacement for *model*:
+        # a cascaded field delete above regenerates the type mid-delete.
+        self.unregister_model(model, branch_id=self._active_branch_id() if in_branch else None)
 
         # Re-clear: the get_model() call above re-cached this context's entry
         # (and its throughs) for the DDL drop.  Cascaded field deletes clear it
@@ -2450,7 +2455,7 @@ class CustomObjectType(NetBoxModel):
             transaction.on_commit(lambda: signal_custom_object_type_deleted(cot_id))
 
     @classmethod
-    def unregister_model(cls, model, only_this_class=False):
+    def unregister_model(cls, model, branch_id=None):
         """
         Remove a generated model and its through models from the app registry.
 
@@ -2459,14 +2464,17 @@ class CustomObjectType(NetBoxModel):
         table.  ``_global_lock`` guards against a concurrent ``get_model()``
         re-registering it mid-cleanup.
 
-        With ``only_this_class``, an entry is removed only when it is this exact
-        class, leaving a different class registered under the same name alone.
+        With ``branch_id``, only entries built for that branch context are removed,
+        whichever generation they are, so main's classes stay registered.
         """
         with cls._global_lock:
             registry = apps.all_models.get(APP_LABEL, {})
             for dropped in (model, *getattr(model, '_through_models', [])):
                 name = dropped.__name__.lower()
-                if name in registry and (not only_this_class or registry[name] is dropped):
+                registered = registry.get(name)
+                if registered is None:
+                    continue
+                if branch_id is None or registered is dropped:
                     del registry[name]
 
         apps.clear_cache()

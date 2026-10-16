@@ -3427,6 +3427,39 @@ class BranchCOTDeletionIsolationTestCase(BranchingTestBase, _TestBase):
         self.assertFalse(CustomObjectType.is_model_cached(cot.pk, branch.pk))
         self.assertIs(CustomObjectType.get_cached_model(cot.pk), main_model)
 
+    def test_branch_only_self_referencing_delete_unregisters_replacement(self):
+        # Deleting the self-referencing field mid-delete regenerates the model,
+        # registering a replacement class that delete()'s own class isn't.
+        with event_tracking(self.request):
+            keeper = CustomObjectType.objects.create(name='keeper', slug='keeper')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=keeper, name='name', label='Name', type='text',
+            )
+        keeper_model = CustomObjectType.objects.get(pk=keeper.pk).get_model()
+        keeper_key = keeper_model.__name__.lower()
+
+        branch = _provision_branch('Self Ref Delete Branch', user=self.user)
+        with activate_branch(branch), event_tracking(_make_request(self.user)):
+            cot = CustomObjectType.objects.create(name='selfref', slug='selfref')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='name', label='Name', type='text',
+            )
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='parent', label='Parent', type='object',
+                related_object_type=cot.object_type,
+            )
+            model_key = cot.get_model().__name__.lower()
+            CustomObjectType.objects.get(pk=cot.pk).get_model().objects.create(name='child')
+
+            CustomObjectType.objects.get(pk=cot.pk).delete()
+
+        registered = apps.all_models['netbox_custom_objects']
+        self.assertNotIn(model_key, registered)
+        self.assertFalse(CustomObjectType.is_model_cached(cot.pk, branch.pk))
+        # Main's classes for other types are untouched.
+        self.assertIs(registered.get(keeper_key), keeper_model)
+        self.assertIs(CustomObjectType.get_cached_model(keeper.pk), keeper_model)
+
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
 class GraphQLBranchIsolationTestCase(BranchingTestBase, _TestBase):
