@@ -3184,6 +3184,30 @@ class CustomObjectTypeConstraintAPITest(CustomObjectsTestCase, TestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.content)
         self.assertIn('fields', response.data)
 
+        condition = [{'field': foreign.pk, 'lookup': 'isnull', 'value': True}]
+        response = self._create_constraint([self.serial.pk], condition=condition)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.content)
+        self.assertIn('condition', response.data)
+
+    def test_create_with_condition(self):
+        status_field = self.create_custom_object_type_field(self.cot, name='status', type='text')
+        condition = [{'field': status_field.pk, 'lookup': 'n', 'value': 'retired'}]
+        response = self._create_constraint([self.serial.pk], condition=condition)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.content)
+        self.assertEqual(
+            CustomObjectTypeConstraint.objects.get().condition,
+            [{'field': status_field.schema_id, 'lookup': 'n', 'value': 'retired'}],
+        )
+        predicate = response.data['condition'][0]
+        self.assertEqual(predicate['field']['id'], status_field.pk)
+        self.assertEqual(predicate['field']['name'], 'status')
+        self.assertEqual((predicate['lookup'], predicate['value']), ('n', 'retired'))
+
+        response = self._create_constraint(
+            [self.vendor.pk], name='invalid', condition=[{'field': status_field.pk, 'lookup': 'isnull'}]
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.content)
+
     def test_rejects_invalid_constraint(self):
         response = self._create_constraint([self.vendor.pk])
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.content)
@@ -3231,9 +3255,11 @@ class CustomObjectTypeConstraintAPITest(CustomObjectsTestCase, TestCase):
             custom_object_type=self.cot, name='c1', field_schema_ids=[self.vendor.schema_id, self.serial.schema_id]
         )
         one = list_queries()
+        condition = [{'field': self.vendor.schema_id, 'lookup': 'isnull', 'value': False}]
         for name, fields in (('c2', (self.vendor, model_field)), ('c3', (self.serial, model_field))):
             CustomObjectTypeConstraint.objects.create(
-                custom_object_type=self.cot, name=name, field_schema_ids=[f.schema_id for f in fields]
+                custom_object_type=self.cot, name=name, field_schema_ids=[f.schema_id for f in fields],
+                condition=condition,
             )
         self.assertEqual(list_queries(), one)
 

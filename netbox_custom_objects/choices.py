@@ -72,3 +72,18 @@ class ConstraintTypeChoices(ChoiceSet):
     CHOICES = (
         (UNIQUE, _("Unique")),
     )
+
+
+class ConstraintLookupChoices(ChoiceSet):
+    """How a constraint condition compares a field's value."""
+    EXACT = "exact"
+    NOT_EQUAL = "n"
+    IN = "in"
+    ISNULL = "isnull"
+
+    CHOICES = (
+        (EXACT, _("Equals")),
+        (NOT_EQUAL, _("Does not equal (or is empty)")),
+        (IN, _("Is one of")),
+        (ISNULL, _("Is empty")),
+    )

@@ -325,7 +325,25 @@
         },
         "case_insensitive": { "type": "boolean", "default": false },
         "nulls_distinct": { "type": "boolean", "default": true },
+        "condition": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/constraint_predicate" },
+          "default": [],
+          "description": "Apply the constraint only to objects matching all of these predicates."
+        },
         "description": { "type": "string", "maxLength": 200 }
+      }
+    },
+
+    "constraint_predicate": {
+      "type": "object",
+      "description": "A test on one field of the COT. 'value' is a list for 'in', a boolean for 'isnull', and a single value otherwise.",
+      "required": ["field", "lookup"],
+      "additionalProperties": false,
+      "properties": {
+        "field": { "type": "integer", "minimum": 1, "description": "The id of the field to test." },
+        "lookup": { "type": "string", "enum": ["exact", "n", "in", "isnull"] },
+        "value": {}
       }
     },
 

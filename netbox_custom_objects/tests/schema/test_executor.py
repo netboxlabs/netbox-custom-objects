@@ -952,6 +952,20 @@ class ExecutorConstraintTestCase(_ExecutorTestBase):
         self.assertEqual(diff.constraint_changes[0].changed_attrs, {"nulls_distinct": (True, False)})
         self.assertFalse(CustomObjectTypeConstraint.objects.get().nulls_distinct)
 
+    def test_condition(self):
+        condition = [{"field": self.vendor.schema_id, "lookup": "isnull", "value": False}]
+        constraint_def = {"name": "serial_if_vendor", "fields": [self.serial.schema_id], "condition": condition}
+        apply_document(self._document(constraints=[constraint_def]))
+        self.assertEqual(CustomObjectTypeConstraint.objects.get().condition, condition)
+        self.cot.refresh_from_db()
+        self.assertEqual(export_cot(self.cot)["constraints"], [constraint_def])
+        self.assertEqual(diff_document(self._document())[0].constraint_changes, [])
+
+        changed = [{**condition[0], "value": True}]
+        diff = apply_document(self._document(constraints=[{**constraint_def, "condition": changed}]))[0]
+        self.assertEqual(diff.constraint_changes[0].changed_attrs, {"condition": (condition, changed)})
+        self.assertEqual(CustomObjectTypeConstraint.objects.get().condition, changed)
+
     def test_remove_needs_removed_constraints(self):
         apply_document(self._document(constraints=[self._constraint_def()]))
 

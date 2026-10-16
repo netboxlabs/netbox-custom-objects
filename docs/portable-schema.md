@@ -225,6 +225,10 @@ constraints:
   - name: serial_ci
     fields: [2]
     case_insensitive: true
+  - name: name_unique_top_level
+    fields: [3]
+    condition:
+      - {field: 4, lookup: isnull, value: true}
 ```
 
 | Key | Required | Description |
@@ -234,6 +238,7 @@ constraints:
 | `type` | no | `"unique"`. Default: `"unique"`. |
 | `case_insensitive` | no | Compare text and URL fields without regard to case. Default: `false`. |
 | `nulls_distinct` | no | Objects that leave a constrained field empty never conflict. Default: `true`. |
+| `condition` | no | Apply the constraint only to objects matching all of these predicates. Each is `{field, lookup, value}`: `field` is a field `id`; `lookup` is `exact`, `n` (does not equal, or is empty), `in` (`value` is a list) or `isnull` (`value` is `true` or `false`). Object fields can only be tested with `isnull`. Default: `[]`. |
 | `description` | no | Short description (max 200 characters). |
 
 Constraints are matched by name. As with fields, a constraint in the DB but absent from

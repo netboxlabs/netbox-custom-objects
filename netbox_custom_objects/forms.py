@@ -8,7 +8,7 @@ from netbox.forms import (NetBoxModelBulkEditForm, NetBoxModelFilterSetForm,
 from netbox.forms.mixins import ChangelogMessageMixin
 from utilities.forms.fields import (CommentField, ContentTypeChoiceField,
                                     ContentTypeMultipleChoiceField,
-                                    DynamicModelChoiceField, SlugField, TagFilterField)
+                                    DynamicModelChoiceField, JSONField, SlugField, TagFilterField)
 from utilities.forms.rendering import FieldSet
 from utilities.forms.utils import get_field_value
 from utilities.object_types import object_type_name
@@ -449,6 +449,15 @@ class CustomObjectTypeConstraintForm(ChangelogMessageMixin, forms.ModelForm):
         label=_("Fields"),
         help_text=_("The fields whose combined values must be unique"),
     )
+    condition = JSONField(
+        required=False,
+        label=_("Condition"),
+        help_text=_(
+            "Apply the constraint only to objects matching all of these predicates. Lookups: exact, "
+            'n (does not equal, or is empty), in (a list of values), isnull (true or false). Example: '
+            '<code>[{"field": "parent", "lookup": "isnull", "value": true}]</code>'
+        ),
+    )
 
     fieldsets = (
         FieldSet(
@@ -458,6 +467,7 @@ class CustomObjectTypeConstraintForm(ChangelogMessageMixin, forms.ModelForm):
             "field_schema_ids",
             "case_insensitive",
             "nulls_distinct",
+            "condition",
             "description",
             name=_("Constraint"),
         ),
@@ -472,6 +482,7 @@ class CustomObjectTypeConstraintForm(ChangelogMessageMixin, forms.ModelForm):
             "field_schema_ids",
             "case_insensitive",
             "nulls_distinct",
+            "condition",
             "description",
         )
 
@@ -485,6 +496,32 @@ class CustomObjectTypeConstraintForm(ChangelogMessageMixin, forms.ModelForm):
         )
         if self.instance.pk:
             self.initial["field_schema_ids"] = [f.pk for f in self.instance.get_fields()]
+        # The model stores fields by schema ID; the form shows and accepts field names.
+        if self.instance.condition and not self.is_bound:
+            names = {f.schema_id: f.name for f in self._cot_fields()}
+            self.initial["condition"] = [
+                {**p, "field": names.get(p.get("field"), p.get("field"))} for p in self.instance.condition
+            ]
+
+    def _cot_fields(self):
+        return CustomObjectTypeField.objects.filter(custom_object_type_id=self.instance.custom_object_type_id)
 
     def clean_field_schema_ids(self):
         return [f.schema_id for f in self.cleaned_data["field_schema_ids"]]
+
+    def clean_condition(self):
+        condition = self.cleaned_data["condition"]
+        if not condition:
+            return []
+        if not isinstance(condition, list) or not all(isinstance(p, dict) for p in condition):
+            raise forms.ValidationError(_("The condition must be a list of predicates."))
+        schema_ids = {f.name: f.schema_id for f in self._cot_fields()}
+        unknown = [
+            str(p.get("field")) for p in condition
+            if not isinstance(p.get("field"), str) or p["field"] not in schema_ids
+        ]
+        if unknown:
+            raise forms.ValidationError(
+                _("Unknown field(s): {names}").format(names=", ".join(unknown))
+            )
+        return [{**p, "field": schema_ids[p["field"]]} for p in condition]
