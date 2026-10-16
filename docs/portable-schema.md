@@ -229,16 +229,23 @@ constraints:
     fields: [3]
     condition:
       - {field: 4, lookup: isnull, value: true}
+  - name: end_after_start
+    type: check
+    rule:
+      - {field: 6, lookup: gt, value: {field: 5}}
+    error_message: The end date must be after the start date.
 ```
 
 | Key | Required | Description |
 |-----|----------|-------------|
 | `name` | yes | Constraint name, must match identifier pattern. Used as the lookup key when applying. |
-| `fields` | yes | The `id`s of the fields whose combined values must be unique. |
-| `type` | no | `"unique"`. Default: `"unique"`. |
-| `case_insensitive` | no | Compare text and URL fields without regard to case. Default: `false`. |
-| `nulls_distinct` | no | Objects that leave a constrained field empty never conflict. Default: `true`. |
-| `condition` | no | Apply the constraint only to objects matching all of these predicates. Each is `{field, lookup, value}`: `field` is a field `id`; `lookup` is `exact`, `n` (does not equal, or is empty), `in` (`value` is a list) or `isnull` (`value` is `true` or `false`). Object fields can only be tested with `isnull`. Default: `[]`. |
+| `type` | no | `"unique"` or `"check"`. Default: `"unique"`. |
+| `fields` | for `unique` | The `id`s of the fields whose combined values must be unique. Omitted for `check`. |
+| `case_insensitive` | no | For `unique`: compare text and URL fields without regard to case. Default: `false`. |
+| `nulls_distinct` | no | For `unique`: objects that leave a constrained field empty never conflict. Default: `true`. |
+| `condition` | no | Apply the constraint only to objects matching all of these predicates. Each is `{field, lookup, value}`: `field` is a field `id`; `lookup` is `exact`, `n` (does not equal, or is empty), `in` (`value` is a list), `isnull` (`value` is `true` or `false`), or `gt`, `gte`, `lt` or `lte` (integer, decimal, date and datetime fields). A `value` of `{field: <id>}` compares with another field of the same kind. Object fields can only be tested with `isnull`. Default: `[]`. |
+| `rule` | for `check` | Predicates, in the same form as `condition`, that every object (matching the condition, if any) must satisfy. A comparison passes when a value it compares is empty. |
+| `error_message` | no | For `check`: the error shown when an object breaks the rule (max 200 characters). Default: `""`, which describes the rule. |
 | `description` | no | Short description (max 200 characters). |
 
 Constraints are matched by name. As with fields, a constraint in the DB but absent from

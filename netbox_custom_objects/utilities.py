@@ -14,6 +14,7 @@ __all__ = (
     "generate_model",
     "get_viewname",
     "install_clear_cache_suppressor",
+    "predicate_field_ref",
     "restrict_to_viewable",
 )
 
@@ -168,6 +169,16 @@ class AppsProxy:
 
     def __getattr__(self, attr):
         return getattr(apps, attr)
+
+
+def predicate_field_ref(value):
+    """
+    Return the field a constraint predicate's value refers to (``{"field": <field>}``),
+    or None for a literal value.
+    """
+    if isinstance(value, dict) and value.keys() == {"field"}:
+        return value["field"]
+    return None
 
 
 def extract_cot_id_from_model_name(model_name: str) -> str | None:

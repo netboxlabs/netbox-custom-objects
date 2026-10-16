@@ -290,7 +290,7 @@ def _compare_constraint_attrs(db_constraint, schema_constraint: dict) -> dict[st
     for attr in CONSTRAINT_ATTRS:
         if attr == "fields":
             db_val = list(db_constraint.field_schema_ids)
-            schema_val = list(schema_constraint["fields"])
+            schema_val = list(schema_constraint.get("fields", []))
         else:
             db_val = getattr(db_constraint, attr)
             schema_val = schema_constraint.get(attr, CONSTRAINT_DEFAULTS[attr])
