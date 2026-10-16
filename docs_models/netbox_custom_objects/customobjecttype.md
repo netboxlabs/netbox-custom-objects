@@ -24,7 +24,7 @@ A unique, plural, URL-friendly identifier used as a URL component for this type'
 
 An optional Jinja2 template used to render the display name of individual objects of this type, e.g. `{{ name }} - {{ manufacturer }}`. Reference field values by name; undefined fields resolve to an empty string. If left blank, the field marked as the type's primary field is used instead.
 
-The rendered display name is included in global search, quick search and object selectors, so searching for any text in it finds the object. It's stored in NetBox's search cache when an object is saved, and every object of the type is reindexed when the expression changes. An expression can include values from related objects, e.g. `{{ interface.device.name }}`. Changes to those objects don't update the cached display name immediately, but every type with a display expression is reindexed hourly by a background job (which needs NetBox's background worker running), so search catches up within an hour.
+The rendered display name is included in global search, quick search and object selectors, so searching for any text in it finds the object. It's stored in NetBox's search cache when an object is saved, and every object of the type is reindexed when the expression changes. An expression can include values from related objects, e.g. `{{ interface.device.name }}`. Changes to those objects don't update the cached display name immediately, but a background job (which needs NetBox's background worker running) refreshes the cached display names hourly for every type whose expression references an object or multi-object field, so search catches up within an hour.
 
 ### Group Name
 

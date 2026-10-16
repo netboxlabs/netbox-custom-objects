@@ -1946,15 +1946,72 @@ class DisplayExpressionSearchTestCase(CustomObjectsTestCase, TestCase):
                 cot.save(update_fields=['cache_timestamp'])
         mock_enqueue.assert_not_called()
 
-    def test_hourly_job_reindexes_types_with_display_expression(self):
+    def _row_ids(self, display):
+        rows = CachedValue.objects.filter(object_type=self.object_type)
+        rows = rows.filter(field='_display') if display else rows.exclude(field='_display')
+        return set(rows.values_list('pk', flat=True))
+
+    def _run_hourly_job(self):
+        job = Job.objects.create(name='Refresh', job_id=uuid.uuid4())
+        RefreshDisplayExpressionSearchJob(job).run()
+
+    def test_hourly_job_refreshes_only_display_rows(self):
         self.assertEqual(
             registry['system_jobs'][RefreshDisplayExpressionSearchJob]['interval'], JobIntervalChoices.INTERVAL_HOURLY,
         )
+        get_backend().cache(self.model.objects.all())
+        other_rows = self._row_ids(display=False)
+        self.assertTrue(other_rows)
+        self.site.name = "Beta"
+        self.site.save()
+
+        self._run_hourly_job()
+
+        self.assertEqual(self._cached_display(), [("Beta / svc1", DISPLAY_EXPRESSION_SEARCH_WEIGHT)])
+        self.assertEqual(self._quick_search("beta"), [self.obj.pk])
+        # The object's other cached values are left in place.
+        self.assertEqual(self._row_ids(display=False), other_rows)
+
+        # Unchanged display names aren't rewritten.
+        display_rows = self._row_ids(display=True)
+        self._run_hourly_job()
+        self.assertEqual(self._row_ids(display=True), display_rows)
+
+    def test_hourly_job_skips_expressions_without_related_fields(self):
         self.create_custom_object_type(name="NoExpression", slug="no-expression")
-        job = Job.objects.create(name='Refresh', job_id=uuid.uuid4())
-        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
-            RefreshDisplayExpressionSearchJob(job).run()
-        mock_enqueue.assert_called_once_with(cot_id=self.cot.pk)
+        own_fields_only = self.create_custom_object_type(
+            name="OwnFields", slug="own-fields", display_expression="{{ name }}",
+        )
+        self.create_custom_object_type_field(own_fields_only, name="name", type="text", primary=True)
+        # A related field the expression doesn't use can't make it drift.
+        self.create_custom_object_type_field(
+            own_fields_only, name="site", type="object", related_object_type=self.get_site_object_type(),
+        )
+        with patch('netbox_custom_objects.jobs.refresh_display_search_cache') as mock_refresh:
+            self._run_hourly_job()
+        self.assertEqual([call.args[0].pk for call in mock_refresh.call_args_list], [self.cot.pk])
+
+    def test_rendering_skips_fields_the_expression_does_not_use(self):
+        self.create_custom_object_type_field(
+            self.cot, name="sites", type="multiobject", related_object_type=self.get_site_object_type(),
+        )
+        cot = CustomObjectType.objects.get(pk=self.cot.pk)
+        cot.display_expression = "{{ name }}"
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue'):
+            cot.save()
+        obj = cot.get_model().objects.get(pk=self.obj.pk)
+        str(obj)  # load the type and its field definitions
+        with self.assertNumQueries(0):
+            self.assertEqual(str(obj), "svc1")
+
+    def test_caching_renders_display_once(self):
+        with patch.object(
+            nco_models.CustomObject, '_render_display_expression', autospec=True,
+            side_effect=nco_models.CustomObject._render_display_expression,
+        ) as mock_render:
+            get_backend().cache(self.model.objects.get(pk=self.obj.pk))
+        self.assertEqual(mock_render.call_count, 1)
+        self.assertEqual(self._cached_display(), [("Alpha / svc1", DISPLAY_EXPRESSION_SEARCH_WEIGHT)])
 
 
 class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
