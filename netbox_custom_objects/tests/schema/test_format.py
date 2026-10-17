@@ -620,7 +620,8 @@ class COTJsonSchemaTestCase(TestCase):
             "no element type": {"id": 1, "name": "points", "type": "array"},
             "unknown element type": {**points, "array_element_type": "json"},
             "tuple size of one": {**points, "array_tuple_size": 1},
-            "negative length": {**points, "array_min_length": -1},
+            "zero minimum length": {**points, "array_min_length": 0},
+            "zero maximum length": {**points, "array_max_length": 0},
             "unknown attribute": {**points, "choice_set": "x"},
             "array attribute on a text field": {"id": 1, "name": "label", "type": "text", "array_element_type": "text"},
         }

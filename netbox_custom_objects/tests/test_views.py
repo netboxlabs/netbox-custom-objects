@@ -1734,11 +1734,14 @@ class ArrayFieldViewTest(CustomObjectsTestCase, TestCase):
                      "validation_minimum", "validation_maximum"):
             self.assertIn(name, form.fields)
         self.assertNotIn("validation_regex", form.fields)
+        # Element limits describe each element, not the whole value.
+        self.assertEqual(form.fields["validation_minimum"].help_text, "Minimum allowed value for each element")
 
         form = CustomObjectTypeFieldForm(initial={
             "custom_object_type": self.cot.pk, "type": "array", "array_element_type": "text",
         })
         self.assertIn("validation_regex", form.fields)
+        self.assertEqual(form.fields["validation_regex"].help_text, "Regular expression each element must match")
         self.assertNotIn("validation_minimum", form.fields)
 
         form = CustomObjectTypeFieldForm(initial={"custom_object_type": self.cot.pk, "type": "text"})

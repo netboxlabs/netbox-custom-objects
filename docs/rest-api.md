@@ -160,7 +160,7 @@ Field type: `array`
 |-----------|-------------|
 | `array_element_type` | `text`, `integer`, `decimal`, `boolean`, `date` or `datetime`. Required. Cannot be changed after creation. |
 | `array_tuple_size` | Store a list of tuples of this many values (at least 2); `null` for a list of single values. Cannot be changed after creation. |
-| `array_min_length`, `array_max_length` | Minimum and maximum number of items. |
+| `array_min_length`, `array_max_length` | Minimum and maximum number of items (at least 1 when set). |
 | `validation_regex` | For `text` elements: a regular expression every value must match. |
 | `validation_minimum`, `validation_maximum` | For `integer` and `decimal` elements: the allowed range of every value. |
 

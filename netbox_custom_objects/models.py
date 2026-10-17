@@ -2715,12 +2715,14 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
     array_min_length = models.PositiveIntegerField(
         blank=True,
         null=True,
+        validators=[MinValueValidator(1)],
         verbose_name=_("minimum length"),
         help_text=_("Minimum number of items (for array fields)"),
     )
     array_max_length = models.PositiveIntegerField(
         blank=True,
         null=True,
+        validators=[MinValueValidator(1)],
         verbose_name=_("maximum length"),
         help_text=_("Maximum number of items (for array fields)"),
     )

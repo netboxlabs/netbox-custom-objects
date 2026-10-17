@@ -369,6 +369,13 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
             del self.fields["related_name"]
             del self.fields["on_delete_behavior"]
 
+    # The model's help text describes whole-value limits; for arrays they apply to each element.
+    ARRAY_VALIDATION_HELP_TEXT = {
+        "validation_minimum": _("Minimum allowed value for each element"),
+        "validation_maximum": _("Maximum allowed value for each element"),
+        "validation_regex": _("Regular expression each element must match"),
+    }
+
     def _init_array_fields(self, field_type):
         """Show the array settings, and the validation that applies to its element type, for array fields."""
         array_fields = ("array_element_type", "array_tuple_size", "array_min_length", "array_max_length")
@@ -393,6 +400,7 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
         for name in validation:
             if name not in self.fields:
                 self.fields[name] = CustomObjectTypeField._meta.get_field(name).formfield()
+            self.fields[name].help_text = self.ARRAY_VALIDATION_HELP_TEXT[name]
         self.fieldsets = (
             self.fieldsets[0],
             FieldSet(*array_fields, *validation, name=_("Array")),
