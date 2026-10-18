@@ -2700,7 +2700,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         choices=ArrayElementTypeChoices,
         blank=True,
         verbose_name=_("element type"),
-        help_text=_("The type of each value (for array fields)"),
+        help_text=_("The type of each value"),
     )
     array_tuple_size = models.PositiveSmallIntegerField(
         blank=True,
@@ -2709,7 +2709,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         verbose_name=_("tuple size"),
         help_text=_(
             "Store a list of tuples of this many values, e.g. 3 for (x, y, z) points; leave blank for a list of "
-            "single values (for array fields)"
+            "single values"
         ),
     )
     array_min_length = models.PositiveIntegerField(
@@ -2717,14 +2717,14 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         null=True,
         validators=[MinValueValidator(1)],
         verbose_name=_("minimum length"),
-        help_text=_("Minimum number of items (for array fields)"),
+        help_text=_("Minimum number of items"),
     )
     array_max_length = models.PositiveIntegerField(
         blank=True,
         null=True,
         validators=[MinValueValidator(1)],
         verbose_name=_("maximum length"),
-        help_text=_("Maximum number of items (for array fields)"),
+        help_text=_("Maximum number of items"),
     )
     choice_set = models.ForeignKey(
         to="extras.CustomFieldChoiceSet",
