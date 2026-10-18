@@ -1,5 +1,8 @@
 # Portable Schema
 
+Dynamic Assignment fields are exported with `type: dynamic_assignment` and no assignment name. Assignments are selected
+per custom-object instance, so they are data rather than part of the type schema.
+
 The portable schema feature allows Custom Object Type (COT) definitions to be exported as
 structured YAML documents, versioned in source control, and applied to other NetBox instances.
 This makes COT schemas shareable, auditable, and deployable across environments in a consistent

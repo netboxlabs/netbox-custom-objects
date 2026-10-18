@@ -44,10 +44,10 @@
         <table class="table table-hover">
           <thead><tr><th>{% trans "Custom Object Type" %}</th><th>{% trans "Field" %}</th></tr></thead>
           <tbody>
-            {% for field in referencing_fields %}
+            {% for reference in referencing_fields %}
               <tr>
-                <td>{{ field.custom_object_type|linkify:"name" }}</td>
-                <td>{{ field }}</td>
+                <td>{{ reference.field.custom_object_type|linkify:"name" }}</td>
+                <td>{{ reference.field }} ({{ reference.count }})</td>
               </tr>
             {% empty %}
               <tr><td colspan="2" class="text-muted">{% trans "None found" %}</td></tr>

@@ -1,4 +1,5 @@
 from django import forms
+from django.db.models import Q
 from django.utils.translation import gettext_lazy as _
 from jinja2.sandbox import SandboxedEnvironment as _JinjaSandbox
 from core.models import ObjectType
@@ -187,10 +188,13 @@ class CustomContentTypeMultipleChoiceField(ContentTypeMultipleChoiceField):
 
 class DynamicAssignmentForm(NetBoxModelForm):
     assigned_object_types = CustomContentTypeMultipleChoiceField(
-        queryset=ObjectType.objects.all(),
-        required=False,
+        queryset=ObjectType.objects.filter(
+            Q(app_label='dcim', model='device')
+            | Q(app_label='virtualization', model='virtualmachine')
+        ),
+        required=True,
         label=_("Assigned object types"),
-        help_text=_("The object type(s) this assignment applies to (leave empty to match all types)."),
+        help_text=_("Select at least one supported target type."),
     )
     regions = DynamicModelMultipleChoiceField(
         queryset=Region.objects.all(),
@@ -392,10 +396,6 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
         # CustomFieldForm keeps only NetBox's built-in field types. Restore the
         # plugin-specific choices for custom object fields.
         self.fields['type'].choices = CustomObjectFieldTypeChoices.CHOICES
-        # The assignment is selected per Custom Object instance, never on the
-        # shared field definition.
-        self.fields.pop('dynamic_assignment', None)
-
         # Toggling the polymorphic checkbox should re-render the form so only the
         # relevant related-object field is shown.
         self.fields['is_polymorphic'].widget.attrs.update({

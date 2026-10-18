@@ -4,7 +4,7 @@ import sys
 
 from core.models import ObjectType
 from django.contrib.contenttypes.models import ContentType
-from django.db import transaction
+from django.db import models, transaction
 from django.urls import NoReverseMatch
 from django.utils.translation import gettext_lazy as _
 from drf_spectacular.extensions import OpenApiSerializerExtension
@@ -16,6 +16,7 @@ from netbox.api.serializers import NetBoxModelSerializer
 from netbox.api.serializers.nested import NestedTagSerializer
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
+from rest_framework.fields import empty
 from rest_framework.reverse import reverse
 from rest_framework.utils import model_meta
 
@@ -23,6 +24,7 @@ from users.api.serializers_.owners import OwnerSerializer
 
 from netbox_custom_objects import constants, field_types
 from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
+from netbox_custom_objects.constants import DYNAMIC_ASSIGNMENT_OBJECT_TYPES
 from netbox_custom_objects.models import (ConfigContextRenderer, CustomObject, CustomObjectType,
                                           CustomObjectTypeField, DynamicAssignment)
 
@@ -189,25 +191,40 @@ class DynamicAssignmentSerializer(NetBoxModelSerializer):
         from core.models import ObjectType  # noqa: PLC0415
         if isinstance(item, int):
             try:
-                return ObjectType.objects.get(pk=item)
+                object_type = ObjectType.objects.get(pk=item)
             except ObjectType.DoesNotExist:
-                raise serializers.ValidationError(_(f"ObjectType with PK {item} does not exist."))
+                raise serializers.ValidationError(
+                    _("ObjectType with PK %(pk)s does not exist.") % {'pk': item}
+                )
         elif isinstance(item, str) and "." in item:
             app_label, model = item.split(".", 1)
             try:
-                return ObjectType.objects.get(app_label=app_label, model=model)
-            except ObjectType.DoesNotExist:
-                raise serializers.ValidationError(_(f"ObjectType '{item}' does not exist."))
-        elif isinstance(item, dict) and "app_label" in item and "model" in item:
-            try:
-                return ObjectType.objects.get(app_label=item["app_label"], model=item["model"])
+                object_type = ObjectType.objects.get(app_label=app_label, model=model)
             except ObjectType.DoesNotExist:
                 raise serializers.ValidationError(
-                    _(f"ObjectType '{item['app_label']}.{item['model']}' does not exist.")
+                    _("ObjectType '%(object_type)s' does not exist.") % {'object_type': item}
+                )
+        elif isinstance(item, dict) and "app_label" in item and "model" in item:
+            try:
+                object_type = ObjectType.objects.get(app_label=item["app_label"], model=item["model"])
+            except ObjectType.DoesNotExist:
+                raise serializers.ValidationError(
+                    _("ObjectType '%(object_type)s' does not exist.")
+                    % {'object_type': f'{item["app_label"]}.{item["model"]}'}
                 )
         elif hasattr(item, "pk"):
-            return item
-        raise serializers.ValidationError(_(f"Invalid ObjectType representation: {item}"))
+            object_type = item
+        else:
+            raise serializers.ValidationError(
+                _("Invalid ObjectType representation: %(value)s") % {'value': item}
+            )
+
+        if (object_type.app_label, object_type.model) not in DYNAMIC_ASSIGNMENT_OBJECT_TYPES:
+            raise serializers.ValidationError(
+                _("Object type '%(object_type)s' does not support dynamic assignments.")
+                % {'object_type': f'{object_type.app_label}.{object_type.model}'}
+            )
+        return object_type
 
     def to_internal_value(self, data):
         ret = super().to_internal_value(data)
@@ -218,10 +235,16 @@ class DynamicAssignmentSerializer(NetBoxModelSerializer):
     def validate(self, attrs):
         if "assigned_object_types" in attrs:
             raw_types = attrs["assigned_object_types"]
-            if raw_types is not None:
-                if not isinstance(raw_types, list):
-                    raise serializers.ValidationError({"assigned_object_types": _("Must be a list.")})
+            if raw_types is None or not isinstance(raw_types, list):
+                raise serializers.ValidationError({"assigned_object_types": _("Must be a non-empty list.")})
+            if not raw_types:
+                raise serializers.ValidationError({"assigned_object_types": _("Select at least one object type.")})
+            try:
                 attrs["assigned_object_types"] = [self._resolve_object_type(t) for t in raw_types]
+            except serializers.ValidationError as exc:
+                raise serializers.ValidationError({'assigned_object_types': exc.detail}) from None
+        elif self.instance is None:
+            raise serializers.ValidationError({"assigned_object_types": _("This field is required.")})
         return super().validate(attrs)
 
     def create(self, validated_data):
@@ -243,6 +266,93 @@ class DynamicAssignmentSerializer(NetBoxModelSerializer):
             {"id": ot.id, "app_label": ot.app_label, "model": ot.model}
             for ot in obj.assigned_object_types.all()
         ]
+
+
+@extend_schema_field(DynamicAssignmentSerializer(nested=True, allow_null=True))
+class DynamicAssignmentReferenceField(serializers.Field):
+    """Read and write the assignment ID stored in a custom object's JSON data."""
+
+    def get_attribute(self, instance):
+        return instance
+
+    def get_value(self, dictionary):
+        value = super().get_value(dictionary)
+        if value is None:
+            current_id = self._current_assignment_id()
+            if current_id and not self._can_view(current_id):
+                return empty
+        return value
+
+    def to_representation(self, instance):
+        assignment_id = (instance.dynamic_assignment_data or {}).get(self.field_name)
+        if not assignment_id:
+            return None
+        cache = self.context.setdefault('_dynamic_assignment_cache', {})
+        if assignment_id not in cache:
+            queryset = DynamicAssignment.objects
+            request = self.context.get('request')
+            if request is not None:
+                queryset = queryset.restrict(request.user, 'view')
+            cache[assignment_id] = queryset.filter(pk=assignment_id).first()
+        assignment = cache[assignment_id]
+        if assignment is None:
+            return None
+        data = DynamicAssignmentSerializer(assignment, nested=True, context=self.context).data
+        return {key: data[key] for key in ('id', 'url', 'display', 'name')}
+
+    def to_internal_value(self, data):
+        current_id = self._current_assignment_id()
+        if current_id and not self._can_view(current_id):
+            self.fail_hidden_current()
+        if data is None:
+            return None
+        request = self.context.get('request')
+        queryset = DynamicAssignment.objects.all()
+        if request is not None:
+            queryset = queryset.restrict(request.user, 'view')
+        try:
+            return queryset.get(pk=data)
+        except (DynamicAssignment.DoesNotExist, TypeError, ValueError):
+            raise serializers.ValidationError(_("Invalid or inaccessible dynamic assignment.")) from None
+
+    def _current_assignment_id(self):
+        instance = getattr(self.parent, 'instance', None)
+        if instance is None:
+            instance = getattr(self.root, 'instance', None)
+        if instance is None:
+            return None
+        return (getattr(instance, 'dynamic_assignment_data', None) or {}).get(self.field_name)
+
+    def _can_view(self, assignment_id):
+        request = self.context.get('request')
+        queryset = DynamicAssignment.objects.all()
+        if request is not None:
+            queryset = queryset.restrict(request.user, 'view')
+        return queryset.filter(pk=assignment_id).exists()
+
+    def fail_hidden_current(self):
+        raise serializers.ValidationError(
+            _("You do not have permission to view the current assignment; it cannot be changed.")
+        )
+
+
+class DynamicAssignmentPrefetchListSerializer(serializers.ListSerializer):
+    """Load JSON-backed assignment references once for a serialized page."""
+
+    def to_representation(self, data):
+        instances = list(data.all() if isinstance(data, models.Manager) else data)
+        assignment_ids = {
+            assignment_id
+            for instance in instances
+            for assignment_id in (getattr(instance, 'dynamic_assignment_data', None) or {}).values()
+            if assignment_id
+        }
+        queryset = DynamicAssignment.objects
+        request = self.context.get('request')
+        if request is not None:
+            queryset = queryset.restrict(request.user, 'view')
+        self.context['_dynamic_assignment_cache'] = queryset.in_bulk(assignment_ids)
+        return super().to_representation(instances)
 
 
 class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
@@ -279,7 +389,6 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
             "unique",
             "default",
             "choice_set",
-            "dynamic_assignment",
             "validation_regex",
             "validation_minimum",
             "validation_maximum",
@@ -640,7 +749,7 @@ def get_serializer_class(model, skip_object_fields=False):
     # not appear in any _meta.*fields list.  Add descriptor names explicitly.
     model_field_names.update(
         name for name, attr in model.__dict__.items()
-        if isinstance(attr, field_types.PolymorphicM2MDescriptor)
+        if isinstance(attr, (field_types.PolymorphicM2MDescriptor, field_types.DynamicAssignmentDescriptor))
     )
 
     # If a COT field is named 'owner', it shadows the OwnerMixin FK on the dynamic model
@@ -702,6 +811,7 @@ def get_serializer_class(model, skip_object_fields=False):
             "model": model,
             "fields": all_fields,
             "brief_fields": brief_fields,
+            "list_serializer_class": DynamicAssignmentPrefetchListSerializer,
         },
     )
 
@@ -805,14 +915,14 @@ def get_serializer_class(model, skip_object_fields=False):
             if field_name in validated_data
         }
 
-        instance = ModelClass._default_manager.create(**validated_data)
-
         if dynamic_assignments:
-            instance.dynamic_assignment_data = {
+            # Store assignments on the initial write for a complete changelog entry.
+            validated_data['dynamic_assignment_data'] = {
                 field_name: assignment.pk if assignment else None
                 for field_name, assignment in dynamic_assignments.items()
             }
-            instance.save(update_fields=['dynamic_assignment_data'])
+
+        instance = ModelClass._default_manager.create(**validated_data)
 
         if tags is not None:
             instance._tags = tags
@@ -873,16 +983,16 @@ def get_serializer_class(model, skip_object_fields=False):
         for field_name, value in poly_gfk.items():
             setattr(instance, field_name, value)
 
-        instance.save()
-
         if dynamic_assignments:
+            # Include assignment changes in the main update.
             data = getattr(instance, 'dynamic_assignment_data', None) or {}
             data.update({
                 field_name: assignment.pk if assignment else None
                 for field_name, assignment in dynamic_assignments.items()
             })
             instance.dynamic_assignment_data = data
-            instance.save(update_fields=['dynamic_assignment_data'])
+
+        instance.save()
 
         if tags is not None:
             instance._tags = tags
@@ -915,7 +1025,7 @@ def get_serializer_class(model, skip_object_fields=False):
         # class body (no __class__ cell). The generated class has a single base
         # (NetBoxModelSerializer), so calling it directly is equivalent.
         saved = {}
-        for field_name in _poly_m2m_fields:
+        for field_name in _poly_m2m_fields | _dynamic_assignment_fields:
             if field_name in data:
                 saved[field_name] = data.pop(field_name)
 
@@ -1002,8 +1112,7 @@ def get_serializer_class(model, skip_object_fields=False):
         if not is_coordinates and field.name not in model_field_names:
             continue  # excluded during model generation (e.g. broken FK)
         if field.type == CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT:
-            # Resolving these fields can scan multiple target models and must be
-            # explicitly requested via ``?resolve=<field_name>`` on the detail API.
+            attrs[field.name] = DynamicAssignmentReferenceField(required=False, allow_null=True)
             continue
         if skip_object_fields and field.type in [
             CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT

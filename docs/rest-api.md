@@ -13,6 +13,36 @@ The NetBox Custom Objects plugin exposes full CRUD operations through the standa
 
 The endpoint name for each Custom Object Type is its **slug** — a type with slug `dhcp_scope` is reachable at `/api/plugins/custom-objects/dhcp_scope/`.
 
+## Dynamic assignments
+
+Reusable assignments are managed at `/api/plugins/custom-objects/dynamic-assignments/`. A Dynamic Assignment field on a
+custom object accepts an assignment primary key or `null` and normally returns a brief assignment object. Resolved target
+objects are opt-in. At least one supported `assigned_object_types` value is required; the form and serializer enforce
+this during creation because the M2M values do not exist yet during model `clean()`.
+
+If the stored assignment is hidden by object permissions, the field is returned as `null`. Sending that `null` value
+back on PATCH or PUT is treated as a no-op and preserves the hidden assignment. A non-null replacement is rejected until
+the caller has permission to view the current assignment.
+
+Use `GET .../<custom-object-id>/?resolve=<field_name>&limit=50&offset=0` to resolve one field. Resolution uses NetBox's
+configured default page size when `limit` is omitted and caps explicit limits at `MAX_PAGE_SIZE`. The field is returned as:
+
+```json
+{
+  "dynamic_assignment": {"id": 3, "name": "EMEA devices"},
+  "count": 125,
+  "next": "https://netbox/api/plugins/custom-objects/contracts/42/?resolve=targets&limit=50&offset=50",
+  "previous": null,
+  "results": []
+}
+```
+
+The reverse endpoint `/api/plugins/custom-objects/dynamic-custom-objects/?object_type=dcim.device&object_id=123` returns
+permitted custom objects whose stored assignments currently match the target object.
+
+Filter-dimension fields use lists of primary keys on writes, matching NetBox's normal writable many-to-many API shape;
+`assigned_object_types` additionally accepts IDs or `app_label.model` values.
+
 !!! tip
     For schema management — exporting Custom Object Type definitions, previewing diffs, and applying schemas to other instances — see the [Portable Schema](portable-schema.md) documentation, which also covers the `schema/preview/` and `schema/apply/` endpoints.
 

@@ -20,6 +20,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldDoesNotExist
 from django.core.validators import RegexValidator, ValidationError
 from django.db import DEFAULT_DB_ALIAS, connection, connections, IntegrityError, models, transaction
+from django.db.models.deletion import ProtectedError
 from django.db.utils import OperationalError, ProgrammingError
 from django.db.models import Q
 from django.db.models.fields.related import ForeignKey, ManyToManyField
@@ -75,6 +76,7 @@ from netbox_custom_objects.choices import (CustomObjectFieldTypeChoices,
 from netbox_custom_objects.constants import (
     APP_LABEL,
     CONFIG_CONTEXT_DIMENSION_FIELDS,
+    DYNAMIC_ASSIGNMENT_OBJECT_TYPES,
     RESERVED_FIELD_NAMES,
 )
 from netbox_custom_objects.field_types import (
@@ -763,13 +765,31 @@ class DynamicAssignment(ChangeLoggedModel):
             self.custom_field_data = {}
         return super().save(*args, **kwargs)
 
+    def clean(self):
+        super().clean()
+        # M2M values do not exist until after the first save. Non-empty
+        # validation is therefore performed by the form/serializer; model-level
+        # validation only rejects unsupported types.
+        if not self.pk:
+            return
+        object_types = {
+            (object_type.app_label, object_type.model)
+            for object_type in self.assigned_object_types.all()
+        }
+        unsupported = object_types - set(DYNAMIC_ASSIGNMENT_OBJECT_TYPES)
+        if unsupported:
+            labels = ', '.join(f'{app_label}.{model}' for app_label, model in sorted(unsupported))
+            raise ValidationError({
+                'assigned_object_types': _("Unsupported object types: %(types)s") % {'types': labels},
+            })
+
     # Object types this assignment applies to (e.g. dcim.device, virtualization.virtualmachine)
     assigned_object_types = models.ManyToManyField(
         to="core.ObjectType",
         related_name="dynamic_assignments",
         verbose_name=_("assigned object types"),
-        blank=True,
-        help_text=_("The object type(s) this assignment applies to."),
+        blank=False,
+        help_text=_("The device or virtual machine types this assignment applies to."),
     )
     # Filter dimensions — mirrors ConfigContext
     regions = models.ManyToManyField(
@@ -827,64 +847,39 @@ class DynamicAssignment(ChangeLoggedModel):
         dimensions all match *obj* (AND logic across every non-empty dimension).
 
         Mirrors ConfigContext.get_for_object(): each dimension is optional; when
-        set it must match.  The object's content type must appear in
-        assigned_object_types (when that M2M is non-empty).
+        set it must match. The object's content type must appear in
+        assigned_object_types; assignments with no object types match nothing.
 
-        Supported attributes on *obj* (all optional / gracefully absent):
+        Supported attributes on *obj*:
           site, location, device_type, role, platform, tenant,
-          cluster (for VMs), and tags.
+          and cluster (for VMs).
         Region / site-group / tenant-group / cluster-type / cluster-group are
         derived from the above via their parent hierarchies.
         """
         ct = ContentType.objects.get_for_model(obj)
         qs = cls.objects.filter(is_active=True)
 
-        # Restrict to assignments that include this object type (or have no type filter)
-        qs = qs.filter(
-            Q(assigned_object_types__isnull=True) | Q(assigned_object_types=ct)
-        ).distinct()
+        if (ct.app_label, ct.model) not in DYNAMIC_ASSIGNMENT_OBJECT_TYPES:
+            return qs.none()
+
+        qs = qs.filter(assigned_object_types=ct).distinct()
 
         # --- site / region / site_group ---
-        site = getattr(obj, "site", None) or getattr(obj, "site_id", None)
-        if site is not None and not isinstance(site, int):
-            site_id = site.pk
-        elif isinstance(site, int):
-            site_id = site
-        else:
-            site_id = None
-
-        if site_id is not None:
-            from dcim.models import Site  # noqa: PLC0415
-            try:
-                site_obj = Site.objects.get(pk=site_id)
-                # Collect ancestor region PKs
-                region_ids = []
-                r = site_obj.region
-                while r is not None:
-                    region_ids.append(r.pk)
-                    r = r.parent
-                # Collect ancestor site-group PKs
-                sg_ids = []
-                sg = site_obj.group
-                while sg is not None:
-                    sg_ids.append(sg.pk)
-                    sg = sg.parent
-                qs = qs.filter(
-                    Q(sites__isnull=True) | Q(sites=site_id)
-                ).filter(
-                    Q(regions__isnull=True) | Q(regions__in=region_ids) if region_ids else Q(regions__isnull=True)
-                ).filter(
-                    Q(site_groups__isnull=True) | Q(site_groups__in=sg_ids) if sg_ids else Q(site_groups__isnull=True)
-                )
-            except Exception:  # noqa: BLE001
-                qs = qs.filter(sites__isnull=True, regions__isnull=True, site_groups__isnull=True)
+        site = getattr(obj, 'site', None)
+        if site is not None:
+            regions = site.region.get_ancestors(include_self=True) if site.region else []
+            site_groups = site.group.get_ancestors(include_self=True) if site.group else []
+            qs = qs.filter(Q(sites__isnull=True) | Q(sites=site)).filter(
+                Q(regions__isnull=True) | Q(regions__in=regions)
+            ).filter(Q(site_groups__isnull=True) | Q(site_groups__in=site_groups))
         else:
             qs = qs.filter(sites__isnull=True, regions__isnull=True, site_groups__isnull=True)
 
         # --- location ---
         location = getattr(obj, "location", None)
+        locations = location.get_ancestors(include_self=True) if location else []
         if location is not None:
-            qs = qs.filter(Q(locations__isnull=True) | Q(locations=location))
+            qs = qs.filter(Q(locations__isnull=True) | Q(locations__in=locations))
         else:
             qs = qs.filter(locations__isnull=True)
 
@@ -897,30 +892,26 @@ class DynamicAssignment(ChangeLoggedModel):
 
         # --- role ---
         role = getattr(obj, "role", None)
+        roles = role.get_ancestors(include_self=True) if role else []
         if role is not None:
-            qs = qs.filter(Q(roles__isnull=True) | Q(roles=role))
+            qs = qs.filter(Q(roles__isnull=True) | Q(roles__in=roles))
         else:
             qs = qs.filter(roles__isnull=True)
 
         # --- platform ---
         platform = getattr(obj, "platform", None)
+        platforms = platform.get_ancestors(include_self=True) if platform else []
         if platform is not None:
-            qs = qs.filter(Q(platforms__isnull=True) | Q(platforms=platform))
+            qs = qs.filter(Q(platforms__isnull=True) | Q(platforms__in=platforms))
         else:
             qs = qs.filter(platforms__isnull=True)
 
         # --- tenant / tenant_group ---
         tenant = getattr(obj, "tenant", None)
         if tenant is not None:
-            tenant_group_ids = []
-            tg = tenant.group
-            while tg is not None:
-                tenant_group_ids.append(tg.pk)
-                tg = tg.parent
+            tenant_groups = tenant.group.get_ancestors(include_self=True) if tenant.group else []
             qs = qs.filter(Q(tenants__isnull=True) | Q(tenants=tenant)).filter(
-                Q(tenant_groups__isnull=True) | Q(tenant_groups__in=tenant_group_ids)
-                if tenant_group_ids
-                else Q(tenant_groups__isnull=True)
+                Q(tenant_groups__isnull=True) | Q(tenant_groups__in=tenant_groups)
             )
         else:
             qs = qs.filter(tenants__isnull=True, tenant_groups__isnull=True)
@@ -948,17 +939,227 @@ class DynamicAssignment(ChangeLoggedModel):
 
         return qs.order_by("weight", "name")
 
-    def get_matching_objects(self):
-        """Return target objects matching this assignment's configured types."""
-        matching_objects = []
-        for object_type in self.assigned_object_types.all():
+    def get_matching_querysets(self):
+        """Return one filtered queryset for each assigned target model."""
+        if not self.is_active:
+            return {}
+
+        object_types = list(self.assigned_object_types.all())
+        if not object_types:
+            return {}
+
+        dimensions = {
+            'sites': list(self.sites.all()),
+            'regions': list(self.regions.all()),
+            'site_groups': list(self.site_groups.all()),
+            'locations': list(self.locations.all()),
+            'device_types': list(self.device_types.all()),
+            'roles': list(self.roles.all()),
+            'platforms': list(self.platforms.all()),
+            'cluster_types': list(self.cluster_types.all()),
+            'cluster_groups': list(self.cluster_groups.all()),
+            'clusters': list(self.clusters.all()),
+            'tenant_groups': list(self.tenant_groups.all()),
+            'tenants': list(self.tenants.all()),
+        }
+
+        expected_models = {
+            'site': ('dcim', 'site'),
+            'location': ('dcim', 'location'),
+            'device_type': ('dcim', 'devicetype'),
+            'role': ('dcim', 'devicerole'),
+            'platform': ('dcim', 'platform'),
+            'cluster': ('virtualization', 'cluster'),
+            'tenant': ('tenancy', 'tenant'),
+        }
+
+        def has_related_field(model, name):
+            try:
+                related_model = model._meta.get_field(name).related_model
+            except FieldDoesNotExist:
+                return False
+            expected = expected_models[name]
+            return (
+                related_model is not None
+                and (related_model._meta.app_label, related_model._meta.model_name) == expected
+            )
+
+        def descendant_pks(nodes):
+            pks = set()
+            for node in nodes:
+                pks.update(node.get_descendants(include_self=True).values_list('pk', flat=True))
+            return pks
+
+        querysets = {}
+        for object_type in object_types:
+            if (object_type.app_label, object_type.model) not in DYNAMIC_ASSIGNMENT_OBJECT_TYPES:
+                continue
             model = object_type.model_class()
             if model is None:
                 continue
-            for obj in model.objects.all():
-                if self.pk in DynamicAssignment.get_for_object(obj).values_list('pk', flat=True):
-                    matching_objects.append(obj)
-        return sorted(matching_objects, key=str)
+
+            queryset = model.objects.all()
+            supported = True
+
+            # Build one database query per target model instead of checking every object.
+            direct_fields = ('site', 'location', 'device_type', 'role', 'platform', 'cluster', 'tenant')
+            dimension_names = ('sites', 'locations', 'device_types', 'roles', 'platforms', 'clusters', 'tenants')
+            for field_name, dimension_name in zip(direct_fields, dimension_names):
+                values = dimensions[dimension_name]
+                if not values:
+                    continue
+                if not has_related_field(model, field_name):
+                    supported = False
+                    break
+                if field_name in ('location', 'role', 'platform'):
+                    queryset = queryset.filter(**{f'{field_name}__in': descendant_pks(values)})
+                else:
+                    queryset = queryset.filter(**{f'{field_name}__in': values})
+
+            if not supported:
+                querysets[model] = model.objects.none()
+                continue
+
+            hierarchical_paths = (
+                ('regions', 'site', 'site__region'),
+                ('site_groups', 'site', 'site__group'),
+                ('tenant_groups', 'tenant', 'tenant__group'),
+            )
+            for dimension_name, required_field, path in hierarchical_paths:
+                values = dimensions[dimension_name]
+                if not values:
+                    continue
+                if not has_related_field(model, required_field):
+                    supported = False
+                    break
+                queryset = queryset.filter(**{f'{path}__in': descendant_pks(values)})
+
+            if not supported:
+                querysets[model] = model.objects.none()
+                continue
+
+            cluster_paths = (
+                ('cluster_types', 'cluster__type'),
+                ('cluster_groups', 'cluster__group'),
+            )
+            for dimension_name, path in cluster_paths:
+                values = dimensions[dimension_name]
+                if not values:
+                    continue
+                if not has_related_field(model, 'cluster'):
+                    supported = False
+                    break
+                queryset = queryset.filter(**{f'{path}__in': values})
+
+            if supported:
+                querysets[model] = queryset.distinct()
+            else:
+                querysets[model] = model.objects.none()
+        return querysets
+
+    def get_matching_objects(self):
+        """Deprecated compatibility wrapper; prefer ``DynamicAssignmentResult``."""
+        return list(DynamicAssignmentResult(assignment=self).unrestricted())
+
+
+class DynamicAssignmentResult:
+    """Lazy per-model assignment result.
+
+    Request code should call ``restrict(user)`` before evaluation. Non-request
+    callers that intentionally need the raw querysets should call
+    ``unrestricted()`` to make that choice explicit.
+    """
+
+    def __init__(self, assignment=None, assignment_id=None, user=None, intentionally_unrestricted=False):
+        self.assignment = assignment
+        self.assignment_id = assignment_id or getattr(assignment, 'pk', None)
+        self.user = user
+        self.intentionally_unrestricted = intentionally_unrestricted
+        self._base_querysets = None
+        self._querysets = None
+        self._logged_unrestricted = False
+
+    def _log_unrestricted_once(self):
+        if self.user is None and not self.intentionally_unrestricted and not self._logged_unrestricted:
+            logger.debug(
+                'Evaluating DynamicAssignmentResult %s without a user; call restrict(user) or unrestricted()',
+                self.assignment_id,
+            )
+            self._logged_unrestricted = True
+
+    @staticmethod
+    def prepare_queryset(model, queryset):
+        """Apply the shared eager-loading and stable ordering policy."""
+        related = [
+            name for name in ('site', 'location', 'device_type', 'role', 'platform', 'cluster', 'tenant')
+            if any(field.name == name for field in model._meta.fields)
+        ]
+        if 'device_type' in related:
+            related.append('device_type__manufacturer')
+        if related:
+            queryset = queryset.select_related(*related)
+        ordering = ('name', 'pk') if any(field.name == 'name' for field in model._meta.fields) else ('pk',)
+        return queryset.order_by(*ordering)
+
+    @property
+    def base_querysets(self):
+        """Restricted matching querysets without eager joins or ordering."""
+        if self._base_querysets is None:
+            assignment = self.assignment
+            if assignment is None and self.assignment_id:
+                assignment = DynamicAssignment.objects.filter(pk=self.assignment_id).first()
+            querysets = assignment.get_matching_querysets() if assignment else {}
+            base = {}
+            for model, queryset in querysets.items():
+                if self.user is not None:
+                    queryset = queryset.restrict(self.user, 'view')
+                base[model] = queryset
+            self._base_querysets = base
+        return self._base_querysets
+
+    @property
+    def querysets(self):
+        if self._querysets is None:
+            self._querysets = {
+                model: self.prepare_queryset(model, queryset)
+                for model, queryset in self.base_querysets.items()
+            }
+        return self._querysets
+
+    def restrict(self, user):
+        return type(self)(assignment=self.assignment, assignment_id=self.assignment_id, user=user)
+
+    def unrestricted(self):
+        return type(self)(
+            assignment=self.assignment,
+            assignment_id=self.assignment_id,
+            intentionally_unrestricted=True,
+        )
+
+    def count(self):
+        self._log_unrestricted_once()
+        return sum(queryset.count() for queryset in self.base_querysets.values())
+
+    def count_for(self, model):
+        self._log_unrestricted_once()
+        return self.base_querysets.get(model, model.objects.none()).count()
+
+    def exists_for(self, model):
+        self._log_unrestricted_once()
+        return self.base_querysets.get(model, model.objects.none()).exists()
+
+    def for_model(self, model):
+        self._log_unrestricted_once()
+        return self.querysets.get(model, model.objects.none())
+
+    def __iter__(self):
+        self._log_unrestricted_once()
+        for queryset in self.querysets.values():
+            yield from queryset
+
+    def __bool__(self):
+        self._log_unrestricted_once()
+        return any(queryset.exists() for queryset in self.base_querysets.values())
 
 
 class CustomObject(
@@ -2360,23 +2561,6 @@ class CustomObjectType(NetBoxModel):
                     fk_field.__dict__.pop('path_infos', None)
                     fk_field.__dict__.pop('reverse_path_infos', None)
 
-                if 'dynamic_assignment_data' in {f.name for f in model._meta.local_fields}:
-                    schema_conn = _get_schema_connection()
-                    table_name = model._meta.db_table
-                    if table_name in schema_conn.introspection.table_names(schema_conn.cursor()):
-                        columns = {
-                            column.name
-                            for column in schema_conn.introspection.get_table_description(
-                                schema_conn.cursor(), table_name
-                            )
-                        }
-                        if 'dynamic_assignment_data' not in columns:
-                            with schema_conn.schema_editor() as schema_editor:
-                                schema_editor.add_field(
-                                    model,
-                                    model._meta.get_field('dynamic_assignment_data'),
-                                )
-
                 # Only cache fully-generated models.  Models generated with
                 # skip_object_fields=True or skip_cot_object_fields=True omit FK
                 # fields to other COTs; caching them would permanently hide those
@@ -2961,17 +3145,6 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         blank=True,
         null=True,
     )
-    dynamic_assignment = models.ForeignKey(
-        to="netbox_custom_objects.DynamicAssignment",
-        on_delete=models.PROTECT,
-        related_name="fields",
-        verbose_name=_("dynamic assignment"),
-        blank=True,
-        null=True,
-        help_text=_(
-            "Filter definition used to dynamically resolve matching objects (for Dynamic Assignment fields only)."
-        ),
-    )
     ui_visible = models.CharField(
         max_length=50,
         choices=CustomFieldUIVisibleChoices,
@@ -3373,6 +3546,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         # Dynamic assignment is selected per Custom Object instance, not on the
         # Custom Object Type field definition.
         if self.type == CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT:
+            if self.pk and self._original_type != self.type:
+                raise ValidationError({"type": _("Cannot change an existing field to Dynamic Assignment.")})
             if self.required:
                 raise ValidationError(
                     {"required": _("Dynamic assignment fields cannot be marked as required.")}
@@ -3390,8 +3565,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     {"primary": _("Dynamic assignment fields cannot be primary.")}
                 )
             self.search_weight = 0
-        elif self.dynamic_assignment_id:
-            self.dynamic_assignment = None
+        elif self.pk and self._original_type == CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT:
+            raise ValidationError({"type": _("Cannot change a Dynamic Assignment field's type.")})
 
         # Object fields must define an object_type; other fields must not
         if self.type in (
@@ -4173,12 +4348,37 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 ).update(next_schema_id=new_schema_id)
                 self.schema_id = new_schema_id
 
-        # Dynamic assignment is a virtual field: no DB columns to add, alter, or drop.
+        # Dynamic fields share one JSON column managed with the field lifecycle.
         if self.type == CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT:
-            super().save(*args, **kwargs)
-            self.custom_object_type.clear_model_cache(self.custom_object_type.id)
-            self.custom_object_type.snapshot()
-            self.custom_object_type.save(update_fields=['cache_timestamp'])
+            model = self.custom_object_type.get_model()
+            table_name = model._meta.db_table
+            with transaction.atomic(using=schema_conn.alias):
+                with schema_conn.schema_editor() as schema_editor:
+                    schema_editor.execute('SET CONSTRAINTS ALL IMMEDIATE')
+                    with schema_conn.cursor() as cursor:
+                        columns = {
+                            column.name
+                            for column in schema_conn.introspection.get_table_description(cursor, table_name)
+                        }
+                    if self._state.adding:
+                        if 'dynamic_assignment_data' not in columns:
+                            data_field = models.JSONField(blank=True, default=dict)
+                            data_field.contribute_to_class(model, 'dynamic_assignment_data')
+                            schema_editor.add_field(model, data_field)
+                    elif self.name != self._original_name and 'dynamic_assignment_data' in columns:
+                        quoted_table = schema_conn.ops.quote_name(table_name)
+                        with schema_conn.cursor() as cursor:
+                            cursor.execute(
+                                f'UPDATE {quoted_table} SET dynamic_assignment_data = '
+                                '(dynamic_assignment_data - %s) || '
+                                'jsonb_build_object(%s, dynamic_assignment_data -> %s) '
+                                'WHERE dynamic_assignment_data ? %s',
+                                [self._original_name, self.name, self._original_name, self._original_name],
+                            )
+                super().save(*args, **kwargs)
+                self.custom_object_type.clear_model_cache(self.custom_object_type.id)
+                self.custom_object_type.snapshot()
+                self.custom_object_type.save(update_fields=['cache_timestamp'])
             return
 
         field_type = FIELD_TYPE_CLASS[self.type]()
@@ -4376,10 +4576,38 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
     def delete(self, *args, **kwargs):
         if self.type == CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT:
-            self.custom_object_type.clear_model_cache(self.custom_object_type.id)
-            self.custom_object_type.snapshot()
-            self.custom_object_type.save(update_fields=['cache_timestamp'])
-            super().delete(*args, **kwargs)
+            schema_conn = _get_schema_connection()
+            model = self.custom_object_type.get_model()
+            table_name = model._meta.db_table
+            has_other_dynamic_fields = self.custom_object_type.fields.filter(
+                type=CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT,
+            ).exclude(pk=self.pk).exists()
+            with transaction.atomic(using=schema_conn.alias):
+                with schema_conn.cursor() as cursor:
+                    columns = {
+                        column.name
+                        for column in schema_conn.introspection.get_table_description(cursor, table_name)
+                    }
+                    if 'dynamic_assignment_data' in columns:
+                        quoted_table = schema_conn.ops.quote_name(table_name)
+                        cursor.execute(
+                            f'UPDATE {quoted_table} SET dynamic_assignment_data = dynamic_assignment_data - %s '
+                            'WHERE dynamic_assignment_data ? %s',
+                            [self.name, self.name],
+                        )
+                if not has_other_dynamic_fields and 'dynamic_assignment_data' in columns:
+                    with schema_conn.schema_editor() as schema_editor:
+                        schema_editor.execute('SET CONSTRAINTS ALL IMMEDIATE')
+                        try:
+                            data_field = model._meta.get_field('dynamic_assignment_data')
+                        except FieldDoesNotExist:
+                            data_field = models.JSONField(blank=True, default=dict)
+                            data_field.contribute_to_class(model, 'dynamic_assignment_data')
+                        schema_editor.remove_field(model, data_field)
+                self.custom_object_type.clear_model_cache(self.custom_object_type.id)
+                self.custom_object_type.snapshot()
+                self.custom_object_type.save(update_fields=['cache_timestamp'])
+                super().delete(*args, **kwargs)
             return
 
         field_type = FIELD_TYPE_CLASS[self.type]()
@@ -4591,6 +4819,38 @@ def clear_cache_on_custom_object_type_save(sender, instance, **kwargs):
     Clear the model cache when a CustomObjectType is saved.
     """
     CustomObjectType.clear_model_cache(instance.id)
+
+
+@receiver(pre_delete, sender=DynamicAssignment)
+def protect_referenced_dynamic_assignment(sender, instance, **kwargs):
+    """Block deletion while a custom object still stores this assignment."""
+    for field in CustomObjectTypeField.objects.filter(
+        type=CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT,
+    ).select_related('custom_object_type'):
+        model = field.custom_object_type.get_model()
+        if model.objects.filter(**{f'dynamic_assignment_data__{field.name}': instance.pk}).exists():
+            raise ProtectedError(
+                _("Dynamic assignment '%(assignment)s' is still in use.")
+                % {'assignment': instance},
+                {instance},
+            )
+
+
+@receiver(m2m_changed, sender=DynamicAssignment.assigned_object_types.through)
+def validate_dynamic_assignment_object_types(sender, instance, action, pk_set, reverse, **kwargs):
+    """Limit the assignment's M2M to supported targets."""
+    if reverse:
+        if action == 'pre_add' and (instance.app_label, instance.model) not in DYNAMIC_ASSIGNMENT_OBJECT_TYPES:
+            raise ValidationError(_('This object type does not support dynamic assignments.'))
+        return
+
+    if action == 'pre_add' and pk_set:
+        allowed = Q()
+        for app_label, model in DYNAMIC_ASSIGNMENT_OBJECT_TYPES:
+            allowed |= Q(app_label=app_label, model=model)
+        unsupported = ObjectType.objects.filter(pk__in=pk_set).exclude(allowed)
+        if unsupported.exists():
+            raise ValidationError(_('One or more object types do not support dynamic assignments.'))
 
 
 @receiver(m2m_changed, sender=CustomObjectTypeField.related_object_types.through)

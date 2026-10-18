@@ -10,6 +10,23 @@ This documentation covers:
 - [Using Custom Objects with NetBox Branching](branching.md)
 - [Portable schema](portable-schema.md) — exporting and applying schemas across environments
 
+## Dynamic assignments
+
+Dynamic Assignment fields let a custom object select a reusable set of devices or virtual machines. The custom object
+stores only the selected assignment's ID; it does not create relationships to the matching NetBox objects. Matches are
+queried whenever the field is resolved, so target changes take effect immediately.
+
+Criteria use OR within a dimension and AND between dimensions. Hierarchical criteria such as regions, site groups,
+locations, roles, platforms, and tenant groups also match descendants. Every assignment must select at least one
+supported object type. This rule is enforced by the form and REST serializer during creation because many-to-many data
+does not exist yet when Django calls the model's `clean()` method. Later M2M changes reject unsupported types, while an
+assignment with no object types is allowed at the ORM level and matches nothing.
+
+Accessing a Dynamic Assignment field in Python returns a lazy result with `.querysets`, `.count()`, `.for_model(model)`,
+and iteration support. Attribute access itself runs no query. The result is intentionally **not permission-restricted**;
+code handling a request must call `.restrict(request.user)` before reading or iterating it.
+Non-request code that intentionally needs unfiltered results should call `.unrestricted()`.
+
 !!! tip
     If you hit any problems please check the [existing issues](https://github.com/netboxlabs/netbox-custom-objects/issues) before creating a new one. If you're unsure, start a [discussion](https://github.com/netboxlabs/netbox-custom-objects/discussions).
 

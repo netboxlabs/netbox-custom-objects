@@ -180,21 +180,28 @@ def _iter_linked_fields(instance):
     content_type = ContentType.objects.get_for_model(instance._meta.model)
     type_choices = [CustomFieldTypeChoices.TYPE_OBJECT, CustomFieldTypeChoices.TYPE_MULTIOBJECT]
 
-    dynamic_assignments = DynamicAssignment.get_for_object(instance)
-    dynamic_fields = CustomObjectTypeField.objects.filter(
+    dynamic_fields = list(CustomObjectTypeField.objects.filter(
         type=CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT,
-    ).select_related('custom_object_type')
+    ).select_related('custom_object_type'))
 
     # Fast path: the tab is registered on every public model, so this runs on every
     # detail-page render. One existence check short-circuits the two queries below
     # when nothing references this model. The predicate must mirror those two
     # querysets exactly so a False result guarantees both are empty.
-    if not dynamic_fields.exists() and not CustomObjectTypeField.objects.filter(
+    if not dynamic_fields and not CustomObjectTypeField.objects.filter(
         Q(related_object_type=content_type, is_polymorphic=False)
         | Q(related_object_types=content_type, is_polymorphic=True),
         type__in=type_choices,
     ).exists():
         return
+
+    matching_ids = []
+    if dynamic_fields:
+        assignments = DynamicAssignment.get_for_object(instance)
+        request = current_request.get()
+        if request is not None:
+            assignments = assignments.restrict(request.user, 'view')
+        matching_ids = list(assignments.values_list('pk', flat=True))
 
     # is_polymorphic=False keeps the two querysets disjoint — a row with
     # related_object_type set AND is_polymorphic=True (a legacy misconfig:
@@ -225,14 +232,8 @@ def _iter_linked_fields(instance):
                 logger.exception('Could not get model for CustomObjectType %s', cot_id)
                 continue
             model_cache[cot_id] = model
-        matching_ids = [
-            obj.pk
-            for obj in model.objects.all()
-            if (getattr(obj, 'dynamic_assignment_data', None) or {}).get(field.name)
-            in set(dynamic_assignments.values_list('pk', flat=True))
-        ]
         if matching_ids:
-            yield field, model, Q(pk__in=matching_ids)
+            yield field, model, Q(**{f'dynamic_assignment_data__{field.name}__in': matching_ids})
 
     for field in list(non_poly) + list(poly):
         cot_id = field.custom_object_type_id
@@ -267,9 +268,9 @@ def _linked_fields(instance):
     triples, and building them calls ``get_model()`` per linked type — the costly
     part. Memoizing on the request collapses those two passes into one.
 
-    Keyed by ``(model label, pk)``; the triples are user-independent (per-row
-    ``.restrict()`` happens in each caller), so the cache is shared safely. No
-    request context (shell, jobs) -> fresh build.
+    Keyed by ``(model label, pk)`` within a single request. Dynamic-assignment
+    matching is permission-restricted while building the triples. No request
+    context (shell, jobs) falls back to unrestricted matching and a fresh build.
     """
     request = current_request.get()
     if request is None:
@@ -365,7 +366,11 @@ def _get_field_value(obj, field, user=None):
     via ``restrict_to_viewable``.
     """
     if field.type == CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT:
-        return field.dynamic_assignment
+        assignment_id = (obj.dynamic_assignment_data or {}).get(field.name)
+        queryset = DynamicAssignment.objects
+        if user is not None:
+            queryset = queryset.restrict(user, 'view')
+        return queryset.filter(pk=assignment_id).first()
     if field.type == CustomFieldTypeChoices.TYPE_OBJECT:
         return getattr(obj, field.name, None)
     if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
@@ -429,6 +434,24 @@ def _batch_multiobject_values(pairs, user=None):
         for obj in objs:
             resolved[(id(obj), key)] = per_obj_targets[id(obj)][:limit]
     return resolved
+
+
+def _batch_dynamic_assignment_values(pairs, user=None):
+    """Resolve assignment references for the current page in one query."""
+    assignment_ids = {
+        (obj.dynamic_assignment_data or {}).get(field.name)
+        for obj, field in pairs
+        if field.type == CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT
+    }
+    queryset = DynamicAssignment.objects
+    if user is not None:
+        queryset = queryset.restrict(user, 'view')
+    assignments = queryset.in_bulk(assignment_ids - {None})
+    return {
+        (id(obj), id(field)): assignments.get((obj.dynamic_assignment_data or {}).get(field.name))
+        for obj, field in pairs
+        if field.type == CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT
+    }
 
 
 # Sort keys by ?sort= value.
@@ -529,16 +552,17 @@ def _render_combined_tab(request, instance, tab):
     # everything else falls back to the per-row resolver.
     page_pairs = list(page.object_list)
     multiobject_values = _batch_multiobject_values(page_pairs, request.user)
-    page_rows = [
-        (
-            obj,
-            field,
-            multiobject_values[(id(obj), id(field))]
-            if (id(obj), id(field)) in multiobject_values
-            else _get_field_value(obj, field, request.user),
-        )
-        for obj, field in page_pairs
-    ]
+    dynamic_assignment_values = _batch_dynamic_assignment_values(page_pairs, request.user)
+    page_rows = []
+    for obj, field in page_pairs:
+        key = (id(obj), id(field))
+        if key in dynamic_assignment_values:
+            value = dynamic_assignment_values[key]
+        elif key in multiobject_values:
+            value = multiobject_values[key]
+        else:
+            value = _get_field_value(obj, field, request.user)
+        page_rows.append((obj, field, value))
 
     # Filters preserved on the column sort links (each link adds its own ?sort=)
     base_params = {

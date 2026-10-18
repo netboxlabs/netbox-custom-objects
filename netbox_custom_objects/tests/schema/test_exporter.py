@@ -18,7 +18,7 @@ from pathlib import Path
 from django.test import TestCase, TransactionTestCase
 
 from netbox_custom_objects.schema.exporter import export_cot, export_cots
-from netbox_custom_objects.models import CustomObjectTypeField, DynamicAssignment
+from netbox_custom_objects.models import CustomObjectTypeField
 from netbox_custom_objects.schema.format import SCHEMA_FORMAT_VERSION
 
 from ..base import CustomObjectsTestCase, TransactionCleanupMixin
@@ -244,16 +244,14 @@ class ExporterFieldTypesTestCase(CustomObjectsTestCase, TestCase):
         f = _field_by_name(export_cot(self.cot), "status")
         self.assertEqual(f["choice_set"], "Status Choices")
 
-    def test_dynamic_assignment_field_exports_assignment_name(self):
-        assignment = DynamicAssignment.objects.create(name='Production devices')
+    def test_dynamic_assignment_field_has_no_assignment_name(self):
         self.create_custom_object_type_field(
             self.cot,
             name='covered_devices',
             type='dynamic_assignment',
-            dynamic_assignment=assignment,
         )
         field = _field_by_name(export_cot(self.cot), 'covered_devices')
-        self.assertEqual(field['dynamic_assignment'], 'Production devices')
+        self.assertNotIn('dynamic_assignment', field)
 
     def test_object_field_builtin_encoding(self):
         self.create_custom_object_type_field(

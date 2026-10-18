@@ -4,3 +4,9 @@
 .idea/
 .DS_Store
 netbox_custom_objects/static/
+
+# Local Docker test environment
+.dockerignore
+docker-compose.local.yml
+/docker/
+scripts/netbox-docker.sh

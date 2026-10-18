@@ -1,10 +1,13 @@
-import django.db.models.deletion
 from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
 
     dependencies = [
+        ('core', '0021_job_queue_name'),
+        ('dcim', '0225_gfk_indexes'),
+        ('tenancy', '0022_add_comments_to_organizationalmodel'),
+        ('virtualization', '0052_gfk_indexes'),
         ("netbox_custom_objects", "0018_alter_customobjecttypefield_schema_id"),
     ]
 
@@ -23,8 +26,7 @@ class Migration(migrations.Migration):
                 (
                     "assigned_object_types",
                     models.ManyToManyField(
-                        blank=True,
-                        help_text="The object type(s) this assignment applies to.",
+                        help_text="The device or virtual machine types this assignment applies to.",
                         related_name="dynamic_assignments",
                         to="core.objecttype",
                         verbose_name="assigned object types",
@@ -54,21 +56,5 @@ class Migration(migrations.Migration):
                 "verbose_name_plural": "dynamic assignments",
                 "ordering": ("weight", "name"),
             },
-        ),
-        migrations.AddField(
-            model_name="customobjecttypefield",
-            name="dynamic_assignment",
-            field=models.ForeignKey(
-                blank=True,
-                help_text=(
-                    "Filter definition used to dynamically resolve matching objects "
-                    "(for Dynamic Assignment fields only)."
-                ),
-                null=True,
-                on_delete=django.db.models.deletion.PROTECT,
-                related_name="fields",
-                to="netbox_custom_objects.dynamicassignment",
-                verbose_name="dynamic assignment",
-            ),
         ),
     ]

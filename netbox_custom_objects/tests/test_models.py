@@ -12,8 +12,10 @@ from django.apps import apps as django_apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import connection, transaction
+from django.db.models.deletion import ProtectedError
 from django.db.utils import OperationalError, ProgrammingError
 from django.test import TestCase, override_settings, tag
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -23,7 +25,7 @@ import netbox_custom_objects.models as nco_models
 
 from core.choices import JobStatusChoices
 from core.models import ObjectType
-from dcim.models import Site
+from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Region, Site
 from extras.models import CachedValue, CustomFieldChoiceSet, Tag, TaggedItem
 from netbox.search import registry
 from netbox.search.backends import get_backend
@@ -33,7 +35,12 @@ from netbox_custom_objects import views
 from netbox_custom_objects.field_types import LazyForeignKey, ObjectFieldType, TextFieldType
 from netbox_custom_objects.graphql.live import _active_branch_key
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.models import (
+    CustomObjectType,
+    CustomObjectTypeField,
+    DynamicAssignment,
+    DynamicAssignmentResult,
+)
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name
 from .base import CustomObjectsTestCase, create_token
 
@@ -3500,3 +3507,144 @@ class BranchingInstalledNotEnabledTestCase(CustomObjectsTestCase, TestCase):
         field.save()
         cot.delete()
         self.assertFalse(CustomObjectType.objects.filter(pk=cot.pk).exists())
+
+
+class DynamicAssignmentTestCase(CustomObjectsTestCase, TestCase):
+    def setUp(self):
+        super().setUp()
+        parent = Region.objects.create(name='Parent region', slug='parent-region')
+        child = Region.objects.create(name='Child region', slug='child-region', parent=parent)
+        site = Site.objects.create(name='Assigned site', slug='assigned-site', region=child)
+        manufacturer = Manufacturer.objects.create(name='Assignment manufacturer', slug='assignment-manufacturer')
+        device_type = DeviceType.objects.create(
+            manufacturer=manufacturer, model='Assignment type', slug='assignment-type'
+        )
+        role = DeviceRole.objects.create(name='Assignment role', slug='assignment-role')
+        self.device = Device.objects.create(
+            name='assigned-device', site=site, device_type=device_type, role=role
+        )
+        self.assignment = DynamicAssignment.objects.create(name='Parent region devices')
+        self.assignment.assigned_object_types.add(ObjectType.objects.get_for_model(Device))
+        self.assignment.regions.add(parent)
+
+    def test_forward_and_reverse_resolution_agree(self):
+        queryset = self.assignment.get_matching_querysets()[Device]
+
+        self.assertIn(self.device, queryset)
+        self.assertIn(self.assignment, DynamicAssignment.get_for_object(self.device))
+
+    def test_result_truthiness(self):
+        self.assertTrue(bool(DynamicAssignmentResult(assignment=self.assignment).unrestricted()))
+
+        no_match = DynamicAssignment.objects.create(name='No matching devices')
+        no_match.assigned_object_types.add(ObjectType.objects.get_for_model(Device))
+        other_site = Site.objects.create(name='No match site', slug='no-match-site')
+        no_match.sites.add(other_site)
+        self.assertFalse(bool(DynamicAssignmentResult(assignment=no_match).unrestricted()))
+
+        no_match.is_active = False
+        no_match.save()
+        self.assertFalse(bool(DynamicAssignmentResult(assignment=no_match).unrestricted()))
+
+        no_match.assigned_object_types.clear()
+        no_match.is_active = True
+        no_match.save()
+        self.assertFalse(bool(DynamicAssignmentResult(assignment=no_match).unrestricted()))
+
+    def test_result_existence_and_count_queries_do_not_add_eager_joins(self):
+        assignment = DynamicAssignment.objects.create(name='All devices')
+        assignment.assigned_object_types.add(ObjectType.objects.get_for_model(Device))
+        result = DynamicAssignmentResult(assignment=assignment).unrestricted()
+
+        with CaptureQueriesContext(connection) as captured:
+            self.assertTrue(bool(result))
+            self.assertTrue(result.exists_for(Device))
+            self.assertEqual(result.count(), 1)
+
+        target_queries = [
+            query['sql'].lower()
+            for query in captured.captured_queries
+            if 'from "dcim_device"' in query['sql'].lower()
+        ]
+        self.assertTrue(target_queries)
+        for sql in target_queries:
+            self.assertNotIn('join "dcim_devicetype"', sql)
+            self.assertNotIn('join "dcim_manufacturer"', sql)
+            self.assertNotIn('join "dcim_site"', sql)
+
+    def test_result_truthiness_stops_after_first_matching_model(self):
+        self.assignment.assigned_object_types.add(
+            ObjectType.objects.get(app_label='virtualization', model='virtualmachine')
+        )
+        result = DynamicAssignmentResult(assignment=self.assignment).unrestricted()
+
+        with CaptureQueriesContext(connection) as captured:
+            self.assertTrue(bool(result))
+
+        target_exists_queries = [
+            query['sql'].lower()
+            for query in captured.captured_queries
+            if 'limit 1' in query['sql'].lower()
+            and ('dcim_device' in query['sql'].lower()
+                 or 'virtualization_virtualmachine' in query['sql'].lower())
+        ]
+        self.assertEqual(len(target_exists_queries), 1)
+
+    def test_empty_object_types_match_nothing(self):
+        self.assignment.assigned_object_types.clear()
+
+        self.assertEqual(self.assignment.get_matching_querysets(), {})
+        self.assertNotIn(self.assignment, DynamicAssignment.get_for_object(self.device))
+
+    def test_object_types_can_be_replaced_or_cleared_through_orm(self):
+        virtual_machine_type = ObjectType.objects.get(
+            app_label='virtualization', model='virtualmachine'
+        )
+
+        self.assignment.assigned_object_types.set([virtual_machine_type])
+        self.assertEqual(
+            list(self.assignment.assigned_object_types.values_list('pk', flat=True)),
+            [virtual_machine_type.pk],
+        )
+
+        self.assignment.assigned_object_types.set([])
+        self.assertFalse(self.assignment.assigned_object_types.exists())
+        self.assertEqual(self.assignment.get_matching_querysets(), {})
+
+    def test_unsupported_object_type_is_rejected_through_orm(self):
+        with self.assertRaises(ValidationError):
+            self.assignment.assigned_object_types.add(self.get_site_object_type())
+
+    def test_referenced_assignment_is_protected(self):
+        cot = self.create_custom_object_type(name='ProtectedAssignment', slug='protected-assignment')
+        self.create_custom_object_type_field(cot, name='targets', type='dynamic_assignment')
+        model = cot.get_model()
+        model.objects.create(dynamic_assignment_data={'targets': self.assignment.pk})
+
+        with self.assertRaises(ProtectedError):
+            self.assignment.delete()
+
+    def test_existing_field_cannot_change_to_or_from_dynamic_assignment(self):
+        cot = self.create_custom_object_type(name='ImmutableDynamicType', slug='immutable-dynamic-type')
+        text_field = self.create_custom_object_type_field(cot, name='text_value', type='text')
+        text_field = CustomObjectTypeField.objects.get(pk=text_field.pk)
+        text_field.type = 'dynamic_assignment'
+        with self.assertRaises(ValidationError):
+            text_field.clean()
+
+        dynamic_field = self.create_custom_object_type_field(cot, name='targets', type='dynamic_assignment')
+        dynamic_field = CustomObjectTypeField.objects.get(pk=dynamic_field.pk)
+        dynamic_field.type = 'text'
+        with self.assertRaises(ValidationError):
+            dynamic_field.clean()
+
+    def test_clean_on_manually_constructed_existing_field_has_original_type(self):
+        cot = self.create_custom_object_type(name='ManualDynamicField', slug='manual-dynamic-field')
+        field = CustomObjectTypeField(
+            pk=999999,
+            custom_object_type=cot,
+            name='manual_value',
+            type='text',
+        )
+
+        field.clean()

@@ -20,4 +20,4 @@ class DynamicAssignmentIndex(SearchIndex):
         ('name', 100),
         ('description', 500),
     )
-    display_attrs = ('description', 'description')
+    display_attrs = ('name', 'description')

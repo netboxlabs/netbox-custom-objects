@@ -1,5 +1,10 @@
 # Releases
 
+## Unreleased
+
+- Added reusable Dynamic Assignments that resolve matching devices and virtual machines at read time without storing
+  relationships to those objects.
+
 ## 0.7.0
 
 ### New Features

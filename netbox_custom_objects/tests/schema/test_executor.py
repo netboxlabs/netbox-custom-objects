@@ -25,7 +25,6 @@ from netbox_custom_objects.schema.executor import (
     CircularDependencyError,
     DestructiveChangesError,
     UnknownChoiceSetError,
-    UnknownDynamicAssignmentError,
     UnknownFieldTypeError,
     UnknownObjectTypeError,
     _build_dep_order,
@@ -33,7 +32,7 @@ from netbox_custom_objects.schema.executor import (
     apply_diffs,
 )
 from netbox_custom_objects.schema.exporter import export_cot
-from netbox_custom_objects.models import CustomObjectType, DynamicAssignment
+from netbox_custom_objects.models import CustomObjectType
 
 from ..base import CustomObjectsTestCase, TransactionCleanupMixin
 
@@ -371,19 +370,16 @@ class ExecutorFieldAddTestCase(_ExecutorTestBase):
         field = self.cot.fields.select_related("related_object_type").get(name="device")
         self.assertEqual(field.related_object_type, device_ot)
 
-    def test_added_dynamic_assignment_field_resolves_assignment(self):
-        assignment = DynamicAssignment.objects.create(name='Production devices')
+    def test_added_dynamic_assignment_field(self):
         type_def = export_cot(self.cot)
         next_id = self.cot.next_schema_id + 1
         type_def["fields"].append({
             "id": next_id,
             "name": "covered_devices",
             "type": "dynamic_assignment",
-            "dynamic_assignment": assignment.name,
         })
         apply_document({"schema_version": "1", "types": [type_def]})
-        field = self.cot.fields.select_related("dynamic_assignment").get(name="covered_devices")
-        self.assertEqual(field.dynamic_assignment, assignment)
+        self.assertTrue(self.cot.fields.filter(name="covered_devices").exists())
 
     def test_unknown_choice_set_raises(self):
         type_def = export_cot(self.cot)
@@ -403,18 +399,6 @@ class ExecutorFieldAddTestCase(_ExecutorTestBase):
             "related_object_type": "does/notexist",
         })
         with self.assertRaises(UnknownObjectTypeError):
-            apply_document({"schema_version": "1", "types": [type_def]})
-
-    def test_unknown_dynamic_assignment_raises(self):
-        type_def = export_cot(self.cot)
-        next_id = self.cot.next_schema_id + 1
-        type_def["fields"].append({
-            "id": next_id,
-            "name": "covered_devices",
-            "type": "dynamic_assignment",
-            "dynamic_assignment": "No such assignment",
-        })
-        with self.assertRaises(UnknownDynamicAssignmentError):
             apply_document({"schema_version": "1", "types": [type_def]})
 
     def test_unknown_field_type_raises(self):
@@ -529,24 +513,6 @@ class ExecutorFieldAlterTestCase(_ExecutorTestBase):
         apply_document({"schema_version": "1", "types": [type_def]})
         sel_field.refresh_from_db()
         self.assertEqual(sel_field.choice_set, cs_b)
-
-    def test_alter_dynamic_assignment(self):
-        assignment_a = DynamicAssignment.objects.create(name='Production devices')
-        assignment_b = DynamicAssignment.objects.create(name='Lab devices')
-        assignment_cot = self.create_custom_object_type(name='coverage', slug='coverage')
-        assignment_field = self.create_custom_object_type_field(
-            assignment_cot,
-            name='covered_devices',
-            type='dynamic_assignment',
-            dynamic_assignment=assignment_a,
-        )
-        type_def = export_cot(assignment_cot)
-        for field in type_def['fields']:
-            if field['name'] == 'covered_devices':
-                field['dynamic_assignment'] = assignment_b.name
-        apply_document({'schema_version': '1', 'types': [type_def]})
-        assignment_field.refresh_from_db()
-        self.assertEqual(assignment_field.dynamic_assignment, assignment_b)
 
     def test_alter_related_object_type(self):
         device_ot = self.get_device_object_type()

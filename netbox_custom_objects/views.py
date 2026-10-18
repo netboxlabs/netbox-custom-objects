@@ -45,7 +45,13 @@ from netbox_custom_objects.tables import (
     DynamicAssignmentTable,
 )
 from . import field_types, filtersets, forms, tables
-from .models import CustomObject, CustomObjectType, CustomObjectTypeField, DynamicAssignment
+from .models import (
+    CustomObject,
+    CustomObjectType,
+    CustomObjectTypeField,
+    DynamicAssignment,
+    DynamicAssignmentResult,
+)
 from extras.choices import CustomFieldTypeChoices
 from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
 from netbox_custom_objects.constants import APP_LABEL
@@ -675,38 +681,36 @@ class CustomObjectView(generic.ObjectView):
             field_groups[group_name].append(field)
 
         dynamic_assignment_tables = []
+        dynamic_assignment_notices = []
         for field in da_fields:
             if not get_field_is_ui_visible(instance, field):
                 continue
-            matching_objects = getattr(instance, field.name, None) or []
-            # Filter objects user has permission to view
-            viewable_objects = [
-                obj for obj in matching_objects
-                if request.user.has_perm(
-                    f"{obj._meta.app_label}.view_{obj._meta.model_name}", obj
-                )
-            ]
-            if not viewable_objects:
+            assignment_id = (instance.dynamic_assignment_data or {}).get(field.name)
+            assignment = DynamicAssignment.objects.restrict(request.user, 'view').filter(pk=assignment_id).first()
+            if assignment is None:
                 continue
-
-            # Group matching viewable objects by model class
-            objects_by_model = {}
-            for obj in viewable_objects:
-                model_cls = obj._meta.model
-                if model_cls not in objects_by_model:
-                    objects_by_model[model_cls] = []
-                objects_by_model[model_cls].append(obj)
-
-            for model_cls, model_objs in objects_by_model.items():
-                table_cls = tables.get_table_for_model(model_cls)
-                table = table_cls(data=model_objs, orderable=False)
+            result = DynamicAssignmentResult(assignment=assignment).restrict(request.user)
+            for model_cls, queryset in result.querysets.items():
+                if not result.exists_for(model_cls):
+                    continue
+                try:
+                    table_cls = tables.get_table_for_model(model_cls)
+                except (LookupError, ImportError) as exc:
+                    logger.warning('No table is available for %s: %s', model_cls._meta.label, exc)
+                    dynamic_assignment_notices.append(model_cls._meta.verbose_name_plural)
+                    continue
+                table = table_cls(
+                    data=queryset,
+                    orderable=False,
+                    prefix=f'da_{field.pk}_{model_cls._meta.model_name}_',
+                )
                 table.configure(request)
                 dynamic_assignment_tables.append({
                     "field": field,
                     "title": field.label or field.name.replace("_", " ").title(),
                     "description": field.description,
                     "model_verbose_name": model_cls._meta.verbose_name_plural.title(),
-                    "count": len(model_objs),
+                    "count": result.count_for(model_cls),
                     "table": table,
                 })
 
@@ -714,6 +718,7 @@ class CustomObjectView(generic.ObjectView):
             "fields": fields,
             "field_groups": field_groups,
             "dynamic_assignment_tables": dynamic_assignment_tables,
+            "dynamic_assignment_notices": dynamic_assignment_notices,
         }
 
 
@@ -1150,15 +1155,15 @@ class CustomObjectEditView(generic.ObjectEditView):
                 for field_name, (ct_sub, obj_sub) in self.custom_object_type_poly_obj_fields.items():
                     setattr(instance, field_name, self.cleaned_data.get(obj_sub))
 
-                instance.save()
-
                 if self.custom_object_type_dynamic_assignment_fields:
+                    # Keep the assignment in the same save and changelog entry.
                     assignment_data = getattr(instance, 'dynamic_assignment_data', None) or {}
                     for field_name in self.custom_object_type_dynamic_assignment_fields:
                         assignment = self.cleaned_data.get(field_name)
                         assignment_data[field_name] = assignment.pk if assignment else None
                     instance.dynamic_assignment_data = assignment_data
-                    instance.save(update_fields=['dynamic_assignment_data'])
+
+                instance.save()
 
                 # Handle non-polymorphic M2M fields (require PK, so after save)
                 for field_name, field_obj in self.custom_object_type_fields.items():
@@ -1398,6 +1403,8 @@ class CustomObjectBulkEditView(BackgroundJobURLKwargsMixin, CustomObjectTableMix
         for field in cot_fields:
             # Hidden fields are omitted entirely, not just disabled.
             if field.ui_editable == CustomFieldUIEditableChoices.HIDDEN:
+                continue
+            if field.type == CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT:
                 continue
 
             field_type = field_types.FIELD_TYPE_CLASS[field.type]()
@@ -1659,7 +1666,11 @@ class CustomObjectBulkImportView(BackgroundJobURLKwargsMixin, generic.BulkImport
         non_editable_field_names = tuple(
             field.name for field in fields
             if field.ui_editable != CustomFieldUIEditableChoices.YES
+            or field.type == CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT
         )
+        raw_exclude = list(non_editable_field_names)
+        if any(field.type == CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT for field in fields):
+            raw_exclude.append('dynamic_assignment_data')
 
         meta = type(
             "Meta",
@@ -1667,7 +1678,7 @@ class CustomObjectBulkImportView(BackgroundJobURLKwargsMixin, generic.BulkImport
             {
                 "model": queryset.model,
                 "fields": "__all__",
-                "exclude": non_editable_field_names,
+                "exclude": tuple(raw_exclude),
             },
         )
 
@@ -1936,7 +1947,7 @@ class CustomObjectConfigContextView(ConditionalLoginRequiredMixin, View):
 
 @register_model_view(DynamicAssignment, "list", path="", detail=False)
 class DynamicAssignmentListView(generic.ObjectListView):
-    queryset = DynamicAssignment.objects.all()
+    queryset = DynamicAssignment.objects.prefetch_related('assigned_object_types')
     filterset = filtersets.DynamicAssignmentFilterSet
     filterset_form = forms.DynamicAssignmentFilterForm
     table = DynamicAssignmentTable
@@ -1947,14 +1958,19 @@ class DynamicAssignmentView(generic.ObjectView):
     queryset = DynamicAssignment.objects.all()
 
     def get_extra_context(self, request, instance):
-        referencing_fields = (
+        referencing_fields = []
+        fields = (
             CustomObjectTypeField.objects.restrict(request.user, "view")
-            .filter(
-                type=CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT,
-                dynamic_assignment=instance,
-            )
+            .filter(type=CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT)
             .select_related("custom_object_type")
         )
+        for field in fields:
+            model = field.custom_object_type.get_model()
+            count = model.objects.restrict(request.user, 'view').filter(**{
+                f'dynamic_assignment_data__{field.name}': instance.pk,
+            }).count()
+            if count:
+                referencing_fields.append({'field': field, 'count': count})
         dimension_specs = [
             ("regions", _("Regions")),
             ("site_groups", _("Site groups")),

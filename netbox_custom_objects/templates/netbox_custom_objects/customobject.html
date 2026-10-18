@@ -212,6 +212,9 @@
       {% endfor %}
     </div>
   </div>
+  {% for model_name in dynamic_assignment_notices %}
+    <div class="alert alert-warning">{% blocktrans %}No table is available for {{ model_name }}.{% endblocktrans %}</div>
+  {% endfor %}
   {% if dynamic_assignment_tables %}
     {% for item in dynamic_assignment_tables %}
       <div class="row mb-3">

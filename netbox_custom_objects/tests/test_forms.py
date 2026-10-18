@@ -6,8 +6,8 @@ from django.test import TestCase
 from core.models import ObjectType
 from extras.choices import CustomFieldTypeChoices
 
-from netbox_custom_objects.forms import CustomObjectTypeFieldForm
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.forms import CustomObjectTypeFieldForm, DynamicAssignmentForm
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField, DynamicAssignment
 
 from .base import CustomObjectsTestCase
 
@@ -24,6 +24,48 @@ def _fieldset_fields(form):
 
 def _make_form(data, instance=None):
     return CustomObjectTypeFieldForm(data=data, instance=instance)
+
+
+class DynamicAssignmentFormTestCase(CustomObjectsTestCase, TestCase):
+    def setUp(self):
+        self.device_type = ObjectType.objects.get(app_label='dcim', model='device')
+        self.vm_type = ObjectType.objects.get(
+            app_label='virtualization', model='virtualmachine'
+        )
+
+    def _data(self, object_types):
+        return {
+            'name': 'Form assignment',
+            'weight': 1000,
+            'description': '',
+            'is_active': True,
+            'assigned_object_types': object_types,
+        }
+
+    def test_rejects_empty_and_unsupported_object_types(self):
+        empty = DynamicAssignmentForm(data=self._data([]))
+        self.assertFalse(empty.is_valid())
+        self.assertIn('assigned_object_types', empty.errors)
+
+        unsupported = DynamicAssignmentForm(data=self._data([self.get_site_object_type().pk]))
+        self.assertFalse(unsupported.is_valid())
+        self.assertIn('assigned_object_types', unsupported.errors)
+
+    def test_edit_replaces_device_with_virtual_machine(self):
+        assignment = DynamicAssignment.objects.create(name='Form assignment')
+        assignment.assigned_object_types.set([self.device_type])
+        form = DynamicAssignmentForm(
+            data=self._data([self.vm_type.pk]),
+            instance=assignment,
+        )
+
+        self.assertTrue(form.is_valid(), form.errors)
+        form.save()
+
+        self.assertEqual(
+            list(assignment.assigned_object_types.values_list('pk', flat=True)),
+            [self.vm_type.pk],
+        )
 
 
 class PolymorphicRelatedNameVisibilityTestCase(CustomObjectsTestCase, TestCase):

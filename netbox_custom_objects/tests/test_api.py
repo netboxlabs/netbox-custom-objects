@@ -4,7 +4,10 @@ Tests for API code paths.
 import json
 import uuid
 from decimal import Decimal
+from types import SimpleNamespace
+from urllib.parse import parse_qs, urlparse
 from unittest import skipUnless
+from unittest.mock import patch
 
 from django.conf import settings
 from django.db import connection
@@ -21,11 +24,11 @@ from rest_framework.test import APIClient
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField, DynamicAssignment
 from netbox_custom_objects.utilities import is_branching_enabled
 from .base import CustomObjectsTestCase, create_token
-from core.models import Job, ObjectType
+from core.models import Job, ObjectChange, ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Rack, Site
 from extras.models import ConfigContext, ExportTemplate, Tag
 from users.models import ObjectPermission, Owner
-from virtualization.models import Cluster, ClusterType
+from virtualization.models import Cluster, ClusterType, VirtualMachine
 
 try:
     from utilities.testing.query_counts import assert_expected_query_count
@@ -1352,12 +1355,192 @@ class DynamicAssignmentResolveAPITest(CustomObjectsTestCase, TestCase):
             'plugins-api:netbox_custom_objects-api:customobject-detail',
             kwargs={'custom_object_type': self.cot.slug, 'pk': self.instance.pk},
         )
+        self.list_url = reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-list',
+            kwargs={'custom_object_type': self.cot.slug},
+        )
 
-    def test_default_response_omits_dynamic_assignment(self):
+    def test_post_sets_assignment_in_initial_change(self):
+        before = ObjectChange.objects.count()
+
+        response = self.client.post(
+            self.list_url,
+            {'name': 'Contract from API', 'assigned_devices': self.assignment.pk},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        instance = self.model.objects.get(pk=response.data['id'])
+        self.assertEqual(instance.dynamic_assignment_data, {'assigned_devices': self.assignment.pk})
+        self.assertEqual(response.data['assigned_devices']['id'], self.assignment.pk)
+        self.assertEqual(ObjectChange.objects.count(), before + 1)
+
+    def test_post_accepts_null_and_omitted_assignment(self):
+        response = self.client.post(
+            self.list_url, {'name': 'Null assignment', 'assigned_devices': None}, format='json'
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertIsNone(response.data['assigned_devices'])
+        self.assertEqual(
+            self.model.objects.get(pk=response.data['id']).dynamic_assignment_data,
+            {'assigned_devices': None},
+        )
+
+        response = self.client.post(self.list_url, {'name': 'Omitted assignment'}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertIsNone(response.data['assigned_devices'])
+        self.assertEqual(self.model.objects.get(pk=response.data['id']).dynamic_assignment_data, {})
+
+    def test_post_rejects_unknown_assignment(self):
+        response = self.client.post(
+            self.list_url, {'name': 'Bad assignment', 'assigned_devices': 999999}, format='json'
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+
+    def test_default_response_returns_assignment_reference(self):
         response = self.client.get(self.url)
 
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
-        self.assertNotIn('assigned_devices', response.data)
+        self.assertEqual(response.data['assigned_devices']['id'], self.assignment.pk)
+        self.assertNotIn('results', response.data['assigned_devices'])
+
+    def test_patch_sets_and_clears_assignment(self):
+        replacement = DynamicAssignment.objects.create(name='Replacement assignment')
+        replacement.assigned_object_types.add(self.get_device_object_type())
+
+        response = self.client.patch(
+            self.url, {'assigned_devices': replacement.pk}, format='json'
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(response.data['assigned_devices']['id'], replacement.pk)
+
+        response = self.client.patch(self.url, {'assigned_devices': None}, format='json')
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertIsNone(response.data['assigned_devices'])
+
+    def test_patch_rejects_unknown_assignment(self):
+        response = self.client.patch(self.url, {'assigned_devices': 999999}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+
+    def _use_user_without_assignment_permission(self):
+        self.user.is_superuser = False
+        self.user.save()
+        permission = ObjectPermission(
+            name='Custom object access without assignment access',
+            actions=['add', 'view', 'change'],
+        )
+        permission.save()
+        permission.users.add(self.user)
+        permission.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+    def test_hidden_assignment_null_write_is_a_noop(self):
+        self._use_user_without_assignment_permission()
+
+        get_response = self.client.get(self.url)
+        self.assertEqual(get_response.status_code, status.HTTP_200_OK, get_response.data)
+        self.assertIsNone(get_response.data['assigned_devices'])
+
+        for method in ('patch', 'put'):
+            payload = {'assigned_devices': None}
+            if method == 'put':
+                payload['name'] = self.instance.name
+            response = getattr(self.client, method)(self.url, payload, format='json')
+            self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+            self.instance.refresh_from_db()
+            self.assertEqual(
+                self.instance.dynamic_assignment_data['assigned_devices'],
+                self.assignment.pk,
+            )
+
+    def test_hidden_assignment_rejects_non_null_replacement(self):
+        replacement = DynamicAssignment.objects.create(name='Hidden replacement')
+        replacement.assigned_object_types.add(self.get_device_object_type())
+        self._use_user_without_assignment_permission()
+
+        response = self.client.patch(
+            self.url, {'assigned_devices': replacement.pk}, format='json'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+        self.assertIn('permission to view the current assignment', str(response.data))
+        self.instance.refresh_from_db()
+        self.assertEqual(
+            self.instance.dynamic_assignment_data['assigned_devices'],
+            self.assignment.pk,
+        )
+
+    def test_unrelated_patch_preserves_hidden_assignment(self):
+        self._use_user_without_assignment_permission()
+
+        response = self.client.patch(self.url, {'name': 'Updated contract'}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.instance.refresh_from_db()
+        self.assertEqual(self.instance.name, 'Updated contract')
+        self.assertEqual(
+            self.instance.dynamic_assignment_data['assigned_devices'],
+            self.assignment.pk,
+        )
+
+    def test_post_rejects_assignment_hidden_from_user(self):
+        self._use_user_without_assignment_permission()
+
+        response = self.client.post(
+            self.list_url,
+            {'name': 'Hidden assignment', 'assigned_devices': self.assignment.pk},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+
+    def test_dynamic_assignment_api_rejects_invalid_object_type_lists(self):
+        url = reverse('plugins-api:netbox_custom_objects-api:dynamicassignment-list')
+        invalid_values = (
+            [],
+            None,
+            [self.get_site_object_type().pk],
+            [999999],
+        )
+        for index, object_types in enumerate(invalid_values):
+            response = self.client.post(
+                url,
+                {
+                    'name': f'Invalid assignment {index}',
+                    'assigned_object_types': object_types,
+                },
+                format='json',
+            )
+            self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+            self.assertIn('assigned_object_types', response.data)
+
+    def test_dynamic_assignment_api_replaces_object_types_once(self):
+        url = reverse(
+            'plugins-api:netbox_custom_objects-api:dynamicassignment-detail',
+            kwargs={'pk': self.assignment.pk},
+        )
+        vm_type = ObjectType.objects.get(
+            app_label='virtualization', model='virtualmachine'
+        )
+        before = ObjectChange.objects.filter(
+            changed_object_type=ObjectType.objects.get_for_model(DynamicAssignment),
+            changed_object_id=self.assignment.pk,
+        ).count()
+
+        response = self.client.patch(
+            url, {'assigned_object_types': [vm_type.pk]}, format='json'
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(
+            list(self.assignment.assigned_object_types.values_list('pk', flat=True)),
+            [vm_type.pk],
+        )
+        after = ObjectChange.objects.filter(
+            changed_object_type=ObjectType.objects.get_for_model(DynamicAssignment),
+            changed_object_id=self.assignment.pk,
+        ).count()
+        self.assertEqual(after, before + 1)
 
     def test_resolve_returns_matching_objects(self):
         response = self.client.get(self.url, {'resolve': 'assigned_devices'})
@@ -1368,6 +1551,225 @@ class DynamicAssignmentResolveAPITest(CustomObjectsTestCase, TestCase):
         self.assertEqual(resolved['count'], 1)
         self.assertEqual(resolved['results'][0]['id'], self.device.pk)
         self.assertEqual(resolved['results'][0]['object_type'], 'dcim.device')
+
+    def test_resolve_paginates_and_preserves_query_parameters(self):
+        for index in range(5):
+            Device.objects.create(
+                name=f'page-device-{index}',
+                site=self.device.site,
+                device_type=self.device.device_type,
+                role=self.device.role,
+            )
+
+        first = self.client.get(self.url, {
+            'resolve': 'assigned_devices',
+            'limit': 2,
+            'offset': 0,
+            'brief': 1,
+        })
+        self.assertEqual(first.status_code, status.HTTP_200_OK, first.data)
+        first_page = first.data['assigned_devices']
+        self.assertEqual(first_page['count'], 6)
+        self.assertIsNone(first_page['previous'])
+        self.assertIsNotNone(first_page['next'])
+        self.assertEqual(
+            parse_qs(urlparse(first_page['next']).query),
+            {'brief': ['1'], 'limit': ['2'], 'offset': ['2'], 'resolve': ['assigned_devices']},
+        )
+
+        middle = self.client.get(self.url, {
+            'resolve': 'assigned_devices', 'limit': 2, 'offset': 2, 'brief': 1,
+        })
+        middle_page = middle.data['assigned_devices']
+        self.assertIsNotNone(middle_page['next'])
+        self.assertIsNotNone(middle_page['previous'])
+        self.assertEqual(
+            parse_qs(urlparse(middle_page['previous']).query),
+            {'brief': ['1'], 'limit': ['2'], 'resolve': ['assigned_devices']},
+        )
+
+        last = self.client.get(self.url, {
+            'resolve': 'assigned_devices', 'limit': 2, 'offset': 4,
+        })
+        self.assertEqual(last.status_code, status.HTTP_200_OK, last.data)
+        self.assertIsNone(last.data['assigned_devices']['next'])
+        self.assertIsNotNone(last.data['assigned_devices']['previous'])
+
+    def test_resolve_offset_beyond_total_returns_empty_page(self):
+        response = self.client.get(self.url, {
+            'resolve': 'assigned_devices', 'limit': 2, 'offset': 100,
+        })
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(response.data['assigned_devices']['count'], 1)
+        self.assertEqual(response.data['assigned_devices']['results'], [])
+        self.assertIsNone(response.data['assigned_devices']['next'])
+
+    def test_resolve_limit_zero_is_unbounded_when_max_page_size_is_disabled(self):
+        for index in range(4):
+            Device.objects.create(
+                name=f'unbounded-device-{index}', site=self.device.site,
+                device_type=self.device.device_type, role=self.device.role,
+            )
+
+        config = SimpleNamespace(PAGINATE_COUNT=2, MAX_PAGE_SIZE=0)
+        with patch('netbox.api.pagination.get_config', return_value=config):
+            response = self.client.get(self.url, {
+                'resolve': 'assigned_devices', 'limit': 0,
+            })
+
+        resolved = response.data['assigned_devices']
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(resolved['count'], 5)
+        self.assertEqual(len(resolved['results']), 5)
+        self.assertIsNone(resolved['next'])
+
+    def test_resolve_honors_default_and_maximum_page_sizes(self):
+        for index in range(4):
+            Device.objects.create(
+                name=f'bounded-device-{index}', site=self.device.site,
+                device_type=self.device.device_type, role=self.device.role,
+            )
+
+        config = SimpleNamespace(PAGINATE_COUNT=2, MAX_PAGE_SIZE=3)
+        with patch('netbox.api.pagination.get_config', return_value=config):
+            default_response = self.client.get(self.url, {'resolve': 'assigned_devices'})
+            capped_response = self.client.get(self.url, {
+                'resolve': 'assigned_devices', 'limit': 100,
+            })
+            zero_response = self.client.get(self.url, {
+                'resolve': 'assigned_devices', 'limit': 0,
+            })
+
+        self.assertEqual(len(default_response.data['assigned_devices']['results']), 2)
+        self.assertEqual(len(capped_response.data['assigned_devices']['results']), 3)
+        self.assertEqual(len(zero_response.data['assigned_devices']['results']), 3)
+
+    def test_resolve_page_can_span_target_models_without_gaps(self):
+        self.assignment.assigned_object_types.add(
+            ObjectType.objects.get_for_model(VirtualMachine)
+        )
+        devices = [self.device]
+        for index in range(2):
+            devices.append(Device.objects.create(
+                name=f'span-device-{index}', site=self.device.site,
+                device_type=self.device.device_type, role=self.device.role,
+            ))
+        virtual_machines = [
+            VirtualMachine.objects.create(name=f'span-vm-{index}', site=self.device.site)
+            for index in range(3)
+        ]
+
+        response = self.client.get(self.url, {
+            'resolve': 'assigned_devices', 'limit': 4, 'offset': 1,
+        })
+
+        resolved = response.data['assigned_devices']
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(resolved['count'], 6)
+        all_expected = sorted(devices, key=lambda obj: (obj.name or '', obj.pk)) + sorted(
+            virtual_machines, key=lambda obj: (obj.name or '', obj.pk)
+        )
+        expected = [(obj._meta.label_lower, obj.pk) for obj in all_expected[1:5]]
+        actual = [(obj['object_type'], obj['id']) for obj in resolved['results']]
+        self.assertEqual(actual, expected)
+
+    def test_descriptor_returns_matching_objects(self):
+        """Reading the generated field resolves its assignment."""
+        other_site = Site.objects.create(name='Other Site', slug='other-site')
+        Device.objects.create(
+            name='other-device', site=other_site,
+            device_type=self.device.device_type, role=self.device.role,
+        )
+
+        result = self.instance.assigned_devices
+        self.assertEqual(list(result), [self.device])
+        self.assertEqual(list(result.for_model(Device)), [self.device])
+
+    def test_descriptor_query_count_does_not_scale_with_target_objects(self):
+        self.device.delete()
+        for index in range(3):
+            Device.objects.create(
+                name=None if index == 0 else f'resolved-device-{index}',
+                site=self.assignment.sites.get(),
+                device_type=self.device.device_type,
+                role=self.device.role,
+            )
+
+        with CaptureQueriesContext(connection) as queries:
+            resolved = list(self.instance.assigned_devices)
+
+        self.assertEqual(len(resolved), 3)
+        three_device_query_count = len(queries)
+
+        for index in range(3, 30):
+            Device.objects.create(
+                name=None if index % 7 == 0 else f'resolved-device-{index}',
+                site=self.assignment.sites.get(),
+                device_type=self.device.device_type,
+                role=self.device.role,
+            )
+
+        with CaptureQueriesContext(connection) as queries:
+            resolved = list(self.instance.assigned_devices)
+
+        self.assertEqual(len(resolved), 30)
+        self.assertEqual(len(queries), three_device_query_count)
+
+    def test_resolve_query_count_does_not_scale_with_off_page_matches(self):
+        for index in range(2):
+            Device.objects.create(
+                name=None if index == 0 else f'query-device-{index}',
+                site=self.device.site,
+                device_type=self.device.device_type,
+                role=self.device.role,
+            )
+        params = {'resolve': 'assigned_devices', 'limit': 5}
+        self.client.get(self.url, params)
+
+        with CaptureQueriesContext(connection) as queries:
+            response = self.client.get(self.url, params)
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        three_device_query_count = len(queries)
+
+        for index in range(3, 30):
+            Device.objects.create(
+                name=None if index % 7 == 0 else f'query-device-{index}',
+                site=self.device.site,
+                device_type=self.device.device_type,
+                role=self.device.role,
+            )
+
+        with CaptureQueriesContext(connection) as queries:
+            response = self.client.get(self.url, params)
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(response.data['assigned_devices']['count'], 30)
+        self.assertEqual(len(queries), three_device_query_count)
+
+    def test_reverse_lookup_hides_unviewable_target(self):
+        self.user.is_superuser = False
+        self.user.save()
+        url = reverse('plugins-api:netbox_custom_objects-api:dynamic-custom-objects')
+
+        response = self.client.get(url, {
+            'object_type': 'dcim.device',
+            'object_id': self.device.pk,
+        })
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_reverse_lookup_returns_stored_assignment(self):
+        url = reverse('plugins-api:netbox_custom_objects-api:dynamic-custom-objects')
+
+        response = self.client.get(url, {
+            'object_type': 'dcim.device',
+            'object_id': self.device.pk,
+        })
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(response.data['count'], 1)
+        self.assertEqual(response.data['results'][0]['object']['id'], self.instance.pk)
+        self.assertEqual(response.data['results'][0]['dynamic_assignment']['id'], self.assignment.pk)
 
     def test_resolve_rejects_non_dynamic_field(self):
         response = self.client.get(self.url, {'resolve': 'name'})

@@ -2719,13 +2719,7 @@ class CoordinatesFieldType(FieldType):
 
 
 class DynamicAssignmentFieldType(FieldType):
-    """
-    A virtual field type that has no backing DB column.
-    At query time, DynamicAssignment.get_for_object() resolves which custom
-    objects match the requesting NetBox object via the filter defined on the
-    linked DynamicAssignment.  The result is surfaced via the dedicated
-    /api/plugins/custom-objects/dynamic-custom-objects/ endpoint.
-    """
+    """A virtual field backed by an assignment ID in the shared JSON column."""
 
     def get_model_field(self, field, **kwargs):
         return DynamicAssignmentDescriptor(field)
@@ -2757,7 +2751,12 @@ class DynamicAssignmentFieldType(FieldType):
 
 
 class DynamicAssignmentDescriptor:
-    """Resolve a dynamic-assignment field to its matching NetBox objects."""
+    """Return a lazy target result.
+
+    Request-aware callers must call ``result.restrict(user)`` before inspecting
+    or iterating it. Non-request callers should explicitly opt in with
+    ``result.unrestricted()``.
+    """
 
     def __init__(self, field):
         self.field = field
@@ -2767,14 +2766,8 @@ class DynamicAssignmentDescriptor:
             return self
         data = getattr(instance, 'dynamic_assignment_data', None) or {}
         assignment_id = data.get(self.field.name)
-        if not assignment_id:
-            return []
-        from netbox_custom_objects.models import DynamicAssignment
-        try:
-            assignment = DynamicAssignment.objects.get(pk=assignment_id)
-        except DynamicAssignment.DoesNotExist:
-            return []
-        return assignment.get_matching_objects()
+        from netbox_custom_objects.models import DynamicAssignmentResult
+        return DynamicAssignmentResult(assignment_id=assignment_id)
 
 
 FIELD_TYPE_CLASS = {

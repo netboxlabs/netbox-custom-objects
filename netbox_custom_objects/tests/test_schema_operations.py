@@ -783,3 +783,103 @@ class OwnerFieldNameCollisionTestCase(TransactionCleanupMixin, CustomObjectsTest
 
         results = list(updated_model.objects.all())
         self.assertEqual(len(results), 1)
+
+
+class DynamicAssignmentColumnLifecycleTestCase(
+    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
+):
+    def _columns(self, model):
+        with connection.cursor() as cursor:
+            return {
+                column.name
+                for column in connection.introspection.get_table_description(cursor, model._meta.db_table)
+            }
+
+    def test_shared_column_create_rename_and_delete(self):
+        cot = self.create_custom_object_type(name='DynamicLifecycle', slug='dynamic-lifecycle')
+        self.create_custom_object_type_field(cot, name='name', type='text')
+        model = cot.get_model()
+        instance = model.objects.create(name='Object')
+
+        field = self.create_custom_object_type_field(cot, name='targets', type='dynamic_assignment')
+        model = cot.get_model(no_cache=True)
+        self.assertIn('dynamic_assignment_data', self._columns(model))
+
+        model.objects.filter(pk=instance.pk).update(dynamic_assignment_data={'targets': 42})
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.name = 'renamed_targets'
+        field.save()
+        model = cot.get_model(no_cache=True)
+        self.assertEqual(
+            model.objects.get(pk=instance.pk).dynamic_assignment_data,
+            {'renamed_targets': 42},
+        )
+
+        field.delete()
+        model = cot.get_model(no_cache=True)
+        self.assertNotIn('dynamic_assignment_data', self._columns(model))
+        self.assertIsNotNone(model.objects.create(name='After delete').pk)
+
+    def test_deleting_last_field_tolerates_already_missing_column(self):
+        cot = self.create_simple_custom_object_type(name='MissingColumn', slug='missing-column')
+        field = self.create_custom_object_type_field(cot, name='targets', type='dynamic_assignment')
+        model = cot.get_model(no_cache=True)
+        data_field = model._meta.get_field('dynamic_assignment_data')
+        with connection.schema_editor() as schema_editor:
+            schema_editor.remove_field(model, data_field)
+
+        field.delete()
+
+        self.assertNotIn('dynamic_assignment_data', self._columns(model))
+        self.assertFalse(CustomObjectTypeField.objects.filter(pk=field.pk).exists())
+
+    def test_deleting_one_of_two_fields_keeps_column_and_other_key(self):
+        cot = self.create_simple_custom_object_type(name='SharedColumn', slug='shared-column')
+        first = self.create_custom_object_type_field(cot, name='first_targets', type='dynamic_assignment')
+        self.create_custom_object_type_field(cot, name='second_targets', type='dynamic_assignment')
+        model = cot.get_model(no_cache=True)
+        instance = model.objects.create(
+            name='Object',
+            dynamic_assignment_data={'first_targets': 1, 'second_targets': 2},
+        )
+
+        first.delete()
+
+        model = cot.get_model(no_cache=True)
+        self.assertIn('dynamic_assignment_data', self._columns(model))
+        instance = model.objects.get(pk=instance.pk)
+        self.assertEqual(instance.dynamic_assignment_data, {'second_targets': 2})
+
+    def test_rename_without_stored_key_leaves_table_unchanged(self):
+        cot = self.create_simple_custom_object_type(name='EmptyRename', slug='empty-rename')
+        field = self.create_custom_object_type_field(cot, name='targets', type='dynamic_assignment')
+        model = cot.get_model(no_cache=True)
+        instance = model.objects.create(name='Object')
+        columns_before = self._columns(model)
+
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.name = 'renamed_targets'
+        field.save()
+
+        model = cot.get_model(no_cache=True)
+        self.assertEqual(self._columns(model), columns_before)
+        self.assertEqual(model.objects.get(pk=instance.pk).dynamic_assignment_data, {})
+
+    def test_second_dynamic_field_does_not_add_shared_column_again(self):
+        cot = self.create_simple_custom_object_type(name='SecondDynamic', slug='second-dynamic')
+        self.create_custom_object_type_field(cot, name='first_targets', type='dynamic_assignment')
+
+        captured = []
+
+        def capture_sql(execute, sql, params, many, context):
+            captured.append(sql)
+            return execute(sql, params, many, context)
+
+        with connection.execute_wrapper(capture_sql):
+            self.create_custom_object_type_field(cot, name='second_targets', type='dynamic_assignment')
+
+        add_column_sql = [
+            sql for sql in captured
+            if 'add column' in sql.lower() and 'dynamic_assignment_data' in sql.lower()
+        ]
+        self.assertEqual(add_column_sql, [])

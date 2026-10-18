@@ -13,6 +13,11 @@ INCLUDE_MODELS = (
 
 APP_LABEL = "netbox_custom_objects"
 
+DYNAMIC_ASSIGNMENT_OBJECT_TYPES = (
+    ('dcim', 'device'),
+    ('virtualization', 'virtualmachine'),
+)
+
 # Convention for config-context aggregation (issue #98): a single, non-polymorphic
 # OBJECT field named as the key and pointing at the given (app_label, model) feeds the
 # matching ConfigContext assignment dimension read by
@@ -44,6 +49,7 @@ RESERVED_FIELD_NAMES = [
     "custom_object_type",
     "custom_object_type_id",
     "delete",
+    "dynamic_assignment_data",
     "full_clean",
     "get_absolute_url",
     "id",

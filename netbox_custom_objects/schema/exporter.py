@@ -142,12 +142,6 @@ def _export_field(field) -> dict:
             value = field.on_delete_behavior or FIELD_DEFAULTS["on_delete_behavior"]
             if value != FIELD_DEFAULTS["on_delete_behavior"]:
                 result[attr] = value
-        elif attr == "dynamic_assignment":
-            if field.dynamic_assignment is None:
-                raise ValueError(
-                    f"Field {field.name!r} is type {schema_type!r} but has no dynamic assignment assigned."
-                )
-            result["dynamic_assignment"] = field.dynamic_assignment.name
         elif attr in ("validation_regex", "validation_minimum", "validation_maximum"):
             value = getattr(field, attr)
             if value != FIELD_DEFAULTS.get(attr):

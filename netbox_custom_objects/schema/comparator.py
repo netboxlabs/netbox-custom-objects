@@ -268,12 +268,6 @@ def _compare_field_attrs(db_field, schema_field: dict, cot_slug_cache: dict, war
         if dv != sv:
             changes["on_delete_behavior"] = (dv, sv)
 
-    if "dynamic_assignment" in type_specific:
-        dv = db_field.dynamic_assignment.name if db_field.dynamic_assignment_id else None
-        sv = schema_field.get("dynamic_assignment")
-        if dv != sv:
-            changes["dynamic_assignment"] = (dv, sv)
-
     return changes
 
 
@@ -355,7 +349,7 @@ def diff_cot(type_def: dict) -> COTDiff:
     # Single query for all fields; partition into tracked/untracked in Python.
     db_fields: dict[int, object] = {}
     for f in cot.fields.select_related(
-        "choice_set", "related_object_type", "dynamic_assignment"
+        "choice_set", "related_object_type"
     ).prefetch_related("related_object_types"):
         if f.schema_id is None:
             diff.warnings.append(

@@ -10,18 +10,19 @@ from django.test import TestCase
 from django.utils import timezone
 
 from core.models import ObjectType
-from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
+from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Region, Site
 from extras.choices import CustomFieldTypeChoices
 from extras.models import CustomFieldChoiceSet
 
 from netbox_custom_objects.field_types import MultiObjectFieldType, ObjectFieldType
 from netbox_custom_objects.filtersets import (
     ArrayContainsFilter, CustomObjectTypeFieldFilterSet, CustomObjectTypeFilterSet,
+    DynamicAssignmentFilterSet,
     NonPolymorphicMultiObjectFilter, NonPolymorphicObjectFilter,
     PolymorphicMultiObjectFilter, PolymorphicObjectFilter,
     build_filter_for_field, get_filterset_class,
 )
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField, DynamicAssignment
 from utilities.forms.fields import (
     DynamicModelChoiceField,
     DynamicModelMultipleChoiceField,
@@ -47,6 +48,44 @@ def _make_device_fixtures(suffix):
         name=f"Role {suffix}", slug=f"role-{suffix}", color="ff0000"
     )
     return site, dt, role
+
+
+class DynamicAssignmentFilterSetTestCase(CustomObjectsTestCase, TestCase):
+    def setUp(self):
+        self.parent_region = Region.objects.create(name='Filter parent', slug='filter-parent')
+        self.child_region = Region.objects.create(
+            name='Filter child', slug='filter-child', parent=self.parent_region
+        )
+        self.site = Site.objects.create(
+            name='Filter site', slug='filter-site', region=self.parent_region
+        )
+        self.device_type = ObjectType.objects.get(app_label='dcim', model='device')
+        self.assignment = DynamicAssignment.objects.create(
+            name='Production targets', description='Primary assignment', is_active=True
+        )
+        self.assignment.assigned_object_types.add(self.device_type)
+        self.assignment.regions.add(self.parent_region, self.child_region)
+        self.assignment.sites.add(self.site)
+        DynamicAssignment.objects.create(name='Disabled targets', is_active=False)
+
+    def _ids(self, data):
+        filterset = DynamicAssignmentFilterSet(
+            data, queryset=DynamicAssignment.objects.all()
+        )
+        return set(filterset.qs.values_list('pk', flat=True))
+
+    def test_search_and_scalar_filters(self):
+        self.assertEqual(self._ids({'q': 'Primary'}), {self.assignment.pk})
+        self.assertEqual(self._ids({'name': [self.assignment.name]}), {self.assignment.pk})
+        self.assertEqual(self._ids({'is_active': True}), {self.assignment.pk})
+
+    def test_dimension_and_object_type_filters_are_distinct(self):
+        for data in (
+            {'region_id': [self.parent_region.pk, self.child_region.pk]},
+            {'site_id': [self.site.pk]},
+            {'assigned_object_types': [self.device_type.pk]},
+        ):
+            self.assertEqual(self._ids(data), {self.assignment.pk})
 
 
 # ---------------------------------------------------------------------------

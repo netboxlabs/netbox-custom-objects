@@ -10,9 +10,10 @@ from django.contrib.contenttypes.models import ContentType
 from django.http import Http404
 from django.utils.translation import gettext_lazy as _
 from drf_spectacular.types import OpenApiTypes
-from drf_spectacular.utils import OpenApiParameter, extend_schema
+from drf_spectacular.utils import OpenApiParameter, extend_schema, inline_serializer
 from extras.choices import CustomFieldTypeChoices
 from rest_framework import status
+from rest_framework import serializers as drf_serializers
 from rest_framework.parsers import JSONParser
 from rest_framework.renderers import JSONRenderer
 from rest_framework.response import Response
@@ -21,6 +22,11 @@ from rest_framework.views import APIView
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from netbox.api.authentication import IsAuthenticatedOrLoginNotRequired, TokenWritePermission
+try:
+    from netbox.api.pagination import NetBoxPagination as OptionalLimitOffsetPagination
+except ImportError:
+    # COMPAT(netbox<4.7.0): NetBoxPagination was named OptionalLimitOffsetPagination.
+    from netbox.api.pagination import OptionalLimitOffsetPagination
 from netbox.api.renderers import FormlessBrowsableAPIRenderer
 from netbox.api.viewsets import NetBoxModelViewSet
 from utilities.api import get_serializer_for_model
@@ -30,9 +36,15 @@ from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.filtersets import (
     CustomObjectTypeFieldFilterSet,
     CustomObjectTypeFilterSet,
+    DynamicAssignmentFilterSet,
     get_filterset_class,
 )
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField, DynamicAssignment
+from netbox_custom_objects.models import (
+    CustomObjectType,
+    CustomObjectTypeField,
+    DynamicAssignment,
+    DynamicAssignmentResult,
+)
 from netbox_custom_objects.schema.comparator import diff_document
 from netbox_custom_objects.schema.executor import (
     apply_document,
@@ -136,8 +148,31 @@ class DynamicAssignmentViewSet(NetBoxModelViewSet):
         'clusters', 'tenant_groups', 'tenants',
     )
     serializer_class = serializers.DynamicAssignmentSerializer
+    filterset_class = DynamicAssignmentFilterSet
 
 
+@extend_schema(
+    parameters=[
+        OpenApiParameter('object_type', OpenApiTypes.STR, OpenApiParameter.QUERY, required=True),
+        OpenApiParameter('object_id', OpenApiTypes.STR, OpenApiParameter.QUERY, required=True),
+    ],
+    responses=inline_serializer(
+        name='DynamicCustomObjectsResponse',
+        fields={
+            'count': drf_serializers.IntegerField(),
+            'results': inline_serializer(
+                name='DynamicCustomObjectResult',
+                many=True,
+                fields={
+                    'custom_object_type': drf_serializers.JSONField(),
+                    'field_name': drf_serializers.CharField(),
+                    'dynamic_assignment': drf_serializers.JSONField(),
+                    'object': drf_serializers.JSONField(),
+                },
+            ),
+        },
+    ),
+)
 class DynamicCustomObjectsView(APIView):
     """
     Returns all custom objects that dynamically match a specific NetBox object
@@ -193,45 +228,57 @@ class DynamicCustomObjectsView(APIView):
             )
 
         model_class = content_type.model_class()
+        manager = getattr(model_class, 'objects', None) if model_class is not None else None
+        if manager is None or not hasattr(manager, 'restrict'):
+            raise Http404
         try:
-            target_obj = model_class.objects.get(pk=object_id)
+            # Hide objects the caller cannot view.
+            target_obj = model_class.objects.restrict(request.user, 'view').get(pk=object_id)
         except (model_class.DoesNotExist, ValueError):
             raise Http404
 
         # Find all DynamicAssignment instances whose filter matches this object
-        matching_assignments = DynamicAssignment.get_for_object(target_obj)
+        matching_assignments = DynamicAssignment.get_for_object(target_obj).restrict(request.user, 'view')
         if not matching_assignments.exists():
             return Response({'count': 0, 'results': []})
 
-        matching_ids = set(matching_assignments.values_list('pk', flat=True))
+        matching_assignments = {
+            assignment.pk: assignment
+            for assignment in matching_assignments
+        }
+        matching_ids = list(matching_assignments)
 
-        # Find all CustomObjectTypeFields of type dynamic_assignment pointing at any match
+        # Find custom-object JSON keys that may store a matching assignment.
         from netbox_custom_objects.choices import CustomObjectFieldTypeChoices  # noqa: PLC0415
         da_fields = CustomObjectTypeField.objects.filter(
             type=CustomObjectFieldTypeChoices.TYPE_DYNAMIC_ASSIGNMENT,
-        ).select_related('custom_object_type', 'dynamic_assignment')
+        ).select_related('custom_object_type')
 
         results = []
         for field in da_fields:
             custom_object_model = field.custom_object_type.get_model()
-            all_cos = custom_object_model.objects.restrict(request.user, 'view')
+            # Let PostgreSQL filter the JSON value before loading objects.
+            all_cos = custom_object_model.objects.restrict(request.user, 'view').filter(**{
+                f'dynamic_assignment_data__{field.name}__in': matching_ids,
+            })
             serializer_class = serializers.get_serializer_class(custom_object_model)
-            da_brief = {
-                'id': field.dynamic_assignment.pk,
-                'name': field.dynamic_assignment.name,
-            }
             cot_brief = serializers.CustomObjectTypeSerializer(
                 field.custom_object_type, nested=True, context={'request': request}
             ).data
             for co in all_cos:
                 assignment_id = (getattr(co, 'dynamic_assignment_data', None) or {}).get(field.name)
-                if assignment_id not in matching_ids:
-                    continue
+                assignment = matching_assignments[assignment_id]
                 results.append({
                     'custom_object_type': cot_brief,
                     'field_name': field.name,
-                    'dynamic_assignment': da_brief,
-                    'object': serializer_class(co, context={'request': request}).data,
+                    'dynamic_assignment': {'id': assignment.pk, 'name': assignment.name},
+                    'object': serializer_class(
+                        co,
+                        context={
+                            'request': request,
+                            '_dynamic_assignment_cache': matching_assignments,
+                        },
+                    ).data,
                 })
 
         return Response({'count': len(results), 'results': results})
@@ -351,37 +398,54 @@ class CustomObjectViewSet(NetBoxModelViewSet):
             })
 
         instance = self.get_object()
-        matching_objects = getattr(instance, field.name, None) or []
-        objects_by_model = {}
-        for obj in matching_objects:
-            objects_by_model.setdefault(obj._meta.model, []).append(obj.pk)
-
+        assignment_id = (getattr(instance, 'dynamic_assignment_data', None) or {}).get(field.name)
+        assignment = DynamicAssignment.objects.restrict(request.user, 'view').filter(pk=assignment_id).first()
+        result = DynamicAssignmentResult(assignment=assignment).restrict(request.user)
+        querysets = result.querysets
+        paginator = OptionalLimitOffsetPagination()
+        paginator.request = request
+        paginator_limit = paginator.get_limit(request)
+        limit = paginator_limit or None
+        offset = paginator.get_offset(request)
+        remaining_offset = offset
+        remaining_limit = limit
+        model_counts = [
+            (model, queryset, result.count_for(model))
+            for model, queryset in querysets.items()
+        ]
+        count = sum(model_count for _, _, model_count in model_counts)
         results = []
-        for model, object_ids in objects_by_model.items():
-            queryset = model.objects.filter(pk__in=object_ids)
-            if hasattr(queryset, 'restrict'):
-                queryset = queryset.restrict(request.user, 'view')
-            else:
-                queryset = [
-                    obj for obj in queryset
-                    if request.user.has_perm(f'{model._meta.app_label}.view_{model._meta.model_name}', obj)
-                ]
-
+        for model, queryset, model_count in model_counts:
+            if remaining_offset >= model_count:
+                remaining_offset -= model_count
+                continue
+            stop = None if remaining_limit is None else remaining_offset + remaining_limit
             serializer_class = get_serializer_for_model(model)
-            for obj in queryset:
+            page_objects = queryset[remaining_offset:stop]
+            page_count = 0
+            for obj in page_objects:
                 serialized = dict(
                     serializer_class(obj, nested=True, context={'request': request}).data
                 )
                 serialized['object_type'] = model._meta.label_lower
                 results.append(serialized)
+                page_count += 1
+            remaining_offset = 0
+            if remaining_limit is not None:
+                remaining_limit -= page_count
+                if remaining_limit <= 0:
+                    break
 
-        assignment_id = (getattr(instance, 'dynamic_assignment_data', None) or {}).get(field.name)
-        assignment = DynamicAssignment.objects.filter(pk=assignment_id).first()
+        paginator.count = count
+        paginator.limit = paginator_limit
+        paginator.offset = offset
         response.data[field.name] = {
             'dynamic_assignment': (
                 {'id': assignment.pk, 'name': assignment.name} if assignment else None
             ),
-            'count': len(results),
+            'count': count,
+            'next': paginator.get_next_link(),
+            'previous': paginator.get_previous_link(),
             'results': results,
         }
         return response
