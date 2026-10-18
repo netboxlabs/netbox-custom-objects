@@ -153,6 +153,14 @@
                             {{ ''|placeholder }}
                           {% endif %}
                         {% endwith %}
+                      {% elif field.type == 'color' %}
+                        {% with color=object|get_field_value:field %}
+                          {% if color %}
+                            {{ color|color_label }}
+                          {% else %}
+                            {{ ''|placeholder }}
+                          {% endif %}
+                        {% endwith %}
                       {% elif field.type == 'url' %}
                         {% with url_html=object|get_url_field_html:field %}
                           {% if url_html %}

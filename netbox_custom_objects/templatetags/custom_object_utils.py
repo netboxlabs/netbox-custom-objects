@@ -2,7 +2,7 @@ from django import template
 from extras.choices import CustomFieldUIVisibleChoices
 
 from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
-from netbox_custom_objects.field_types import URLFieldType
+from netbox_custom_objects.field_types import URLFieldType, render_color
 from netbox_custom_objects.models import CustomObjectTypeField
 from netbox_custom_objects.utilities import build_map_url
 
@@ -14,6 +14,7 @@ __all__ = (
     "get_child_relations",
     "get_coordinate_map_url",
     "get_url_field_html",
+    "color_label",
 )
 
 register = template.Library()
@@ -94,3 +95,8 @@ def get_child_relations(obj, field: CustomObjectTypeField):
 def dict_get(d, key):
     """Look up a key in a dict from a template (e.g. ``mydict|dict_get:name``)."""
     return d.get(key)
+
+
+@register.filter(name="color_label")
+def color_label(value):
+    return render_color(value)

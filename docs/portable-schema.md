@@ -203,7 +203,7 @@ Attributes that match their defaults are omitted from exported documents to keep
 | `select`, `multiselect` | `choice_set` (required — **name** of a `CustomFieldChoiceSet`) |
 | `object` | `related_object_type` (required when `is_polymorphic` is `false`), `related_object_types` (required when `is_polymorphic` is `true`), `is_polymorphic`, `related_object_filter`, `on_delete_behavior` |
 | `multiobject` | `related_object_type` (required when `is_polymorphic` is `false`), `related_object_types` (required when `is_polymorphic` is `true`), `is_polymorphic`, `related_object_filter` |
-| `boolean`, `date`, `datetime`, `url`, `json` | (none) |
+| `boolean`, `date`, `datetime`, `url`, `json`, `color` | (none) |
 
 `on_delete_behavior` is one of `"set_null"` (default), `"cascade"`, or `"protect"`. It applies only to single `object` fields.
 

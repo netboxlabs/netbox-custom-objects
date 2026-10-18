@@ -20,6 +20,7 @@ The following attributes are available when creating or editing a Custom Object 
 | `object` | Reference to a single object (built-in NetBox object or Custom Object) |
 | `multiobject` | Reference to multiple objects of the same type |
 | `coordinates` | A geographic latitude/longitude pair (with a map link) |
+| `color` | An RGB color, shown as a swatch |
 
 ## Common Attributes
 
@@ -107,6 +108,22 @@ Behaviour:
 - **Map link.** Detail views render the coordinates with a **Map** button that opens the location
   using NetBox's `MAPS_URL` configuration parameter (Google Maps by default).
 - `Must be unique` and `Default` are not supported for `coordinates` fields.
+
+## Color Fields
+
+Field type: `color`
+
+A `color` field stores an RGB color as six lowercase hexadecimal digits without a leading `#`
+(e.g. `00ff00`), the same format as NetBox's own color fields such as a tag's color.
+
+- **Forms.** The edit form offers NetBox's named colors. A value set through the REST API or CSV
+  import that isn't one of them stays selectable when the object is edited.
+- **Default.** The field's default is picked from the same named colors, and the field list shows
+  it the same way.
+- **Display.** Detail views and tables show a color swatch with the color's name (or its `#rrggbb`
+  code if it isn't a named color); CSV export writes `#rrggbb`, which CSV
+  import accepts along with uppercase digits.
+- **Filtering.** Filters match whole values, e.g. `?color=00ff00&color=ff0000`.
 
 ## URL Fields
 
