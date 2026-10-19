@@ -5,7 +5,7 @@ import time
 from django.apps import apps as django_apps
 from django.contrib.contenttypes.management import create_contenttypes
 from django.db import connection, connections
-from django.test import Client
+from django.test import Client, override_settings
 from core.models import ObjectChange, ObjectType
 from extras.models import CustomFieldChoiceSet
 from users.models import Token
@@ -368,6 +368,16 @@ class CustomObjectsTestCase:
     """
     Base test case for custom objects tests.
     """
+
+    @classmethod
+    def setUpClass(cls):
+        # Keep test client sessions in signed cookies, as NetBox's own TestCase does after v4.7.3.
+        # A database session costs a query per request, so the query-count baselines would
+        # otherwise differ between NetBox versions.
+        session_override = override_settings(SESSION_ENGINE='django.contrib.sessions.backends.signed_cookies')
+        session_override.enable()
+        cls.addClassCleanup(session_override.disable)
+        super().setUpClass()
 
     @classmethod
     def setUpTestData(cls):
