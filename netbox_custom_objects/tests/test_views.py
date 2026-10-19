@@ -1700,6 +1700,26 @@ class ArrayFieldViewTest(CustomObjectsTestCase, TestCase):
         response = self.client.post(self._url("customobject_add"), {"name": "Bad", "points": "[[0, 0, 0], 1]"})
         self.assertContains(response, "Each item must itself be a list of values.")
 
+        # Values that aren't of the element type are rejected, not coerced or a server error.
+        cases = {
+            "a JSON string": {"points": '"abc"'},
+            "a number on dates": {"days": "[1]"},
+            "a fraction on integers": {"points": "[[0, 0, 0], [1, 1, 1.5]]"},
+            "a boolean on integers": {"points": "[[0, 0, 0], [1, 1, true]]"},
+        }
+        for label, values in cases.items():
+            with self.subTest(label):
+                response = self.client.post(self._url("customobject_add"), {"name": "Bad", **values})
+                self.assertEqual(response.status_code, 200)
+                self.assertFalse(self.model.objects.filter(name="Bad").exists())
+
+    def test_empty_list_is_no_value(self):
+        # Stored as NULL, as blank input is; the minimum length applies only to a non-empty list.
+        response = self.client.post(self._url("customobject_add"), {"name": "Empty", "points": "[]", "days": "[]"})
+        self.assertEqual(response.status_code, 302, response.content)
+        obj = self.model.objects.get(name="Empty")
+        self.assertEqual((obj.points, obj.days), (None, None))
+
     def test_csv_import(self):
         csv_data = 'name,points,days\nImported,"[[0, 0, 0], [1, 2, 3]]","[""2026-03-01""]"'
         response = self.client.post(
@@ -1709,6 +1729,21 @@ class ArrayFieldViewTest(CustomObjectsTestCase, TestCase):
         obj = self.model.objects.get(name="Imported")
         self.assertEqual(obj.points, [[0, 0, 0], [1, 2, 3]])
         self.assertEqual(obj.days, [date(2026, 3, 1)])
+
+        csv_data = 'name,points,days\nCoerced,"[[0, 0, 0], [1, 2, 3.5]]",\nEmpty,[],[]'
+        response = self.client.post(
+            self._url("customobject_bulk_import"), {"data": csv_data, "format": "csv", "csv_delimiter": ","}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(self.model.objects.filter(name__in=["Coerced", "Empty"]).exists())
+
+        csv_data = 'name,points,days\nEmpty,[],[]'
+        response = self.client.post(
+            self._url("customobject_bulk_import"), {"data": csv_data, "format": "csv", "csv_delimiter": ","}
+        )
+        self.assertEqual(response.status_code, 302, response.content)
+        obj = self.model.objects.get(name="Empty")
+        self.assertEqual((obj.points, obj.days), (None, None))
 
     def test_list_and_detail_display(self):
         obj = self.model.objects.create(name="Shown", points=[[0, 0, 0], [10, 0, 5]], days=[date(2026, 1, 1)])

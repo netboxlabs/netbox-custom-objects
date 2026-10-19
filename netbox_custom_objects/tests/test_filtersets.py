@@ -1307,6 +1307,9 @@ class ArrayFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
         cls.create_custom_object_type_field(
             cls.cot, name='tags_list', label='Tags', type='array', array_element_type='text'
         )
+        cls.create_custom_object_type_field(
+            cls.cot, name='amounts', label='Amounts', type='array', array_element_type='decimal'
+        )
 
         model = cls.cot.get_model()
         cls.obj_match = model.objects.create(
@@ -1325,6 +1328,9 @@ class ArrayFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
         self.assertEqual(self._pks({'points': '7,8,9'}), {self.obj_match.pk})
         # A value that isn't of the element type matches nothing.
         self.assertEqual(self._pks({'readings': 'x'}), set())
+        # As does one too large for the element type.
+        self.assertEqual(self._pks({'readings': '99999999999999999999'}), set())
+        self.assertEqual(self._pks({'amounts': '1000000'}), set())
 
     def test_length(self):
         self.assertEqual(self._pks({'readings__len': 2}), {self.obj_no_match.pk})
@@ -1334,6 +1340,9 @@ class ArrayFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
         self.assertEqual(self._pks({'q': 'core'}), {self.obj_match.pk})
         self.assertEqual(self._pks({'q': '3'}), {self.obj_match.pk})
         self.assertEqual(self._pks({'q': '9'}), {self.obj_match.pk})
+        # A value too large for an element type skips that field.
+        self.assertEqual(self._pks({'q': '1000000'}), set())
+        self.assertEqual(self._pks({'q': '99999999999999999999'}), set())
 
 
 # ---------------------------------------------------------------------------

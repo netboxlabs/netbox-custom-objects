@@ -2727,12 +2727,16 @@ class CoordinatesFieldType(FieldType):
 class CustomArrayField(ArrayField):
     """
     An ArrayField that also converts each item of list input (from a JSON form, the
-    API or CSV), not only of the JSON strings Django deserializes.
+    API or CSV), not only of the JSON strings Django deserializes. Items must be of the
+    element type, as the API requires, rather than coerced to it (e.g. 1.5 to 1).
     """
 
     def to_python(self, value):
         if isinstance(value, str):
-            return super().to_python(value)
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError:
+                raise ValidationError(_("Enter a list of values."), code="not_a_list")
         if value is None:
             return value
         if not isinstance(value, (list, tuple)):
@@ -2753,12 +2757,51 @@ class CustomArrayField(ArrayField):
         result = []
         for index, item in enumerate(value, start=1):
             try:
-                result.append(self.base_field.to_python(item))
+                result.append(self._item_to_python(item))
             except ValidationError as error:
                 raise prefix_validation_error(
                     error, prefix=self.error_messages["item_invalid"], code="item_invalid", params={"nth": index},
                 )
         return result
+
+    def _item_to_python(self, item):
+        base_field = self.base_field
+        if isinstance(base_field, ArrayField):
+            return base_field.to_python(item)
+        if item is None:
+            raise ValidationError(base_field.error_messages["null"], code="null")
+        invalid = ValidationError(
+            base_field.error_messages.get("invalid", _("“%(value)s” is not a valid value.")),
+            code="invalid",
+            params={"value": item},
+        )
+        if (
+            isinstance(item, (list, tuple, dict))
+            or (isinstance(item, bool) and not isinstance(base_field, models.BooleanField))
+            or (isinstance(base_field, models.IntegerField) and isinstance(item, float) and not item.is_integer())
+        ):
+            raise invalid
+        try:
+            return base_field.to_python(item)
+        except (TypeError, ValueError):
+            raise invalid
+
+    def pre_save(self, model_instance, add):
+        value = super().pre_save(model_instance, add)
+        # An empty list is no value, as a blank form or CSV value is.
+        if value == [] and self.null:
+            setattr(model_instance, self.attname, None)
+            return None
+        return value
+
+
+class ArrayListField(drf_serializers.ListField):
+    """A ListField that takes an empty list as no value (null), when null is allowed."""
+
+    def validate_empty_values(self, data):
+        if data == [] and self.allow_null:
+            return True, None
+        return super().validate_empty_values(data)
 
 
 class ArrayJSONField(JSONField):
@@ -2812,15 +2855,16 @@ class ArrayFieldType(FieldType):
         return list[element]
 
     @staticmethod
-    def _element_model_field(field):
+    def _element_model_field(field, field_validators=True):
+        """The model field for one element; without the field's own limits if not *field_validators*."""
         element_type = field.array_element_type
         validators = []
-        if element_type in (ArrayElementTypeChoices.INTEGER, ArrayElementTypeChoices.DECIMAL):
+        if field_validators and element_type in (ArrayElementTypeChoices.INTEGER, ArrayElementTypeChoices.DECIMAL):
             if field.validation_minimum is not None:
                 validators.append(MinValueValidator(field.validation_minimum))
             if field.validation_maximum is not None:
                 validators.append(MaxValueValidator(field.validation_maximum))
-        if element_type == ArrayElementTypeChoices.TEXT and field.validation_regex:
+        elif field_validators and element_type == ArrayElementTypeChoices.TEXT and field.validation_regex:
             validators.append(RegexValidator(field.validation_regex))
         if element_type == ArrayElementTypeChoices.INTEGER:
             return models.BigIntegerField(validators=validators)
@@ -2885,7 +2929,7 @@ class ArrayFieldType(FieldType):
             child = drf_serializers.ListField(
                 child=child, min_length=field.array_tuple_size, max_length=field.array_tuple_size,
             )
-        return drf_serializers.ListField(
+        return ArrayListField(
             child=child,
             required=field.required,
             allow_null=not field.required,

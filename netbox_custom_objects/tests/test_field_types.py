@@ -23,6 +23,7 @@ from netbox_custom_objects.field_types import (
     SelectFieldType,
     _csv_import_to_field_name,
 )
+from netbox.search import get_indexer
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from .base import CustomObjectsTestCase
 
@@ -669,6 +670,8 @@ class ArrayFieldTypeTestCase(FieldTypeTestCase):
         self._array_field(name="readings", validation_minimum=0, validation_maximum=100)
         self._array_field(name="codes", array_element_type="text", validation_regex="^[A-Z]+$")
         self._array_field(name="amounts", array_element_type="decimal")
+        self._array_field(name="days", array_element_type="date")
+        self._array_field(name="labels", array_element_type="text")
         model = self._model()
         valid = {"points": [[0, 0, 0], [1, 1, 1]]}
         self._clean(model, **valid)
@@ -685,6 +688,14 @@ class ArrayFieldTypeTestCase(FieldTypeTestCase):
             "above the maximum": {**valid, "readings": [101]},
             "not matching the regex": {**valid, "codes": ["ab"]},
             "not a decimal": {**valid, "amounts": ["x"]},
+            "a JSON string": {**valid, "readings": '"abc"'},
+            "not JSON": {**valid, "readings": "abc"},
+            "a number on dates": {**valid, "days": [1]},
+            # Rejected rather than coerced, as the API does.
+            "a fraction on integers": {**valid, "readings": [1.5]},
+            "a boolean on integers": {**valid, "readings": [True]},
+            "a boolean on decimals": {**valid, "amounts": [True]},
+            "a list on text": {**valid, "labels": [[1]]},
         }
         for label, values in cases.items():
             with self.subTest(label):
@@ -696,6 +707,8 @@ class ArrayFieldTypeTestCase(FieldTypeTestCase):
             "Item 2 must have exactly 3 values.": {"points": [[0, 0, 0], [1, 1]]},
             "Item 2, value 3: “x” value must be an integer.": {"points": [[0, 0, 0], [1, 1, "x"]]},
             "Item 2: Ensure this value is less than or equal to 100.": {**valid, "readings": [0, 101]},
+            "Item 1: “1” value has an invalid date format.": {**valid, "days": [1]},
+            "Enter a list of values.": {**valid, "readings": '"abc"'},
         }
         for message, values in messages.items():
             with self.subTest(message):
@@ -746,13 +759,45 @@ class ArrayFieldTypeTestCase(FieldTypeTestCase):
         first.readings.append(3)
         self.assertEqual(second.readings, [1, 2])
 
-        field = CustomObjectTypeField(
-            custom_object_type=self.custom_object_type, name="bad", type="array",
-            array_element_type="integer", default=["x"],
-        )
+        invalid = {
+            "not an integer": ("integer", ["x"]),
+            "a string": ("integer", "abc"),
+            "a number on dates": ("date", [1]),
+        }
+        for label, (element_type, default) in invalid.items():
+            with self.subTest(label):
+                field = CustomObjectTypeField(
+                    custom_object_type=self.custom_object_type, name="bad", type="array",
+                    array_element_type=element_type, default=default,
+                )
+                with self.assertRaises(ValidationError) as cm:
+                    field.full_clean()
+                self.assertIn("default", cm.exception.message_dict)
+
+    def test_empty_list_is_no_value(self):
+        self._array_field(name="readings", array_min_length=2)
+        self._array_field(name="required_readings", required=True)
+        model = self._model()
+        instance = model.objects.create(name="Test", readings=[], required_readings=[1])
+        instance.refresh_from_db()
+        self.assertIsNone(instance.readings)
+
+        # The minimum length applies to a non-empty list; a required field rejects an empty one.
+        self._clean(model, readings=[], required_readings=[1])
         with self.assertRaises(ValidationError) as cm:
-            field.full_clean()
-        self.assertIn("default", cm.exception.message_dict)
+            self._clean(model, required_readings=[])
+        self.assertIn("required_readings", cm.exception.message_dict)
+
+    def test_search_values(self):
+        self._array_field(name="days", array_element_type="date", search_weight=100)
+        self._array_field(name="amounts", array_element_type="decimal", search_weight=100)
+        model = self._model()
+        instance = model.objects.create(
+            name="Test", days=[date(2026, 1, 1), date(2026, 7, 1)], amounts=[Decimal("1.50")],
+        )
+        # Cached as displayed, not as the list's repr.
+        values = {value.name: value.value for value in get_indexer(model).to_cache(instance)}
+        self.assertEqual((values["days"], values["amounts"]), ("2026-01-01, 2026-07-01", "1.50"))
 
     def test_field_definition_validation(self):
         cases = {

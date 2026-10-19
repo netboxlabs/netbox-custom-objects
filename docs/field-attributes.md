@@ -133,6 +133,9 @@ Behaviour:
 - **Forms and CSV import.** Enter the value as JSON, e.g. `[1, 2, 3]` or `[[0, 0, 0], [10, 0, 5]]`;
   dates and times as strings, e.g. `["2026-01-01"]`. In a CSV file, quote the JSON as usual.
 - **REST API and GraphQL.** The value is a JSON list (of lists, for tuples).
+- **Values.** Each value must be of the element type: an integer array rejects `1.5` and `true`
+  rather than storing `1`. An empty list `[]` is stored as no value (`null`), so a required field
+  rejects it, and the minimum length applies only to a non-empty list.
 - **Display.** Lists show as `1, 2, 3`, and tuples as `(0, 0, 0), (10, 0, 5)`.
 - **Filtering.** `?<name>=1,3` matches objects whose array contains all of the comma-separated
   values (for tuples, anywhere in any tuple), and `?<name>__len=2` matches by the number of items.

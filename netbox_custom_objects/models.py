@@ -79,7 +79,7 @@ from netbox_custom_objects.constants import (
     RESERVED_FIELD_NAMES,
 )
 from netbox_custom_objects.field_types import (
-    FIELD_TYPE_CLASS, LazyForeignKey, _safe_pg_identifier, safe_table_name,
+    FIELD_TYPE_CLASS, LazyForeignKey, _safe_pg_identifier, format_array_value, safe_table_name,
     PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor,
 )
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
@@ -1844,11 +1844,14 @@ class CustomObjectType(NetBoxModel):
         )
         fields = []
         display_attrs = []
+        array_fields = set()
         for field in self.fields.all():
             if field.name not in present:
                 continue
             if field.search_weight > 0:
                 fields.append((field.name, field.search_weight))
+                if field.type == CustomObjectFieldTypeChoices.TYPE_ARRAY:
+                    array_fields.add(field.name)
             # Context fields surface as supplementary "attributes" on global search
             # results (issue #655), via the same generic CachedValue.display_attrs
             # mechanism every other NetBox model's SearchIndex uses. That mechanism
@@ -1861,10 +1864,17 @@ class CustomObjectType(NetBoxModel):
             if field.context and field.type != CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                 display_attrs.append(field.name)
 
+        def get_field_value(instance, field_name):
+            # Arrays as they're displayed ("2026-01-01, 2026-07-01"), not as a Python list's repr.
+            if field_name in array_fields:
+                return format_array_value(getattr(instance, field_name)) or None
+            return SearchIndex.get_field_value(instance, field_name)
+
         attrs = {
             "model": model,
             "fields": tuple(fields),
             "display_attrs": tuple(display_attrs),
+            "get_field_value": staticmethod(get_field_value),
         }
         search_index = type(
             f"{self.name}SearchIndex",

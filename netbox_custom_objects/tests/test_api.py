@@ -2763,6 +2763,8 @@ class ArrayFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
             "below the minimum": [[0, 0, 0], [-1, 0, 0]],
             "not integers": [[0, 0, 0], ["a", 0, 0]],
             "not a list": "0,0,0",
+            "a fraction": [[0, 0, 0], [1, 1, 1.5]],
+            "a boolean": [[0, 0, 0], [1, 1, True]],
         }
         for label, value in cases.items():
             with self.subTest(label):
@@ -2772,6 +2774,15 @@ class ArrayFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
                 self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
                 self.assertIn("coordinates", response.data)
         self.assertFalse(self.model.objects.exists())
+
+    def test_empty_list_is_null(self):
+        # As in the form and CSV: stored as null, and the minimum length applies only to a non-empty list.
+        data = {"name": "Empty", "coordinates": [], "days": []}
+        response = self.client.post(self._list_url(), data, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual((response.data["coordinates"], response.data["days"]), (None, None))
+        obj = self.model.objects.get(pk=response.data["id"])
+        self.assertEqual((obj.coordinates, obj.days), (None, None))
 
     def test_create_array_field(self):
         url = reverse("plugins-api:netbox_custom_objects-api:customobjecttypefield-list")

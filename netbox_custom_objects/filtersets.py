@@ -160,9 +160,12 @@ def array_contains_lookup(field, values):
     """
     from netbox_custom_objects.field_types import ArrayFieldType
 
-    element_field = ArrayFieldType._element_model_field(field)
+    # The element type's own range checks, so a value too large for the column matches
+    # nothing rather than failing in the database. Not the field's limits, which can
+    # change after values are stored.
+    element_field = ArrayFieldType._element_model_field(field, field_validators=False)
     try:
-        coerced = [element_field.to_python(value) for value in values]
+        coerced = [element_field.clean(value, None) for value in values]
     except django_forms.ValidationError:
         return None
     return [coerced] if field.array_tuple_size else coerced
