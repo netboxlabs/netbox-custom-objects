@@ -131,15 +131,24 @@ class UniquenessConstraintTestError(Exception):
 
 
 def _table_exists(table_name, conn=None):
-    """Return True if *table_name* exists in the database reachable via *conn*.
+    """Return True if *table_name* exists in *conn*'s own schema.
 
     Defaults to the global ``connection`` (main schema).  When the caller is
     operating inside a branch context, pass the branch's connection so the
-    lookup runs against the active branch's PostgreSQL schema.
+    lookup runs against the active branch's PostgreSQL schema.  Only that
+    schema counts: a branch connection's search_path falls through to main, so
+    ``introspection.table_names()`` would report main's table and an unqualified
+    DROP would then remove it.
     """
     if conn is None:
         conn = connection
-    return table_name in conn.introspection.table_names()
+    with conn.cursor() as cursor:
+        cursor.execute(
+            'SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_tables '
+            'WHERE schemaname = current_schema() AND tablename = %s)',
+            [table_name],
+        )
+        return cursor.fetchone()[0]
 
 
 USER_TABLE_DATABASE_NAME_PREFIX = "custom_objects_"
@@ -1813,6 +1822,7 @@ class CustomObjectType(NetBoxModel):
         key = (self.pk, branch_id)
         bucket = type(self)._through_model_cache.setdefault(key, {})
         bucket[through_model.__name__] = through_model
+        through_model._context_branch_id = branch_id
         if branch_id is not None:
             self._restore_main_through_registration(self.pk, through_model.__name__)
 
@@ -2008,6 +2018,9 @@ class CustomObjectType(NetBoxModel):
             "__module__": __name__,
             "custom_object_type": self,
             "custom_object_type_id": self.id,
+            # Branch context this class was built for (None for main); lets a
+            # branch-side delete tell its own registrations from main's.
+            "_context_branch_id": branch_id,
         }
 
         # Pass the generating models set to field generation
@@ -2375,18 +2388,20 @@ class CustomObjectType(NetBoxModel):
             self.clear_model_cache(self.id)
 
     def delete(self, *args, **kwargs):
-        # super().delete() clears self.id; keep it for the cleanup afterwards.
+        # super().delete() resets self.id to None; keep it for the cleanup afterwards.
         cot_id = self.id
+        schema_conn = _get_schema_connection()
+        in_branch = schema_conn is not connection
 
-        # COT is going away — every branch's cached class is stale.
-        self.clear_model_cache(cot_id, all_branches=True)
+        # Deleted in main, the COT is gone everywhere, so every context's cached
+        # class is stale.  Deleted in a branch, main and other branches still
+        # have it, so only this branch's entry goes.
+        self.clear_model_cache(cot_id, all_branches=not in_branch)
 
         # Regenerate against the current context so the model used for the
         # DDL drop below reflects this branch's column set, not whatever
         # stale class an earlier context cached.
         model = self.get_model()
-        schema_conn = _get_schema_connection()
-        in_branch = schema_conn is not connection
 
         # Delete all CustomObjectTypeFields that reference this CustomObjectType (non-polymorphic)
         for field in CustomObjectTypeField.objects.filter(related_object_type=self.object_type):
@@ -2461,12 +2476,13 @@ class CustomObjectType(NetBoxModel):
                 for through, original in cleared:
                     through._meta.auto_created = original
 
-        # Unregister from apps.all_models so cascade-delete doesn't query the
-        # dropped table.
-        self.unregister_model(model)
+        # Unregister dropped models so cascade deletion doesn't query missing tables.
+        # In a branch, preserve main's classes but drop any built for this branch,
+        # including one a cascaded field delete above regenerated.
+        self.unregister_model(model, branch_id=self._active_branch_id() if in_branch else None)
 
-        # Re-clear in case anything re-cached during cleanup.
-        self.clear_model_cache(cot_id, all_branches=True)
+        # Clear the model and through models cached by get_model() above.
+        self.clear_model_cache(cot_id, all_branches=not in_branch)
 
         if not in_branch:
             # Other worker processes still have this model registered; tell them to
@@ -2475,7 +2491,7 @@ class CustomObjectType(NetBoxModel):
             transaction.on_commit(lambda: signal_custom_object_type_deleted(cot_id))
 
     @classmethod
-    def unregister_model(cls, model):
+    def unregister_model(cls, model, branch_id=None):
         """
         Remove a generated model and its through models from the app registry.
 
@@ -2483,12 +2499,25 @@ class CustomObjectType(NetBoxModel):
         cascade delete (or core's ``handle_deleted_object``) queries its dropped
         table.  ``_global_lock`` guards against a concurrent ``get_model()``
         re-registering it mid-cleanup.
+
+        With ``branch_id``, only entries built for that branch context are removed,
+        whichever generation they are, so main's classes stay registered.
         """
+        names = [m.__name__ for m in (model, *getattr(model, '_through_models', []))]
+        cls._unregister_model_names(names, branch_id=branch_id)
+
+    @classmethod
+    def _unregister_model_names(cls, names, branch_id=None):
+        """Remove the classes registered under *names*; see ``unregister_model``."""
         with cls._global_lock:
             registry = apps.all_models.get(APP_LABEL, {})
-            registry.pop(model.__name__.lower(), None)
-            for through_model in getattr(model, '_through_models', []):
-                registry.pop(through_model.__name__.lower(), None)
+            for name in names:
+                name = name.lower()
+                registered = registry.get(name)
+                if registered is None:
+                    continue
+                if branch_id is None or getattr(registered, '_context_branch_id', None) == branch_id:
+                    del registry[name]
 
         apps.clear_cache()
 
@@ -4230,11 +4259,22 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         # Deregister the dropped through model (both polymorphic and plain MULTIOBJECT)
         # so the cascade-delete collector no longer queries the now-missing table.
         if _dropped_through_model is not None:
-            through_name = _dropped_through_model.__name__.lower()
-            with CustomObjectType._global_lock:
-                if through_name in apps.all_models.get(APP_LABEL, {}):
-                    del apps.all_models[APP_LABEL][through_name]
-            apps.clear_cache()
+            if schema_conn is connection:
+                CustomObjectType._unregister_model_names([_dropped_through_model.__name__])
+            else:
+                # In a branch the captured through is normally main's, whose table
+                # is untouched, so it stays; the removal above built a fresh through
+                # that Django auto-registered over it, so put main's back.  Only a
+                # through built for this branch goes.
+                through_name = _dropped_through_model.__name__.lower()
+                branch_id = CustomObjectType._active_branch_id()
+                with CustomObjectType._global_lock:
+                    registry = apps.all_models[APP_LABEL]
+                    if getattr(_dropped_through_model, '_context_branch_id', None) == branch_id:
+                        registry.pop(through_name, None)
+                    else:
+                        registry[through_name] = _dropped_through_model
+                apps.clear_cache()
 
         # Clear the model cache for this CustomObjectType when a field is deleted
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)
