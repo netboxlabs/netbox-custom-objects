@@ -69,7 +69,7 @@ from utilities.object_types import object_type_name
 from utilities.querysets import RestrictedQuerySet
 from utilities.serialization import deserialize_object as _deserialize_object
 from utilities.string import title
-from utilities.validators import validate_regex
+from utilities.validators import ColorValidator, validate_regex
 
 from netbox_custom_objects.choices import (ConstraintLookupChoices, ConstraintTypeChoices,
                                             CustomObjectFieldTypeChoices, ObjectFieldOnDeleteChoices)
@@ -3674,6 +3674,12 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                         )
                     )
 
+            # Validate color
+            elif self.type == CustomObjectFieldTypeChoices.TYPE_COLOR:
+                if not isinstance(value, str):
+                    raise ValidationError(_("Value must be a string."))
+                ColorValidator(value)
+
             # Validate integer
             elif self.type == CustomFieldTypeChoices.TYPE_INTEGER:
                 if type(value) is not int:
@@ -4200,6 +4206,7 @@ CONSTRAINT_FIELD_TYPES = {
     CustomFieldTypeChoices.TYPE_URL,
     CustomFieldTypeChoices.TYPE_SELECT,
     CustomFieldTypeChoices.TYPE_OBJECT,
+    CustomObjectFieldTypeChoices.TYPE_COLOR,
 }
 
 # Field types compared case-insensitively when a constraint is case-insensitive.
@@ -4223,6 +4230,7 @@ _BLANK_STRING_FIELD_TYPES = {
     CustomFieldTypeChoices.TYPE_LONGTEXT,
     CustomFieldTypeChoices.TYPE_URL,
     CustomFieldTypeChoices.TYPE_SELECT,
+    CustomObjectFieldTypeChoices.TYPE_COLOR,
 }
 
 
@@ -4680,6 +4688,8 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
             })
         try:
             model._meta.get_field(field.name).to_python(value)
+            if field.type == CustomObjectFieldTypeChoices.TYPE_COLOR:
+                ColorValidator(value)
         except ValidationError as exc:
             raise ValidationError({
                 attr: _("{field}: {error}").format(field=field, error=" ".join(exc.messages))

@@ -74,6 +74,7 @@ Available `type` values are:
 | `multiselect` | Multiple selections from a choice set |
 | `object` | Reference to a single object |
 | `multiobject` | Reference to multiple objects of the same type |
+| `color` | RGB color as six lowercase hexadecimal digits, e.g. `00ff00` |
 
 Common attributes available on all field types:
 

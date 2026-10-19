@@ -1043,16 +1043,17 @@ class GraphQLFilterTestCase(GraphQLEndpointMixin, CustomObjectsTestCase, TestCas
         self.create_custom_object_type_field(cot, name="seen", label="Seen", type="datetime")
         self.create_custom_object_type_field(cot, name="notes", label="Notes", type="longtext")
         self.create_custom_object_type_field(cot, name="link", label="Link", type="url")
+        self.create_custom_object_type_field(cot, name="shade", label="Shade", type="color")
         model = cot.get_model()
         model.objects.create(
             name="Alpha", count=1, price=decimal.Decimal("1.50"), active=True,
             bought="2026-01-15", seen="2026-01-15T10:00:00Z",
-            notes="Rack 4, top shelf", link="https://example.com/alpha",
+            notes="Rack 4, top shelf", link="https://example.com/alpha", shade="ff0000",
         )
         model.objects.create(
             name="Beta", count=5, price=decimal.Decimal("9.99"), active=False,
             bought="2026-06-01", seen="2026-06-01T10:00:00Z",
-            notes="Spare", link="https://example.org/beta",
+            notes="Spare", link="https://example.org/beta", shade="00ff00",
         )
         model.objects.create(name="Gamma", count=10)
 
@@ -1068,6 +1069,9 @@ class GraphQLFilterTestCase(GraphQLEndpointMixin, CustomObjectsTestCase, TestCas
         self.assertEqual(self._names(field, '{seen: {lt: "2026-03-01T00:00:00Z"}}'), ["Alpha"])
         self.assertEqual(self._names(field, '{notes: {i_contains: "shelf"}}'), ["Alpha"])
         self.assertEqual(self._names(field, '{link: {ends_with: ".org/beta"}}'), ["Beta"])
+        self.assertEqual(self._names(field, '{shade: {exact: "00ff00"}}'), ["Beta"])
+        rows = self._gql(f'{{ {field}(filters: {{shade: {{exact: "ff0000"}}}}) {{ shade }} }}')[field]
+        self.assertEqual(rows, [{"shade": "ff0000"}])
 
     def test_choice_field_filters(self):
         cot = self.create_custom_object_type(name="Box", slug="box")
