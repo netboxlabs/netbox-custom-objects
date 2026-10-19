@@ -20,6 +20,7 @@ from netbox.tables.columns import ColorColumn
 from netbox_custom_objects.field_types import (
     ArrayFieldType,
     ColorFieldType,
+    MACAddressFieldType,
     CoordinatesFieldType,
     MultiObjectFieldType,
     MultiSelectFieldType,
@@ -62,7 +63,7 @@ class RequiredFieldEnforcementTestCase(FieldTypeTestCase):
 
     SCALAR_TYPES = (
         'text', 'longtext', 'integer', 'decimal', 'boolean', 'date', 'datetime',
-        'url', 'json', 'color',
+        'url', 'json', 'color', 'mac_address',
     )
 
     def test_scalar_fields_blank_matches_required(self):
@@ -1344,6 +1345,67 @@ class ColorFieldTypeTestCase(FieldTypeTestCase):
             column.render("ff9800"), '<span class="color-label" style="background-color: #ff9800">&nbsp;</span>',
         )
         self.assertEqual(column.value("ff8800"), "#ff8800")
+
+
+class MACAddressFieldTypeTestCase(FieldTypeTestCase):
+    """Test cases for MAC address field type."""
+
+    FORMATS = ("00:1a:2b:3c:4d:5e", "00-1A-2B-3C-4D-5E", "001a.2b3c.4d5e", "001a2b3c4d5e")
+
+    def test_model_field_normalizes_formats(self):
+        self.create_custom_object_type_field(self.custom_object_type, name="mac", type="mac_address")
+        model = self.custom_object_type.get_model()
+        for value in self.FORMATS:
+            with self.subTest(value=value):
+                obj = model.objects.create(name=value, mac=value)
+                obj.refresh_from_db()
+                self.assertEqual(str(obj.mac), "00:1A:2B:3C:4D:5E")
+        model(name="Blank").full_clean()
+        for value in ("00:1a:2b:3c:4d", "not a mac", "00:1a:2b:3c:4d:5e:6f:70"):
+            with self.subTest(value=value), self.assertRaises(ValidationError) as cm:
+                model(name="Invalid", mac=value).full_clean()
+            self.assertIn("mac", cm.exception.message_dict)
+
+    def test_validate(self):
+        field = self.create_custom_object_type_field(self.custom_object_type, name="mac", type="mac_address")
+        field.validate("00-1a-2b-3c-4d-5e")
+        for value in ("00:1a:2b:3c:4d", 123):
+            with self.subTest(value=value), self.assertRaises(ValidationError):
+                field.validate(value)
+
+    def test_default(self):
+        # The field form's JSON input yields a str subclass.
+        for default in ("nope", JSONString("nope")):
+            field = CustomObjectTypeField(
+                custom_object_type=self.custom_object_type, name="mac", type="mac_address", default=default
+            )
+            with self.subTest(default=type(default)), self.assertRaises(ValidationError) as cm:
+                field.full_clean()
+            self.assertIn("default", cm.exception.message_dict)
+
+        field = CustomObjectTypeField(
+            custom_object_type=self.custom_object_type, name="mac", type="mac_address", default="001a.2b3c.4d5e"
+        )
+        field.full_clean()
+        self.assertEqual(field.default, "00:1A:2B:3C:4D:5E")
+        field.save()
+        model = self.custom_object_type.get_model()
+        self.assertEqual(str(model.objects.create(name="Defaulted").mac), "00:1A:2B:3C:4D:5E")
+
+    def test_unique_across_formats(self):
+        self.create_custom_object_type_field(self.custom_object_type, name="mac", type="mac_address", unique=True)
+        model = self.custom_object_type.get_model()
+        model.objects.create(name="First", mac="00:1a:2b:3c:4d:5e")
+        with self.assertRaises(ValidationError):
+            model(name="Second", mac="001A2B3C4D5E").full_clean()
+
+    def test_form_field(self):
+        field = self.create_custom_object_type_field(self.custom_object_type, name="mac", type="mac_address")
+        form_field = MACAddressFieldType().get_form_field(field)
+        self.assertEqual(form_field.clean("001a.2b3c.4d5e"), "00:1A:2B:3C:4D:5E")
+        self.assertIsNone(form_field.clean(""))
+        with self.assertRaises(ValidationError):
+            form_field.clean("00:1a")
 
 
 class JSONFieldTypeTestCase(FieldTypeTestCase):

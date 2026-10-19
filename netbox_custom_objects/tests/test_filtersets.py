@@ -1187,6 +1187,42 @@ class ColorFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
         self.assertFalse(self._filterset({'shade': ['ff00']}).qs.exists())
 
 
+class MACAddressFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
+    """A multi-value MAC address filter is generated for MAC address fields."""
+
+    match_params = {'mac': ['00-1A-2B-3C-4D-5E']}
+    total_count = 3
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(name='MACFS', slug='mac-fs')
+        cls.create_custom_object_type_field(
+            cls.cot, name='name', label='Name', type='text', primary=True, required=True
+        )
+        cls.create_custom_object_type_field(cls.cot, name='mac', label='MAC', type='mac_address')
+
+        model = cls.cot.get_model()
+        cls.obj_match = model.objects.create(name='eth0', mac='00:1a:2b:3c:4d:5e')
+        cls.obj_no_match = model.objects.create(name='eth1', mac='00:1a:2b:3c:4d:5f')
+        cls.obj_other = model.objects.create(name='eth2', mac='aa:bb:cc:dd:ee:ff')
+
+    def test_multiple_values_in_any_format(self):
+        pks = set(self._filterset({'mac': ['001a2b3c4d5e', 'AA:BB:CC:DD:EE:FF']}).qs.values_list('pk', flat=True))
+        self.assertEqual(pks, {self.obj_match.pk, self.obj_other.pk})
+
+    def test_partial_match(self):
+        pks = set(self._filterset({'mac__ic': ['3c:4d']}).qs.values_list('pk', flat=True))
+        self.assertEqual(pks, {self.obj_match.pk, self.obj_no_match.pk})
+
+    def test_invalid_value_matches_nothing(self):
+        self.assertFalse(self._filterset({'mac': ['nope']}).qs.exists())
+
+    def test_quick_search(self):
+        pks = set(self._filterset({'q': 'BB:CC'}).qs.values_list('pk', flat=True))
+        self.assertEqual(pks, {self.obj_other.pk})
+
+
 class JSONFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
     """CharFilter with icontains is generated for TYPE_JSON fields."""
 

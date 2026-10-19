@@ -69,6 +69,7 @@ from utilities.object_types import object_type_name
 from utilities.querysets import RestrictedQuerySet
 from utilities.serialization import deserialize_object as _deserialize_object
 from utilities.string import title
+from dcim.fields import MACAddressField
 from utilities.validators import ColorValidator, validate_regex
 
 from netbox_custom_objects.choices import (ArrayElementTypeChoices, ConstraintLookupChoices, ConstraintTypeChoices,
@@ -3133,6 +3134,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                         )
                     }
                 )
+            if self.type == CustomObjectFieldTypeChoices.TYPE_MAC_ADDRESS:
+                self.default = str(MACAddressField().to_python(self.default))
 
         is_array = self.type == CustomObjectFieldTypeChoices.TYPE_ARRAY
 
@@ -3795,6 +3798,12 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     raise ValidationError(_("Value must be a string."))
                 ColorValidator(value)
 
+            # Validate MAC address
+            elif self.type == CustomObjectFieldTypeChoices.TYPE_MAC_ADDRESS:
+                if not isinstance(value, str):
+                    raise ValidationError(_("Value must be a string."))
+                MACAddressField().to_python(value)
+
             # Validate integer
             elif self.type == CustomFieldTypeChoices.TYPE_INTEGER:
                 if type(value) is not int:
@@ -4322,6 +4331,7 @@ CONSTRAINT_FIELD_TYPES = {
     CustomFieldTypeChoices.TYPE_SELECT,
     CustomFieldTypeChoices.TYPE_OBJECT,
     CustomObjectFieldTypeChoices.TYPE_COLOR,
+    CustomObjectFieldTypeChoices.TYPE_MAC_ADDRESS,
 }
 
 # Field types compared case-insensitively when a constraint is case-insensitive.

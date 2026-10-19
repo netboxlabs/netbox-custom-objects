@@ -3605,7 +3605,11 @@ class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
             self.cot, name="site", type="object", related_object_type=self.get_site_object_type()
         )
         shade = self.create_custom_object_type_field(self.cot, name="shade", type="color")
+        mac = self.create_custom_object_type_field(self.cot, name="mac", type="mac_address")
         self._constraint()
+        self._constraint(
+            name="vendor_mac", fields=[self.vendor, mac], condition=[self._predicate(mac, "exact", "00-1a-2b-3c-4d-5e")]
+        )
         # Color fields can be constrained and compared by value.
         self._constraint(
             name="vendor_shade", fields=[self.vendor, shade], condition=[self._predicate(shade, "exact", "ff0000")]
@@ -3629,6 +3633,7 @@ class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
             "value of the wrong type": dict(condition=[self._predicate(count, "exact", "many")]),
             "value not a choice": dict(condition=[self._predicate(color, "exact", "nope")]),
             "value not a color": dict(condition=[self._predicate(shade, "exact", "#FF0000")]),
+            "value not a MAC address": dict(condition=[self._predicate(mac, "exact", "00:1a")]),
             "object field compared by value": dict(condition=[self._predicate(site, "exact", 1)]),
         }
         for label, kwargs in cases.items():

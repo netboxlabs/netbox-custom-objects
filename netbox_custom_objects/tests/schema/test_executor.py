@@ -362,6 +362,17 @@ class ExecutorFieldAddTestCase(_ExecutorTestBase):
         self.assertEqual(export_cot(self.cot)["fields"][-1], {"id": next_id, "name": "shade", "type": "color",
                                                                "default": "00ff00"})
 
+    def test_added_mac_address_field(self):
+        type_def = export_cot(self.cot)
+        next_id = self.cot.next_schema_id + 1
+        type_def["fields"].append({"id": next_id, "name": "mac", "type": "mac_address", "default": "001a2b3c4d5e"})
+        apply_document({"schema_version": "1", "types": [type_def]})
+        self.assertEqual(self.cot.fields.get(name="mac").type, "mac_address")
+        self.cot.refresh_from_db()
+        obj = self.cot.get_model().objects.create()
+        obj.refresh_from_db()
+        self.assertEqual(str(obj.mac), "00:1A:2B:3C:4D:5E")
+
     def test_added_select_field_resolves_choice_set(self):
         cs = self.create_choice_set(name='Colours')
         type_def = export_cot(self.cot)

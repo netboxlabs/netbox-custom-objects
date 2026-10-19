@@ -50,6 +50,7 @@ from utilities.forms.widgets import (
 )
 from utilities.templatetags.builtins.filters import linkify, render_markdown
 from netbox.config import get_config
+from dcim.fields import MACAddressField
 from utilities.fields import ColorField
 from utilities.validators import ColorValidator
 from netbox.tables.columns import BooleanColumn, ColorColumn
@@ -2646,6 +2647,48 @@ class ColorFieldType(FieldType):
         return ColorColumn()
 
 
+class MACAddressFormField(forms.CharField):
+    """A MAC address in any format netaddr reads, cleaned to AA:BB:CC:DD:EE:FF."""
+
+    def to_python(self, value):
+        value = super().to_python(value)
+        return str(MACAddressField().to_python(value)) if value else value
+
+
+class MACAddressFieldType(FieldType):
+    graphql_annotation = str
+
+    def get_model_field(self, field, **kwargs):
+        field_kwargs = self._safe_kwargs(**kwargs)
+        field_kwargs.update({"default": field.default, "unique": field.unique})
+        return MACAddressField(null=True, blank=not field.required, **field_kwargs)
+
+    def get_serializer_field(self, field, **kwargs):
+        return MACAddressSerializerField(required=field.required, allow_null=not field.required)
+
+    def get_form_field(self, field, **kwargs):
+        return MACAddressFormField(
+            required=field.required, initial=field.default, empty_value=None, help_text=_("e.g. 00:1A:2B:3C:4D:5E")
+        )
+
+    def get_filterform_field(self, field, **kwargs):
+        return forms.CharField(label=field, required=False)
+
+
+class MACAddressSerializerField(drf_serializers.CharField):
+    """A MAC address, accepted in any format netaddr reads and returned as AA:BB:CC:DD:EE:FF."""
+
+    def to_internal_value(self, data):
+        value = super().to_internal_value(data)
+        try:
+            return str(MACAddressField().to_python(value))
+        except ValidationError as exc:
+            raise drf_serializers.ValidationError(exc.messages)
+
+    def to_representation(self, value):
+        return str(value)
+
+
 class CoordinatesFieldType(FieldType):
     """
     A geographic coordinates field. A single field of this type expands into two real
@@ -3089,4 +3132,5 @@ FIELD_TYPE_CLASS = {
     CustomObjectFieldTypeChoices.TYPE_COORDINATES: CoordinatesFieldType,
     CustomObjectFieldTypeChoices.TYPE_ARRAY: ArrayFieldType,
     CustomObjectFieldTypeChoices.TYPE_COLOR: ColorFieldType,
+    CustomObjectFieldTypeChoices.TYPE_MAC_ADDRESS: MACAddressFieldType,
 }
