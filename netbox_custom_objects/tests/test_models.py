@@ -3762,6 +3762,12 @@ class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
             "compared with itself": ({"rule": [self._predicate(end, "gt", {"field": end.schema_id})]}, "rule"),
             "in with a field": ({"rule": [self._predicate(end, "in", {"field": start.schema_id})]}, "rule"),
             "unknown field": ({"rule": [self._predicate(end, "gt", {"field": 999})]}, "rule"),
+            # Only an ID refers to a field; true would otherwise match schema ID 1.
+            "a list as the compared field": (
+                {"rule": [self._predicate(end, "gt", {"field": [start.schema_id]})]}, "rule"
+            ),
+            "true as the compared field": ({"rule": [self._predicate(end, "gt", {"field": True})]}, "rule"),
+            "a name as the field": ({"rule": [{"field": "end", "lookup": "isnull", "value": True}]}, "rule"),
             "bad value": ({"rule": [self._predicate(count, "gt", "many")]}, "rule"),
             # "Is empty" tests for blank text.
             "blank value": ({"rule": [self._predicate(self.serial, "exact", "")]}, "rule"),

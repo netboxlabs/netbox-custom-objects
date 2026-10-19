@@ -350,6 +350,22 @@ class SchemaApplyTestCase(_SchemaAPIBase):
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(resp.data["error"], "unresolvable_reference")
 
+    def test_apply_invalid_constraint_field_reference_returns_400(self):
+        cot = self.create_custom_object_type(name='applyrule', slug='apply-rule')
+        low = self.create_custom_object_type_field(cot, name='low', type='integer')
+        high = self.create_custom_object_type_field(cot, name='high', type='integer')
+        cot.refresh_from_db()
+        type_def = export_cot(cot)
+        for ref in ([low.schema_id], True):
+            with self.subTest(ref=ref):
+                rule = [{"field": high.schema_id, "lookup": "gt", "value": {"field": ref}}]
+                type_def["constraints"] = [{"name": "high_above_low", "type": "check", "rule": rule}]
+                schema_doc = {"schema_version": "1", "types": [type_def]}
+                resp = self.client.post(self.apply_url, data=self._apply_body(schema_doc), format="json")
+                self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertEqual(resp.data["error"], "invalid_constraint")
+        self.assertFalse(cot.constraints.exists())
+
     def test_apply_unresolvable_choice_set_returns_400(self):
         cot = self.create_custom_object_type(name='applycsfail', slug='apply-cs-fail')
         self.create_custom_object_type_field(cot, name='ok', type='text')

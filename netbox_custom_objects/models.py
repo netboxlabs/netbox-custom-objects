@@ -4630,6 +4630,9 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
             return ValidationError({attr: message.format(**kwargs) if kwargs else message})
 
         def testable_field(schema_id):
+            # A bool is an int, and would match the field with schema ID 1 (or 0).
+            if not isinstance(schema_id, int) or isinstance(schema_id, bool):
+                raise error(_("A field must be given by its ID."))
             field = by_schema_id.get(schema_id)
             if field is None:
                 raise error(_("Every field must belong to this custom object type."))
