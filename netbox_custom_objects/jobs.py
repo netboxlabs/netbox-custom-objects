@@ -74,13 +74,14 @@ class ReindexCustomObjectTypeJob(JobRunner):
 @system_job(interval=JobIntervalChoices.INTERVAL_HOURLY)
 class RefreshDisplayExpressionSearchJob(JobRunner):
     """
-    Hourly refresh of the cached display names of Custom Object Types whose
-    display_expression references an object or multi-object field.
+    Hourly refresh of the cached display names of Custom Object Types with a
+    display_expression.
 
     The rendered expression is cached for search when an object is saved, but it can
     reference related objects (e.g. ``{{ interface.device.name }}``), and changes to those
     don't touch the custom object. This bounds how long the cached text can be stale.
-    An expression that names no related field can't drift, so those types are skipped.
+    An expression that names no related field can't drift, so for those types only objects
+    with no cached display name (e.g. ones saved before display names were indexed) are rendered.
     """
 
     class Meta:
@@ -91,19 +92,23 @@ class RefreshDisplayExpressionSearchJob(JobRunner):
         from netbox_custom_objects.models import CustomObjectType
         for cot in CustomObjectType.objects.exclude(display_expression=''):
             related = [f for f in cot.get_display_expression_fields() if f.type in _RELATED_FIELD_TYPES]
-            if related:
-                refresh_display_search_cache(cot, related)
+            refresh_display_search_cache(cot, related, missing_only=not related)
 
 
-def refresh_display_search_cache(cot, related_fields):
+def refresh_display_search_cache(cot, related_fields, missing_only=False):
     """
     Re-render a type's display names and rewrite only the cached ``_display`` values
     that changed. With a search backend other than NetBox's, reindex the type instead.
+
+    With ``missing_only``, render only objects that have no cached display name. Objects
+    whose name renders empty have none, so they're rendered again on each run.
     """
     model = cot.get_model()
     queryset = model.objects.all()
     if not isinstance(get_backend(), CachedValueSearchBackend):
-        get_backend().cache(queryset)
+        # Other backends can't tell which objects are missing a value; those need a reindex.
+        if not missing_only:
+            get_backend().cache(queryset)
         return
 
     # Load what the expression names; polymorphic relations can't be joined this way.
@@ -115,9 +120,12 @@ def refresh_display_search_cache(cot, related_fields):
     )
 
     object_type = ObjectType.objects.get_for_model(model)
-    cached = dict(
-        CachedValue.objects.filter(object_type=object_type, field='_display').values_list('object_id', 'value')
-    )
+    cached_rows = CachedValue.objects.filter(object_type=object_type, field='_display')
+    if missing_only:
+        queryset = queryset.exclude(pk__in=cached_rows.values('object_id'))
+        cached = {}
+    else:
+        cached = dict(cached_rows.values_list('object_id', 'value'))
     changed, new_values = [], []
     for instance in queryset.iterator(chunk_size=2000):
         value = instance._display
@@ -135,5 +143,9 @@ def refresh_display_search_cache(cot, related_fields):
             ))
 
     with transaction.atomic():
-        CachedValue.objects.filter(object_type=object_type, field='_display', object_id__in=changed).delete()
+        if changed and not missing_only:
+            # A raw DELETE, as core's search backend does, so rows aren't loaded and
+            # delete signal receivers don't run for each one.
+            stale = cached_rows.filter(object_id__in=changed)
+            stale._raw_delete(using=stale.db)
         CachedValue.objects.bulk_create(new_values, batch_size=2000)

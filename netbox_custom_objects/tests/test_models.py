@@ -13,6 +13,7 @@ from django.apps import apps as django_apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import connection, transaction
+from django.db.models.signals import post_delete
 from django.db.utils import OperationalError, ProgrammingError
 from django.test import TestCase, override_settings, tag
 from django.urls import reverse
@@ -1977,7 +1978,7 @@ class DisplayExpressionSearchTestCase(CustomObjectsTestCase, TestCase):
         self._run_hourly_job()
         self.assertEqual(self._row_ids(display=True), display_rows)
 
-    def test_hourly_job_skips_expressions_without_related_fields(self):
+    def test_hourly_job_renders_only_missing_names_without_related_fields(self):
         self.create_custom_object_type(name="NoExpression", slug="no-expression")
         own_fields_only = self.create_custom_object_type(
             name="OwnFields", slug="own-fields", display_expression="{{ name }}",
@@ -1989,7 +1990,46 @@ class DisplayExpressionSearchTestCase(CustomObjectsTestCase, TestCase):
         )
         with patch('netbox_custom_objects.jobs.refresh_display_search_cache') as mock_refresh:
             self._run_hourly_job()
-        self.assertEqual([call.args[0].pk for call in mock_refresh.call_args_list], [self.cot.pk])
+        self.assertEqual(
+            sorted((call.args[0].pk, call.kwargs['missing_only']) for call in mock_refresh.call_args_list),
+            [(self.cot.pk, False), (own_fields_only.pk, True)],
+        )
+
+    def test_hourly_job_backfills_objects_without_a_cached_name(self):
+        cot = self.create_custom_object_type(name="OwnFields", slug="own-fields", display_expression="#{{ name }}")
+        self.create_custom_object_type_field(cot, name="name", type="text", primary=True)
+        model = cot.get_model()
+        indexed, unindexed = model.objects.create(name="a"), model.objects.create(name="b")
+        object_type = ContentType.objects.get_for_model(model)
+        rows = CachedValue.objects.filter(object_type=object_type, field='_display')
+        get_backend().cache(model.objects.all())
+        # As if "b" was saved before display names were indexed.
+        rows.filter(object_id=unindexed.pk).delete()
+        indexed_row = rows.get(object_id=indexed.pk).pk
+
+        self._run_hourly_job()
+
+        self.assertEqual(
+            sorted(rows.values_list('object_id', 'value')), [(indexed.pk, "#a"), (unindexed.pk, "#b")],
+        )
+        self.assertTrue(rows.filter(pk=indexed_row).exists())
+
+    def test_hourly_job_deletes_stale_names_without_delete_signals(self):
+        get_backend().cache(self.model.objects.all())
+        self.site.name = "Beta"
+        self.site.save()
+        deleted = []
+
+        def receiver(sender, instance, **kwargs):
+            deleted.append(instance)
+
+        post_delete.connect(receiver, sender=CachedValue)
+        try:
+            self._run_hourly_job()
+        finally:
+            post_delete.disconnect(receiver, sender=CachedValue)
+        self.assertEqual(deleted, [])
+        self.assertEqual(self._cached_display(), [("Beta / svc1", DISPLAY_EXPRESSION_SEARCH_WEIGHT)])
 
     def test_rendering_skips_fields_the_expression_does_not_use(self):
         self.create_custom_object_type_field(
