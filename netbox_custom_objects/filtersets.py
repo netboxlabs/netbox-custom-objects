@@ -16,6 +16,7 @@ from extras.choices import CustomFieldFilterLogicChoices, CustomFieldTypeChoices
 from extras.models import CustomFieldChoiceSet
 from netbox.filtersets import ChangeLoggedModelFilterSet, NetBoxModelFilterSet
 from users.models import Owner, OwnerGroup
+from utilities.filters import MultiValueCharFilter
 
 from .choices import ConstraintTypeChoices, CustomObjectFieldTypeChoices
 from .constants import APP_LABEL
@@ -291,6 +292,7 @@ FIELD_TYPE_FILTERS = {
     # NonPolymorphicMultiObjectFilter uses field__in=pks, which Django's ORM
     # translates to a JOIN through the through table at the SQL level.
     CustomFieldTypeChoices.TYPE_MULTIOBJECT: FilterSpec(NonPolymorphicMultiObjectFilter),
+    CustomObjectFieldTypeChoices.TYPE_COLOR: FilterSpec(MultiValueCharFilter),
 }
 
 # Field types whose base filter's lookup_expr is driven by field.filter_logic,

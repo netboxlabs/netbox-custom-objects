@@ -598,9 +598,10 @@ class COTJsonSchemaTestCase(TestCase):
                         {"id": 11, "name": "tags", "type": "multiselect", "choice_set": "endpoint_tags"},
                         {"id": 12, "name": "device", "type": "object", "related_object_type": "dcim/device"},
                         {"id": 13, "name": "sites", "type": "multiobject", "related_object_type": "dcim/site"},
+                        {"id": 14, "name": "shade", "type": "color", "default": "00ff00"},
                     ],
                     "removed_fields": [
-                        {"id": 14, "name": "old_code", "type": "text", "removed_in": "1.1.0"}
+                        {"id": 15, "name": "old_code", "type": "text", "removed_in": "1.1.0"}
                     ],
                 }
             ],

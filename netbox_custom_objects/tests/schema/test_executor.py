@@ -350,6 +350,16 @@ class ExecutorFieldAddTestCase(_ExecutorTestBase):
         field = self.cot.fields.get(name="newfield")
         self.assertEqual(field.schema_id, next_id)
 
+    def test_added_color_field(self):
+        type_def = export_cot(self.cot)
+        next_id = self.cot.next_schema_id + 1
+        type_def["fields"].append({"id": next_id, "name": "shade", "type": "color", "default": "00ff00"})
+        apply_document({"schema_version": "1", "types": [type_def]})
+        field = self.cot.fields.get(name="shade")
+        self.assertEqual((field.type, field.default), ("color", "00ff00"))
+        self.assertEqual(export_cot(self.cot)["fields"][-1], {"id": next_id, "name": "shade", "type": "color",
+                                                               "default": "00ff00"})
+
     def test_added_select_field_resolves_choice_set(self):
         cs = self.create_choice_set(name='Colours')
         type_def = export_cot(self.cot)

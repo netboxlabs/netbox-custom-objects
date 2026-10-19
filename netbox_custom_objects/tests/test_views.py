@@ -1640,6 +1640,112 @@ class CoordinatesFieldViewTest(CustomObjectsTestCase, TestCase):
         self.assertIsNone(obj.location_longitude)
 
 
+class ColorFieldViewTest(CustomObjectsTestCase, TestCase):
+    """UI behaviour for the color field type."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.cot = CustomObjectType.objects.create(name="Paint", verbose_name_plural="Paints", slug="paints")
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.cot, name="name", type="text", primary=True, required=True
+        )
+        CustomObjectTypeField.objects.create(custom_object_type=cls.cot, name="shade", type="color")
+        cls.model = cls.cot.get_model()
+
+    def setUp(self):
+        super().setUp()
+        perm = ObjectPermission(name="paint all", actions=["view", "add", "change", "delete"])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+    def _url(self, action, **kwargs):
+        return reverse(
+            f"plugins:netbox_custom_objects:customobject{action}",
+            kwargs={"custom_object_type": self.cot.slug, **kwargs},
+        )
+
+    def test_field_default_uses_the_color_picker(self):
+        perm = ObjectPermission(name="paint fields", actions=["add", "change", "view"])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectTypeField))
+        perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
+        add_url = reverse("plugins:netbox_custom_objects:customobjecttypefield_add")
+        response = self.client.get(f"{add_url}?custom_object_type={self.cot.pk}&type=color")
+        self.assertRegex(response.content.decode(), r'<select name="default"[^>]*color-select')
+
+        data = {
+            "custom_object_type": self.cot.pk, "name": "trim", "type": "color", "default": "4caf50",
+            "search_weight": 500, "filter_logic": "loose", "weight": 100, "ui_visible": "always",
+            "ui_editable": "yes",
+        }
+        response = self.client.post(f"{add_url}?custom_object_type={self.cot.pk}", data)
+        self.assertEqual(response.status_code, 302, response.content)
+        trim = self.cot.fields.get(name="trim")
+        self.assertEqual(trim.default, "4caf50")
+
+        # The field list shows the default as a swatch, not JSON; other types' defaults stay JSON.
+        CustomObjectTypeField.objects.create(custom_object_type=self.cot, name="finish", type="text", default="matte")
+        response = self.client.get(reverse("plugins:netbox_custom_objects:customobjecttype_fields", args=[self.cot.pk]))
+        self.assertContains(response, '<span class="color-label" style="background-color: #4caf50">&nbsp;</span>')
+        self.assertNotContains(response, "&quot;4caf50&quot;")
+        self.assertContains(response, "&quot;matte&quot;</pre>")
+
+        # A blank choice clears it.
+        response = self.client.post(
+            reverse("plugins:netbox_custom_objects:customobjecttypefield_edit", args=[trim.pk]),
+            {**data, "default": ""},
+        )
+        self.assertEqual(response.status_code, 302, response.content)
+        trim.refresh_from_db()
+        self.assertIsNone(trim.default)
+
+    def test_type_choices_include_plugin_types(self):
+        perm = ObjectPermission(name="paint fields", actions=["add"])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectTypeField))
+        response = self.client.get(
+            reverse("plugins:netbox_custom_objects:customobjecttypefield_add") + f"?custom_object_type={self.cot.pk}"
+        )
+        self.assertContains(response, '<option value="color"')
+        self.assertContains(response, '<option value="coordinates"')
+
+    def test_create_and_display(self):
+        response = self.client.get(self._url("_add"))
+        self.assertContains(response, 'color-select"')
+
+        response = self.client.post(self._url("_add"), {"name": "Red", "shade": "f44336"})
+        self.assertEqual(response.status_code, 302)
+        obj = self.model.objects.get(name="Red")
+        self.assertEqual(obj.shade, "f44336")
+
+        # Rendered as NetBox renders its own color fields: a bare swatch.
+        response = self.client.get(obj.get_absolute_url())
+        self.assertContains(response, '<span class="badge color-label" style="background-color: #f44336">&nbsp;</span>')
+        response = self.client.get(self._url("_list"))
+        self.assertContains(response, '<span class="color-label" style="background-color: #f44336">&nbsp;</span>')
+
+    def test_invalid_color_rejected(self):
+        response = self.client.post(self._url("_add"), {"name": "Bad", "shade": "#F44336"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Enter a valid hexadecimal RGB color code.")
+        self.assertFalse(self.model.objects.filter(name="Bad").exists())
+
+    def test_edit_keeps_a_custom_color(self):
+        obj = self.model.objects.create(name="Custom", shade="123456")
+        response = self.client.get(self._url("_edit", pk=obj.pk))
+        self.assertRegex(response.content.decode(), r'value="123456"\s+selected')
+
+    def test_csv_import_accepts_exported_values(self):
+        csv_data = "name,shade\nImported,#00FF00"
+        data = {"data": csv_data, "format": "csv", "csv_delimiter": ","}
+        response = self.client.post(self._url("_bulk_import"), data)
+        self.assertEqual(response.status_code, 302, response.content)
+        self.assertEqual(self.model.objects.get(name="Imported").shade, "00ff00")
+
+
 class URLFieldLinkTitleViewTest(CustomObjectsTestCase, TestCase):
     """UI form behaviour for the url field type's link-title support (issue #496)."""
 
