@@ -156,7 +156,7 @@
                       {% elif field.type == 'color' %}
                         {% with color=object|get_field_value:field %}
                           {% if color %}
-                            {{ color|color_label }}
+                            {% include 'ui/attrs/color.html' with value=color %}
                           {% else %}
                             {{ ''|placeholder }}
                           {% endif %}

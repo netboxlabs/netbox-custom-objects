@@ -1688,7 +1688,7 @@ class ColorFieldViewTest(CustomObjectsTestCase, TestCase):
         # The field list shows the default as a swatch, not JSON; other types' defaults stay JSON.
         CustomObjectTypeField.objects.create(custom_object_type=self.cot, name="finish", type="text", default="matte")
         response = self.client.get(reverse("plugins:netbox_custom_objects:customobjecttype_fields", args=[self.cot.pk]))
-        self.assertContains(response, 'style="background-color: #4caf50" aria-hidden="true">&nbsp;</span>Green')
+        self.assertContains(response, '<span class="color-label" style="background-color: #4caf50">&nbsp;</span>')
         self.assertNotContains(response, "&quot;4caf50&quot;")
         self.assertContains(response, "&quot;matte&quot;</pre>")
 
@@ -1721,11 +1721,11 @@ class ColorFieldViewTest(CustomObjectsTestCase, TestCase):
         obj = self.model.objects.get(name="Red")
         self.assertEqual(obj.shade, "f44336")
 
-        swatch = '<span class="color-label" style="background-color: #f44336" aria-hidden="true">&nbsp;</span>Red'
+        # Rendered as NetBox renders its own color fields: a bare swatch.
         response = self.client.get(obj.get_absolute_url())
-        self.assertContains(response, swatch)
+        self.assertContains(response, '<span class="badge color-label" style="background-color: #f44336">&nbsp;</span>')
         response = self.client.get(self._url("_list"))
-        self.assertContains(response, swatch)
+        self.assertContains(response, '<span class="color-label" style="background-color: #f44336">&nbsp;</span>')
 
     def test_invalid_color_rejected(self):
         response = self.client.post(self._url("_add"), {"name": "Bad", "shade": "#F44336"})

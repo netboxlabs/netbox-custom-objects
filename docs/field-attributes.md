@@ -120,9 +120,8 @@ A `color` field stores an RGB color as six lowercase hexadecimal digits without 
   import that isn't one of them stays selectable when the object is edited.
 - **Default.** The field's default is picked from the same named colors, and the field list shows
   it the same way.
-- **Display.** Detail views and tables show a color swatch with the color's name (or its `#rrggbb`
-  code if it isn't a named color); CSV export writes `#rrggbb`, which CSV
-  import accepts along with uppercase digits.
+- **Display.** Detail views and tables show a color swatch, like NetBox's own color fields; CSV
+  export writes `#rrggbb`, which CSV import accepts along with uppercase digits.
 - **Filtering.** Filters match whole values, e.g. `?color=00ff00&color=ff0000`.
 
 ## URL Fields

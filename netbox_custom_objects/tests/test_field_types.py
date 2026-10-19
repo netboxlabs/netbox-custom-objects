@@ -15,6 +15,7 @@ from django.test import TestCase
 from core.models import ObjectType
 from dcim.models import Device, DeviceType, ModuleType
 from extras.models import CustomFieldChoiceSet
+from netbox.tables.columns import ColorColumn
 from netbox_custom_objects.field_types import (
     ColorFieldType,
     CoordinatesFieldType,
@@ -1051,10 +1052,11 @@ class ColorFieldTypeTestCase(FieldTypeTestCase):
     def test_table_column(self):
         field = self.create_custom_object_type_field(self.custom_object_type, name="shade", type="color")
         column = ColorFieldType().get_table_column_field(field)
-        # A named color shows its name; any other color, its hex code.
-        self.assertIn("background-color: #ff9800", column.render("ff9800"))
-        self.assertTrue(column.render("ff9800").endswith("</span>Orange</span>"))
-        self.assertTrue(column.render("ff8800").endswith("</span>#ff8800</span>"))
+        # NetBox's own ColorColumn: a bare swatch, exported as #rrggbb.
+        self.assertIsInstance(column, ColorColumn)
+        self.assertEqual(
+            column.render("ff9800"), '<span class="color-label" style="background-color: #ff9800">&nbsp;</span>',
+        )
         self.assertEqual(column.value("ff8800"), "#ff8800")
 
 

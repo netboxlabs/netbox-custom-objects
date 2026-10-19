@@ -43,7 +43,6 @@ from utilities.forms.widgets import (
     DateTimePicker,
 )
 from utilities.templatetags.builtins.filters import linkify, render_markdown
-from netbox.choices import ColorChoices
 from netbox.config import get_config
 from utilities.fields import ColorField
 from utilities.validators import ColorValidator
@@ -2588,24 +2587,6 @@ class CoordinatesColumn(tables.Column):
         return f"{latitude}, {longitude}"
 
 
-def render_color(value):
-    """A color swatch followed by the color's name, or its hex code when it isn't a named color."""
-    label = dict(ColorChoices.CHOICES).get(value) or f"#{value}"
-    return format_html(
-        '<span class="d-inline-flex align-items-center gap-2">'
-        '<span class="color-label" style="background-color: #{}" aria-hidden="true">&nbsp;</span>{}</span>',
-        value,
-        label,
-    )
-
-
-class ColorLabelColumn(ColorColumn):
-    """A ColorColumn that names the color next to its swatch."""
-
-    def render(self, value):
-        return render_color(value)
-
-
 class CustomColorSelect(ColorSelect):
     """A ColorSelect that also offers a current value outside NetBox's named colors, so editing keeps it."""
 
@@ -2656,7 +2637,7 @@ class ColorFieldType(FieldType):
         return forms.CharField(label=field, required=False, widget=ColorSelect)
 
     def get_table_column_field(self, field, **kwargs):
-        return ColorLabelColumn()
+        return ColorColumn()
 
 
 class CoordinatesFieldType(FieldType):
