@@ -1216,7 +1216,12 @@ class MACAddressFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
         self.assertEqual(pks, {self.obj_match.pk, self.obj_no_match.pk})
 
     def test_invalid_value_matches_nothing(self):
-        self.assertFalse(self._filterset({'mac': ['nope']}).qs.exists())
+        # Older NetBox releases match nothing; newer ones reject the value as an invalid filter.
+        filterset = self._filterset({'mac': ['nope']})
+        if filterset.is_valid():
+            self.assertFalse(filterset.qs.exists())
+        else:
+            self.assertIn('mac', filterset.errors)
 
     def test_quick_search(self):
         pks = set(self._filterset({'q': 'BB:CC'}).qs.values_list('pk', flat=True))
