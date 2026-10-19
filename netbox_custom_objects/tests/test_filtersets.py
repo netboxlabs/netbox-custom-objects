@@ -1159,6 +1159,34 @@ class URLFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
         cls.obj_no_match = model.objects.create(name='gl', link='https://gitlab.com/example')
 
 
+class ColorFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
+    """A multi-value exact filter is generated for color fields."""
+
+    match_params = {'shade': ['ff0000']}
+    total_count = 3
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(name='ColorFS', slug='color-fs')
+        cls.create_custom_object_type_field(
+            cls.cot, name='name', label='Name', type='text', primary=True, required=True
+        )
+        cls.create_custom_object_type_field(cls.cot, name='shade', label='Shade', type='color')
+
+        model = cls.cot.get_model()
+        cls.obj_match = model.objects.create(name='red', shade='ff0000')
+        cls.obj_no_match = model.objects.create(name='green', shade='00ff00')
+        cls.obj_other = model.objects.create(name='blue', shade='0000ff')
+
+    def test_multiple_values(self):
+        pks = set(self._filterset({'shade': ['ff0000', '0000ff']}).qs.values_list('pk', flat=True))
+        self.assertEqual(pks, {self.obj_match.pk, self.obj_other.pk})
+
+    def test_exact_match_only(self):
+        self.assertFalse(self._filterset({'shade': ['ff00']}).qs.exists())
+
+
 class JSONFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
     """CharFilter with icontains is generated for TYPE_JSON fields."""
 

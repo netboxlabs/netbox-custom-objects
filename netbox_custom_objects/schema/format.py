@@ -13,6 +13,8 @@ Format version history
 
 from extras.choices import CustomFieldTypeChoices
 
+from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
+
 # ── Format version ──────────────────────────────────────────────────────────
 # Bump this only when the format itself changes in a breaking way.
 SCHEMA_FORMAT_VERSION = "1"
@@ -34,6 +36,7 @@ FIELD_TYPE_SELECT = "select"
 FIELD_TYPE_MULTISELECT = "multiselect"
 FIELD_TYPE_OBJECT = "object"
 FIELD_TYPE_MULTIOBJECT = "multiobject"
+FIELD_TYPE_COLOR = "color"
 
 # Mapping from CustomFieldTypeChoices values to schema type names.
 # Used by the exporter; the importer uses the inverse.
@@ -51,6 +54,7 @@ CHOICES_TO_SCHEMA_TYPE = {
     CustomFieldTypeChoices.TYPE_MULTISELECT: FIELD_TYPE_MULTISELECT,
     CustomFieldTypeChoices.TYPE_OBJECT: FIELD_TYPE_OBJECT,
     CustomFieldTypeChoices.TYPE_MULTIOBJECT: FIELD_TYPE_MULTIOBJECT,
+    CustomObjectFieldTypeChoices.TYPE_COLOR: FIELD_TYPE_COLOR,
 }
 
 SCHEMA_TYPE_TO_CHOICES = {v: k for k, v in CHOICES_TO_SCHEMA_TYPE.items()}
@@ -107,6 +111,7 @@ FIELD_TYPE_ATTRS = {
     FIELD_TYPE_DATETIME: set(),
     FIELD_TYPE_URL: set(),
     FIELD_TYPE_JSON: set(),
+    FIELD_TYPE_COLOR: set(),
     FIELD_TYPE_SELECT: {"choice_set"},
     FIELD_TYPE_MULTISELECT: {"choice_set"},
     FIELD_TYPE_OBJECT: {
