@@ -9,6 +9,7 @@ from django.utils.translation import gettext_lazy as _
 from netbox.tables import NetBoxTable, columns
 from utilities.permissions import get_permission_for_model
 
+from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
 from netbox_custom_objects.models import (CustomObject, CustomObjectType, CustomObjectTypeConstraint,
                                           CustomObjectTypeField)
 from netbox_custom_objects.utilities import get_viewname
@@ -208,6 +209,15 @@ class CustomObjectActionsColumn(columns.ActionsColumn):
         return mark_safe(html)
 
 
+class FieldDefaultColumn(tables.JSONColumn):
+    """Shows a color field's default as a swatch, like the field's values, instead of JSON."""
+
+    def render(self, record, value):
+        if record.type == CustomObjectFieldTypeChoices.TYPE_COLOR:
+            return columns.ColorColumn().render(value)
+        return super().render(record, value)
+
+
 class CustomObjectTypeFieldTable(NetBoxTable):
     id = tables.Column()
     name = tables.Column(
@@ -221,6 +231,7 @@ class CustomObjectTypeFieldTable(NetBoxTable):
     )
     primary = columns.BooleanColumn()
     required = columns.BooleanColumn()
+    default = FieldDefaultColumn(verbose_name=_('Default'))
 
     exempt_columns = ('actions',)
 

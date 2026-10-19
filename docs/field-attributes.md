@@ -21,6 +21,7 @@ The following attributes are available when creating or editing a Custom Object 
 | `multiobject` | Reference to multiple objects of the same type |
 | `coordinates` | A geographic latitude/longitude pair (with a map link) |
 | `array` | A list of values of one type, or of fixed-size tuples such as (x, y, z) points |
+| `color` | An RGB color, shown as a swatch |
 
 ## Common Attributes
 
@@ -142,6 +143,21 @@ Behaviour:
   Quick search matches objects whose array contains the searched value.
 - A field's type cannot be changed to or from `array`, and arrays can't be included in
   [constraints](index.md#adding-constraints-to-the-custom-object-type).
+
+## Color Fields
+
+Field type: `color`
+
+A `color` field stores an RGB color as six lowercase hexadecimal digits without a leading `#`
+(e.g. `00ff00`), the same format as NetBox's own color fields such as a tag's color.
+
+- **Forms.** The edit form offers NetBox's named colors. A value set through the REST API or CSV
+  import that isn't one of them stays selectable when the object is edited.
+- **Default.** The field's default is picked from the same named colors, and the field list shows
+  it the same way.
+- **Display.** Detail views and tables show a color swatch, like NetBox's own color fields; CSV
+  export writes `#rrggbb`, which CSV import accepts along with uppercase digits.
+- **Filtering.** Filters match whole values, e.g. `?color=00ff00&color=ff0000`.
 
 ## URL Fields
 

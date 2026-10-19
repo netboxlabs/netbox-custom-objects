@@ -45,12 +45,14 @@ from utilities.forms.fields import (
 )
 from utilities.forms.utils import add_blank_choice
 from utilities.forms.widgets import (
-    APISelect, APISelectMultiple, DatePicker,
+    APISelect, APISelectMultiple, ColorSelect, DatePicker,
     DateTimePicker,
 )
 from utilities.templatetags.builtins.filters import linkify, render_markdown
 from netbox.config import get_config
-from netbox.tables.columns import BooleanColumn
+from utilities.fields import ColorField
+from utilities.validators import ColorValidator
+from netbox.tables.columns import BooleanColumn, ColorColumn
 
 from netbox_custom_objects.choices import (ArrayElementTypeChoices, CustomObjectFieldTypeChoices,
                                            ObjectFieldOnDeleteChoices)
@@ -2591,6 +2593,59 @@ class CoordinatesColumn(tables.Column):
         return f"{latitude}, {longitude}"
 
 
+class CustomColorSelect(ColorSelect):
+    """A ColorSelect that also offers a current value outside NetBox's named colors, so editing keeps it."""
+
+    def optgroups(self, name, value, attrs=None):
+        known = {str(choice) for choice, _label in self.choices}
+        extra = [(v, f"#{v}") for v in value if v and v not in known]
+        if extra:
+            self.choices = [*self.choices, *extra]
+        return super().optgroups(name, value, attrs)
+
+
+class _CSVColorField(forms.CharField):
+    """Accepts colors as exported (``#rrggbb``) or in any case."""
+
+    def to_python(self, value):
+        return super().to_python(value).removeprefix("#").lower()
+
+
+class ColorFieldType(FieldType):
+    graphql_annotation = str
+
+    def get_model_field(self, field, **kwargs):
+        field_kwargs = self._safe_kwargs(**kwargs)
+        field_kwargs.update({"default": field.default, "unique": field.unique})
+        return ColorField(null=True, blank=not field.required, **field_kwargs)
+
+    def get_serializer_field(self, field, **kwargs):
+        return drf_serializers.CharField(
+            required=field.required,
+            allow_null=not field.required,
+            allow_blank=not field.required,
+            max_length=6,
+            validators=[ColorValidator],
+        )
+
+    def get_form_field(self, field, for_csv_import=False, **kwargs):
+        if for_csv_import:
+            return _CSVColorField(
+                required=field.required,
+                validators=[ColorValidator],
+                help_text=_("RGB color in hexadecimal, e.g. 00ff00"),
+            )
+        return forms.CharField(
+            required=field.required, initial=field.default, widget=CustomColorSelect, validators=[ColorValidator]
+        )
+
+    def get_filterform_field(self, field, **kwargs):
+        return forms.CharField(label=field, required=False, widget=ColorSelect)
+
+    def get_table_column_field(self, field, **kwargs):
+        return ColorColumn()
+
+
 class CoordinatesFieldType(FieldType):
     """
     A geographic coordinates field. A single field of this type expands into two real
@@ -3026,4 +3081,5 @@ FIELD_TYPE_CLASS = {
     CustomFieldTypeChoices.TYPE_MULTIOBJECT: MultiObjectFieldType,
     CustomObjectFieldTypeChoices.TYPE_COORDINATES: CoordinatesFieldType,
     CustomObjectFieldTypeChoices.TYPE_ARRAY: ArrayFieldType,
+    CustomObjectFieldTypeChoices.TYPE_COLOR: ColorFieldType,
 }

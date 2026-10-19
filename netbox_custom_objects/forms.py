@@ -17,6 +17,7 @@ from netbox_custom_objects.choices import ArrayElementTypeChoices, CustomObjectF
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.field_types import (
+    CustomColorSelect,
     PolymorphicObjectReverseDescriptor,
     PolymorphicMultiObjectReverseDescriptor,
 )
@@ -187,7 +188,7 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
         help_text=_("The type(s) of object that have this custom field"),
         required=False,
     )
-    # Core's choices omit this plugin's own field types (coordinates, array).
+    # Core's choices omit this plugin's own field types (coordinates, array, color).
     type = forms.ChoiceField(
         label=_("Type"),
         choices=CustomObjectFieldTypeChoices,
@@ -347,6 +348,16 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
         # Multi-object fields may not be set unique
         if get_field_value(self, 'type') == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
             self.fields["unique"].disabled = True
+
+        # A color field's default is picked like its values, not typed as JSON.
+        if field_type == CustomObjectFieldTypeChoices.TYPE_COLOR:
+            self.fields["default"] = forms.CharField(
+                label=self.fields["default"].label,
+                required=False,
+                empty_value=None,
+                widget=CustomColorSelect,
+                help_text=_("Color given to new objects"),
+            )
 
         # Add related_name (and on_delete_behavior for non-polymorphic single-object
         # fields) to the Related Object fieldset.  Polymorphic mode removes

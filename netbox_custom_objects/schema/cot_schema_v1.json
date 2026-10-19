@@ -46,7 +46,8 @@
         "multiselect",
         "object",
         "multiobject",
-        "array"
+        "array",
+        "color"
       ]
     },
 
@@ -293,7 +294,7 @@
         {
           "properties": {
             "type": {
-              "enum": ["boolean", "date", "datetime", "url", "json"]
+              "enum": ["boolean", "date", "datetime", "url", "json", "color"]
             }
           }
         }

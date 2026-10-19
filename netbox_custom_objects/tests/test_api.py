@@ -2803,6 +2803,53 @@ class ArrayFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
         self.assertIn("array_element_type", response.data)
 
 
+class ColorFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
+    """REST API behaviour for the color field type."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.cot = CustomObjectType.objects.create(name="Paint", verbose_name_plural="Paints", slug="paints")
+        cls.create_custom_object_type_field(cls.cot, name="name", type="text", primary=True, required=True)
+        cls.create_custom_object_type_field(cls.cot, name="shade", type="color")
+        cls.model = cls.cot.get_model()
+
+    def setUp(self):
+        super().setUp()
+        self.user = create_test_user("paintuser")
+        self.client = APIClient()
+        self.header = {"HTTP_AUTHORIZATION": f"Token {create_token(self.user)}"}
+        perm = ObjectPermission(name="paint all", actions=["view", "add", "change", "delete"])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+    def _list_url(self):
+        return reverse(
+            "plugins-api:netbox_custom_objects-api:customobject-list",
+            kwargs={"custom_object_type": self.cot.slug},
+        )
+
+    def test_create_and_read(self):
+        response = self.client.post(self._list_url(), {"name": "Red", "shade": "f44336"}, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(response.data["shade"], "f44336")
+        self.assertEqual(self.model.objects.get(pk=response.data["id"]).shade, "f44336")
+
+    def test_null_allowed(self):
+        response = self.client.post(self._list_url(), {"name": "None", "shade": None}, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertIsNone(response.data["shade"])
+
+    def test_invalid_color_rejected(self):
+        for value in ("F44336", "#f44336", "red", "f443361"):
+            with self.subTest(value=value):
+                response = self.client.post(
+                    self._list_url(), {"name": "Bad", "shade": value}, format="json", **self.header
+                )
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertIn("shade", response.data)
+
+
 class URLFieldLinkTitleAPITest(CustomObjectsTestCase, NetBoxTestCase):
     """REST API behaviour for the url field type's link-title support (issue #496)."""
 

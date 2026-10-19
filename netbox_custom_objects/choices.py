@@ -11,10 +11,12 @@ class CustomObjectFieldTypeChoices(CustomFieldTypeChoices):
 
     TYPE_COORDINATES = "coordinates"
     TYPE_ARRAY = "array"
+    TYPE_COLOR = "color"
 
     CHOICES = CustomFieldTypeChoices.CHOICES + (
         (TYPE_COORDINATES, _("Coordinates")),
         (TYPE_ARRAY, _("Array")),
+        (TYPE_COLOR, _("Color")),
     )
 
 

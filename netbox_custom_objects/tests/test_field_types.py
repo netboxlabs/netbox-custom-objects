@@ -9,13 +9,16 @@ from decimal import Decimal
 from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import connection, models
+from django.forms.fields import JSONString
 from django.test import TestCase
 
 from core.models import ObjectType
 from dcim.models import Device, DeviceType, ModuleType
 from extras.models import CustomFieldChoiceSet
+from netbox.tables.columns import ColorColumn
 from netbox_custom_objects.field_types import (
     ArrayFieldType,
+    ColorFieldType,
     CoordinatesFieldType,
     MultiObjectFieldType,
     MultiSelectFieldType,
@@ -58,7 +61,7 @@ class RequiredFieldEnforcementTestCase(FieldTypeTestCase):
 
     SCALAR_TYPES = (
         'text', 'longtext', 'integer', 'decimal', 'boolean', 'date', 'datetime',
-        'url', 'json',
+        'url', 'json', 'color',
     )
 
     def test_scalar_fields_blank_matches_required(self):
@@ -1224,6 +1227,81 @@ class URLFieldTypeTestCase(FieldTypeTestCase):
         model = self.custom_object_type.get_model(no_cache=True)
         instance = model.objects.create(name="Test")
         self.assertEqual(get_url_field_html(instance, cotf), "")
+
+
+class ColorFieldTypeTestCase(FieldTypeTestCase):
+    """Test cases for color field type."""
+
+    def test_model_field_validates_hex_color(self):
+        self.create_custom_object_type_field(self.custom_object_type, name="shade", type="color")
+        model = self.custom_object_type.get_model()
+        self.assertEqual(model._meta.get_field("shade").max_length, 6)
+
+        model(name="Valid", shade="00ff00").full_clean()
+        model(name="Blank").full_clean()
+        for value in ("00FF00", "#00ff00", "green", "0f0"):
+            with self.subTest(value=value), self.assertRaises(ValidationError) as cm:
+                model(name="Invalid", shade=value).full_clean()
+            self.assertIn("shade", cm.exception.message_dict)
+
+    def test_validate(self):
+        field = self.create_custom_object_type_field(self.custom_object_type, name="shade", type="color")
+        field.validate("aa1100")
+        for value in ("AA1100", "#aa1100", 123):
+            with self.subTest(value=value), self.assertRaises(ValidationError):
+                field.validate(value)
+
+    def test_default_must_be_a_color(self):
+        # The field form's JSON input yields a str subclass.
+        for default in ("red", JSONString("red")):
+            field = CustomObjectTypeField(
+                custom_object_type=self.custom_object_type, name="shade", type="color", default=default
+            )
+            with self.subTest(default=type(default)), self.assertRaises(ValidationError) as cm:
+                field.full_clean()
+            self.assertIn("valid hexadecimal RGB color", cm.exception.message_dict["default"][0])
+        field.default = JSONString("ff0000")
+        field.full_clean()
+
+        field = self.create_custom_object_type_field(
+            self.custom_object_type, name="shade", type="color", default="ff0000"
+        )
+        model = self.custom_object_type.get_model()
+        self.assertEqual(model.objects.create(name="Defaulted").shade, "ff0000")
+
+    def test_unique(self):
+        self.create_custom_object_type_field(self.custom_object_type, name="shade", type="color", unique=True)
+        model = self.custom_object_type.get_model()
+        model.objects.create(name="First", shade="0000ff")
+        with self.assertRaises(ValidationError):
+            model(name="Second", shade="0000ff").full_clean()
+
+    def test_form_field_keeps_a_custom_color(self):
+        field = self.create_custom_object_type_field(self.custom_object_type, name="shade", type="color")
+        form_field = ColorFieldType().get_form_field(field)
+        named = form_field.widget.render("shade", "00ffff")
+        custom = form_field.widget.render("shade", "123456")
+        self.assertRegex(named, r'value="00ffff"\s+selected')
+        self.assertEqual(named.count('value="00ffff"'), 1)
+        self.assertRegex(custom, r'value="123456"\s+selected')
+
+    def test_csv_form_field_accepts_exported_values(self):
+        field = self.create_custom_object_type_field(self.custom_object_type, name="shade", type="color")
+        form_field = ColorFieldType().get_form_field(field, for_csv_import=True)
+        self.assertEqual(form_field.clean("#00FF00"), "00ff00")
+        self.assertEqual(form_field.clean("abcdef"), "abcdef")
+        with self.assertRaises(ValidationError):
+            form_field.clean("#xy")
+
+    def test_table_column(self):
+        field = self.create_custom_object_type_field(self.custom_object_type, name="shade", type="color")
+        column = ColorFieldType().get_table_column_field(field)
+        # NetBox's own ColorColumn: a bare swatch, exported as #rrggbb.
+        self.assertIsInstance(column, ColorColumn)
+        self.assertEqual(
+            column.render("ff9800"), '<span class="color-label" style="background-color: #ff9800">&nbsp;</span>',
+        )
+        self.assertEqual(column.value("ff8800"), "#ff8800")
 
 
 class JSONFieldTypeTestCase(FieldTypeTestCase):
