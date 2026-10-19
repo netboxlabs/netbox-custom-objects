@@ -1685,10 +1685,12 @@ class ColorFieldViewTest(CustomObjectsTestCase, TestCase):
         trim = self.cot.fields.get(name="trim")
         self.assertEqual(trim.default, "4caf50")
 
-        # The field list shows the default as a swatch, not JSON.
+        # The field list shows the default as a swatch, not JSON; other types' defaults stay JSON.
+        CustomObjectTypeField.objects.create(custom_object_type=self.cot, name="finish", type="text", default="matte")
         response = self.client.get(reverse("plugins:netbox_custom_objects:customobjecttype_fields", args=[self.cot.pk]))
         self.assertContains(response, 'style="background-color: #4caf50" aria-hidden="true">&nbsp;</span>Green')
         self.assertNotContains(response, "&quot;4caf50&quot;")
+        self.assertContains(response, "&quot;matte&quot;</pre>")
 
         # A blank choice clears it.
         response = self.client.post(

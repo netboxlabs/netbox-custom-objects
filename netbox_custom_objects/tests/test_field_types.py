@@ -1045,6 +1045,8 @@ class ColorFieldTypeTestCase(FieldTypeTestCase):
         form_field = ColorFieldType().get_form_field(field, for_csv_import=True)
         self.assertEqual(form_field.clean("#00FF00"), "00ff00")
         self.assertEqual(form_field.clean("abcdef"), "abcdef")
+        with self.assertRaises(ValidationError):
+            form_field.clean("#xy")
 
     def test_table_column(self):
         field = self.create_custom_object_type_field(self.custom_object_type, name="shade", type="color")

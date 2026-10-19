@@ -2645,9 +2645,12 @@ class ColorFieldType(FieldType):
         if for_csv_import:
             return _CSVColorField(
                 required=field.required,
+                validators=[ColorValidator],
                 help_text=_("RGB color in hexadecimal, e.g. 00ff00"),
             )
-        return forms.CharField(required=field.required, initial=field.default, widget=CustomColorSelect)
+        return forms.CharField(
+            required=field.required, initial=field.default, widget=CustomColorSelect, validators=[ColorValidator]
+        )
 
     def get_filterform_field(self, field, **kwargs):
         return forms.CharField(label=field, required=False, widget=ColorSelect)
