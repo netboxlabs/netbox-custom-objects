@@ -2885,10 +2885,22 @@ class MACAddressFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
         response = self.client.get(self._list_url(), {"mac": "00-1a-2b-3c-4d-5e"}, **self.header)
         self.assertEqual([row["mac"] for row in response.data["results"]], ["00:1A:2B:3C:4D:5E"])
 
-    def test_null_allowed(self):
-        response = self.client.post(self._list_url(), {"name": "eth1", "mac": None}, format="json", **self.header)
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
-        self.assertIsNone(response.data["mac"])
+    def test_null_or_blank_allowed(self):
+        for value in (None, ""):
+            with self.subTest(value=value):
+                response = self.client.post(
+                    self._list_url(), {"name": f"eth{value!r}", "mac": value}, format="json", **self.header
+                )
+                self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+                self.assertIsNone(response.data["mac"])
+
+    def test_blank_rejected_when_required(self):
+        field = self.cot.fields.get(name="mac")
+        field.required = True
+        field.save()
+        response = self.client.post(self._list_url(), {"name": "eth9", "mac": ""}, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("mac", response.data)
 
     def test_invalid_rejected(self):
         for value in ("00:1a:2b:3c:4d", "not a mac", "00:1a:2b:3c:4d:5e:6f:70"):

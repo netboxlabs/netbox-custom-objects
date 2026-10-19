@@ -3607,9 +3607,14 @@ class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
         shade = self.create_custom_object_type_field(self.cot, name="shade", type="color")
         mac = self.create_custom_object_type_field(self.cot, name="mac", type="mac_address")
         self._constraint()
-        self._constraint(
+        constraint = self._constraint(
             name="vendor_mac", fields=[self.vendor, mac], condition=[self._predicate(mac, "exact", "00-1a-2b-3c-4d-5e")]
         )
+        # MAC addresses are stored the way the field shows them.
+        self.assertEqual(constraint.condition[0]["value"], "00:1A:2B:3C:4D:5E")
+        constraint.condition = [self._predicate(mac, "in", ["001a.2b3c.4d5e", "aa:bb:cc:dd:ee:ff"])]
+        constraint.full_clean()
+        self.assertEqual(constraint.condition[0]["value"], ["00:1A:2B:3C:4D:5E", "AA:BB:CC:DD:EE:FF"])
         # Color fields can be constrained and compared by value.
         self._constraint(
             name="vendor_shade", fields=[self.vendor, shade], condition=[self._predicate(shade, "exact", "ff0000")]

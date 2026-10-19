@@ -4804,6 +4804,10 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
                 values = [value]
             for v in values:
                 self._clean_predicate_value(attr, model, field, v)
+            # Store MAC addresses the way the field shows them.
+            if field.type == CustomObjectFieldTypeChoices.TYPE_MAC_ADDRESS:
+                normalized = [str(MACAddressField().to_python(v)) for v in values]
+                predicate["value"] = normalized if lookup == ConstraintLookupChoices.IN else normalized[0]
         return predicates
 
     @staticmethod

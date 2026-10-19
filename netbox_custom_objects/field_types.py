@@ -2664,7 +2664,9 @@ class MACAddressFieldType(FieldType):
         return MACAddressField(null=True, blank=not field.required, **field_kwargs)
 
     def get_serializer_field(self, field, **kwargs):
-        return MACAddressSerializerField(required=field.required, allow_null=not field.required)
+        return MACAddressSerializerField(
+            required=field.required, allow_null=not field.required, allow_blank=not field.required
+        )
 
     def get_form_field(self, field, **kwargs):
         return MACAddressFormField(
@@ -2676,10 +2678,12 @@ class MACAddressFieldType(FieldType):
 
 
 class MACAddressSerializerField(drf_serializers.CharField):
-    """A MAC address, accepted in any format netaddr reads and returned as AA:BB:CC:DD:EE:FF."""
+    """A MAC address, accepted in any format netaddr reads and returned as AA:BB:CC:DD:EE:FF. Blank means none."""
 
     def to_internal_value(self, data):
         value = super().to_internal_value(data)
+        if not value:
+            return None
         try:
             return str(MACAddressField().to_python(value))
         except ValidationError as exc:
