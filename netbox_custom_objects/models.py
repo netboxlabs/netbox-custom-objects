@@ -82,7 +82,7 @@ from netbox_custom_objects.constants import (
     RESERVED_FIELD_NAMES,
 )
 from netbox_custom_objects.field_types import (
-    FIELD_TYPE_CLASS, bind_for_ddl, resolve_lazy_target, safe_table_name,
+    FIELD_TYPE_CLASS, bind_for_ddl, safe_table_name,
     PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor,
 )
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
@@ -487,6 +487,7 @@ def _primary_model_field(fi):
 
 def _schema_add_field(fi, model, schema_editor, schema_conn):
     """``add_field`` against *schema_conn*; idempotent (skips if column exists).
+    Returns the field as ``bind_for_ddl()`` bound it.
 
     Creates the through table for MULTIOBJECT.  Deferred CO field data is NOT
     applied here — call ``_apply_deferred_co_field`` separately after.
@@ -501,7 +502,7 @@ def _schema_add_field(fi, model, schema_editor, schema_conn):
         }
     if mf.column in existing_cols:
         logger.debug('_schema_add_field: %r already exists on %s, skipping', mf.column, model._meta.db_table)
-        return
+        return mf
 
     # Flush any pending DEFERRABLE FK trigger events (e.g. owner_id from OwnerMixin)
     # before ALTER TABLE; PostgreSQL rejects ADD COLUMN when deferred triggers are pending.
@@ -509,6 +510,7 @@ def _schema_add_field(fi, model, schema_editor, schema_conn):
     schema_editor.add_field(model, mf)
     if fi.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
         ft.create_m2m_table(fi, model, fi.name, schema_conn=schema_conn, field=mf)
+    return mf
 
 
 def _schema_remove_field(fi, model, schema_editor, schema_conn=None, existing_tables=None):
@@ -602,6 +604,7 @@ def _alter_column_with_rename_conflict_resolution(
 
 def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, existing_tables=None):
     """``alter_field`` from *old_fi* to *new_fi*; idempotent across replays.
+    Returns *new_fi*'s field as ``bind_for_ddl()`` bound it.
 
     M2M renames go through ``_rename_or_create_m2m_through`` first.  When
     neither old nor new column exists (rename conflict — branch A→X vs main
@@ -627,7 +630,7 @@ def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, exist
             _rename_or_create_m2m_through(
                 old_fi, new_fi, new_mf, model, schema_editor, schema_conn, existing_tables,
             )
-        return
+        return new_mf
 
     def _resolve_live_primary_column():
         try:
@@ -645,6 +648,7 @@ def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, exist
         resolve_live_column=_resolve_live_primary_column,
         log_label='_schema_alter_field',
     )
+    return new_mf
 
 
 def _rename_or_create_m2m_through(old_fi, new_fi, new_mf, model, schema_editor, schema_conn, existing_tables):
@@ -2290,10 +2294,6 @@ class CustomObjectType(NetBoxModel):
 
         if not (hasattr(model_field, 'remote_field') and model_field.remote_field):
             return
-        if isinstance(model_field.remote_field.model, str):
-            resolve_lazy_target(model_field)
-            if isinstance(model_field.remote_field.model, str):
-                return
 
         # Resolve on_delete_behavior from the CustomObjectTypeField if not provided
         if on_delete_behavior is None:
@@ -4080,6 +4080,9 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
         field_type = FIELD_TYPE_CLASS[self.type]()
         model = self.custom_object_type.get_model()
+        # The Object field as bound for DDL; the FK-constraint hook below reads
+        # its column and resolved target without regenerating any model.
+        ddl_field = None
 
         # Schema mutation + audit-key rewrite + cache bump + parent save() share
         # one atomic so a failure between DDL and row save can't leave audit
@@ -4098,7 +4101,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                         elif self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                             field_type.create_polymorphic_m2m_table(self, model, schema_editor)
                     else:
-                        _schema_add_field(self, model, schema_editor, schema_conn)
+                        ddl_field = _schema_add_field(self, model, schema_editor, schema_conn)
                         if self.type == CustomObjectFieldTypeChoices.TYPE_URL:
                             # Add the title column before _apply_deferred_co_field()
                             # runs below -- it replays both <name> and <name>_title
@@ -4140,7 +4143,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                                 {"name": _("Cannot rename a polymorphic field after creation.")}
                             )
                     else:
-                        _schema_alter_field(self.original, self, model, schema_editor, schema_conn)
+                        ddl_field = _schema_alter_field(self.original, self, model, schema_editor, schema_conn)
                         if (
                             self.type == CustomObjectFieldTypeChoices.TYPE_URL
                             and self.name != self._original_name
@@ -4239,9 +4242,9 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
             def ensure_constraint():
                 try:
-                    # `model` predates this save; the regenerated class has the field.
+                    # `model` predates this save; the stand-in the field was bound to has it.
                     self.custom_object_type._ensure_field_fk_constraint(
-                        self.custom_object_type.get_model(), _field_name, on_delete_behavior=_on_delete
+                        ddl_field.model, _field_name, on_delete_behavior=_on_delete
                     )
                 except Exception as e:
                     logger.error(

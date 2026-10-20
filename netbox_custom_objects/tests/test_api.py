@@ -229,8 +229,8 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, NetB
 
         cls.custom_object_type3 = cls.create_complex_custom_object_type(name="ComplexObject")
 
-        cls.model = cls.custom_object_type1.get_model()
         cls.create_custom_object_type_field(cls.custom_object_type1)
+        cls.model = cls.custom_object_type1.get_model()
 
         # Set the model for the test class
         CustomObjectTest.model = cls.model
