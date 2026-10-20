@@ -1,4 +1,3 @@
-import contextlib
 import contextvars
 import decimal
 import functools
@@ -83,7 +82,7 @@ from netbox_custom_objects.constants import (
     RESERVED_FIELD_NAMES,
 )
 from netbox_custom_objects.field_types import (
-    FIELD_TYPE_CLASS, LazyForeignKey, safe_table_name,
+    FIELD_TYPE_CLASS, bind_for_ddl, resolve_lazy_target, safe_table_name,
     PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor,
 )
 from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
@@ -249,6 +248,33 @@ def _get_schema_connection():
         if branch is not None:
             return connections[branch.connection_name]
     return connection
+
+
+def _mark_registered_in_transaction(model):
+    """Note that *model* was cached or registered while a transaction was open.
+
+    A field change regenerates the class inside its transaction (a rename
+    needs it for healing).  If that transaction then rolls back, the table
+    reverts but the class does not, and Django offers no rollback hook; so
+    the class is marked here and the mark is cleared on commit.  A lookup
+    that finds the mark still set after the transaction has ended knows the
+    class is stale and rebuilds it (issue #767).
+    """
+    conn = _get_schema_connection()
+    if not conn.in_atomic_block:
+        return
+    model._registered_in = conn
+
+    def committed():
+        model._registered_in = None
+
+    conn.on_commit(committed)
+
+
+def _registration_rolled_back(model):
+    """True if *model* was built inside a transaction that ended without committing."""
+    conn = getattr(model, '_registered_in', None)
+    return conn is not None and not conn.in_atomic_block
 
 
 def _historical_names_for_field(field_pk):
@@ -451,39 +477,6 @@ def detect_backing_column_collisions(cot):
     return collisions
 
 
-def _evict_model(cot, model):
-    """Drop *model* from the model cache and app registry so the next
-    ``get_model()`` rebuilds it from the database.
-
-    The schema helpers below ``contribute_to_class()`` the old and new fields
-    onto the cached class so ``schema_editor`` can build DDL from them.  A
-    rollback undoes the DDL but not those in-memory fields, so a class that went
-    through a failed change would keep selecting columns that don't exist
-    (issue #767).  Runs no queries, so it is safe inside an aborted transaction.
-    """
-    cot.clear_model_cache(cot.id)
-    branch_id = CustomObjectType._active_branch_id()
-    with CustomObjectType._global_lock:
-        registry = apps.all_models.get(APP_LABEL, {})
-        name = model.__name__.lower()
-        registered = registry.get(name)
-        # In a branch the registry holds main's class, which this change never touched.
-        if registered is model or (
-            registered is not None and getattr(registered, '_context_branch_id', None) == branch_id
-        ):
-            del registry[name]
-
-
-@contextlib.contextmanager
-def _evict_model_on_error(cot, model):
-    """Run a schema change on *model*, evicting it if the change fails."""
-    try:
-        yield
-    except BaseException:
-        _evict_model(cot, model)
-        raise
-
-
 def _primary_model_field(fi):
     """fi's own <name>-column Field, unwrapping FieldType.get_model_field()'s dict
     return for a multi-column type (coordinates, url) so single-column DDL/validation
@@ -499,8 +492,7 @@ def _schema_add_field(fi, model, schema_editor, schema_conn):
     applied here — call ``_apply_deferred_co_field`` separately after.
     """
     ft = FIELD_TYPE_CLASS[fi.type]()
-    mf = _primary_model_field(fi)
-    mf.contribute_to_class(model, fi.name)
+    mf = bind_for_ddl(_primary_model_field(fi), model, fi.name)
 
     with schema_conn.cursor() as cursor:
         existing_cols = {
@@ -511,34 +503,12 @@ def _schema_add_field(fi, model, schema_editor, schema_conn):
         logger.debug('_schema_add_field: %r already exists on %s, skipping', mf.column, model._meta.db_table)
         return
 
-    # LazyForeignKey starts with a string remote_field.model.  Django's
-    # lazy_related_operation fires immediately when the target is in
-    # apps.all_models, but tearDown() cleanup between tests can remove
-    # the target model from the registry.  Resolve it directly here —
-    # bypassing the app-config's skip guard — so that schema_editor
-    # .add_field() always sees a model class, not a string.
-    if isinstance(mf, LazyForeignKey) and isinstance(mf.remote_field.model, str):
-        _app_label, _model_name = mf._to_model_name.rsplit('.', 1)
-        _cot_id_str = extract_cot_id_from_model_name(_model_name.lower())
-        if _cot_id_str is not None:
-            try:
-                _cot = CustomObjectType.objects.get(pk=int(_cot_id_str))
-                _actual = _cot.get_model()
-                mf.remote_field.model = _actual
-                mf.to = _actual
-            except (CustomObjectType.DoesNotExist, OperationalError, ProgrammingError):
-                logger.warning(
-                    "Could not resolve LazyForeignKey target %r before add_field; "
-                    "schema_editor.add_field may fail",
-                    mf._to_model_name,
-                )
-
     # Flush any pending DEFERRABLE FK trigger events (e.g. owner_id from OwnerMixin)
     # before ALTER TABLE; PostgreSQL rejects ADD COLUMN when deferred triggers are pending.
     schema_editor.execute('SET CONSTRAINTS ALL IMMEDIATE')
     schema_editor.add_field(model, mf)
     if fi.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-        ft.create_m2m_table(fi, model, fi.name, schema_conn=schema_conn)
+        ft.create_m2m_table(fi, model, fi.name, schema_conn=schema_conn, field=mf)
 
 
 def _schema_remove_field(fi, model, schema_editor, schema_conn=None, existing_tables=None):
@@ -549,8 +519,7 @@ def _schema_remove_field(fi, model, schema_editor, schema_conn=None, existing_ta
     PostgreSQL doesn't reject the call with "pending trigger events".
     *existing_tables* optionally short-circuits the per-call introspection.
     """
-    mf = _primary_model_field(fi)
-    mf.contribute_to_class(model, fi.name)
+    mf = bind_for_ddl(_primary_model_field(fi), model, fi.name)
 
     if fi.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
         through_table = fi.through_table_name
@@ -649,16 +618,14 @@ def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, exist
             {"type": _("Cannot change a field's type to or from multi-object after creation.")}
         )
 
-    old_mf = _primary_model_field(old_fi)
-    new_mf = _primary_model_field(new_fi)
-    old_mf.contribute_to_class(model, old_fi.name)
-    new_mf.contribute_to_class(model, new_fi.name)
+    old_mf = bind_for_ddl(_primary_model_field(old_fi), model, old_fi.name)
+    new_mf = bind_for_ddl(_primary_model_field(new_fi), model, new_fi.name)
 
     # M2M has no parent-table column — schema work happens on the through table.
     if new_is_m2m:
         if old_fi.name != new_fi.name:
             _rename_or_create_m2m_through(
-                old_fi, new_fi, model, schema_editor, schema_conn, existing_tables,
+                old_fi, new_fi, new_mf, model, schema_editor, schema_conn, existing_tables,
             )
         return
 
@@ -671,9 +638,7 @@ def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, exist
                 new_fi.pk, schema_conn.alias,
             )
             return None
-        live_mf = _primary_model_field(live_fi)
-        live_mf.contribute_to_class(model, live_fi.name)
-        return live_mf
+        return bind_for_ddl(_primary_model_field(live_fi), model, live_fi.name)
 
     _alter_column_with_rename_conflict_resolution(
         old_mf, new_mf, model, schema_editor, schema_conn,
@@ -682,9 +647,10 @@ def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, exist
     )
 
 
-def _rename_or_create_m2m_through(old_fi, new_fi, model, schema_editor, schema_conn, existing_tables):
+def _rename_or_create_m2m_through(old_fi, new_fi, new_mf, model, schema_editor, schema_conn, existing_tables):
     """Rename the through-table for a renamed M2M field, or create the new one
     if the old table is absent (sync/merge against a schema that never had it).
+    *new_mf* is *new_fi*'s M2M field as ``bind_for_ddl()`` returned it.
     """
     old_through = old_fi.through_table_name
     new_through = new_fi.through_table_name
@@ -724,7 +690,7 @@ def _rename_or_create_m2m_through(old_fi, new_fi, model, schema_editor, schema_c
     else:
         # Old through table absent — create the new one from scratch
         ft = FIELD_TYPE_CLASS[new_fi.type]()
-        ft.create_m2m_table(new_fi, model, new_fi.name, schema_conn=schema_conn)
+        ft.create_m2m_table(new_fi, model, new_fi.name, schema_conn=schema_conn, field=new_mf)
 
 
 def _translate_renamed_field_name(cot, attr, rename_map=None):
@@ -2052,8 +2018,11 @@ class CustomObjectType(NetBoxModel):
         with self._global_lock:
             if self.is_model_cached(self.id, branch_id) and not no_cache:
                 cached_timestamp = self.get_cached_timestamp(self.id, branch_id)
-                if cached_timestamp and self.cache_timestamp and cached_timestamp == self.cache_timestamp:
-                    model = self.get_cached_model(self.id, branch_id)
+                model = self.get_cached_model(self.id, branch_id)
+                if (
+                    cached_timestamp and self.cache_timestamp and cached_timestamp == self.cache_timestamp
+                    and not _registration_rolled_back(model)
+                ):
                     # registry["search"] is global, not per-branch — re-bind so
                     # post_save's search-cache handler sees this context's fields.
                     self.register_custom_object_search_index(model)
@@ -2286,6 +2255,7 @@ class CustomObjectType(NetBoxModel):
                 # the startup loop (issue #408), or after a migrate-time call (#637).
                 if not (skip_object_fields or skip_cot_object_fields):
                     self._model_cache[(self.id, branch_id)] = (model, self.cache_timestamp)
+                _mark_registered_in_transaction(model)
 
         apps.clear_cache()
         ContentType.objects.clear_cache()
@@ -2320,6 +2290,10 @@ class CustomObjectType(NetBoxModel):
 
         if not (hasattr(model_field, 'remote_field') and model_field.remote_field):
             return
+        if isinstance(model_field.remote_field.model, str):
+            resolve_lazy_target(model_field)
+            if isinstance(model_field.remote_field.model, str):
+                return
 
         # Resolve on_delete_behavior from the CustomObjectTypeField if not provided
         if on_delete_behavior is None:
@@ -3325,10 +3299,6 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     }
                 )
 
-        # NOTE: the related_name checks above must run before the uniqueness probe below.
-        # The probe calls contribute_to_class(), which installs the reverse accessor on the
-        # target model; once installed, the clobber guard would mistake it for a legitimate
-        # custom object accessor and accept e.g. related_name="save" on Site.
         # Check if uniqueness constraint can be applied when changing from non-unique to unique.
         # _original is set by from_db only; deserialized objects (branch merge/revert)
         # never load from DB and won't have it — guard before touching self.original.
@@ -3339,12 +3309,9 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             and hasattr(self, '_original')
             and not self.original.unique
         ):
-            model_field = _primary_model_field(self)
             model = self.custom_object_type.get_model()
-            model_field.contribute_to_class(model, self.name)
-
-            old_field = _primary_model_field(self.original)
-            old_field.contribute_to_class(model, self._original_name)
+            model_field = bind_for_ddl(_primary_model_field(self), model, self.name)
+            old_field = bind_for_ddl(_primary_model_field(self.original), model, self._original_name)
 
             # Route the probe through the branch's connection so the ALTER
             # TABLE runs in the active schema.  Using the default connection
@@ -3370,9 +3337,6 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                         )
                     }
                 )
-            finally:
-                # The probe contributed both fields onto the cached class.
-                _evict_model(self.custom_object_type, model)
 
         # Toggling a field from optional to required can strand existing rows that
         # left it blank: blank=False is checked by full_clean() against every field
@@ -4120,14 +4084,13 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         # Schema mutation + audit-key rewrite + cache bump + parent save() share
         # one atomic so a failure between DDL and row save can't leave audit
         # data rewritten but the field record un-persisted (or vice versa).
-        # The DDL mutates the cached model; a rollback doesn't, so evict it.
-        with _evict_model_on_error(self.custom_object_type, model), transaction.atomic(using=schema_conn.alias):
+        with transaction.atomic(using=schema_conn.alias):
             with schema_conn.schema_editor() as schema_editor:
                 if self._state.adding:
                     if self.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
                         # Coordinates expand into two concrete columns (latitude/longitude).
                         for column_name, model_field in field_type.get_model_field(self).items():
-                            model_field.contribute_to_class(model, column_name)
+                            bind_for_ddl(model_field, model, column_name)
                             schema_editor.add_field(model, model_field)
                     elif self.is_polymorphic:
                         if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
@@ -4143,7 +4106,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                             # a column that doesn't exist yet would fail.
                             title_name = field_type.title_field_name(self)
                             title_field = field_type.get_model_field(self)[title_name]
-                            title_field.contribute_to_class(model, title_name)
+                            bind_for_ddl(title_field, model, title_name)
                             with schema_conn.cursor() as cursor:
                                 existing_cols = {
                                     col.name for col in schema_conn.introspection.get_table_description(
@@ -4166,8 +4129,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                             new_fields = list(field_type.get_model_field(self).items())
                             old_fields = list(field_type.get_model_field(self.original).items())
                             for (old_col, old_field), (new_col, new_field) in zip(old_fields, new_fields):
-                                old_field.contribute_to_class(model, old_col)
-                                new_field.contribute_to_class(model, new_col)
+                                bind_for_ddl(old_field, model, old_col)
+                                bind_for_ddl(new_field, model, new_col)
                                 schema_editor.alter_field(model, old_field, new_field)
                     # Polymorphic renames/type changes are rejected in clean();
                     # raise here if one slipped through to avoid silent column drift.
@@ -4188,8 +4151,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                             new_title = field_type.title_field_name(self)
                             old_title_field = field_type.get_model_field(self.original)[old_title]
                             new_title_field = field_type.get_model_field(self)[new_title]
-                            old_title_field.contribute_to_class(model, old_title)
-                            new_title_field.contribute_to_class(model, new_title)
+                            bind_for_ddl(old_title_field, model, old_title)
+                            bind_for_ddl(new_title_field, model, new_title)
 
                             def _resolve_live_title_column():
                                 try:
@@ -4200,8 +4163,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                                     return None
                                 live_title_name = field_type.title_field_name(live_fi)
                                 live_title_field = field_type.get_model_field(live_fi)[live_title_name]
-                                live_title_field.contribute_to_class(model, live_title_name)
-                                return live_title_field
+                                return bind_for_ddl(live_title_field, model, live_title_name)
 
                             _alter_column_with_rename_conflict_resolution(
                                 old_title_field, new_title_field, model, schema_editor, schema_conn,
@@ -4253,11 +4215,12 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
             super().save(*args, **kwargs)
 
-            # On rename, _schema_alter_field calls contribute_to_class twice on the
-            # same class — force a no_cache regeneration so _meta is clean.  Healing
-            # runs in this same transaction so a reader can never observe the rename
-            # committed without the unmasked base field's column.  Non-rename changes
-            # lean on cache_timestamp for lazy invalidation; we skip the
+            # On rename, regenerate now: healing needs the class with the new field
+            # set, and runs in this same transaction so a reader can never observe
+            # the rename committed without the unmasked base field's column.  (If
+            # the transaction rolls back after this, the class is rebuilt on the
+            # next lookup; see _mark_registered_in_transaction.)  Non-rename
+            # changes lean on cache_timestamp for lazy invalidation; we skip the
             # apps.clear_cache() cascade so signal-driven cache evictions (e.g.
             # clear_cache_on_field_save for OBJECT fields) survive.
             renamed = (
@@ -4276,8 +4239,9 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
             def ensure_constraint():
                 try:
+                    # `model` predates this save; the regenerated class has the field.
                     self.custom_object_type._ensure_field_fk_constraint(
-                        model, _field_name, on_delete_behavior=_on_delete
+                        self.custom_object_type.get_model(), _field_name, on_delete_behavior=_on_delete
                     )
                 except Exception as e:
                     logger.error(
@@ -4318,74 +4282,71 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         if self.is_polymorphic:
             _unwire_polymorphic_reverse_descriptors(self)
 
-        # The DDL mutates the cached model; if anything up to the row delete fails,
-        # evict it so a rollback leaves no phantom or duplicate fields behind.
-        with _evict_model_on_error(self.custom_object_type, model):
-            with schema_conn.schema_editor() as schema_editor:
-                # Flush deferred FK trigger events before any ALTER TABLE or DROP TABLE.
-                # PostgreSQL rejects DDL with "pending trigger events" when a row
-                # deletion (e.g. from the branching revert path) has queued events on
-                # a DEFERRABLE FK column.  Guards all removal paths below.
-                schema_editor.execute('SET CONSTRAINTS ALL IMMEDIATE')
-                if self.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
-                    # Drop both backing columns (latitude/longitude).
-                    for column_name, model_field in field_type.get_model_field(self).items():
-                        model_field.contribute_to_class(model, column_name)
-                        schema_editor.remove_field(model, model_field)
-                elif self.is_polymorphic:
-                    if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
-                        field_type.remove_polymorphic_object_columns(self, model, schema_editor)
-                    elif self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                        try:
-                            _dropped_through_model = model._meta.apps.get_model(APP_LABEL, self.through_model_name)
-                        except LookupError:
-                            pass
-                        field_type.drop_polymorphic_m2m_table(self, model, schema_editor)
-                else:
-                    # _schema_remove_field drops the through table (for MULTIOBJECT) but
-                    # leaves the real through model in apps.all_models; capture it so the
-                    # deregistration below removes it (issue #535).
-                    if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                        try:
-                            _dropped_through_model = model._meta.apps.get_model(APP_LABEL, self.through_model_name)
-                        except LookupError:
-                            pass
-                    _schema_remove_field(self, model, schema_editor, schema_conn=schema_conn)
-                    if self.type == CustomObjectFieldTypeChoices.TYPE_URL:
-                        # Drop the title column alongside the primary URL column.
-                        title_name = field_type.title_field_name(self)
-                        title_field = field_type.get_model_field(self)[title_name]
-                        title_field.contribute_to_class(model, title_name)
-                        schema_editor.remove_field(model, title_field)
+        with schema_conn.schema_editor() as schema_editor:
+            # Flush deferred FK trigger events before any ALTER TABLE or DROP TABLE.
+            # PostgreSQL rejects DDL with "pending trigger events" when a row
+            # deletion (e.g. from the branching revert path) has queued events on
+            # a DEFERRABLE FK column.  Guards all removal paths below.
+            schema_editor.execute('SET CONSTRAINTS ALL IMMEDIATE')
+            if self.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+                # Drop both backing columns (latitude/longitude).
+                for column_name, model_field in field_type.get_model_field(self).items():
+                    bind_for_ddl(model_field, model, column_name)
+                    schema_editor.remove_field(model, model_field)
+            elif self.is_polymorphic:
+                if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
+                    field_type.remove_polymorphic_object_columns(self, model, schema_editor)
+                elif self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+                    try:
+                        _dropped_through_model = model._meta.apps.get_model(APP_LABEL, self.through_model_name)
+                    except LookupError:
+                        pass
+                    field_type.drop_polymorphic_m2m_table(self, model, schema_editor)
+            else:
+                # _schema_remove_field drops the through table (for MULTIOBJECT) but
+                # leaves the real through model in apps.all_models; capture it so the
+                # deregistration below removes it (issue #535).
+                if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+                    try:
+                        _dropped_through_model = model._meta.apps.get_model(APP_LABEL, self.through_model_name)
+                    except LookupError:
+                        pass
+                _schema_remove_field(self, model, schema_editor, schema_conn=schema_conn)
+                if self.type == CustomObjectFieldTypeChoices.TYPE_URL:
+                    # Drop the title column alongside the primary URL column.
+                    title_name = field_type.title_field_name(self)
+                    title_field = field_type.get_model_field(self)[title_name]
+                    bind_for_ddl(title_field, model, title_name)
+                    schema_editor.remove_field(model, title_field)
 
-            # Deregister the dropped through model (both polymorphic and plain MULTIOBJECT)
-            # so the cascade-delete collector no longer queries the now-missing table.
-            if _dropped_through_model is not None:
-                if schema_conn is connection:
-                    CustomObjectType._unregister_model_names([_dropped_through_model.__name__])
-                else:
-                    # In a branch the captured through is normally main's, whose table
-                    # is untouched, so it stays; the removal above built a fresh through
-                    # that Django auto-registered over it, so put main's back.  Only a
-                    # through built for this branch goes.
-                    through_name = _dropped_through_model.__name__.lower()
-                    branch_id = CustomObjectType._active_branch_id()
-                    with CustomObjectType._global_lock:
-                        registry = apps.all_models[APP_LABEL]
-                        if getattr(_dropped_through_model, '_context_branch_id', None) == branch_id:
-                            registry.pop(through_name, None)
-                        else:
-                            registry[through_name] = _dropped_through_model
-                    apps.clear_cache()
+        # Deregister the dropped through model (both polymorphic and plain MULTIOBJECT)
+        # so the cascade-delete collector no longer queries the now-missing table.
+        if _dropped_through_model is not None:
+            if schema_conn is connection:
+                CustomObjectType._unregister_model_names([_dropped_through_model.__name__])
+            else:
+                # In a branch the captured through is normally main's, whose table
+                # is untouched, so it stays; the removal above built a fresh through
+                # that Django auto-registered over it, so put main's back.  Only a
+                # through built for this branch goes.
+                through_name = _dropped_through_model.__name__.lower()
+                branch_id = CustomObjectType._active_branch_id()
+                with CustomObjectType._global_lock:
+                    registry = apps.all_models[APP_LABEL]
+                    if getattr(_dropped_through_model, '_context_branch_id', None) == branch_id:
+                        registry.pop(through_name, None)
+                    else:
+                        registry[through_name] = _dropped_through_model
+                apps.clear_cache()
 
-            # Clear the model cache for this CustomObjectType when a field is deleted
-            self.custom_object_type.clear_model_cache(self.custom_object_type.id)
+        # Clear the model cache for this CustomObjectType when a field is deleted
+        self.custom_object_type.clear_model_cache(self.custom_object_type.id)
 
-            # snapshot() first so change logging records a correct pre-state.
-            self.custom_object_type.snapshot()
-            self.custom_object_type.save(update_fields=['cache_timestamp'])
+        # snapshot() first so change logging records a correct pre-state.
+        self.custom_object_type.snapshot()
+        self.custom_object_type.save(update_fields=['cache_timestamp'])
 
-            super().delete(*args, **kwargs)
+        super().delete(*args, **kwargs)
 
         # Regenerate so the apps registry no longer holds a class with the
         # removed column — squash revert may SELECT via the model class between

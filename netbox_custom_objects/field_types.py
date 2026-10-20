@@ -11,6 +11,7 @@ from rest_framework import serializers as drf_serializers
 from strawberry.scalars import JSON
 from django import forms
 from django.apps import apps
+from django.apps.registry import Apps
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
@@ -204,6 +205,71 @@ class LazyForeignKey(ForeignKey):
 
         self.remote_field.model = actual_model
         self.to = actual_model
+
+
+def resolve_lazy_target(field):
+    """Resolve *field*'s string target to a model class, in place.
+
+    A COT target is looked up by id rather than through ``apps.get_model()``,
+    which bypasses the app config's skip guard so the class is rebuilt even
+    when test teardown has dropped it from the registry.
+    """
+    remote = field.remote_field
+    if isinstance(field, LazyForeignKey):
+        _app_label, model_name = field._to_model_name.rsplit('.', 1)
+        cot_id = extract_cot_id_from_model_name(model_name.lower())
+        if cot_id is None:
+            logger.warning("Could not resolve target %r of field %r", field._to_model_name, field.name)
+            return
+        from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
+        try:
+            target = CustomObjectType.objects.get(pk=int(cot_id)).get_model()
+        except (CustomObjectType.DoesNotExist, OperationalError, ProgrammingError):
+            logger.warning("Could not resolve target %r of field %r", field._to_model_name, field.name)
+            return
+    else:
+        target = apps.get_model(remote.model)
+    remote.model = target
+    field.to = target
+    # Django's lazy relation setup fills this in from the target's primary key;
+    # the schema editor's FK SQL reads it.
+    if remote.field_name is None:
+        remote.field_name = target._meta.pk.name
+
+
+def ddl_model(model):
+    """A throwaway stand-in for *model* that a field can be bound to for DDL.
+
+    It has *model*'s table name and app label, so the schema editor emits the
+    same SQL, but lives in its own app registry and starts with nothing but a
+    primary key.  Binding a field to it leaves the cached class alone and
+    installs no reverse accessor on the target model (issue #767).
+    """
+    meta = type('Meta', (), {
+        'apps': Apps(),
+        'app_label': model._meta.app_label,
+        'db_table': model._meta.db_table,
+        'managed': False,
+    })
+    return type(model.__name__, (models.Model,), {'Meta': meta, '__module__': __name__})
+
+
+def bind_for_ddl(field, model, name, stand_in=None):
+    """Bind *field* to a throwaway copy of *model* under *name* and return it.
+
+    This is what the schema helpers hand to the schema editor.  They used to
+    ``contribute_to_class()`` the live cached model instead, which left phantom
+    or duplicate fields on it whenever the DDL rolled back (issue #767).  A
+    string target is resolved by hand, since the copy's registry knows no
+    other models; a many-to-many field needs none, its through table is built
+    separately.  Pass the same ``ddl_model(model)`` as *stand_in* for fields
+    that must be looked up together, e.g. by a composite index.
+    """
+    field.contribute_to_class(stand_in or ddl_model(model), name)
+    remote = getattr(field, 'remote_field', None)
+    if remote is not None and not field.many_to_many and isinstance(remote.model, str):
+        resolve_lazy_target(field)
+    return field
 
 
 def _make_lazy_cot_fk(cot, field, on_delete, **field_kwargs):
@@ -1184,11 +1250,13 @@ class ObjectFieldType(FieldType):
             # django_content_type without manual CASCADE).
             db_constraint=False,
         )
-        ct_field.contribute_to_class(model, ct_field_name)
+        # Both columns share one stand-in: the index below looks them up on it.
+        stand_in = ddl_model(model)
+        bind_for_ddl(ct_field, model, ct_field_name, stand_in)
         schema_editor.add_field(model, ct_field)
 
         oid_field = models.PositiveBigIntegerField(null=True, blank=True)
-        oid_field.contribute_to_class(model, oid_field_name)
+        bind_for_ddl(oid_field, model, oid_field_name, stand_in)
         schema_editor.add_field(model, oid_field)
 
         # Composite index as recommended in issue #31
@@ -1196,7 +1264,7 @@ class ObjectFieldType(FieldType):
             f"co_{field_instance.custom_object_type_id}_{field_instance.name}_gfk"
         )
         idx = models.Index(fields=[ct_field_name, oid_field_name], name=idx_name)
-        schema_editor.add_index(model, idx)
+        schema_editor.add_index(stand_in, idx)
 
     def remove_polymorphic_object_columns(self, field_instance, model, schema_editor):
         """
@@ -1882,15 +1950,18 @@ class MultiObjectFieldType(FieldType):
         target_field.remote_field.model = to_model
         target_field.related_model = to_model
 
-    def create_m2m_table(self, instance, model, field_name, schema_conn=None):
+    def create_m2m_table(self, instance, model, field_name, schema_conn=None, field=None):
         """
-        Creates the actual M2M table after models are fully generated
+        Creates the actual M2M table after models are fully generated.
+
+        *field* is the M2M field when it isn't on *model* yet, i.e. the one
+        ``bind_for_ddl()`` returned while the field is being added.
         """
         from django.db import connection as default_connection
         connection = schema_conn if schema_conn is not None else default_connection
 
-        # Get the field instance
-        field = model._meta.get_field(field_name)
+        if field is None:
+            field = model._meta.get_field(field_name)
 
         # For self-referential fields, use the current model
         if getattr(field, "_is_self_referential", False):
