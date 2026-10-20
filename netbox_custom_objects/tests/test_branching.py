@@ -3835,3 +3835,23 @@ class PolymorphicReverseAccessorBranchTestCase(BranchingTestBase, _TestBase):
 
         # Main still has the field until the branch merges.
         self.assertEqual(list(self.site.holders_by_target.all()), [co])
+
+    def test_branch_multiobject_field_delete_keeps_main_accessor(self):
+        with event_tracking(self.request):
+            field = self._add_field('multiobject', 'targets', 'holders_by_targets')
+            co = self._model().objects.create(name='main-co')
+            co.targets.add(self.site)
+
+        branch = _provision_branch('Reverse M2M Delete Branch', user=self.user)
+        with activate_branch(branch), event_tracking(_make_request(self.user)):
+            CustomObjectTypeField.objects.get(pk=field.pk).delete()
+            # The branch has no such field, so no through to read either.
+            self.assertEqual(list(self.site.holders_by_targets.all()), [])
+            self.assertEqual(self.site.holders_by_targets.count(), 0)
+
+        # Main keeps its accessor until the branch merges.  Reading it would fail:
+        # the branch delete drops main's through table (#839).
+        self.assertIn('holders_by_targets', Site.__dict__)
+        self.assertEqual(
+            CustomObjectTypeField.objects.get(pk=field.pk).related_name, 'holders_by_targets',
+        )

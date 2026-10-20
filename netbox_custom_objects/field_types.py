@@ -2604,17 +2604,24 @@ class PolymorphicMultiObjectReverseManager(_PolymorphicReverseManager):
             and field.through_model_name == self._through_model_name
         )
 
-    def _through(self):
-        from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
-        # This context's through; apps.all_models only holds main's.
-        through = CustomObjectType.get_cached_through_model(
-            self._cot_pk, self._through_model_name, CustomObjectType._active_branch_id()
-        )
-        return through or apps.get_model(APP_LABEL, self._through_model_name)
+    def _through(self, source_model):
+        """The through built alongside *source_model*, or None.
+
+        Read off the model rather than the registry or the through cache: apps.all_models
+        only holds main's through, and the cache can be cleared by another thread between
+        resolving the model and reaching here.
+        """
+        for through in getattr(source_model, '_through_models', ()):
+            if through.__name__ == self._through_model_name:
+                return through
+        return None
 
     def _filter(self, source_model):
+        through = self._through(source_model)
+        if through is None:
+            return source_model.objects.none()
         ct = ContentType.objects.get_for_model(type(self._instance))
-        source_ids = self._through().objects.filter(
+        source_ids = through.objects.filter(
             content_type_id=ct.pk,
             object_id=self._instance.pk,
         ).values_list("source_id", flat=True)
