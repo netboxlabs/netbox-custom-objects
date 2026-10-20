@@ -1075,9 +1075,6 @@ class ComplexCustomObjectViewTestCase(
 
         return reverse(url_format.format(action), kwargs={'pk': instance.pk, 'custom_object_type': custom_object_type})
 
-    def test_get_object_with_constrained_permission(self):
-        ...
-
     @override_settings(EXEMPT_VIEW_PERMISSIONS=['*'])
     def test_get_object_changelog(self):
         """Regression #500: changelog tab must return 200, not 500 from deprecated user kwarg."""
@@ -1118,9 +1115,6 @@ class ComplexCustomObjectViewTestCase(
         ...
 
     def test_delete_object_with_permission(self):
-        ...
-
-    def test_delete_object_with_constrained_permission(self):
         ...
 
     def test_bulk_delete_objects_with_permission(self):
@@ -1332,9 +1326,6 @@ class ObjectFieldViewTestCase(
 
         return reverse(url_format.format(action), kwargs={'pk': instance.pk, 'custom_object_type': custom_object_type})
 
-    def test_get_object_with_constrained_permission(self):
-        ...
-
     @override_settings(EXEMPT_VIEW_PERMISSIONS=['*'])
     def test_get_object_changelog(self):
         """Regression #500: changelog tab must return 200, not 500 from deprecated user kwarg."""
@@ -1377,9 +1368,6 @@ class ObjectFieldViewTestCase(
         ...
 
     def test_delete_object_with_permission(self):
-        ...
-
-    def test_delete_object_with_constrained_permission(self):
         ...
 
     def test_bulk_delete_objects_with_permission(self):
