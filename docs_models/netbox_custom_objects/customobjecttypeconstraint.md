@@ -14,7 +14,7 @@ The kind of constraint: `Unique` or `Check`.
 
 ### Fields
 
-For a unique constraint: the fields whose combined values must be unique. Choose at least two, or one when the constraint is case-insensitive or has a condition. Multi-object, multi-select, JSON and coordinates fields can't be included.
+For a unique constraint: the fields whose combined values must be unique. Choose at least two, or one when the constraint is case-insensitive or has a condition. Multi-object, multi-select, JSON, coordinates and array fields can't be included.
 
 ### Case-Insensitive
 

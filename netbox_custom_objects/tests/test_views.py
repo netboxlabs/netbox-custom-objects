@@ -1,6 +1,7 @@
 """
 Tests for all UI views.
 """
+from datetime import date
 from unittest import skipUnless
 
 from django.contrib.contenttypes.models import ContentType
@@ -1669,6 +1670,154 @@ class CoordinatesFieldViewTest(CustomObjectsTestCase, TestCase):
         obj.refresh_from_db()
         self.assertIsNone(obj.location_latitude)
         self.assertIsNone(obj.location_longitude)
+
+
+class ArrayFieldViewTest(CustomObjectsTestCase, TestCase):
+    """UI behaviour for the array field type: JSON input, CSV import and formatted display."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.cot = CustomObjectType.objects.create(name="ZoneView", verbose_name_plural="Zone Views", slug="zone-views")
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.cot, name="name", type="text", primary=True, required=True
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.cot, name="points", type="array", array_element_type="integer",
+            array_tuple_size=3, array_min_length=2,
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.cot, name="days", type="array", array_element_type="date",
+        )
+        cls.model = cls.cot.get_model()
+
+    def setUp(self):
+        super().setUp()
+        self.user.is_superuser = True
+        self.user.save()
+
+    def _url(self, name, **kwargs):
+        return reverse(f"plugins:netbox_custom_objects:{name}", kwargs={"custom_object_type": self.cot.slug, **kwargs})
+
+    def test_create_and_edit(self):
+        response = self.client.get(self._url("customobject_add"))
+        self.assertContains(response, "A list of 3-value integer tuples, at least 2.")
+
+        response = self.client.post(self._url("customobject_add"), {
+            "name": "Zone", "points": "[[0, 0, 0], [10, 0, 5]]", "days": '["2026-01-01"]',
+        })
+        self.assertEqual(response.status_code, 302, response.content)
+        obj = self.model.objects.get(name="Zone")
+        self.assertEqual(obj.points, [[0, 0, 0], [10, 0, 5]])
+        self.assertEqual(obj.days, [date(2026, 1, 1)])
+
+        # The edit form shows the stored values compactly, dates included.
+        edit_url = self._url("customobject_edit", pk=obj.pk)
+        response = self.client.get(edit_url)
+        self.assertContains(response, "    [0, 0, 0],\n    [10, 0, 5]\n]")
+        self.assertContains(response, "[&quot;2026-01-01&quot;]")
+        response = self.client.post(edit_url, {"name": "Zone", "points": "[[0, 0, 0], [1, 1, 1]]", "days": ""})
+        self.assertEqual(response.status_code, 302, response.content)
+        obj.refresh_from_db()
+        self.assertEqual((obj.points, obj.days), ([[0, 0, 0], [1, 1, 1]], None))
+
+    def test_invalid_value_rejected(self):
+        response = self.client.post(self._url("customobject_add"), {"name": "Bad", "points": "[[0, 0, 0], [1, 1]]"})
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(self.model.objects.filter(name="Bad").exists())
+        # The model's message, not the JSON form field's "Enter a valid JSON."
+        self.assertContains(response, "Item 2 must have exactly 3 values.")
+        self.assertNotContains(response, "Enter a valid JSON")
+
+        response = self.client.post(self._url("customobject_add"), {"name": "Bad", "points": "[[0, 0, 0], 1]"})
+        self.assertContains(response, "Each item must itself be a list of values.")
+
+        # Values that aren't of the element type are rejected, not coerced or a server error.
+        cases = {
+            "a JSON string": {"points": '"abc"'},
+            "a number on dates": {"days": "[1]"},
+            "a fraction on integers": {"points": "[[0, 0, 0], [1, 1, 1.5]]"},
+            "a boolean on integers": {"points": "[[0, 0, 0], [1, 1, true]]"},
+        }
+        for label, values in cases.items():
+            with self.subTest(label):
+                response = self.client.post(self._url("customobject_add"), {"name": "Bad", **values})
+                self.assertEqual(response.status_code, 200)
+                self.assertFalse(self.model.objects.filter(name="Bad").exists())
+
+    def test_empty_list_is_no_value(self):
+        # Stored as NULL, as blank input is; the minimum length applies only to a non-empty list.
+        response = self.client.post(self._url("customobject_add"), {"name": "Empty", "points": "[]", "days": "[]"})
+        self.assertEqual(response.status_code, 302, response.content)
+        obj = self.model.objects.get(name="Empty")
+        self.assertEqual((obj.points, obj.days), (None, None))
+
+    def test_csv_import(self):
+        csv_data = 'name,points,days\nImported,"[[0, 0, 0], [1, 2, 3]]","[""2026-03-01""]"'
+        response = self.client.post(
+            self._url("customobject_bulk_import"), {"data": csv_data, "format": "csv", "csv_delimiter": ","}
+        )
+        self.assertEqual(response.status_code, 302, response.content)
+        obj = self.model.objects.get(name="Imported")
+        self.assertEqual(obj.points, [[0, 0, 0], [1, 2, 3]])
+        self.assertEqual(obj.days, [date(2026, 3, 1)])
+
+        csv_data = 'name,points,days\nCoerced,"[[0, 0, 0], [1, 2, 3.5]]",\nEmpty,[],[]'
+        response = self.client.post(
+            self._url("customobject_bulk_import"), {"data": csv_data, "format": "csv", "csv_delimiter": ","}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(self.model.objects.filter(name__in=["Coerced", "Empty"]).exists())
+
+        csv_data = 'name,points,days\nEmpty,[],[]'
+        response = self.client.post(
+            self._url("customobject_bulk_import"), {"data": csv_data, "format": "csv", "csv_delimiter": ","}
+        )
+        self.assertEqual(response.status_code, 302, response.content)
+        obj = self.model.objects.get(name="Empty")
+        self.assertEqual((obj.points, obj.days), (None, None))
+
+    def test_list_and_detail_display(self):
+        obj = self.model.objects.create(name="Shown", points=[[0, 0, 0], [10, 0, 5]], days=[date(2026, 1, 1)])
+        self.assertContains(self.client.get(self._url("customobject_list")), "(0, 0, 0), (10, 0, 5)")
+        response = self.client.get(self._url("customobject", pk=obj.pk))
+        self.assertContains(response, "(0, 0, 0), (10, 0, 5)")
+        self.assertContains(response, "2026-01-01")
+
+    def test_field_form_shows_array_settings(self):
+        from netbox_custom_objects.forms import CustomObjectTypeFieldForm
+
+        # The type choices include this plugin's own field types, not only core's.
+        response = self.client.get(
+            reverse("plugins:netbox_custom_objects:customobjecttypefield_add") + f"?custom_object_type={self.cot.pk}"
+        )
+        self.assertContains(response, '<option value="array"')
+        self.assertContains(response, '<option value="coordinates"')
+
+        form = CustomObjectTypeFieldForm(initial={
+            "custom_object_type": self.cot.pk, "type": "array", "array_element_type": "integer",
+        })
+        for name in ("array_element_type", "array_tuple_size", "array_min_length", "array_max_length",
+                     "validation_minimum", "validation_maximum"):
+            self.assertIn(name, form.fields)
+        self.assertNotIn("validation_regex", form.fields)
+        # Element limits describe each element, not the whole value.
+        self.assertEqual(form.fields["validation_minimum"].help_text, "Minimum allowed value for each element")
+
+        form = CustomObjectTypeFieldForm(initial={
+            "custom_object_type": self.cot.pk, "type": "array", "array_element_type": "text",
+        })
+        self.assertIn("validation_regex", form.fields)
+        self.assertEqual(form.fields["validation_regex"].help_text, "Regular expression each element must match")
+        self.assertNotIn("validation_minimum", form.fields)
+
+        form = CustomObjectTypeFieldForm(initial={"custom_object_type": self.cot.pk, "type": "text"})
+        self.assertNotIn("array_element_type", form.fields)
+
+        # An existing array's shape can't be edited.
+        form = CustomObjectTypeFieldForm(instance=self.cot.fields.get(name="points"))
+        self.assertTrue(form.fields["array_element_type"].disabled)
+        self.assertTrue(form.fields["array_tuple_size"].disabled)
+        self.assertFalse(form.fields["array_max_length"].disabled)
 
 
 class ColorFieldViewTest(CustomObjectsTestCase, TestCase):

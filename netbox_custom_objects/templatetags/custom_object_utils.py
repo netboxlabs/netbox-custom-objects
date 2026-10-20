@@ -2,7 +2,7 @@ from django import template
 from extras.choices import CustomFieldUIVisibleChoices
 
 from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
-from netbox_custom_objects.field_types import URLFieldType
+from netbox_custom_objects.field_types import URLFieldType, format_array_value
 from netbox_custom_objects.models import CustomObjectTypeField
 from netbox_custom_objects.utilities import build_map_url
 
@@ -39,6 +39,8 @@ def get_field_value(obj, field: CustomObjectTypeField):
         if latitude is None or longitude is None:
             return None
         return f"{latitude}, {longitude}"
+    if field.type == CustomObjectFieldTypeChoices.TYPE_ARRAY:
+        return format_array_value(getattr(obj, field.name)) or None
     return getattr(obj, field.name)
 
 

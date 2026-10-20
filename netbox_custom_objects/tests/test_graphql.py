@@ -15,6 +15,7 @@ Two layers are exercised:
   ``__init__.py``) is built and bound per request, exactly as in production.
 """
 
+import datetime
 import decimal
 import json
 from unittest import mock
@@ -549,6 +550,23 @@ class GraphQLEndpointTestCase(GraphQLEndpointMixin, CustomObjectsTestCase, TestC
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["name"], "Widget")
         self.assertEqual(decimal.Decimal(str(rows[0]["price"])), decimal.Decimal("19.99"))
+
+    def test_array_fields_round_trip(self):
+        cot = self.create_custom_object_type(name="Zone", slug="zone")
+        self.create_custom_object_type_field(
+            cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        self.create_custom_object_type_field(
+            cot, name="points", label="Points", type="array", array_element_type="integer", array_tuple_size=3,
+        )
+        self.create_custom_object_type_field(
+            cot, name="days", label="Days", type="array", array_element_type="date",
+        )
+        model = cot.get_model()
+        model.objects.create(name="Z", points=[[0, 0, 0], [10, 0, 5]], days=[datetime.date(2026, 1, 1)])
+
+        rows = self._gql("{ custom_objects_zone_list { name points days } }")["custom_objects_zone_list"]
+        self.assertEqual(rows, [{"name": "Z", "points": [[0, 0, 0], [10, 0, 5]], "days": ["2026-01-01"]}])
 
     def test_json_field_round_trips(self):
         # A JSON field is annotated with Strawberry's JSON scalar; confirm a

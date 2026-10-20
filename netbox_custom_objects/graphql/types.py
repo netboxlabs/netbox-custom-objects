@@ -578,14 +578,14 @@ def _make_choice_resolver(field):
     return strawberry_django.field(description=f"Choice value for '{field_name}'")(resolver)
 
 
-def _scalar_annotation_for(field_type):
-    """Return the GraphQL scalar annotation for a field type, or ``None``."""
+def _scalar_annotation_for(field):
+    """Return the GraphQL scalar annotation for a field, or ``None``."""
     from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
 
-    field_type_cls = FIELD_TYPE_CLASS.get(field_type)
+    field_type_cls = FIELD_TYPE_CLASS.get(field.type)
     if field_type_cls is None:
         return None
-    return field_type_cls().get_graphql_annotation()
+    return field_type_cls().get_graphql_annotation(field)
 
 
 def build_object_type(custom_object_type):
@@ -669,7 +669,7 @@ def _build_object_type(custom_object_type, model):
             namespace[field_name] = _make_choice_resolver(field)
             continue
 
-        annotation = _scalar_annotation_for(field.type)
+        annotation = _scalar_annotation_for(field)
         if annotation is None:
             logger.debug(
                 "Skipping custom field %r of unsupported GraphQL type %r",

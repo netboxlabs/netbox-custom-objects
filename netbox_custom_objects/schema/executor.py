@@ -37,6 +37,7 @@ from django.db import transaction
 from extras.models import CustomFieldChoiceSet
 
 from netbox_custom_objects import constants
+from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
 from netbox_custom_objects.schema.comparator import FieldOp, diff_document
 from netbox_custom_objects.schema.format import (
@@ -78,6 +79,10 @@ class InvalidConstraintError(Exception):
 
 class InvalidRelatedNameError(Exception):
     """Raised when a field's related_name is already used for its object type, or clashes with an attribute."""
+
+
+class UnsupportedFieldChangeError(Exception):
+    """Raised when the schema changes a field in a way that can't be applied, e.g. an array's element type."""
 
 
 class UnknownChoiceSetError(Exception):
@@ -243,6 +248,10 @@ def _schema_def_to_field_kwargs(schema_def: dict) -> dict:
     if "validation_maximum" in type_specific:
         kwargs["validation_maximum"] = schema_def.get("validation_maximum", None)
 
+    for attr in ("array_element_type", "array_tuple_size", "array_min_length", "array_max_length"):
+        if attr in type_specific:
+            kwargs[attr] = schema_def.get(attr, FIELD_DEFAULTS[attr])
+
     if "choice_set" in type_specific:
         cs_name = schema_def.get("choice_set")
         if not cs_name:
@@ -357,6 +366,19 @@ def _apply_field_alter(cot, fc) -> None:
         .select_related("choice_set", "related_object_type")
         .get(schema_id=fc.schema_id)
     )
+
+    # An array column's shape is fixed when it's created (see CustomObjectTypeField.clean()).
+    type_change = fc.changed_attrs.get("type")
+    if type_change and CustomObjectFieldTypeChoices.TYPE_ARRAY in type_change:
+        raise UnsupportedFieldChangeError(
+            f"Field {field.name!r} on COT {cot.slug!r}: a field's type can't change to or from array."
+        )
+    if field.type == CustomObjectFieldTypeChoices.TYPE_ARRAY:
+        for attr in ("array_element_type", "array_tuple_size"):
+            if attr in fc.changed_attrs:
+                raise UnsupportedFieldChangeError(
+                    f"Field {field.name!r} on COT {cot.slug!r}: an array's {attr} can't change after creation."
+                )
 
     pending_m2m: dict[str, list] = {}
 

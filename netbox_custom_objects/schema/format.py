@@ -36,6 +36,7 @@ FIELD_TYPE_SELECT = "select"
 FIELD_TYPE_MULTISELECT = "multiselect"
 FIELD_TYPE_OBJECT = "object"
 FIELD_TYPE_MULTIOBJECT = "multiobject"
+FIELD_TYPE_ARRAY = "array"
 FIELD_TYPE_COLOR = "color"
 
 # Mapping from CustomFieldTypeChoices values to schema type names.
@@ -54,6 +55,7 @@ CHOICES_TO_SCHEMA_TYPE = {
     CustomFieldTypeChoices.TYPE_MULTISELECT: FIELD_TYPE_MULTISELECT,
     CustomFieldTypeChoices.TYPE_OBJECT: FIELD_TYPE_OBJECT,
     CustomFieldTypeChoices.TYPE_MULTIOBJECT: FIELD_TYPE_MULTIOBJECT,
+    CustomObjectFieldTypeChoices.TYPE_ARRAY: FIELD_TYPE_ARRAY,
     CustomObjectFieldTypeChoices.TYPE_COLOR: FIELD_TYPE_COLOR,
 }
 
@@ -94,6 +96,10 @@ FIELD_DEFAULTS = {
     "related_name": "",
     "on_delete_behavior": "set_null",
     "is_polymorphic": False,
+    "array_element_type": "",
+    "array_tuple_size": None,
+    "array_min_length": None,
+    "array_max_length": None,
     # related_object_types has no scalar default (M2M list); absence means []
 }
 
@@ -120,6 +126,10 @@ FIELD_TYPE_ATTRS = {
     },
     FIELD_TYPE_MULTIOBJECT: {
         "is_polymorphic", "related_object_type", "related_object_types", "related_object_filter", "related_name",
+    },
+    FIELD_TYPE_ARRAY: {
+        "array_element_type", "array_tuple_size", "array_min_length", "array_max_length",
+        "validation_regex", "validation_minimum", "validation_maximum",
     },
 }
 

@@ -608,6 +608,29 @@ class COTJsonSchemaTestCase(TestCase):
             ],
         })
 
+    def test_array_field(self):
+        def document(field):
+            return {"schema_version": "1", "types": [{"name": "zone", "slug": "zone", "fields": [field]}]}
+
+        points = {"id": 1, "name": "points", "type": "array", "array_element_type": "integer"}
+        self._assert_valid(document(points))
+        self._assert_valid(document({
+            **points, "array_tuple_size": 3, "array_min_length": 2, "array_max_length": 10, "validation_minimum": 0,
+        }))
+        self._assert_valid(document({**points, "array_element_type": "text", "validation_regex": "^a$"}))
+        invalid = {
+            "no element type": {"id": 1, "name": "points", "type": "array"},
+            "unknown element type": {**points, "array_element_type": "json"},
+            "tuple size of one": {**points, "array_tuple_size": 1},
+            "zero minimum length": {**points, "array_min_length": 0},
+            "zero maximum length": {**points, "array_max_length": 0},
+            "unknown attribute": {**points, "choice_set": "x"},
+            "array attribute on a text field": {"id": 1, "name": "label", "type": "text", "array_element_type": "text"},
+        }
+        for label, field in invalid.items():
+            with self.subTest(label):
+                self._assert_invalid(document(field))
+
     def test_related_name(self):
         def document(field):
             return {"schema_version": "1", "types": [{"name": "widget", "slug": "widget", "fields": [field]}]}

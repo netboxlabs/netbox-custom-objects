@@ -46,6 +46,7 @@
         "multiselect",
         "object",
         "multiobject",
+        "array",
         "color"
       ]
     },
@@ -268,6 +269,34 @@
       ]
     },
 
+    "array_field": {
+      "unevaluatedProperties": false,
+      "allOf": [
+        { "$ref": "#/$defs/field_base" },
+        {
+          "required": ["array_element_type"],
+          "properties": {
+            "type": { "const": "array" },
+            "array_element_type": {
+              "type": "string",
+              "enum": ["text", "integer", "decimal", "boolean", "date", "datetime"],
+              "description": "The type of each value. Can't change after the field is created."
+            },
+            "array_tuple_size": {
+              "type": ["integer", "null"],
+              "minimum": 2,
+              "description": "Store a list of tuples of this many values, e.g. 3 for (x, y, z) points. Absent or null for a list of single values. Can't change after the field is created."
+            },
+            "array_min_length": { "type": ["integer", "null"], "minimum": 1, "description": "Minimum number of items." },
+            "array_max_length": { "type": ["integer", "null"], "minimum": 1, "description": "Maximum number of items." },
+            "validation_regex": { "type": "string", "description": "For text elements: a regular expression each value must match." },
+            "validation_minimum": { "type": "number", "description": "For integer and decimal elements: the minimum value." },
+            "validation_maximum": { "type": "number", "description": "For integer and decimal elements: the maximum value." }
+          }
+        }
+      ]
+    },
+
     "simple_field": {
       "unevaluatedProperties": false,
       "allOf": [
@@ -292,6 +321,7 @@
         { "$ref": "#/$defs/multiselect_field" },
         { "$ref": "#/$defs/object_field" },
         { "$ref": "#/$defs/multiobject_field" },
+        { "$ref": "#/$defs/array_field" },
         { "$ref": "#/$defs/simple_field" }
       ],
       "discriminator": {

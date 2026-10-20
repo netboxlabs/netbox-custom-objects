@@ -203,7 +203,10 @@ Attributes that match their defaults are omitted from exported documents to keep
 | `select`, `multiselect` | `choice_set` (required — **name** of a `CustomFieldChoiceSet`) |
 | `object` | `related_object_type` (required when `is_polymorphic` is `false`), `related_object_types` (required when `is_polymorphic` is `true`), `is_polymorphic`, `related_object_filter`, `related_name`, `on_delete_behavior` |
 | `multiobject` | `related_object_type` (required when `is_polymorphic` is `false`), `related_object_types` (required when `is_polymorphic` is `true`), `is_polymorphic`, `related_object_filter`, `related_name` |
+| `array` | `array_element_type` (required — `text`, `integer`, `decimal`, `boolean`, `date` or `datetime`), `array_tuple_size`, `array_min_length`, `array_max_length`, `validation_regex` (text elements), `validation_minimum` and `validation_maximum` (integer and decimal elements) |
 | `boolean`, `date`, `datetime`, `url`, `json`, `color` | (none) |
+
+An `array` field's `array_element_type` and `array_tuple_size`, and a field's type changing to or from `array`, can't be changed by applying a document; doing so raises `UnsupportedFieldChangeError`. For example, `{id: 3, name: coordinates, type: array, array_element_type: integer, array_tuple_size: 3, array_min_length: 2}` stores a list of at least two (x, y, z) integer points.
 
 `on_delete_behavior` is one of `"set_null"` (default), `"cascade"`, or `"protect"`. It applies only to single `object` fields.
 
@@ -571,6 +574,7 @@ full rollback.
 | `UnknownChoiceSetError` | A `choice_set` name cannot be resolved |
 | `UnknownObjectTypeError` | A `related_object_type` string cannot be resolved |
 | `UnknownFieldTypeError` | A `type` value is not one of the supported field type strings |
+| `UnsupportedFieldChangeError` | A document changes an `array` field's element type or tuple size, or a field's type to or from `array` |
 | `InvalidConstraintError` | A constraint fails validation, e.g. existing objects already violate it |
 | `InvalidRelatedNameError` | A field's `related_name` is already used for its object type, or clashes with an attribute of a polymorphic field's target model |
 

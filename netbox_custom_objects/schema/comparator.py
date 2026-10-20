@@ -236,6 +236,13 @@ def _compare_field_attrs(db_field, schema_field: dict, cot_slug_cache: dict, war
         if dv != sv:
             changes["validation_maximum"] = (dv, sv)
 
+    for attr in ("array_element_type", "array_tuple_size", "array_min_length", "array_max_length"):
+        if attr in type_specific:
+            dv = getattr(db_field, attr)
+            sv = schema_field.get(attr, FIELD_DEFAULTS[attr])
+            if dv != sv:
+                changes[attr] = (dv, sv)
+
     if "choice_set" in type_specific:
         dv = db_field.choice_set.name if db_field.choice_set_id else None
         sv = schema_field.get("choice_set")

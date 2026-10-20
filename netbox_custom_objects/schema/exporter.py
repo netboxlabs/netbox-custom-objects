@@ -146,7 +146,10 @@ def _export_field(field) -> dict:
             value = field.on_delete_behavior or FIELD_DEFAULTS["on_delete_behavior"]
             if value != FIELD_DEFAULTS["on_delete_behavior"]:
                 result[attr] = value
-        elif attr in ("validation_regex", "validation_minimum", "validation_maximum"):
+        elif attr in (
+            "validation_regex", "validation_minimum", "validation_maximum",
+            "array_element_type", "array_tuple_size", "array_min_length", "array_max_length",
+        ):
             value = getattr(field, attr)
             if value != FIELD_DEFAULTS.get(attr):
                 result[attr] = value

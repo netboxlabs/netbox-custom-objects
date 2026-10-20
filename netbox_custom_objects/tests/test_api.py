@@ -3,6 +3,7 @@ Tests for API code paths.
 """
 import json
 import uuid
+from datetime import date
 from decimal import Decimal
 from unittest import skipUnless
 
@@ -2715,6 +2716,91 @@ class CoordinatesFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
         obj.refresh_from_db()
         self.assertIsNone(obj.location_latitude)
         self.assertIsNone(obj.location_longitude)
+
+
+class ArrayFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
+    """REST API behaviour for the array field type."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.cot = CustomObjectType.objects.create(name="Zone", verbose_name_plural="Zones", slug="zones")
+        cls.create_custom_object_type_field(cls.cot, name="name", type="text", primary=True, required=True)
+        cls.create_custom_object_type_field(
+            cls.cot, name="coordinates", type="array", array_element_type="integer", array_tuple_size=3,
+            array_min_length=2, validation_minimum=0,
+        )
+        cls.create_custom_object_type_field(cls.cot, name="days", type="array", array_element_type="date")
+        cls.model = cls.cot.get_model()
+
+    def setUp(self):
+        super().setUp()
+        self.user = create_test_user("zoneuser")
+        self.user.is_superuser = True
+        self.user.save()
+        self.client = APIClient()
+        self.header = {"HTTP_AUTHORIZATION": f"Token {create_token(self.user)}"}
+
+    def _list_url(self):
+        return reverse(
+            "plugins-api:netbox_custom_objects-api:customobject-list",
+            kwargs={"custom_object_type": self.cot.slug},
+        )
+
+    def test_create_and_read(self):
+        data = {"name": "Zone 1", "coordinates": [[0, 0, 0], [10, 0, 5]], "days": ["2026-01-01"]}
+        response = self.client.post(self._list_url(), data, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(response.data["coordinates"], [[0, 0, 0], [10, 0, 5]])
+        self.assertEqual(response.data["days"], ["2026-01-01"])
+        obj = self.model.objects.get(pk=response.data["id"])
+        self.assertEqual(obj.coordinates, [[0, 0, 0], [10, 0, 5]])
+        self.assertEqual(obj.days, [date(2026, 1, 1)])
+
+    def test_invalid_values_rejected(self):
+        cases = {
+            "wrong tuple size": [[0, 0, 0], [1, 1]],
+            "too few items": [[0, 0, 0]],
+            "below the minimum": [[0, 0, 0], [-1, 0, 0]],
+            "not integers": [[0, 0, 0], ["a", 0, 0]],
+            "not a list": "0,0,0",
+            "a fraction": [[0, 0, 0], [1, 1, 1.5]],
+            "a boolean": [[0, 0, 0], [1, 1, True]],
+        }
+        for label, value in cases.items():
+            with self.subTest(label):
+                response = self.client.post(
+                    self._list_url(), {"name": label, "coordinates": value}, format="json", **self.header
+                )
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+                self.assertIn("coordinates", response.data)
+        self.assertFalse(self.model.objects.exists())
+
+    def test_empty_list_is_null(self):
+        # As in the form and CSV: stored as null, and the minimum length applies only to a non-empty list.
+        data = {"name": "Empty", "coordinates": [], "days": []}
+        response = self.client.post(self._list_url(), data, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual((response.data["coordinates"], response.data["days"]), (None, None))
+        obj = self.model.objects.get(pk=response.data["id"])
+        self.assertEqual((obj.coordinates, obj.days), (None, None))
+
+    def test_create_array_field(self):
+        url = reverse("plugins-api:netbox_custom_objects-api:customobjecttypefield-list")
+        data = {
+            "custom_object_type": self.cot.pk, "name": "readings", "type": "array",
+            "array_element_type": "decimal", "array_max_length": 10,
+        }
+        response = self.client.post(url, data, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(
+            (response.data["array_element_type"], response.data["array_tuple_size"], response.data["array_max_length"]),
+            ("decimal", None, 10),
+        )
+
+        response = self.client.post(url, {**data, "name": "untyped", "array_element_type": ""}, format="json",
+                                    **self.header)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+        self.assertIn("array_element_type", response.data)
 
 
 class ColorFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
