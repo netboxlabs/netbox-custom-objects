@@ -332,6 +332,73 @@ class SchemaOperationsTestCase(TransactionCleanupMixin, CustomObjectsTestCase, T
         self.assertNotIn('website', columns)
         self.assertNotIn('website_title', columns)
 
+    # ------------------------------------------------------------------
+    # Failed field changes don't leave the cached model mutated (#767)
+    # ------------------------------------------------------------------
+
+    def _assert_model_matches_db(self, cot):
+        cot.refresh_from_db()
+        model = cot.get_model()
+        concrete = [f.column for f in model._meta.concrete_fields]
+        self.assertEqual(len(concrete), len(set(concrete)), f'duplicate fields on {model._meta.fields}')
+        self.assertEqual(set(concrete), self._db_columns(model))
+        registered = apps.all_models[APP_LABEL].get(model.__name__.lower())
+        if registered is not None:
+            self.assertEqual(
+                {f.column for f in registered._meta.concrete_fields}, self._db_columns(model),
+            )
+        # Selecting every column must not hit a column that doesn't exist.
+        list(model.objects.all())
+
+    def test_failed_rename_does_not_mutate_cached_model(self):
+        cot = self.create_custom_object_type(name='failrename', slug='fail-rename')
+        self.create_custom_object_type_field(cot, name='name', type='text', primary=True)
+        field = self.create_custom_object_type_field(cot, name='coordinatescoordinates', type='text')
+        cot.get_model()
+
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.name = 'coordinates'
+        with patch(
+            'netbox_custom_objects.models._rename_objectchange_field_key',
+            side_effect=RuntimeError('boom'),
+        ):
+            with self.assertRaises(RuntimeError):
+                field.save()
+
+        self.assertIn('coordinatescoordinates', self._db_columns(cot.get_model()))
+        self._assert_model_matches_db(cot)
+
+    def test_failed_add_does_not_mutate_cached_model(self):
+        cot = self.create_custom_object_type(name='failadd', slug='fail-add')
+        self.create_custom_object_type_field(cot, name='name', type='text', primary=True)
+        cot.get_model()
+
+        with patch(
+            'netbox_custom_objects.models._apply_deferred_co_field',
+            side_effect=RuntimeError('boom'),
+        ):
+            with self.assertRaises(RuntimeError):
+                self.create_custom_object_type_field(cot, name='extra', type='text')
+
+        self.assertNotIn('extra', self._db_columns(cot.get_model()))
+        self._assert_model_matches_db(cot)
+
+    def test_failed_delete_does_not_mutate_cached_model(self):
+        cot = self.create_custom_object_type(name='faildelete', slug='fail-delete')
+        self.create_custom_object_type_field(cot, name='name', type='text', primary=True)
+        field = self.create_custom_object_type_field(cot, name='extra', type='text')
+        cot.get_model()
+
+        with patch(
+            'django.db.backends.postgresql.schema.DatabaseSchemaEditor.remove_field',
+            side_effect=RuntimeError('boom'),
+        ):
+            with self.assertRaises(RuntimeError):
+                field.delete()
+
+        self.assertIn('extra', self._db_columns(cot.get_model()))
+        self._assert_model_matches_db(cot)
+
 
 class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
     """

@@ -1,3 +1,4 @@
+import contextlib
 import contextvars
 import decimal
 import functools
@@ -448,6 +449,39 @@ def detect_backing_column_collisions(cot):
                     ),
                 })
     return collisions
+
+
+def _evict_model(cot, model):
+    """Drop *model* from the model cache and app registry so the next
+    ``get_model()`` rebuilds it from the database.
+
+    The schema helpers below ``contribute_to_class()`` the old and new fields
+    onto the cached class so ``schema_editor`` can build DDL from them.  A
+    rollback undoes the DDL but not those in-memory fields, so a class that went
+    through a failed change would keep selecting columns that don't exist
+    (issue #767).  Runs no queries, so it is safe inside an aborted transaction.
+    """
+    cot.clear_model_cache(cot.id)
+    branch_id = CustomObjectType._active_branch_id()
+    with CustomObjectType._global_lock:
+        registry = apps.all_models.get(APP_LABEL, {})
+        name = model.__name__.lower()
+        registered = registry.get(name)
+        # In a branch the registry holds main's class, which this change never touched.
+        if registered is model or (
+            registered is not None and getattr(registered, '_context_branch_id', None) == branch_id
+        ):
+            del registry[name]
+
+
+@contextlib.contextmanager
+def _evict_model_on_error(cot, model):
+    """Run a schema change on *model*, evicting it if the change fails."""
+    try:
+        yield
+    except BaseException:
+        _evict_model(cot, model)
+        raise
 
 
 def _primary_model_field(fi):
@@ -3337,7 +3371,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     }
                 )
             finally:
-                self.custom_object_type.clear_model_cache(self.custom_object_type.id)
+                # The probe contributed both fields onto the cached class.
+                _evict_model(self.custom_object_type, model)
 
         # Toggling a field from optional to required can strand existing rows that
         # left it blank: blank=False is checked by full_clean() against every field
@@ -4085,7 +4120,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         # Schema mutation + audit-key rewrite + cache bump + parent save() share
         # one atomic so a failure between DDL and row save can't leave audit
         # data rewritten but the field record un-persisted (or vice versa).
-        with transaction.atomic(using=schema_conn.alias):
+        # The DDL mutates the cached model; a rollback doesn't, so evict it.
+        with _evict_model_on_error(self.custom_object_type, model), transaction.atomic(using=schema_conn.alias):
             with schema_conn.schema_editor() as schema_editor:
                 if self._state.adding:
                     if self.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
@@ -4282,71 +4318,74 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         if self.is_polymorphic:
             _unwire_polymorphic_reverse_descriptors(self)
 
-        with schema_conn.schema_editor() as schema_editor:
-            # Flush deferred FK trigger events before any ALTER TABLE or DROP TABLE.
-            # PostgreSQL rejects DDL with "pending trigger events" when a row
-            # deletion (e.g. from the branching revert path) has queued events on
-            # a DEFERRABLE FK column.  Guards all removal paths below.
-            schema_editor.execute('SET CONSTRAINTS ALL IMMEDIATE')
-            if self.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
-                # Drop both backing columns (latitude/longitude).
-                for column_name, model_field in field_type.get_model_field(self).items():
-                    model_field.contribute_to_class(model, column_name)
-                    schema_editor.remove_field(model, model_field)
-            elif self.is_polymorphic:
-                if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
-                    field_type.remove_polymorphic_object_columns(self, model, schema_editor)
-                elif self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                    try:
-                        _dropped_through_model = model._meta.apps.get_model(APP_LABEL, self.through_model_name)
-                    except LookupError:
-                        pass
-                    field_type.drop_polymorphic_m2m_table(self, model, schema_editor)
-            else:
-                # _schema_remove_field drops the through table (for MULTIOBJECT) but
-                # leaves the real through model in apps.all_models; capture it so the
-                # deregistration below removes it (issue #535).
-                if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-                    try:
-                        _dropped_through_model = model._meta.apps.get_model(APP_LABEL, self.through_model_name)
-                    except LookupError:
-                        pass
-                _schema_remove_field(self, model, schema_editor, schema_conn=schema_conn)
-                if self.type == CustomObjectFieldTypeChoices.TYPE_URL:
-                    # Drop the title column alongside the primary URL column.
-                    title_name = field_type.title_field_name(self)
-                    title_field = field_type.get_model_field(self)[title_name]
-                    title_field.contribute_to_class(model, title_name)
-                    schema_editor.remove_field(model, title_field)
+        # The DDL mutates the cached model; if anything up to the row delete fails,
+        # evict it so a rollback leaves no phantom or duplicate fields behind.
+        with _evict_model_on_error(self.custom_object_type, model):
+            with schema_conn.schema_editor() as schema_editor:
+                # Flush deferred FK trigger events before any ALTER TABLE or DROP TABLE.
+                # PostgreSQL rejects DDL with "pending trigger events" when a row
+                # deletion (e.g. from the branching revert path) has queued events on
+                # a DEFERRABLE FK column.  Guards all removal paths below.
+                schema_editor.execute('SET CONSTRAINTS ALL IMMEDIATE')
+                if self.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+                    # Drop both backing columns (latitude/longitude).
+                    for column_name, model_field in field_type.get_model_field(self).items():
+                        model_field.contribute_to_class(model, column_name)
+                        schema_editor.remove_field(model, model_field)
+                elif self.is_polymorphic:
+                    if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
+                        field_type.remove_polymorphic_object_columns(self, model, schema_editor)
+                    elif self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+                        try:
+                            _dropped_through_model = model._meta.apps.get_model(APP_LABEL, self.through_model_name)
+                        except LookupError:
+                            pass
+                        field_type.drop_polymorphic_m2m_table(self, model, schema_editor)
+                else:
+                    # _schema_remove_field drops the through table (for MULTIOBJECT) but
+                    # leaves the real through model in apps.all_models; capture it so the
+                    # deregistration below removes it (issue #535).
+                    if self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
+                        try:
+                            _dropped_through_model = model._meta.apps.get_model(APP_LABEL, self.through_model_name)
+                        except LookupError:
+                            pass
+                    _schema_remove_field(self, model, schema_editor, schema_conn=schema_conn)
+                    if self.type == CustomObjectFieldTypeChoices.TYPE_URL:
+                        # Drop the title column alongside the primary URL column.
+                        title_name = field_type.title_field_name(self)
+                        title_field = field_type.get_model_field(self)[title_name]
+                        title_field.contribute_to_class(model, title_name)
+                        schema_editor.remove_field(model, title_field)
 
-        # Deregister the dropped through model (both polymorphic and plain MULTIOBJECT)
-        # so the cascade-delete collector no longer queries the now-missing table.
-        if _dropped_through_model is not None:
-            if schema_conn is connection:
-                CustomObjectType._unregister_model_names([_dropped_through_model.__name__])
-            else:
-                # In a branch the captured through is normally main's, whose table
-                # is untouched, so it stays; the removal above built a fresh through
-                # that Django auto-registered over it, so put main's back.  Only a
-                # through built for this branch goes.
-                through_name = _dropped_through_model.__name__.lower()
-                branch_id = CustomObjectType._active_branch_id()
-                with CustomObjectType._global_lock:
-                    registry = apps.all_models[APP_LABEL]
-                    if getattr(_dropped_through_model, '_context_branch_id', None) == branch_id:
-                        registry.pop(through_name, None)
-                    else:
-                        registry[through_name] = _dropped_through_model
-                apps.clear_cache()
+            # Deregister the dropped through model (both polymorphic and plain MULTIOBJECT)
+            # so the cascade-delete collector no longer queries the now-missing table.
+            if _dropped_through_model is not None:
+                if schema_conn is connection:
+                    CustomObjectType._unregister_model_names([_dropped_through_model.__name__])
+                else:
+                    # In a branch the captured through is normally main's, whose table
+                    # is untouched, so it stays; the removal above built a fresh through
+                    # that Django auto-registered over it, so put main's back.  Only a
+                    # through built for this branch goes.
+                    through_name = _dropped_through_model.__name__.lower()
+                    branch_id = CustomObjectType._active_branch_id()
+                    with CustomObjectType._global_lock:
+                        registry = apps.all_models[APP_LABEL]
+                        if getattr(_dropped_through_model, '_context_branch_id', None) == branch_id:
+                            registry.pop(through_name, None)
+                        else:
+                            registry[through_name] = _dropped_through_model
+                    apps.clear_cache()
 
-        # Clear the model cache for this CustomObjectType when a field is deleted
-        self.custom_object_type.clear_model_cache(self.custom_object_type.id)
+            # Clear the model cache for this CustomObjectType when a field is deleted
+            self.custom_object_type.clear_model_cache(self.custom_object_type.id)
 
-        # snapshot() first so change logging records a correct pre-state.
-        self.custom_object_type.snapshot()
-        self.custom_object_type.save(update_fields=['cache_timestamp'])
+            # snapshot() first so change logging records a correct pre-state.
+            self.custom_object_type.snapshot()
+            self.custom_object_type.save(update_fields=['cache_timestamp'])
 
-        super().delete(*args, **kwargs)
+            super().delete(*args, **kwargs)
 
         # Regenerate so the apps registry no longer holds a class with the
         # removed column — squash revert may SELECT via the model class between
