@@ -671,6 +671,7 @@ class RestrictedObjectMixin:
     def has_permission(self):
         if not super().has_permission():
             return False
+        # super().has_permission() restricts self.queryset to the user's permitted objects.
         if self.object.pk:
             self.object = get_object_or_404(self.queryset, pk=self.object.pk)
         return True
