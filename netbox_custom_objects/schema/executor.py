@@ -536,7 +536,7 @@ def _add_constraints(ordered_diffs, cot_map) -> None:
             constraint = CustomObjectTypeConstraint(
                 custom_object_type=cot,
                 name=schema_def["name"],
-                field_schema_ids=list(schema_def["fields"]),
+                field_schema_ids=list(schema_def.get("fields", [])),
                 **{attr: schema_def.get(attr, default) for attr, default in CONSTRAINT_DEFAULTS.items()},
             )
             try:

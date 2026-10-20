@@ -13,8 +13,8 @@ from utilities.forms.rendering import FieldSet
 from utilities.forms.utils import get_field_value
 from utilities.object_types import object_type_name
 
-from netbox_custom_objects.choices import CustomObjectFieldTypeChoices, SearchWeightChoices
-from netbox_custom_objects.utilities import extract_cot_id_from_model_name
+from netbox_custom_objects.choices import ConstraintTypeChoices, CustomObjectFieldTypeChoices, SearchWeightChoices
+from netbox_custom_objects.utilities import extract_cot_id_from_model_name, predicate_field_ref
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.field_types import (
     CustomColorSelect,
@@ -467,16 +467,27 @@ class CustomObjectTypeConstraintForm(ChangelogMessageMixin, forms.ModelForm):
     )
     field_schema_ids = forms.ModelMultipleChoiceField(
         queryset=CustomObjectTypeField.objects.none(),
+        required=False,
         label=_("Fields"),
-        help_text=_("The fields whose combined values must be unique"),
+        help_text=_("For a unique constraint: the fields whose combined values must be unique"),
     )
     condition = JSONField(
         required=False,
         label=_("Condition"),
         help_text=_(
             "Apply the constraint only to objects matching all of these predicates. Lookups: exact, "
-            'n (does not equal, or is empty), in (a list of values), isnull (true or false). Example: '
-            '<code>[{"field": "parent", "lookup": "isnull", "value": true}]</code>'
+            'n (does not equal, or is empty), in (a list of values), isnull (true or false), gt, gte, lt, lte. '
+            'Example: <code>[{"field": "parent", "lookup": "isnull", "value": true}]</code>'
+        ),
+    )
+    rule = JSONField(
+        required=False,
+        label=_("Rule"),
+        help_text=_(
+            "For a check constraint: predicates every object (matching the condition, if any) must satisfy, "
+            "with the same lookups. A comparison passes when a value is empty. To compare two fields, use "
+            '<code>{"field": ...}</code> as the value. Example: '
+            '<code>[{"field": "end_date", "lookup": "gt", "value": {"field": "start_date"}}]</code>'
         ),
     )
 
@@ -485,12 +496,23 @@ class CustomObjectTypeConstraintForm(ChangelogMessageMixin, forms.ModelForm):
             "custom_object_type",
             "name",
             "type",
+            "description",
+            name=_("Constraint"),
+        ),
+        FieldSet(
             "field_schema_ids",
             "case_insensitive",
             "nulls_distinct",
+            name=_("Unique"),
+        ),
+        FieldSet(
+            "rule",
+            "error_message",
+            name=_("Check"),
+        ),
+        FieldSet(
             "condition",
-            "description",
-            name=_("Constraint"),
+            name=_("Condition"),
         ),
     )
 
@@ -504,6 +526,8 @@ class CustomObjectTypeConstraintForm(ChangelogMessageMixin, forms.ModelForm):
             "case_insensitive",
             "nulls_distinct",
             "condition",
+            "rule",
+            "error_message",
             "description",
         )
 
@@ -518,31 +542,54 @@ class CustomObjectTypeConstraintForm(ChangelogMessageMixin, forms.ModelForm):
         if self.instance.pk:
             self.initial["field_schema_ids"] = [f.pk for f in self.instance.get_fields()]
         # The model stores fields by schema ID; the form shows and accepts field names.
-        if self.instance.condition and not self.is_bound:
+        if (self.instance.condition or self.instance.rule) and not self.is_bound:
             names = {f.schema_id: f.name for f in self._cot_fields()}
-            self.initial["condition"] = [
-                {**p, "field": names.get(p.get("field"), p.get("field"))} for p in self.instance.condition
-            ]
+            for attr in ("condition", "rule"):
+                if getattr(self.instance, attr):
+                    self.initial[attr] = [
+                        self._map_fields(p, lambda ref: names.get(ref, ref)) for p in getattr(self.instance, attr)
+                    ]
 
     def _cot_fields(self):
         return CustomObjectTypeField.objects.filter(custom_object_type_id=self.instance.custom_object_type_id)
 
+    @staticmethod
+    def _map_fields(predicate, convert):
+        predicate = {**predicate, "field": convert(predicate.get("field"))}
+        other = predicate_field_ref(predicate.get("value"))
+        if other is not None:
+            predicate["value"] = {"field": convert(other)}
+        return predicate
+
     def clean_field_schema_ids(self):
         return [f.schema_id for f in self.cleaned_data["field_schema_ids"]]
 
-    def clean_condition(self):
-        condition = self.cleaned_data["condition"]
-        if not condition:
+    def _clean_predicates(self, attr):
+        predicates = self.cleaned_data[attr]
+        if not predicates:
             return []
-        if not isinstance(condition, list) or not all(isinstance(p, dict) for p in condition):
-            raise forms.ValidationError(_("The condition must be a list of predicates."))
+        if not isinstance(predicates, list) or not all(isinstance(p, dict) for p in predicates):
+            raise forms.ValidationError(_("Expected a list of predicates."))
         schema_ids = {f.name: f.schema_id for f in self._cot_fields()}
-        unknown = [
-            str(p.get("field")) for p in condition
-            if not isinstance(p.get("field"), str) or p["field"] not in schema_ids
+        refs = [p.get("field") for p in predicates] + [
+            ref for p in predicates if (ref := predicate_field_ref(p.get("value"))) is not None
         ]
+        unknown = [str(ref) for ref in refs if not isinstance(ref, str) or ref not in schema_ids]
         if unknown:
             raise forms.ValidationError(
                 _("Unknown field(s): {names}").format(names=", ".join(unknown))
             )
-        return [{**p, "field": schema_ids[p["field"]]} for p in condition]
+        return [self._map_fields(p, schema_ids.get) for p in predicates]
+
+    def clean_condition(self):
+        return self._clean_predicates("condition")
+
+    def clean(self):
+        cleaned_data = super().clean()
+        # An unchecked box posts False; empty values only matter to unique constraints.
+        if cleaned_data.get("type") == ConstraintTypeChoices.CHECK:
+            cleaned_data["nulls_distinct"] = True
+        return cleaned_data
+
+    def clean_rule(self):
+        return self._clean_predicates("rule")

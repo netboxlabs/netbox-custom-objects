@@ -623,18 +623,27 @@ class COTJsonSchemaTestCase(TestCase):
                     {"field": 1, "lookup": "isnull", "value": False},
                     {"field": 1, "lookup": "in", "value": ["acme", "globex"]},
                 ]},
+                {"name": "serial_not_vendor", "type": "check", "rule": [
+                    {"field": 2, "lookup": "n", "value": {"field": 1}},
+                ], "condition": [{"field": 1, "lookup": "gte", "value": "a"}], "error_message": "No"},
             ],
             "removed_constraints": ["old_constraint"],
         }
         self._assert_valid({"schema_version": "1", "types": [type_def]})
+        empty = {"field": 1, "lookup": "isnull", "value": True}
         invalid = {
             "missing fields": {"name": "c"},
             "empty fields": {"name": "c", "fields": []},
-            "unknown type": {"name": "c", "fields": [1], "type": "check"},
+            "unknown type": {"name": "c", "fields": [1], "type": "exclusion"},
             "unknown key": {"name": "c", "fields": [1], "check": "x"},
+            "check without rule": {"name": "c", "type": "check"},
+            "check with empty rule": {"name": "c", "type": "check", "rule": []},
+            "check with fields": {"name": "c", "type": "check", "fields": [1], "rule": [empty]},
+            "unique with rule": {"name": "c", "fields": [1], "rule": [empty]},
+            "unique with error message": {"name": "c", "fields": [1], "error_message": "No"},
             "condition not a list": {"name": "c", "fields": [1], "condition": {}},
             "predicate without lookup": {"name": "c", "fields": [1], "condition": [{"field": 1}]},
-            "unknown lookup": {"name": "c", "fields": [1], "condition": [{"field": 1, "lookup": "lt", "value": 1}]},
+            "unknown lookup": {"name": "c", "fields": [1], "condition": [{"field": 1, "lookup": "lk", "value": 1}]},
             "predicate unknown key": {
                 "name": "c", "fields": [1], "condition": [{"field": 1, "lookup": "exact", "value": 1, "not": True}]
             },

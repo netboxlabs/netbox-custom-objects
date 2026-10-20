@@ -118,7 +118,12 @@ def _constraint_field_refs(data, fields_by_schema_id):
         return set()
     cot_id = data.get('custom_object_type')
     schema_ids = list(data.get('field_schema_ids') or ())
-    schema_ids += [p.get('field') for p in data.get('condition') or () if isinstance(p, dict)]
+    for predicate in [*(data.get('condition') or ()), *(data.get('rule') or ())]:
+        if isinstance(predicate, dict):
+            schema_ids.append(predicate.get('field'))
+            value = predicate.get('value')
+            if isinstance(value, dict):
+                schema_ids.append(value.get('field'))
     return {
         fields_by_schema_id[(cot_id, sid)]
         for sid in schema_ids

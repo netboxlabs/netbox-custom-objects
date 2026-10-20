@@ -153,10 +153,9 @@ def _export_field(field) -> dict:
 
 def _export_constraint(constraint) -> dict:
     """Serialise a ``CustomObjectTypeConstraint`` to a schema constraint dict."""
-    result = {
-        "name": constraint.name,
-        "fields": list(constraint.field_schema_ids),
-    }
+    result = {"name": constraint.name}
+    if constraint.field_schema_ids:
+        result["fields"] = list(constraint.field_schema_ids)
     for attr, default in CONSTRAINT_DEFAULTS.items():
         value = getattr(constraint, attr)
         if value != default:

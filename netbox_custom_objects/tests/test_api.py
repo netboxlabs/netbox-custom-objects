@@ -3236,6 +3236,41 @@ class CustomObjectTypeConstraintAPITest(CustomObjectsTestCase, TestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.content)
         self.assertIn('condition', response.data)
 
+        # Including a field of another type as the value a rule compares with.
+        rule = [{'field': self.serial.pk, 'lookup': 'exact', 'value': {'field': foreign.pk}}]
+        response = self._create_constraint([], name='check', type='check', rule=rule)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.content)
+        self.assertIn('rule', response.data)
+
+    def test_create_check_constraint(self):
+        start = self.create_custom_object_type_field(self.cot, name='start_date', type='date')
+        end = self.create_custom_object_type_field(self.cot, name='end_date', type='date')
+        rule = [{'field': end.pk, 'lookup': 'gt', 'value': {'field': start.pk}}]
+        response = self.client.post(
+            reverse(self.constraint_list_url),
+            {'custom_object_type': self.cot.pk, 'name': 'dates', 'type': 'check', 'rule': rule,
+             'error_message': 'The end date must be after the start date.'},
+            format='json', **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.content)
+        self.assertEqual(
+            CustomObjectTypeConstraint.objects.get().rule,
+            [{'field': end.schema_id, 'lookup': 'gt', 'value': {'field': start.schema_id}}],
+        )
+        self.assertEqual(response.data['fields'], [])
+        predicate = response.data['rule'][0]
+        self.assertEqual((predicate['field']['name'], predicate['value']['field']['name']), ('end_date', 'start_date'))
+
+        url = reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-list', kwargs={'custom_object_type': 'assets'}
+        )
+        data = {'vendor': 'acme', 'start_date': '2026-02-01', 'end_date': '2026-01-01'}
+        response = self.client.post(url, data, format='json', **self.header)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.content)
+        self.assertIn('The end date must be after the start date.', str(response.data))
+        response = self.client.post(url, {**data, 'end_date': '2026-03-01'}, format='json', **self.header)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.content)
+
     def test_create_with_condition(self):
         status_field = self.create_custom_object_type_field(self.cot, name='status', type='text')
         condition = [{'field': status_field.pk, 'lookup': 'n', 'value': 'retired'}]

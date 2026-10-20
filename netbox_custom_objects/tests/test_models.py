@@ -3,6 +3,7 @@ Tests for the concrete and dynamically generated models that are managed by this
 """
 import pickle
 import sys
+from datetime import date
 from decimal import Decimal
 from unittest import skip
 from unittest.mock import PropertyMock, patch
@@ -3660,16 +3661,179 @@ class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
                 with self.assertRaisesMessage(ValidationError, "vendor_serial"):
                     field.full_clean()
 
+    def _check_constraint(self, rule, name="check", **kwargs):
+        """Validate and save a check constraint with *rule*."""
+        constraint = CustomObjectTypeConstraint(
+            custom_object_type=self.cot, name=name, type="check", rule=rule, **kwargs
+        )
+        constraint.full_clean()
+        constraint.save()
+        return constraint
+
+    def _assert_rule_broken(self, model, message=None, **values):
+        """An object breaking a check constraint fails full_clean() and, if saved anyway, the database."""
+        with self.assertRaises(ValidationError) as cm:
+            model(**values).full_clean()
+        if message:
+            self.assertIn(message, cm.exception.messages)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            model.objects.create(**values)
+
+    def _date_fields(self):
+        start = self.create_custom_object_type_field(self.cot, name="start_date", label="Start date", type="date")
+        end = self.create_custom_object_type_field(self.cot, name="end_date", label="End date", type="date")
+        return start, end
+
+    def test_check_compares_fields(self):
+        start, end = self._date_fields()
+        constraint = self._check_constraint([self._predicate(end, "gt", {"field": start.schema_id})])
+        self.assertIn(constraint.db_name, self._db_constraint_names())
+        self.assertTrue(constraint.db_name.endswith("_check"))
+        self.assertEqual(constraint.get_rule_display(), "End date is greater than Start date")
+        model = self._model()
+
+        model.objects.create(vendor="ok", start_date=date(2026, 1, 1), end_date=date(2026, 2, 1))
+        # A comparison passes when either value is empty.
+        model.objects.create(vendor="no end", start_date=date(2026, 1, 1))
+        model.objects.create(vendor="no start", end_date=date(2026, 1, 1))
+        self._assert_rule_broken(
+            model, "This object must satisfy: End date is greater than Start date.",
+            vendor="bad", start_date=date(2026, 2, 1), end_date=date(2026, 1, 1),
+        )
+        self._assert_rule_broken(model, vendor="same", start_date=date(2026, 1, 1), end_date=date(2026, 1, 1))
+
+    def test_check_with_condition(self):
+        kind = self.create_custom_object_type_field(self.cot, name="kind", label="Kind", type="text")
+        bandwidth = self.create_custom_object_type_field(
+            self.cot, name="bandwidth_mbps", label="Bandwidth", type="integer"
+        )
+        self._check_constraint(
+            [self._predicate(bandwidth, "gt", 0), self._predicate(bandwidth, "lte", 100000)],
+            condition=[self._predicate(kind, "exact", "wan")],
+            error_message="WAN links need a bandwidth.",
+        )
+        model = self._model()
+        model.objects.create(vendor="wan", kind="wan", bandwidth_mbps=100)
+        model.objects.create(vendor="lan", kind="lan", bandwidth_mbps=0)
+        model.objects.create(vendor="unset", kind="wan")
+        self._assert_rule_broken(model, "WAN links need a bandwidth.", vendor="zero", kind="wan", bandwidth_mbps=0)
+        self._assert_rule_broken(model, vendor="huge", kind="wan", bandwidth_mbps=100001)
+
+        default = CustomObjectTypeConstraint(
+            custom_object_type=self.cot, type="check", rule=[self._predicate(bandwidth, "gt", 0)],
+            condition=[self._predicate(kind, "exact", "wan")],
+        )
+        self.assertEqual(
+            default.get_default_error_message(),
+            "When Kind equals wan, this object must satisfy: Bandwidth is greater than 0.",
+        )
+
+    def test_check_rule_requires_value(self):
+        # "Is not empty" is how a rule requires a value.
+        kind = self.create_custom_object_type_field(self.cot, name="kind", type="text")
+        self._check_constraint([self._predicate(self.serial, "isnull", False)], condition=[
+            self._predicate(kind, "exact", "wan"),
+        ])
+        model = self._model()
+        model.objects.create(vendor="lan", kind="lan")
+        model.objects.create(vendor="wan", kind="wan", serial="1")
+        self._assert_rule_broken(model, vendor="blank", kind="wan", serial="")
+        self._assert_rule_broken(model, vendor="null", kind="wan")
+
+    def test_check_blocked_by_existing_objects(self):
+        start, end = self._date_fields()
+        model = self._model()
+        model.objects.create(vendor="bad", start_date=date(2026, 2, 1), end_date=date(2026, 1, 1))
+        with self.assertRaisesMessage(ValidationError, "already break this rule"):
+            self._check_constraint([self._predicate(end, "gte", {"field": start.schema_id})])
+        self.assertFalse(CustomObjectTypeConstraint.objects.exists())
+
+    def test_check_validation(self):
+        start, end = self._date_fields()
+        count = self.create_custom_object_type_field(self.cot, name="count", type="integer")
+        rule = [self._predicate(end, "gt", {"field": start.schema_id})]
+        cases = {
+            "fields": ({"field_schema_ids": [self.vendor.schema_id], "rule": rule}, "field_schema_ids"),
+            "case-insensitive": ({"case_insensitive": True, "rule": rule}, "case_insensitive"),
+            "nulls not distinct": ({"nulls_distinct": False, "rule": rule}, "nulls_distinct"),
+            "no rule": ({"rule": []}, "rule"),
+            "greater than on text": ({"rule": [self._predicate(self.serial, "gt", "a")]}, "rule"),
+            "kinds differ": ({"rule": [self._predicate(end, "gt", {"field": count.schema_id})]}, "rule"),
+            "compared with itself": ({"rule": [self._predicate(end, "gt", {"field": end.schema_id})]}, "rule"),
+            "in with a field": ({"rule": [self._predicate(end, "in", {"field": start.schema_id})]}, "rule"),
+            "unknown field": ({"rule": [self._predicate(end, "gt", {"field": 999})]}, "rule"),
+            # Only an ID refers to a field; true would otherwise match schema ID 1.
+            "a list as the compared field": (
+                {"rule": [self._predicate(end, "gt", {"field": [start.schema_id]})]}, "rule"
+            ),
+            "true as the compared field": ({"rule": [self._predicate(end, "gt", {"field": True})]}, "rule"),
+            "a name as the field": ({"rule": [{"field": "end", "lookup": "isnull", "value": True}]}, "rule"),
+            "bad value": ({"rule": [self._predicate(count, "gt", "many")]}, "rule"),
+            # "Is empty" tests for blank text.
+            "blank value": ({"rule": [self._predicate(self.serial, "exact", "")]}, "rule"),
+            "blank in a list": ({"rule": [self._predicate(self.serial, "in", ["a", ""])]}, "rule"),
+        }
+        for label, (kwargs, key) in cases.items():
+            with self.subTest(label):
+                constraint = CustomObjectTypeConstraint(
+                    custom_object_type=self.cot, name="c", type="check", **kwargs
+                )
+                with self.assertRaises(ValidationError) as cm:
+                    constraint.full_clean()
+                self.assertIn(key, cm.exception.message_dict)
+
+        unique_cases = {
+            "unique without fields": ({"field_schema_ids": []}, "field_schema_ids"),
+            "unique with a rule": ({"rule": rule}, "rule"),
+            "unique with an error message": ({"error_message": "No"}, "error_message"),
+        }
+        for label, (kwargs, key) in unique_cases.items():
+            with self.subTest(label):
+                kwargs = {"field_schema_ids": [self.vendor.schema_id, self.serial.schema_id], **kwargs}
+                constraint = CustomObjectTypeConstraint(custom_object_type=self.cot, name="c", **kwargs)
+                with self.assertRaises(ValidationError) as cm:
+                    constraint.full_clean()
+                self.assertIn(key, cm.exception.message_dict)
+
+        # A unique constraint's condition can compare too.
+        self._constraint(condition=[self._predicate(count, "gte", 1)])
+
+        # A field deleted after the fields were validated.
+        constraint = CustomObjectTypeConstraint(custom_object_type=self.cot, name="gone", type="check", rule=rule)
+        with patch.object(CustomObjectTypeConstraint, "to_model_constraint", return_value=None):
+            with self.assertRaisesMessage(ValidationError, "A field this constraint uses no longer exists."):
+                constraint.full_clean()
+
+    def test_condition_compares_fields(self):
+        part = self.create_custom_object_type_field(self.cot, name="part", type="text")
+        # Vendor unique among objects whose serial matches their part.
+        self._constraint(
+            fields=[self.vendor], name="by_match",
+            condition=[self._predicate(self.serial, "exact", {"field": part.schema_id})],
+        )
+        model = self._model()
+        model.objects.create(vendor="acme", serial="x", part="x")
+        self._assert_duplicate_rejected(model, vendor="acme", serial="y", part="y")
+        model.objects.create(vendor="acme", serial="x", part="z")
+        # Blank text is empty, and a comparison with an empty value doesn't match.
+        for _ in range(2):
+            model(vendor="blank", serial="", part="").full_clean()
+            model.objects.create(vendor="blank", serial="", part="")
+
     def test_field_delete_deletes_constraint(self):
         status = self.create_custom_object_type_field(self.cot, name="status", type="text")
+        start, end = self._date_fields()
         constraint = self._constraint()
         conditional = self._constraint(
             fields=[self.vendor], name="by_status", condition=[self._predicate(status, "exact", "active")]
         )
+        # The start date appears only as the value the rule compares with.
+        check = self._check_constraint([self._predicate(end, "gt", {"field": start.schema_id})])
         CustomObjectTypeField.objects.get(pk=self.serial.pk).delete()
         CustomObjectTypeField.objects.get(pk=status.pk).delete()
+        CustomObjectTypeField.objects.get(pk=start.pk).delete()
 
-        for c in (constraint, conditional):
+        for c in (constraint, conditional, check):
             self.assertFalse(CustomObjectTypeConstraint.objects.filter(pk=c.pk).exists())
             self.assertNotIn(c.db_name, self._db_constraint_names())
         self.assertEqual(self._model()._meta.constraints, [])

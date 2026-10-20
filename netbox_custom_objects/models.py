@@ -88,6 +88,7 @@ from netbox_custom_objects.utilities import (
     _suppress_clear_cache,
     extract_cot_id_from_model_name,
     generate_model,
+    predicate_field_ref,
 )
 
 logger = logging.getLogger(__name__)
@@ -2819,11 +2820,15 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
     @property
     def constraints(self):
-        """The constraints on this field's custom object type that include this field or test it in a condition."""
+        """The constraints on this field's custom object type that include this field or test it."""
         if self.schema_id is None:
             return CustomObjectTypeConstraint.objects.none()
         return CustomObjectTypeConstraint.objects.filter(
-            Q(field_schema_ids__contains=[self.schema_id]) | Q(condition__contains=[{"field": self.schema_id}]),
+            Q(field_schema_ids__contains=[self.schema_id])
+            | Q(condition__contains=[{"field": self.schema_id}])
+            | Q(condition__contains=[{"value": {"field": self.schema_id}}])
+            | Q(rule__contains=[{"field": self.schema_id}])
+            | Q(rule__contains=[{"value": {"field": self.schema_id}}]),
             custom_object_type_id=self.custom_object_type_id,
         )
 
@@ -4229,6 +4234,35 @@ _BLANK_STRING_FIELD_TYPES = {
 }
 
 
+# Field types the greater/less-than lookups can compare.
+_ORDERED_FIELD_TYPES = {
+    CustomFieldTypeChoices.TYPE_INTEGER,
+    CustomFieldTypeChoices.TYPE_DECIMAL,
+    CustomFieldTypeChoices.TYPE_DATE,
+    CustomFieldTypeChoices.TYPE_DATETIME,
+}
+
+# A predicate can compare two fields only if their values are of the same kind.
+_FIELD_VALUE_KINDS = {
+    CustomFieldTypeChoices.TYPE_TEXT: "text",
+    CustomFieldTypeChoices.TYPE_LONGTEXT: "text",
+    CustomFieldTypeChoices.TYPE_URL: "text",
+    CustomFieldTypeChoices.TYPE_SELECT: "text",
+    CustomFieldTypeChoices.TYPE_INTEGER: "number",
+    CustomFieldTypeChoices.TYPE_DECIMAL: "number",
+    CustomFieldTypeChoices.TYPE_DATE: "date",
+    CustomFieldTypeChoices.TYPE_DATETIME: "datetime",
+    CustomFieldTypeChoices.TYPE_BOOLEAN: "boolean",
+}
+
+_COMPARISON_LOOKUPS = {
+    ConstraintLookupChoices.GT,
+    ConstraintLookupChoices.GTE,
+    ConstraintLookupChoices.LT,
+    ConstraintLookupChoices.LTE,
+}
+
+
 def _condition_column(field):
     """Return the model field name a constraint condition on *field* tests."""
     if field.is_polymorphic:
@@ -4236,8 +4270,47 @@ def _condition_column(field):
     return field.name
 
 
+def _empty_q(field):
+    """Match objects that leave *field* empty."""
+    column = _condition_column(field)
+    q = Q(**{f"{column}__isnull": True})
+    if field.type in _BLANK_STRING_FIELD_TYPES:
+        q |= Q(**{column: ""})
+    return q
+
+
+def _predicate_q(predicate, fields_by_schema_id, empty_passes=False):
+    """
+    Build the Q for one predicate; raises KeyError if a field is missing.
+
+    The Q is never NULL: a comparison with an empty value is false, or true if
+    *empty_passes* (as in a check constraint's rule). "Does not equal" always
+    matches empty values.
+    """
+    field = fields_by_schema_id[predicate["field"]]
+    column = _condition_column(field)
+    lookup, value = predicate["lookup"], predicate.get("value")
+    if lookup == ConstraintLookupChoices.ISNULL:
+        return _empty_q(field) if value else ~_empty_q(field)
+    operands = [field]
+    other_sid = predicate_field_ref(value)
+    if other_sid is not None:
+        other = fields_by_schema_id[other_sid]
+        operands.append(other)
+        value = F(_condition_column(other))
+    set_q = Q()
+    empty = Q()
+    for operand in operands:
+        set_q &= ~_empty_q(operand)
+        empty |= _empty_q(operand)
+    if lookup == ConstraintLookupChoices.NOT_EQUAL:
+        return (~Q(**{column: value}) & set_q) | empty
+    q = Q(**{f"{column}__{lookup}": value}) & set_q
+    return q | empty if empty_passes else q
+
+
 def _drop_db_constraint(schema_editor, model, name):
-    """Drop the unique constraint or unique index *name* from *model*'s table, if present."""
+    """Drop the constraint or unique index *name* from *model*'s table, if present."""
     conn = schema_editor.connection
     with conn.cursor() as cursor:
         existing = conn.introspection.get_constraints(cursor, model._meta.db_table)
@@ -4247,7 +4320,8 @@ def _drop_db_constraint(schema_editor, model, name):
         # Expression constraints are created as unique indexes.
         schema_editor.execute(schema_editor._delete_index_sql(model, name))
     else:
-        schema_editor.execute(schema_editor._delete_constraint_sql(schema_editor.sql_delete_unique, model, name))
+        template = schema_editor.sql_delete_check if existing[name]["check"] else schema_editor.sql_delete_unique
+        schema_editor.execute(schema_editor._delete_constraint_sql(template, model, name))
 
 
 class CustomObjectTypeConstraint(ChangeLoggedModel):
@@ -4282,7 +4356,9 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
     field_schema_ids = ArrayField(
         base_field=models.PositiveIntegerField(),
         verbose_name=_("fields"),
-        help_text=_("Schema IDs of the fields the constraint covers, in order"),
+        blank=True,
+        default=list,
+        help_text=_("Schema IDs of the fields a unique constraint covers, in order"),
     )
     case_insensitive = models.BooleanField(
         verbose_name=_("case-insensitive"),
@@ -4303,6 +4379,20 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
         blank=True,
         default=list,
         help_text=_("Apply the constraint only to objects that match all of these conditions"),
+    )
+    # Predicates in the same form as the condition, which every object (matching the
+    # condition, if any) must satisfy. Not named "check", which would hide Model.check().
+    rule = models.JSONField(
+        verbose_name=_("rule"),
+        blank=True,
+        default=list,
+        help_text=_("For a check constraint: what every object must satisfy"),
+    )
+    error_message = models.CharField(
+        verbose_name=_("error message"),
+        max_length=200,
+        blank=True,
+        help_text=_("For a check constraint: the error shown when an object breaks the rule"),
     )
     description = models.CharField(
         verbose_name=_("description"), max_length=200, blank=True
@@ -4333,12 +4423,13 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
         return f"{settings.STATIC_URL}docs/models/{APP_LABEL}/customobjecttypeconstraint/"
 
     @staticmethod
-    def get_db_name(cot_id, name):
-        return _safe_pg_identifier(f"custom_objects_{cot_id}_{name}_uniq")
+    def get_db_name(cot_id, name, constraint_type=ConstraintTypeChoices.UNIQUE):
+        suffix = "check" if constraint_type == ConstraintTypeChoices.CHECK else "uniq"
+        return _safe_pg_identifier(f"custom_objects_{cot_id}_{name}_{suffix}")
 
     @property
     def db_name(self):
-        return self.get_db_name(self.custom_object_type_id, self.name)
+        return self.get_db_name(self.custom_object_type_id, self.name, self.type)
 
     def get_fields(self):
         """Return the constrained fields in order, omitting any that no longer exist."""
@@ -4354,14 +4445,24 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
 
     def get_condition_display(self):
         """Describe the condition in words, e.g. "Parent is empty and Status does not equal retired (or is empty)"."""
-        if not self.condition:
+        return self._predicates_display(self.condition)
+
+    def get_rule_display(self):
+        """Describe the rule in words, e.g. "End date is greater than Start date"."""
+        return self._predicates_display(self.rule)
+
+    def _predicates_display(self, predicates):
+        if not predicates:
             return ""
         by_schema_id = self._fields_by_schema_id()
         parts = []
-        for predicate in self.condition:
+        for predicate in predicates:
             field = by_schema_id.get(predicate.get("field"))
             lookup, value = predicate.get("lookup"), predicate.get("value")
             name = str(field) if field else "?"
+            other_sid = predicate_field_ref(value)
+            if other_sid is not None:
+                value = by_schema_id.get(other_sid, "?")
             if lookup == ConstraintLookupChoices.ISNULL:
                 text = _("is empty") if value else _("is not empty")
             elif lookup == ConstraintLookupChoices.IN:
@@ -4377,17 +4478,14 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
         """Build the Q for the condition; raises KeyError if a field is missing."""
         q = Q()
         for predicate in self.condition:
-            field = fields_by_schema_id[predicate["field"]]
-            column = _condition_column(field)
-            lookup, value = predicate["lookup"], predicate.get("value")
-            if lookup == ConstraintLookupChoices.NOT_EQUAL:
-                # Spell out that empty values match; full_clean() evaluates NOT (NULL = x) as false.
-                q &= ~Q(**{column: value}) | Q(**{f"{column}__isnull": True})
-            elif lookup == ConstraintLookupChoices.ISNULL and field.type in _BLANK_STRING_FIELD_TYPES:
-                empty = Q(**{f"{column}__isnull": True}) | Q(**{column: ""})
-                q &= empty if value else Q(**{f"{column}__isnull": False}) & ~Q(**{column: ""})
-            else:
-                q &= Q(**{f"{column}__{lookup}": value})
+            q &= _predicate_q(predicate, fields_by_schema_id)
+        return q
+
+    def _rule_q(self, fields_by_schema_id):
+        """Build the Q for the rule, in which empty values pass; raises KeyError if a field is missing."""
+        q = Q()
+        for predicate in self.rule:
+            q &= _predicate_q(predicate, fields_by_schema_id, empty_passes=True)
         return q
 
     def to_model_constraint(self, fields_by_schema_id, verbose_name=None):
@@ -4397,8 +4495,16 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
         try:
             members = [fields_by_schema_id[sid] for sid in self.field_schema_ids]
             condition = self._condition_q(fields_by_schema_id) if self.condition else None
+            rule = self._rule_q(fields_by_schema_id) if self.type == ConstraintTypeChoices.CHECK else None
         except KeyError:
             return None
+        if rule is not None:
+            return models.CheckConstraint(
+                # A rule that applies only under a condition: "if condition then rule".
+                condition=rule if condition is None else ~condition | rule,
+                name=self.db_name,
+                violation_error_message=self.error_message or self.get_default_error_message(),
+            )
         kwargs = {
             "name": self.db_name,
             "nulls_distinct": None if self.nulls_distinct else False,
@@ -4421,11 +4527,54 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
         )
         return models.UniqueConstraint(*expressions, violation_error_message=message, **kwargs)
 
+    def get_default_error_message(self):
+        """The error for an object that breaks a check constraint's rule, without a custom message."""
+        if self.condition:
+            return _("When {condition}, this object must satisfy: {rule}.").format(
+                condition=self.get_condition_display(), rule=self.get_rule_display()
+            )
+        return _("This object must satisfy: {rule}.").format(rule=self.get_rule_display())
+
     def clean(self):
         super().clean()
-        if not self.custom_object_type_id or not self.field_schema_ids:
+        if not self.custom_object_type_id:
             return
+        if self.type == ConstraintTypeChoices.CHECK:
+            self._clean_check()
+        else:
+            self._clean_unique()
 
+        siblings = CustomObjectTypeConstraint.objects.filter(
+            custom_object_type_id=self.custom_object_type_id
+        ).exclude(pk=self.pk)
+        for sibling in siblings:
+            if (
+                sibling.type == self.type
+                and set(sibling.field_schema_ids) == set(self.field_schema_ids)
+                and sibling.case_insensitive == self.case_insensitive
+                and sibling.nulls_distinct == self.nulls_distinct
+                and sibling.condition == self.condition
+                and sibling.rule == self.rule
+            ):
+                if self.type == ConstraintTypeChoices.CHECK:
+                    raise ValidationError({"rule": _("Constraint {name} already has this rule.").format(name=sibling)})
+                raise ValidationError({
+                    "field_schema_ids": _("Constraint {name} already covers these fields.").format(name=sibling)
+                })
+
+        self.condition = self._clean_predicates("condition", self.condition)
+        self.rule = self._clean_predicates("rule", self.rule)
+        if self.type == ConstraintTypeChoices.CHECK and not self.rule:
+            raise ValidationError({"rule": _("A check constraint needs a rule.")})
+        self._check_existing_objects()
+
+    def _clean_unique(self):
+        if not self.field_schema_ids:
+            raise ValidationError({"field_schema_ids": _("A unique constraint needs at least one field.")})
+        if self.rule:
+            raise ValidationError({"rule": _("Only check constraints have a rule.")})
+        if self.error_message:
+            raise ValidationError({"error_message": _("Only check constraints have a custom error message.")})
         if len(set(self.field_schema_ids)) != len(self.field_schema_ids):
             raise ValidationError({"field_schema_ids": _("A field can be listed only once.")})
         members = self.get_fields()
@@ -4455,75 +4604,90 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
                 "nulls_distinct": _("Treating empty values as equal requires PostgreSQL 15 or later.")
             })
 
-        siblings = CustomObjectTypeConstraint.objects.filter(
-            custom_object_type_id=self.custom_object_type_id
-        ).exclude(pk=self.pk)
-        for sibling in siblings:
-            if (
-                set(sibling.field_schema_ids) == set(self.field_schema_ids)
-                and sibling.case_insensitive == self.case_insensitive
-                and sibling.nulls_distinct == self.nulls_distinct
-                and sibling.condition == self.condition
-            ):
-                raise ValidationError({
-                    "field_schema_ids": _("Constraint {name} already covers these fields.").format(name=sibling)
-                })
+    def _clean_check(self):
+        # The rule names the fields it tests.
+        if self.field_schema_ids:
+            raise ValidationError({
+                "field_schema_ids": _("A check constraint's rule names its fields; don't list any here.")
+            })
+        if self.case_insensitive:
+            raise ValidationError({"case_insensitive": _("Only unique constraints can be case-insensitive.")})
+        if not self.nulls_distinct:
+            raise ValidationError({"nulls_distinct": _("Only unique constraints compare empty values.")})
 
-        self._clean_condition()
-        self._check_existing_objects()
-
-    def _clean_condition(self):
-        """Validate the condition's structure, fields, lookups and values."""
-        if self.condition in (None, ""):
-            self.condition = []
-        if not isinstance(self.condition, list):
-            raise ValidationError({"condition": _("The condition must be a list of predicates.")})
-        if not self.condition:
-            return
+    def _clean_predicates(self, attr, predicates):
+        """Validate a condition or rule's structure, fields, lookups and values; return it normalized."""
+        if predicates in (None, ""):
+            return []
+        if not isinstance(predicates, list):
+            raise ValidationError({attr: _("Expected a list of predicates.")})
+        if not predicates:
+            return predicates
         by_schema_id = self._fields_by_schema_id()
         model = self.custom_object_type.get_model()
-        for predicate in self.condition:
+
+        def error(message, **kwargs):
+            return ValidationError({attr: message.format(**kwargs) if kwargs else message})
+
+        def testable_field(schema_id):
+            # A bool is an int, and would match the field with schema ID 1 (or 0).
+            if not isinstance(schema_id, int) or isinstance(schema_id, bool):
+                raise error(_("A field must be given by its ID."))
+            field = by_schema_id.get(schema_id)
+            if field is None:
+                raise error(_("Every field must belong to this custom object type."))
+            if field.type not in CONSTRAINT_FIELD_TYPES:
+                raise error(
+                    _("{field} is a {type} field, which can't be tested."), field=field, type=field.get_type_display()
+                )
+            return field
+
+        for predicate in predicates:
             if not isinstance(predicate, dict) or not {"field", "lookup"} <= predicate.keys() or (
                 predicate.keys() - {"field", "lookup", "value"}
             ):
-                raise ValidationError({
-                    "condition": _("Each predicate needs a field and a lookup, and may have only a value besides.")
-                })
-            field = by_schema_id.get(predicate["field"])
-            if field is None:
-                raise ValidationError({"condition": _("Every field must belong to this custom object type.")})
-            if field.type not in CONSTRAINT_FIELD_TYPES:
-                raise ValidationError({
-                    "condition": _("{field} is a {type} field, which a condition can't test.").format(
-                        field=field, type=field.get_type_display()
-                    )
-                })
+                raise error(_("Each predicate needs a field and a lookup, and may have only a value besides."))
+            field = testable_field(predicate["field"])
             lookup, value = predicate["lookup"], predicate.get("value")
             if lookup not in ConstraintLookupChoices.values():
-                raise ValidationError({"condition": _("Unknown lookup {lookup!r}.").format(lookup=lookup)})
+                raise error(_("Unknown lookup {lookup!r}."), lookup=lookup)
             if lookup == ConstraintLookupChoices.ISNULL:
                 if not isinstance(value, bool):
-                    raise ValidationError({"condition": _("An \"is empty\" test needs true or false.")})
+                    raise error(_("An \"is empty\" test needs true or false."))
                 continue
             # Object IDs differ between installations, so only emptiness is portable.
             if field.type == CustomFieldTypeChoices.TYPE_OBJECT:
-                raise ValidationError({
-                    "condition": _("A condition can only test whether {field} is empty.").format(field=field)
-                })
+                raise error(_("{field} can only be tested for whether it's empty."), field=field)
+            if lookup in _COMPARISON_LOOKUPS and field.type not in _ORDERED_FIELD_TYPES:
+                raise error(
+                    _("{field} is a {type} field, which can't be compared as greater or less."),
+                    field=field, type=field.get_type_display(),
+                )
+            other_sid = predicate_field_ref(value)
+            if other_sid is not None:
+                if lookup == ConstraintLookupChoices.IN:
+                    raise error(_("{field}: \"is one of\" needs a list of values, not a field."), field=field)
+                other = testable_field(other_sid)
+                if other == field or _FIELD_VALUE_KINDS.get(other.type) != _FIELD_VALUE_KINDS.get(field.type):
+                    raise error(_("{field} can't be compared with {other}."), field=field, other=other)
+                continue
             if lookup == ConstraintLookupChoices.IN:
                 if not isinstance(value, list) or not value:
-                    raise ValidationError({"condition": _("An \"is one of\" test needs a list of values.")})
+                    raise error(_("An \"is one of\" test needs a list of values."))
                 values = value
             else:
                 values = [value]
             for v in values:
-                self._clean_condition_value(model, field, v)
+                self._clean_predicate_value(attr, model, field, v)
+        return predicates
 
     @staticmethod
-    def _clean_condition_value(model, field, value):
-        if value is None or isinstance(value, (dict, list)):
+    def _clean_predicate_value(attr, model, field, value):
+        if value is None or value == "" or isinstance(value, (dict, list)):
             raise ValidationError({
-                "condition": _("{field}: compare to a single value, or test whether it's empty.").format(field=field)
+                attr: _("{field}: compare to a single value or another field, or test whether it's empty.").format(
+                    field=field
+                )
             })
         try:
             model._meta.get_field(field.name).to_python(value)
@@ -4531,13 +4695,13 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
                 ColorValidator(value)
         except ValidationError as exc:
             raise ValidationError({
-                "condition": _("{field}: {error}").format(field=field, error=" ".join(exc.messages))
+                attr: _("{field}: {error}").format(field=field, error=" ".join(exc.messages))
             })
         if field.type == CustomFieldTypeChoices.TYPE_SELECT and field.choice_set and (
             value not in field.choice_set.values
         ):
             raise ValidationError({
-                "condition": _("{field}: {value!r} isn't one of its choices.").format(field=field, value=value)
+                attr: _("{field}: {value!r} isn't one of its choices.").format(field=field, value=value)
             })
 
     def _check_existing_objects(self):
@@ -4546,6 +4710,9 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
             return
         model = self.custom_object_type.get_model()
         constraint = self.to_model_constraint(self._fields_by_schema_id())
+        if constraint is None:
+            # A field was deleted after the fields were validated.
+            raise ValidationError(_("A field this constraint uses no longer exists."))
         # Route through the branch's connection so the probe runs in the active schema.
         probe_conn = _get_schema_connection()
         try:
@@ -4557,17 +4724,17 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
         except UniquenessConstraintTestError:
             pass
         except IntegrityError:
-            raise ValidationError(
-                _("Existing {model} objects already have duplicate values for these fields.").format(
-                    model=self.custom_object_type.get_verbose_name()
-                )
-            )
+            if self.type == ConstraintTypeChoices.CHECK:
+                message = _("Existing {model} objects already break this rule.")
+            else:
+                message = _("Existing {model} objects already have duplicate values for these fields.")
+            raise ValidationError(message.format(model=self.custom_object_type.get_verbose_name()))
 
     def _definition_changed(self):
         # Compared against the stored row rather than a from_db() snapshot so that
         # branch merges and reverts (which deserialize without from_db) are covered.
         stored = CustomObjectTypeConstraint.objects.filter(pk=self.pk).values(
-            "name", "type", "field_schema_ids", "case_insensitive", "nulls_distinct", "condition"
+            "name", "type", "field_schema_ids", "case_insensitive", "nulls_distinct", "condition", "rule"
         ).first()
         return stored != {
             "name": self.name,
@@ -4576,6 +4743,7 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
             "case_insensitive": self.case_insensitive,
             "nulls_distinct": self.nulls_distinct,
             "condition": self.condition,
+            "rule": self.rule,
         }
 
     @classmethod
@@ -4594,20 +4762,20 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
 
     def save(self, *args, **kwargs):
         schema_conn = _get_schema_connection()
-        previous_name = None
+        previous = None
         if not self._state.adding:
-            previous_name = CustomObjectTypeConstraint.objects.using(schema_conn.alias).filter(
+            previous = CustomObjectTypeConstraint.objects.using(schema_conn.alias).filter(
                 pk=self.pk
-            ).values_list("name", flat=True).first()
+            ).values_list("name", "type").first()
 
         model = self.custom_object_type.get_model()
         constraint = self.to_model_constraint(self._fields_by_schema_id())
 
         with transaction.atomic(using=schema_conn.alias):
             with schema_conn.schema_editor() as schema_editor:
-                if previous_name and previous_name != self.name:
+                if previous and previous != (self.name, self.type):
                     _drop_db_constraint(
-                        schema_editor, model, self.get_db_name(self.custom_object_type_id, previous_name)
+                        schema_editor, model, self.get_db_name(self.custom_object_type_id, *previous)
                     )
                 # Drop and re-create, so a replayed save (branch merge) is idempotent.
                 _drop_db_constraint(schema_editor, model, self.db_name)

@@ -976,6 +976,23 @@ class ExecutorConstraintTestCase(_ExecutorTestBase):
         self.assertEqual(diff.constraint_changes[0].changed_attrs, {"condition": (condition, changed)})
         self.assertEqual(CustomObjectTypeConstraint.objects.get().condition, changed)
 
+    def test_check(self):
+        rule = [{"field": self.serial.schema_id, "lookup": "n", "value": {"field": self.vendor.schema_id}}]
+        constraint_def = {"name": "serial_not_vendor", "type": "check", "rule": rule}
+        apply_document(self._document(constraints=[constraint_def]))
+        constraint = CustomObjectTypeConstraint.objects.get()
+        self.assertEqual((constraint.type, constraint.field_schema_ids, constraint.rule), ("check", [], rule))
+        self.cot.refresh_from_db()
+        self.assertEqual(export_cot(self.cot)["constraints"], [constraint_def])
+        self.assertEqual(diff_document(self._document())[0].constraint_changes, [])
+
+        changed = {**constraint_def, "error_message": "Serial can't match vendor."}
+        diff = apply_document(self._document(constraints=[changed]))[0]
+        self.assertEqual(
+            diff.constraint_changes[0].changed_attrs, {"error_message": ("", "Serial can't match vendor.")}
+        )
+        self.assertEqual(CustomObjectTypeConstraint.objects.get().error_message, "Serial can't match vendor.")
+
     def test_remove_needs_removed_constraints(self):
         apply_document(self._document(constraints=[self._constraint_def()]))
 

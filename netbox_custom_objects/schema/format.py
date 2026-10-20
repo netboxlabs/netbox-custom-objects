@@ -144,14 +144,19 @@ FIELD_BASE_ATTRS = (
 
 # ── Constraint attributes ─────────────────────────────────────────────────────
 # Constraints are matched by name. Attributes equal to these defaults MAY be
-# omitted from the schema document; 'fields' (a list of field ids) is required.
+# omitted from the schema document; a unique constraint requires 'fields' (a list
+# of field ids), and a check constraint requires 'rule'.
 CONSTRAINT_DEFAULTS = {
     "type": "unique",
     "case_insensitive": False,
     "nulls_distinct": True,
     "condition": [],
+    "rule": [],
+    "error_message": "",
     "description": "",
 }
 
 # Attributes compared by the comparator and applied by the executor, besides 'name'.
-CONSTRAINT_ATTRS = ("type", "fields", "case_insensitive", "nulls_distinct", "condition", "description")
+CONSTRAINT_ATTRS = (
+    "type", "fields", "case_insensitive", "nulls_distinct", "condition", "rule", "error_message", "description",
+)

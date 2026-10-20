@@ -311,18 +311,17 @@
 
     "constraint": {
       "type": "object",
-      "description": "A database-enforced constraint across fields of a COT.",
-      "required": ["name", "fields"],
+      "description": "A database-enforced constraint across fields of a COT: a unique constraint over 'fields', or a check constraint that every object must satisfy its 'rule'.",
+      "required": ["name"],
       "additionalProperties": false,
       "properties": {
         "name": { "$ref": "#/$defs/identifier" },
-        "type": { "type": "string", "enum": ["unique"], "default": "unique" },
+        "type": { "type": "string", "enum": ["unique", "check"], "default": "unique" },
         "fields": {
           "type": "array",
           "items": { "type": "integer", "minimum": 1 },
-          "minItems": 1,
           "uniqueItems": true,
-          "description": "The ids of the fields the constraint covers."
+          "description": "For a unique constraint: the ids of the fields it covers."
         },
         "case_insensitive": { "type": "boolean", "default": false },
         "nulls_distinct": { "type": "boolean", "default": true },
@@ -332,18 +331,38 @@
           "default": [],
           "description": "Apply the constraint only to objects matching all of these predicates."
         },
+        "rule": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/constraint_predicate" },
+          "default": [],
+          "description": "For a check constraint: predicates every object (matching the condition, if any) must satisfy. A comparison passes when a value is empty."
+        },
+        "error_message": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "For a check constraint: the error shown when an object breaks the rule."
+        },
         "description": { "type": "string", "maxLength": 200 }
+      },
+      "if": { "properties": { "type": { "const": "check" } }, "required": ["type"] },
+      "then": {
+        "required": ["rule"],
+        "properties": { "fields": { "maxItems": 0 }, "rule": { "minItems": 1 } }
+      },
+      "else": {
+        "required": ["fields"],
+        "properties": { "fields": { "minItems": 1 }, "rule": { "maxItems": 0 }, "error_message": { "maxLength": 0 } }
       }
     },
 
     "constraint_predicate": {
       "type": "object",
-      "description": "A test on one field of the COT. 'value' is a list for 'in', a boolean for 'isnull', and a single value otherwise.",
+      "description": "A test on one field of the COT. 'value' is a list for 'in', a boolean for 'isnull', and otherwise a single value or {\"field\": <id>} to compare with another field.",
       "required": ["field", "lookup"],
       "additionalProperties": false,
       "properties": {
         "field": { "type": "integer", "minimum": 1, "description": "The id of the field to test." },
-        "lookup": { "type": "string", "enum": ["exact", "n", "in", "isnull"] },
+        "lookup": { "type": "string", "enum": ["exact", "n", "in", "isnull", "gt", "gte", "lt", "lte"] },
         "value": {}
       }
     },
