@@ -321,13 +321,32 @@ class FieldType:
     def create_m2m_table(self, instance, model, field_name, schema_conn=None): ...
 
 
+def regex_validators(field):
+    """
+    Return the validators enforcing *field*'s validation_regex, for use on the
+    generated model field. Validating at the model level (rather than only on the
+    UI form field) means the regex also applies to REST API writes and CSV/bulk
+    import, which validate through Model.full_clean().
+    """
+    if not field.validation_regex:
+        return []
+    return [
+        RegexValidator(
+            regex=field.validation_regex,
+            message=_("Values must match this regex: {regex}").format(regex=field.validation_regex),
+        )
+    ]
+
+
 class TextFieldType(FieldType):
     graphql_annotation = str
 
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
-        return models.CharField(null=True, blank=not field.required, **field_kwargs)
+        return models.CharField(
+            null=True, blank=not field.required, validators=regex_validators(field), **field_kwargs
+        )
 
     def get_serializer_field(self, field, **kwargs):
         return drf_serializers.CharField(
@@ -337,21 +356,7 @@ class TextFieldType(FieldType):
         )
 
     def get_form_field(self, field, **kwargs):
-        validators = []
-        if field.validation_regex:
-            validators = [
-                RegexValidator(
-                    regex=field.validation_regex,
-                    message=mark_safe(
-                        _("Values must match this regex: <code>{regex}</code>").format(
-                            regex=escape(field.validation_regex)
-                        )
-                    ),
-                )
-            ]
-        return forms.CharField(
-            required=field.required, initial=field.default, validators=validators
-        )
+        return forms.CharField(required=field.required, initial=field.default)
 
     def get_filterform_field(self, field, **kwargs):
         return forms.CharField(
@@ -373,7 +378,9 @@ class LongTextFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
-        return models.TextField(null=True, blank=not field.required, **field_kwargs)
+        return models.TextField(
+            null=True, blank=not field.required, validators=regex_validators(field), **field_kwargs
+        )
 
     def get_serializer_field(self, field, **kwargs):
         return drf_serializers.CharField(
@@ -383,24 +390,10 @@ class LongTextFieldType(FieldType):
         )
 
     def get_form_field(self, field, **kwargs):
-        widget = forms.Textarea
-        validators = []
-        if field.validation_regex:
-            validators = [
-                RegexValidator(
-                    regex=field.validation_regex,
-                    message=mark_safe(
-                        _("Values must match this regex: <code>{regex}</code>").format(
-                            regex=escape(field.validation_regex)
-                        )
-                    ),
-                )
-            ]
         return forms.CharField(
-            widget=widget,
+            widget=forms.Textarea,
             required=field.required,
             initial=field.default,
-            validators=validators,
         )
 
     def render_table_column(self, value):
@@ -632,7 +625,9 @@ class URLFieldType(FieldType):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
         return {
-            field.name: models.URLField(null=True, blank=not field.required, **field_kwargs),
+            field.name: models.URLField(
+                null=True, blank=not field.required, validators=regex_validators(field), **field_kwargs
+            ),
             # blank=True, default='' (not null=True): a CharField with null=True lets
             # "no title" be represented as both NULL (ORM/API create omitting the key)
             # and '' (a form submission clearing the field), which would make

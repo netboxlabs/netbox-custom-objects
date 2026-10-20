@@ -664,6 +664,31 @@ class CustomObjectViewTestCase(
         instance = form.save()
         self.assertIsNone(instance.identifier)
 
+    def test_bulk_import_enforces_validation_regex(self):
+        """Regression #763: CSV/bulk import must reject values that don't match validation_regex."""
+        cot = self.create_custom_object_type(name='RegexImportTest', slug='regex-import-test')
+        self.create_custom_object_type_field(
+            cot, name='code', label='Code', type='text', validation_regex=r'^[A-Z]{3}$',
+        )
+        self.create_custom_object_type_field(
+            cot, name='website', label='Website', type='url', validation_regex=r'^https://',
+        )
+
+        request = RequestFactory().post('/')
+        request.user = self.user
+
+        view = views.CustomObjectBulkImportView()
+        view.setup(request, custom_object_type=cot.slug)
+        model = view.queryset.model
+
+        form = view.model_form(data={'code': 'abc', 'website': 'http://example.com'}, instance=model())
+        self.assertFalse(form.is_valid())
+        self.assertIn('code', form.errors)
+        self.assertIn('website', form.errors)
+
+        form = view.model_form(data={'code': 'ABC', 'website': 'https://example.com'}, instance=model())
+        self.assertTrue(form.is_valid(), form.errors)
+
     def test_edit_form_omits_hidden_field(self):
         """Regression #645: a hidden field must be omitted from the edit form, not just disabled."""
         cot = self.create_custom_object_type(name='HiddenFieldEditTest', slug='hidden-field-edit-test')

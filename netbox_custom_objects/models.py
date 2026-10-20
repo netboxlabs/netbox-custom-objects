@@ -3828,10 +3828,11 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         """
         if value not in [None, ""]:
 
-            # Validate text field
+            # Validate text and URL fields
             if self.type in (
                 CustomFieldTypeChoices.TYPE_TEXT,
                 CustomFieldTypeChoices.TYPE_LONGTEXT,
+                CustomFieldTypeChoices.TYPE_URL,
             ):
                 if type(value) is not str:
                     raise ValidationError(_("Value must be a string."))
