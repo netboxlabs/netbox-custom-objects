@@ -7,7 +7,7 @@ from unittest import skipUnless
 from core.models import Job
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection
-from django.test import RequestFactory, TestCase
+from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
 from extras.models import CustomFieldChoiceSet
 from netbox.context import current_request, events_queue, query_cache
@@ -264,6 +264,7 @@ class CustomObjectViewTestCase(
     """Test cases for dynamic CustomObject views."""
 
     query_count_model_label = 'customobject-simple'
+    form_data = {"name": "Edited Instance", "description": "Edited", "count": 30}
 
     @classmethod
     def setUpTestData(cls):
@@ -346,13 +347,22 @@ class CustomObjectViewTestCase(
 
         return reverse(url_format.format(action), kwargs={'pk': instance.pk, 'custom_object_type': custom_object_type})
 
-    def test_get_object_with_constrained_permission(self):
-        ...
-
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=['*'])
     def test_get_object_changelog(self):
         """Regression #500: changelog tab must return 200, not 500 from deprecated user kwarg."""
         url = self._get_url('changelog', self.instance1)
         self.assertHttpStatus(self.client.get(url), 200)
+
+    def test_tabs_with_constrained_permission(self):
+        obj_perm = ObjectPermission(name='Test permission', constraints={'pk': self.instance1.pk}, actions=['view'])
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        obj_perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+        for tab in ('journal', 'changelog', 'contacts'):
+            with self.subTest(tab):
+                self.assertHttpStatus(self.client.get(self._get_url(tab, self.instance1)), 200)
+                self.assertHttpStatus(self.client.get(self._get_url(tab, self.instance2)), 404)
 
     def test_create_object_with_permission(self):
         ...
@@ -361,9 +371,6 @@ class CustomObjectViewTestCase(
         ...
 
     def test_edit_object_with_permission(self):
-        ...
-
-    def test_edit_object_with_constrained_permission(self):
         ...
 
     def test_bulk_edit_objects_with_permission(self):
@@ -388,9 +395,6 @@ class CustomObjectViewTestCase(
         ...
 
     def test_delete_object_with_permission(self):
-        ...
-
-    def test_delete_object_with_constrained_permission(self):
         ...
 
     def test_bulk_delete_objects_with_permission(self):
@@ -1071,9 +1075,7 @@ class ComplexCustomObjectViewTestCase(
 
         return reverse(url_format.format(action), kwargs={'pk': instance.pk, 'custom_object_type': custom_object_type})
 
-    def test_get_object_with_constrained_permission(self):
-        ...
-
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=['*'])
     def test_get_object_changelog(self):
         """Regression #500: changelog tab must return 200, not 500 from deprecated user kwarg."""
         url = self._get_url('changelog', self.instance_1)
@@ -1113,9 +1115,6 @@ class ComplexCustomObjectViewTestCase(
         ...
 
     def test_delete_object_with_permission(self):
-        ...
-
-    def test_delete_object_with_constrained_permission(self):
         ...
 
     def test_bulk_delete_objects_with_permission(self):
@@ -1327,9 +1326,7 @@ class ObjectFieldViewTestCase(
 
         return reverse(url_format.format(action), kwargs={'pk': instance.pk, 'custom_object_type': custom_object_type})
 
-    def test_get_object_with_constrained_permission(self):
-        ...
-
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=['*'])
     def test_get_object_changelog(self):
         """Regression #500: changelog tab must return 200, not 500 from deprecated user kwarg."""
         if self.instance_1 is None:
@@ -1371,9 +1368,6 @@ class ObjectFieldViewTestCase(
         ...
 
     def test_delete_object_with_permission(self):
-        ...
-
-    def test_delete_object_with_constrained_permission(self):
         ...
 
     def test_bulk_delete_objects_with_permission(self):
