@@ -894,11 +894,27 @@ class ExecutorPolymorphicFieldTestCase(_ExecutorTestBase):
             apply_document(document("interfaces"))
         self.assertFalse(cot.fields.exists())
         self.assertEqual(type(Device.interfaces).__name__, "ReverseManyToOneDescriptor")
+        # Nor is the reverse relation added to the other target, which a rollback wouldn't undo.
+        self.assertFalse(hasattr(Site, "interfaces"))
 
         apply_document(document("poly_widgets"))
         self.assertEqual(cot.fields.get(name="poly_obj").related_name, "poly_widgets")
         self.assertTrue(hasattr(Device, "poly_widgets"))
         self.assertTrue(hasattr(Site, "poly_widgets"))
+
+    def test_alter_polymorphic_types_with_taken_related_name(self):
+        from ipam.models import Prefix
+
+        cot = self.create_custom_object_type(name='polytaken', slug='poly-taken')
+        field = self.create_polymorphic_field(cot, [self.site_ot], name='poly_obj', related_name='interfaces')
+        type_def = export_cot(cot)
+        type_def["fields"][-1]["related_object_types"] = ["dcim/device", "ipam/prefix"]
+
+        # Device already has an "interfaces" attribute; the types aren't changed.
+        with self.assertRaisesRegex(InvalidRelatedNameError, "conflicts with an existing attribute"):
+            apply_document({"schema_version": "1", "types": [type_def]})
+        self.assertEqual(list(field.related_object_types.all()), [self.site_ot])
+        self.assertFalse(hasattr(Prefix, "interfaces"))
 
     def test_add_polymorphic_multiobject_field(self):
         cot = self.create_custom_object_type(name='polyadd2', slug='poly-add-2')

@@ -207,7 +207,7 @@ Attributes that match their defaults are omitted from exported documents to keep
 
 `on_delete_behavior` is one of `"set_null"` (default), `"cascade"`, or `"protect"`. It applies only to single `object` fields.
 
-`related_name` names the reverse relation on the related object type, e.g. `related_name: interfaces` lets a `device` object field be followed back as `device.interfaces`. It's optional: with the default `""`, a non-polymorphic field gets a generated name and a polymorphic field gets no reverse relation. It uses lowercase letters, digits and single underscores (max 100 characters), and must be unique among the fields pointing at each object type. Changing it renames the reverse relation.
+`related_name` names the reverse relation on the related object type, e.g. `related_name: widgets` lets a `device` object field be followed back as `device.widgets`. It's optional: with the default `""`, a non-polymorphic object field gets a generated name, and multi-object and polymorphic fields get no reverse relation. When a document omits it, an existing field keeps its name (documents exported before `related_name` was added don't include it); `""` clears it. It uses lowercase letters, digits and single underscores (max 100 characters), and must be unique among the fields pointing at each object type. Changing it renames the reverse relation.
 
 `is_polymorphic` defaults to `false`. When `true`, the field uses a generic foreign key and accepts references to any of the types listed in `related_object_types`. The `is_polymorphic` flag and the set of allowed types cannot be changed after the field is created.
 

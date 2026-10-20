@@ -233,7 +233,7 @@
       "maxLength": 100,
       "pattern": "^(?!.*__)[a-z0-9_]*$",
       "default": "",
-      "description": "Name of the reverse relation on the related object type, e.g. 'interfaces' for device.interfaces. Lowercase letters, digits and single underscores. Empty for none."
+      "description": "Name of the reverse relation on the related object type, e.g. 'widgets' for device.widgets. Lowercase letters, digits and single underscores. Empty for none: a non-polymorphic object field then gets a generated name. When omitted, an existing field keeps its name."
     },
 
     "multiobject_field": {

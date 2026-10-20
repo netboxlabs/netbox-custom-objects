@@ -2906,15 +2906,18 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             return CustomObjectType.get_content_type_label(custom_object_type_id)
         return object_type_name(self.related_object_type, include_app=True)
 
-    def clean_related_name(self):
+    def clean_related_name(self, object_types=None):
         """
         Reject a related_name another field already uses for the same object type, or
         that would replace an existing attribute of a polymorphic field's target model.
+        *object_types* are a polymorphic field's targets, when they aren't saved yet.
         """
         # related_name collision detection for polymorphic fields (M2M related_object_types).
-        # Only run on saved instances; unsaved ones have no M2M rows to collide with yet.
-        if self.related_name and self.is_polymorphic and self.pk:
-            for ot in self.related_object_types.all():
+        # Without object_types, only saved instances have targets to collide on.
+        if object_types is None and self.pk:
+            object_types = self.related_object_types.all()
+        if self.related_name and self.is_polymorphic and object_types:
+            for ot in object_types:
                 conflict = CustomObjectTypeField.objects.filter(
                     is_polymorphic=True,
                     related_name=self.related_name,

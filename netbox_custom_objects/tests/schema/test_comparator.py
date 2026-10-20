@@ -370,9 +370,13 @@ class ComparatorFieldAlterTestCase(CustomObjectsTestCase, TestCase):
         fc = next(fc for fc in result.alters if fc.db_name == "named")
         self.assertEqual(fc.changed_attrs, {"related_name": ("widgets", "gadgets")})
 
+        # Without the key (as in exports from before it was in the format), the name is kept;
+        # "" clears it.
         type_def = export_cot(self.cot)
         del next(f for f in type_def["fields"] if f["name"] == "named")["related_name"]
-        fc = next(fc for fc in diff_cot(type_def).alters if fc.db_name == "named")
+        self.assertEqual([fc for fc in diff_cot(type_def).alters if fc.db_name == "named"], [])
+        result = self._alter_field("named", related_name="")
+        fc = next(fc for fc in result.alters if fc.db_name == "named")
         self.assertEqual(fc.changed_attrs, {"related_name": ("widgets", "")})
 
     def test_on_delete_behavior_change_detected(self):

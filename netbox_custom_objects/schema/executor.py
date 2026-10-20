@@ -279,6 +279,7 @@ def _schema_def_to_field_kwargs(schema_def: dict) -> dict:
         )
 
     if "related_name" in type_specific:
+        # A new field without the key gets none; an existing one keeps its own (see the comparator).
         kwargs["related_name"] = schema_def.get("related_name", FIELD_DEFAULTS["related_name"])
 
     if "on_delete_behavior" in type_specific:
@@ -298,12 +299,17 @@ def _resolve_related_object_types(rot_list: list) -> list:
 # Per-operation helpers
 # ---------------------------------------------------------------------------
 
-def _validate_related_name(cot, field) -> None:
-    """Raise InvalidRelatedNameError if *field*'s related_name is taken (see clean_related_name())."""
+def _validate_related_name(cot, field, object_types=None) -> None:
+    """
+    Raise InvalidRelatedNameError if *field*'s related_name is taken (see clean_related_name()).
+
+    Call it before setting a polymorphic field's *object_types*: that adds the reverse
+    relation to their models, which rolling back the transaction doesn't undo.
+    """
     if not field.related_name:
         return
     try:
-        field.clean_related_name()
+        field.clean_related_name(object_types)
     except ValidationError as exc:
         raise InvalidRelatedNameError(
             f"Field {field.name!r} on COT {cot.slug!r}: {' '.join(exc.messages)}"
@@ -323,16 +329,15 @@ def _apply_field_add(cot, fc) -> None:
     # related_object_types.
     with transaction.atomic():
         field = CustomObjectTypeField(**kwargs)
-        # A polymorphic field's targets are only known after save(), so it's checked again below.
-        _validate_related_name(cot, field)
+        object_types = None
+        if fc.schema_def.get("is_polymorphic"):
+            object_types = _resolve_related_object_types(fc.schema_def.get("related_object_types", []))
+        _validate_related_name(cot, field, object_types)
         field.save()
 
         # Wire up M2M related_object_types for polymorphic fields (must be after save).
-        if fc.schema_def.get("is_polymorphic"):
-            rot_list = fc.schema_def.get("related_object_types", [])
-            if rot_list:
-                field.related_object_types.set(_resolve_related_object_types(rot_list))
-            _validate_related_name(cot, field)
+        if object_types:
+            field.related_object_types.set(object_types)
 
     logger.debug(
         "ADD field %r (schema_id=%s) on COT %r",
@@ -389,14 +394,14 @@ def _apply_field_alter(cot, fc) -> None:
                 f"{', '.join(constraint_names)}; remove it from them before changing its type."
             )
 
-    _validate_related_name(cot, field)
+    object_types = None
+    if "related_object_types" in pending_m2m:
+        object_types = _resolve_related_object_types(pending_m2m["related_object_types"])
+    _validate_related_name(cot, field, object_types)
     field.save()
 
-    if "related_object_types" in pending_m2m:
-        field.related_object_types.set(
-            _resolve_related_object_types(pending_m2m["related_object_types"])
-        )
-        _validate_related_name(cot, field)
+    if object_types is not None:
+        field.related_object_types.set(object_types)
 
     logger.debug(
         "ALTER field %r (schema_id=%s) on COT %r — changed: %s",
