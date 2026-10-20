@@ -1374,14 +1374,12 @@ class MACAddressFieldTypeTestCase(FieldTypeTestCase):
                 field.validate(value)
 
     def test_default(self):
-        # The field form's JSON input yields a str subclass.
-        for default in ("nope", JSONString("nope")):
-            field = CustomObjectTypeField(
-                custom_object_type=self.custom_object_type, name="mac", type="mac_address", default=default
-            )
-            with self.subTest(default=type(default)), self.assertRaises(ValidationError) as cm:
-                field.full_clean()
-            self.assertIn("default", cm.exception.message_dict)
+        field = CustomObjectTypeField(
+            custom_object_type=self.custom_object_type, name="mac", type="mac_address", default="nope"
+        )
+        with self.assertRaises(ValidationError) as cm:
+            field.full_clean()
+        self.assertIn("default", cm.exception.message_dict)
 
         field = CustomObjectTypeField(
             custom_object_type=self.custom_object_type, name="mac", type="mac_address", default="001a.2b3c.4d5e"

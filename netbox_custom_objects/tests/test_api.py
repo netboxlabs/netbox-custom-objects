@@ -2911,6 +2911,23 @@ class MACAddressFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
                 self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
                 self.assertIn("mac", response.data)
 
+    def test_field_default_normalized(self):
+        self.user.is_superuser = True
+        self.user.save()
+        url = reverse("plugins-api:netbox_custom_objects-api:customobjecttypefield-list")
+        data = {"custom_object_type": self.cot.pk, "name": "uplink", "type": "mac_address", "default": "001a.2b3c.4d5e"}
+        response = self.client.post(url, data, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(response.data["default"], "00:1A:2B:3C:4D:5E")
+        self.assertEqual(self.cot.fields.get(name="uplink").default, "00:1A:2B:3C:4D:5E")
+
+        field = self.cot.fields.get(name="mac")
+        url = reverse("plugins-api:netbox_custom_objects-api:customobjecttypefield-detail", kwargs={"pk": field.pk})
+        response = self.client.patch(url, {"default": "aa-bb-cc-dd-ee-ff"}, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        field.refresh_from_db()
+        self.assertEqual(field.default, "AA:BB:CC:DD:EE:FF")
+
 
 class URLFieldLinkTitleAPITest(CustomObjectsTestCase, NetBoxTestCase):
     """REST API behaviour for the url field type's link-title support (issue #496)."""

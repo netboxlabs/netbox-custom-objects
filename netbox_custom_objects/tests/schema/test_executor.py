@@ -15,6 +15,8 @@ Covers:
 - Constraint ADD, ALTER and REMOVE, and their ordering around field changes
 """
 
+import copy
+
 from django.test import SimpleTestCase, TransactionTestCase
 
 from netbox_custom_objects.schema.comparator import (
@@ -1124,6 +1126,20 @@ class ExecutorConstraintTestCase(_ExecutorTestBase):
             diff.constraint_changes[0].changed_attrs, {"error_message": ("", "Serial can't match vendor.")}
         )
         self.assertEqual(CustomObjectTypeConstraint.objects.get().error_message, "Serial can't match vendor.")
+
+    def test_mac_address_values_compare_normalized(self):
+        mac = self.create_custom_object_type_field(self.cot, name='mac', type='mac_address')
+        condition = [{"field": mac.schema_id, "lookup": "exact", "value": "00-1a-2b-3c-4d-5e"}]
+        rule = [{"field": mac.schema_id, "lookup": "in", "value": ["001a.2b3c.4d5e", "aa:bb:cc:dd:ee:ff"]}]
+        document = self._document(constraints=[
+            self._constraint_def(condition=condition),
+            {"name": "known_mac", "type": "check", "rule": rule},
+        ])
+        apply_document(copy.deepcopy(document))
+        stored = CustomObjectTypeConstraint.objects.get(name="known_mac").rule
+        self.assertEqual(stored[0]["value"], ["00:1A:2B:3C:4D:5E", "AA:BB:CC:DD:EE:FF"])
+        # The same document, spelling the addresses differently, is no change.
+        self.assertEqual(diff_document(document)[0].constraint_changes, [])
 
     def test_remove_needs_removed_constraints(self):
         apply_document(self._document(constraints=[self._constraint_def()]))

@@ -3625,6 +3625,9 @@ class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
             "ineligible type": dict(fields=[self.vendor, tags]),
             "case-insensitive without text": dict(fields=[count], case_insensitive=True),
             "same fields as another constraint": dict(fields=[self.serial, self.vendor]),
+            "same MAC condition, spelled differently": dict(
+                fields=[self.vendor, mac], condition=[self._predicate(mac, "exact", "001a.2b3c.4d5e")]
+            ),
             "condition not a list": dict(condition={"field": self.vendor.schema_id, "lookup": "isnull"}),
             "condition without lookup": dict(condition=[{"field": self.vendor.schema_id}]),
             "condition extra key": dict(condition=[{**self._predicate(self.vendor, "isnull", True), "not": True}]),

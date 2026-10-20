@@ -4388,6 +4388,18 @@ _COMPARISON_LOOKUPS = {
 }
 
 
+def normalize_predicate_value(field, lookup, value):
+    """
+    Return a constraint predicate's literal value with MAC addresses written the way
+    the field shows them; raises ValidationError for an invalid address.
+    """
+    if field.type != CustomObjectFieldTypeChoices.TYPE_MAC_ADDRESS:
+        return value
+    if lookup == ConstraintLookupChoices.IN:
+        return [str(MACAddressField().to_python(v)) for v in value]
+    return str(MACAddressField().to_python(value))
+
+
 def _condition_column(field):
     """Return the model field name a constraint condition on *field* tests."""
     if field.is_polymorphic:
@@ -4669,6 +4681,9 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
         else:
             self._clean_unique()
 
+        # Normalized first, so a sibling's predicates compare equal however they were written.
+        self.condition = self._clean_predicates("condition", self.condition)
+        self.rule = self._clean_predicates("rule", self.rule)
         siblings = CustomObjectTypeConstraint.objects.filter(
             custom_object_type_id=self.custom_object_type_id
         ).exclude(pk=self.pk)
@@ -4687,8 +4702,6 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
                     "field_schema_ids": _("Constraint {name} already covers these fields.").format(name=sibling)
                 })
 
-        self.condition = self._clean_predicates("condition", self.condition)
-        self.rule = self._clean_predicates("rule", self.rule)
         if self.type == ConstraintTypeChoices.CHECK and not self.rule:
             raise ValidationError({"rule": _("A check constraint needs a rule.")})
         self._check_existing_objects()
@@ -4804,10 +4817,7 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
                 values = [value]
             for v in values:
                 self._clean_predicate_value(attr, model, field, v)
-            # Store MAC addresses the way the field shows them.
-            if field.type == CustomObjectFieldTypeChoices.TYPE_MAC_ADDRESS:
-                normalized = [str(MACAddressField().to_python(v)) for v in values]
-                predicate["value"] = normalized if lookup == ConstraintLookupChoices.IN else normalized[0]
+            predicate["value"] = normalize_predicate_value(field, lookup, value)
         return predicates
 
     @staticmethod
