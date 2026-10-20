@@ -1489,6 +1489,48 @@ class BaseBranchingTests(BranchingTestBase):
 
     # ── cross-COT FK created entirely inside branch ───────────────────────
 
+    def test_array_field_merge_and_revert(self):
+        """
+        Array values, which the changelog stores serialized (a tuple array as a
+        list of JSON strings), merge and revert: an object modified and one
+        created in the branch, and a field added in the branch with a value.
+        """
+        request = _make_request(self.user)
+        with event_tracking(request):
+            cot = CustomObjectType.objects.create(name='array_cot', slug='array-cot')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='points', label='Points', type='array',
+                array_element_type='integer', array_tuple_size=2,
+            )
+            co = cot.get_model().objects.create(points=[[0, 0]])
+
+        branch = _provision_branch('Array Branch', self.MERGE_STRATEGY, self.user)
+        branch_request = _make_request(self.user)
+        with activate_branch(branch), event_tracking(branch_request):
+            branch_co = cot.get_model().objects.get(pk=co.pk)
+            branch_co.snapshot()
+            branch_co.points = [[1, 2], [3, 4]]
+            branch_co.save()
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cot, name='days', label='Days', type='array', array_element_type='date',
+            )
+            new_co = cot.get_model().objects.create(points=[[5, 6]], days=[datetime.date(2026, 1, 1)])
+        new_pk = new_co.pk
+
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+        Model = CustomObjectType.objects.get(pk=cot.pk).get_model()
+        self.assertEqual(Model.objects.get(pk=co.pk).points, [[1, 2], [3, 4]])
+        created = Model.objects.get(pk=new_pk)
+        self.assertEqual(created.points, [[5, 6]])
+        self.assertEqual(created.days, [datetime.date(2026, 1, 1)])
+
+        branch.revert(user=self.user, commit=True)
+        Model = CustomObjectType.objects.get(pk=cot.pk).get_model()
+        self.assertEqual(Model.objects.get(pk=co.pk).points, [[0, 0]])
+        self.assertFalse(Model.objects.filter(pk=new_pk).exists())
+
     def test_cross_cot_fk_branch_creates_both_merge_and_revert(self):
         """
         Branch creates COT B, then COT A with a FK pointing at B, then a CO
