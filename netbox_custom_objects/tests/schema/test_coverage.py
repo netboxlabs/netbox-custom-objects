@@ -38,7 +38,6 @@ _SCHEMA_EXCLUDED_ATTRS = frozenset({
     "comments",            # editorial annotation; see cot_schema_v1.json $comment
     # ── Not yet in the schema format (pending design decision) ──────────────
     "context",             # display preference flag — not structural; omitted for now
-    "related_name",        # reverse relation accessor name — omitted for now
 })
 
 

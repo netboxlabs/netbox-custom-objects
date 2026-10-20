@@ -39,6 +39,7 @@ from netbox_custom_objects.schema.executor import (
     CircularDependencyError,
     DestructiveChangesError,
     InvalidConstraintError,
+    InvalidRelatedNameError,
     UnknownChoiceSetError,
     UnknownFieldTypeError,
     UnknownObjectTypeError,
@@ -520,6 +521,11 @@ class SchemaApplyView(APIView):
         except InvalidConstraintError as exc:
             return Response(
                 {"error": "invalid_constraint", "detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except InvalidRelatedNameError as exc:
+            return Response(
+                {"error": "invalid_related_name", "detail": str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

@@ -91,6 +91,7 @@ FIELD_DEFAULTS = {
     "validation_minimum": None,
     "validation_maximum": None,
     "related_object_filter": None,
+    "related_name": "",
     "on_delete_behavior": "set_null",
     "is_polymorphic": False,
     # related_object_types has no scalar default (M2M list); absence means []
@@ -114,9 +115,12 @@ FIELD_TYPE_ATTRS = {
     FIELD_TYPE_SELECT: {"choice_set"},
     FIELD_TYPE_MULTISELECT: {"choice_set"},
     FIELD_TYPE_OBJECT: {
-        "is_polymorphic", "related_object_type", "related_object_types", "related_object_filter", "on_delete_behavior"
+        "is_polymorphic", "related_object_type", "related_object_types", "related_object_filter", "related_name",
+        "on_delete_behavior",
     },
-    FIELD_TYPE_MULTIOBJECT: {"is_polymorphic", "related_object_type", "related_object_types", "related_object_filter"},
+    FIELD_TYPE_MULTIOBJECT: {
+        "is_polymorphic", "related_object_type", "related_object_types", "related_object_filter", "related_name",
+    },
 }
 
 # ── Field base attributes ─────────────────────────────────────────────────────

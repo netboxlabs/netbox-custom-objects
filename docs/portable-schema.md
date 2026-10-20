@@ -201,11 +201,13 @@ Attributes that match their defaults are omitted from exported documents to keep
 | `text`, `longtext` | `validation_regex` |
 | `integer`, `decimal` | `validation_minimum`, `validation_maximum` |
 | `select`, `multiselect` | `choice_set` (required — **name** of a `CustomFieldChoiceSet`) |
-| `object` | `related_object_type` (required when `is_polymorphic` is `false`), `related_object_types` (required when `is_polymorphic` is `true`), `is_polymorphic`, `related_object_filter`, `on_delete_behavior` |
-| `multiobject` | `related_object_type` (required when `is_polymorphic` is `false`), `related_object_types` (required when `is_polymorphic` is `true`), `is_polymorphic`, `related_object_filter` |
+| `object` | `related_object_type` (required when `is_polymorphic` is `false`), `related_object_types` (required when `is_polymorphic` is `true`), `is_polymorphic`, `related_object_filter`, `related_name`, `on_delete_behavior` |
+| `multiobject` | `related_object_type` (required when `is_polymorphic` is `false`), `related_object_types` (required when `is_polymorphic` is `true`), `is_polymorphic`, `related_object_filter`, `related_name` |
 | `boolean`, `date`, `datetime`, `url`, `json`, `color` | (none) |
 
 `on_delete_behavior` is one of `"set_null"` (default), `"cascade"`, or `"protect"`. It applies only to single `object` fields.
+
+`related_name` names the reverse relation on the related object type, e.g. `related_name: widgets` lets a `device` object field be followed back as `device.widgets`. It's optional: with the default `""`, a non-polymorphic object field gets a generated name, and multi-object and polymorphic fields get no reverse relation. When a document omits it, an existing field keeps its name (documents exported before `related_name` was added don't include it); `""` clears it. It uses lowercase letters, digits and single underscores (max 100 characters), and must be unique among the fields pointing at each object type. Changing it renames the reverse relation.
 
 `is_polymorphic` defaults to `false`. When `true`, the field uses a generic foreign key and accepts references to any of the types listed in `related_object_types`. The `is_polymorphic` flag and the set of allowed types cannot be changed after the field is created.
 
@@ -570,6 +572,7 @@ full rollback.
 | `UnknownObjectTypeError` | A `related_object_type` string cannot be resolved |
 | `UnknownFieldTypeError` | A `type` value is not one of the supported field type strings |
 | `InvalidConstraintError` | A constraint fails validation, e.g. existing objects already violate it |
+| `InvalidRelatedNameError` | A field's `related_name` is already used for its object type, or clashes with an attribute of a polymorphic field's target model |
 
 `DestructiveChangesError` is raised **before** the transaction opens, so the DB is never
 touched. The other exceptions may be raised mid-transaction, triggering a full rollback.

@@ -213,6 +213,7 @@
               "type": ["object", "null"],
               "description": "Query params dict to filter the related object selection."
             },
+            "related_name": { "$ref": "#/$defs/related_name" },
             "on_delete_behavior": {
               "type": "string",
               "enum": ["set_null", "cascade", "protect"],
@@ -225,6 +226,14 @@
           "else": { "required": ["related_object_type"] }
         }
       ]
+    },
+
+    "related_name": {
+      "type": "string",
+      "maxLength": 100,
+      "pattern": "^(?!.*__)[a-z0-9_]*$",
+      "default": "",
+      "description": "Name of the reverse relation on the related object type, e.g. 'widgets' for device.widgets. Lowercase letters, digits and single underscores. Empty for none: a non-polymorphic object field then gets a generated name. When omitted, an existing field keeps its name."
     },
 
     "multiobject_field": {
@@ -249,7 +258,8 @@
             "related_object_filter": {
               "type": ["object", "null"],
               "description": "Query params dict to filter the related object selection."
-            }
+            },
+            "related_name": { "$ref": "#/$defs/related_name" }
           },
           "if": { "properties": { "is_polymorphic": { "const": true } }, "required": ["is_polymorphic"] },
           "then": { "required": ["related_object_types"] },

@@ -2911,6 +2911,120 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             return CustomObjectType.get_content_type_label(custom_object_type_id)
         return object_type_name(self.related_object_type, include_app=True)
 
+    def clean_related_name(self, object_types=None):
+        """
+        Reject a related_name another field already uses for the same object type, or
+        that would replace an existing attribute of a polymorphic field's target model.
+        *object_types* are a polymorphic field's targets, when they aren't saved yet.
+        """
+        # related_name collision detection for polymorphic fields (M2M related_object_types).
+        # Without object_types, only saved instances have targets to collide on.
+        if object_types is None and self.pk:
+            object_types = self.related_object_types.all()
+        if self.related_name and self.is_polymorphic and object_types:
+            for ot in object_types:
+                conflict = CustomObjectTypeField.objects.filter(
+                    is_polymorphic=True,
+                    related_name=self.related_name,
+                    related_object_types=ot,
+                ).exclude(pk=self.pk).first()
+                if conflict:
+                    raise ValidationError(
+                        {
+                            "related_name": _(
+                                'Reverse relation name "{name}" is already used by field '
+                                '"{field}" on "{object_type}" for object type "{ot}".'
+                            ).format(
+                                name=self.related_name,
+                                field=conflict.name,
+                                object_type=conflict.custom_object_type,
+                                ot=ot,
+                            )
+                        }
+                    )
+
+                # Cross-check: non-polymorphic field claiming the same related_name on this target
+                conflict_np = CustomObjectTypeField.objects.filter(
+                    is_polymorphic=False,
+                    related_name=self.related_name,
+                    related_object_type=ot,
+                ).exclude(pk=self.pk).first()
+                if conflict_np:
+                    raise ValidationError(
+                        {
+                            "related_name": _(
+                                'Reverse relation name "{name}" is already used by field '
+                                '"{field}" on "{object_type}" for object type "{ot}".'
+                            ).format(
+                                name=self.related_name,
+                                field=conflict_np.name,
+                                object_type=conflict_np.custom_object_type,
+                                ot=ot,
+                            )
+                        }
+                    )
+
+                # Guard against clobbering an existing attribute on the target model class
+                # (e.g. a FK, method, or property that already uses that name).  We allow
+                # the name only if the class already carries one of our own descriptors —
+                # which means this field (or a field being renamed to/from it) is the one
+                # that set it.
+                target_cls = ot.model_class()
+                if target_cls is not None:
+                    existing = getattr(target_cls, self.related_name, None)
+                    if existing is not None and not isinstance(
+                        existing,
+                        (PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor),
+                    ):
+                        raise ValidationError(
+                            {
+                                "related_name": _(
+                                    'Reverse relation name "{name}" conflicts with an existing '
+                                    'attribute on model "{model}". Choose a different name.'
+                                ).format(name=self.related_name, model=target_cls.__name__)
+                            }
+                        )
+
+        # related_name must be unique per related_object_type (when set)
+        if self.related_name and self.related_object_type_id:
+            conflict = CustomObjectTypeField.objects.filter(
+                related_object_type_id=self.related_object_type_id,
+                related_name=self.related_name,
+            ).exclude(pk=self.pk).first()
+            if conflict:
+                raise ValidationError(
+                    {
+                        "related_name": _(
+                            'Reverse relation name "{name}" is already used by field '
+                            '"{field}" on "{object_type}".'
+                        ).format(
+                            name=self.related_name,
+                            field=conflict.name,
+                            object_type=conflict.custom_object_type,
+                        )
+                    }
+                )
+
+            # Cross-check: polymorphic field claiming the same related_name on this target
+            conflict_poly = CustomObjectTypeField.objects.filter(
+                is_polymorphic=True,
+                related_name=self.related_name,
+                related_object_types=self.related_object_type,
+            ).exclude(pk=self.pk).first()
+            if conflict_poly:
+                raise ValidationError(
+                    {
+                        "related_name": _(
+                            'Reverse relation name "{name}" is already used by field '
+                            '"{field}" on "{object_type}".'
+                        ).format(
+                            name=self.related_name,
+                            field=conflict_poly.name,
+                            object_type=conflict_poly.custom_object_type,
+                        )
+                    }
+                )
+
     def clean(self):
         super().clean()
 
@@ -3293,111 +3407,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 }
             )
 
-        # related_name collision detection for polymorphic fields (M2M related_object_types).
-        # Only run on saved instances; unsaved ones have no M2M rows to collide with yet.
-        if self.related_name and self.is_polymorphic and self.pk:
-            for ot in self.related_object_types.all():
-                conflict = CustomObjectTypeField.objects.filter(
-                    is_polymorphic=True,
-                    related_name=self.related_name,
-                    related_object_types=ot,
-                ).exclude(pk=self.pk).first()
-                if conflict:
-                    raise ValidationError(
-                        {
-                            "related_name": _(
-                                'Reverse relation name "{name}" is already used by field '
-                                '"{field}" on "{object_type}" for object type "{ot}".'
-                            ).format(
-                                name=self.related_name,
-                                field=conflict.name,
-                                object_type=conflict.custom_object_type,
-                                ot=ot,
-                            )
-                        }
-                    )
-
-                # Cross-check: non-polymorphic field claiming the same related_name on this target
-                conflict_np = CustomObjectTypeField.objects.filter(
-                    is_polymorphic=False,
-                    related_name=self.related_name,
-                    related_object_type=ot,
-                ).exclude(pk=self.pk).first()
-                if conflict_np:
-                    raise ValidationError(
-                        {
-                            "related_name": _(
-                                'Reverse relation name "{name}" is already used by field '
-                                '"{field}" on "{object_type}" for object type "{ot}".'
-                            ).format(
-                                name=self.related_name,
-                                field=conflict_np.name,
-                                object_type=conflict_np.custom_object_type,
-                                ot=ot,
-                            )
-                        }
-                    )
-
-                # Guard against clobbering an existing attribute on the target model class
-                # (e.g. a FK, method, or property that already uses that name).  We allow
-                # the name only if the class already carries one of our own descriptors —
-                # which means this field (or a field being renamed to/from it) is the one
-                # that set it.
-                target_cls = ot.model_class()
-                if target_cls is not None:
-                    existing = getattr(target_cls, self.related_name, None)
-                    if existing is not None and not isinstance(
-                        existing,
-                        (PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor),
-                    ):
-                        raise ValidationError(
-                            {
-                                "related_name": _(
-                                    'Reverse relation name "{name}" conflicts with an existing '
-                                    'attribute on model "{model}". Choose a different name.'
-                                ).format(name=self.related_name, model=target_cls.__name__)
-                            }
-                        )
-
-        # related_name must be unique per related_object_type (when set)
-        if self.related_name and self.related_object_type_id:
-            conflict = CustomObjectTypeField.objects.filter(
-                related_object_type_id=self.related_object_type_id,
-                related_name=self.related_name,
-            ).exclude(pk=self.pk).first()
-            if conflict:
-                raise ValidationError(
-                    {
-                        "related_name": _(
-                            'Reverse relation name "{name}" is already used by field '
-                            '"{field}" on "{object_type}".'
-                        ).format(
-                            name=self.related_name,
-                            field=conflict.name,
-                            object_type=conflict.custom_object_type,
-                        )
-                    }
-                )
-
-            # Cross-check: polymorphic field claiming the same related_name on this target
-            conflict_poly = CustomObjectTypeField.objects.filter(
-                is_polymorphic=True,
-                related_name=self.related_name,
-                related_object_types=self.related_object_type,
-            ).exclude(pk=self.pk).first()
-            if conflict_poly:
-                raise ValidationError(
-                    {
-                        "related_name": _(
-                            'Reverse relation name "{name}" is already used by field '
-                            '"{field}" on "{object_type}".'
-                        ).format(
-                            name=self.related_name,
-                            field=conflict_poly.name,
-                            object_type=conflict_poly.custom_object_type,
-                        )
-                    }
-                )
+        self.clean_related_name()
 
         # on_delete_behavior is only meaningful for non-polymorphic Object-type fields.
         # Polymorphic GFK fields have no real DB FK constraint to enforce (the content_type

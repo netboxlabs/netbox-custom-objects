@@ -27,6 +27,7 @@ from netbox_custom_objects.schema.executor import (
     CircularDependencyError,
     DestructiveChangesError,
     InvalidConstraintError,
+    InvalidRelatedNameError,
     UnknownChoiceSetError,
     UnknownFieldTypeError,
     UnknownObjectTypeError,
@@ -533,6 +534,47 @@ class ExecutorFieldAlterTestCase(_ExecutorTestBase):
             obj_field.related_object_type, site_ot,
         )
 
+    def test_related_name(self):
+        from dcim.models import Device
+
+        obj_cot = self.create_custom_object_type(name='named', slug='named')
+        obj_cot.refresh_from_db()
+        type_def = export_cot(obj_cot)
+        type_def.setdefault("fields", []).append({
+            "id": obj_cot.next_schema_id + 1, "name": "device", "type": "object",
+            "related_object_type": "dcim/device", "related_name": "widgets",
+        })
+        apply_document({"schema_version": "1", "types": [type_def]})
+        field = obj_cot.fields.get(name="device")
+        self.assertEqual(field.related_name, "widgets")
+        obj_cot.get_model()
+        self.assertTrue(hasattr(Device, "widgets"))
+        self.assertEqual(export_cot(obj_cot)["fields"][-1]["related_name"], "widgets")
+
+        type_def = export_cot(obj_cot)
+        type_def["fields"][-1]["related_name"] = "gadgets"
+        apply_document({"schema_version": "1", "types": [type_def]})
+        field.refresh_from_db()
+        self.assertEqual(field.related_name, "gadgets")
+        CustomObjectType.objects.get(pk=obj_cot.pk).get_model()
+        self.assertTrue(hasattr(Device, "gadgets"))
+
+    def test_related_name_already_used(self):
+        device_ot = self.get_device_object_type()
+        self.create_custom_object_type_field(
+            self.cot, name='device', type='object', related_object_type=device_ot, related_name='widgets',
+        )
+        other = self.create_custom_object_type(name='other', slug='other')
+        other.refresh_from_db()
+        type_def = export_cot(other)
+        type_def.setdefault("fields", []).append({
+            "id": other.next_schema_id + 1, "name": "device", "type": "object",
+            "related_object_type": "dcim/device", "related_name": "widgets",
+        })
+        with self.assertRaisesRegex(InvalidRelatedNameError, "already used by field"):
+            apply_document({"schema_version": "1", "types": [type_def]})
+        self.assertFalse(other.fields.exists())
+
     def test_alter_field_type(self):
         type_def = export_cot(self.cot)
         for f in type_def["fields"]:
@@ -835,6 +877,44 @@ class ExecutorPolymorphicFieldTestCase(_ExecutorTestBase):
             for rot in field.related_object_types.all()
         )
         self.assertEqual(encoded, ["dcim/device", "dcim/site"])
+
+    def test_add_polymorphic_field_with_related_name(self):
+        from dcim.models import Device, Site
+
+        cot = self.create_custom_object_type(name='polynamed', slug='poly-named')
+
+        def document(related_name):
+            return {"schema_version": "1", "types": [{"name": "polynamed", "slug": "poly-named", "fields": [{
+                "id": 1, "name": "poly_obj", "type": "object", "is_polymorphic": True,
+                "related_object_types": ["dcim/device", "dcim/site"], "related_name": related_name,
+            }]}]}
+
+        # Device already has an "interfaces" attribute; the field isn't created.
+        with self.assertRaisesRegex(InvalidRelatedNameError, "conflicts with an existing attribute"):
+            apply_document(document("interfaces"))
+        self.assertFalse(cot.fields.exists())
+        self.assertEqual(type(Device.interfaces).__name__, "ReverseManyToOneDescriptor")
+        # Nor is the reverse relation added to the other target, which a rollback wouldn't undo.
+        self.assertFalse(hasattr(Site, "interfaces"))
+
+        apply_document(document("poly_widgets"))
+        self.assertEqual(cot.fields.get(name="poly_obj").related_name, "poly_widgets")
+        self.assertTrue(hasattr(Device, "poly_widgets"))
+        self.assertTrue(hasattr(Site, "poly_widgets"))
+
+    def test_alter_polymorphic_types_with_taken_related_name(self):
+        from ipam.models import Prefix
+
+        cot = self.create_custom_object_type(name='polytaken', slug='poly-taken')
+        field = self.create_polymorphic_field(cot, [self.site_ot], name='poly_obj', related_name='interfaces')
+        type_def = export_cot(cot)
+        type_def["fields"][-1]["related_object_types"] = ["dcim/device", "ipam/prefix"]
+
+        # Device already has an "interfaces" attribute; the types aren't changed.
+        with self.assertRaisesRegex(InvalidRelatedNameError, "conflicts with an existing attribute"):
+            apply_document({"schema_version": "1", "types": [type_def]})
+        self.assertEqual(list(field.related_object_types.all()), [self.site_ot])
+        self.assertFalse(hasattr(Prefix, "interfaces"))
 
     def test_add_polymorphic_multiobject_field(self):
         cot = self.create_custom_object_type(name='polyadd2', slug='poly-add-2')
