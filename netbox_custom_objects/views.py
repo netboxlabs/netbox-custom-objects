@@ -637,16 +637,11 @@ class CustomObjectView(generic.ObjectView):
         return model.objects.all()
 
     def get_object(self, **kwargs):
-        custom_object_type = self.kwargs.get("custom_object_type", None)
-        object_type = get_object_or_404(
-            CustomObjectType, slug=custom_object_type
-        )
-        model = object_type.get_model_with_serializer()
         # Filter out custom_object_type from kwargs for the object lookup
         lookup_kwargs = {
             k: v for k, v in self.kwargs.items() if k != "custom_object_type"
         }
-        return get_object_or_404(model.objects.all(), **lookup_kwargs)
+        return get_object_or_404(self.queryset, **lookup_kwargs)
 
     def get_extra_context(self, request, instance):
         fields = instance.custom_object_type.fields.all().order_by(
@@ -667,8 +662,22 @@ class CustomObjectView(generic.ObjectView):
         }
 
 
+class RestrictedObjectMixin:
+    """
+    For views that look up the object in setup(), before dispatch() restricts the queryset
+    to the user's permissions: look it up again in the restricted queryset.
+    """
+
+    def has_permission(self):
+        if not super().has_permission():
+            return False
+        if self.object.pk:
+            self.object = get_object_or_404(self.queryset, pk=self.object.pk)
+        return True
+
+
 @register_model_view(CustomObject, "edit")
-class CustomObjectEditView(generic.ObjectEditView):
+class CustomObjectEditView(RestrictedObjectMixin, generic.ObjectEditView):
     template_name = "netbox_custom_objects/customobject_edit.html"
     htmx_template_name = "netbox_custom_objects/htmx/edit_fields.html"
     _CO_QUICK_ADD_TEMPLATE = 'netbox_custom_objects/htmx/co_quick_add.html'
@@ -1150,7 +1159,7 @@ class CustomObjectEditView(generic.ObjectEditView):
 
 
 @register_model_view(CustomObject, "delete")
-class CustomObjectDeleteView(generic.ObjectDeleteView):
+class CustomObjectDeleteView(RestrictedObjectMixin, generic.ObjectDeleteView):
     queryset = None
     object = None
     default_return_url = "plugins:netbox_custom_objects:customobject_list"
@@ -1635,7 +1644,7 @@ class CustomObjectJournalView(ConditionalLoginRequiredMixin, View):
 
         # Get the specific object
         lookup_kwargs = {k: v for k, v in kwargs.items() if k != "custom_object_type"}
-        obj = get_object_or_404(model.objects.all(), **lookup_kwargs)
+        obj = get_object_or_404(model.objects.restrict(request.user, "view"), **lookup_kwargs)
 
         # Get journal entries for this object
         content_type = ContentType.objects.get_for_model(model)
@@ -1707,7 +1716,7 @@ class CustomObjectChangeLogView(ConditionalLoginRequiredMixin, View):
 
         # Get the specific object
         lookup_kwargs = {k: v for k, v in kwargs.items() if k != "custom_object_type"}
-        obj = get_object_or_404(model.objects.all(), **lookup_kwargs)
+        obj = get_object_or_404(model.objects.restrict(request.user, "view"), **lookup_kwargs)
 
         # Gather all changes for this object (and its related objects)
         content_type = ContentType.objects.get_for_model(model)
@@ -1761,7 +1770,7 @@ class CustomObjectContactsView(ConditionalLoginRequiredMixin, View):
         model = object_type.get_model_with_serializer()
 
         lookup_kwargs = {k: v for k, v in kwargs.items() if k != "custom_object_type"}
-        obj = get_object_or_404(model.objects.all(), **lookup_kwargs)
+        obj = get_object_or_404(model.objects.restrict(request.user, "view"), **lookup_kwargs)
 
         contacts = (
             obj.get_contacts()
