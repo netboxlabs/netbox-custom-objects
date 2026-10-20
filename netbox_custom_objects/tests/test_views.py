@@ -1689,6 +1689,77 @@ class URLFieldLinkTitleViewTest(CustomObjectsTestCase, TestCase):
         self.assertNotContains(response, "Orphan Title")
 
 
+class ValidationRegexViewTest(CustomObjectsTestCase, TestCase):
+    """Regression #763: the standard add/edit form must enforce validation_regex (via the UI form field)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.cot = CustomObjectType.objects.create(
+            name="RegexView", verbose_name_plural="Regex Views", slug="regex-views",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.cot, name="name", type="text", primary=True, required=True,
+        )
+        for name, field_type, regex in (
+            ("code", "text", r"^[A-Z]{3}$"),
+            ("notes", "longtext", r"^ok"),
+            ("website", "url", r"^https://"),
+        ):
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cls.cot, name=name, type=field_type, validation_regex=regex,
+            )
+        cls.model = cls.cot.get_model()
+
+    def setUp(self):
+        super().setUp()
+        perm = ObjectPermission(name="regex view all", actions=["view", "add", "change", "delete"])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+    def _add_url(self):
+        return reverse(
+            "plugins:netbox_custom_objects:customobject_add",
+            kwargs={"custom_object_type": self.cot.slug},
+        )
+
+    def test_add_view_rejects_values_not_matching_regex(self):
+        for field_name, value, regex in (
+            ("code", "abc", "^[A-Z]{3}$"),
+            ("notes", "not ok", "^ok"),
+            ("website", "http://example.com", "^https://"),
+        ):
+            with self.subTest(field=field_name):
+                response = self.client.post(self._add_url(), {"name": "Box", field_name: value})
+                # Re-rendered form, not a redirect
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(field_name, response.context["form"].errors)
+                # The UI message shows the regex in a <code> tag, and only once
+                # (the model-level validator must not add a duplicate error).
+                self.assertContains(response, f"<code>{regex}</code>", count=1, html=False)
+        self.assertFalse(self.model.objects.exists())
+
+    def test_add_view_accepts_values_matching_regex(self):
+        data = {"name": "Box", "code": "ABC", "notes": "ok then", "website": "https://example.com"}
+        response = self.client.post(self._add_url(), data)
+        self.assertEqual(response.status_code, 302, getattr(response, "content", b""))
+        obj = self.model.objects.get(name="Box")
+        self.assertEqual(obj.code, "ABC")
+        self.assertEqual(obj.website, "https://example.com")
+
+    def test_edit_view_rejects_value_not_matching_regex(self):
+        instance = self.model.objects.create(name="Box", code="ABC")
+        url = reverse(
+            "plugins:netbox_custom_objects:customobject_edit",
+            kwargs={"pk": instance.pk, "custom_object_type": self.cot.slug},
+        )
+        response = self.client.post(url, {"name": "Box", "code": "abcd"})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("code", response.context["form"].errors)
+        instance.refresh_from_db()
+        self.assertEqual(instance.code, "ABC")
+
+
 class QuickAddViewTestCase(CustomObjectsTestCase, TestCase):
     """
     Tests for the quick-add flow in CustomObjectEditView.

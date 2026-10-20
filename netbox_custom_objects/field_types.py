@@ -25,7 +25,7 @@ from django.db.models.signals import m2m_changed
 from django.urls import reverse
 from django.utils.html import escape, format_html
 from django.utils.safestring import mark_safe
-from django.utils.text import Truncator
+from django.utils.text import Truncator, format_lazy
 from django.utils.translation import gettext_lazy as _
 from extras.choices import CustomFieldTypeChoices, CustomFieldUIEditableChoices
 from utilities.api import get_serializer_for_model
@@ -321,21 +321,32 @@ class FieldType:
     def create_m2m_table(self, instance, model, field_name, schema_conn=None): ...
 
 
-def regex_validators(field):
+def regex_validators(field, html=False):
     """
-    Return the validators enforcing *field*'s validation_regex, for use on the
-    generated model field. Validating at the model level (rather than only on the
-    UI form field) means the regex also applies to REST API writes and CSV/bulk
-    import, which validate through Model.full_clean().
+    Return the validators enforcing *field*'s validation_regex.
+
+    Applied to the generated model field, so the regex is enforced on REST API writes
+    and CSV/bulk import (which validate through Model.full_clean()) as well as on the
+    UI form. The UI form field also carries the validator with ``html=True`` so the
+    regex is shown in a <code> tag; a form field that fails its own validation is
+    excluded from model validation by ModelForm, so the error is not reported twice.
+
+    The message is built lazily so it is translated per request, not once at model
+    generation time. The validator gets its own error code: Django replaces the message
+    of a validator error whose code is "invalid" with the field's own "invalid" message
+    (e.g. "Enter a valid URL." on URL fields), which would hide the regex.
     """
     if not field.validation_regex:
         return []
-    return [
-        RegexValidator(
-            regex=field.validation_regex,
-            message=_("Values must match this regex: {regex}").format(regex=field.validation_regex),
+    if html:
+        message = mark_safe(
+            format_lazy(
+                _("Values must match this regex: <code>{regex}</code>"), regex=escape(field.validation_regex)
+            )
         )
-    ]
+    else:
+        message = format_lazy(_("Values must match this regex: {regex}"), regex=field.validation_regex)
+    return [RegexValidator(regex=field.validation_regex, message=message, code="validation_regex")]
 
 
 class TextFieldType(FieldType):
@@ -356,7 +367,9 @@ class TextFieldType(FieldType):
         )
 
     def get_form_field(self, field, **kwargs):
-        return forms.CharField(required=field.required, initial=field.default)
+        return forms.CharField(
+            required=field.required, initial=field.default, validators=regex_validators(field, html=True)
+        )
 
     def get_filterform_field(self, field, **kwargs):
         return forms.CharField(
@@ -394,6 +407,7 @@ class LongTextFieldType(FieldType):
             widget=forms.Textarea,
             required=field.required,
             initial=field.default,
+            validators=regex_validators(field, html=True),
         )
 
     def render_table_column(self, value):
@@ -654,7 +668,10 @@ class URLFieldType(FieldType):
 
     def get_form_field(self, field, **kwargs):
         return LaxURLField(
-            assume_scheme="https", required=field.required, initial=field.default
+            assume_scheme="https",
+            required=field.required,
+            initial=field.default,
+            validators=regex_validators(field, html=True),
         )
 
     def get_form_fields(self, field):
@@ -669,6 +686,7 @@ class URLFieldType(FieldType):
             required=field.required,
             initial=field.default,
             help_text=render_markdown(field.description) if field.description else None,
+            validators=regex_validators(field, html=True),
         )
         title_field = forms.CharField(
             label=f"{base_label} ({_('link title')})",
