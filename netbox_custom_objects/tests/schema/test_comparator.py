@@ -367,6 +367,27 @@ class ComparatorFieldAlterTestCase(CustomObjectsTestCase, TestCase):
         fc = next(fc for fc in result.alters if fc.db_name == "filtered")
         self.assertIn("related_object_filter", fc.changed_attrs)
 
+    def test_related_name_change_detected(self):
+        self.create_custom_object_type_field(
+            self.cot, name='named', type='object', related_object_type=self.device_ot, related_name='widgets',
+        )
+        self.assertEqual(
+            [fc for fc in diff_cot(export_cot(self.cot)).alters if fc.db_name == "named"], [],
+            "related_name round-trips cleanly",
+        )
+        result = self._alter_field("named", related_name="gadgets")
+        fc = next(fc for fc in result.alters if fc.db_name == "named")
+        self.assertEqual(fc.changed_attrs, {"related_name": ("widgets", "gadgets")})
+
+        # Without the key (as in exports from before it was in the format), the name is kept;
+        # "" clears it.
+        type_def = export_cot(self.cot)
+        del next(f for f in type_def["fields"] if f["name"] == "named")["related_name"]
+        self.assertEqual([fc for fc in diff_cot(type_def).alters if fc.db_name == "named"], [])
+        result = self._alter_field("named", related_name="")
+        fc = next(fc for fc in result.alters if fc.db_name == "named")
+        self.assertEqual(fc.changed_attrs, {"related_name": ("widgets", "")})
+
     def test_on_delete_behavior_change_detected(self):
         self.create_custom_object_type_field(
             self.cot, name='odchange', type='object',

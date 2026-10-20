@@ -139,6 +139,9 @@ def _export_field(field) -> dict:
             value = field.related_object_filter
             if value != FIELD_DEFAULTS.get("related_object_filter"):
                 result["related_object_filter"] = value
+        elif attr == "related_name":
+            if field.related_name:
+                result["related_name"] = field.related_name
         elif attr == "on_delete_behavior":
             value = field.on_delete_behavior or FIELD_DEFAULTS["on_delete_behavior"]
             if value != FIELD_DEFAULTS["on_delete_behavior"]:
@@ -156,10 +159,9 @@ def _export_field(field) -> dict:
 
 def _export_constraint(constraint) -> dict:
     """Serialise a ``CustomObjectTypeConstraint`` to a schema constraint dict."""
-    result = {
-        "name": constraint.name,
-        "fields": list(constraint.field_schema_ids),
-    }
+    result = {"name": constraint.name}
+    if constraint.field_schema_ids:
+        result["fields"] = list(constraint.field_schema_ids)
     for attr, default in CONSTRAINT_DEFAULTS.items():
         value = getattr(constraint, attr)
         if value != default:

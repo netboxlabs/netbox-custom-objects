@@ -39,6 +39,7 @@ from netbox_custom_objects.schema.executor import (
     CircularDependencyError,
     DestructiveChangesError,
     InvalidConstraintError,
+    InvalidRelatedNameError,
     UnknownChoiceSetError,
     UnsupportedFieldChangeError,
     UnknownFieldTypeError,
@@ -526,6 +527,11 @@ class SchemaApplyView(APIView):
         except UnsupportedFieldChangeError as exc:
             return Response(
                 {"error": "unsupported_field_change", "detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except InvalidRelatedNameError as exc:
+            return Response(
+                {"error": "invalid_related_name", "detail": str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

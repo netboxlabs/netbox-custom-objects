@@ -282,6 +282,14 @@ def _compare_field_attrs(db_field, schema_field: dict, cot_slug_cache: dict, war
         if dv != sv:
             changes["related_object_filter"] = (dv, sv)
 
+    # Exports from before related_name was in the format omit it, so a missing key keeps
+    # the field's name; "" clears it.
+    if "related_name" in type_specific and "related_name" in schema_field:
+        dv = db_field.related_name or FIELD_DEFAULTS["related_name"]
+        sv = schema_field["related_name"]
+        if dv != sv:
+            changes["related_name"] = (dv, sv)
+
     if "on_delete_behavior" in type_specific:
         dv = db_field.on_delete_behavior or FIELD_DEFAULTS["on_delete_behavior"]
         sv = schema_field.get("on_delete_behavior", FIELD_DEFAULTS["on_delete_behavior"])
@@ -297,7 +305,7 @@ def _compare_constraint_attrs(db_constraint, schema_constraint: dict) -> dict[st
     for attr in CONSTRAINT_ATTRS:
         if attr == "fields":
             db_val = list(db_constraint.field_schema_ids)
-            schema_val = list(schema_constraint["fields"])
+            schema_val = list(schema_constraint.get("fields", []))
         else:
             db_val = getattr(db_constraint, attr)
             schema_val = schema_constraint.get(attr, CONSTRAINT_DEFAULTS[attr])

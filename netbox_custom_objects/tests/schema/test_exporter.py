@@ -295,6 +295,17 @@ class ExporterFieldTypesTestCase(CustomObjectsTestCase, TestCase):
         f = _field_by_name(export_cot(self.cot), "unfiltered")
         self.assertNotIn("related_object_filter", f)
 
+    def test_related_name_included_when_set(self):
+        self.create_custom_object_type_field(
+            self.cot, name='named', type='object', related_object_type=self.device_ot, related_name='widgets',
+        )
+        self.create_custom_object_type_field(
+            self.cot, name='unnamed', type='multiobject', related_object_type=self.device_ot,
+        )
+        type_def = export_cot(self.cot)
+        self.assertEqual(_field_by_name(type_def, "named")["related_name"], "widgets")
+        self.assertNotIn("related_name", _field_by_name(type_def, "unnamed"))
+
     def test_on_delete_behavior_default_omitted(self):
         """SET_NULL (the default) must not appear in the exported schema."""
         from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices

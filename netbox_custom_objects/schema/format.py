@@ -93,6 +93,7 @@ FIELD_DEFAULTS = {
     "validation_minimum": None,
     "validation_maximum": None,
     "related_object_filter": None,
+    "related_name": "",
     "on_delete_behavior": "set_null",
     "is_polymorphic": False,
     "array_element_type": "",
@@ -120,13 +121,16 @@ FIELD_TYPE_ATTRS = {
     FIELD_TYPE_SELECT: {"choice_set"},
     FIELD_TYPE_MULTISELECT: {"choice_set"},
     FIELD_TYPE_OBJECT: {
-        "is_polymorphic", "related_object_type", "related_object_types", "related_object_filter", "on_delete_behavior"
+        "is_polymorphic", "related_object_type", "related_object_types", "related_object_filter", "related_name",
+        "on_delete_behavior",
+    },
+    FIELD_TYPE_MULTIOBJECT: {
+        "is_polymorphic", "related_object_type", "related_object_types", "related_object_filter", "related_name",
     },
     FIELD_TYPE_ARRAY: {
         "array_element_type", "array_tuple_size", "array_min_length", "array_max_length",
         "validation_regex", "validation_minimum", "validation_maximum",
     },
-    FIELD_TYPE_MULTIOBJECT: {"is_polymorphic", "related_object_type", "related_object_types", "related_object_filter"},
 }
 
 # ── Field base attributes ─────────────────────────────────────────────────────
@@ -154,14 +158,19 @@ FIELD_BASE_ATTRS = (
 
 # ── Constraint attributes ─────────────────────────────────────────────────────
 # Constraints are matched by name. Attributes equal to these defaults MAY be
-# omitted from the schema document; 'fields' (a list of field ids) is required.
+# omitted from the schema document; a unique constraint requires 'fields' (a list
+# of field ids), and a check constraint requires 'rule'.
 CONSTRAINT_DEFAULTS = {
     "type": "unique",
     "case_insensitive": False,
     "nulls_distinct": True,
     "condition": [],
+    "rule": [],
+    "error_message": "",
     "description": "",
 }
 
 # Attributes compared by the comparator and applied by the executor, besides 'name'.
-CONSTRAINT_ATTRS = ("type", "fields", "case_insensitive", "nulls_distinct", "condition", "description")
+CONSTRAINT_ATTRS = (
+    "type", "fields", "case_insensitive", "nulls_distinct", "condition", "rule", "error_message", "description",
+)

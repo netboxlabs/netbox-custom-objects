@@ -448,6 +448,7 @@ class FieldDefaultsConsistencyTestCase(TestCase):
         "validation_minimum": None,
         "validation_maximum": None,
         "related_object_filter": None,
+        "related_name": "",
         "default": None,
     }
 
@@ -630,6 +631,26 @@ class COTJsonSchemaTestCase(TestCase):
             with self.subTest(label):
                 self._assert_invalid(document(field))
 
+    def test_related_name(self):
+        def document(field):
+            return {"schema_version": "1", "types": [{"name": "widget", "slug": "widget", "fields": [field]}]}
+
+        device = {"id": 1, "name": "device", "type": "object", "related_object_type": "dcim/device"}
+        sites = {"id": 1, "name": "sites", "type": "multiobject", "related_object_type": "dcim/site"}
+        self._assert_valid(document({**device, "related_name": "widgets"}))
+        self._assert_valid(document({**sites, "related_name": "site_widgets"}))
+        self._assert_valid(document({**device, "related_name": ""}))
+        invalid = {
+            "uppercase": {**device, "related_name": "Widgets"},
+            "double underscore": {**device, "related_name": "my__widgets"},
+            "too long": {**device, "related_name": "w" * 101},
+            "not a string": {**device, "related_name": 1},
+            "on a text field": {"id": 1, "name": "label", "type": "text", "related_name": "widgets"},
+        }
+        for label, field in invalid.items():
+            with self.subTest(label):
+                self._assert_invalid(document(field))
+
     def test_constraints(self):
         type_def = {
             "name": "asset",
@@ -646,18 +667,27 @@ class COTJsonSchemaTestCase(TestCase):
                     {"field": 1, "lookup": "isnull", "value": False},
                     {"field": 1, "lookup": "in", "value": ["acme", "globex"]},
                 ]},
+                {"name": "serial_not_vendor", "type": "check", "rule": [
+                    {"field": 2, "lookup": "n", "value": {"field": 1}},
+                ], "condition": [{"field": 1, "lookup": "gte", "value": "a"}], "error_message": "No"},
             ],
             "removed_constraints": ["old_constraint"],
         }
         self._assert_valid({"schema_version": "1", "types": [type_def]})
+        empty = {"field": 1, "lookup": "isnull", "value": True}
         invalid = {
             "missing fields": {"name": "c"},
             "empty fields": {"name": "c", "fields": []},
-            "unknown type": {"name": "c", "fields": [1], "type": "check"},
+            "unknown type": {"name": "c", "fields": [1], "type": "exclusion"},
             "unknown key": {"name": "c", "fields": [1], "check": "x"},
+            "check without rule": {"name": "c", "type": "check"},
+            "check with empty rule": {"name": "c", "type": "check", "rule": []},
+            "check with fields": {"name": "c", "type": "check", "fields": [1], "rule": [empty]},
+            "unique with rule": {"name": "c", "fields": [1], "rule": [empty]},
+            "unique with error message": {"name": "c", "fields": [1], "error_message": "No"},
             "condition not a list": {"name": "c", "fields": [1], "condition": {}},
             "predicate without lookup": {"name": "c", "fields": [1], "condition": [{"field": 1}]},
-            "unknown lookup": {"name": "c", "fields": [1], "condition": [{"field": 1, "lookup": "lt", "value": 1}]},
+            "unknown lookup": {"name": "c", "fields": [1], "condition": [{"field": 1, "lookup": "lk", "value": 1}]},
             "predicate unknown key": {
                 "name": "c", "fields": [1], "condition": [{"field": 1, "lookup": "exact", "value": 1, "not": True}]
             },
