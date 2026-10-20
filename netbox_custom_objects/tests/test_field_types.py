@@ -1,6 +1,7 @@
 """
 Tests for all the different field types supported by Custom Object Type Fields.
 """
+import json
 from importlib import import_module
 from unittest import skip, skipUnless
 from unittest.mock import Mock
@@ -27,7 +28,7 @@ from netbox_custom_objects.field_types import (
     _csv_import_to_field_name,
 )
 from netbox.search import get_indexer
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField, _deferred_co_field_data
 from .base import CustomObjectsTestCase
 
 
@@ -667,6 +668,47 @@ class ArrayFieldTypeTestCase(FieldTypeTestCase):
         self.assertEqual(instance.readings, [1, 2, 3])
         self.assertEqual(instance.points, [[0, 0, 0], [10, 0, 5]])
         self.assertEqual(instance.days, [date(2026, 1, 1), date(2026, 2, 1)])
+
+    def test_serialized_round_trip(self):
+        """Serialized values (as netbox-branching applies them from the changelog) load back."""
+        self._array_field(name="readings")
+        self._array_field(name="points", array_tuple_size=3)
+        self._array_field(name="days", array_element_type="date")
+        model = self._model()
+        instance = model.objects.create(
+            name="Test", readings=[1, 2], points=[[0, 0, 0], [10, 0, 5]], days=[date(2026, 1, 1)],
+        )
+        data = instance.serialize_object()
+        self.assertIsInstance(data["points"], str)
+
+        # Update: assigned as serialized, then cleaned.
+        instance.points = data["points"]
+        instance.full_clean()
+        self.assertEqual(instance.points, [[0, 0, 0], [10, 0, 5]])
+
+        # Create.
+        pk = instance.pk
+        instance.delete()
+        deserialized = model.deserialize_object(data, pk=pk)
+        deserialized.object.full_clean()
+        deserialized.save()
+        restored = model.objects.get(pk=pk)
+        self.assertEqual(restored.readings, [1, 2])
+        self.assertEqual(restored.points, [[0, 0, 0], [10, 0, 5]])
+        self.assertEqual(restored.days, [date(2026, 1, 1)])
+
+    def test_deferred_replay(self):
+        """Serialized values replay once the field exists (a squash merge applying an object first)."""
+        model = self._model()
+        instance = model.objects.create(name="Test")
+        # As Django serializes them: a tuple array is a list of JSON strings.
+        data = {"readings": json.dumps(["1", "2"]), "points": json.dumps([json.dumps(["0", "1"])])}
+        _deferred_co_field_data.set({self.custom_object_type.get_database_table_name(): {instance.pk: {"data": data}}})
+        self._array_field(name="readings")
+        self._array_field(name="points", array_tuple_size=2)
+        restored = self._model().objects.get(pk=instance.pk)
+        self.assertEqual(restored.readings, [1, 2])
+        self.assertEqual(restored.points, [[0, 1]])
 
     def test_value_validation(self):
         self._array_field(name="points", array_tuple_size=3, array_min_length=2, array_max_length=3)

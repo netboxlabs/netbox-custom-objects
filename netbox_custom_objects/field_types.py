@@ -2787,17 +2787,17 @@ class CustomArrayField(ArrayField):
     """
 
     def to_python(self, value):
+        nested = isinstance(self.base_field, ArrayField)
         if isinstance(value, str):
-            try:
-                value = json.loads(value)
-            except json.JSONDecodeError:
-                raise ValidationError(_("Enter a list of values."), code="not_a_list")
+            value = self._load_json(value)
+            # Django serializes a tuple array (e.g. in the changelog) as a list of JSON strings.
+            if nested and isinstance(value, list):
+                value = [self._load_json(item) if isinstance(item, str) else item for item in value]
         if value is None:
             return value
         if not isinstance(value, (list, tuple)):
             # Not "invalid": a ModelForm would replace that with its form field's own message.
             raise ValidationError(_("Enter a list of values."), code="not_a_list")
-        nested = isinstance(self.base_field, ArrayField)
         if nested and not all(isinstance(item, (list, tuple)) for item in value):
             raise ValidationError(_("Each item must itself be a list of values."), code="item_not_a_list")
         # Check tuple sizes first, rather than Django's "nested arrays must have the same length".
@@ -2818,6 +2818,13 @@ class CustomArrayField(ArrayField):
                     error, prefix=self.error_messages["item_invalid"], code="item_invalid", params={"nth": index},
                 )
         return result
+
+    @staticmethod
+    def _load_json(value):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            raise ValidationError(_("Enter a list of values."), code="not_a_list")
 
     def _item_to_python(self, item):
         base_field = self.base_field

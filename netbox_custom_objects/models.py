@@ -272,6 +272,11 @@ def _apply_deferred_co_field(field_instance):
 
     schema_conn = _get_schema_connection()
 
+    # An array arrives serialized (a JSON string), which isn't a Postgres array literal.
+    array_field = None
+    if field_instance.type == CustomObjectFieldTypeChoices.TYPE_ARRAY:
+        array_field = FIELD_TYPE_CLASS[field_instance.type]().get_model_field(field_instance)
+
     with schema_conn.cursor() as cursor:
         for co_pk, entry in per_table.items():
             data = entry['data']
@@ -284,9 +289,12 @@ def _apply_deferred_co_field(field_instance):
             # table_name / col_name come from validated identifiers
             # (^[a-z0-9_]+$ on field.name) — safe to interpolate.
             if matched is not None:
+                value = data[matched]
+                if array_field is not None:
+                    value = array_field.get_db_prep_value(array_field.to_python(value), schema_conn)
                 cursor.execute(
                     f'UPDATE "{table_name}" SET "{col_name}" = %s WHERE id = %s',
-                    [data[matched], co_pk],
+                    [value, co_pk],
                 )
             if title_matched is not None:
                 cursor.execute(
