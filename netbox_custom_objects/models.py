@@ -263,18 +263,30 @@ def _mark_registered_in_transaction(model):
     conn = _get_schema_connection()
     if not conn.in_atomic_block:
         return
-    model._registered_in = conn
 
     def committed():
-        model._registered_in = None
+        # Only this mark's own hook may clear it; a class is marked once, by
+        # the thread that built it, but keep the clear scoped regardless.
+        if getattr(model, '_registered_in', None) is mark:
+            model._registered_in = None
 
+    mark = (conn, committed)
+    model._registered_in = mark
     conn.on_commit(committed)
 
 
 def _registration_rolled_back(model):
     """True if *model* was built inside a transaction that ended without committing."""
-    conn = getattr(model, '_registered_in', None)
-    return conn is not None and not conn.in_atomic_block
+    mark = getattr(model, '_registered_in', None)
+    if mark is None:
+        return False
+    conn, committed = mark
+    # Django drops a pending on_commit hook when its transaction (or the
+    # savepoint it was registered under) rolls back, and the hook clears the
+    # mark on commit.  Checking the hook rather than conn.in_atomic_block tells
+    # the marking transaction from a later one on the same connection, e.g.
+    # the thread's next request.
+    return not any(hook is committed for _sids, hook, *_rest in conn.run_on_commit)
 
 
 def _historical_names_for_field(field_pk):

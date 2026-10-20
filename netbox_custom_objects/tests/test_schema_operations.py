@@ -471,6 +471,15 @@ class SchemaOperationsTestCase(TransactionCleanupMixin, CustomObjectsTestCase, T
         cot, _stale_cot = self._rename_then_roll_back()
         self._assert_fits_table(apps.get_model(APP_LABEL, cot.get_table_model_name(cot.pk)))
 
+    def test_rollback_after_rename_is_seen_from_a_later_transaction(self):
+        """The connection that rolled back serves the next request too, so a lookup
+        from inside that request's transaction must not mistake it for the one the
+        class was built in (#767)."""
+        cot, stale_cot = self._rename_then_roll_back()
+        with transaction.atomic():
+            self._assert_fits_table(stale_cot.get_model())
+            self._assert_fits_table(apps.get_model(APP_LABEL, cot.get_table_model_name(cot.pk)))
+
 
 class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
     """

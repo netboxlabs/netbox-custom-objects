@@ -649,12 +649,14 @@ class CustomObjectsPluginConfig(PluginConfig):
             # CustomObjectType.get_model() and _mark_registered_in_transaction.
             # The narrow guard, as get_model() itself uses: the class exists, so
             # the test runner must rebuild it too rather than skip.
-            conn = getattr(model, '_registered_in', None)
-            if conn is None or conn.in_atomic_block or self._dynamic_model_creation_unsafe():
+            if getattr(model, '_registered_in', None) is None:
                 return model
-            from .models import CustomObjectType
+            from .models import CustomObjectType, _registration_rolled_back
+            cot_id = getattr(model, 'custom_object_type_id', None)
+            if cot_id is None or not _registration_rolled_back(model) or self._dynamic_model_creation_unsafe():
+                return model
             try:
-                return CustomObjectType.objects.get(pk=model.custom_object_type_id).get_model()
+                return CustomObjectType.objects.get(pk=cot_id).get_model()
             except (CustomObjectType.DoesNotExist, ProgrammingError, OperationalError):
                 return model
 
