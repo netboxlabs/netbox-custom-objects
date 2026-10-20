@@ -3737,3 +3737,101 @@ class GraphQLBranchEndpointTestCase(BranchingTestBase, _TestBase):
         self.assertEqual(
             [r['name'] for r in main_again['custom_objects_server_list']], ['main-server'],
         )
+
+
+class PolymorphicReverseAccessorBranchTestCase(BranchingTestBase, _TestBase):
+    """Reverse accessors live on target classes shared by every branch: only main
+    wires them, and they resolve the source model for the active branch (#766)."""
+
+    def setUp(self):
+        super().setUp()
+        self.site_ot = ObjectType.objects.get(app_label='dcim', model='site')
+        self.site_ct = ContentType.objects.get_for_model(Site)
+        with event_tracking(self.request):
+            self.cot = CustomObjectType.objects.create(name='holder', slug='holder')
+            CustomObjectTypeField.objects.create(
+                custom_object_type=self.cot, name='name', label='Name', type='text',
+            )
+            self.site = Site.objects.create(name='Reverse Site', slug='reverse-site')
+
+    def _add_field(self, type_, name, related_name):
+        field = CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot, name=name, label=name, type=type_,
+            is_polymorphic=True, related_name=related_name,
+        )
+        field.related_object_types.set([self.site_ot])
+        return field
+
+    def _model(self):
+        return CustomObjectType.objects.get(pk=self.cot.pk).get_model()
+
+    def test_object_accessor_uses_branch_model(self):
+        with event_tracking(self.request):
+            self._add_field('object', 'target', 'holders_by_target')
+            main_co = self._model().objects.create(
+                name='main-co', target_content_type=self.site_ct, target_object_id=self.site.pk,
+            )
+
+        branch = _provision_branch('Reverse OBJ Branch', user=self.user)
+        with activate_branch(branch), event_tracking(_make_request(self.user)):
+            CustomObjectTypeField.objects.create(
+                custom_object_type=self.cot, name='note', label='Note', type='text',
+            )
+            branch_model = self._model()
+            branch_co = branch_model.objects.create(
+                name='branch-co', note='hi', target_content_type=self.site_ct, target_object_id=self.site.pk,
+            )
+            result = list(self.site.holders_by_target.all())
+            self.assertEqual({type(co) for co in result}, {branch_model})
+            self.assertEqual({co.pk for co in result}, {main_co.pk, branch_co.pk})
+
+        self.assertEqual(list(self.site.holders_by_target.all()), [main_co])
+
+    def test_multiobject_accessor_uses_branch_model(self):
+        # Reads only: branch writes to a polymorphic through still land in main (#839).
+        with event_tracking(self.request):
+            self._add_field('multiobject', 'targets', 'holders_by_targets')
+            main_model = self._model()
+            co = main_model.objects.create(name='main-co')
+            co.targets.add(self.site)
+
+        branch = _provision_branch('Reverse M2M Branch', user=self.user)
+        with activate_branch(branch), event_tracking(_make_request(self.user)):
+            CustomObjectTypeField.objects.create(
+                custom_object_type=self.cot, name='note', label='Note', type='text',
+            )
+            branch_model = self._model()
+            result = list(self.site.holders_by_targets.all())
+            self.assertEqual([type(c) for c in result], [branch_model])
+            self.assertEqual([c.pk for c in result], [co.pk])
+
+        result = list(self.site.holders_by_targets.all())
+        self.assertEqual([type(c) for c in result], [main_model])
+        self.assertEqual([c.pk for c in result], [co.pk])
+
+    def test_field_added_in_branch_is_not_wired(self):
+        branch = _provision_branch('Reverse Add Branch', user=self.user)
+        with activate_branch(branch), event_tracking(_make_request(self.user)):
+            self._add_field('object', 'target', 'holders_by_target')
+            self._model()
+            self._add_field('multiobject', 'targets', 'holders_by_targets')
+            self._model()
+
+        self.assertFalse(hasattr(Site, 'holders_by_target'))
+        self.assertFalse(hasattr(Site, 'holders_by_targets'))
+
+    def test_branch_field_delete_keeps_main_accessor(self):
+        with event_tracking(self.request):
+            field = self._add_field('object', 'target', 'holders_by_target')
+            co = self._model().objects.create(
+                name='main-co', target_content_type=self.site_ct, target_object_id=self.site.pk,
+            )
+
+        branch = _provision_branch('Reverse Delete Branch', user=self.user)
+        with activate_branch(branch), event_tracking(_make_request(self.user)):
+            CustomObjectTypeField.objects.get(pk=field.pk).delete()
+            # The branch has no such field any more.
+            self.assertEqual(list(self.site.holders_by_target.all()), [])
+
+        # Main still has the field until the branch merges.
+        self.assertEqual(list(self.site.holders_by_target.all()), [co])

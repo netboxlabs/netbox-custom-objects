@@ -2503,21 +2503,27 @@ class PolymorphicM2MDescriptor:
         return False
 
 
-class PolymorphicObjectReverseManager:
-    """Returned when a polymorphic GFK reverse relation is accessed on a target instance."""
+class _PolymorphicReverseManager:
+    """Base for the managers returned by the polymorphic reverse descriptors."""
 
-    def __init__(self, instance, cot_pk, field_name):
+    def __init__(self, instance, cot_pk):
         self._instance = instance
         self._cot_pk = cot_pk
-        self._field_name = field_name
+
+    def _is_source_field(self, field):
+        raise NotImplementedError
+
+    def _filter(self, source_model):
+        raise NotImplementedError
 
     def _source_model(self):
+        """Return the source model for the active branch, or None if the source type is gone.
+
+        Goes through get_model() so the model matches the active branch and isn't stale. The
+        descriptor sits on the shared target class, so the source field may not exist in this
+        context (the branch deleted it); the caller then returns an empty queryset (#766).
+        """
         from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
-        # Fast path: model already in the COT cache (the common runtime case).
-        model = CustomObjectType.get_cached_model(self._cot_pk)
-        if model is not None:
-            return model
-        # Cache miss — fetch from DB and let get_model() cache the result.
         try:
             return CustomObjectType.objects.get(pk=self._cot_pk).get_model()
         except CustomObjectType.DoesNotExist:
@@ -2532,11 +2538,12 @@ class PolymorphicObjectReverseManager:
         source_model = self._source_model()
         if source_model is None:
             return ContentType.objects.none()
-        ct = ContentType.objects.get_for_model(type(self._instance))
-        return source_model.objects.filter(**{
-            f"{self._field_name}_content_type": ct,
-            f"{self._field_name}_object_id": self._instance.pk,
-        })
+        if not any(
+            info['field'].is_polymorphic and self._is_source_field(info['field'])
+            for info in source_model._field_objects.values()
+        ):
+            return source_model.objects.none()
+        return self._filter(source_model)
 
     def count(self):
         return self.all().count()
@@ -2546,6 +2553,24 @@ class PolymorphicObjectReverseManager:
 
     def __iter__(self):
         return iter(self.all())
+
+
+class PolymorphicObjectReverseManager(_PolymorphicReverseManager):
+    """Returned when a polymorphic GFK reverse relation is accessed on a target instance."""
+
+    def __init__(self, instance, cot_pk, field_name):
+        super().__init__(instance, cot_pk)
+        self._field_name = field_name
+
+    def _is_source_field(self, field):
+        return field.type == CustomFieldTypeChoices.TYPE_OBJECT and field.name == self._field_name
+
+    def _filter(self, source_model):
+        ct = ContentType.objects.get_for_model(type(self._instance))
+        return source_model.objects.filter(**{
+            f"{self._field_name}_content_type": ct,
+            f"{self._field_name}_object_id": self._instance.pk,
+        })
 
 
 class PolymorphicObjectReverseDescriptor:
@@ -2566,53 +2591,34 @@ class PolymorphicObjectReverseDescriptor:
         return PolymorphicObjectReverseManager(instance, self.cot_pk, self.field_name)
 
 
-class PolymorphicMultiObjectReverseManager:
+class PolymorphicMultiObjectReverseManager(_PolymorphicReverseManager):
     """Returned when a polymorphic M2M reverse relation is accessed on a target instance."""
 
     def __init__(self, instance, cot_pk, through_model_name):
-        self._instance = instance
-        self._cot_pk = cot_pk
+        super().__init__(instance, cot_pk)
         self._through_model_name = through_model_name
 
-    def _source_model(self):
-        from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
-        # Fast path: model already in the COT cache (the common runtime case).
-        model = CustomObjectType.get_cached_model(self._cot_pk)
-        if model is not None:
-            return model
-        # Cache miss — fetch from DB and let get_model() cache the result.
-        try:
-            return CustomObjectType.objects.get(pk=self._cot_pk).get_model()
-        except CustomObjectType.DoesNotExist:
-            logger.warning(
-                'Reverse accessor: source CustomObjectType pk=%d no longer exists; '
-                'returning empty queryset.',
-                self._cot_pk,
-            )
-            return None
+    def _is_source_field(self, field):
+        return (
+            field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
+            and field.through_model_name == self._through_model_name
+        )
 
     def _through(self):
-        return apps.get_model(APP_LABEL, self._through_model_name)
+        from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
+        # This context's through; apps.all_models only holds main's.
+        through = CustomObjectType.get_cached_through_model(
+            self._cot_pk, self._through_model_name, CustomObjectType._active_branch_id()
+        )
+        return through or apps.get_model(APP_LABEL, self._through_model_name)
 
-    def all(self):
-        source_model = self._source_model()
-        if source_model is None:
-            return ContentType.objects.none()
+    def _filter(self, source_model):
         ct = ContentType.objects.get_for_model(type(self._instance))
         source_ids = self._through().objects.filter(
             content_type_id=ct.pk,
             object_id=self._instance.pk,
         ).values_list("source_id", flat=True)
         return source_model.objects.filter(pk__in=source_ids)
-
-    def count(self):
-        return self.all().count()
-
-    def exists(self):
-        return self.all().exists()
-
-    def __iter__(self):
-        return iter(self.all())
 
 
 class PolymorphicMultiObjectReverseDescriptor:

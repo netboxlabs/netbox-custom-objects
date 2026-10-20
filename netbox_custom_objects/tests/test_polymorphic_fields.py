@@ -1936,6 +1936,17 @@ class PolymorphicReverseDescriptorTest(
             "COT A's _wire must not overwrite COT B's descriptor",
         )
 
+    def test_cot_delete_unwires_own_descriptor(self):
+        """Deleting the source COT removes its fields' reverse accessors, so a later
+        field can claim the related_name."""
+        self._create_gfk_field(related_name="co_deleted_cot_ref")
+        self.cot.get_model()
+        self.assertIn("co_deleted_cot_ref", Site.__dict__)
+
+        self.cot.delete()
+
+        self.assertNotIn("co_deleted_cot_ref", Site.__dict__)
+
     def test_source_model_deleted_returns_empty_queryset(self):
         """Accessing .all() on a stale reverse descriptor returns an empty queryset
         rather than raising DoesNotExist when the source COT has been deleted."""
