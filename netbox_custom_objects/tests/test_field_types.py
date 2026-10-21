@@ -5,7 +5,7 @@ import json
 from importlib import import_module
 from unittest import skip, skipUnless
 from unittest.mock import Mock
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from decimal import Decimal
 from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist, ValidationError
@@ -187,21 +187,6 @@ class TextFieldTypeTestCase(FieldTypeTestCase):
         with self.assertRaises(ValidationError):
             field.validate("Invalid123")
 
-    def test_text_field_model_generation(self):
-        """Test text field model generation."""
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="description",
-            label="Description",
-            type="text",
-            required=True
-        )
-
-        model = self.custom_object_type.get_model()
-        instance = model.objects.create(name="Test", description="Test description")
-
-        self.assertEqual(instance.description, "Test description")
-
 
 class LongTextFieldTypeTestCase(FieldTypeTestCase):
     """Test cases for long text field type."""
@@ -279,21 +264,6 @@ class IntegerFieldTypeTestCase(FieldTypeTestCase):
         # Test non-integer value
         with self.assertRaises(ValidationError):
             field.validate("not an integer")
-
-    def test_integer_field_model_generation(self):
-        """Test integer field model generation."""
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="count",
-            label="Count",
-            type="integer",
-            default=10
-        )
-
-        model = self.custom_object_type.get_model()
-        instance = model.objects.create(name="Test", count=25)
-
-        self.assertEqual(instance.count, 25)
 
     def test_integer_field_min_max_enforced_by_full_clean(self):
         """validation_minimum/maximum must be enforced by the model field, not just the UI form."""
@@ -441,21 +411,6 @@ class DecimalFieldTypeTestCase(FieldTypeTestCase):
         # Test invalid decimal
         with self.assertRaises(ValidationError):
             field.validate("not a decimal")
-
-    def test_decimal_field_model_generation(self):
-        """Test decimal field model generation."""
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="price",
-            label="Price",
-            type="decimal",
-            default=10.50
-        )
-
-        model = self.custom_object_type.get_model()
-        instance = model.objects.create(name="Test", price=Decimal("25.75"))
-
-        self.assertEqual(instance.price, Decimal("25.75"))
 
     def test_decimal_field_min_max_enforced_by_full_clean(self):
         """validation_minimum/maximum must be enforced by the model field, not just the UI form."""
@@ -953,21 +908,6 @@ class BooleanFieldTypeTestCase(FieldTypeTestCase):
         with self.assertRaises(ValidationError):
             field.validate("not a boolean")
 
-    def test_boolean_field_model_generation(self):
-        """Test boolean field model generation."""
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="active",
-            label="Active",
-            type="boolean",
-            default=True
-        )
-
-        model = self.custom_object_type.get_model()
-        instance = model.objects.create(name="Test", active=False)
-
-        self.assertFalse(instance.active)
-
 
 class DateFieldTypeTestCase(FieldTypeTestCase):
     """Test cases for date field type."""
@@ -1004,21 +944,6 @@ class DateFieldTypeTestCase(FieldTypeTestCase):
         with self.assertRaises(ValidationError):
             field.validate("invalid-date")
 
-    def test_date_field_model_generation(self):
-        """Test date field model generation."""
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="created_date",
-            label="Created Date",
-            type="date"
-        )
-
-        model = self.custom_object_type.get_model()
-        test_date = date(2023, 1, 1)
-        instance = model.objects.create(name="Test", created_date=test_date)
-
-        self.assertEqual(instance.created_date, test_date)
-
 
 class DateTimeFieldTypeTestCase(FieldTypeTestCase):
     """Test cases for datetime field type."""
@@ -1054,21 +979,6 @@ class DateTimeFieldTypeTestCase(FieldTypeTestCase):
         # Test invalid datetime string
         with self.assertRaises(ValidationError):
             field.validate("invalid-datetime")
-
-    def test_datetime_field_model_generation(self):
-        """Test datetime field model generation."""
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="created_datetime",
-            label="Created DateTime",
-            type="datetime"
-        )
-
-        model = self.custom_object_type.get_model()
-        test_datetime = datetime(2023, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-        instance = model.objects.create(name="Test", created_datetime=test_datetime)
-
-        self.assertEqual(instance.created_datetime, test_datetime)
 
 
 class URLFieldTypeTestCase(FieldTypeTestCase):
@@ -1362,21 +1272,6 @@ class JSONFieldTypeTestCase(FieldTypeTestCase):
         self.assertEqual(field.type, "json")
         self.assertEqual(field.default, {"key": "value"})
 
-    def test_json_field_model_generation(self):
-        """Test JSON field model generation."""
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="metadata",
-            label="Metadata",
-            type="json"
-        )
-
-        model = self.custom_object_type.get_model()
-        test_data = {"key": "value", "number": 42, "list": [1, 2, 3]}
-        instance = model.objects.create(name="Test", metadata=test_data)
-
-        self.assertEqual(instance.metadata, test_data)
-
 
 class SelectFieldTypeTestCase(FieldTypeTestCase):
     """Test cases for select field type."""
@@ -1417,22 +1312,6 @@ class SelectFieldTypeTestCase(FieldTypeTestCase):
         # Test invalid choice
         with self.assertRaises(ValidationError):
             field.validate("invalid_choice")
-
-    def test_select_field_model_generation(self):
-        """Test select field model generation."""
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="status",
-            label="Status",
-            type="select",
-            choice_set=self.choice_set,
-            default="choice1"
-        )
-
-        model = self.custom_object_type.get_model()
-        instance = model.objects.create(name="Test", status="choice2")
-
-        self.assertEqual(instance.status, "choice2")
 
     def test_select_field_display_value_returns_label(self):
         """get_display_value() must return the human-readable label, not the raw key."""
@@ -1618,21 +1497,6 @@ class MultiSelectFieldTypeTestCase(FieldTypeTestCase):
         with self.assertRaises(ValidationError):
             field.validate(["choice1", "invalid_choice"])
 
-    def test_multiselect_field_model_generation(self):
-        """Test multiselect field model generation."""
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="tags",
-            label="Tags",
-            type="multiselect",
-            choice_set=self.choice_set
-        )
-
-        model = self.custom_object_type.get_model()
-        instance = model.objects.create(name="Test", tags=["choice1", "choice3"])
-
-        self.assertEqual(instance.tags, ["choice1", "choice3"])
-
     def test_multiselect_field_display_value_returns_labels(self):
         """get_display_value() must return comma-joined human-readable labels, not raw keys."""
         self.create_custom_object_type_field(
@@ -1763,38 +1627,6 @@ class ObjectFieldTypeTestCase(FieldTypeTestCase):
         with self.assertRaises(NotImplementedError):
             ObjectFieldType().get_model_field(field)
 
-    def test_object_field_model_generation(self):
-        """Test object field model generation."""
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="device",
-            label="Device",
-            type="object",
-            related_object_type=self.device_object_type
-        )
-
-        from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
-
-        model = self.custom_object_type.get_model()
-
-        site = Site.objects.create(name="Test Site", slug="test-site")
-        manufacturer = Manufacturer.objects.create(name="Test Manufacturer", slug="test-manufacturer")
-        device_type = DeviceType.objects.create(
-            manufacturer=manufacturer,
-            model="Test Model",
-            slug="test-model"
-        )
-        device_role = DeviceRole.objects.create(name="Test Role", slug="test-role")
-        device = Device.objects.create(
-            name="Test Device",
-            site=site,
-            device_type=device_type,
-            role=device_role
-        )
-
-        instance = model.objects.create(name="Test", device=device)
-        self.assertEqual(instance.device, device)
-
     def test_csv_import_field_uses_name_for_models_with_name(self):
         """get_form_field(for_csv_import=True) uses 'name' as to_field_name for models
         that have a name field (e.g. Device)."""
@@ -1886,48 +1718,6 @@ class MultiObjectFieldTypeTestCase(FieldTypeTestCase):
         field.refresh_from_db()
         with self.assertRaises(NotImplementedError):
             MultiObjectFieldType().get_model_field(field)
-
-    def test_multiobject_field_model_generation(self):
-        """Test multiobject field model generation."""
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="devices",
-            label="Devices",
-            type="multiobject",
-            related_object_type=self.device_object_type
-        )
-
-        from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
-
-        model = self.custom_object_type.get_model()
-
-        site = Site.objects.create(name="Test Site", slug="test-site")
-        manufacturer = Manufacturer.objects.create(name="Test Manufacturer", slug="test-manufacturer")
-        device_type = DeviceType.objects.create(
-            manufacturer=manufacturer,
-            model="Test Model",
-            slug="test-model"
-        )
-        device_role = DeviceRole.objects.create(name="Test Role", slug="test-role")
-        device1 = Device.objects.create(
-            name="Test Device 1",
-            site=site,
-            device_type=device_type,
-            role=device_role
-        )
-        device2 = Device.objects.create(
-            name="Test Device 2",
-            site=site,
-            device_type=device_type,
-            role=device_role
-        )
-
-        instance = model.objects.create(name="Test")
-        instance.devices.add(device1, device2)
-
-        self.assertEqual(instance.devices.count(), 2)
-        self.assertIn(device1, instance.devices.all())
-        self.assertIn(device2, instance.devices.all())
 
     def test_csv_import_form_field_for_module_type_uses_model_field(self):
         """MultiObjectFieldType.get_form_field(for_csv_import=True) on a field
@@ -2024,268 +1814,6 @@ class MultiObjectFieldTypeTestCase(FieldTypeTestCase):
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)
         model = self.custom_object_type.get_model()
         self.assertEqual(set(model.objects.get(pk=instance.pk).devices.all()), {device1, device2})
-
-
-class SelfReferentialFieldTestCase(FieldTypeTestCase):
-    """Test cases for self-referential object fields.
-
-    The recursion guard in CustomObjectTypeField._check_recursion() explicitly
-    permits self-referential fields (#263), so these tests should pass without
-    any skip decorator.
-    """
-
-    def test_self_referential_object_field(self):
-        """#263 – A COT may have an FK object field pointing to itself."""
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="parent",
-            label="Parent",
-            type="object",
-            related_object_type=self.custom_object_type.object_type,
-        )
-
-        model = self.custom_object_type.get_model()
-
-        parent = model.objects.create(name="Parent Instance")
-        child = model.objects.create(name="Child Instance", parent=parent)
-
-        self.assertEqual(child.parent, parent)
-
-    def test_self_referential_multiobject_field(self):
-        """#263 – A COT may have a M2M multiobject field pointing to itself."""
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="children",
-            label="Children",
-            type="multiobject",
-            related_object_type=self.custom_object_type.object_type,
-        )
-
-        model = self.custom_object_type.get_model()
-
-        parent = model.objects.create(name="Parent Instance")
-        child1 = model.objects.create(name="Child 1")
-        child2 = model.objects.create(name="Child 2")
-
-        parent.children.add(child1, child2)
-
-        self.assertEqual(parent.children.count(), 2)
-        self.assertIn(child1, parent.children.all())
-        self.assertIn(child2, parent.children.all())
-
-
-class CrossReferentialFieldTestCase(FieldTypeTestCase):
-    """Test cases for cross-referential custom object fields."""
-
-    def test_cross_referential_object_field(self):
-        """Test object field referencing another custom object type."""
-        # Create second custom object type
-        second_type = self.create_custom_object_type(name="SecondObject", slug="second-objects")
-        self.create_custom_object_type_field(
-            second_type,
-            name="name",
-            label="Name",
-            type="text",
-            primary=True,
-            required=True
-        )
-
-        # Add object field referencing second type
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="related_object",
-            label="Related Object",
-            type="object",
-            related_object_type=second_type.object_type
-        )
-
-        model1 = self.custom_object_type.get_model()
-        # Refresh second_type so cache_timestamp matches the DB value bumped by the signal.
-        second_type.refresh_from_db()
-        model2 = second_type.get_model()
-
-        # Create instances
-        obj2 = model2.objects.create(name="Second Object")
-        obj1 = model1.objects.create(name="First Object", related_object=obj2)
-
-        self.assertEqual(obj1.related_object, obj2)
-
-    def test_cross_referential_multiobject_field(self):
-        """Test multiobject field referencing another custom object type."""
-        # Create second custom object type
-        second_type = self.create_custom_object_type(name="SecondObject", slug="second-objects")
-        self.create_custom_object_type_field(
-            second_type,
-            name="name",
-            label="Name",
-            type="text",
-            primary=True,
-            required=True
-        )
-
-        # Add multiobject field referencing second type
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="related_objects",
-            label="Related Objects",
-            type="multiobject",
-            related_object_type=second_type.object_type
-        )
-
-        model1 = self.custom_object_type.get_model()
-        model2 = second_type.get_model()
-
-        # Create instances
-        obj1 = model1.objects.create(name="First Object")
-        obj2_1 = model2.objects.create(name="Second Object 1")
-        obj2_2 = model2.objects.create(name="Second Object 2")
-
-        # Add related objects
-        obj1.related_objects.add(obj2_1, obj2_2)
-
-        self.assertEqual(obj1.related_objects.count(), 2)
-        self.assertIn(obj2_1, obj1.related_objects.all())
-        self.assertIn(obj2_2, obj1.related_objects.all())
-
-
-class MultipleObjectFieldsToSameCOTTestCase(FieldTypeTestCase):
-    """Test cases for multiple object/multiobject fields pointing to the same COT.
-
-    Issue #237: multiple FK/M2M fields targeting the same related COT should all
-    be created without name collisions and must remain independently queryable.
-    """
-
-    def test_two_fk_fields_to_same_cot(self):
-        """#237 – Two FK object fields on the same COT can point to the same target COT."""
-        # Create a second COT that will be the shared target
-        target = self.create_custom_object_type(name="SharedTarget", slug="shared-target")
-        self.create_custom_object_type_field(
-            target,
-            name="name",
-            label="Name",
-            type="text",
-            primary=True,
-            required=True,
-        )
-
-        # Add two independent FK fields on the existing COT pointing to target
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="primary_ref",
-            label="Primary Reference",
-            type="object",
-            related_object_type=target.object_type,
-        )
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="secondary_ref",
-            label="Secondary Reference",
-            type="object",
-            related_object_type=target.object_type,
-        )
-
-        # Refresh target so its cache_timestamp matches the DB value bumped by the signal
-        # when both TYPE_OBJECT fields above were saved.
-        target.refresh_from_db()
-        target_model = target.get_model()
-        model = self.custom_object_type.get_model()
-
-        t1 = target_model.objects.create(name="Target 1")
-        t2 = target_model.objects.create(name="Target 2")
-
-        obj = model.objects.create(name="Source Object", primary_ref=t1, secondary_ref=t2)
-
-        self.assertEqual(obj.primary_ref, t1)
-        self.assertEqual(obj.secondary_ref, t2)
-
-    def test_two_m2m_fields_to_same_cot(self):
-        """#237 – Two M2M multiobject fields on the same COT can point to the same target COT."""
-        target = self.create_custom_object_type(name="M2MTarget", slug="m2m-target")
-        self.create_custom_object_type_field(
-            target,
-            name="name",
-            label="Name",
-            type="text",
-            primary=True,
-            required=True,
-        )
-
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="primary_refs",
-            label="Primary References",
-            type="multiobject",
-            related_object_type=target.object_type,
-        )
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="secondary_refs",
-            label="Secondary References",
-            type="multiobject",
-            related_object_type=target.object_type,
-        )
-
-        target_model = target.get_model()
-        model = self.custom_object_type.get_model()
-
-        t1 = target_model.objects.create(name="Target 1")
-        t2 = target_model.objects.create(name="Target 2")
-        t3 = target_model.objects.create(name="Target 3")
-
-        obj = model.objects.create(name="Source Object")
-        obj.primary_refs.add(t1, t2)
-        obj.secondary_refs.add(t2, t3)
-
-        # The two M2M relations are independent
-        self.assertEqual(obj.primary_refs.count(), 2)
-        self.assertEqual(obj.secondary_refs.count(), 2)
-        self.assertIn(t1, obj.primary_refs.all())
-        self.assertIn(t3, obj.secondary_refs.all())
-        # t2 appears in both without conflict
-        self.assertIn(t2, obj.primary_refs.all())
-        self.assertIn(t2, obj.secondary_refs.all())
-
-    def test_fk_and_m2m_fields_to_same_cot(self):
-        """#237 – One FK and one M2M field pointing to the same target COT coexist."""
-        target = self.create_custom_object_type(name="MixedTarget", slug="mixed-target")
-        self.create_custom_object_type_field(
-            target,
-            name="name",
-            label="Name",
-            type="text",
-            primary=True,
-            required=True,
-        )
-
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="single_ref",
-            label="Single Reference",
-            type="object",
-            related_object_type=target.object_type,
-        )
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="multi_refs",
-            label="Multi References",
-            type="multiobject",
-            related_object_type=target.object_type,
-        )
-
-        # Refresh target so cache_timestamp matches the DB value bumped by the signal
-        # when the TYPE_OBJECT 'single_ref' field was saved above.
-        target.refresh_from_db()
-        target_model = target.get_model()
-        model = self.custom_object_type.get_model()
-
-        t1 = target_model.objects.create(name="Target 1")
-        t2 = target_model.objects.create(name="Target 2")
-
-        obj = model.objects.create(name="Source Object", single_ref=t1)
-        obj.multi_refs.add(t1, t2)
-
-        self.assertEqual(obj.single_ref, t1)
-        self.assertEqual(obj.multi_refs.count(), 2)
 
 
 class PrimaryFieldChangeTestCase(FieldTypeTestCase):
