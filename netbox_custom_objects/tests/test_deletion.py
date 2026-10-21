@@ -1,8 +1,9 @@
 """
 Tests for deletion scenarios with cascading effects.
 
-On-delete behaviour is enforced by FK constraints that a field adds once its
-transaction commits, so tests that rely on it run the field's on-commit callbacks.
+The database enforces on-delete behaviour with FK constraints that a field adds once
+its transaction commits, so the tests that delete with raw SQL run the field's
+on-commit callbacks. ORM deletes use the model field's on_delete and don't need them.
 """
 from django.apps import apps as django_apps
 from django.db import connection, transaction
