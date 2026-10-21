@@ -701,6 +701,16 @@ class LinkedObjectsAPITest(CustomObjectsTestCase, TestCase):
         self.device = Device.objects.create(
             device_type=device_type, role=role, name='LO Device', site=site
         )
+        self._grant(Device)
+        self._grant(self.model)
+
+    def _grant(self, model, constraints=None, user=None):
+        """Give the user (default: self.user) view permission on *model*."""
+        perm = ObjectPermission.objects.create(
+            name=f'LO view {model._meta.label} {uuid.uuid4().hex[:8]}', actions=['view'], constraints=constraints
+        )
+        perm.users.add(user or self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(model))
 
     def tearDown(self):
         CustomObjectType.clear_model_cache()
@@ -791,6 +801,7 @@ class LinkedObjectsAPITest(CustomObjectsTestCase, TestCase):
             type='object',
         )
         model = cot.get_model()
+        self._grant(model)
         linked = model.objects.create(name='poly-gfk-linked', target=self.device)
 
         url = self._url(object_type='dcim.device', object_id=self.device.pk)
@@ -821,6 +832,7 @@ class LinkedObjectsAPITest(CustomObjectsTestCase, TestCase):
             type='multiobject',
         )
         model = cot.get_model()
+        self._grant(model)
         linked = model.objects.create(name='poly-m2m-linked')
         linked.targets.add(self.device)
 
@@ -832,6 +844,45 @@ class LinkedObjectsAPITest(CustomObjectsTestCase, TestCase):
             any(r['field_name'] == 'targets' and r['object']['id'] == linked.pk for r in results),
             "Polymorphic M2M-linked object not found in linked-objects results"
         )
+
+    def test_unviewable_custom_objects_omitted(self):
+        """Custom objects the user can't view aren't returned."""
+        self.model.objects.create(name='hidden', device=self.device)
+        user = create_test_user('linkedobjectsdeviceonly')
+        self._grant(Device, user=user)
+        header = {'HTTP_AUTHORIZATION': f'Token {create_token(user)}'}
+
+        response = self.client.get(self._url(object_type='dcim.device', object_id=self.device.pk), **header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual((response.data['count'], response.data['results']), (0, []))
+
+    def test_constrained_permission_limits_custom_objects(self):
+        """A constrained view permission limits the custom objects returned, for every field kind."""
+        visible = self.model.objects.create(name='visible', device=self.device)
+        visible.devices.add(self.device)
+        hidden = self.model.objects.create(name='hidden', device=self.device)
+        hidden.devices.add(self.device)
+        user = create_test_user('linkedobjectsconstrained')
+        self._grant(Device, user=user)
+        self._grant(self.model, constraints={'name': 'visible'}, user=user)
+        header = {'HTTP_AUTHORIZATION': f'Token {create_token(user)}'}
+
+        response = self.client.get(self._url(object_type='dcim.device', object_id=self.device.pk), **header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            sorted((r['field_name'], r['object']['id']) for r in response.data['results']),
+            [('device', visible.pk), ('devices', visible.pk)],
+        )
+
+    def test_unviewable_target_returns_404(self):
+        """A target object the user can't view is reported as not found."""
+        self.model.objects.create(name='linked', device=self.device)
+        user = create_test_user('linkedobjectsnodevice')
+        self._grant(self.model, user=user)
+        header = {'HTTP_AUTHORIZATION': f'Token {create_token(user)}'}
+
+        response = self.client.get(self._url(object_type='dcim.device', object_id=self.device.pk), **header)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_response_shape(self):
         """Each result contains custom_object_type, field_name, and object keys."""
@@ -2435,6 +2486,9 @@ class ConfigContextAPITest(CustomObjectsTestCase, TestCase):
         ConfigContext.objects.create(name='site', weight=100, data={'ntp': '10.0.0.1'}).sites.add(site)
         self._add_site_field()
         self._add_perm('view')
+        site_perm = ObjectPermission.objects.create(name='view-site', actions=['view'])
+        site_perm.users.add(self.user)
+        site_perm.object_types.add(ObjectType.objects.get_for_model(Site))
         url = reverse('plugins-api:netbox_custom_objects-api:linked-objects')
         url = f'{url}?object_type=dcim.site&object_id={site.pk}'
 
