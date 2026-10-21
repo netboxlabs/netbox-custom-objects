@@ -338,14 +338,15 @@ def regex_validators(field, html=False):
     """
     if not field.validation_regex:
         return []
+    # Django renders a validator's message with ``message % params``, so a literal % in
+    # the regex must be doubled or rendering the error raises ValueError.
+    regex = field.validation_regex.replace("%", "%%")
     if html:
         message = mark_safe(
-            format_lazy(
-                _("Values must match this regex: <code>{regex}</code>"), regex=escape(field.validation_regex)
-            )
+            format_lazy(_("Values must match this regex: <code>{regex}</code>"), regex=escape(regex))
         )
     else:
-        message = format_lazy(_("Values must match this regex: {regex}"), regex=field.validation_regex)
+        message = format_lazy(_("Values must match this regex: {regex}"), regex=regex)
     return [RegexValidator(regex=field.validation_regex, message=message, code="validation_regex")]
 
 
