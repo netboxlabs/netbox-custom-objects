@@ -4378,6 +4378,8 @@ _FIELD_VALUE_KINDS = {
     CustomFieldTypeChoices.TYPE_DATE: "date",
     CustomFieldTypeChoices.TYPE_DATETIME: "datetime",
     CustomFieldTypeChoices.TYPE_BOOLEAN: "boolean",
+    CustomObjectFieldTypeChoices.TYPE_COLOR: "color",
+    CustomObjectFieldTypeChoices.TYPE_MAC_ADDRESS: "mac_address",
 }
 
 _COMPARISON_LOOKUPS = {

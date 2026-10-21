@@ -3753,6 +3753,14 @@ class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
         self._assert_rule_broken(model, vendor="blank", kind="wan", serial="")
         self._assert_rule_broken(model, vendor="null", kind="wan")
 
+    def test_check_compares_mac_fields(self):
+        mac = self.create_custom_object_type_field(self.cot, name="mac", type="mac_address")
+        peer_mac = self.create_custom_object_type_field(self.cot, name="peer_mac", type="mac_address")
+        self._check_constraint([self._predicate(mac, "n", {"field": peer_mac.schema_id})])
+        model = self._model()
+        model.objects.create(vendor="ok", mac="00:1a:2b:3c:4d:5e", peer_mac="aa:bb:cc:dd:ee:ff")
+        self._assert_rule_broken(model, vendor="same", mac="00:1a:2b:3c:4d:5e", peer_mac="00-1A-2B-3C-4D-5E")
+
     def test_check_blocked_by_existing_objects(self):
         start, end = self._date_fields()
         model = self._model()
@@ -3764,6 +3772,8 @@ class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
     def test_check_validation(self):
         start, end = self._date_fields()
         count = self.create_custom_object_type_field(self.cot, name="count", type="integer")
+        shade = self.create_custom_object_type_field(self.cot, name="shade", type="color")
+        mac = self.create_custom_object_type_field(self.cot, name="mac", type="mac_address")
         rule = [self._predicate(end, "gt", {"field": start.schema_id})]
         cases = {
             "fields": ({"field_schema_ids": [self.vendor.schema_id], "rule": rule}, "field_schema_ids"),
@@ -3773,6 +3783,9 @@ class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
             "greater than on text": ({"rule": [self._predicate(self.serial, "gt", "a")]}, "rule"),
             "kinds differ": ({"rule": [self._predicate(end, "gt", {"field": count.schema_id})]}, "rule"),
             "compared with itself": ({"rule": [self._predicate(end, "gt", {"field": end.schema_id})]}, "rule"),
+            "MAC compared with a color": (
+                {"rule": [self._predicate(mac, "n", {"field": shade.schema_id})]}, "rule"
+            ),
             "in with a field": ({"rule": [self._predicate(end, "in", {"field": start.schema_id})]}, "rule"),
             "unknown field": ({"rule": [self._predicate(end, "gt", {"field": 999})]}, "rule"),
             # Only an ID refers to a field; true would otherwise match schema ID 1.
