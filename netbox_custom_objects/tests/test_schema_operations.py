@@ -4,6 +4,7 @@ Tests for database schema operations and model-cache behaviour.
 Uses TransactionTestCase so DDL and on_commit callbacks behave exactly as they
 do in production (no wrapping savepoint prevents commits).
 """
+import sys
 import threading
 from io import StringIO
 from unittest.mock import patch
@@ -12,10 +13,11 @@ from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
 from django.db import IntegrityError, ProgrammingError, connection
-from django.test import TransactionTestCase
+from django.test import SimpleTestCase, TransactionTestCase
 from django.urls import reverse
 from psycopg.errors import DuplicateTable
 
+import netbox_custom_objects as nco
 from core.models import ObjectType
 from dcim.models import Site
 from extras.choices import CustomFieldTypeChoices
@@ -208,23 +210,6 @@ class SchemaOperationsTestCase(TransactionCleanupMixin, CustomObjectsTestCase, T
             # If we reach here, migrate --check found unapplied migrations or the plugin crashed.
             self.fail(f"migrate --check exited with code {exc.code}: {out.getvalue()}")
 
-    def test_collectstatic_without_database(self):
-        """#347 – collectstatic should complete without requiring database access."""
-        out = StringIO()
-        err = StringIO()
-        # --dry-run does not write files; --no-input skips confirmation prompts.
-        # The important assertion is that no exception (especially no database
-        # error originating from the plugin's AppConfig) is raised.
-        call_command(
-            'collectstatic',
-            '--dry-run',
-            '--no-input',
-            verbosity=0,
-            stdout=out,
-            stderr=err,
-        )
-        # No uncaught exceptions reaching here means success.
-
     # ------------------------------------------------------------------
     # Coordinates fields expand into two backing columns; verify the schema
     # editor manages both on rename and delete.
@@ -331,6 +316,21 @@ class SchemaOperationsTestCase(TransactionCleanupMixin, CustomObjectsTestCase, T
         columns = self._db_columns(cot.get_model())
         self.assertNotIn('website', columns)
         self.assertNotIn('website_title', columns)
+
+
+class CollectstaticWithoutDatabaseTestCase(SimpleTestCase):
+    """collectstatic must not need the database (SimpleTestCase fails any query)."""
+
+    def test_collectstatic_without_database(self):
+        # Run as collectstatic would: under the test runner, "test" in argv and an unfinished
+        # ready() would skip model generation anyway.
+        with (
+            patch.object(sys, 'argv', ['manage.py', 'collectstatic']),
+            patch.object(nco, '_app_ready', True),
+            patch.object(nco, '_migrations_checked', None),
+        ):
+            call_command('collectstatic', '--dry-run', '--no-input', verbosity=0, stdout=StringIO())
+            list(apps.get_app_config(APP_LABEL).get_models())
 
 
 class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):

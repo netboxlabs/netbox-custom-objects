@@ -331,7 +331,6 @@ class CustomObjectsPluginConfig(PluginConfig):
     # Surfaced as a system check warning (checks.check_related_tabs_registration)
     # so the swallowed exception isn't invisible outside the logs.
     _register_tabs_error = None
-    template_extensions = "template_content.template_extensions"
     # Registers the custom_objects Jinja filter (jinja_env.filters).
     # COMPAT(netbox<4.7): older NetBox never reads this attribute (see ready()).
     jinja_filters = "jinja_env.filters"
