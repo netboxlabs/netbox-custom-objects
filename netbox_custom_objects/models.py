@@ -2289,61 +2289,53 @@ class CustomObjectType(NetBoxModel):
         self.register_custom_object_search_index(model)
         return model
 
-    def _ensure_field_fk_constraint(self, model, field_name, on_delete_behavior=None):
-        """Create the FK constraint for an OBJECT-type field at the DB level.
+    @staticmethod
+    def _fk_target_table(object_type):
+        """DB table of *object_type*'s model, without generating a custom object model."""
+        if object_type.app_label == APP_LABEL:
+            cot_id = extract_cot_id_from_model_name(object_type.model)
+            if cot_id is not None:
+                return f"{USER_TABLE_DATABASE_NAME_PREFIX}{int(cot_id)}"
+        model = object_type.model_class()
+        if model is None:
+            raise ValueError(f"No model for object type {object_type.app_label}.{object_type.model}")
+        return model._meta.db_table
+
+    def _ensure_field_fk_constraint(self, field, using=None):
+        """Create (or replace) the DB-level FK constraint for *field*, a
+        non-polymorphic OBJECT field of this type.
 
         Required because dynamic models are ``managed=False``, so Django won't
-        emit the FK on its own.  ``on_delete_behavior`` defaults to the field's
-        recorded value, falling back to SET_NULL.
+        emit the FK on its own.  Works from the field record alone (the column
+        is always ``<name>_id``), so it can't act on a stale model class.  The
+        constraint is added ``NOT VALID``: it applies to every later write and
+        delete, but rows written before it existed aren't checked, so orphaned
+        values can't block it.
         """
+        if field.related_object_type_id is None:
+            raise ValueError(f"Object field {field.name!r} (pk={field.pk}) has no related_object_type")
+
         table_name = self.get_database_table_name()
+        column_name = f"{field.name}_id"
+        related_table = self._fk_target_table(field.related_object_type)
+        on_delete_sql = self._ON_DELETE_SQL.get(
+            field.on_delete_behavior or ObjectFieldOnDeleteChoices.SET_NULL, "SET NULL",
+        )
 
-        # Get the model field
-        try:
-            model_field = model._meta.get_field(field_name)
-        except Exception as e:
-            logger.error("_ensure_field_fk_constraint: field %r not found on model %r: %s", field_name, model, e)
-            return
-
-        if not (hasattr(model_field, 'remote_field') and model_field.remote_field):
-            return
-
-        # Resolve on_delete_behavior from the CustomObjectTypeField if not provided
-        if on_delete_behavior is None:
-            try:
-                cotf = self.fields.get(name=field_name)
-                on_delete_behavior = cotf.on_delete_behavior or ObjectFieldOnDeleteChoices.SET_NULL
-            except Exception:
-                on_delete_behavior = ObjectFieldOnDeleteChoices.SET_NULL
-
-        on_delete_sql = self._ON_DELETE_SQL.get(on_delete_behavior, "SET NULL")
-
-        # Get the referenced table
-        related_model = model_field.remote_field.model
-        related_table = related_model._meta.db_table
-        column_name = model_field.column
-
-        schema_conn = _get_schema_connection()
+        schema_conn = connections[using] if using else _get_schema_connection()
         q = schema_conn.ops.quote_name
-        with schema_conn.cursor() as cursor:
-            # Drop existing FK constraint if it exists.
-            # Join on key_column_usage so we match by actual column name, not constraint name —
-            # RENAME COLUMN updates kcu but leaves the constraint name unchanged.
-            cursor.execute("""
-                SELECT tc.constraint_name
-                FROM information_schema.table_constraints tc
-                JOIN information_schema.key_column_usage kcu
-                    ON tc.constraint_name = kcu.constraint_name
-                    AND tc.table_schema = kcu.table_schema
-                    AND tc.table_name = kcu.table_name
-                WHERE tc.table_name = %s
-                AND tc.table_schema = current_schema()
-                AND tc.constraint_type = 'FOREIGN KEY'
-                AND kcu.column_name = %s
-            """, [table_name, column_name])
-
-            for row in cursor.fetchall():
-                constraint_name = row[0]
+        with transaction.atomic(using=schema_conn.alias), schema_conn.cursor() as cursor:
+            # Match by column, not constraint name: RENAME COLUMN keeps the old name.
+            cursor.execute(
+                """
+                SELECT c.conname
+                FROM pg_constraint c
+                JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+                WHERE c.contype = 'f' AND c.conrelid = %s::regclass AND a.attname = %s
+                """,
+                [table_name, column_name],
+            )
+            for (constraint_name,) in cursor.fetchall():
                 cursor.execute(f'ALTER TABLE {q(table_name)} DROP CONSTRAINT IF EXISTS {q(constraint_name)}')
 
             # PROTECT → RESTRICT; SET NULL needs a nullable column (always true
@@ -2356,19 +2348,16 @@ class CustomObjectType(NetBoxModel):
                 FOREIGN KEY ({q(column_name)})
                 REFERENCES {q(related_table)} ("id")
                 ON DELETE {on_delete_sql}
+                NOT VALID
             """)
 
-    def _ensure_all_fk_constraints(self, model):
-        """
-        Ensure that foreign key constraints are properly created at the database level
-        for ALL OBJECT type fields, respecting each field's on_delete_behavior.
-
-        :param model: The model to ensure FK constraints for
-        """
-        object_fields = self.fields.filter(type=CustomFieldTypeChoices.TYPE_OBJECT, is_polymorphic=False)
-
+    def _ensure_all_fk_constraints(self):
+        """Ensure the DB-level FK constraint for every non-polymorphic OBJECT field of this type."""
+        object_fields = self.fields.filter(
+            type=CustomFieldTypeChoices.TYPE_OBJECT, is_polymorphic=False,
+        ).select_related("related_object_type")
         for field in object_fields:
-            self._ensure_field_fk_constraint(model, field.name, on_delete_behavior=field.on_delete_behavior)
+            self._ensure_field_fk_constraint(field)
 
     def create_model(self):
         from netbox_custom_objects.api.serializers import get_serializer_class
@@ -4101,9 +4090,6 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
         field_type = FIELD_TYPE_CLASS[self.type]()
         model = self.custom_object_type.get_model()
-        # The Object field as bound for DDL; the FK-constraint hook below reads
-        # its column and resolved target without regenerating any model.
-        ddl_field = None
 
         # Schema mutation + audit-key rewrite + cache bump + parent save() share
         # one atomic so a failure between DDL and row save can't leave audit
@@ -4122,7 +4108,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                         elif self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                             field_type.create_polymorphic_m2m_table(self, model, schema_editor)
                     else:
-                        ddl_field = _schema_add_field(self, model, schema_editor, schema_conn)
+                        _schema_add_field(self, model, schema_editor, schema_conn)
                         if self.type == CustomObjectFieldTypeChoices.TYPE_URL:
                             # Add the title column before _apply_deferred_co_field()
                             # runs below -- it replays both <name> and <name>_title
@@ -4164,7 +4150,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                                 {"name": _("Cannot rename a polymorphic field after creation.")}
                             )
                     else:
-                        ddl_field = _schema_alter_field(self.original, self, model, schema_editor, schema_conn)
+                        _schema_alter_field(self.original, self, model, schema_editor, schema_conn)
                         if (
                             self.type == CustomObjectFieldTypeChoices.TYPE_URL
                             and self.name != self._original_name
@@ -4256,24 +4242,29 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 updated_model = self.custom_object_type.get_model(no_cache=True)
                 heal_unmasked_fields(self.custom_object_type, updated_model, schema_conn)
 
-        # FK constraint runs AFTER commit to avoid "pending trigger events".
+        # FK constraint runs after commit: inside the transaction it would hit
+        # "pending trigger events" and fight a branch merge's row ordering.
+        # Registered on the schema connection so it fires when that commits.
         if should_ensure_fk:
-            _on_delete = self.on_delete_behavior
-            _field_name = self.name
+            _alias = schema_conn.alias
+            _field_pk = self.pk
 
             def ensure_constraint():
                 try:
-                    # `model` predates this save; the stand-in the field was bound to has it.
-                    self.custom_object_type._ensure_field_fk_constraint(
-                        ddl_field.model, _field_name, on_delete_behavior=_on_delete
-                    )
-                except Exception as e:
-                    logger.error(
-                        "Failed to ensure FK constraint for field %r on COT %r: %s",
-                        _field_name, self.custom_object_type_id, e,
+                    field = CustomObjectTypeField.objects.using(_alias).select_related(
+                        'custom_object_type', 'related_object_type',
+                    ).get(pk=_field_pk)
+                except CustomObjectTypeField.DoesNotExist:
+                    return
+                try:
+                    field.custom_object_type._ensure_field_fk_constraint(field, using=_alias)
+                except Exception:
+                    logger.exception(
+                        "Failed to create the FK constraint for Object field %r on custom object type %r",
+                        field.name, field.custom_object_type_id,
                     )
 
-            transaction.on_commit(ensure_constraint)
+            transaction.on_commit(ensure_constraint, using=_alias)
 
         if renamed:
             self.custom_object_type.register_custom_object_search_index(updated_model)
