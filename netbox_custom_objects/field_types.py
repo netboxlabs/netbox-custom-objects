@@ -1676,8 +1676,9 @@ class MultiObjectFieldType(FieldType):
                 # The real DB-level FK is added separately in create_m2m_table
                 # as DEFERRABLE INITIALLY DEFERRED so iterative branch merges
                 # (time-ordered) can insert through rows before the target CO
-                # exists.  A new constraint created after SET CONSTRAINTS ALL
-                # IMMEDIATE is not affected by that earlier call; db_constraint=False
+                # exists.  An earlier SET CONSTRAINTS ALL IMMEDIATE in the same
+                # transaction *does* cover a constraint created afterwards, so
+                # create_m2m_table re-defers it by name; db_constraint=False
                 # prevents Django from creating a non-deferrable FK here.
                 db_constraint=False,
             ),
