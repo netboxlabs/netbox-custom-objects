@@ -2302,6 +2302,12 @@ class CustomObjectType(NetBoxModel):
             raise ValueError(f"No model for object type {object_type.app_label}.{object_type.model}")
         return model._meta.db_table
 
+    def _lock_database_table(self, schema_conn):
+        """Take ACCESS EXCLUSIVE on this type's table so concurrent FK hooks for it serialise."""
+        with schema_conn.cursor() as cursor:
+            cursor.execute(f'LOCK TABLE {schema_conn.ops.quote_name(self.get_database_table_name())} '
+                           'IN ACCESS EXCLUSIVE MODE')
+
     def _ensure_field_fk_constraint(self, field, using=None):
         """Create (or replace) the DB-level FK constraint for *field*, a
         non-polymorphic OBJECT field of this type.
@@ -2330,7 +2336,7 @@ class CustomObjectType(NetBoxModel):
         q = schema_conn.ops.quote_name
         with transaction.atomic(using=schema_conn.alias), schema_conn.cursor() as cursor:
             # Lock before reading the constraints so concurrent hooks for this table serialise.
-            cursor.execute(f'LOCK TABLE {q(table_name)} IN ACCESS EXCLUSIVE MODE')
+            self._lock_database_table(schema_conn)
             # Match by column, not constraint name: RENAME COLUMN keeps the old name.
             cursor.execute(
                 """
@@ -4267,20 +4273,25 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         if should_ensure_fk:
             _alias = schema_conn.alias
             _field_pk = self.pk
+            _field_name = self.name
+            _cot = self.custom_object_type
 
             def ensure_constraint():
                 try:
-                    field = CustomObjectTypeField.objects.using(_alias).select_related(
-                        'custom_object_type', 'related_object_type',
-                    ).get(pk=_field_pk)
-                except CustomObjectTypeField.DoesNotExist:
-                    return
-                try:
-                    field.custom_object_type._ensure_field_fk_constraint(field, using=_alias)
+                    with transaction.atomic(using=_alias):
+                        # Read the field after the lock, so a delayed hook can't apply an outdated setting.
+                        _cot._lock_database_table(connections[_alias])
+                        try:
+                            field = CustomObjectTypeField.objects.using(_alias).select_related(
+                                'custom_object_type', 'related_object_type',
+                            ).get(pk=_field_pk)
+                        except CustomObjectTypeField.DoesNotExist:
+                            return
+                        field.custom_object_type._ensure_field_fk_constraint(field, using=_alias)
                 except Exception:
                     logger.exception(
                         "Failed to create the FK constraint for Object field %r on custom object type %r",
-                        field.name, field.custom_object_type_id,
+                        _field_name, _cot.pk,
                     )
 
             transaction.on_commit(ensure_constraint, using=_alias)
