@@ -210,11 +210,13 @@ class CustomObjectActionsColumn(columns.ActionsColumn):
 
 
 class FieldDefaultColumn(tables.JSONColumn):
-    """Shows a color field's default as a swatch, like the field's values, instead of JSON."""
+    """Shows color and MAC address defaults the way their values are shown, instead of as JSON."""
 
     def render(self, record, value):
         if record.type == CustomObjectFieldTypeChoices.TYPE_COLOR:
             return columns.ColorColumn().render(value)
+        if record.type == CustomObjectFieldTypeChoices.TYPE_MAC_ADDRESS:
+            return value
         return super().render(record, value)
 
 

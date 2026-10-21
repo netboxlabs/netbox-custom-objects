@@ -16,7 +16,7 @@ from extras.choices import CustomFieldFilterLogicChoices, CustomFieldTypeChoices
 from extras.models import CachedValue, CustomFieldChoiceSet
 from netbox.filtersets import ChangeLoggedModelFilterSet, NetBoxModelFilterSet
 from users.models import Owner, OwnerGroup
-from utilities.filters import MultiValueCharFilter
+from utilities.filters import MultiValueCharFilter, MultiValueMACAddressFilter
 
 from .choices import ConstraintTypeChoices, CustomObjectFieldTypeChoices
 from .constants import APP_LABEL
@@ -336,6 +336,7 @@ FIELD_TYPE_FILTERS = {
     # translates to a JOIN through the through table at the SQL level.
     CustomFieldTypeChoices.TYPE_MULTIOBJECT: FilterSpec(NonPolymorphicMultiObjectFilter),
     CustomObjectFieldTypeChoices.TYPE_COLOR: FilterSpec(MultiValueCharFilter),
+    CustomObjectFieldTypeChoices.TYPE_MAC_ADDRESS: FilterSpec(MultiValueMACAddressFilter),
 }
 
 # Field types whose base filter's lookup_expr is driven by field.filter_logic,
@@ -649,6 +650,7 @@ def get_filterset_class(model):
                 CustomFieldTypeChoices.TYPE_JSON,
                 CustomFieldTypeChoices.TYPE_URL,
                 CustomFieldTypeChoices.TYPE_SELECT,
+                CustomObjectFieldTypeChoices.TYPE_MAC_ADDRESS,
             ]:
                 q |= Q(**{f"{field.name}__icontains": value})
             elif field.type == CustomFieldTypeChoices.TYPE_MULTISELECT:

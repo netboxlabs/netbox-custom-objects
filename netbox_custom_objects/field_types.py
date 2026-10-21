@@ -13,6 +13,7 @@ from rest_framework import serializers as drf_serializers
 from strawberry.scalars import JSON
 from django import forms
 from django.apps import apps
+from django.apps.registry import Apps
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
@@ -31,7 +32,7 @@ from django.db.models.signals import m2m_changed
 from django.urls import reverse
 from django.utils.html import escape, format_html
 from django.utils.safestring import mark_safe
-from django.utils.text import Truncator
+from django.utils.text import Truncator, format_lazy
 from django.utils.translation import gettext_lazy as _
 from extras.choices import CustomFieldTypeChoices, CustomFieldUIEditableChoices
 from utilities.api import get_serializer_for_model
@@ -50,6 +51,7 @@ from utilities.forms.widgets import (
 )
 from utilities.templatetags.builtins.filters import linkify, render_markdown
 from netbox.config import get_config
+from dcim.fields import MACAddressField
 from utilities.fields import ColorField
 from utilities.validators import ColorValidator
 from netbox.tables.columns import BooleanColumn, ColorColumn
@@ -214,6 +216,71 @@ class LazyForeignKey(ForeignKey):
         self.to = actual_model
 
 
+def resolve_lazy_target(field):
+    """Resolve *field*'s string target to a model class, in place.
+
+    A COT target is looked up by id rather than through ``apps.get_model()``,
+    which bypasses the app config's skip guard so the class is rebuilt even
+    when test teardown has dropped it from the registry.
+    """
+    remote = field.remote_field
+    if isinstance(field, LazyForeignKey):
+        _app_label, model_name = field._to_model_name.rsplit('.', 1)
+        cot_id = extract_cot_id_from_model_name(model_name.lower())
+        if cot_id is None:
+            logger.warning("Could not resolve target %r of field %r", field._to_model_name, field.name)
+            return
+        from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
+        try:
+            target = CustomObjectType.objects.get(pk=int(cot_id)).get_model()
+        except (CustomObjectType.DoesNotExist, OperationalError, ProgrammingError):
+            logger.warning("Could not resolve target %r of field %r", field._to_model_name, field.name)
+            return
+    else:
+        target = apps.get_model(remote.model)
+    remote.model = target
+    field.to = target
+    # Django's lazy relation setup fills this in from the target's primary key;
+    # the schema editor's FK SQL reads it.
+    if remote.field_name is None:
+        remote.field_name = target._meta.pk.name
+
+
+def ddl_model(model):
+    """A throwaway stand-in for *model* that a field can be bound to for DDL.
+
+    It has *model*'s table name and app label, so the schema editor emits the
+    same SQL, but lives in its own app registry and starts with nothing but a
+    primary key.  Binding a field to it leaves the cached class alone and
+    installs no reverse accessor on the target model (issue #767).
+    """
+    meta = type('Meta', (), {
+        'apps': Apps(),
+        'app_label': model._meta.app_label,
+        'db_table': model._meta.db_table,
+        'managed': False,
+    })
+    return type(model.__name__, (models.Model,), {'Meta': meta, '__module__': __name__})
+
+
+def bind_for_ddl(field, model, name, stand_in=None):
+    """Bind *field* to a throwaway copy of *model* under *name* and return it.
+
+    This is what the schema helpers hand to the schema editor.  They used to
+    ``contribute_to_class()`` the live cached model instead, which left phantom
+    or duplicate fields on it whenever the DDL rolled back (issue #767).  A
+    string target is resolved by hand, since the copy's registry knows no
+    other models; a many-to-many field needs none, its through table is built
+    separately.  Pass the same ``ddl_model(model)`` as *stand_in* for fields
+    that must be looked up together, e.g. by a composite index.
+    """
+    field.contribute_to_class(stand_in or ddl_model(model), name)
+    remote = getattr(field, 'remote_field', None)
+    if remote is not None and not field.many_to_many and isinstance(remote.model, str):
+        resolve_lazy_target(field)
+    return field
+
+
 def _make_lazy_cot_fk(cot, field, on_delete, **field_kwargs):
     """Build a LazyForeignKey pointing to the given COT model.
 
@@ -329,13 +396,44 @@ class FieldType:
     def create_m2m_table(self, instance, model, field_name, schema_conn=None): ...
 
 
+def regex_validators(field, html=False):
+    """
+    Return the validators enforcing *field*'s validation_regex.
+
+    Applied to the generated model field, so the regex is enforced on REST API writes
+    and CSV/bulk import (which validate through Model.full_clean()) as well as on the
+    UI form. The UI form field also carries the validator with ``html=True`` so the
+    regex is shown in a <code> tag; a form field that fails its own validation is
+    excluded from model validation by ModelForm, so the error is not reported twice.
+
+    The message is built lazily so it is translated per request, not once at model
+    generation time. The validator gets its own error code: Django replaces the message
+    of a validator error whose code is "invalid" with the field's own "invalid" message
+    (e.g. "Enter a valid URL." on URL fields), which would hide the regex.
+    """
+    if not field.validation_regex:
+        return []
+    # Django renders a validator's message with ``message % params``, so a literal % in
+    # the regex must be doubled or rendering the error raises ValueError.
+    regex = field.validation_regex.replace("%", "%%")
+    if html:
+        message = mark_safe(
+            format_lazy(_("Values must match this regex: <code>{regex}</code>"), regex=escape(regex))
+        )
+    else:
+        message = format_lazy(_("Values must match this regex: {regex}"), regex=regex)
+    return [RegexValidator(regex=field.validation_regex, message=message, code="validation_regex")]
+
+
 class TextFieldType(FieldType):
     graphql_annotation = str
 
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
-        return models.CharField(null=True, blank=not field.required, **field_kwargs)
+        return models.CharField(
+            null=True, blank=not field.required, validators=regex_validators(field), **field_kwargs
+        )
 
     def get_serializer_field(self, field, **kwargs):
         return drf_serializers.CharField(
@@ -345,20 +443,8 @@ class TextFieldType(FieldType):
         )
 
     def get_form_field(self, field, **kwargs):
-        validators = []
-        if field.validation_regex:
-            validators = [
-                RegexValidator(
-                    regex=field.validation_regex,
-                    message=mark_safe(
-                        _("Values must match this regex: <code>{regex}</code>").format(
-                            regex=escape(field.validation_regex)
-                        )
-                    ),
-                )
-            ]
         return forms.CharField(
-            required=field.required, initial=field.default, validators=validators
+            required=field.required, initial=field.default, validators=regex_validators(field, html=True)
         )
 
     def get_filterform_field(self, field, **kwargs):
@@ -381,7 +467,9 @@ class LongTextFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
-        return models.TextField(null=True, blank=not field.required, **field_kwargs)
+        return models.TextField(
+            null=True, blank=not field.required, validators=regex_validators(field), **field_kwargs
+        )
 
     def get_serializer_field(self, field, **kwargs):
         return drf_serializers.CharField(
@@ -391,24 +479,11 @@ class LongTextFieldType(FieldType):
         )
 
     def get_form_field(self, field, **kwargs):
-        widget = forms.Textarea
-        validators = []
-        if field.validation_regex:
-            validators = [
-                RegexValidator(
-                    regex=field.validation_regex,
-                    message=mark_safe(
-                        _("Values must match this regex: <code>{regex}</code>").format(
-                            regex=escape(field.validation_regex)
-                        )
-                    ),
-                )
-            ]
         return forms.CharField(
-            widget=widget,
+            widget=forms.Textarea,
             required=field.required,
             initial=field.default,
-            validators=validators,
+            validators=regex_validators(field, html=True),
         )
 
     def render_table_column(self, value):
@@ -640,7 +715,9 @@ class URLFieldType(FieldType):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
         return {
-            field.name: models.URLField(null=True, blank=not field.required, **field_kwargs),
+            field.name: models.URLField(
+                null=True, blank=not field.required, validators=regex_validators(field), **field_kwargs
+            ),
             # blank=True, default='' (not null=True): a CharField with null=True lets
             # "no title" be represented as both NULL (ORM/API create omitting the key)
             # and '' (a form submission clearing the field), which would make
@@ -667,7 +744,10 @@ class URLFieldType(FieldType):
 
     def get_form_field(self, field, **kwargs):
         return LaxURLField(
-            assume_scheme="https", required=field.required, initial=field.default
+            assume_scheme="https",
+            required=field.required,
+            initial=field.default,
+            validators=regex_validators(field, html=True),
         )
 
     def get_form_fields(self, field):
@@ -682,6 +762,7 @@ class URLFieldType(FieldType):
             required=field.required,
             initial=field.default,
             help_text=render_markdown(field.description) if field.description else None,
+            validators=regex_validators(field, html=True),
         )
         title_field = forms.CharField(
             label=f"{base_label} ({_('link title')})",
@@ -1192,11 +1273,13 @@ class ObjectFieldType(FieldType):
             # django_content_type without manual CASCADE).
             db_constraint=False,
         )
-        ct_field.contribute_to_class(model, ct_field_name)
+        # Both columns share one stand-in: the index below looks them up on it.
+        stand_in = ddl_model(model)
+        bind_for_ddl(ct_field, model, ct_field_name, stand_in)
         schema_editor.add_field(model, ct_field)
 
         oid_field = models.PositiveBigIntegerField(null=True, blank=True)
-        oid_field.contribute_to_class(model, oid_field_name)
+        bind_for_ddl(oid_field, model, oid_field_name, stand_in)
         schema_editor.add_field(model, oid_field)
 
         # Composite index as recommended in issue #31
@@ -1204,7 +1287,7 @@ class ObjectFieldType(FieldType):
             f"co_{field_instance.custom_object_type_id}_{field_instance.name}_gfk"
         )
         idx = models.Index(fields=[ct_field_name, oid_field_name], name=idx_name)
-        schema_editor.add_index(model, idx)
+        schema_editor.add_index(stand_in, idx)
 
     def remove_polymorphic_object_columns(self, field_instance, model, schema_editor):
         """
@@ -1602,8 +1685,9 @@ class MultiObjectFieldType(FieldType):
                 # The real DB-level FK is added separately in create_m2m_table
                 # as DEFERRABLE INITIALLY DEFERRED so iterative branch merges
                 # (time-ordered) can insert through rows before the target CO
-                # exists.  A new constraint created after SET CONSTRAINTS ALL
-                # IMMEDIATE is not affected by that earlier call; db_constraint=False
+                # exists.  An earlier SET CONSTRAINTS ALL IMMEDIATE in the same
+                # transaction *does* cover a constraint created afterwards, so
+                # create_m2m_table re-defers it by name; db_constraint=False
                 # prevents Django from creating a non-deferrable FK here.
                 db_constraint=False,
             ),
@@ -1890,15 +1974,18 @@ class MultiObjectFieldType(FieldType):
         target_field.remote_field.model = to_model
         target_field.related_model = to_model
 
-    def create_m2m_table(self, instance, model, field_name, schema_conn=None):
+    def create_m2m_table(self, instance, model, field_name, schema_conn=None, field=None):
         """
-        Creates the actual M2M table after models are fully generated
+        Creates the actual M2M table after models are fully generated.
+
+        *field* is the M2M field when it isn't on *model* yet, i.e. the one
+        ``bind_for_ddl()`` returned while the field is being added.
         """
         from django.db import connection as default_connection
         connection = schema_conn if schema_conn is not None else default_connection
 
-        # Get the field instance
-        field = model._meta.get_field(field_name)
+        if field is None:
+            field = model._meta.get_field(field_name)
 
         # For self-referential fields, use the current model
         if getattr(field, "_is_self_referential", False):
@@ -2511,21 +2598,27 @@ class PolymorphicM2MDescriptor:
         return False
 
 
-class PolymorphicObjectReverseManager:
-    """Returned when a polymorphic GFK reverse relation is accessed on a target instance."""
+class _PolymorphicReverseManager:
+    """Base for the managers returned by the polymorphic reverse descriptors."""
 
-    def __init__(self, instance, cot_pk, field_name):
+    def __init__(self, instance, cot_pk):
         self._instance = instance
         self._cot_pk = cot_pk
-        self._field_name = field_name
+
+    def _is_source_field(self, field):
+        raise NotImplementedError
+
+    def _filter(self, source_model):
+        raise NotImplementedError
 
     def _source_model(self):
+        """Return the source model for the active branch, or None if the source type is gone.
+
+        Goes through get_model() so the model matches the active branch and isn't stale. The
+        descriptor sits on the shared target class, so the source field may not exist in this
+        context (the branch deleted it); the caller then returns an empty queryset (#766).
+        """
         from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
-        # Fast path: model already in the COT cache (the common runtime case).
-        model = CustomObjectType.get_cached_model(self._cot_pk)
-        if model is not None:
-            return model
-        # Cache miss — fetch from DB and let get_model() cache the result.
         try:
             return CustomObjectType.objects.get(pk=self._cot_pk).get_model()
         except CustomObjectType.DoesNotExist:
@@ -2540,11 +2633,12 @@ class PolymorphicObjectReverseManager:
         source_model = self._source_model()
         if source_model is None:
             return ContentType.objects.none()
-        ct = ContentType.objects.get_for_model(type(self._instance))
-        return source_model.objects.filter(**{
-            f"{self._field_name}_content_type": ct,
-            f"{self._field_name}_object_id": self._instance.pk,
-        })
+        if not any(
+            info['field'].is_polymorphic and self._is_source_field(info['field'])
+            for info in source_model._field_objects.values()
+        ):
+            return source_model.objects.none()
+        return self._filter(source_model)
 
     def count(self):
         return self.all().count()
@@ -2554,6 +2648,24 @@ class PolymorphicObjectReverseManager:
 
     def __iter__(self):
         return iter(self.all())
+
+
+class PolymorphicObjectReverseManager(_PolymorphicReverseManager):
+    """Returned when a polymorphic GFK reverse relation is accessed on a target instance."""
+
+    def __init__(self, instance, cot_pk, field_name):
+        super().__init__(instance, cot_pk)
+        self._field_name = field_name
+
+    def _is_source_field(self, field):
+        return field.type == CustomFieldTypeChoices.TYPE_OBJECT and field.name == self._field_name
+
+    def _filter(self, source_model):
+        ct = ContentType.objects.get_for_model(type(self._instance))
+        return source_model.objects.filter(**{
+            f"{self._field_name}_content_type": ct,
+            f"{self._field_name}_object_id": self._instance.pk,
+        })
 
 
 class PolymorphicObjectReverseDescriptor:
@@ -2574,53 +2686,41 @@ class PolymorphicObjectReverseDescriptor:
         return PolymorphicObjectReverseManager(instance, self.cot_pk, self.field_name)
 
 
-class PolymorphicMultiObjectReverseManager:
+class PolymorphicMultiObjectReverseManager(_PolymorphicReverseManager):
     """Returned when a polymorphic M2M reverse relation is accessed on a target instance."""
 
     def __init__(self, instance, cot_pk, through_model_name):
-        self._instance = instance
-        self._cot_pk = cot_pk
+        super().__init__(instance, cot_pk)
         self._through_model_name = through_model_name
 
-    def _source_model(self):
-        from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
-        # Fast path: model already in the COT cache (the common runtime case).
-        model = CustomObjectType.get_cached_model(self._cot_pk)
-        if model is not None:
-            return model
-        # Cache miss — fetch from DB and let get_model() cache the result.
-        try:
-            return CustomObjectType.objects.get(pk=self._cot_pk).get_model()
-        except CustomObjectType.DoesNotExist:
-            logger.warning(
-                'Reverse accessor: source CustomObjectType pk=%d no longer exists; '
-                'returning empty queryset.',
-                self._cot_pk,
-            )
-            return None
+    def _is_source_field(self, field):
+        return (
+            field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
+            and field.through_model_name == self._through_model_name
+        )
 
-    def _through(self):
-        return apps.get_model(APP_LABEL, self._through_model_name)
+    def _through(self, source_model):
+        """The through built alongside *source_model*, or None.
 
-    def all(self):
-        source_model = self._source_model()
-        if source_model is None:
-            return ContentType.objects.none()
+        Read off the model rather than the registry or the through cache: apps.all_models
+        only holds main's through, and the cache can be cleared by another thread between
+        resolving the model and reaching here.
+        """
+        for through in getattr(source_model, '_through_models', ()):
+            if through.__name__ == self._through_model_name:
+                return through
+        return None
+
+    def _filter(self, source_model):
+        through = self._through(source_model)
+        if through is None:
+            return source_model.objects.none()
         ct = ContentType.objects.get_for_model(type(self._instance))
-        source_ids = self._through().objects.filter(
+        source_ids = through.objects.filter(
             content_type_id=ct.pk,
             object_id=self._instance.pk,
         ).values_list("source_id", flat=True)
         return source_model.objects.filter(pk__in=source_ids)
-
-    def count(self):
-        return self.all().count()
-
-    def exists(self):
-        return self.all().exists()
-
-    def __iter__(self):
-        return iter(self.all())
 
 
 class PolymorphicMultiObjectReverseDescriptor:
@@ -2713,6 +2813,52 @@ class ColorFieldType(FieldType):
 
     def get_table_column_field(self, field, **kwargs):
         return ColorColumn()
+
+
+class MACAddressFormField(forms.CharField):
+    """A MAC address in any format netaddr reads, cleaned to AA:BB:CC:DD:EE:FF."""
+
+    def to_python(self, value):
+        value = super().to_python(value)
+        return str(MACAddressField().to_python(value)) if value else value
+
+
+class MACAddressFieldType(FieldType):
+    graphql_annotation = str
+
+    def get_model_field(self, field, **kwargs):
+        field_kwargs = self._safe_kwargs(**kwargs)
+        field_kwargs.update({"default": field.default, "unique": field.unique})
+        return MACAddressField(null=True, blank=not field.required, **field_kwargs)
+
+    def get_serializer_field(self, field, **kwargs):
+        return MACAddressSerializerField(
+            required=field.required, allow_null=not field.required, allow_blank=not field.required
+        )
+
+    def get_form_field(self, field, **kwargs):
+        return MACAddressFormField(
+            required=field.required, initial=field.default, empty_value=None, help_text=_("e.g. 00:1A:2B:3C:4D:5E")
+        )
+
+    def get_filterform_field(self, field, **kwargs):
+        return forms.CharField(label=field, required=False)
+
+
+class MACAddressSerializerField(drf_serializers.CharField):
+    """A MAC address, accepted in any format netaddr reads and returned as AA:BB:CC:DD:EE:FF. Blank means none."""
+
+    def to_internal_value(self, data):
+        value = super().to_internal_value(data)
+        if not value:
+            return None
+        try:
+            return str(MACAddressField().to_python(value))
+        except ValidationError as exc:
+            raise drf_serializers.ValidationError(exc.messages)
+
+    def to_representation(self, value):
+        return str(value)
 
 
 class CoordinatesFieldType(FieldType):
@@ -3158,4 +3304,5 @@ FIELD_TYPE_CLASS = {
     CustomObjectFieldTypeChoices.TYPE_COORDINATES: CoordinatesFieldType,
     CustomObjectFieldTypeChoices.TYPE_ARRAY: ArrayFieldType,
     CustomObjectFieldTypeChoices.TYPE_COLOR: ColorFieldType,
+    CustomObjectFieldTypeChoices.TYPE_MAC_ADDRESS: MACAddressFieldType,
 }

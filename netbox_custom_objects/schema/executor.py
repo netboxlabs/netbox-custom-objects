@@ -451,12 +451,16 @@ def _update_schema_document(cot, type_def: dict) -> None:
 
     Stores the document as ``{"schema_version": "1", "types": [type_def]}`` so
     that the exporter's ``_removed_fields_from_document`` helper can read
-    tombstones from it in future export/diff cycles.
+    tombstones from it in future export/diff cycles.  Other keys, such as the
+    ``base_columns`` snapshot that ``upgrade_custom_objects`` relies on, are kept.
 
     Uses ``QuerySet.update()`` rather than ``save()`` so that ``post_save`` is
     not dispatched and the model cache is not prematurely invalidated.
     """
+    # Read it from the database: creating the table stores the snapshot there, not on this instance.
+    current = CustomObjectType.objects.filter(pk=cot.pk).values_list("schema_document", flat=True).first()
     doc = {
+        **(current or {}),
         "schema_version": SCHEMA_FORMAT_VERSION,
         "types": [type_def],
     }

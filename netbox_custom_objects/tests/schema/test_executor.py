@@ -15,7 +15,9 @@ Covers:
 - Constraint ADD, ALTER and REMOVE, and their ordering around field changes
 """
 
-from django.test import SimpleTestCase, TransactionTestCase
+import copy
+
+from django.test import SimpleTestCase, TestCase
 
 from netbox_custom_objects.schema.comparator import (
     COTDiff,
@@ -39,7 +41,7 @@ from netbox_custom_objects.schema.executor import (
 from netbox_custom_objects.schema.exporter import export_cot
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint
 
-from ..base import CustomObjectsTestCase, TransactionCleanupMixin
+from ..base import CustomObjectsTestCase
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +148,7 @@ class ExecutorBuildDepOrderTestCase(SimpleTestCase):
 # Helper base for DDL tests
 # ---------------------------------------------------------------------------
 
-class _ExecutorTestBase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
+class _ExecutorTestBase(CustomObjectsTestCase, TestCase):
     """Common base for executor integration tests that touch the DB."""
     pass
 
@@ -361,6 +363,17 @@ class ExecutorFieldAddTestCase(_ExecutorTestBase):
         self.assertEqual((field.type, field.default), ("color", "00ff00"))
         self.assertEqual(export_cot(self.cot)["fields"][-1], {"id": next_id, "name": "shade", "type": "color",
                                                                "default": "00ff00"})
+
+    def test_added_mac_address_field(self):
+        type_def = export_cot(self.cot)
+        next_id = self.cot.next_schema_id + 1
+        type_def["fields"].append({"id": next_id, "name": "mac", "type": "mac_address", "default": "001a2b3c4d5e"})
+        apply_document({"schema_version": "1", "types": [type_def]})
+        self.assertEqual(self.cot.fields.get(name="mac").type, "mac_address")
+        self.cot.refresh_from_db()
+        obj = self.cot.get_model().objects.create()
+        obj.refresh_from_db()
+        self.assertEqual(str(obj.mac), "00:1A:2B:3C:4D:5E")
 
     def test_added_select_field_resolves_choice_set(self):
         cs = self.create_choice_set(name='Colours')
@@ -708,6 +721,25 @@ class ExecutorSchemaDocumentTestCase(_ExecutorTestBase):
         apply_document({"schema_version": "1", "types": [type_def]})
         cot.refresh_from_db()
         self.assertEqual(cot.schema_document.get("schema_version"), "1")
+
+    def test_base_columns_kept_for_new_type(self):
+        apply_document({"schema_version": "1", "types": [{
+            "name": "fresh", "slug": "fresh", "fields": [{"id": 1, "name": "name", "type": "text", "primary": True}],
+        }]})
+        cot = CustomObjectType.objects.get(slug="fresh")
+        self.assertEqual(cot.schema_document["schema_version"], "1")
+        self.assertIn("id", [c["name"] for c in cot.schema_document["base_columns"]])
+
+    def test_base_columns_kept_when_type_changes(self):
+        cot = self.create_custom_object_type(name='doctest4', slug='doc-test-4')
+        cot.refresh_from_db()
+        base_columns = cot.schema_document["base_columns"]
+        type_def = export_cot(cot)
+        type_def.setdefault("fields", []).append({"id": cot.next_schema_id + 1, "name": "added", "type": "text"})
+        apply_document({"schema_version": "1", "types": [type_def]})
+        cot.refresh_from_db()
+        self.assertEqual(cot.schema_document["types"][0]["fields"][-1]["name"], "added")
+        self.assertEqual(cot.schema_document["base_columns"], base_columns)
 
 
 # ---------------------------------------------------------------------------
@@ -1113,6 +1145,20 @@ class ExecutorConstraintTestCase(_ExecutorTestBase):
             diff.constraint_changes[0].changed_attrs, {"error_message": ("", "Serial can't match vendor.")}
         )
         self.assertEqual(CustomObjectTypeConstraint.objects.get().error_message, "Serial can't match vendor.")
+
+    def test_mac_address_values_compare_normalized(self):
+        mac = self.create_custom_object_type_field(self.cot, name='mac', type='mac_address')
+        condition = [{"field": mac.schema_id, "lookup": "exact", "value": "00-1a-2b-3c-4d-5e"}]
+        rule = [{"field": mac.schema_id, "lookup": "in", "value": ["001a.2b3c.4d5e", "aa:bb:cc:dd:ee:ff"]}]
+        document = self._document(constraints=[
+            self._constraint_def(condition=condition),
+            {"name": "known_mac", "type": "check", "rule": rule},
+        ])
+        apply_document(copy.deepcopy(document))
+        stored = CustomObjectTypeConstraint.objects.get(name="known_mac").rule
+        self.assertEqual(stored[0]["value"], ["00:1A:2B:3C:4D:5E", "AA:BB:CC:DD:EE:FF"])
+        # The same document, spelling the addresses differently, is no change.
+        self.assertEqual(diff_document(document)[0].constraint_changes, [])
 
     def test_remove_needs_removed_constraints(self):
         apply_document(self._document(constraints=[self._constraint_def()]))

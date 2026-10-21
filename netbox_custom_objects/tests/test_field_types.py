@@ -3,7 +3,7 @@ Tests for all the different field types supported by Custom Object Type Fields.
 """
 import json
 from importlib import import_module
-from unittest import skip, skipUnless
+from unittest import skipUnless
 from unittest.mock import Mock
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -18,8 +18,10 @@ from dcim.models import Device, DeviceType, ModuleType
 from extras.models import CustomFieldChoiceSet
 from netbox.tables.columns import ColorColumn
 from netbox_custom_objects.field_types import (
+    FIELD_TYPE_CLASS,
     ArrayFieldType,
     ColorFieldType,
+    MACAddressFieldType,
     CoordinatesFieldType,
     MultiObjectFieldType,
     MultiSelectFieldType,
@@ -62,7 +64,7 @@ class RequiredFieldEnforcementTestCase(FieldTypeTestCase):
 
     SCALAR_TYPES = (
         'text', 'longtext', 'integer', 'decimal', 'boolean', 'date', 'datetime',
-        'url', 'json', 'color',
+        'url', 'json', 'color', 'mac_address',
     )
 
     def test_scalar_fields_blank_matches_required(self):
@@ -201,6 +203,61 @@ class TextFieldTypeTestCase(FieldTypeTestCase):
         instance = model.objects.create(name="Test", description="Test description")
 
         self.assertEqual(instance.description, "Test description")
+
+    def test_validation_regex_enforced_on_model_field(self):
+        """
+        Regression #763: validation_regex is enforced by the generated model field itself,
+        so model validation (used by API writes and CSV import) rejects non-matching values.
+        """
+        for field_type, regex, valid, invalid in (
+            ("text", r"^[A-Z]{3}$", "ABC", "abc"),
+            ("longtext", r"^ok", "ok then", "not ok"),
+            ("url", r"^https://", "https://example.com", "http://example.com"),
+        ):
+            with self.subTest(field_type=field_type):
+                field_name = f"regex_{field_type}"
+                self.create_custom_object_type_field(
+                    self.custom_object_type,
+                    name=field_name,
+                    label=field_name,
+                    type=field_type,
+                    validation_regex=regex,
+                )
+                model = self.custom_object_type.get_model()
+
+                model(**{field_name: valid}).clean_fields(exclude=["id", "name"])
+
+                with self.assertRaises(ValidationError) as cm:
+                    model(**{field_name: invalid}).clean_fields(exclude=["id", "name"])
+                self.assertIn(field_name, cm.exception.error_dict)
+
+    def test_validation_regex_with_percent_renders_error(self):
+        """
+        A literal % in validation_regex must not break rendering of the validation
+        error: Django renders validator messages with ``message % params``.
+        """
+        regex = r"^\d+%$"
+        self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="percent",
+            label="Percent",
+            type="text",
+            validation_regex=regex,
+        )
+        model = self.custom_object_type.get_model()
+
+        model(percent="50%").clean_fields(exclude=["id", "name"])
+
+        with self.assertRaises(ValidationError) as cm:
+            model(percent="abc").clean_fields(exclude=["id", "name"])
+        # Rendering the message is what raised ValueError before the fix.
+        self.assertIn(regex, str(cm.exception.message_dict["percent"][0]))
+
+        field = self.custom_object_type.fields.get(name="percent")
+        form_field = FIELD_TYPE_CLASS[field.type]().get_form_field(field)
+        with self.assertRaises(ValidationError) as cm:
+            form_field.clean("abc")
+        self.assertIn(regex, str(cm.exception.messages[0]))
 
 
 class LongTextFieldTypeTestCase(FieldTypeTestCase):
@@ -1087,7 +1144,6 @@ class URLFieldTypeTestCase(FieldTypeTestCase):
         self.assertEqual(field.type, "url")
         self.assertEqual(field.validation_regex, "^https://.*")
 
-    @skip("URL field validation not currently working, including in Custom Fields?")
     def test_url_field_validation(self):
         """Test URL field validation."""
         field = self.create_custom_object_type_field(
@@ -1344,6 +1400,65 @@ class ColorFieldTypeTestCase(FieldTypeTestCase):
             column.render("ff9800"), '<span class="color-label" style="background-color: #ff9800">&nbsp;</span>',
         )
         self.assertEqual(column.value("ff8800"), "#ff8800")
+
+
+class MACAddressFieldTypeTestCase(FieldTypeTestCase):
+    """Test cases for MAC address field type."""
+
+    FORMATS = ("00:1a:2b:3c:4d:5e", "00-1A-2B-3C-4D-5E", "001a.2b3c.4d5e", "001a2b3c4d5e")
+
+    def test_model_field_normalizes_formats(self):
+        self.create_custom_object_type_field(self.custom_object_type, name="mac", type="mac_address")
+        model = self.custom_object_type.get_model()
+        for value in self.FORMATS:
+            with self.subTest(value=value):
+                obj = model.objects.create(name=value, mac=value)
+                obj.refresh_from_db()
+                self.assertEqual(str(obj.mac), "00:1A:2B:3C:4D:5E")
+        model(name="Blank").full_clean()
+        for value in ("00:1a:2b:3c:4d", "not a mac", "00:1a:2b:3c:4d:5e:6f:70"):
+            with self.subTest(value=value), self.assertRaises(ValidationError) as cm:
+                model(name="Invalid", mac=value).full_clean()
+            self.assertIn("mac", cm.exception.message_dict)
+
+    def test_validate(self):
+        field = self.create_custom_object_type_field(self.custom_object_type, name="mac", type="mac_address")
+        field.validate("00-1a-2b-3c-4d-5e")
+        for value in ("00:1a:2b:3c:4d", 123):
+            with self.subTest(value=value), self.assertRaises(ValidationError):
+                field.validate(value)
+
+    def test_default(self):
+        field = CustomObjectTypeField(
+            custom_object_type=self.custom_object_type, name="mac", type="mac_address", default="nope"
+        )
+        with self.assertRaises(ValidationError) as cm:
+            field.full_clean()
+        self.assertIn("default", cm.exception.message_dict)
+
+        field = CustomObjectTypeField(
+            custom_object_type=self.custom_object_type, name="mac", type="mac_address", default="001a.2b3c.4d5e"
+        )
+        field.full_clean()
+        self.assertEqual(field.default, "00:1A:2B:3C:4D:5E")
+        field.save()
+        model = self.custom_object_type.get_model()
+        self.assertEqual(str(model.objects.create(name="Defaulted").mac), "00:1A:2B:3C:4D:5E")
+
+    def test_unique_across_formats(self):
+        self.create_custom_object_type_field(self.custom_object_type, name="mac", type="mac_address", unique=True)
+        model = self.custom_object_type.get_model()
+        model.objects.create(name="First", mac="00:1a:2b:3c:4d:5e")
+        with self.assertRaises(ValidationError):
+            model(name="Second", mac="001A2B3C4D5E").full_clean()
+
+    def test_form_field(self):
+        field = self.create_custom_object_type_field(self.custom_object_type, name="mac", type="mac_address")
+        form_field = MACAddressFieldType().get_form_field(field)
+        self.assertEqual(form_field.clean("001a.2b3c.4d5e"), "00:1A:2B:3C:4D:5E")
+        self.assertIsNone(form_field.clean(""))
+        with self.assertRaises(ValidationError):
+            form_field.clean("00:1a")
 
 
 class JSONFieldTypeTestCase(FieldTypeTestCase):
