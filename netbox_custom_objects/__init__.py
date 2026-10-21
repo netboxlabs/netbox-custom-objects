@@ -647,8 +647,10 @@ class CustomObjectsPluginConfig(PluginConfig):
             # A dynamic model built inside a transaction that then rolled back no
             # longer matches its table; rebuild it (issue #767).  See
             # CustomObjectType.get_model() and _mark_registered_in_transaction.
-            # The narrow guard, as get_model() itself uses: the class exists, so
-            # the test runner must rebuild it too rather than skip.
+            # Guard with _dynamic_model_creation_unsafe() rather than
+            # should_skip_dynamic_model_creation(): the latter also skips under the
+            # test runner, but this class already exists, so tests must rebuild it
+            # too (the same guard CustomObjectType.get_model() uses).
             if getattr(model, '_registered_in', None) is None:
                 return model
             from .models import CustomObjectType, _registration_rolled_back

@@ -260,7 +260,8 @@ def _mark_registered_in_transaction(model):
     that finds the mark still set after the transaction has ended knows the
     class is stale and rebuilds it (issue #767).
     """
-    conn = _get_schema_connection()
+    # Resolve the thread-local proxy so the mark holds the builder's own connection.
+    conn = connections[_get_schema_connection().alias]
     if not conn.in_atomic_block:
         return
 
