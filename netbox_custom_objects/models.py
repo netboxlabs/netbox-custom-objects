@@ -2313,7 +2313,10 @@ class CustomObjectType(NetBoxModel):
         values can't block it.
         """
         if field.related_object_type_id is None:
-            raise ValueError(f"Object field {field.name!r} (pk={field.pk}) has no related_object_type")
+            raise ValueError(
+                f"Cannot create FK constraint for Object field {field.name!r} (pk={field.pk}) "
+                f"on {self.slug!r}: related_object_type is not set."
+            )
 
         table_name = self.get_database_table_name()
         column_name = f"{field.name}_id"
@@ -2357,6 +2360,13 @@ class CustomObjectType(NetBoxModel):
             type=CustomFieldTypeChoices.TYPE_OBJECT, is_polymorphic=False,
         ).select_related("related_object_type")
         for field in object_fields:
+            if field.related_object_type_id is None:
+                # get_model() skips these too; one bad record shouldn't block the rest.
+                logger.warning(
+                    "Skipping FK constraint for field %r (pk=%s) on COT %r: related_object_type is not set.",
+                    field.name, field.pk, self.slug,
+                )
+                continue
             self._ensure_field_fk_constraint(field)
 
     def create_model(self):
