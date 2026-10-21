@@ -26,7 +26,7 @@ from django.db.models.signals import m2m_changed
 from django.urls import reverse
 from django.utils.html import escape, format_html
 from django.utils.safestring import mark_safe
-from django.utils.text import Truncator
+from django.utils.text import Truncator, format_lazy
 from django.utils.translation import gettext_lazy as _
 from extras.choices import CustomFieldTypeChoices, CustomFieldUIEditableChoices
 from utilities.api import get_serializer_for_model
@@ -387,13 +387,44 @@ class FieldType:
     def create_m2m_table(self, instance, model, field_name, schema_conn=None): ...
 
 
+def regex_validators(field, html=False):
+    """
+    Return the validators enforcing *field*'s validation_regex.
+
+    Applied to the generated model field, so the regex is enforced on REST API writes
+    and CSV/bulk import (which validate through Model.full_clean()) as well as on the
+    UI form. The UI form field also carries the validator with ``html=True`` so the
+    regex is shown in a <code> tag; a form field that fails its own validation is
+    excluded from model validation by ModelForm, so the error is not reported twice.
+
+    The message is built lazily so it is translated per request, not once at model
+    generation time. The validator gets its own error code: Django replaces the message
+    of a validator error whose code is "invalid" with the field's own "invalid" message
+    (e.g. "Enter a valid URL." on URL fields), which would hide the regex.
+    """
+    if not field.validation_regex:
+        return []
+    # Django renders a validator's message with ``message % params``, so a literal % in
+    # the regex must be doubled or rendering the error raises ValueError.
+    regex = field.validation_regex.replace("%", "%%")
+    if html:
+        message = mark_safe(
+            format_lazy(_("Values must match this regex: <code>{regex}</code>"), regex=escape(regex))
+        )
+    else:
+        message = format_lazy(_("Values must match this regex: {regex}"), regex=regex)
+    return [RegexValidator(regex=field.validation_regex, message=message, code="validation_regex")]
+
+
 class TextFieldType(FieldType):
     graphql_annotation = str
 
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
-        return models.CharField(null=True, blank=not field.required, **field_kwargs)
+        return models.CharField(
+            null=True, blank=not field.required, validators=regex_validators(field), **field_kwargs
+        )
 
     def get_serializer_field(self, field, **kwargs):
         return drf_serializers.CharField(
@@ -403,20 +434,8 @@ class TextFieldType(FieldType):
         )
 
     def get_form_field(self, field, **kwargs):
-        validators = []
-        if field.validation_regex:
-            validators = [
-                RegexValidator(
-                    regex=field.validation_regex,
-                    message=mark_safe(
-                        _("Values must match this regex: <code>{regex}</code>").format(
-                            regex=escape(field.validation_regex)
-                        )
-                    ),
-                )
-            ]
         return forms.CharField(
-            required=field.required, initial=field.default, validators=validators
+            required=field.required, initial=field.default, validators=regex_validators(field, html=True)
         )
 
     def get_filterform_field(self, field, **kwargs):
@@ -439,7 +458,9 @@ class LongTextFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
-        return models.TextField(null=True, blank=not field.required, **field_kwargs)
+        return models.TextField(
+            null=True, blank=not field.required, validators=regex_validators(field), **field_kwargs
+        )
 
     def get_serializer_field(self, field, **kwargs):
         return drf_serializers.CharField(
@@ -449,24 +470,11 @@ class LongTextFieldType(FieldType):
         )
 
     def get_form_field(self, field, **kwargs):
-        widget = forms.Textarea
-        validators = []
-        if field.validation_regex:
-            validators = [
-                RegexValidator(
-                    regex=field.validation_regex,
-                    message=mark_safe(
-                        _("Values must match this regex: <code>{regex}</code>").format(
-                            regex=escape(field.validation_regex)
-                        )
-                    ),
-                )
-            ]
         return forms.CharField(
-            widget=widget,
+            widget=forms.Textarea,
             required=field.required,
             initial=field.default,
-            validators=validators,
+            validators=regex_validators(field, html=True),
         )
 
     def render_table_column(self, value):
@@ -698,7 +706,9 @@ class URLFieldType(FieldType):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
         return {
-            field.name: models.URLField(null=True, blank=not field.required, **field_kwargs),
+            field.name: models.URLField(
+                null=True, blank=not field.required, validators=regex_validators(field), **field_kwargs
+            ),
             # blank=True, default='' (not null=True): a CharField with null=True lets
             # "no title" be represented as both NULL (ORM/API create omitting the key)
             # and '' (a form submission clearing the field), which would make
@@ -725,7 +735,10 @@ class URLFieldType(FieldType):
 
     def get_form_field(self, field, **kwargs):
         return LaxURLField(
-            assume_scheme="https", required=field.required, initial=field.default
+            assume_scheme="https",
+            required=field.required,
+            initial=field.default,
+            validators=regex_validators(field, html=True),
         )
 
     def get_form_fields(self, field):
@@ -740,6 +753,7 @@ class URLFieldType(FieldType):
             required=field.required,
             initial=field.default,
             help_text=render_markdown(field.description) if field.description else None,
+            validators=regex_validators(field, html=True),
         )
         title_field = forms.CharField(
             label=f"{base_label} ({_('link title')})",

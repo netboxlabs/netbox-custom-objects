@@ -2,7 +2,7 @@
 Tests for all the different field types supported by Custom Object Type Fields.
 """
 from importlib import import_module
-from unittest import skip, skipUnless
+from unittest import skipUnless
 from unittest.mock import Mock
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -15,6 +15,7 @@ from core.models import ObjectType
 from dcim.models import Device, DeviceType, ModuleType
 from extras.models import CustomFieldChoiceSet
 from netbox_custom_objects.field_types import (
+    FIELD_TYPE_CLASS,
     CoordinatesFieldType,
     MultiObjectFieldType,
     MultiSelectFieldType,
@@ -195,6 +196,61 @@ class TextFieldTypeTestCase(FieldTypeTestCase):
         instance = model.objects.create(name="Test", description="Test description")
 
         self.assertEqual(instance.description, "Test description")
+
+    def test_validation_regex_enforced_on_model_field(self):
+        """
+        Regression #763: validation_regex is enforced by the generated model field itself,
+        so model validation (used by API writes and CSV import) rejects non-matching values.
+        """
+        for field_type, regex, valid, invalid in (
+            ("text", r"^[A-Z]{3}$", "ABC", "abc"),
+            ("longtext", r"^ok", "ok then", "not ok"),
+            ("url", r"^https://", "https://example.com", "http://example.com"),
+        ):
+            with self.subTest(field_type=field_type):
+                field_name = f"regex_{field_type}"
+                self.create_custom_object_type_field(
+                    self.custom_object_type,
+                    name=field_name,
+                    label=field_name,
+                    type=field_type,
+                    validation_regex=regex,
+                )
+                model = self.custom_object_type.get_model()
+
+                model(**{field_name: valid}).clean_fields(exclude=["id", "name"])
+
+                with self.assertRaises(ValidationError) as cm:
+                    model(**{field_name: invalid}).clean_fields(exclude=["id", "name"])
+                self.assertIn(field_name, cm.exception.error_dict)
+
+    def test_validation_regex_with_percent_renders_error(self):
+        """
+        A literal % in validation_regex must not break rendering of the validation
+        error: Django renders validator messages with ``message % params``.
+        """
+        regex = r"^\d+%$"
+        self.create_custom_object_type_field(
+            self.custom_object_type,
+            name="percent",
+            label="Percent",
+            type="text",
+            validation_regex=regex,
+        )
+        model = self.custom_object_type.get_model()
+
+        model(percent="50%").clean_fields(exclude=["id", "name"])
+
+        with self.assertRaises(ValidationError) as cm:
+            model(percent="abc").clean_fields(exclude=["id", "name"])
+        # Rendering the message is what raised ValueError before the fix.
+        self.assertIn(regex, str(cm.exception.message_dict["percent"][0]))
+
+        field = self.custom_object_type.fields.get(name="percent")
+        form_field = FIELD_TYPE_CLASS[field.type]().get_form_field(field)
+        with self.assertRaises(ValidationError) as cm:
+            form_field.clean("abc")
+        self.assertIn(regex, str(cm.exception.messages[0]))
 
 
 class LongTextFieldTypeTestCase(FieldTypeTestCase):
@@ -798,7 +854,6 @@ class URLFieldTypeTestCase(FieldTypeTestCase):
         self.assertEqual(field.type, "url")
         self.assertEqual(field.validation_regex, "^https://.*")
 
-    @skip("URL field validation not currently working, including in Custom Fields?")
     def test_url_field_validation(self):
         """Test URL field validation."""
         field = self.create_custom_object_type_field(

@@ -912,6 +912,64 @@ class LinkedObjectsAPITest(CustomObjectsTestCase, TestCase):
         self.assertIn('object', result)
 
 
+class ValidationRegexAPITest(CustomObjectsTestCase, TestCase):
+    """Regression #763: validation_regex must be enforced on REST API writes, not just in the UI form."""
+
+    def setUp(self):
+        self.user = create_test_user('regexapiuser')
+        self.client = APIClient()
+        token_key = create_token(self.user)
+        self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
+
+        self.cot = CustomObjectsTestCase.create_custom_object_type(name='RegexAPITest', slug='regex-api-test')
+        for name, field_type, regex in (
+            ('code', 'text', r'^[A-Z]{3}$'),
+            ('notes', 'longtext', r'^ok'),
+            ('website', 'url', r'^https://'),
+        ):
+            CustomObjectsTestCase.create_custom_object_type_field(
+                self.cot, name=name, label=name.title(), type=field_type, validation_regex=regex,
+            )
+        self.model = self.cot.get_model()
+
+        perm = ObjectPermission(name='Regex API perm', actions=['add', 'change'])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+    def _list_url(self):
+        return reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-list',
+            kwargs={'custom_object_type': self.cot.slug},
+        )
+
+    def test_create_rejects_values_not_matching_regex(self):
+        for field_name, value in (('code', 'abc'), ('notes', 'not ok'), ('website', 'http://example.com')):
+            with self.subTest(field=field_name):
+                response = self.client.post(
+                    self._list_url(), {field_name: value}, format='json', **self.header
+                )
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.content)
+                self.assertIn(field_name, response.json())
+        self.assertFalse(self.model.objects.exists())
+
+    def test_create_accepts_values_matching_regex(self):
+        data = {'code': 'ABC', 'notes': 'ok then', 'website': 'https://example.com'}
+        response = self.client.post(self._list_url(), data, format='json', **self.header)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.content)
+
+    def test_update_rejects_value_not_matching_regex(self):
+        instance = self.model.objects.create(code='ABC')
+        url = reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-detail',
+            kwargs={'pk': instance.pk, 'custom_object_type': self.cot.slug},
+        )
+        response = self.client.patch(url, {'code': 'abcd'}, format='json', **self.header)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.content)
+        instance.refresh_from_db()
+        self.assertEqual(instance.code, 'ABC')
+
+
 class PolymorphicMultiObjectPrefetchTest(CustomObjectsTestCase, TestCase):
     """Polymorphic multi-object fields must be prefetched (flat query count) and
     must serialize each instance's own members correctly once prefetched."""

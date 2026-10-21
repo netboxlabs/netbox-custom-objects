@@ -3845,14 +3845,17 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         """
         if value not in [None, ""]:
 
-            # Validate text field
+            # Validate text and URL fields
             if self.type in (
                 CustomFieldTypeChoices.TYPE_TEXT,
                 CustomFieldTypeChoices.TYPE_LONGTEXT,
+                CustomFieldTypeChoices.TYPE_URL,
             ):
                 if type(value) is not str:
                     raise ValidationError(_("Value must be a string."))
-                if self.validation_regex and not re.match(self.validation_regex, value):
+                # re.search, not re.match: RegexValidator on the model and form fields
+                # searches, so a default must be accepted under the same rule as object values.
+                if self.validation_regex and not re.search(self.validation_regex, value):
                     raise ValidationError(
                         _("Value must match regex '{regex}'").format(
                             regex=self.validation_regex
