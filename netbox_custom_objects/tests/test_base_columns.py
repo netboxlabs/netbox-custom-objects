@@ -12,11 +12,11 @@ Covers:
 
 import importlib
 
-from django.test import TransactionTestCase
+from django.test import TestCase
 
 from netbox_custom_objects.models import CustomObjectType
 
-from .base import CustomObjectsTestCase, TransactionCleanupMixin
+from .base import CustomObjectsTestCase
 
 
 # ---------------------------------------------------------------------------
@@ -42,9 +42,7 @@ def _run_backfill():
 # _collect_base_columns()
 # ---------------------------------------------------------------------------
 
-class CollectBaseColumnsTestCase(
-    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
-):
+class CollectBaseColumnsTestCase(CustomObjectsTestCase, TestCase):
     """Unit-style tests for CustomObjectType._collect_base_columns()."""
 
     def _make_cot_and_model(self, name, slug, field_names=()):
@@ -107,9 +105,7 @@ class CollectBaseColumnsTestCase(
 # _store_base_column_snapshot()
 # ---------------------------------------------------------------------------
 
-class StoreBaseColumnSnapshotTestCase(
-    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
-):
+class StoreBaseColumnSnapshotTestCase(CustomObjectsTestCase, TestCase):
     """Tests for CustomObjectType._store_base_column_snapshot()."""
 
     def test_snapshot_written_to_schema_document(self):
@@ -176,9 +172,7 @@ class StoreBaseColumnSnapshotTestCase(
 # create_model() automatic snapshot
 # ---------------------------------------------------------------------------
 
-class CreateModelSnapshotTestCase(
-    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
-):
+class CreateModelSnapshotTestCase(CustomObjectsTestCase, TestCase):
     """Tests that create_model() stores a base-column snapshot automatically."""
 
     def test_schema_document_has_base_columns_after_creation(self):
@@ -217,9 +211,7 @@ class CreateModelSnapshotTestCase(
 # 0010 backfill migration
 # ---------------------------------------------------------------------------
 
-class BackfillBaseColumnsTestCase(
-    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
-):
+class BackfillBaseColumnsTestCase(CustomObjectsTestCase, TestCase):
     """
     Tests for the 0010_backfill_base_columns migration function.
 

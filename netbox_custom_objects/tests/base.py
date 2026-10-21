@@ -266,6 +266,29 @@ def _reset_netbox_request_context():
         logger.debug('netbox.context.query_cache has no .set(); skipping reset')
 
 
+def _reverse_descriptors():
+    """Return (model, name) for every polymorphic reverse descriptor set on a model class."""
+    from netbox_custom_objects.field_types import (
+        PolymorphicMultiObjectReverseDescriptor,
+        PolymorphicObjectReverseDescriptor,
+    )
+    return {
+        (model, name)
+        for model in django_apps.get_models()
+        for name, attr in vars(model).items()
+        if isinstance(attr, (PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor))
+    }
+
+
+def _remove_reverse_descriptors(keep=frozenset()):
+    """
+    Remove polymorphic reverse descriptors other than *keep* from model classes.
+    Rolling back a test drops the fields that set them, but not the class attributes.
+    """
+    for model, name in _reverse_descriptors() - keep:
+        delattr(model, name)
+
+
 def create_api_token(user):
     """Create an API token for *user*, handling the NetBox ≥ 4.5 version field."""
     try:
@@ -403,6 +426,7 @@ class CustomObjectsTestCase:
             name: frozenset(f.column for f in model._meta.local_fields)
             for name, model in app_models.items()
         }
+        self._reverse_descriptor_snapshot = _reverse_descriptors()
 
     def tearDown(self):
         """Clean up after each test."""
@@ -421,6 +445,7 @@ class CustomObjectsTestCase:
             # skip per-test model cleanup to avoid deleting static models.
             super().tearDown()
             return
+        _remove_reverse_descriptors(keep=self._reverse_descriptor_snapshot)
         app_models = django_apps.all_models.get(APP_LABEL, {})
         to_remove = []
         for name, model in list(app_models.items()):
@@ -454,6 +479,7 @@ class CustomObjectsTestCase:
         # the registry first so the cascade collector never tries to query those
         # dropped tables.  Static plugin models (CustomObjectType, etc.) must
         # NOT be removed.
+        _remove_reverse_descriptors()
         app_models = django_apps.all_models.get(APP_LABEL, {})
         dynamic = [
             name for name, model in list(app_models.items())

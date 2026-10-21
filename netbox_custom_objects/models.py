@@ -67,6 +67,7 @@ from utilities.object_types import object_type_name
 from utilities.querysets import RestrictedQuerySet
 from utilities.serialization import deserialize_object as _deserialize_object
 from utilities.string import title
+from dcim.fields import MACAddressField
 from utilities.validators import ColorValidator, validate_regex
 
 from netbox_custom_objects.choices import (ArrayElementTypeChoices, ConstraintLookupChoices, ConstraintTypeChoices,
@@ -3131,6 +3132,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                         )
                     }
                 )
+            if self.type == CustomObjectFieldTypeChoices.TYPE_MAC_ADDRESS:
+                self.default = str(MACAddressField().to_python(self.default))
 
         is_array = self.type == CustomObjectFieldTypeChoices.TYPE_ARRAY
 
@@ -3726,6 +3729,12 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                     raise ValidationError(_("Value must be a string."))
                 ColorValidator(value)
 
+            # Validate MAC address
+            elif self.type == CustomObjectFieldTypeChoices.TYPE_MAC_ADDRESS:
+                if not isinstance(value, str):
+                    raise ValidationError(_("Value must be a string."))
+                MACAddressField().to_python(value)
+
             # Validate integer
             elif self.type == CustomFieldTypeChoices.TYPE_INTEGER:
                 if type(value) is not int:
@@ -4253,6 +4262,7 @@ CONSTRAINT_FIELD_TYPES = {
     CustomFieldTypeChoices.TYPE_SELECT,
     CustomFieldTypeChoices.TYPE_OBJECT,
     CustomObjectFieldTypeChoices.TYPE_COLOR,
+    CustomObjectFieldTypeChoices.TYPE_MAC_ADDRESS,
 }
 
 # Field types compared case-insensitively when a constraint is case-insensitive.
@@ -4299,6 +4309,8 @@ _FIELD_VALUE_KINDS = {
     CustomFieldTypeChoices.TYPE_DATE: "date",
     CustomFieldTypeChoices.TYPE_DATETIME: "datetime",
     CustomFieldTypeChoices.TYPE_BOOLEAN: "boolean",
+    CustomObjectFieldTypeChoices.TYPE_COLOR: "color",
+    CustomObjectFieldTypeChoices.TYPE_MAC_ADDRESS: "mac_address",
 }
 
 _COMPARISON_LOOKUPS = {
@@ -4307,6 +4319,18 @@ _COMPARISON_LOOKUPS = {
     ConstraintLookupChoices.LT,
     ConstraintLookupChoices.LTE,
 }
+
+
+def normalize_predicate_value(field, lookup, value):
+    """
+    Return a constraint predicate's literal value with MAC addresses written the way
+    the field shows them; raises ValidationError for an invalid address.
+    """
+    if field.type != CustomObjectFieldTypeChoices.TYPE_MAC_ADDRESS:
+        return value
+    if lookup == ConstraintLookupChoices.IN:
+        return [str(MACAddressField().to_python(v)) for v in value]
+    return str(MACAddressField().to_python(value))
 
 
 def _condition_column(field):
@@ -4590,6 +4614,9 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
         else:
             self._clean_unique()
 
+        # Normalized first, so a sibling's predicates compare equal however they were written.
+        self.condition = self._clean_predicates("condition", self.condition)
+        self.rule = self._clean_predicates("rule", self.rule)
         siblings = CustomObjectTypeConstraint.objects.filter(
             custom_object_type_id=self.custom_object_type_id
         ).exclude(pk=self.pk)
@@ -4608,8 +4635,6 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
                     "field_schema_ids": _("Constraint {name} already covers these fields.").format(name=sibling)
                 })
 
-        self.condition = self._clean_predicates("condition", self.condition)
-        self.rule = self._clean_predicates("rule", self.rule)
         if self.type == ConstraintTypeChoices.CHECK and not self.rule:
             raise ValidationError({"rule": _("A check constraint needs a rule.")})
         self._check_existing_objects()
@@ -4725,6 +4750,7 @@ class CustomObjectTypeConstraint(ChangeLoggedModel):
                 values = [value]
             for v in values:
                 self._clean_predicate_value(attr, model, field, v)
+            predicate["value"] = normalize_predicate_value(field, lookup, value)
         return predicates
 
     @staticmethod

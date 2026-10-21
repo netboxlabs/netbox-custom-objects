@@ -2850,6 +2850,85 @@ class ColorFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
                 self.assertIn("shade", response.data)
 
 
+class MACAddressFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
+    """REST API behaviour for the MAC address field type."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.cot = CustomObjectType.objects.create(name="Port", verbose_name_plural="Ports", slug="ports")
+        cls.create_custom_object_type_field(cls.cot, name="name", type="text", primary=True, required=True)
+        cls.create_custom_object_type_field(cls.cot, name="mac", type="mac_address")
+        cls.model = cls.cot.get_model()
+
+    def setUp(self):
+        super().setUp()
+        self.user = create_test_user("portuser")
+        self.client = APIClient()
+        self.header = {"HTTP_AUTHORIZATION": f"Token {create_token(self.user)}"}
+        perm = ObjectPermission(name="port all", actions=["view", "add", "change", "delete"])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+    def _list_url(self):
+        return reverse(
+            "plugins-api:netbox_custom_objects-api:customobject-list",
+            kwargs={"custom_object_type": self.cot.slug},
+        )
+
+    def test_create_normalizes(self):
+        response = self.client.post(
+            self._list_url(), {"name": "eth0", "mac": "001a.2b3c.4d5e"}, format="json", **self.header
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(response.data["mac"], "00:1A:2B:3C:4D:5E")
+        response = self.client.get(self._list_url(), {"mac": "00-1a-2b-3c-4d-5e"}, **self.header)
+        self.assertEqual([row["mac"] for row in response.data["results"]], ["00:1A:2B:3C:4D:5E"])
+
+    def test_null_or_blank_allowed(self):
+        for value in (None, ""):
+            with self.subTest(value=value):
+                response = self.client.post(
+                    self._list_url(), {"name": f"eth{value!r}", "mac": value}, format="json", **self.header
+                )
+                self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+                self.assertIsNone(response.data["mac"])
+
+    def test_blank_rejected_when_required(self):
+        field = self.cot.fields.get(name="mac")
+        field.required = True
+        field.save()
+        response = self.client.post(self._list_url(), {"name": "eth9", "mac": ""}, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("mac", response.data)
+
+    def test_invalid_rejected(self):
+        for value in ("00:1a:2b:3c:4d", "not a mac", "00:1a:2b:3c:4d:5e:6f:70"):
+            with self.subTest(value=value):
+                response = self.client.post(
+                    self._list_url(), {"name": "bad", "mac": value}, format="json", **self.header
+                )
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertIn("mac", response.data)
+
+    def test_field_default_normalized(self):
+        self.user.is_superuser = True
+        self.user.save()
+        url = reverse("plugins-api:netbox_custom_objects-api:customobjecttypefield-list")
+        data = {"custom_object_type": self.cot.pk, "name": "uplink", "type": "mac_address", "default": "001a.2b3c.4d5e"}
+        response = self.client.post(url, data, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(response.data["default"], "00:1A:2B:3C:4D:5E")
+        self.assertEqual(self.cot.fields.get(name="uplink").default, "00:1A:2B:3C:4D:5E")
+
+        field = self.cot.fields.get(name="mac")
+        url = reverse("plugins-api:netbox_custom_objects-api:customobjecttypefield-detail", kwargs={"pk": field.pk})
+        response = self.client.patch(url, {"default": "aa-bb-cc-dd-ee-ff"}, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        field.refresh_from_db()
+        self.assertEqual(field.default, "AA:BB:CC:DD:EE:FF")
+
+
 class URLFieldLinkTitleAPITest(CustomObjectsTestCase, NetBoxTestCase):
     """REST API behaviour for the url field type's link-title support (issue #496)."""
 

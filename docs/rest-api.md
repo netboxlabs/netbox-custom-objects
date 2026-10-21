@@ -75,6 +75,7 @@ Available `type` values are:
 | `object` | Reference to a single object |
 | `multiobject` | Reference to multiple objects of the same type |
 | `color` | RGB color as six lowercase hexadecimal digits, e.g. `00ff00` |
+| `mac_address` | EUI-48 MAC address; accepted in any common format, returned as `00:1A:2B:3C:4D:5E` |
 
 Common attributes available on all field types:
 

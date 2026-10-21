@@ -1,19 +1,20 @@
 """
 Tests for database schema operations and model-cache behaviour.
 
-Uses TransactionTestCase so DDL and on_commit callbacks behave exactly as they
-do in production (no wrapping savepoint prevents commits).
+The concurrency tests use TransactionTestCase, because their threads use their own
+database connections and only see committed data.
 """
 import sys
 import threading
 from io import StringIO
+from unittest import expectedFailure
 from unittest.mock import patch
 
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
 from django.db import IntegrityError, ProgrammingError, connection
-from django.test import SimpleTestCase, TransactionTestCase
+from django.test import SimpleTestCase, TestCase, TransactionTestCase
 from django.urls import reverse
 from psycopg.errors import DuplicateTable
 
@@ -29,7 +30,7 @@ from users.models import ObjectPermission
 from .base import CustomObjectsTestCase, TransactionCleanupMixin
 
 
-class SchemaOperationsTestCase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
+class SchemaOperationsTestCase(CustomObjectsTestCase, TestCase):
     """Test database schema operations and related cache/registry behaviour."""
 
     # ------------------------------------------------------------------
@@ -723,7 +724,7 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
         obj.delete()  # Must not raise ValueError: "Cannot query ...: Must be ... instance."
 
 
-class OwnerFieldNameCollisionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
+class OwnerFieldNameCollisionTestCase(CustomObjectsTestCase, TestCase):
     """A user field named 'owner' shadows CustomObject's own OwnerMixin.owner field.
     Renaming or deleting it must not crash on the unmasked mixin field's missing column.
     """
@@ -737,6 +738,20 @@ class OwnerFieldNameCollisionTestCase(TransactionCleanupMixin, CustomObjectsTest
                 )
             }
 
+    def _fks(self, model, column):
+        """(target table, ON DELETE action code) of each FK on *column*."""
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT c.confrelid::regclass::text, c.confdeltype
+                FROM pg_constraint c
+                JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+                WHERE c.contype = 'f' AND c.conrelid = %s::regclass AND a.attname = %s
+                """,
+                [model._meta.db_table, column],
+            )
+            return cursor.fetchall()
+
     def _make_owner_collision_cot(self, slug):
         from core.models import ObjectType
         contact_ot = ObjectType.objects.get(app_label='tenancy', model='contact')
@@ -745,10 +760,12 @@ class OwnerFieldNameCollisionTestCase(TransactionCleanupMixin, CustomObjectsTest
         self.create_custom_object_type_field(
             cot, name='name', label='Name', type='text', primary=True, required=True,
         )
-        # .objects.create() bypasses the reserved-name check in clean().
-        field = self.create_custom_object_type_field(
-            cot, name='owner', label='Owner', type='object', related_object_type=contact_ot,
-        )
+        # .objects.create() bypasses the reserved-name check in clean().  The FK
+        # constraint is added on commit, as in production.
+        with self.captureOnCommitCallbacks(execute=True):
+            field = self.create_custom_object_type_field(
+                cot, name='owner', label='Owner', type='object', related_object_type=contact_ot,
+            )
         return cot, field
 
     def test_renaming_away_from_owner_does_not_break_list_view(self):
@@ -759,15 +776,29 @@ class OwnerFieldNameCollisionTestCase(TransactionCleanupMixin, CustomObjectsTest
 
         field = CustomObjectTypeField.objects.get(pk=field.pk)
         field.name = 'client_contact'
-        field.save()
+        with self.captureOnCommitCallbacks(execute=True):
+            field.save()
 
         updated_model = cot.get_model(no_cache=True)
         columns = self._db_columns(updated_model)
         self.assertIn('client_contact_id', columns)
         self.assertIn('owner_id', columns, "OwnerMixin's own column must be healed back in")
+        self.assertEqual([t for t, _ in self._fks(updated_model, 'client_contact_id')], ['tenancy_contact'])
 
         results = list(updated_model.objects.all())
         self.assertEqual(len(results), 2)
+
+    @expectedFailure  # A rename recreates the FK as NO ACTION and the on-commit hook doesn't restore it.
+    def test_renaming_away_from_owner_keeps_on_delete_action(self):
+        cot, field = self._make_owner_collision_cot('owner-rename-fk')
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.name = 'client_contact'
+        with self.captureOnCommitCallbacks(execute=True):
+            field.save()
+
+        updated_model = cot.get_model(no_cache=True)
+        # 'n' is ON DELETE SET NULL, the field's default.
+        self.assertEqual(self._fks(updated_model, 'client_contact_id'), [('tenancy_contact', 'n')])
 
     def test_deleting_owner_field_does_not_break_list_view(self):
         cot, field = self._make_owner_collision_cot('owner-delete')
