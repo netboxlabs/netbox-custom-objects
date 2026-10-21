@@ -13,7 +13,7 @@ from pathlib import Path
 
 from django.db import IntegrityError, transaction
 from django.db.models.fields import NOT_PROVIDED
-from django.test import TestCase, TransactionTestCase
+from django.test import TestCase
 
 from netbox_custom_objects.models import CustomObjectTypeConstraint, CustomObjectTypeField
 from netbox_custom_objects.schema.format import (
@@ -25,7 +25,7 @@ from netbox_custom_objects.schema.format import (
 )
 from extras.choices import CustomFieldTypeChoices
 
-from ..base import CustomObjectsTestCase, TransactionCleanupMixin
+from ..base import CustomObjectsTestCase
 
 # ---------------------------------------------------------------------------
 # Optional jsonschema dependency — skip structural-validation tests if absent
@@ -42,12 +42,10 @@ _SCHEMA_PATH = (
 
 
 # ===========================================================================
-# schema_id / deprecated model field tests (require TransactionTestCase)
+# schema_id / deprecated model field tests
 # ===========================================================================
 
-class SchemaIdAutoAssignmentTestCase(
-    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
-):
+class SchemaIdAutoAssignmentTestCase(CustomObjectsTestCase, TestCase):
     """schema_id is auto-assigned on field creation and never reused."""
 
     def test_schema_id_assigned_on_create(self):
@@ -124,9 +122,7 @@ class SchemaIdAutoAssignmentTestCase(
         )
 
 
-class DeprecationFieldsTestCase(
-    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
-):
+class DeprecationFieldsTestCase(CustomObjectsTestCase, TestCase):
     """deprecated, deprecated_since, and scheduled_removal field behaviour."""
 
     def test_deprecated_defaults_to_false(self):
@@ -167,12 +163,10 @@ class DeprecationFieldsTestCase(
 
 
 # ===========================================================================
-# Backfill migration logic tests (TransactionTestCase — uses DDL)
+# Backfill migration logic tests
 # ===========================================================================
 
-class SchemaIdBackfillTestCase(
-    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
-):
+class SchemaIdBackfillTestCase(CustomObjectsTestCase, TestCase):
     """
     Tests for the 0008_backfill_schema_ids migration logic.
 
@@ -600,9 +594,10 @@ class COTJsonSchemaTestCase(TestCase):
                         {"id": 12, "name": "device", "type": "object", "related_object_type": "dcim/device"},
                         {"id": 13, "name": "sites", "type": "multiobject", "related_object_type": "dcim/site"},
                         {"id": 14, "name": "shade", "type": "color", "default": "00ff00"},
+                        {"id": 15, "name": "mac", "type": "mac_address", "unique": True},
                     ],
                     "removed_fields": [
-                        {"id": 15, "name": "old_code", "type": "text", "removed_in": "1.1.0"}
+                        {"id": 16, "name": "old_code", "type": "text", "removed_in": "1.1.0"}
                     ],
                 }
             ],

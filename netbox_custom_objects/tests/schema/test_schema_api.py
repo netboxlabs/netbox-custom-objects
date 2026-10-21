@@ -19,7 +19,7 @@ from unittest import mock
 
 from django.apps import apps as django_apps
 from django.urls import reverse
-from django.test import TransactionTestCase
+from django.test import TestCase
 from rest_framework import status
 from rest_framework.test import APIClient
 
@@ -31,14 +31,14 @@ import netbox_custom_objects as nco_pkg
 from netbox_custom_objects.schema.exporter import export_cot
 from netbox_custom_objects.models import CustomObjectType
 
-from ..base import CustomObjectsTestCase, TransactionCleanupMixin, create_api_token
+from ..base import CustomObjectsTestCase, create_api_token
 
 
 # ---------------------------------------------------------------------------
 # Base for schema API tests
 # ---------------------------------------------------------------------------
 
-class _SchemaAPIBase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
+class _SchemaAPIBase(CustomObjectsTestCase, TestCase):
     """Base class providing an authenticated API client and helper shortcuts."""
 
     def setUp(self):

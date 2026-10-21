@@ -20,6 +20,7 @@ from netbox_custom_objects.utilities import extract_cot_id_from_model_name, pred
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.field_types import (
     CustomColorSelect,
+    MACAddressFormField,
     PolymorphicObjectReverseDescriptor,
     PolymorphicMultiObjectReverseDescriptor,
 )
@@ -359,6 +360,14 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
                 empty_value=None,
                 widget=CustomColorSelect,
                 help_text=_("Color given to new objects"),
+            )
+        # A MAC address default is typed as plain text, not JSON.
+        elif field_type == CustomObjectFieldTypeChoices.TYPE_MAC_ADDRESS:
+            self.fields["default"] = MACAddressFormField(
+                label=self.fields["default"].label,
+                required=False,
+                empty_value=None,
+                help_text=_("MAC address given to new objects, e.g. 00:1A:2B:3C:4D:5E"),
             )
 
         # Add related_name (and on_delete_behavior for non-polymorphic single-object

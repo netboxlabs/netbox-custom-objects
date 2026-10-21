@@ -15,7 +15,7 @@ Covers:
 from unittest.mock import MagicMock, patch
 
 from django.db import connection
-from django.test import TestCase, TransactionTestCase
+from django.test import TestCase
 
 from netbox_custom_objects.mixin_migration import (
     _can_auto_add,
@@ -29,7 +29,7 @@ from netbox_custom_objects.models import (
     detect_backing_column_collisions,
 )
 
-from .base import CustomObjectsTestCase, TransactionCleanupMixin
+from .base import CustomObjectsTestCase
 
 
 # ---------------------------------------------------------------------------
@@ -62,9 +62,7 @@ class CanAutoAddTestCase(TestCase):
 # _expected_base_fields()
 # ---------------------------------------------------------------------------
 
-class ExpectedBaseFieldsTestCase(
-    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
-):
+class ExpectedBaseFieldsTestCase(CustomObjectsTestCase, TestCase):
     """Tests for _expected_base_fields() — requires a live COT."""
 
     def test_returns_id_created_last_updated(self):
@@ -91,9 +89,7 @@ class ExpectedBaseFieldsTestCase(
 # heal_cot() — normal path
 # ---------------------------------------------------------------------------
 
-class HealCotTestCase(
-    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
-):
+class HealCotTestCase(CustomObjectsTestCase, TestCase):
     """Integration tests for heal_cot() against a real DB."""
 
     def test_no_drift_returns_empty_results(self):
@@ -351,9 +347,7 @@ class HealCotTestCase(
 # detect_backing_column_collisions() / heal_cot() collision surfacing
 # ---------------------------------------------------------------------------
 
-class BackingColumnCollisionTestCase(
-    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
-):
+class BackingColumnCollisionTestCase(CustomObjectsTestCase, TestCase):
     """
     Regression tests (PR #641 review) for pre-existing backing-column
     collisions: a plain field literally named "<url_field>_title" (or
@@ -530,9 +524,7 @@ class BackingColumnCollisionTestCase(
 # heal_all_cots()
 # ---------------------------------------------------------------------------
 
-class HealAllCotsTestCase(
-    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
-):
+class HealAllCotsTestCase(CustomObjectsTestCase, TestCase):
     """Tests for heal_all_cots() summary behaviour."""
 
     def test_summary_total_matches_cot_count(self):
@@ -558,9 +550,7 @@ class HealAllCotsTestCase(
 # Management command
 # ---------------------------------------------------------------------------
 
-class UpgradeCustomObjectsCommandTestCase(
-    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
-):
+class UpgradeCustomObjectsCommandTestCase(CustomObjectsTestCase, TestCase):
     """Smoke tests for the upgrade_custom_objects management command."""
 
     def _call_command(self, *args, **kwargs):
