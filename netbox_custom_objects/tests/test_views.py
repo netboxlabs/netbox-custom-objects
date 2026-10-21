@@ -1926,6 +1926,78 @@ class ColorFieldViewTest(CustomObjectsTestCase, TestCase):
         self.assertEqual(self.model.objects.get(name="Imported").shade, "00ff00")
 
 
+class MACAddressFieldViewTest(CustomObjectsTestCase, TestCase):
+    """UI behaviour for the MAC address field type."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.cot = CustomObjectType.objects.create(name="Port", verbose_name_plural="Ports", slug="ports")
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.cot, name="name", type="text", primary=True, required=True
+        )
+        CustomObjectTypeField.objects.create(custom_object_type=cls.cot, name="mac", type="mac_address")
+        cls.model = cls.cot.get_model()
+
+    def setUp(self):
+        super().setUp()
+        perm = ObjectPermission(name="port all", actions=["view", "add", "change", "delete"])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+        perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectTypeField))
+        perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
+
+    def _url(self, action, **kwargs):
+        return reverse(
+            f"plugins:netbox_custom_objects:customobject{action}",
+            kwargs={"custom_object_type": self.cot.slug, **kwargs},
+        )
+
+    def test_create_and_display(self):
+        response = self.client.post(self._url("_add"), {"name": "eth0", "mac": "00-1a-2b-3c-4d-5e"})
+        self.assertEqual(response.status_code, 302)
+        obj = self.model.objects.get(name="eth0")
+        self.assertEqual(str(obj.mac), "00:1A:2B:3C:4D:5E")
+        for url in (obj.get_absolute_url(), self._url("_list"), self._url("_edit", pk=obj.pk)):
+            with self.subTest(url=url):
+                self.assertContains(self.client.get(url), "00:1A:2B:3C:4D:5E")
+
+    def test_invalid_rejected(self):
+        response = self.client.post(self._url("_add"), {"name": "bad", "mac": "00:1a:2b:3c:4d"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Invalid MAC address format")
+        self.assertFalse(self.model.objects.filter(name="bad").exists())
+
+    def test_csv_import(self):
+        data = {"data": "name,mac\neth1,001a.2b3c.4d5e", "format": "csv", "csv_delimiter": ","}
+        response = self.client.post(self._url("_bulk_import"), data)
+        self.assertEqual(response.status_code, 302, response.content)
+        self.assertEqual(str(self.model.objects.get(name="eth1").mac), "00:1A:2B:3C:4D:5E")
+
+    def test_field_default_is_plain_text(self):
+        add_url = reverse("plugins:netbox_custom_objects:customobjecttypefield_add")
+        response = self.client.get(f"{add_url}?custom_object_type={self.cot.pk}&type=mac_address")
+        self.assertRegex(response.content.decode(), r'<input type="text" name="default"')
+
+        data = {
+            "custom_object_type": self.cot.pk, "name": "uplink", "type": "mac_address", "default": "aabb.ccdd.eeff",
+            "search_weight": 500, "filter_logic": "loose", "weight": 100, "ui_visible": "always",
+            "ui_editable": "yes",
+        }
+        response = self.client.post(f"{add_url}?custom_object_type={self.cot.pk}", data)
+        self.assertEqual(response.status_code, 302, response.content)
+        self.assertEqual(self.cot.fields.get(name="uplink").default, "AA:BB:CC:DD:EE:FF")
+
+        response = self.client.get(reverse("plugins:netbox_custom_objects:customobjecttype_fields", args=[self.cot.pk]))
+        self.assertContains(response, "AA:BB:CC:DD:EE:FF")
+        self.assertNotContains(response, "&quot;AA:BB:CC:DD:EE:FF&quot;")
+
+        bad = {**data, "name": "bad", "default": "x"}
+        response = self.client.post(f"{add_url}?custom_object_type={self.cot.pk}", bad)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Invalid MAC address format")
+
+
 class URLFieldLinkTitleViewTest(CustomObjectsTestCase, TestCase):
     """UI form behaviour for the url field type's link-title support (issue #496)."""
 
