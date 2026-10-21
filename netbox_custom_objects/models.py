@@ -2478,11 +2478,8 @@ class CustomObjectType(NetBoxModel):
             if not field.related_object_types.exists():
                 field.delete()
 
-        # This COT's own fields are removed with its row, not via field.delete(), so
-        # unwire their reverse accessors here; a leftover one would also block another
-        # field from claiming its related_name.  Like all (un)wiring this is a no-op
-        # in a branch: the target classes are shared, and main still has the type
-        # until the merge replays this delete in main (#766).
+        # Cascading field deletion skips field.delete(), so remove these accessors here.
+        # Unwiring only affects main; branch deletions take effect when merged.
         for field in CustomObjectTypeField.objects.filter(custom_object_type_id=cot_id, is_polymorphic=True):
             _unwire_polymorphic_reverse_descriptors(field)
 
