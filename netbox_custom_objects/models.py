@@ -656,6 +656,7 @@ def _schema_alter_field(old_fi, new_fi, model, schema_editor, schema_conn, exist
             return None
         return bind_for_ddl(_primary_model_field(live_fi), model, live_fi.name)
 
+    # A Python-level on_delete is a non-DB attr, so an on_delete-only change emits no FK DDL here.
     _alter_column_with_rename_conflict_resolution(
         old_mf, new_mf, model, schema_editor, schema_conn,
         resolve_live_column=_resolve_live_primary_column,

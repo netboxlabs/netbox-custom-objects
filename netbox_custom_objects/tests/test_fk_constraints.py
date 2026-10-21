@@ -1,9 +1,11 @@
 from unittest import mock
 
+from core.models import ObjectType
 from dcim.models import Site
 from django.db import IntegrityError, connection, transaction
 from django.test import TestCase, TransactionTestCase
 from django.test.utils import CaptureQueriesContext
+from tenancy.models import Tenant
 from users.models import Owner
 
 from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
@@ -70,6 +72,14 @@ class ObjectFieldFKConstraintTestCase(CustomObjectsTestCase, TestCase):
         self.cot.get_model().objects.create(name="o", site=site)
         with self.assertRaises(IntegrityError), transaction.atomic():
             Site.objects.filter(pk=site.pk).delete()
+
+    def test_retarget_replaces_constraint(self):
+        field = self._create_field(ObjectFieldOnDeleteChoices.CASCADE)
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.related_object_type = ObjectType.objects.get_for_model(Tenant)
+        with self.captureOnCommitCallbacks(execute=True):
+            field.save()
+        self.assertEqual(self._constraints(), [("tenancy_tenant", "c")])
 
     def test_orphaned_values_dont_block_constraint(self):
         field = self._create_field()
