@@ -2328,6 +2328,8 @@ class CustomObjectType(NetBoxModel):
         schema_conn = connections[using] if using else _get_schema_connection()
         q = schema_conn.ops.quote_name
         with transaction.atomic(using=schema_conn.alias), schema_conn.cursor() as cursor:
+            # Lock before reading the constraints so concurrent hooks for this table serialise.
+            cursor.execute(f'LOCK TABLE {q(table_name)} IN ACCESS EXCLUSIVE MODE')
             # Match by column, not constraint name: RENAME COLUMN keeps the old name.
             cursor.execute(
                 """
@@ -2344,7 +2346,7 @@ class CustomObjectType(NetBoxModel):
             # PROTECT → RESTRICT; SET NULL needs a nullable column (always true
             # for Object fields).  NOT DEFERRABLE — deferred constraints queue
             # trigger events that block subsequent ALTER TABLE calls.
-            constraint_name = f"{table_name}_{column_name}_fk"
+            constraint_name = safe_table_name(f"{table_name}_{column_name}_fk")
             cursor.execute(f"""
                 ALTER TABLE {q(table_name)}
                 ADD CONSTRAINT {q(constraint_name)}
@@ -2367,7 +2369,13 @@ class CustomObjectType(NetBoxModel):
                     field.name, field.pk, self.slug,
                 )
                 continue
-            self._ensure_field_fk_constraint(field)
+            try:
+                self._ensure_field_fk_constraint(field)
+            except Exception:
+                logger.exception(
+                    "Failed to create the FK constraint for Object field %r (pk=%s) on COT %r",
+                    field.name, field.pk, self.slug,
+                )
 
     def create_model(self):
         from netbox_custom_objects.api.serializers import get_serializer_class

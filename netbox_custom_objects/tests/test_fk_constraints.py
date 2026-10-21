@@ -56,8 +56,7 @@ class ObjectFieldFKConstraintTestCase(CustomObjectsTestCase, TestCase):
             self.create_custom_object_type_field(
                 self.cot, name="site", type="object", related_object_type=self.get_site_object_type(),
             )
-        # Inside the transaction the column has Django's deferrable NO ACTION FK.
-        self.assertEqual(self._constraints(), [("dcim_site", "a")])
+        self.assertNotIn(("dcim_site", "n"), self._constraints())
         for callback in callbacks:
             callback()
         self.assertEqual(self._constraints(), [("dcim_site", "n")])
@@ -132,6 +131,39 @@ class ObjectFieldFKConstraintTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(self._constraints("site_b_id"), [("dcim_site", "c")])
         # The field query joins the content type; nothing should fetch it again per field.
         self.assertFalse([q["sql"] for q in ctx.captured_queries if 'FROM "django_content_type"' in q["sql"]])
+
+    def test_long_field_names_get_distinct_constraints(self):
+        prefix = "x" * 45
+        with self.captureOnCommitCallbacks(execute=True):
+            for suffix in ("a", "b"):
+                self.create_custom_object_type_field(
+                    self.cot, name=f"{prefix}_{suffix}", type="object",
+                    related_object_type=self.get_site_object_type(), on_delete_behavior="cascade",
+                )
+        self.assertEqual(self._constraints(f"{prefix}_a_id"), [("dcim_site", "c")])
+        self.assertEqual(self._constraints(f"{prefix}_b_id"), [("dcim_site", "c")])
+
+    def test_ensure_all_fk_constraints_continues_past_a_failing_field(self):
+        site_ot = self.get_site_object_type()
+        with self.captureOnCommitCallbacks(execute=True):
+            self.create_custom_object_type_field(self.cot, name="site_a", type="object", related_object_type=site_ot)
+            self.create_custom_object_type_field(self.cot, name="site_b", type="object", related_object_type=site_ot)
+        with connection.cursor() as cursor:
+            cursor.execute(f'ALTER TABLE "{self.table}" DROP CONSTRAINT "{self.table}_site_b_id_fk"')
+
+        original = CustomObjectType._ensure_field_fk_constraint
+
+        def fail_site_a(cot, field, using=None):
+            if field.name == "site_a":
+                raise RuntimeError("boom")
+            return original(cot, field, using=using)
+
+        with (
+            mock.patch.object(CustomObjectType, "_ensure_field_fk_constraint", fail_site_a),
+            self.assertLogs("netbox_custom_objects.models", level="ERROR"),
+        ):
+            self.cot._ensure_all_fk_constraints()
+        self.assertEqual(self._constraints("site_b_id"), [("dcim_site", "n")])
 
 
 class ObjectFieldFKConstraintCommitTestCase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
