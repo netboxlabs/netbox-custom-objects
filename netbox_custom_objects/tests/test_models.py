@@ -961,6 +961,26 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
             )
             field.full_clean()
 
+    def test_custom_object_type_field_default_matches_regex_like_objects(self):
+        """
+        A default is checked against validation_regex with the same search semantics
+        RegexValidator applies to object values, so an unanchored regex that accepts an
+        object value also accepts it as the field's default.
+        """
+        field = CustomObjectTypeField(
+            custom_object_type=self.custom_object_type,
+            name="site",
+            type="url",
+            validation_regex=r"example\.com",
+            default="https://example.com",
+        )
+        field.full_clean()
+
+        field.default = "https://example.org"
+        with self.assertRaises(ValidationError) as cm:
+            field.full_clean()
+        self.assertIn("default", cm.exception.error_dict)
+
     def test_custom_object_type_field_boolean_unique_validation(self):
         """Test that boolean fields cannot be unique."""
         with self.assertRaises(ValidationError):
