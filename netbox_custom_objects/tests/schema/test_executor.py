@@ -17,7 +17,7 @@ Covers:
 
 import copy
 
-from django.test import SimpleTestCase, TransactionTestCase
+from django.test import SimpleTestCase, TestCase
 
 from netbox_custom_objects.schema.comparator import (
     COTDiff,
@@ -41,7 +41,7 @@ from netbox_custom_objects.schema.executor import (
 from netbox_custom_objects.schema.exporter import export_cot
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint
 
-from ..base import CustomObjectsTestCase, TransactionCleanupMixin
+from ..base import CustomObjectsTestCase
 
 
 # ---------------------------------------------------------------------------
@@ -148,7 +148,7 @@ class ExecutorBuildDepOrderTestCase(SimpleTestCase):
 # Helper base for DDL tests
 # ---------------------------------------------------------------------------
 
-class _ExecutorTestBase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
+class _ExecutorTestBase(CustomObjectsTestCase, TestCase):
     """Common base for executor integration tests that touch the DB."""
     pass
 
