@@ -16,9 +16,7 @@ Adding tests for a new migration
 import importlib
 
 from django.db import connection
-from django.test import TransactionTestCase
-
-from .base import TransactionCleanupMixin
+from django.test import TestCase
 
 
 def _load_migration(name):
@@ -85,33 +83,22 @@ def _add_nondeferrable_fk(table_name, constraint_name, column_name, ref_table=_R
 # Base TestCase
 # ---------------------------------------------------------------------------
 
-class _MigrationTestCase(TransactionCleanupMixin, TransactionTestCase):
+class _MigrationTestCase(TestCase):
     """
     Base for migration tests that need ephemeral custom_objects_* tables.
 
-    Subclasses call ``_create_scratch_table()`` in setUp; tables are dropped
-    automatically in tearDown.  Use IDs in the 99900+ range to avoid colliding
-    with any real CustomObjectType rows created during the test run.
+    Subclasses call ``_create_scratch_table()`` in setUp; the test's rollback drops
+    them.  Use IDs in the 99900+ range to avoid colliding with any real
+    CustomObjectType rows created during the test run.
     """
 
-    def setUp(self):
-        super().setUp()
-        self._created_tables: list[str] = []
-
-    def tearDown(self):
-        with connection.cursor() as cursor:
-            for table in reversed(self._created_tables):
-                cursor.execute(f'DROP TABLE IF EXISTS "{table}" CASCADE')
-        super().tearDown()
-
     def _create_scratch_table(self, table_name: str, columns: list[str]):
-        """CREATE TABLE with nullable integer columns; register for tearDown."""
+        """CREATE TABLE with nullable integer columns."""
         col_defs = ', '.join(f'"{c}" INTEGER' for c in columns)
         with connection.cursor() as cursor:
             cursor.execute(
                 f'CREATE TABLE "{table_name}" (id SERIAL PRIMARY KEY, {col_defs})'
             )
-        self._created_tables.append(table_name)
 
 
 # ===========================================================================
