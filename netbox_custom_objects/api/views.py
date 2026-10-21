@@ -23,6 +23,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from netbox.api.authentication import IsAuthenticatedOrLoginNotRequired, TokenWritePermission
 from netbox.api.renderers import FormlessBrowsableAPIRenderer
 from netbox.api.viewsets import NetBoxModelViewSet
+from utilities.permissions import get_permission_for_model
 
 
 from netbox_custom_objects.constants import APP_LABEL
@@ -254,10 +255,9 @@ class LinkedObjectsView(APIView):
         }
     """
 
-    # This view queries across multiple unrelated custom object type models so there is
-    # no single queryset to derive object-type permissions from.  Authentication is still
-    # enforced; object-level permission checks are bypassed here and delegated to the
-    # individual serializers / querysets used when building the results.
+    # This view queries across multiple unrelated custom object type models, so there is
+    # no single queryset to derive model permissions from. Instead, get() restricts the
+    # target object and each type's linked objects to what the user may view.
     _ignore_model_permissions = True
 
     def get(self, request, *args, **kwargs):
@@ -284,8 +284,16 @@ class LinkedObjectsView(APIView):
             )
 
         model_class = content_type.model_class()
+        manager = model_class._default_manager
+        if hasattr(manager, 'restrict'):
+            targets = manager.restrict(request.user, 'view')
+        elif request.user.has_perm(get_permission_for_model(model_class, 'view')):
+            # The manager isn't permission-aware, so only the model-level permission applies.
+            targets = manager.all()
+        else:
+            raise Http404
         try:
-            target_obj = model_class.objects.get(pk=object_id)
+            target_obj = targets.get(pk=object_id)
         except (model_class.DoesNotExist, ValueError):
             raise Http404
 
@@ -304,6 +312,7 @@ class LinkedObjectsView(APIView):
         results = []
         for field in list(non_poly_fields) + list(poly_fields):
             custom_object_model = field.custom_object_type.get_model()
+            viewable = custom_object_model.objects.restrict(request.user, 'view')
 
             if field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                 if field.is_polymorphic:
@@ -318,15 +327,15 @@ class LinkedObjectsView(APIView):
                     linked_ids = through_model.objects.filter(
                         target_id=target_obj.pk
                     ).values_list('source_id', flat=True)
-                linked_objects = custom_object_model.objects.filter(pk__in=linked_ids)
+                linked_objects = viewable.filter(pk__in=linked_ids)
             else:
                 if field.is_polymorphic:
-                    linked_objects = custom_object_model.objects.filter(**{
+                    linked_objects = viewable.filter(**{
                         f"{field.name}_content_type_id": content_type.id,
                         f"{field.name}_object_id": target_obj.pk,
                     })
                 else:
-                    linked_objects = custom_object_model.objects.filter(**{field.name: target_obj})
+                    linked_objects = viewable.filter(**{field.name: target_obj})
 
             serializer_class = serializers.get_serializer_class(custom_object_model)
             for linked_obj in linked_objects:
