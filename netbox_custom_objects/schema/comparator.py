@@ -47,8 +47,12 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING
 
+from django.core.exceptions import ValidationError
+
 from netbox_custom_objects import constants
-from netbox_custom_objects.models import CustomObjectType
+from netbox_custom_objects.choices import ConstraintLookupChoices
+from netbox_custom_objects.models import CustomObjectType, normalize_predicate_value
+from netbox_custom_objects.utilities import predicate_field_ref
 
 if TYPE_CHECKING:
     from django.contrib.contenttypes.models import ContentType
@@ -299,7 +303,33 @@ def _compare_field_attrs(db_field, schema_field: dict, cot_slug_cache: dict, war
     return changes
 
 
-def _compare_constraint_attrs(db_constraint, schema_constraint: dict) -> dict[str, tuple]:
+def _normalize_predicates(predicates, fields_by_schema_id: dict):
+    """
+    Return *predicates* with their values written as the model stores them, so that
+    a document spelling a value differently (e.g. a MAC address) isn't a change.
+    """
+    if not isinstance(predicates, list):
+        return predicates
+    normalized = []
+    for predicate in predicates:
+        if not isinstance(predicate, dict):
+            normalized.append(predicate)
+            continue
+        schema_id, lookup, value = predicate.get("field"), predicate.get("lookup"), predicate.get("value")
+        field = fields_by_schema_id.get(schema_id) if isinstance(schema_id, int) else None
+        if field is None or lookup == ConstraintLookupChoices.ISNULL or predicate_field_ref(value) is not None:
+            normalized.append(predicate)
+            continue
+        try:
+            value = normalize_predicate_value(field, lookup, value)
+        except (ValidationError, TypeError):
+            # Invalid; applying the document reports it.
+            pass
+        normalized.append({**predicate, "value": value})
+    return normalized
+
+
+def _compare_constraint_attrs(db_constraint, schema_constraint: dict, fields_by_schema_id: dict) -> dict[str, tuple]:
     """Return ``{attr: (db_value, schema_value)}`` for constraint attributes that differ."""
     changes: dict[str, tuple] = {}
     for attr in CONSTRAINT_ATTRS:
@@ -309,6 +339,8 @@ def _compare_constraint_attrs(db_constraint, schema_constraint: dict) -> dict[st
         else:
             db_val = getattr(db_constraint, attr)
             schema_val = schema_constraint.get(attr, CONSTRAINT_DEFAULTS[attr])
+            if attr in ("condition", "rule"):
+                schema_val = _normalize_predicates(schema_val, fields_by_schema_id)
         if db_val != schema_val:
             changes[attr] = (db_val, schema_val)
     return changes
@@ -322,10 +354,11 @@ def _diff_constraints(cot, type_def: dict, diff: COTDiff) -> None:
     schema_constraints = {sc["name"]: sc for sc in type_def.get("constraints", [])}
     removed = set(type_def.get("removed_constraints", []))
     db_constraints = {c.name: c for c in cot.constraints.all()} if cot is not None else {}
+    fields_by_schema_id = {f.schema_id: f for f in cot.fields.all()} if db_constraints else {}
 
     for name, schema_constraint in schema_constraints.items():
         if name in db_constraints:
-            changed = _compare_constraint_attrs(db_constraints[name], schema_constraint)
+            changed = _compare_constraint_attrs(db_constraints[name], schema_constraint, fields_by_schema_id)
             if changed:
                 diff.constraint_changes.append(ConstraintChange(
                     op=FieldOp.ALTER, name=name, schema_def=schema_constraint, changed_attrs=changed,

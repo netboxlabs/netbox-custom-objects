@@ -3,6 +3,7 @@ import re
 import sys
 
 from core.models import ObjectType
+from dcim.fields import MACAddressField
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
 from django.urls import NoReverseMatch
@@ -324,7 +325,12 @@ class CustomObjectTypeFieldSerializer(NetBoxModelSerializer):
             raise ValidationError(
                 {"on_delete_behavior": "on_delete_behavior can only be set for Object-type fields."}
             )
-        return super().validate(attrs)
+        attrs = super().validate(attrs)
+        # NetBox's serializer saves the default as submitted, not as clean() normalized it.
+        field_type = attrs.get("type") or getattr(self.instance, "type", None)
+        if field_type == CustomObjectFieldTypeChoices.TYPE_MAC_ADDRESS and attrs.get("default") is not None:
+            attrs["default"] = str(MACAddressField().to_python(attrs["default"]))
+        return attrs
 
     def to_representation(self, instance):
         data = super().to_representation(instance)

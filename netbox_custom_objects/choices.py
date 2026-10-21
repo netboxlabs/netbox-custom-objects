@@ -12,11 +12,13 @@ class CustomObjectFieldTypeChoices(CustomFieldTypeChoices):
     TYPE_COORDINATES = "coordinates"
     TYPE_ARRAY = "array"
     TYPE_COLOR = "color"
+    TYPE_MAC_ADDRESS = "mac_address"
 
     CHOICES = CustomFieldTypeChoices.CHOICES + (
         (TYPE_COORDINATES, _("Coordinates")),
         (TYPE_ARRAY, _("Array")),
         (TYPE_COLOR, _("Color")),
+        (TYPE_MAC_ADDRESS, _("MAC address")),
     )
 
 

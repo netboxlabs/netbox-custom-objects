@@ -108,7 +108,7 @@ filter based on its type:
 
 | Custom field type | Filter | Example |
 |-------------------|--------|---------|
-| text, long text, URL, select, color | String lookups | `name: {i_contains: "web"}` |
+| text, long text, URL, select, color, MAC address | String lookups | `name: {i_contains: "web"}` |
 | integer, decimal | Comparison lookups | `cpu_count: {range: {start: 2, end: 8}}` |
 | boolean | `exact` / `is_null` | `active: {exact: true}` |
 | date, datetime | Comparison and date-part lookups | `purchased: {year: {exact: 2026}}` |
@@ -169,7 +169,7 @@ Scalar custom fields map to their natural GraphQL types:
 
 | Custom field type | GraphQL type |
 |-------------------|--------------|
-| text, long text, URL, select, color | `String` |
+| text, long text, URL, select, color, MAC address | `String` |
 | integer | `Int` |
 | decimal | `Decimal` |
 | boolean | `Boolean` |

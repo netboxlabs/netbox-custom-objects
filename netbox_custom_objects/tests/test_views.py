@@ -822,6 +822,31 @@ class CustomObjectViewTestCase(
         instance = form.save()
         self.assertIsNone(instance.identifier)
 
+    def test_bulk_import_enforces_validation_regex(self):
+        """Regression #763: CSV/bulk import must reject values that don't match validation_regex."""
+        cot = self.create_custom_object_type(name='RegexImportTest', slug='regex-import-test')
+        self.create_custom_object_type_field(
+            cot, name='code', label='Code', type='text', validation_regex=r'^[A-Z]{3}$',
+        )
+        self.create_custom_object_type_field(
+            cot, name='website', label='Website', type='url', validation_regex=r'^https://',
+        )
+
+        request = RequestFactory().post('/')
+        request.user = self.user
+
+        view = views.CustomObjectBulkImportView()
+        view.setup(request, custom_object_type=cot.slug)
+        model = view.queryset.model
+
+        form = view.model_form(data={'code': 'abc', 'website': 'http://example.com'}, instance=model())
+        self.assertFalse(form.is_valid())
+        self.assertIn('code', form.errors)
+        self.assertIn('website', form.errors)
+
+        form = view.model_form(data={'code': 'ABC', 'website': 'https://example.com'}, instance=model())
+        self.assertTrue(form.is_valid(), form.errors)
+
     def test_edit_form_omits_hidden_field(self):
         """Regression #645: a hidden field must be omitted from the edit form, not just disabled."""
         cot = self.create_custom_object_type(name='HiddenFieldEditTest', slug='hidden-field-edit-test')
@@ -1974,6 +1999,78 @@ class ColorFieldViewTest(CustomObjectsTestCase, TestCase):
         self.assertEqual(self.model.objects.get(name="Imported").shade, "00ff00")
 
 
+class MACAddressFieldViewTest(CustomObjectsTestCase, TestCase):
+    """UI behaviour for the MAC address field type."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.cot = CustomObjectType.objects.create(name="Port", verbose_name_plural="Ports", slug="ports")
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.cot, name="name", type="text", primary=True, required=True
+        )
+        CustomObjectTypeField.objects.create(custom_object_type=cls.cot, name="mac", type="mac_address")
+        cls.model = cls.cot.get_model()
+
+    def setUp(self):
+        super().setUp()
+        perm = ObjectPermission(name="port all", actions=["view", "add", "change", "delete"])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+        perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectTypeField))
+        perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
+
+    def _url(self, action, **kwargs):
+        return reverse(
+            f"plugins:netbox_custom_objects:customobject{action}",
+            kwargs={"custom_object_type": self.cot.slug, **kwargs},
+        )
+
+    def test_create_and_display(self):
+        response = self.client.post(self._url("_add"), {"name": "eth0", "mac": "00-1a-2b-3c-4d-5e"})
+        self.assertEqual(response.status_code, 302)
+        obj = self.model.objects.get(name="eth0")
+        self.assertEqual(str(obj.mac), "00:1A:2B:3C:4D:5E")
+        for url in (obj.get_absolute_url(), self._url("_list"), self._url("_edit", pk=obj.pk)):
+            with self.subTest(url=url):
+                self.assertContains(self.client.get(url), "00:1A:2B:3C:4D:5E")
+
+    def test_invalid_rejected(self):
+        response = self.client.post(self._url("_add"), {"name": "bad", "mac": "00:1a:2b:3c:4d"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Invalid MAC address format")
+        self.assertFalse(self.model.objects.filter(name="bad").exists())
+
+    def test_csv_import(self):
+        data = {"data": "name,mac\neth1,001a.2b3c.4d5e", "format": "csv", "csv_delimiter": ","}
+        response = self.client.post(self._url("_bulk_import"), data)
+        self.assertEqual(response.status_code, 302, response.content)
+        self.assertEqual(str(self.model.objects.get(name="eth1").mac), "00:1A:2B:3C:4D:5E")
+
+    def test_field_default_is_plain_text(self):
+        add_url = reverse("plugins:netbox_custom_objects:customobjecttypefield_add")
+        response = self.client.get(f"{add_url}?custom_object_type={self.cot.pk}&type=mac_address")
+        self.assertRegex(response.content.decode(), r'<input type="text" name="default"')
+
+        data = {
+            "custom_object_type": self.cot.pk, "name": "uplink", "type": "mac_address", "default": "aabb.ccdd.eeff",
+            "search_weight": 500, "filter_logic": "loose", "weight": 100, "ui_visible": "always",
+            "ui_editable": "yes",
+        }
+        response = self.client.post(f"{add_url}?custom_object_type={self.cot.pk}", data)
+        self.assertEqual(response.status_code, 302, response.content)
+        self.assertEqual(self.cot.fields.get(name="uplink").default, "AA:BB:CC:DD:EE:FF")
+
+        response = self.client.get(reverse("plugins:netbox_custom_objects:customobjecttype_fields", args=[self.cot.pk]))
+        self.assertContains(response, "AA:BB:CC:DD:EE:FF")
+        self.assertNotContains(response, "&quot;AA:BB:CC:DD:EE:FF&quot;")
+
+        bad = {**data, "name": "bad", "default": "x"}
+        response = self.client.post(f"{add_url}?custom_object_type={self.cot.pk}", bad)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Invalid MAC address format")
+
+
 class URLFieldLinkTitleViewTest(CustomObjectsTestCase, TestCase):
     """UI form behaviour for the url field type's link-title support (issue #496)."""
 
@@ -2064,6 +2161,77 @@ class URLFieldLinkTitleViewTest(CustomObjectsTestCase, TestCase):
         response = self.client.get(self._list_url())
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, "Orphan Title")
+
+
+class ValidationRegexViewTest(CustomObjectsTestCase, TestCase):
+    """Regression #763: the standard add/edit form must enforce validation_regex (via the UI form field)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.cot = CustomObjectType.objects.create(
+            name="RegexView", verbose_name_plural="Regex Views", slug="regex-views",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.cot, name="name", type="text", primary=True, required=True,
+        )
+        for name, field_type, regex in (
+            ("code", "text", r"^[A-Z]{3}$"),
+            ("notes", "longtext", r"^ok"),
+            ("website", "url", r"^https://"),
+        ):
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cls.cot, name=name, type=field_type, validation_regex=regex,
+            )
+        cls.model = cls.cot.get_model()
+
+    def setUp(self):
+        super().setUp()
+        perm = ObjectPermission(name="regex view all", actions=["view", "add", "change", "delete"])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+    def _add_url(self):
+        return reverse(
+            "plugins:netbox_custom_objects:customobject_add",
+            kwargs={"custom_object_type": self.cot.slug},
+        )
+
+    def test_add_view_rejects_values_not_matching_regex(self):
+        for field_name, value, regex in (
+            ("code", "abc", "^[A-Z]{3}$"),
+            ("notes", "not ok", "^ok"),
+            ("website", "http://example.com", "^https://"),
+        ):
+            with self.subTest(field=field_name):
+                response = self.client.post(self._add_url(), {"name": "Box", field_name: value})
+                # Re-rendered form, not a redirect
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(field_name, response.context["form"].errors)
+                # The UI message shows the regex in a <code> tag, and only once
+                # (the model-level validator must not add a duplicate error).
+                self.assertContains(response, f"<code>{regex}</code>", count=1, html=False)
+        self.assertFalse(self.model.objects.exists())
+
+    def test_add_view_accepts_values_matching_regex(self):
+        data = {"name": "Box", "code": "ABC", "notes": "ok then", "website": "https://example.com"}
+        response = self.client.post(self._add_url(), data)
+        self.assertEqual(response.status_code, 302, getattr(response, "content", b""))
+        obj = self.model.objects.get(name="Box")
+        self.assertEqual(obj.code, "ABC")
+        self.assertEqual(obj.website, "https://example.com")
+
+    def test_edit_view_rejects_value_not_matching_regex(self):
+        instance = self.model.objects.create(name="Box", code="ABC")
+        url = reverse(
+            "plugins:netbox_custom_objects:customobject_edit",
+            kwargs={"pk": instance.pk, "custom_object_type": self.cot.slug},
+        )
+        response = self.client.post(url, {"name": "Box", "code": "abcd"})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("code", response.context["form"].errors)
+        instance.refresh_from_db()
+        self.assertEqual(instance.code, "ABC")
 
 
 class QuickAddViewTestCase(CustomObjectsTestCase, TestCase):

@@ -24,7 +24,7 @@ from netbox_custom_objects.utilities import is_branching_enabled
 from .base import CustomObjectsTestCase, create_token
 from core.models import Job, ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Rack, Site
-from extras.models import ConfigContext, ExportTemplate, Tag
+from extras.models import ConfigContext, Dashboard, ExportTemplate, Tag
 from users.models import ObjectPermission, Owner
 from virtualization.models import Cluster, ClusterType
 
@@ -230,8 +230,8 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, NetB
 
         cls.custom_object_type3 = cls.create_complex_custom_object_type(name="ComplexObject")
 
-        cls.model = cls.custom_object_type1.get_model()
         cls.create_custom_object_type_field(cls.custom_object_type1)
+        cls.model = cls.custom_object_type1.get_model()
 
         # Set the model for the test class
         CustomObjectTest.model = cls.model
@@ -673,6 +673,16 @@ class LinkedObjectsAPITest(CustomObjectsTestCase, TestCase):
         self.device = Device.objects.create(
             device_type=device_type, role=role, name='LO Device', site=site
         )
+        self._grant(Device)
+        self._grant(self.model)
+
+    def _grant(self, model, constraints=None, user=None):
+        """Give the user (default: self.user) view permission on *model*."""
+        perm = ObjectPermission.objects.create(
+            name=f'LO view {model._meta.label} {uuid.uuid4().hex[:8]}', actions=['view'], constraints=constraints
+        )
+        perm.users.add(user or self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(model))
 
     def tearDown(self):
         CustomObjectType.clear_model_cache()
@@ -763,6 +773,7 @@ class LinkedObjectsAPITest(CustomObjectsTestCase, TestCase):
             type='object',
         )
         model = cot.get_model()
+        self._grant(model)
         linked = model.objects.create(name='poly-gfk-linked', target=self.device)
 
         url = self._url(object_type='dcim.device', object_id=self.device.pk)
@@ -793,6 +804,7 @@ class LinkedObjectsAPITest(CustomObjectsTestCase, TestCase):
             type='multiobject',
         )
         model = cot.get_model()
+        self._grant(model)
         linked = model.objects.create(name='poly-m2m-linked')
         linked.targets.add(self.device)
 
@@ -804,6 +816,58 @@ class LinkedObjectsAPITest(CustomObjectsTestCase, TestCase):
             any(r['field_name'] == 'targets' and r['object']['id'] == linked.pk for r in results),
             "Polymorphic M2M-linked object not found in linked-objects results"
         )
+
+    def test_unviewable_custom_objects_omitted(self):
+        """Custom objects the user can't view aren't returned."""
+        self.model.objects.create(name='hidden', device=self.device)
+        user = create_test_user('linkedobjectsdeviceonly')
+        self._grant(Device, user=user)
+        header = {'HTTP_AUTHORIZATION': f'Token {create_token(user)}'}
+
+        response = self.client.get(self._url(object_type='dcim.device', object_id=self.device.pk), **header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual((response.data['count'], response.data['results']), (0, []))
+
+    def test_constrained_permission_limits_custom_objects(self):
+        """A constrained view permission limits the custom objects returned, for every field kind."""
+        visible = self.model.objects.create(name='visible', device=self.device)
+        visible.devices.add(self.device)
+        hidden = self.model.objects.create(name='hidden', device=self.device)
+        hidden.devices.add(self.device)
+        user = create_test_user('linkedobjectsconstrained')
+        self._grant(Device, user=user)
+        self._grant(self.model, constraints={'name': 'visible'}, user=user)
+        header = {'HTTP_AUTHORIZATION': f'Token {create_token(user)}'}
+
+        response = self.client.get(self._url(object_type='dcim.device', object_id=self.device.pk), **header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            sorted((r['field_name'], r['object']['id']) for r in response.data['results']),
+            [('device', visible.pk), ('devices', visible.pk)],
+        )
+
+    def test_unviewable_target_returns_404(self):
+        """A target object the user can't view is reported as not found."""
+        self.model.objects.create(name='linked', device=self.device)
+        user = create_test_user('linkedobjectsnodevice')
+        self._grant(self.model, user=user)
+        header = {'HTTP_AUTHORIZATION': f'Token {create_token(user)}'}
+
+        response = self.client.get(self._url(object_type='dcim.device', object_id=self.device.pk), **header)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_target_without_restrict_needs_model_permission(self):
+        """A target whose manager isn't permission-aware needs the model's view permission."""
+        dashboard = Dashboard.objects.create(user=self.user)
+        url = self._url(object_type='extras.dashboard', object_id=dashboard.pk)
+
+        response = self.client.get(url, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+        self._grant(Dashboard)
+        response = self.client.get(url, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['count'], 0)
 
     def test_response_shape(self):
         """Each result contains custom_object_type, field_name, and object keys."""
@@ -818,6 +882,64 @@ class LinkedObjectsAPITest(CustomObjectsTestCase, TestCase):
         self.assertIn('custom_object_type', result)
         self.assertIn('field_name', result)
         self.assertIn('object', result)
+
+
+class ValidationRegexAPITest(CustomObjectsTestCase, TestCase):
+    """Regression #763: validation_regex must be enforced on REST API writes, not just in the UI form."""
+
+    def setUp(self):
+        self.user = create_test_user('regexapiuser')
+        self.client = APIClient()
+        token_key = create_token(self.user)
+        self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
+
+        self.cot = CustomObjectsTestCase.create_custom_object_type(name='RegexAPITest', slug='regex-api-test')
+        for name, field_type, regex in (
+            ('code', 'text', r'^[A-Z]{3}$'),
+            ('notes', 'longtext', r'^ok'),
+            ('website', 'url', r'^https://'),
+        ):
+            CustomObjectsTestCase.create_custom_object_type_field(
+                self.cot, name=name, label=name.title(), type=field_type, validation_regex=regex,
+            )
+        self.model = self.cot.get_model()
+
+        perm = ObjectPermission(name='Regex API perm', actions=['add', 'change'])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+    def _list_url(self):
+        return reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-list',
+            kwargs={'custom_object_type': self.cot.slug},
+        )
+
+    def test_create_rejects_values_not_matching_regex(self):
+        for field_name, value in (('code', 'abc'), ('notes', 'not ok'), ('website', 'http://example.com')):
+            with self.subTest(field=field_name):
+                response = self.client.post(
+                    self._list_url(), {field_name: value}, format='json', **self.header
+                )
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.content)
+                self.assertIn(field_name, response.json())
+        self.assertFalse(self.model.objects.exists())
+
+    def test_create_accepts_values_matching_regex(self):
+        data = {'code': 'ABC', 'notes': 'ok then', 'website': 'https://example.com'}
+        response = self.client.post(self._list_url(), data, format='json', **self.header)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.content)
+
+    def test_update_rejects_value_not_matching_regex(self):
+        instance = self.model.objects.create(code='ABC')
+        url = reverse(
+            'plugins-api:netbox_custom_objects-api:customobject-detail',
+            kwargs={'pk': instance.pk, 'custom_object_type': self.cot.slug},
+        )
+        response = self.client.patch(url, {'code': 'abcd'}, format='json', **self.header)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.content)
+        instance.refresh_from_db()
+        self.assertEqual(instance.code, 'ABC')
 
 
 class PolymorphicMultiObjectPrefetchTest(CustomObjectsTestCase, TestCase):
@@ -2370,6 +2492,9 @@ class ConfigContextAPITest(CustomObjectsTestCase, TestCase):
         ConfigContext.objects.create(name='site', weight=100, data={'ntp': '10.0.0.1'}).sites.add(site)
         self._add_site_field()
         self._add_perm('view')
+        site_perm = ObjectPermission.objects.create(name='view-site', actions=['view'])
+        site_perm.users.add(self.user)
+        site_perm.object_types.add(ObjectType.objects.get_for_model(Site))
         url = reverse('plugins-api:netbox_custom_objects-api:linked-objects')
         url = f'{url}?object_type=dcim.site&object_id={site.pk}'
 
@@ -2815,6 +2940,85 @@ class ColorFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
                 )
                 self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
                 self.assertIn("shade", response.data)
+
+
+class MACAddressFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
+    """REST API behaviour for the MAC address field type."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.cot = CustomObjectType.objects.create(name="Port", verbose_name_plural="Ports", slug="ports")
+        cls.create_custom_object_type_field(cls.cot, name="name", type="text", primary=True, required=True)
+        cls.create_custom_object_type_field(cls.cot, name="mac", type="mac_address")
+        cls.model = cls.cot.get_model()
+
+    def setUp(self):
+        super().setUp()
+        self.user = create_test_user("portuser")
+        self.client = APIClient()
+        self.header = {"HTTP_AUTHORIZATION": f"Token {create_token(self.user)}"}
+        perm = ObjectPermission(name="port all", actions=["view", "add", "change", "delete"])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+    def _list_url(self):
+        return reverse(
+            "plugins-api:netbox_custom_objects-api:customobject-list",
+            kwargs={"custom_object_type": self.cot.slug},
+        )
+
+    def test_create_normalizes(self):
+        response = self.client.post(
+            self._list_url(), {"name": "eth0", "mac": "001a.2b3c.4d5e"}, format="json", **self.header
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(response.data["mac"], "00:1A:2B:3C:4D:5E")
+        response = self.client.get(self._list_url(), {"mac": "00-1a-2b-3c-4d-5e"}, **self.header)
+        self.assertEqual([row["mac"] for row in response.data["results"]], ["00:1A:2B:3C:4D:5E"])
+
+    def test_null_or_blank_allowed(self):
+        for value in (None, ""):
+            with self.subTest(value=value):
+                response = self.client.post(
+                    self._list_url(), {"name": f"eth{value!r}", "mac": value}, format="json", **self.header
+                )
+                self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+                self.assertIsNone(response.data["mac"])
+
+    def test_blank_rejected_when_required(self):
+        field = self.cot.fields.get(name="mac")
+        field.required = True
+        field.save()
+        response = self.client.post(self._list_url(), {"name": "eth9", "mac": ""}, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("mac", response.data)
+
+    def test_invalid_rejected(self):
+        for value in ("00:1a:2b:3c:4d", "not a mac", "00:1a:2b:3c:4d:5e:6f:70"):
+            with self.subTest(value=value):
+                response = self.client.post(
+                    self._list_url(), {"name": "bad", "mac": value}, format="json", **self.header
+                )
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertIn("mac", response.data)
+
+    def test_field_default_normalized(self):
+        self.user.is_superuser = True
+        self.user.save()
+        url = reverse("plugins-api:netbox_custom_objects-api:customobjecttypefield-list")
+        data = {"custom_object_type": self.cot.pk, "name": "uplink", "type": "mac_address", "default": "001a.2b3c.4d5e"}
+        response = self.client.post(url, data, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(response.data["default"], "00:1A:2B:3C:4D:5E")
+        self.assertEqual(self.cot.fields.get(name="uplink").default, "00:1A:2B:3C:4D:5E")
+
+        field = self.cot.fields.get(name="mac")
+        url = reverse("plugins-api:netbox_custom_objects-api:customobjecttypefield-detail", kwargs={"pk": field.pk})
+        response = self.client.patch(url, {"default": "aa-bb-cc-dd-ee-ff"}, format="json", **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        field.refresh_from_db()
+        self.assertEqual(field.default, "AA:BB:CC:DD:EE:FF")
 
 
 class URLFieldLinkTitleAPITest(CustomObjectsTestCase, NetBoxTestCase):

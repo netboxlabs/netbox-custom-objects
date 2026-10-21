@@ -26,7 +26,7 @@ from unittest.mock import patch
 from core.models import ObjectType
 from django.apps import apps
 from django.db.models import Q
-from django.test import TestCase, TransactionTestCase
+from django.test import TestCase
 from extras.choices import CustomFieldTypeChoices
 from netbox.registry import registry
 
@@ -48,7 +48,7 @@ from netbox_custom_objects.related_tabs.views.combined import (
     reference_q,
     register_combined_tabs,
 )
-from netbox_custom_objects.tests.base import CustomObjectsTestCase, TransactionCleanupMixin
+from netbox_custom_objects.tests.base import CustomObjectsTestCase
 
 
 class ReferenceQTests(TestCase):
@@ -209,7 +209,7 @@ class RegisterTabsAppInitWarningTests(TestCase):
         self.assertIsNone(self.app_config._register_tabs_error)
 
 
-class BadgeGateTests(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
+class BadgeGateTests(CustomObjectsTestCase, TestCase):
     """
     ``_count_linked_custom_objects`` is both the tab badge and the display gate.
     It must return None (so hide_if_empty hides the tab, and the cheap .exists()
@@ -359,7 +359,7 @@ class SortHeaderTests(TestCase):
         self.assertEqual(h['clear_url'], '?q=x')
 
 
-class CombinedTabQueryTests(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
+class CombinedTabQueryTests(CustomObjectsTestCase, TestCase):
     """DB-backed coverage for reference resolution, per-row permission enforcement,
     and badge summation — the parts of the tab a mocked unit test can't reach."""
 

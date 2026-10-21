@@ -962,6 +962,26 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
             )
             field.full_clean()
 
+    def test_custom_object_type_field_default_matches_regex_like_objects(self):
+        """
+        A default is checked against validation_regex with the same search semantics
+        RegexValidator applies to object values, so an unanchored regex that accepts an
+        object value also accepts it as the field's default.
+        """
+        field = CustomObjectTypeField(
+            custom_object_type=self.custom_object_type,
+            name="site",
+            type="url",
+            validation_regex=r"example\.com",
+            default="https://example.com",
+        )
+        field.full_clean()
+
+        field.default = "https://example.org"
+        with self.assertRaises(ValidationError) as cm:
+            field.full_clean()
+        self.assertIn("default", cm.exception.error_dict)
+
     def test_custom_object_type_field_boolean_unique_validation(self):
         """Test that boolean fields cannot be unique."""
         with self.assertRaises(ValidationError):
@@ -3944,7 +3964,16 @@ class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
             self.cot, name="site", type="object", related_object_type=self.get_site_object_type()
         )
         shade = self.create_custom_object_type_field(self.cot, name="shade", type="color")
+        mac = self.create_custom_object_type_field(self.cot, name="mac", type="mac_address")
         self._constraint()
+        constraint = self._constraint(
+            name="vendor_mac", fields=[self.vendor, mac], condition=[self._predicate(mac, "exact", "00-1a-2b-3c-4d-5e")]
+        )
+        # MAC addresses are stored the way the field shows them.
+        self.assertEqual(constraint.condition[0]["value"], "00:1A:2B:3C:4D:5E")
+        constraint.condition = [self._predicate(mac, "in", ["001a.2b3c.4d5e", "aa:bb:cc:dd:ee:ff"])]
+        constraint.full_clean()
+        self.assertEqual(constraint.condition[0]["value"], ["00:1A:2B:3C:4D:5E", "AA:BB:CC:DD:EE:FF"])
         # Color fields can be constrained and compared by value.
         self._constraint(
             name="vendor_shade", fields=[self.vendor, shade], condition=[self._predicate(shade, "exact", "ff0000")]
@@ -3955,6 +3984,9 @@ class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
             "ineligible type": dict(fields=[self.vendor, tags]),
             "case-insensitive without text": dict(fields=[count], case_insensitive=True),
             "same fields as another constraint": dict(fields=[self.serial, self.vendor]),
+            "same MAC condition, spelled differently": dict(
+                fields=[self.vendor, mac], condition=[self._predicate(mac, "exact", "001a.2b3c.4d5e")]
+            ),
             "condition not a list": dict(condition={"field": self.vendor.schema_id, "lookup": "isnull"}),
             "condition without lookup": dict(condition=[{"field": self.vendor.schema_id}]),
             "condition extra key": dict(condition=[{**self._predicate(self.vendor, "isnull", True), "not": True}]),
@@ -3968,6 +4000,7 @@ class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
             "value of the wrong type": dict(condition=[self._predicate(count, "exact", "many")]),
             "value not a choice": dict(condition=[self._predicate(color, "exact", "nope")]),
             "value not a color": dict(condition=[self._predicate(shade, "exact", "#FF0000")]),
+            "value not a MAC address": dict(condition=[self._predicate(mac, "exact", "00:1a")]),
             "object field compared by value": dict(condition=[self._predicate(site, "exact", 1)]),
         }
         for label, kwargs in cases.items():
@@ -4079,6 +4112,14 @@ class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
         self._assert_rule_broken(model, vendor="blank", kind="wan", serial="")
         self._assert_rule_broken(model, vendor="null", kind="wan")
 
+    def test_check_compares_mac_fields(self):
+        mac = self.create_custom_object_type_field(self.cot, name="mac", type="mac_address")
+        peer_mac = self.create_custom_object_type_field(self.cot, name="peer_mac", type="mac_address")
+        self._check_constraint([self._predicate(mac, "n", {"field": peer_mac.schema_id})])
+        model = self._model()
+        model.objects.create(vendor="ok", mac="00:1a:2b:3c:4d:5e", peer_mac="aa:bb:cc:dd:ee:ff")
+        self._assert_rule_broken(model, vendor="same", mac="00:1a:2b:3c:4d:5e", peer_mac="00-1A-2B-3C-4D-5E")
+
     def test_check_blocked_by_existing_objects(self):
         start, end = self._date_fields()
         model = self._model()
@@ -4090,6 +4131,8 @@ class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
     def test_check_validation(self):
         start, end = self._date_fields()
         count = self.create_custom_object_type_field(self.cot, name="count", type="integer")
+        shade = self.create_custom_object_type_field(self.cot, name="shade", type="color")
+        mac = self.create_custom_object_type_field(self.cot, name="mac", type="mac_address")
         rule = [self._predicate(end, "gt", {"field": start.schema_id})]
         cases = {
             "fields": ({"field_schema_ids": [self.vendor.schema_id], "rule": rule}, "field_schema_ids"),
@@ -4099,6 +4142,9 @@ class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
             "greater than on text": ({"rule": [self._predicate(self.serial, "gt", "a")]}, "rule"),
             "kinds differ": ({"rule": [self._predicate(end, "gt", {"field": count.schema_id})]}, "rule"),
             "compared with itself": ({"rule": [self._predicate(end, "gt", {"field": end.schema_id})]}, "rule"),
+            "MAC compared with a color": (
+                {"rule": [self._predicate(mac, "n", {"field": shade.schema_id})]}, "rule"
+            ),
             "in with a field": ({"rule": [self._predicate(end, "in", {"field": start.schema_id})]}, "rule"),
             "unknown field": ({"rule": [self._predicate(end, "gt", {"field": 999})]}, "rule"),
             # Only an ID refers to a field; true would otherwise match schema ID 1.

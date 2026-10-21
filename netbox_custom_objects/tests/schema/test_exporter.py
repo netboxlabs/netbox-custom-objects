@@ -15,13 +15,13 @@ Covers:
 import unittest
 from pathlib import Path
 
-from django.test import TestCase, TransactionTestCase
+from django.test import TestCase
 
 from netbox_custom_objects.schema.exporter import export_cot, export_cots
 from netbox_custom_objects.models import CustomObjectTypeField
 from netbox_custom_objects.schema.format import SCHEMA_FORMAT_VERSION
 
-from ..base import CustomObjectsTestCase, TransactionCleanupMixin
+from ..base import CustomObjectsTestCase
 
 try:
     import jsonschema
@@ -445,9 +445,7 @@ class ExporterDeprecationTestCase(CustomObjectsTestCase, TestCase):
         self.assertNotIn("removed_fields", cot_def)
 
 
-class ExporterSchemaIdTestCase(
-    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
-):
+class ExporterSchemaIdTestCase(CustomObjectsTestCase, TestCase):
     """Fields without schema_id are skipped with a warning."""
 
     def test_field_without_schema_id_is_skipped(self):

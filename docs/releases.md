@@ -1,5 +1,57 @@
 # Releases
 
+## 0.7.1
+
+### Enhancements
+
+- [#584](https://github.com/netboxlabs/netbox-custom-objects/issues/584) - The Custom Object Type and field REST endpoints now apply list filters, for PyNetBox compatibility with bulk operations
+- [#701](https://github.com/netboxlabs/netbox-custom-objects/issues/701) - Add query-count regression coverage for the Custom Object REST API
+- [#702](https://github.com/netboxlabs/netbox-custom-objects/issues/702) - The Custom Object REST endpoints are now included in NetBox's OpenAPI schema
+- [#703](https://github.com/netboxlabs/netbox-custom-objects/issues/703) - Cover and document Export Templates (`?export=`) on the Custom Object REST API
+- [#704](https://github.com/netboxlabs/netbox-custom-objects/issues/704) - Custom Object Type GraphQL list queries now accept a `filters:` argument for server-side filtering
+- [#709](https://github.com/netboxlabs/netbox-custom-objects/issues/709) - Custom Objects of config-context-enabled types now expose the rendered `config_context` in the REST and GraphQL APIs
+- [#729](https://github.com/netboxlabs/netbox-custom-objects/issues/729) - Quick search and the dynamic object selector now match a Custom Object's rendered `display_expression`
+- [#745](https://github.com/netboxlabs/netbox-custom-objects/issues/745) - Add GraphQL filtering for polymorphic and coordinates fields
+
+### Bug Fixes
+
+- [#640](https://github.com/netboxlabs/netbox-custom-objects/issues/640) - Deleting a Custom Object with a multi-object field raised `ValueError`
+- [#697](https://github.com/netboxlabs/netbox-custom-objects/issues/697) - Updated Custom Choice Set values could not be selected on a multiple selection field
+- [#699](https://github.com/netboxlabs/netbox-custom-objects/issues/699) - Custom Object REST API viewsets bypassed NetBox's permission enforcement, query optimization and bulk-operation support
+- [#700](https://github.com/netboxlabs/netbox-custom-objects/issues/700) - Required scalar fields were enforced only in the UI form, not at the model or REST API layer
+- [#705](https://github.com/netboxlabs/netbox-custom-objects/issues/705) - Polymorphic Object/Multi-object GraphQL fields caused N+1 queries
+- [#706](https://github.com/netboxlabs/netbox-custom-objects/issues/706) - `owner`, `journal_entries` and (when config context is enabled) `local_context_data` were missing from Custom Object GraphQL types
+- [#707](https://github.com/netboxlabs/netbox-custom-objects/issues/707) - Multi-object GraphQL fields had no pagination or filtering
+- [#708](https://github.com/netboxlabs/netbox-custom-objects/issues/708) - Select/multiselect fields returned the raw value instead of `{value, label}` in REST and GraphQL
+- [#711](https://github.com/netboxlabs/netbox-custom-objects/issues/711) - Polymorphic Multi-object fields caused N+1 queries on the REST list endpoint
+- [#713](https://github.com/netboxlabs/netbox-custom-objects/issues/713) - Removing a value from a Choice Set did not check whether Custom Objects still used it
+- [#715](https://github.com/netboxlabs/netbox-custom-objects/issues/715) - Integer/Decimal min/max validation was enforced only in the UI form, not at the model or REST API layer
+- [#719](https://github.com/netboxlabs/netbox-custom-objects/issues/719) - Required Object/Multi-object fields were not enforced at the model layer
+- [#725](https://github.com/netboxlabs/netbox-custom-objects/issues/725) - Custom Object Types were missing from GraphQL on NetBox versions before 4.6.1, and Custom Object detail pages failed (HTTP 500) on NetBox 4.5.x
+- [#728](https://github.com/netboxlabs/netbox-custom-objects/issues/728) - Bulk operations run as background jobs raised `DoesNotExist`
+- [#730](https://github.com/netboxlabs/netbox-custom-objects/issues/730) - `PicklingError` when RQ jobs (webhooks, scripts) carried Custom Object querysets or prefetched relations
+- [#731](https://github.com/netboxlabs/netbox-custom-objects/issues/731) - Custom Objects imported netbox-branching when it was installed but not enabled
+- [#740](https://github.com/netboxlabs/netbox-custom-objects/issues/740) - A "database access during app initialization" warning was printed on every `manage.py` command since v0.7.0
+- [#746](https://github.com/netboxlabs/netbox-custom-objects/issues/746) - GraphQL filters ignored a field's disabled filter logic
+- [#751](https://github.com/netboxlabs/netbox-custom-objects/issues/751) - Flaky concurrent double-submit test failed with `DuplicateTable`
+- [#755](https://github.com/netboxlabs/netbox-custom-objects/issues/755) - Deletes (e.g. of tags) failed with `relation "custom_objects_N" does not exist` on multi-worker deployments after a Custom Object Type was deleted
+- [#760](https://github.com/netboxlabs/netbox-custom-objects/issues/760) - Changing a field's type to or from Multi-object silently broke the Custom Object Type; it is now rejected
+- [#761](https://github.com/netboxlabs/netbox-custom-objects/issues/761) - A non-polymorphic `related_name` could overwrite attributes on its target model
+- [#762](https://github.com/netboxlabs/netbox-custom-objects/issues/762) - Branch merge failed for polymorphic Multi-object fields with long names
+- [#763](https://github.com/netboxlabs/netbox-custom-objects/issues/763) - `validation_regex` was not enforced on REST API writes or CSV import
+- [#764](https://github.com/netboxlabs/netbox-custom-objects/issues/764) - Multi-object add/remove/set ran per row, outside a transaction
+- [#765](https://github.com/netboxlabs/netbox-custom-objects/issues/765) - Building a model in a branch rewired main's model classes
+- [#766](https://github.com/netboxlabs/netbox-custom-objects/issues/766) - Polymorphic reverse accessors ignored the active branch and could use a stale model
+- [#767](https://github.com/netboxlabs/netbox-custom-objects/issues/767) - A failed field change could leave duplicate fields on the cached model
+- [#768](https://github.com/netboxlabs/netbox-custom-objects/issues/768) - An Object field's database foreign key could be left missing, or with the wrong on-delete action, after the field was created or changed
+- [#772](https://github.com/netboxlabs/netbox-custom-objects/issues/772) - Deleting a Custom Object Type inside a branch cleared main's model and cache
+- [#825](https://github.com/netboxlabs/netbox-custom-objects/issues/825) - A Custom Object's detail page failed after its model was regenerated when another type linked to it via a Multi-object field
+- [#858](https://github.com/netboxlabs/netbox-custom-objects/issues/858) - Custom Object UI views did not fully apply object-level permission constraints
+- [#866](https://github.com/netboxlabs/netbox-custom-objects/issues/866) - Applying a portable schema document dropped the Custom Object Type's base-column snapshot, which `upgrade_custom_objects` uses to detect changed or removed base columns
+- [#867](https://github.com/netboxlabs/netbox-custom-objects/issues/867) - The linked-objects REST endpoint did not apply object-level permissions
+
+---
+
 ## 0.7.0
 
 ### New Features

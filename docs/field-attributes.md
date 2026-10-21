@@ -22,6 +22,7 @@ The following attributes are available when creating or editing a Custom Object 
 | `coordinates` | A geographic latitude/longitude pair (with a map link) |
 | `array` | A list of values of one type, or of fixed-size tuples such as (x, y, z) points |
 | `color` | An RGB color, shown as a swatch |
+| `mac_address` | An EUI-48 MAC address |
 
 ## Common Attributes
 
@@ -84,7 +85,7 @@ Field types: `object`, `multiobject`
 | `Related object types` | For polymorphic fields, the set of object types that may be referenced. Cannot be changed after the field is created. |
 | `Related object filter` | A JSON `query_params` dict used to filter the object selection drop-down (e.g. `{"status": "active"}`). |
 | `Reverse relation name` | Name for the reverse relation accessor on the related object. For example, setting this to `ssl_profiles` on a Certificate → SLB field allows `slb.ssl_profiles.all()` in export templates. |
-| `On delete behavior` | What happens when the referenced object is deleted: `Set null` (clear the field, keep this object), `Cascade` (delete this object too), or `Protect` (prevent deletion of the referenced object). Default: `Set null`. **Applies only to `object` fields, not `multiobject`.** |
+| `On delete behavior` | What happens when the referenced object is deleted: `Set null` (clear the field, keep this object), `Cascade` (delete this object too), or `Protect` (prevent deletion of the referenced object). Default: `Set null`. Changing it applies only to later deletes; existing values that already point at a deleted object are left as they are. **Applies only to `object` fields, not `multiobject`.** |
 
 !!! note
     To reference another Custom Object Type, choose `Custom Objects > <Custom Object Type name>` in the **Related object type** dropdown. To create a polymorphic field that may reference objects of multiple types, enable **Polymorphic** and select the allowed types under **Related object types**.
@@ -158,6 +159,21 @@ A `color` field stores an RGB color as six lowercase hexadecimal digits without 
 - **Display.** Detail views and tables show a color swatch, like NetBox's own color fields; CSV
   export writes `#rrggbb`, which CSV import accepts along with uppercase digits.
 - **Filtering.** Filters match whole values, e.g. `?color=00ff00&color=ff0000`.
+
+## MAC Address Fields
+
+Field type: `mac_address`
+
+A `mac_address` field stores an EUI-48 MAC address in a PostgreSQL `macaddr` column, using NetBox's
+own `MACAddressField`, as an interface's MAC address does.
+
+- **Input.** Forms, CSV import and the REST API accept any common format (`00:1a:2b:3c:4d:5e`,
+  `00-1A-2B-3C-4D-5E`, `001a.2b3c.4d5e`, `001a2b3c4d5e`) and store the address itself, so every
+  format of the same address is equal for uniqueness, constraints and filters.
+- **Display.** Values are shown and returned as uppercase, colon-separated hex
+  (`00:1A:2B:3C:4D:5E`). The field's default is typed as plain text and shown the same way.
+- **Filtering.** `?mac=00:1a:2b:3c:4d:5e&mac=...` matches whole addresses in any format, and the
+  usual suffixes such as `__ic` match part of one. Quick search matches part of an address.
 
 ## URL Fields
 

@@ -1,18 +1,19 @@
 """
 Tests for database schema operations and model-cache behaviour.
 
-Uses TransactionTestCase so DDL and on_commit callbacks behave exactly as they
-do in production (no wrapping savepoint prevents commits).
+The concurrency tests use TransactionTestCase, because their threads use their own
+database connections and only see committed data.
 """
 import threading
 from io import StringIO
+from unittest import expectedFailure
 from unittest.mock import patch
 
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
-from django.db import IntegrityError, ProgrammingError, connection
-from django.test import TransactionTestCase
+from django.db import IntegrityError, ProgrammingError, connection, transaction
+from django.test import TestCase, TransactionTestCase
 from django.urls import reverse
 from psycopg.errors import DuplicateTable
 
@@ -27,7 +28,7 @@ from users.models import ObjectPermission
 from .base import CustomObjectsTestCase, TransactionCleanupMixin
 
 
-class SchemaOperationsTestCase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
+class SchemaOperationsTestCase(CustomObjectsTestCase, TestCase):
     """Test database schema operations and related cache/registry behaviour."""
 
     # ------------------------------------------------------------------
@@ -331,6 +332,154 @@ class SchemaOperationsTestCase(TransactionCleanupMixin, CustomObjectsTestCase, T
         columns = self._db_columns(cot.get_model())
         self.assertNotIn('website', columns)
         self.assertNotIn('website_title', columns)
+
+    # ------------------------------------------------------------------
+    # Failed field changes don't leave the cached model mutated (#767)
+    # ------------------------------------------------------------------
+
+    def _assert_model_matches_db(self, cot):
+        cot.refresh_from_db()
+        model = cot.get_model()
+        concrete = [f.column for f in model._meta.concrete_fields]
+        self.assertEqual(len(concrete), len(set(concrete)), f'duplicate fields on {model._meta.fields}')
+        self.assertEqual(set(concrete), self._db_columns(model))
+        registered = apps.all_models[APP_LABEL].get(model.__name__.lower())
+        if registered is not None:
+            self.assertEqual(
+                {f.column for f in registered._meta.concrete_fields}, self._db_columns(model),
+            )
+        # Selecting every column must not hit a column that doesn't exist.
+        list(model.objects.all())
+
+    def test_failed_rename_does_not_mutate_cached_model(self):
+        cot = self.create_custom_object_type(name='failrename', slug='fail-rename')
+        self.create_custom_object_type_field(cot, name='name', type='text', primary=True)
+        field = self.create_custom_object_type_field(cot, name='coordinatescoordinates', type='text')
+        cot.get_model()
+
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.name = 'coordinates'
+        with patch(
+            'netbox_custom_objects.models._rename_objectchange_field_key',
+            side_effect=RuntimeError('boom'),
+        ):
+            with self.assertRaises(RuntimeError):
+                field.save()
+
+        self.assertIn('coordinatescoordinates', self._db_columns(cot.get_model()))
+        self._assert_model_matches_db(cot)
+
+    def test_failed_add_does_not_mutate_cached_model(self):
+        cot = self.create_custom_object_type(name='failadd', slug='fail-add')
+        self.create_custom_object_type_field(cot, name='name', type='text', primary=True)
+        cot.get_model()
+
+        with patch(
+            'netbox_custom_objects.models._apply_deferred_co_field',
+            side_effect=RuntimeError('boom'),
+        ):
+            with self.assertRaises(RuntimeError):
+                self.create_custom_object_type_field(cot, name='extra', type='text')
+
+        self.assertNotIn('extra', self._db_columns(cot.get_model()))
+        self._assert_model_matches_db(cot)
+
+    def test_failed_delete_does_not_mutate_cached_model(self):
+        cot = self.create_custom_object_type(name='faildelete', slug='fail-delete')
+        self.create_custom_object_type_field(cot, name='name', type='text', primary=True)
+        field = self.create_custom_object_type_field(cot, name='extra', type='text')
+        cot.get_model()
+
+        with patch(
+            'django.db.backends.postgresql.schema.DatabaseSchemaEditor.remove_field',
+            side_effect=RuntimeError('boom'),
+        ):
+            with self.assertRaises(RuntimeError):
+                field.delete()
+
+        self.assertIn('extra', self._db_columns(cot.get_model()))
+        self._assert_model_matches_db(cot)
+
+    def test_field_changes_leave_the_class_in_use_alone(self):
+        """DDL binds its fields to a throwaway class, so a request using the
+        current class mid-change never sees in-flight fields (#767)."""
+        cot = self.create_custom_object_type(name='notouch', slug='no-touch')
+        self.create_custom_object_type_field(cot, name='name', type='text', primary=True)
+        field = self.create_custom_object_type_field(cot, name='coordinatescoordinates', type='text')
+        model = cot.get_model()
+        before = [f.name for f in model._meta.local_fields + model._meta.local_many_to_many]
+
+        extra = self.create_custom_object_type_field(cot, name='extra', type='text')
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.name = 'coordinates'
+        field.save()
+        extra.delete()
+
+        self.assertEqual([f.name for f in model._meta.local_fields + model._meta.local_many_to_many], before)
+        self._assert_model_matches_db(cot)
+
+    def test_failed_object_field_add_installs_no_reverse_accessor(self):
+        cot = self.create_custom_object_type(name='noaccessor', slug='no-accessor')
+        self.create_custom_object_type_field(cot, name='name', type='text', primary=True)
+        cot.get_model()
+        self.addCleanup(lambda: 'failed_links' in Site.__dict__ and delattr(Site, 'failed_links'))
+
+        with patch(
+            'netbox_custom_objects.models._apply_deferred_co_field',
+            side_effect=RuntimeError('boom'),
+        ):
+            with self.assertRaises(RuntimeError):
+                self.create_custom_object_type_field(
+                    cot, name='site', type='object',
+                    related_object_type=ObjectType.objects.get_for_model(Site),
+                    related_name='failed_links',
+                )
+
+        self.assertNotIn('failed_links', Site.__dict__)
+        self._assert_model_matches_db(cot)
+
+    def _rename_then_roll_back(self):
+        """Rename a field inside a transaction that then rolls back, as a view
+        or schema apply that fails after the save does.  Returns the type and
+        the instance that saved the rename, whose timestamp was bumped in memory
+        but not in the database."""
+        cot = self.create_custom_object_type(name='rollback', slug='roll-back')
+        self.create_custom_object_type_field(cot, name='name', type='text', primary=True)
+        field = self.create_custom_object_type_field(cot, name='coordinatescoordinates', type='text')
+        cot.get_model()
+
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.name = 'coordinates'
+        with self.assertRaises(RuntimeError):
+            with transaction.atomic():
+                field.save()
+                raise RuntimeError('boom')
+        return cot, field.custom_object_type
+
+    def _assert_fits_table(self, model):
+        columns = self._db_columns(model)
+        self.assertIn('coordinatescoordinates', columns)
+        self.assertEqual({f.column for f in model._meta.concrete_fields}, columns)
+        list(model.objects.all())
+
+    def test_rollback_after_rename_rebuilds_the_cached_model(self):
+        """The saving instance's cache entry looks valid, since both carry the rolled-back timestamp (#767)."""
+        _cot, stale_cot = self._rename_then_roll_back()
+        self._assert_fits_table(stale_cot.get_model())
+
+    def test_rollback_after_rename_rebuilds_the_registered_model(self):
+        """Registry lookups (e.g. ContentType.model_class()) bypass get_model() and its cache check (#767)."""
+        cot, _stale_cot = self._rename_then_roll_back()
+        self._assert_fits_table(apps.get_model(APP_LABEL, cot.get_table_model_name(cot.pk)))
+
+    def test_rollback_after_rename_is_seen_from_a_later_transaction(self):
+        """The connection that rolled back serves the next request too, so a lookup
+        from inside that request's transaction must not mistake it for the one the
+        class was built in (#767)."""
+        cot, stale_cot = self._rename_then_roll_back()
+        with transaction.atomic():
+            self._assert_fits_table(stale_cot.get_model())
+            self._assert_fits_table(apps.get_model(APP_LABEL, cot.get_table_model_name(cot.pk)))
 
 
 class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
@@ -723,7 +872,7 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
         obj.delete()  # Must not raise ValueError: "Cannot query ...: Must be ... instance."
 
 
-class OwnerFieldNameCollisionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
+class OwnerFieldNameCollisionTestCase(CustomObjectsTestCase, TestCase):
     """A user field named 'owner' shadows CustomObject's own OwnerMixin.owner field.
     Renaming or deleting it must not crash on the unmasked mixin field's missing column.
     """
@@ -737,6 +886,20 @@ class OwnerFieldNameCollisionTestCase(TransactionCleanupMixin, CustomObjectsTest
                 )
             }
 
+    def _fks(self, model, column):
+        """(target table, ON DELETE action code) of each FK on *column*."""
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT c.confrelid::regclass::text, c.confdeltype
+                FROM pg_constraint c
+                JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+                WHERE c.contype = 'f' AND c.conrelid = %s::regclass AND a.attname = %s
+                """,
+                [model._meta.db_table, column],
+            )
+            return cursor.fetchall()
+
     def _make_owner_collision_cot(self, slug):
         from core.models import ObjectType
         contact_ot = ObjectType.objects.get(app_label='tenancy', model='contact')
@@ -745,10 +908,12 @@ class OwnerFieldNameCollisionTestCase(TransactionCleanupMixin, CustomObjectsTest
         self.create_custom_object_type_field(
             cot, name='name', label='Name', type='text', primary=True, required=True,
         )
-        # .objects.create() bypasses the reserved-name check in clean().
-        field = self.create_custom_object_type_field(
-            cot, name='owner', label='Owner', type='object', related_object_type=contact_ot,
-        )
+        # .objects.create() bypasses the reserved-name check in clean().  The FK
+        # constraint is added on commit, as in production.
+        with self.captureOnCommitCallbacks(execute=True):
+            field = self.create_custom_object_type_field(
+                cot, name='owner', label='Owner', type='object', related_object_type=contact_ot,
+            )
         return cot, field
 
     def test_renaming_away_from_owner_does_not_break_list_view(self):
@@ -759,15 +924,29 @@ class OwnerFieldNameCollisionTestCase(TransactionCleanupMixin, CustomObjectsTest
 
         field = CustomObjectTypeField.objects.get(pk=field.pk)
         field.name = 'client_contact'
-        field.save()
+        with self.captureOnCommitCallbacks(execute=True):
+            field.save()
 
         updated_model = cot.get_model(no_cache=True)
         columns = self._db_columns(updated_model)
         self.assertIn('client_contact_id', columns)
         self.assertIn('owner_id', columns, "OwnerMixin's own column must be healed back in")
+        self.assertEqual([t for t, _ in self._fks(updated_model, 'client_contact_id')], ['tenancy_contact'])
 
         results = list(updated_model.objects.all())
         self.assertEqual(len(results), 2)
+
+    @expectedFailure  # A rename recreates the FK as NO ACTION and the on-commit hook doesn't restore it.
+    def test_renaming_away_from_owner_keeps_on_delete_action(self):
+        cot, field = self._make_owner_collision_cot('owner-rename-fk')
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.name = 'client_contact'
+        with self.captureOnCommitCallbacks(execute=True):
+            field.save()
+
+        updated_model = cot.get_model(no_cache=True)
+        # 'n' is ON DELETE SET NULL, the field's default.
+        self.assertEqual(self._fks(updated_model, 'client_contact_id'), [('tenancy_contact', 'n')])
 
     def test_deleting_owner_field_does_not_break_list_view(self):
         cot, field = self._make_owner_collision_cot('owner-delete')
