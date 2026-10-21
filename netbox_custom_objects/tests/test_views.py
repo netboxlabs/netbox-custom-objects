@@ -114,7 +114,8 @@ class CustomObjectTypeViewTestCase(
         create, update = ObjectChange.objects.filter(
             changed_object_type=ContentType.objects.get_for_model(instance), changed_object_id=instance.pk
         ).order_by("pk")
-        self.assertObjectChange(create, action=ObjectChangeActionChoices.ACTION_CREATE, message="Created")
+        self.assertEqual(create.action, ObjectChangeActionChoices.ACTION_CREATE)
+        self.assertEqual(create.message, "Created")
         self.assertEqual(update.action, ObjectChangeActionChoices.ACTION_UPDATE)
         self.assertEqual(update.postchange_data["object_type"], instance.object_type_id)
 
