@@ -20,6 +20,7 @@ from netbox_custom_objects.schema.comparator import (
     COTDiff,
     FieldChange,
     FieldOp,
+    diff_cot,
 )
 from netbox_custom_objects.schema.executor import (
     CircularDependencyError,
@@ -346,6 +347,16 @@ class ExecutorFieldAddTestCase(_ExecutorTestBase):
         apply_document({"schema_version": "1", "types": [type_def]})
         field = self.cot.fields.get(name="newfield")
         self.assertEqual(field.schema_id, next_id)
+
+    def test_added_coordinates_field_round_trips(self):
+        type_def = export_cot(self.cot)
+        next_id = self.cot.next_schema_id + 1
+        type_def["fields"].append({"id": next_id, "name": "location", "type": "coordinates"})
+        apply_document({"schema_version": "1", "types": [type_def]})
+        self.assertEqual(self.cot.fields.get(name="location").type, "coordinates")
+        model = self.cot.get_model()
+        self.assertTrue(hasattr(model, "location_latitude") and hasattr(model, "location_longitude"))
+        self.assertFalse(diff_cot(export_cot(self.cot)).has_changes)
 
     def test_added_select_field_resolves_choice_set(self):
         cs = self.create_choice_set(name='Colours')

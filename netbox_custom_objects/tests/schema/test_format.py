@@ -15,6 +15,7 @@ from django.db import IntegrityError, transaction
 from django.db.models.fields import NOT_PROVIDED
 from django.test import TestCase, TransactionTestCase
 
+from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
 from netbox_custom_objects.models import CustomObjectTypeField
 from netbox_custom_objects.schema.format import (
     CHOICES_TO_SCHEMA_TYPE,
@@ -22,7 +23,6 @@ from netbox_custom_objects.schema.format import (
     SCHEMA_FORMAT_VERSION,
     SCHEMA_TYPE_TO_CHOICES,
 )
-from extras.choices import CustomFieldTypeChoices
 
 from ..base import CustomObjectsTestCase, TransactionCleanupMixin
 
@@ -509,13 +509,13 @@ class SchemaFormatConstantsTestCase(TestCase):
             )
 
     def test_all_field_types_are_mapped(self):
-        """Every CustomFieldTypeChoices value must have a schema type entry."""
-        for attr in dir(CustomFieldTypeChoices):
+        """Every field type, including the plugin's own, must have a schema type entry."""
+        for attr in dir(CustomObjectFieldTypeChoices):
             if attr.startswith('TYPE_'):
-                value = getattr(CustomFieldTypeChoices, attr)
+                value = getattr(CustomObjectFieldTypeChoices, attr)
                 self.assertIn(
                     value, CHOICES_TO_SCHEMA_TYPE,
-                    f"CustomFieldTypeChoices.{attr} ({value!r}) is missing from CHOICES_TO_SCHEMA_TYPE",
+                    f"CustomObjectFieldTypeChoices.{attr} ({value!r}) is missing from CHOICES_TO_SCHEMA_TYPE",
                 )
 
 
@@ -547,6 +547,10 @@ class COTJsonSchemaTestCase(TestCase):
     def _assert_invalid(self, document):
         errors = self._validate(document)
         self.assertGreater(len(errors), 0, "Expected invalid document but it passed validation.")
+
+    def test_field_type_enum_matches_mapping(self):
+        """The JSON schema accepts exactly the field types the format maps."""
+        self.assertEqual(set(self.schema["$defs"]["field_type"]["enum"]), set(CHOICES_TO_SCHEMA_TYPE.values()))
 
     # ------------------------------------------------------------------
     # Valid documents

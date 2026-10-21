@@ -45,7 +45,8 @@
         "select",
         "multiselect",
         "object",
-        "multiobject"
+        "multiobject",
+        "coordinates"
       ]
     },
 
@@ -264,7 +265,7 @@
         {
           "properties": {
             "type": {
-              "enum": ["boolean", "date", "datetime", "url", "json"]
+              "enum": ["boolean", "date", "datetime", "url", "json", "coordinates"]
             }
           }
         }
