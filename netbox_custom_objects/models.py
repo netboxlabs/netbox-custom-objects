@@ -2478,6 +2478,11 @@ class CustomObjectType(NetBoxModel):
             if not field.related_object_types.exists():
                 field.delete()
 
+        # Cascading field deletion skips field.delete(), so remove these accessors here.
+        # Unwiring only affects main; branch deletions take effect when merged.
+        for field in CustomObjectTypeField.objects.filter(custom_object_type_id=cot_id, is_polymorphic=True):
+            _unwire_polymorphic_reverse_descriptors(field)
+
         object_type = ObjectType.objects.get_for_model(model)
 
         # ObjectChange and ObjectType records live in the main schema. Only clean
@@ -4420,22 +4425,28 @@ def _descriptor_matches_field(descriptor, field_instance):
     return False
 
 
-def _wire_polymorphic_reverse_descriptors(field_instance):
+def _wire_polymorphic_reverse_descriptors(field_instance, object_types=None):
     """Attach reverse descriptors on target model classes for a polymorphic field.
 
-    For each content type in ``field_instance.related_object_types``, inject a
-    descriptor on the target model class so that ``target_instance.<related_name>``
+    For each content type in *object_types* (default: ``field_instance.related_object_types``),
+    inject a descriptor on the target model class so that ``target_instance.<related_name>``
     returns the CO instances that point at it.  Called from
     ``CustomObjectType._after_model_generation`` for every polymorphic field that
-    has a non-empty ``related_name``.
+    has a non-empty ``related_name``, and when types are added to a live field.
+
+    Target classes are shared by every branch, so only main wires them; a branch's
+    field changes reach them when the branch merges (#766).
     """
+    if CustomObjectType._active_branch_id() is not None:
+        return
     if not field_instance.related_name:
         return
     descriptor = _make_reverse_descriptor(field_instance)
     if descriptor is None:
         return
     related_name = field_instance.related_name
-    for ot in field_instance.related_object_types.all():
+    ots = object_types if object_types is not None else field_instance.related_object_types.all()
+    for ot in ots:
         target_cls = ot.model_class()
         if target_cls is None:
             continue
@@ -4467,7 +4478,11 @@ def _unwire_polymorphic_reverse_descriptors(field_instance, object_types=None, r
     (e.g. after a rename).  Called from ``CustomObjectTypeField.delete()`` (before the
     M2M rows are removed), from the ``m2m_changed`` signal handler when types are removed
     from a live field, and from ``save()`` when ``related_name`` is renamed.
+
+    Main-only, like wiring: main still has the field until a branch's change merges.
     """
+    if CustomObjectType._active_branch_id() is not None:
+        return
     name = related_name if related_name is not None else field_instance.related_name
     if not name:
         return
@@ -4539,34 +4554,7 @@ def sync_polymorphic_reverse_descriptors(sender, instance, action, pk_set, **kwa
         return
 
     if action == "post_add" and pk_set:
-        descriptor = _make_reverse_descriptor(instance)
-        if descriptor is None:
-            return
-        for ot in ObjectType.objects.filter(pk__in=pk_set):
-            target_cls = ot.model_class()
-            if target_cls is None:
-                continue
-            existing = getattr(target_cls, instance.related_name, None)
-            if existing is not None:
-                if not isinstance(
-                    existing, (
-                        PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor
-                    )
-                ):
-                    logger.warning(
-                        'Skipping reverse descriptor "%s" on %s: a non-CO attribute already exists '
-                        'with that name. Change the related_name to avoid this conflict.',
-                        instance.related_name, target_cls.__name__,
-                    )
-                    continue
-                if not _descriptor_matches_field(existing, instance):
-                    logger.warning(
-                        'Skipping reverse descriptor "%s" on %s: already owned by a different CO '
-                        'field. Change the related_name to avoid this conflict.',
-                        instance.related_name, target_cls.__name__,
-                    )
-                    continue
-            setattr(target_cls, instance.related_name, descriptor)
+        _wire_polymorphic_reverse_descriptors(instance, object_types=ObjectType.objects.filter(pk__in=pk_set))
 
     elif action == "pre_remove" and pk_set:
         _unwire_polymorphic_reverse_descriptors(
