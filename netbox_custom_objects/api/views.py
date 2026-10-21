@@ -23,6 +23,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from netbox.api.authentication import IsAuthenticatedOrLoginNotRequired, TokenWritePermission
 from netbox.api.renderers import FormlessBrowsableAPIRenderer
 from netbox.api.viewsets import NetBoxModelViewSet
+from utilities.permissions import get_permission_for_model
 
 
 from netbox_custom_objects.constants import APP_LABEL
@@ -284,8 +285,13 @@ class LinkedObjectsView(APIView):
 
         model_class = content_type.model_class()
         manager = model_class._default_manager
-        # A model whose manager isn't permission-aware is viewable by everyone.
-        targets = manager.restrict(request.user, 'view') if hasattr(manager, 'restrict') else manager.all()
+        if hasattr(manager, 'restrict'):
+            targets = manager.restrict(request.user, 'view')
+        elif request.user.has_perm(get_permission_for_model(model_class, 'view')):
+            # The manager isn't permission-aware, so only the model-level permission applies.
+            targets = manager.all()
+        else:
+            raise Http404
         try:
             target_obj = targets.get(pk=object_id)
         except (model_class.DoesNotExist, ValueError):

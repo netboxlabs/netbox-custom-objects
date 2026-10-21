@@ -23,7 +23,7 @@ from netbox_custom_objects.utilities import is_branching_enabled
 from .base import CustomObjectsTestCase, create_token
 from core.models import Job, ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Rack, Site
-from extras.models import ConfigContext, ExportTemplate, Tag
+from extras.models import ConfigContext, Dashboard, ExportTemplate, Tag
 from users.models import ObjectPermission, Owner
 from virtualization.models import Cluster, ClusterType
 
@@ -883,6 +883,19 @@ class LinkedObjectsAPITest(CustomObjectsTestCase, TestCase):
 
         response = self.client.get(self._url(object_type='dcim.device', object_id=self.device.pk), **header)
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_target_without_restrict_needs_model_permission(self):
+        """A target whose manager isn't permission-aware needs the model's view permission."""
+        dashboard = Dashboard.objects.create(user=self.user)
+        url = self._url(object_type='extras.dashboard', object_id=dashboard.pk)
+
+        response = self.client.get(url, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+        self._grant(Dashboard)
+        response = self.client.get(url, **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['count'], 0)
 
     def test_response_shape(self):
         """Each result contains custom_object_type, field_name, and object keys."""
