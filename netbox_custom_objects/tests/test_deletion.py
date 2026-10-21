@@ -1,31 +1,24 @@
 """
 Tests for deletion scenarios with cascading effects.
 
-Uses TransactionTestCase so that DDL statements (CREATE/DROP TABLE) issued during
-setup and teardown are not wrapped in Django's per-test rollback transaction.  That
-lets us verify table-level changes and FK SET NULL/CASCADE/PROTECT behaviour that
-cannot be observed inside a rolled-back savepoint.
+On-delete behaviour is enforced by FK constraints that a field adds once its
+transaction commits, so tests that rely on it run the field's on-commit callbacks.
 """
 from django.apps import apps as django_apps
-from django.db import connection
+from django.db import connection, transaction
 from django.db.utils import IntegrityError
-from django.test import TransactionTestCase
+from django.test import TestCase
 
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
 from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 
-from .base import CustomObjectsTestCase, TransactionCleanupMixin
+from .base import CustomObjectsTestCase
 
 
-class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
+class DeletionTestCase(CustomObjectsTestCase, TestCase):
     """Test deletion scenarios with cascading effects."""
-
-    def setUp(self):
-        # TransactionCleanupMixin.setUp() purges stale generated models and
-        # CustomObjectsTestCase.setUp() creates the test user and client.
-        super().setUp()
 
     # ------------------------------------------------------------------
     # Helpers
@@ -185,14 +178,15 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         device = self._make_device()
 
         cot = self.create_simple_custom_object_type(name='devref-sn', slug='dev-ref-sn')
-        self.create_custom_object_type_field(
-            cot,
-            name='device',
-            label='Device',
-            type='object',
-            related_object_type=self.get_device_object_type(),
-            on_delete_behavior=ObjectFieldOnDeleteChoices.SET_NULL,
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            self.create_custom_object_type_field(
+                cot,
+                name='device',
+                label='Device',
+                type='object',
+                related_object_type=self.get_device_object_type(),
+                on_delete_behavior=ObjectFieldOnDeleteChoices.SET_NULL,
+            )
         model = cot.get_model()
 
         co = model.objects.create(name='CO with Device', device=device)
@@ -215,14 +209,15 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         device = self._make_device(suffix='-casc')
 
         cot = self.create_simple_custom_object_type(name='devref-casc', slug='dev-ref-casc')
-        self.create_custom_object_type_field(
-            cot,
-            name='device',
-            label='Device',
-            type='object',
-            related_object_type=self.get_device_object_type(),
-            on_delete_behavior=ObjectFieldOnDeleteChoices.CASCADE,
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            self.create_custom_object_type_field(
+                cot,
+                name='device',
+                label='Device',
+                type='object',
+                related_object_type=self.get_device_object_type(),
+                on_delete_behavior=ObjectFieldOnDeleteChoices.CASCADE,
+            )
         model = cot.get_model()
 
         co = model.objects.create(name='CO with Device Cascade', device=device)
@@ -245,14 +240,15 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         device = self._make_device(suffix='-prot')
 
         cot = self.create_simple_custom_object_type(name='devref-prot', slug='dev-ref-prot')
-        self.create_custom_object_type_field(
-            cot,
-            name='device',
-            label='Device',
-            type='object',
-            related_object_type=self.get_device_object_type(),
-            on_delete_behavior=ObjectFieldOnDeleteChoices.PROTECT,
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            self.create_custom_object_type_field(
+                cot,
+                name='device',
+                label='Device',
+                type='object',
+                related_object_type=self.get_device_object_type(),
+                on_delete_behavior=ObjectFieldOnDeleteChoices.PROTECT,
+            )
         model = cot.get_model()
 
         co = model.objects.create(name='CO with Device Protect', device=device)
@@ -261,7 +257,7 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         # The DB-level RESTRICT constraint should prevent deletion.
         # PostgreSQL raises an IntegrityError wrapping a ForeignKeyViolation.
         with self.assertRaises(IntegrityError, msg="RESTRICT should prevent deletion of the referenced Device"):
-            with connection.cursor() as cursor:
+            with transaction.atomic(), connection.cursor() as cursor:
                 cursor.execute('DELETE FROM dcim_device WHERE id = %s', [device_pk])
 
         # Both objects must remain intact.
@@ -414,27 +410,29 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         device = self._make_device(suffix='-chg-sn')
 
         cot = self.create_simple_custom_object_type(name='chgsn', slug='chg-sn')
-        field = self.create_custom_object_type_field(
-            cot,
-            name='device',
-            label='Device',
-            type='object',
-            related_object_type=self.get_device_object_type(),
-            on_delete_behavior=ObjectFieldOnDeleteChoices.PROTECT,
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            field = self.create_custom_object_type_field(
+                cot,
+                name='device',
+                label='Device',
+                type='object',
+                related_object_type=self.get_device_object_type(),
+                on_delete_behavior=ObjectFieldOnDeleteChoices.PROTECT,
+            )
         model = cot.get_model()
         co = model.objects.create(name='CO Chg SN', device=device)
         device_pk = device.pk
 
         # Confirm PROTECT is in effect: raw DELETE must be blocked.
         with self.assertRaises(IntegrityError, msg="RESTRICT should block deletion before the change"):
-            with connection.cursor() as cursor:
+            with transaction.atomic(), connection.cursor() as cursor:
                 cursor.execute('DELETE FROM dcim_device WHERE id = %s', [device_pk])
 
         # Change the field to SET_NULL.
         field = CustomObjectTypeField.objects.get(pk=field.pk)
         field.on_delete_behavior = ObjectFieldOnDeleteChoices.SET_NULL
-        field.save()
+        with self.captureOnCommitCallbacks(execute=True):
+            field.save()
 
         # Now deletion must succeed and set the FK to NULL.
         with connection.cursor() as cursor:
@@ -454,14 +452,15 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         device = self._make_device(suffix='-chg-casc')
 
         cot = self.create_simple_custom_object_type(name='chgcasc', slug='chg-casc')
-        field = self.create_custom_object_type_field(
-            cot,
-            name='device',
-            label='Device',
-            type='object',
-            related_object_type=self.get_device_object_type(),
-            on_delete_behavior=ObjectFieldOnDeleteChoices.PROTECT,
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            field = self.create_custom_object_type_field(
+                cot,
+                name='device',
+                label='Device',
+                type='object',
+                related_object_type=self.get_device_object_type(),
+                on_delete_behavior=ObjectFieldOnDeleteChoices.PROTECT,
+            )
         model = cot.get_model()
         co = model.objects.create(name='CO Chg Casc', device=device)
         co_pk = co.pk
@@ -469,13 +468,14 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
 
         # Confirm PROTECT is in effect.
         with self.assertRaises(IntegrityError, msg="RESTRICT should block deletion before the change"):
-            with connection.cursor() as cursor:
+            with transaction.atomic(), connection.cursor() as cursor:
                 cursor.execute('DELETE FROM dcim_device WHERE id = %s', [device_pk])
 
         # Change the field to CASCADE.
         field = CustomObjectTypeField.objects.get(pk=field.pk)
         field.on_delete_behavior = ObjectFieldOnDeleteChoices.CASCADE
-        field.save()
+        with self.captureOnCommitCallbacks(execute=True):
+            field.save()
 
         # Now deletion must cascade and remove the CO.
         with connection.cursor() as cursor:
@@ -499,14 +499,15 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         cot_target = self.create_simple_custom_object_type(name='dbtarget', slug='db-target')
         cot_source = self.create_simple_custom_object_type(name='dbsource', slug='db-source')
 
-        self.create_custom_object_type_field(
-            cot_source,
-            name='ref_target',
-            label='Reference Target',
-            type='object',
-            related_object_type=cot_target.object_type,
-            on_delete_behavior=ObjectFieldOnDeleteChoices.PROTECT,
-        )
+        with self.captureOnCommitCallbacks(execute=True):
+            self.create_custom_object_type_field(
+                cot_source,
+                name='ref_target',
+                label='Reference Target',
+                type='object',
+                related_object_type=cot_target.object_type,
+                on_delete_behavior=ObjectFieldOnDeleteChoices.PROTECT,
+            )
 
         model_source = cot_source.get_model()
         cot_target.refresh_from_db()
@@ -518,7 +519,7 @@ class DeletionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, Transacti
         target_table = cot_target.get_database_table_name()
         with self.assertRaises(IntegrityError,
                                msg="DB-level ON DELETE RESTRICT must block raw-SQL deletion of the target"):
-            with connection.cursor() as cursor:
+            with transaction.atomic(), connection.cursor() as cursor:
                 cursor.execute(f'DELETE FROM {target_table} WHERE id = %s', [obj_target.pk])
 
         self.assertTrue(

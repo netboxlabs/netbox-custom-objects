@@ -1,8 +1,8 @@
 """
 Tests for database schema operations and model-cache behaviour.
 
-Uses TransactionTestCase so DDL and on_commit callbacks behave exactly as they
-do in production (no wrapping savepoint prevents commits).
+The concurrency tests use TransactionTestCase, because their threads use their own
+database connections and only see committed data.
 """
 import threading
 from io import StringIO
@@ -12,7 +12,7 @@ from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
 from django.db import IntegrityError, ProgrammingError, connection
-from django.test import TransactionTestCase
+from django.test import TestCase, TransactionTestCase
 from django.urls import reverse
 from psycopg.errors import DuplicateTable
 
@@ -27,7 +27,7 @@ from users.models import ObjectPermission
 from .base import CustomObjectsTestCase, TransactionCleanupMixin
 
 
-class SchemaOperationsTestCase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
+class SchemaOperationsTestCase(CustomObjectsTestCase, TestCase):
     """Test database schema operations and related cache/registry behaviour."""
 
     # ------------------------------------------------------------------
@@ -723,7 +723,7 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
         obj.delete()  # Must not raise ValueError: "Cannot query ...: Must be ... instance."
 
 
-class OwnerFieldNameCollisionTestCase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
+class OwnerFieldNameCollisionTestCase(CustomObjectsTestCase, TestCase):
     """A user field named 'owner' shadows CustomObject's own OwnerMixin.owner field.
     Renaming or deleting it must not crash on the unmasked mixin field's missing column.
     """
