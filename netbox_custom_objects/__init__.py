@@ -640,9 +640,27 @@ class CustomObjectsPluginConfig(PluginConfig):
         self.apps.check_apps_ready()
         try:
             # if the model is already loaded, return it
-            return super().get_model(model_name, require_ready)
+            model = super().get_model(model_name, require_ready)
         except LookupError:
             pass
+        else:
+            # A dynamic model built inside a transaction that then rolled back no
+            # longer matches its table; rebuild it (issue #767).  See
+            # CustomObjectType.get_model() and _mark_registered_in_transaction.
+            # Guard with _dynamic_model_creation_unsafe() rather than
+            # should_skip_dynamic_model_creation(): the latter also skips under the
+            # test runner, but this class already exists, so tests must rebuild it
+            # too (the same guard CustomObjectType.get_model() uses).
+            if getattr(model, '_registered_in', None) is None:
+                return model
+            from .models import CustomObjectType, _registration_rolled_back
+            cot_id = getattr(model, 'custom_object_type_id', None)
+            if cot_id is None or not _registration_rolled_back(model) or self._dynamic_model_creation_unsafe():
+                return model
+            try:
+                return CustomObjectType.objects.get(pk=cot_id).get_model()
+            except (CustomObjectType.DoesNotExist, ProgrammingError, OperationalError):
+                return model
 
         model_name = model_name.lower()
 
