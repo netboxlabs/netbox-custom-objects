@@ -8,7 +8,7 @@ Covers both API and UI (form) paths for:
 import json
 
 from django.core.exceptions import ValidationError
-from django.test import TransactionTestCase
+from django.test import TestCase
 from django.urls import reverse
 from rest_framework import status
 
@@ -22,7 +22,6 @@ from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.tests.base import (
     CustomObjectsTestCase,
-    TransactionCleanupMixin,
     create_token,
 )
 
@@ -43,10 +42,9 @@ def _grant_perm(user, action, model_class, name=None):
 # API tests
 # ---------------------------------------------------------------------------
 
-class PolymorphicFieldAPITest(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
+class PolymorphicFieldAPITest(CustomObjectsTestCase, TestCase):
     """
     API tests for polymorphic Object and MultiObject fields.
-    Uses TransactionTestCase so that DB table creation/deletion is committed.
     """
 
     def setUp(self):
@@ -641,7 +639,7 @@ class PolymorphicFieldAPITest(TransactionCleanupMixin, CustomObjectsTestCase, Tr
 # UI / form tests
 # ---------------------------------------------------------------------------
 
-class PolymorphicFieldUITest(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
+class PolymorphicFieldUITest(CustomObjectsTestCase, TestCase):
     """
     UI tests for polymorphic fields on the custom object edit form.
     """
@@ -1100,9 +1098,7 @@ class PolymorphicFieldUITest(TransactionCleanupMixin, CustomObjectsTestCase, Tra
 # Through-model registration
 # ---------------------------------------------------------------------------
 
-class PolymorphicThroughModelRegistrationTest(
-    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
-):
+class PolymorphicThroughModelRegistrationTest(CustomObjectsTestCase, TestCase):
     """Verify the through model is re-registered on model regeneration (simulates restart)."""
 
     def setUp(self):
@@ -1152,9 +1148,7 @@ class PolymorphicThroughModelRegistrationTest(
 # Referenced-object deletion
 # ---------------------------------------------------------------------------
 
-class ReferencedObjectDeletionTest(
-    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
-):
+class ReferencedObjectDeletionTest(CustomObjectsTestCase, TestCase):
     """
     Tests for the on_delete behaviour when a referenced object (e.g. a Site) or
     the CustomObjectType itself is deleted.
@@ -1347,9 +1341,7 @@ class ReferencedObjectDeletionTest(
 # Cycle-detection: multi-hop polymorphic cycles
 # ---------------------------------------------------------------------------
 
-class PolymorphicCycleDetectionTest(
-    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
-):
+class PolymorphicCycleDetectionTest(CustomObjectsTestCase, TestCase):
     """
     Verifies that _has_circular_reference detects cycles that pass entirely
     through polymorphic legs.
@@ -1465,9 +1457,7 @@ class PolymorphicCycleDetectionTest(
 # Polymorphic reverse descriptor tests (issue #385 / PR #548)
 # ---------------------------------------------------------------------------
 
-class PolymorphicReverseDescriptorTest(
-    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
-):
+class PolymorphicReverseDescriptorTest(CustomObjectsTestCase, TestCase):
     """Verify that polymorphic GFK and M2M fields with a related_name expose a working
     reverse accessor on target model instances."""
 
@@ -2114,9 +2104,7 @@ class PolymorphicReverseDescriptorTest(
 # get_models() re-entrancy (issue #686)
 # ---------------------------------------------------------------------------
 
-class PolymorphicReverseDescriptorRecursionTestCase(
-    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
-):
+class PolymorphicReverseDescriptorRecursionTestCase(CustomObjectsTestCase, TestCase):
     """Regression test for issue #686: generating a polymorphic field's
     reverse descriptor raised RecursionError."""
 
@@ -2179,9 +2167,7 @@ class PolymorphicReverseDescriptorRecursionTestCase(
         self.assertIsNotNone(model)
 
 
-class GetModelCacheRegistryConsistencyTestCase(
-    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
-):
+class GetModelCacheRegistryConsistencyTestCase(CustomObjectsTestCase, TestCase):
     """Regression test: a re-entrant get_model() for the same COT could leave
     _model_cache and apps.all_models pointing at two different classes."""
 
