@@ -28,6 +28,7 @@ from netbox_custom_objects.schema.executor import (
     UnknownChoiceSetError,
     UnknownFieldTypeError,
     UnknownObjectTypeError,
+    UnsupportedTypeChangeError,
     _build_dep_order,
     apply_document,
     apply_diffs,
@@ -483,6 +484,23 @@ class ExecutorFieldAlterTestCase(_ExecutorTestBase):
         apply_document({"schema_version": "1", "types": [type_def]})
         self.field.refresh_from_db()
         self.assertTrue(self.field.required)
+
+    def test_multi_column_type_change_rejected(self):
+        coords = self.create_custom_object_type_field(self.cot, name='location', type='coordinates')
+        cases = [(self.field, 'coordinates'), (coords, 'text'), (self.field, 'url')]
+        for field, new_type in cases:
+            with self.subTest(f"{field.type} -> {new_type}"):
+                type_def = export_cot(self.cot)
+                for f in type_def["fields"]:
+                    if f["name"] == field.name:
+                        f["type"] = new_type
+                with self.assertRaises(UnsupportedTypeChangeError):
+                    apply_document({"schema_version": "1", "types": [type_def]})
+                field.refresh_from_db()
+                self.assertNotEqual(field.type, new_type)
+        # Nothing half-applied: the table still matches the fields.
+        self.cot.refresh_from_db()
+        self.cot.get_model().objects.create(target="x", location_latitude=1, location_longitude=2)
 
     def test_alter_validation_minimum(self):
         # First change the field to integer type directly in the DB so we

@@ -228,6 +228,21 @@ class SchemaApplyTestCase(_SchemaAPIBase):
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertTrue(resp.data["applied"])
 
+    def test_apply_multi_column_type_change_returns_400(self):
+        cot = self.create_custom_object_type(name='applyretype', slug='apply-retype')
+        field = self.create_custom_object_type_field(cot, name='loc', type='text')
+        type_def = export_cot(cot)
+        type_def["fields"][0]["type"] = "coordinates"
+        resp = self.client.post(
+            self.apply_url,
+            data=self._apply_body({"schema_version": "1", "types": [type_def]}),
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(resp.data["error"], "unsupported_type_change")
+        field.refresh_from_db()
+        self.assertEqual(field.type, "text")
+
     def test_apply_new_cot_creates_cot_in_db(self):
         schema_doc = {
             "schema_version": "1",

@@ -35,7 +35,7 @@ from django.db import transaction
 from extras.models import CustomFieldChoiceSet
 
 from netbox_custom_objects import constants
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField, is_multi_column_type_change
 from netbox_custom_objects.schema.comparator import FieldOp, diff_document
 from netbox_custom_objects.schema.format import (
     CUSTOM_OBJECTS_APP_LABEL_SLUG,
@@ -79,6 +79,10 @@ class UnknownObjectTypeError(Exception):
 
 class UnknownFieldTypeError(Exception):
     """Raised when a field type string in the schema has no matching DB choice."""
+
+
+class UnsupportedTypeChangeError(Exception):
+    """Raised when the schema changes a field's type in a way the DB schema can't follow."""
 
 
 # ---------------------------------------------------------------------------
@@ -328,7 +332,13 @@ def _apply_field_alter(cot, fc) -> None:
 
     for attr, (db_val, schema_val) in fc.changed_attrs.items():
         if attr == "type":
-            # comparator stores CustomFieldTypeChoices values for type diffs
+            # comparator stores CustomFieldTypeChoices values for type diffs.
+            # save() can't add or drop backing columns, so reject what clean() rejects.
+            if is_multi_column_type_change(field.type, schema_val):
+                raise UnsupportedTypeChangeError(
+                    f"Field {field.name!r} on {cot.slug!r} can't change type from {field.type!r} to "
+                    f"{schema_val!r}: coordinates and URL fields can't be converted to or from another type."
+                )
             field.type = schema_val
         elif attr == "choice_set":
             if schema_val is None:

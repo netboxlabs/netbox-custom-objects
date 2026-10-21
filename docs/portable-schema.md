@@ -415,7 +415,8 @@ detail: "Schema contains destructive field removals for COT(s): circuit."
 destructive_slugs: [circuit]
 ```
 
-Response `400 Bad Request` (invalid schema, unresolvable reference, or circular COT dependency):
+Response `400 Bad Request` (invalid schema, unresolvable reference, circular COT dependency, or a
+type change to or from `coordinates` or `url`, which isn't supported):
 
 ```yaml
 error: unresolvable_reference

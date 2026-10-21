@@ -371,6 +371,11 @@ MULTI_COLUMN_TYPES = {
 }
 
 
+def is_multi_column_type_change(old_type, new_type):
+    """True if changing a field from *old_type* to *new_type* adds or removes backing columns."""
+    return old_type != new_type and (old_type in MULTI_COLUMN_TYPES or new_type in MULTI_COLUMN_TYPES)
+
+
 def _occupied_columns(name, field_type):
     """Real DB column name(s) that a field named *name* of *field_type* occupies.
 
@@ -3510,8 +3515,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         if (
             self.pk
             and not self._state.adding
-            and self.type != self._original_type
-            and (self.type in MULTI_COLUMN_TYPES or self._original_type in MULTI_COLUMN_TYPES)
+            and is_multi_column_type_change(self._original_type, self.type)
         ):
             raise ValidationError(
                 {"type": _(
