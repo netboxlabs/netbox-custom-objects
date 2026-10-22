@@ -1049,8 +1049,9 @@ class CustomObject(
             if not expression:
                 return None
             template, names = _compile_display_expression(expression)
-            # Only the fields the expression names, since a related field's value costs queries.
-            ctx = {}
+            # Except the PK, only the fields the expression names, since a related field's value costs queries.
+            pk = '' if self.pk is None else self.pk
+            ctx = {'id': pk, 'pk': pk}
             for field_info in self._field_objects.values():
                 field_name = field_info["name"]
                 if field_name not in names:
