@@ -82,13 +82,11 @@ def custom_object_clone_button(instance):
         kwargs={"custom_object_type": instance.custom_object_type.slug}
     )
 
-    # Populate cloned field values
+    # Populate cloned field values; with none, there's nothing to clone, so no button.
     param_string = prepare_cloned_fields(instance).urlencode()
-    if param_string:
-        url = f"{url}?{param_string}"
 
     return {
-        "url": url,
+        "url": f"{url}?{param_string}" if param_string else None,
     }
 
 

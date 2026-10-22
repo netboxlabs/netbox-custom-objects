@@ -104,17 +104,17 @@
                                            aria-label="{% trans 'Edit' %}"><i class="mdi mdi-pencil"></i></a>
                                     {% endif %}
                                     <button type="button"
-                                            class="btn btn-sm btn-warning dropdown-toggle"
+                                            class="btn btn-sm btn-{% if request.user|can_change:obj %}warning{% else %}secondary{% endif %} dropdown-toggle"
                                             data-bs-toggle="dropdown"
                                             aria-expanded="false"
                                             style="padding-left: 2px">
                                         <span class="visually-hidden">{% trans 'Toggle Dropdown' %}</span>
                                     </button>
                                     <ul class="dropdown-menu">
-                                        <li><a class="dropdown-item" href="{% url 'plugins:netbox_custom_objects:customobject_changelog' pk=obj.pk custom_object_type=obj.custom_object_type.slug %}"><i class="mdi mdi-history" aria-hidden="true"></i> {% trans "Changelog" %}</a></li>
                                         {% if request.user|can_delete:obj %}
                                             <li><a class="dropdown-item" href="{% url 'plugins:netbox_custom_objects:customobject_delete' pk=obj.pk custom_object_type=obj.custom_object_type.slug %}?return_url={{ return_url|urlencode }}"><i class="mdi mdi-trash-can-outline" aria-hidden="true"></i> {% trans "Delete" %}</a></li>
                                         {% endif %}
+                                        <li><a class="dropdown-item" href="{% url 'plugins:netbox_custom_objects:customobject_changelog' pk=obj.pk custom_object_type=obj.custom_object_type.slug %}"><i class="mdi mdi-history" aria-hidden="true"></i> {% trans "Changelog" %}</a></li>
                                     </ul>
                                 </span>
                             </td>

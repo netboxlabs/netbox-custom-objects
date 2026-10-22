@@ -47,15 +47,6 @@
             <th scope="row">{% trans "Config context support" %}</th>
             <td>{% checkmark object.config_context_enabled %}</td>
           </tr>
-          <tr>
-            <th scope="row">{% trans "Last activity" %}</th>
-            <td>
-              {{ latest_change.time|isodatetime|placeholder }}
-              {% if latest_change %}
-                <div class="small text-muted">{{ latest_change.time|timesince }} {% trans "ago" %}</div>
-              {% endif %}
-            </td>
-          </tr>
         </table>
       </div>
       {% include 'inc/panels/tags.html' %}

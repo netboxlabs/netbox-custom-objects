@@ -23,22 +23,10 @@
 
 {% block title %}{{ object }}{% endblock title %}
 
-{% block subtitle %}
-<div class="text-secondary fs-5">
-  {% if object.owner %}
-    <i class="mdi mdi-account-outline" title="{% trans "Owner" %}"></i> {{ object.owner|linkify }}
-    <span class="separator">&middot;</span>
-  {% endif %}
-  {% trans "Created" %} {{ object.created|isodatetime:"minutes" }}
-  {% if object.last_updated %}
-    <span class="separator">&middot;</span>
-    {% trans "Updated" %} {{ object.last_updated|isodatetime:"minutes" }}
-  {% endif %}
-</div>
-{% endblock subtitle %}
-
 {% block controls %}
 <div class="btn-list justify-content-end mb-2">
+    {% plugin_buttons object %}
+
     {% block control-buttons %}
       {% block extra_controls %}{% endblock %}
       {# Default buttons #}
@@ -106,15 +94,6 @@
             <th scope="row">{% trans "Type" %}</th>
             <td>
                 {{ object.custom_object_type|linkify:"display_name" }}
-            </td>
-          </tr>
-          <tr>
-            <th scope="row">{% trans "Last activity" %}</th>
-            <td>
-              {{ latest_change.time|isodatetime|placeholder }}
-              {% if latest_change %}
-                <div class="small text-muted">{{ latest_change.time|timesince }} {% trans "ago" %}</div>
-              {% endif %}
             </td>
           </tr>
           {% for group_name, group_fields in field_groups.items %}
