@@ -4,8 +4,9 @@ Custom-object pages follow core NetBox's markup and behaviour.
 
 import re
 from types import SimpleNamespace
-from unittest import mock
+from unittest import mock, skipUnless
 
+from django.conf import settings
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
@@ -16,6 +17,7 @@ from extras.choices import (
     CustomFieldUIEditableChoices,
     CustomFieldUIVisibleChoices,
 )
+from packaging.version import Version
 
 from core.models import ObjectType
 from dcim.models import Site
@@ -31,6 +33,7 @@ from netbox_custom_objects.views import CustomObjectDeleteView, CustomObjectList
 from .base import CustomObjectsTestCase
 
 URL_PREFIX = "plugins:netbox_custom_objects"
+NETBOX_VERSION = Version(settings.RELEASE.version)
 
 
 class CustomObjectPageTestCase(CustomObjectsTestCase, TestCase):
@@ -136,7 +139,8 @@ class BulkEditFooterTestCase(CustomObjectPageTestCase):
         return response
 
     def test_sticky_footer(self):
-        response = self._page()
+        with override_settings(RELEASE=SimpleNamespace(version="4.7.0")):
+            response = self._page()
         self.assertContains(response, "sticky-actions-footer", count=1)
         self.assertNotContains(response, "btn-float")
 
@@ -160,6 +164,7 @@ class BulkImportPaneTestCase(CustomObjectPageTestCase):
         self.assertContains(response, 'class="tab-pane show active" id="import-form"')
         self.assertContains(response, 'class="tab-pane show" id="upload-form"')
 
+    @skipUnless(NETBOX_VERSION >= Version("4.7"), "NetBox passes import_method from 4.7")
     def test_failed_upload_shows_upload_pane(self):
         response = self.client.post(self._url("bulk_import"), {
             "import_method": "upload",
@@ -233,7 +238,9 @@ class EditFormTestCase(CustomObjectPageTestCase):
                 self.assertEqual(" ".join(page_title.group(1).split()), title)
                 self.assertContains(response, '<h2 class="col-9 offset-3">Zone</h2>')
                 self.assertContains(response, '<h2 class="col-9 offset-3">Details</h2>')
-                self.assertNotContains(response, "btn-float")
+                if NETBOX_VERSION >= Version("4.6"):
+                    # Before 4.6, core's own edit buttons use btn-float.
+                    self.assertNotContains(response, "btn-float")
 
 
 class CombinedTabTestCase(CustomObjectPageTestCase):
