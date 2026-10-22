@@ -41,6 +41,7 @@ from netbox_custom_objects.schema.executor import (
     UnknownChoiceSetError,
     UnknownFieldTypeError,
     UnknownObjectTypeError,
+    UnsupportedTypeChangeError,
 )
 from . import serializers
 from .parsers import YAMLParser
@@ -502,6 +503,11 @@ class SchemaApplyView(APIView):
         except (UnknownChoiceSetError, UnknownFieldTypeError, UnknownObjectTypeError) as exc:
             return Response(
                 {"error": "unresolvable_reference", "detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except UnsupportedTypeChangeError as exc:
+            return Response(
+                {"error": "unsupported_type_change", "detail": str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

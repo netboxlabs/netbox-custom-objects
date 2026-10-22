@@ -201,7 +201,7 @@ Attributes that match their defaults are omitted from exported documents to keep
 | `select`, `multiselect` | `choice_set` (required — **name** of a `CustomFieldChoiceSet`) |
 | `object` | `related_object_type` (required when `is_polymorphic` is `false`), `related_object_types` (required when `is_polymorphic` is `true`), `is_polymorphic`, `related_object_filter`, `on_delete_behavior` |
 | `multiobject` | `related_object_type` (required when `is_polymorphic` is `false`), `related_object_types` (required when `is_polymorphic` is `true`), `is_polymorphic`, `related_object_filter` |
-| `boolean`, `date`, `datetime`, `url`, `json` | (none) |
+| `boolean`, `date`, `datetime`, `url`, `json`, `coordinates` | (none) |
 
 `on_delete_behavior` is one of `"set_null"` (default), `"cascade"`, or `"protect"`. It applies only to single `object` fields.
 
@@ -415,7 +415,8 @@ detail: "Schema contains destructive field removals for COT(s): circuit."
 destructive_slugs: [circuit]
 ```
 
-Response `400 Bad Request` (invalid schema, unresolvable reference, or circular COT dependency):
+Response `400 Bad Request` (invalid schema, unresolvable reference, circular COT dependency, or a
+type change to or from `coordinates` or `url`, which isn't supported):
 
 ```yaml
 error: unresolvable_reference
