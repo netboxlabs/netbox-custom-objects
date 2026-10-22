@@ -88,6 +88,16 @@ class DetailTabsTestCase(PermissionUITestCase):
             with self.subTest(action=action):
                 self.assertNotContains(response, self._url(action, pk=self.obj.pk))
 
+    def test_config_context_tab_needs_only_view_access(self):
+        # Like core's Config Context tab, it has no permission of its own.
+        cot = self.create_simple_custom_object_type(name="rack", slug="racks", config_context_enabled=True)
+        model = cot.get_model()
+        obj = model.objects.create(name="R1")
+        self._grant(model, self.model)
+        url = reverse(f"{URL_PREFIX}:customobject_configcontext", kwargs={"custom_object_type": "racks", "pk": obj.pk})
+        self.assertContains(self.client.get(obj.get_absolute_url()), f'href="{url}"')
+        self.assertNotContains(self.client.get(self.obj.get_absolute_url()), "config-context")
+
     def test_tabs_in_weight_order_with_badges(self):
         self._superuser()
         JournalEntry.objects.create(assigned_object=self.obj, comments="note")
