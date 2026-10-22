@@ -21,6 +21,8 @@ from django.core.checks import Error, Warning, register
 from netbox.plugins import get_plugin_config
 from packaging.version import InvalidVersion, Version
 
+from netbox_custom_objects.utilities import is_branching_enabled
+
 
 # Version floors enforced only when netbox-branching is installed.
 # COMPAT(netbox<4.6.2): once min_version reaches this floor, remove this constant and
@@ -45,7 +47,7 @@ def _get_branching_version():
 @register()
 def check_branching_compatibility(app_configs, **kwargs):
     """Enforce branching-only version floors; no-op without netbox-branching."""
-    if not apps.is_installed('netbox_branching'):
+    if not is_branching_enabled():
         return []
 
     errors = []

@@ -11,7 +11,12 @@ from django.db.utils import OperationalError, ProgrammingError
 from netbox.plugins import PluginConfig
 
 from .constants import APP_LABEL as APP_LABEL
-from .utilities import extract_cot_id_from_model_name, install_clear_cache_suppressor
+from .utilities import (
+    extract_cot_id_from_model_name,
+    install_clear_cache_suppressor,
+    install_collector_patch,
+    is_branching_enabled,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -105,9 +110,7 @@ def _register_branching_hooks_once():
     if _branching_hooks_registered:
         return
 
-    try:
-        import netbox_branching.signals  # noqa: F401
-    except ImportError:
+    if not is_branching_enabled():
         return
 
     # Unguarded: netbox-branching >= 1.0.4 is required (checks.E002), and an
@@ -310,7 +313,7 @@ class CustomObjectsPluginConfig(PluginConfig):
     name = "netbox_custom_objects"
     verbose_name = "Custom Objects"
     description = "A plugin to manage custom objects in NetBox"
-    version = "0.7.0"
+    version = "0.7.1"
     author = 'Netbox Labs'
     author_email = 'support@netboxlabs.com'
     base_url = "custom-objects"
@@ -483,6 +486,9 @@ class CustomObjectsPluginConfig(PluginConfig):
         # model is registered (must happen exactly once, before get_model() runs).
         install_clear_cache_suppressor()
 
+        # Let deletes match custom objects across branch contexts' model classes.
+        install_collector_patch()
+
         # Register Django system checks (import triggers @register).  These
         # enforce the conditional NetBox/netbox-branching version floors that
         # PluginConfig's static min_version/max_version can't express.
@@ -513,6 +519,10 @@ class CustomObjectsPluginConfig(PluginConfig):
         # polling the database.
         from .graphql.live import connect_signature_invalidation
         connect_signature_invalidation()
+
+        # Evict models of Custom Object Types deleted in another worker process.
+        from .stale_models import connect_stale_model_eviction
+        connect_stale_model_eviction()
 
         # Register netbox-branching integration hooks (deferred-data reset
         # receivers, branchable resolver, ObjectChange field-name migrator,
@@ -629,9 +639,27 @@ class CustomObjectsPluginConfig(PluginConfig):
         self.apps.check_apps_ready()
         try:
             # if the model is already loaded, return it
-            return super().get_model(model_name, require_ready)
+            model = super().get_model(model_name, require_ready)
         except LookupError:
             pass
+        else:
+            # A dynamic model built inside a transaction that then rolled back no
+            # longer matches its table; rebuild it (issue #767).  See
+            # CustomObjectType.get_model() and _mark_registered_in_transaction.
+            # Guard with _dynamic_model_creation_unsafe() rather than
+            # should_skip_dynamic_model_creation(): the latter also skips under the
+            # test runner, but this class already exists, so tests must rebuild it
+            # too (the same guard CustomObjectType.get_model() uses).
+            if getattr(model, '_registered_in', None) is None:
+                return model
+            from .models import CustomObjectType, _registration_rolled_back
+            cot_id = getattr(model, 'custom_object_type_id', None)
+            if cot_id is None or not _registration_rolled_back(model) or self._dynamic_model_creation_unsafe():
+                return model
+            try:
+                return CustomObjectType.objects.get(pk=cot_id).get_model()
+            except (CustomObjectType.DoesNotExist, ProgrammingError, OperationalError):
+                return model
 
         model_name = model_name.lower()
 

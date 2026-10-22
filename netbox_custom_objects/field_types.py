@@ -13,6 +13,7 @@ from rest_framework import serializers as drf_serializers
 from strawberry.scalars import JSON
 from django import forms
 from django.apps import apps
+from django.apps.registry import Apps
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
@@ -23,7 +24,7 @@ from django.core.serializers.json import DjangoJSONEncoder
 from django.forms.fields import InvalidJSONInput
 from django.core.validators import (MaxValueValidator, MinValueValidator,
                                      RegexValidator)
-from django.db import models, router
+from django.db import models, router, transaction
 from django.db.utils import OperationalError, ProgrammingError
 from django.db.models.fields.related import ForeignKey, ManyToManyDescriptor
 from django.db.models.manager import Manager
@@ -31,7 +32,7 @@ from django.db.models.signals import m2m_changed
 from django.urls import reverse
 from django.utils.html import escape, format_html
 from django.utils.safestring import mark_safe
-from django.utils.text import Truncator
+from django.utils.text import Truncator, format_lazy
 from django.utils.translation import gettext_lazy as _
 from extras.choices import CustomFieldTypeChoices, CustomFieldUIEditableChoices
 from utilities.api import get_serializer_for_model
@@ -215,6 +216,71 @@ class LazyForeignKey(ForeignKey):
         self.to = actual_model
 
 
+def resolve_lazy_target(field):
+    """Resolve *field*'s string target to a model class, in place.
+
+    A COT target is looked up by id rather than through ``apps.get_model()``,
+    which bypasses the app config's skip guard so the class is rebuilt even
+    when test teardown has dropped it from the registry.
+    """
+    remote = field.remote_field
+    if isinstance(field, LazyForeignKey):
+        _app_label, model_name = field._to_model_name.rsplit('.', 1)
+        cot_id = extract_cot_id_from_model_name(model_name.lower())
+        if cot_id is None:
+            logger.warning("Could not resolve target %r of field %r", field._to_model_name, field.name)
+            return
+        from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
+        try:
+            target = CustomObjectType.objects.get(pk=int(cot_id)).get_model()
+        except (CustomObjectType.DoesNotExist, OperationalError, ProgrammingError):
+            logger.warning("Could not resolve target %r of field %r", field._to_model_name, field.name)
+            return
+    else:
+        target = apps.get_model(remote.model)
+    remote.model = target
+    field.to = target
+    # Django's lazy relation setup fills this in from the target's primary key;
+    # the schema editor's FK SQL reads it.
+    if remote.field_name is None:
+        remote.field_name = target._meta.pk.name
+
+
+def ddl_model(model):
+    """A throwaway stand-in for *model* that a field can be bound to for DDL.
+
+    It has *model*'s table name and app label, so the schema editor emits the
+    same SQL, but lives in its own app registry and starts with nothing but a
+    primary key.  Binding a field to it leaves the cached class alone and
+    installs no reverse accessor on the target model (issue #767).
+    """
+    meta = type('Meta', (), {
+        'apps': Apps(),
+        'app_label': model._meta.app_label,
+        'db_table': model._meta.db_table,
+        'managed': False,
+    })
+    return type(model.__name__, (models.Model,), {'Meta': meta, '__module__': __name__})
+
+
+def bind_for_ddl(field, model, name, stand_in=None):
+    """Bind *field* to a throwaway copy of *model* under *name* and return it.
+
+    This is what the schema helpers hand to the schema editor.  They used to
+    ``contribute_to_class()`` the live cached model instead, which left phantom
+    or duplicate fields on it whenever the DDL rolled back (issue #767).  A
+    string target is resolved by hand, since the copy's registry knows no
+    other models; a many-to-many field needs none, its through table is built
+    separately.  Pass the same ``ddl_model(model)`` as *stand_in* for fields
+    that must be looked up together, e.g. by a composite index.
+    """
+    field.contribute_to_class(stand_in or ddl_model(model), name)
+    remote = getattr(field, 'remote_field', None)
+    if remote is not None and not field.many_to_many and isinstance(remote.model, str):
+        resolve_lazy_target(field)
+    return field
+
+
 def _make_lazy_cot_fk(cot, field, on_delete, **field_kwargs):
     """Build a LazyForeignKey pointing to the given COT model.
 
@@ -330,13 +396,44 @@ class FieldType:
     def create_m2m_table(self, instance, model, field_name, schema_conn=None): ...
 
 
+def regex_validators(field, html=False):
+    """
+    Return the validators enforcing *field*'s validation_regex.
+
+    Applied to the generated model field, so the regex is enforced on REST API writes
+    and CSV/bulk import (which validate through Model.full_clean()) as well as on the
+    UI form. The UI form field also carries the validator with ``html=True`` so the
+    regex is shown in a <code> tag; a form field that fails its own validation is
+    excluded from model validation by ModelForm, so the error is not reported twice.
+
+    The message is built lazily so it is translated per request, not once at model
+    generation time. The validator gets its own error code: Django replaces the message
+    of a validator error whose code is "invalid" with the field's own "invalid" message
+    (e.g. "Enter a valid URL." on URL fields), which would hide the regex.
+    """
+    if not field.validation_regex:
+        return []
+    # Django renders a validator's message with ``message % params``, so a literal % in
+    # the regex must be doubled or rendering the error raises ValueError.
+    regex = field.validation_regex.replace("%", "%%")
+    if html:
+        message = mark_safe(
+            format_lazy(_("Values must match this regex: <code>{regex}</code>"), regex=escape(regex))
+        )
+    else:
+        message = format_lazy(_("Values must match this regex: {regex}"), regex=regex)
+    return [RegexValidator(regex=field.validation_regex, message=message, code="validation_regex")]
+
+
 class TextFieldType(FieldType):
     graphql_annotation = str
 
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
-        return models.CharField(null=True, blank=not field.required, **field_kwargs)
+        return models.CharField(
+            null=True, blank=not field.required, validators=regex_validators(field), **field_kwargs
+        )
 
     def get_serializer_field(self, field, **kwargs):
         return drf_serializers.CharField(
@@ -346,20 +443,8 @@ class TextFieldType(FieldType):
         )
 
     def get_form_field(self, field, **kwargs):
-        validators = []
-        if field.validation_regex:
-            validators = [
-                RegexValidator(
-                    regex=field.validation_regex,
-                    message=mark_safe(
-                        _("Values must match this regex: <code>{regex}</code>").format(
-                            regex=escape(field.validation_regex)
-                        )
-                    ),
-                )
-            ]
         return forms.CharField(
-            required=field.required, initial=field.default, validators=validators
+            required=field.required, initial=field.default, validators=regex_validators(field, html=True)
         )
 
     def get_filterform_field(self, field, **kwargs):
@@ -382,7 +467,9 @@ class LongTextFieldType(FieldType):
     def get_model_field(self, field, **kwargs):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
-        return models.TextField(null=True, blank=not field.required, **field_kwargs)
+        return models.TextField(
+            null=True, blank=not field.required, validators=regex_validators(field), **field_kwargs
+        )
 
     def get_serializer_field(self, field, **kwargs):
         return drf_serializers.CharField(
@@ -392,24 +479,11 @@ class LongTextFieldType(FieldType):
         )
 
     def get_form_field(self, field, **kwargs):
-        widget = forms.Textarea
-        validators = []
-        if field.validation_regex:
-            validators = [
-                RegexValidator(
-                    regex=field.validation_regex,
-                    message=mark_safe(
-                        _("Values must match this regex: <code>{regex}</code>").format(
-                            regex=escape(field.validation_regex)
-                        )
-                    ),
-                )
-            ]
         return forms.CharField(
-            widget=widget,
+            widget=forms.Textarea,
             required=field.required,
             initial=field.default,
-            validators=validators,
+            validators=regex_validators(field, html=True),
         )
 
     def render_table_column(self, value):
@@ -641,7 +715,9 @@ class URLFieldType(FieldType):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
         return {
-            field.name: models.URLField(null=True, blank=not field.required, **field_kwargs),
+            field.name: models.URLField(
+                null=True, blank=not field.required, validators=regex_validators(field), **field_kwargs
+            ),
             # blank=True, default='' (not null=True): a CharField with null=True lets
             # "no title" be represented as both NULL (ORM/API create omitting the key)
             # and '' (a form submission clearing the field), which would make
@@ -668,7 +744,10 @@ class URLFieldType(FieldType):
 
     def get_form_field(self, field, **kwargs):
         return LaxURLField(
-            assume_scheme="https", required=field.required, initial=field.default
+            assume_scheme="https",
+            required=field.required,
+            initial=field.default,
+            validators=regex_validators(field, html=True),
         )
 
     def get_form_fields(self, field):
@@ -683,6 +762,7 @@ class URLFieldType(FieldType):
             required=field.required,
             initial=field.default,
             help_text=render_markdown(field.description) if field.description else None,
+            validators=regex_validators(field, html=True),
         )
         title_field = forms.CharField(
             label=f"{base_label} ({_('link title')})",
@@ -1191,11 +1271,13 @@ class ObjectFieldType(FieldType):
             # django_content_type without manual CASCADE).
             db_constraint=False,
         )
-        ct_field.contribute_to_class(model, ct_field_name)
+        # Both columns share one stand-in: the index below looks them up on it.
+        stand_in = ddl_model(model)
+        bind_for_ddl(ct_field, model, ct_field_name, stand_in)
         schema_editor.add_field(model, ct_field)
 
         oid_field = models.PositiveBigIntegerField(null=True, blank=True)
-        oid_field.contribute_to_class(model, oid_field_name)
+        bind_for_ddl(oid_field, model, oid_field_name, stand_in)
         schema_editor.add_field(model, oid_field)
 
         # Composite index as recommended in issue #31
@@ -1203,7 +1285,7 @@ class ObjectFieldType(FieldType):
             f"co_{field_instance.custom_object_type_id}_{field_instance.name}_gfk"
         )
         idx = models.Index(fields=[ct_field_name, oid_field_name], name=idx_name)
-        schema_editor.add_index(model, idx)
+        schema_editor.add_index(stand_in, idx)
 
     def remove_polymorphic_object_columns(self, field_instance, model, schema_editor):
         """
@@ -1387,83 +1469,107 @@ class CustomManyToManyManager(Manager):
             using=db,
         )
 
-    @staticmethod
-    def _resolve_pk(obj):
-        """Accept an instance or raw PK — mirrors Django's ManyRelatedManager."""
-        return obj.pk if hasattr(obj, 'pk') else obj
+    def _remove_prefetched_objects(self):
+        """Drop this field's prefetch_related() result so reads after a write
+        hit the database, like Django's ManyRelatedManager."""
+        try:
+            self.instance._prefetched_objects_cache.pop(self.prefetch_cache_name)
+        except (AttributeError, KeyError):
+            pass
+
+    def _resolve_pk(self, obj):
+        """Accept an instance or raw PK — mirrors Django's ManyRelatedManager.
+
+        Instances are matched by model label rather than isinstance(): a
+        regenerated dynamic model is a new class, and objects loaded before the
+        regeneration must still be accepted.
+        """
+        if isinstance(obj, models.Model):
+            if obj._meta.label_lower != self.model._meta.label_lower:
+                raise TypeError(
+                    f"'{self.model._meta.object_name}' instance expected, got {obj!r}"
+                )
+            if obj.pk is None:
+                raise ValueError(
+                    f'Cannot link "{obj!r}" through {self.field_name!r}: it has not been saved.'
+                )
+            return obj.pk
+        return self.model._meta.pk.get_prep_value(obj)
+
+    def _add_pks(self, pks, db):
+        """Link ``pks`` not already linked; caller holds the transaction."""
+        if not pks:
+            return
+        through_qs = self.through.objects.using(db).filter(source_id=self.instance.pk)
+        missing = pks - set(through_qs.filter(target_id__in=pks).values_list('target_id', flat=True))
+        if not missing:
+            return
+        # Like Django's ManyRelatedManager._add_items(), post_add reports the
+        # pre-computed missing set; a row a concurrent writer inserted first is
+        # skipped by ignore_conflicts but still reported.
+        self._fire_m2m_changed('pre_add', missing)
+        self.through.objects.using(db).bulk_create(
+            [self.through(source_id=self.instance.pk, target_id=pk) for pk in missing],
+            ignore_conflicts=True,
+        )
+        self._fire_m2m_changed('post_add', missing)
+
+    def _remove_pks(self, pks, db):
+        """Unlink whichever of ``pks`` are linked; caller holds the transaction."""
+        if not pks:
+            return
+        through_qs = self.through.objects.using(db).filter(source_id=self.instance.pk)
+        linked = set(through_qs.filter(target_id__in=pks).values_list('target_id', flat=True))
+        if not linked:
+            return
+        self._fire_m2m_changed('pre_remove', linked)
+        through_qs.filter(target_id__in=linked).delete()
+        self._fire_m2m_changed('post_remove', linked)
 
     def add(self, *objs):
-        candidate_pks = {self._resolve_pk(obj) for obj in objs}
-        if not candidate_pks:
-            return
-        self._fire_m2m_changed('pre_add', candidate_pks)
-        added = set()
-        for pk in candidate_pks:
-            _, created = self.through.objects.get_or_create(
-                source_id=self.instance.pk, target_id=pk
-            )
-            if created:
-                added.add(pk)
-        if added:
-            self._fire_m2m_changed('post_add', added)
+        pks = {self._resolve_pk(obj) for obj in objs}
+        self._remove_prefetched_objects()
+        db = router.db_for_write(self.through, instance=self.instance)
+        with transaction.atomic(using=db, savepoint=False):
+            self._add_pks(pks, db)
 
     def remove(self, *objs):
-        candidate_pks = {self._resolve_pk(obj) for obj in objs}
-        if not candidate_pks:
-            return
-        self._fire_m2m_changed('pre_remove', candidate_pks)
-        removed = set()
-        for pk in candidate_pks:
-            n, _ = self.through.objects.filter(
-                source_id=self.instance.pk, target_id=pk
-            ).delete()
-            if n:
-                removed.add(pk)
-        if removed:
-            self._fire_m2m_changed('post_remove', removed)
+        pks = {self._resolve_pk(obj) for obj in objs}
+        self._remove_prefetched_objects()
+        db = router.db_for_write(self.through, instance=self.instance)
+        with transaction.atomic(using=db, savepoint=False):
+            self._remove_pks(pks, db)
 
     def clear(self):
-        existing = set(
-            self.through.objects.filter(source_id=self.instance.pk)
-            .values_list('target_id', flat=True)
-        )
-        if not existing:
-            return
-        # pre_clear follows Django's contract; post_clear deliberately does
-        # not — see the class docstring.
-        self._fire_m2m_changed('pre_clear', None)
-        self.through.objects.filter(source_id=self.instance.pk).delete()
-        self._fire_m2m_changed('post_clear', existing)
+        self._remove_prefetched_objects()
+        db = router.db_for_write(self.through, instance=self.instance)
+        with transaction.atomic(using=db, savepoint=False):
+            through_qs = self.through.objects.using(db).filter(source_id=self.instance.pk)
+            existing = set(through_qs.values_list('target_id', flat=True))
+            if not existing:
+                return
+            # pre_clear follows Django's contract; post_clear deliberately does
+            # not — see the class docstring.
+            self._fire_m2m_changed('pre_clear', None)
+            through_qs.delete()
+            self._fire_m2m_changed('post_clear', existing)
 
     def set(self, objs, clear=False):
-        objs = tuple(objs)  # force evaluation before any mutation
-        if clear:
-            self.clear()
-            self.add(*objs)
-        else:
-            new_pks = {self._resolve_pk(obj) for obj in objs}
+        # Resolve (and type-check) everything before any mutation.
+        new_pks = {self._resolve_pk(obj) for obj in objs}
+        self._remove_prefetched_objects()
+        db = router.db_for_write(self.through, instance=self.instance)
+        with transaction.atomic(using=db, savepoint=False):
+            if clear:
+                self.clear()
+                self._add_pks(new_pks, db)
+                return
             old_pks = set(
-                self.through.objects.filter(source_id=self.instance.pk)
+                self.through.objects.using(db).filter(source_id=self.instance.pk)
                 .values_list('target_id', flat=True)
             )
-            # Remove relationships no longer in the target set
-            to_remove = old_pks - new_pks
-            if to_remove:
-                self._fire_m2m_changed('pre_remove', to_remove)
-                self.through.objects.filter(
-                    source_id=self.instance.pk,
-                    target_id__in=to_remove,
-                ).delete()
-                self._fire_m2m_changed('post_remove', to_remove)
-            # Add only genuinely new relationships
-            to_add = new_pks - old_pks
-            if to_add:
-                self._fire_m2m_changed('pre_add', to_add)
-                for pk in to_add:
-                    self.through.objects.get_or_create(
-                        source_id=self.instance.pk, target_id=pk
-                    )
-                self._fire_m2m_changed('post_add', to_add)
+            self._remove_pks(old_pks - new_pks, db)
+            self._add_pks(new_pks - old_pks, db)
 
 
 class CustomManyToManyDescriptor(ManyToManyDescriptor):
@@ -1574,8 +1680,9 @@ class MultiObjectFieldType(FieldType):
                 # The real DB-level FK is added separately in create_m2m_table
                 # as DEFERRABLE INITIALLY DEFERRED so iterative branch merges
                 # (time-ordered) can insert through rows before the target CO
-                # exists.  A new constraint created after SET CONSTRAINTS ALL
-                # IMMEDIATE is not affected by that earlier call; db_constraint=False
+                # exists.  An earlier SET CONSTRAINTS ALL IMMEDIATE in the same
+                # transaction *does* cover a constraint created afterwards, so
+                # create_m2m_table re-defers it by name; db_constraint=False
                 # prevents Django from creating a non-deferrable FK here.
                 db_constraint=False,
             ),
@@ -1862,15 +1969,18 @@ class MultiObjectFieldType(FieldType):
         target_field.remote_field.model = to_model
         target_field.related_model = to_model
 
-    def create_m2m_table(self, instance, model, field_name, schema_conn=None):
+    def create_m2m_table(self, instance, model, field_name, schema_conn=None, field=None):
         """
-        Creates the actual M2M table after models are fully generated
+        Creates the actual M2M table after models are fully generated.
+
+        *field* is the M2M field when it isn't on *model* yet, i.e. the one
+        ``bind_for_ddl()`` returned while the field is being added.
         """
         from django.db import connection as default_connection
         connection = schema_conn if schema_conn is not None else default_connection
 
-        # Get the field instance
-        field = model._meta.get_field(field_name)
+        if field is None:
+            field = model._meta.get_field(field_name)
 
         # For self-referential fields, use the current model
         if getattr(field, "_is_self_referential", False):
@@ -2302,96 +2412,141 @@ class PolymorphicManyToManyManager:
             using=db,
         )
 
-    def add(self, *objs):
-        through = self._get_through_model()
-        candidate_keys = []
+    def _remove_prefetched_objects(self):
+        """Drop this field's prefetch_related() result so reads after a write
+        hit the database, like Django's ManyRelatedManager."""
+        try:
+            self.instance._prefetched_objects_cache.pop(self.field_name)
+        except (AttributeError, KeyError):
+            pass
+
+    def _resolve_keys(self, objs):
+        """Map model instances to ``(content_type_id, object_id)`` keys,
+        rejecting anything that isn't a saved instance of an allowed type."""
+        keys = set()
         for obj in objs:
-            ct = ContentType.objects.get_for_model(obj)
-            candidate_keys.append((ct.pk, obj.pk))
-        if not candidate_keys:
-            return
-        self._fire_m2m_changed('pre_add', {pk for _, pk in candidate_keys})
-        added = set()
-        for ct_pk, obj_pk in candidate_keys:
-            _, created = through.objects.get_or_create(
-                source_id=self.instance.pk,
-                content_type_id=ct_pk,
-                object_id=obj_pk,
+            if not isinstance(obj, models.Model):
+                raise TypeError(
+                    f"{self.field_name!r} links model instances; got {obj!r}"
+                )
+            if obj.pk is None:
+                raise ValueError(
+                    f'Cannot link "{obj!r}" through {self.field_name!r}: it has not been saved.'
+                )
+            keys.add((ContentType.objects.get_for_model(obj).pk, obj.pk))
+        if keys:
+            from netbox_custom_objects.models import CustomObjectTypeField  # noqa: PLC0415
+            allowed = set(
+                CustomObjectTypeField.objects.filter(
+                    custom_object_type_id=self.instance.custom_object_type_id,
+                    name=self.field_name,
+                ).values_list('related_object_types', flat=True)
             )
-            if created:
-                added.add(obj_pk)
-        if added:
-            self._fire_m2m_changed('post_add', added)
+            for ct_id, obj_pk in keys:
+                if ct_id not in allowed:
+                    model = ContentType.objects.get_for_id(ct_id).model_class()
+                    raise TypeError(
+                        f"{self.field_name!r} does not accept {model._meta.verbose_name} objects"
+                    )
+        return keys
+
+    @staticmethod
+    def _keys_q(keys):
+        """One Q matching every ``(content_type_id, object_id)`` key."""
+        if not keys:
+            # A bare Q() matches every row; match nothing instead.
+            return models.Q(pk__in=[])
+        by_ct: dict[int, set] = {}
+        for ct_id, obj_pk in keys:
+            by_ct.setdefault(ct_id, set()).add(obj_pk)
+        q = models.Q()
+        for ct_id, obj_pks in by_ct.items():
+            q |= models.Q(content_type_id=ct_id, object_id__in=obj_pks)
+        return q
+
+    def _existing_keys(self, through, db, keys=None):
+        qs = through.objects.using(db).filter(source_id=self.instance.pk)
+        if keys is not None:
+            qs = qs.filter(self._keys_q(keys))
+        return set(qs.values_list('content_type_id', 'object_id'))
+
+    def _add_keys(self, through, keys, db):
+        """Link ``keys`` not already linked; caller holds the transaction."""
+        if not keys:
+            return
+        missing = keys - self._existing_keys(through, db, keys)
+        if not missing:
+            return
+        pks = {obj_pk for _, obj_pk in missing}
+        self._fire_m2m_changed('pre_add', pks)
+        through.objects.using(db).bulk_create(
+            [
+                through(source_id=self.instance.pk, content_type_id=ct_id, object_id=obj_pk)
+                for ct_id, obj_pk in missing
+            ],
+            ignore_conflicts=True,
+        )
+        self._fire_m2m_changed('post_add', pks)
+
+    def _remove_keys(self, through, keys, db):
+        """Unlink whichever of ``keys`` are linked; caller holds the transaction."""
+        if not keys:
+            return
+        linked = self._existing_keys(through, db, keys)
+        if not linked:
+            return
+        pks = {obj_pk for _, obj_pk in linked}
+        self._fire_m2m_changed('pre_remove', pks)
+        through.objects.using(db).filter(source_id=self.instance.pk).filter(self._keys_q(linked)).delete()
+        self._fire_m2m_changed('post_remove', pks)
+
+    def add(self, *objs):
+        keys = self._resolve_keys(objs)
+        self._remove_prefetched_objects()
+        through = self._get_through_model()
+        db = router.db_for_write(through, instance=self.instance)
+        with transaction.atomic(using=db, savepoint=False):
+            self._add_keys(through, keys, db)
 
     def remove(self, *objs):
+        keys = self._resolve_keys(objs)
+        self._remove_prefetched_objects()
         through = self._get_through_model()
-        candidate_keys = []
-        for obj in objs:
-            ct = ContentType.objects.get_for_model(obj)
-            candidate_keys.append((ct.pk, obj.pk))
-        if not candidate_keys:
-            return
-        self._fire_m2m_changed('pre_remove', {pk for _, pk in candidate_keys})
-        removed = set()
-        for ct_pk, obj_pk in candidate_keys:
-            n, _ = through.objects.filter(
-                source_id=self.instance.pk,
-                content_type_id=ct_pk,
-                object_id=obj_pk,
-            ).delete()
-            if n:
-                removed.add(obj_pk)
-        if removed:
-            self._fire_m2m_changed('post_remove', removed)
+        db = router.db_for_write(through, instance=self.instance)
+        with transaction.atomic(using=db, savepoint=False):
+            self._remove_keys(through, keys, db)
 
     def clear(self):
+        self._remove_prefetched_objects()
         through = self._get_through_model()
-        existing = set(
-            through.objects.filter(source_id=self.instance.pk)
-            .values_list('object_id', flat=True)
-        )
-        if not existing:
-            return
-        # pre_clear follows Django's contract; post_clear deliberately does
-        # not — see the class docstring.
-        self._fire_m2m_changed('pre_clear', None)
-        through.objects.filter(source_id=self.instance.pk).delete()
-        self._fire_m2m_changed('post_clear', existing)
+        db = router.db_for_write(through, instance=self.instance)
+        with transaction.atomic(using=db, savepoint=False):
+            through_qs = through.objects.using(db).filter(source_id=self.instance.pk)
+            existing = set(through_qs.values_list('object_id', flat=True))
+            if not existing:
+                return
+            # pre_clear follows Django's contract; post_clear deliberately does
+            # not — see the class docstring.
+            self._fire_m2m_changed('pre_clear', None)
+            through_qs.delete()
+            self._fire_m2m_changed('post_clear', existing)
 
     def set(self, objs, clear=False):
-        if clear:
-            self.clear()
-            self.add(*objs)
-            return
-
-        # Diff-based replacement: add new, remove old.  Matches Django's
-        # standard ManyRelatedManager.set(clear=False) behaviour.
-        objs = tuple(objs)
+        # Resolve (and type-check) everything before any mutation.
+        new_keys = self._resolve_keys(objs)
+        self._remove_prefetched_objects()
         through = self._get_through_model()
-        existing = {
-            (ct_id, obj_id)
-            for ct_id, obj_id in through.objects.filter(source_id=self.instance.pk)
-            .values_list("content_type_id", "object_id")
-        }
-        # Pre-compute (ct_id, obj_pk) once per object to avoid duplicate CT lookups.
-        new_items = [
-            (ContentType.objects.get_for_model(obj).pk, obj.pk, obj) for obj in objs
-        ]
-        new_keys = {(ct_id, obj_pk) for ct_id, obj_pk, _ in new_items}
-        to_add = [obj for ct_id, obj_pk, obj in new_items if (ct_id, obj_pk) not in existing]
-        to_remove = existing - new_keys
-        if to_add:
-            self.add(*to_add)
-        if to_remove:
-            remove_pks = {obj_id for _, obj_id in to_remove}
-            self._fire_m2m_changed('pre_remove', remove_pks)
-            for ct_id, obj_id in to_remove:
-                through.objects.filter(
-                    source_id=self.instance.pk,
-                    content_type_id=ct_id,
-                    object_id=obj_id,
-                ).delete()
-            self._fire_m2m_changed('post_remove', remove_pks)
+        db = router.db_for_write(through, instance=self.instance)
+        with transaction.atomic(using=db, savepoint=False):
+            if clear:
+                self.clear()
+                self._add_keys(through, new_keys, db)
+                return
+            # Diff-based replacement, matching Django's
+            # ManyRelatedManager.set(clear=False).
+            old_keys = self._existing_keys(through, db)
+            self._remove_keys(through, old_keys - new_keys, db)
+            self._add_keys(through, new_keys - old_keys, db)
 
     def __iter__(self):
         return iter(self.all())
@@ -2438,21 +2593,27 @@ class PolymorphicM2MDescriptor:
         return False
 
 
-class PolymorphicObjectReverseManager:
-    """Returned when a polymorphic GFK reverse relation is accessed on a target instance."""
+class _PolymorphicReverseManager:
+    """Base for the managers returned by the polymorphic reverse descriptors."""
 
-    def __init__(self, instance, cot_pk, field_name):
+    def __init__(self, instance, cot_pk):
         self._instance = instance
         self._cot_pk = cot_pk
-        self._field_name = field_name
+
+    def _is_source_field(self, field):
+        raise NotImplementedError
+
+    def _filter(self, source_model):
+        raise NotImplementedError
 
     def _source_model(self):
+        """Return the source model for the active branch, or None if the source type is gone.
+
+        Goes through get_model() so the model matches the active branch and isn't stale. The
+        descriptor sits on the shared target class, so the source field may not exist in this
+        context (the branch deleted it); the caller then returns an empty queryset (#766).
+        """
         from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
-        # Fast path: model already in the COT cache (the common runtime case).
-        model = CustomObjectType.get_cached_model(self._cot_pk)
-        if model is not None:
-            return model
-        # Cache miss — fetch from DB and let get_model() cache the result.
         try:
             return CustomObjectType.objects.get(pk=self._cot_pk).get_model()
         except CustomObjectType.DoesNotExist:
@@ -2467,11 +2628,12 @@ class PolymorphicObjectReverseManager:
         source_model = self._source_model()
         if source_model is None:
             return ContentType.objects.none()
-        ct = ContentType.objects.get_for_model(type(self._instance))
-        return source_model.objects.filter(**{
-            f"{self._field_name}_content_type": ct,
-            f"{self._field_name}_object_id": self._instance.pk,
-        })
+        if not any(
+            info['field'].is_polymorphic and self._is_source_field(info['field'])
+            for info in source_model._field_objects.values()
+        ):
+            return source_model.objects.none()
+        return self._filter(source_model)
 
     def count(self):
         return self.all().count()
@@ -2481,6 +2643,24 @@ class PolymorphicObjectReverseManager:
 
     def __iter__(self):
         return iter(self.all())
+
+
+class PolymorphicObjectReverseManager(_PolymorphicReverseManager):
+    """Returned when a polymorphic GFK reverse relation is accessed on a target instance."""
+
+    def __init__(self, instance, cot_pk, field_name):
+        super().__init__(instance, cot_pk)
+        self._field_name = field_name
+
+    def _is_source_field(self, field):
+        return field.type == CustomFieldTypeChoices.TYPE_OBJECT and field.name == self._field_name
+
+    def _filter(self, source_model):
+        ct = ContentType.objects.get_for_model(type(self._instance))
+        return source_model.objects.filter(**{
+            f"{self._field_name}_content_type": ct,
+            f"{self._field_name}_object_id": self._instance.pk,
+        })
 
 
 class PolymorphicObjectReverseDescriptor:
@@ -2501,53 +2681,41 @@ class PolymorphicObjectReverseDescriptor:
         return PolymorphicObjectReverseManager(instance, self.cot_pk, self.field_name)
 
 
-class PolymorphicMultiObjectReverseManager:
+class PolymorphicMultiObjectReverseManager(_PolymorphicReverseManager):
     """Returned when a polymorphic M2M reverse relation is accessed on a target instance."""
 
     def __init__(self, instance, cot_pk, through_model_name):
-        self._instance = instance
-        self._cot_pk = cot_pk
+        super().__init__(instance, cot_pk)
         self._through_model_name = through_model_name
 
-    def _source_model(self):
-        from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
-        # Fast path: model already in the COT cache (the common runtime case).
-        model = CustomObjectType.get_cached_model(self._cot_pk)
-        if model is not None:
-            return model
-        # Cache miss — fetch from DB and let get_model() cache the result.
-        try:
-            return CustomObjectType.objects.get(pk=self._cot_pk).get_model()
-        except CustomObjectType.DoesNotExist:
-            logger.warning(
-                'Reverse accessor: source CustomObjectType pk=%d no longer exists; '
-                'returning empty queryset.',
-                self._cot_pk,
-            )
-            return None
+    def _is_source_field(self, field):
+        return (
+            field.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
+            and field.through_model_name == self._through_model_name
+        )
 
-    def _through(self):
-        return apps.get_model(APP_LABEL, self._through_model_name)
+    def _through(self, source_model):
+        """The through built alongside *source_model*, or None.
 
-    def all(self):
-        source_model = self._source_model()
-        if source_model is None:
-            return ContentType.objects.none()
+        Read off the model rather than the registry or the through cache: apps.all_models
+        only holds main's through, and the cache can be cleared by another thread between
+        resolving the model and reaching here.
+        """
+        for through in getattr(source_model, '_through_models', ()):
+            if through.__name__ == self._through_model_name:
+                return through
+        return None
+
+    def _filter(self, source_model):
+        through = self._through(source_model)
+        if through is None:
+            return source_model.objects.none()
         ct = ContentType.objects.get_for_model(type(self._instance))
-        source_ids = self._through().objects.filter(
+        source_ids = through.objects.filter(
             content_type_id=ct.pk,
             object_id=self._instance.pk,
         ).values_list("source_id", flat=True)
         return source_model.objects.filter(pk__in=source_ids)
-
-    def count(self):
-        return self.all().count()
-
-    def exists(self):
-        return self.all().exists()
-
-    def __iter__(self):
-        return iter(self.all())
 
 
 class PolymorphicMultiObjectReverseDescriptor:

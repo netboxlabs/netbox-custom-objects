@@ -1,27 +1,29 @@
 """
 Tests for all UI views.
 """
+import uuid
 from datetime import date
 from unittest import skipUnless
 
+from core.models import Job
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection
-from django.test import RequestFactory, TestCase
+from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
 from extras.models import CustomFieldChoiceSet
+from netbox.context import current_request, events_queue, query_cache
+from netbox.jobs import AsyncViewJob
 from users.models import ObjectPermission
+from utilities.request import copy_safe_request
 from utilities.testing import ViewTestCases, create_test_user
 
 from netbox_custom_objects import views
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
+from netbox_custom_objects.utilities import is_branching_enabled
 from .base import CustomObjectsTestCase
 from core.models.object_types import ObjectType
 
-try:
-    import netbox_branching  # noqa: F401
-    _HAS_BRANCHING = True
-except ImportError:
-    _HAS_BRANCHING = False
+_HAS_BRANCHING = is_branching_enabled()
 
 
 class _SkipQueryCountsWhenBranching:
@@ -416,6 +418,7 @@ class CustomObjectViewTestCase(
     """Test cases for dynamic CustomObject views."""
 
     query_count_model_label = 'customobject-simple'
+    form_data = {"name": "Edited Instance", "description": "Edited", "count": 30}
 
     @classmethod
     def setUpTestData(cls):
@@ -498,13 +501,22 @@ class CustomObjectViewTestCase(
 
         return reverse(url_format.format(action), kwargs={'pk': instance.pk, 'custom_object_type': custom_object_type})
 
-    def test_get_object_with_constrained_permission(self):
-        ...
-
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=['*'])
     def test_get_object_changelog(self):
         """Regression #500: changelog tab must return 200, not 500 from deprecated user kwarg."""
         url = self._get_url('changelog', self.instance1)
         self.assertHttpStatus(self.client.get(url), 200)
+
+    def test_tabs_with_constrained_permission(self):
+        obj_perm = ObjectPermission(name='Test permission', constraints={'pk': self.instance1.pk}, actions=['view'])
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        obj_perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+        for tab in ('journal', 'changelog', 'contacts'):
+            with self.subTest(tab):
+                self.assertHttpStatus(self.client.get(self._get_url(tab, self.instance1)), 200)
+                self.assertHttpStatus(self.client.get(self._get_url(tab, self.instance2)), 404)
 
     def test_create_object_with_permission(self):
         ...
@@ -513,9 +525,6 @@ class CustomObjectViewTestCase(
         ...
 
     def test_edit_object_with_permission(self):
-        ...
-
-    def test_edit_object_with_constrained_permission(self):
         ...
 
     def test_bulk_edit_objects_with_permission(self):
@@ -540,9 +549,6 @@ class CustomObjectViewTestCase(
         ...
 
     def test_delete_object_with_permission(self):
-        ...
-
-    def test_delete_object_with_constrained_permission(self):
         ...
 
     def test_bulk_delete_objects_with_permission(self):
@@ -640,6 +646,58 @@ class CustomObjectViewTestCase(
         self.instance2.refresh_from_db()
         self.assertIsNone(self.instance1.description)
         self.assertIsNone(self.instance2.description)
+
+    def _run_as_background_job(self, view_class, url, data):
+        """Run a bulk view as NetBox's AsyncViewJob does: on a copy of the request, without URL kwargs."""
+        content_type = ContentType.objects.get_for_model(self.model)
+        obj_perm = ObjectPermission(name='background-job', actions=['view', 'add', 'change', 'delete'])
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        obj_perm.object_types.add(content_type)
+
+        request = RequestFactory().post(url, data={**data, 'background_job': True})
+        request.user = self.user
+        request.id = uuid.uuid4()
+        job = Job.objects.create(name='Background bulk operation', user=self.user, job_id=uuid.uuid4())
+        # COMPAT(netbox<4.6): if the view raises, event_tracking() leaves this request current, which
+        # would leak into later tests.
+        self.addCleanup(current_request.set, None)
+        self.addCleanup(events_queue.set, {})
+        self.addCleanup(query_cache.set, None)
+        request_copy = copy_safe_request(request)
+        # COMPAT(netbox<4.7.3): BulkEditView reads request.htmx, which request copies lacked until
+        # NetBox 4.7.3, so a background bulk edit failed for every model, core's included.
+        if not hasattr(request_copy, 'htmx'):
+            request_copy.htmx = False
+        AsyncViewJob(job).run(view_cls=view_class, request=request_copy)
+
+    def test_bulk_edit_as_background_job(self):
+        self._run_as_background_job(views.CustomObjectBulkEditView, self._get_url('bulk_edit'), {
+            '_apply': 'Apply',
+            'pk': [self.instance1.pk, self.instance2.pk],
+            'description': 'Edited in the background',
+        })
+        self.instance1.refresh_from_db()
+        self.instance2.refresh_from_db()
+        self.assertEqual(self.instance1.description, 'Edited in the background')
+        self.assertEqual(self.instance2.description, 'Edited in the background')
+
+    def test_bulk_delete_as_background_job(self):
+        self._run_as_background_job(views.CustomObjectBulkDeleteView, self._get_url('bulk_delete'), {
+            '_confirm': 'Confirm',
+            'confirm': True,
+            'pk': [self.instance1.pk],
+        })
+        self.assertFalse(self.model.objects.filter(pk=self.instance1.pk).exists())
+        self.assertTrue(self.model.objects.filter(pk=self.instance2.pk).exists())
+
+    def test_bulk_import_as_background_job(self):
+        self._run_as_background_job(views.CustomObjectBulkImportView, self._get_url('bulk_import'), {
+            'data': 'name,description\nImported in the background,From a job',
+            'format': 'csv',
+            'csv_delimiter': ',',
+        })
+        self.assertTrue(self.model.objects.filter(name='Imported in the background', description='From a job').exists())
 
     def test_bulk_edit_set_null_clears_object_and_multiobject_fields(self):
         """
@@ -763,6 +821,31 @@ class CustomObjectViewTestCase(
 
         instance = form.save()
         self.assertIsNone(instance.identifier)
+
+    def test_bulk_import_enforces_validation_regex(self):
+        """Regression #763: CSV/bulk import must reject values that don't match validation_regex."""
+        cot = self.create_custom_object_type(name='RegexImportTest', slug='regex-import-test')
+        self.create_custom_object_type_field(
+            cot, name='code', label='Code', type='text', validation_regex=r'^[A-Z]{3}$',
+        )
+        self.create_custom_object_type_field(
+            cot, name='website', label='Website', type='url', validation_regex=r'^https://',
+        )
+
+        request = RequestFactory().post('/')
+        request.user = self.user
+
+        view = views.CustomObjectBulkImportView()
+        view.setup(request, custom_object_type=cot.slug)
+        model = view.queryset.model
+
+        form = view.model_form(data={'code': 'abc', 'website': 'http://example.com'}, instance=model())
+        self.assertFalse(form.is_valid())
+        self.assertIn('code', form.errors)
+        self.assertIn('website', form.errors)
+
+        form = view.model_form(data={'code': 'ABC', 'website': 'https://example.com'}, instance=model())
+        self.assertTrue(form.is_valid(), form.errors)
 
     def test_edit_form_omits_hidden_field(self):
         """Regression #645: a hidden field must be omitted from the edit form, not just disabled."""
@@ -1171,9 +1254,7 @@ class ComplexCustomObjectViewTestCase(
 
         return reverse(url_format.format(action), kwargs={'pk': instance.pk, 'custom_object_type': custom_object_type})
 
-    def test_get_object_with_constrained_permission(self):
-        ...
-
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=['*'])
     def test_get_object_changelog(self):
         """Regression #500: changelog tab must return 200, not 500 from deprecated user kwarg."""
         url = self._get_url('changelog', self.instance_1)
@@ -1213,9 +1294,6 @@ class ComplexCustomObjectViewTestCase(
         ...
 
     def test_delete_object_with_permission(self):
-        ...
-
-    def test_delete_object_with_constrained_permission(self):
         ...
 
     def test_bulk_delete_objects_with_permission(self):
@@ -1427,9 +1505,7 @@ class ObjectFieldViewTestCase(
 
         return reverse(url_format.format(action), kwargs={'pk': instance.pk, 'custom_object_type': custom_object_type})
 
-    def test_get_object_with_constrained_permission(self):
-        ...
-
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=['*'])
     def test_get_object_changelog(self):
         """Regression #500: changelog tab must return 200, not 500 from deprecated user kwarg."""
         if self.instance_1 is None:
@@ -1471,9 +1547,6 @@ class ObjectFieldViewTestCase(
         ...
 
     def test_delete_object_with_permission(self):
-        ...
-
-    def test_delete_object_with_constrained_permission(self):
         ...
 
     def test_bulk_delete_objects_with_permission(self):
@@ -2088,6 +2161,77 @@ class URLFieldLinkTitleViewTest(CustomObjectsTestCase, TestCase):
         response = self.client.get(self._list_url())
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, "Orphan Title")
+
+
+class ValidationRegexViewTest(CustomObjectsTestCase, TestCase):
+    """Regression #763: the standard add/edit form must enforce validation_regex (via the UI form field)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.cot = CustomObjectType.objects.create(
+            name="RegexView", verbose_name_plural="Regex Views", slug="regex-views",
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.cot, name="name", type="text", primary=True, required=True,
+        )
+        for name, field_type, regex in (
+            ("code", "text", r"^[A-Z]{3}$"),
+            ("notes", "longtext", r"^ok"),
+            ("website", "url", r"^https://"),
+        ):
+            CustomObjectTypeField.objects.create(
+                custom_object_type=cls.cot, name=name, type=field_type, validation_regex=regex,
+            )
+        cls.model = cls.cot.get_model()
+
+    def setUp(self):
+        super().setUp()
+        perm = ObjectPermission(name="regex view all", actions=["view", "add", "change", "delete"])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+    def _add_url(self):
+        return reverse(
+            "plugins:netbox_custom_objects:customobject_add",
+            kwargs={"custom_object_type": self.cot.slug},
+        )
+
+    def test_add_view_rejects_values_not_matching_regex(self):
+        for field_name, value, regex in (
+            ("code", "abc", "^[A-Z]{3}$"),
+            ("notes", "not ok", "^ok"),
+            ("website", "http://example.com", "^https://"),
+        ):
+            with self.subTest(field=field_name):
+                response = self.client.post(self._add_url(), {"name": "Box", field_name: value})
+                # Re-rendered form, not a redirect
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(field_name, response.context["form"].errors)
+                # The UI message shows the regex in a <code> tag, and only once
+                # (the model-level validator must not add a duplicate error).
+                self.assertContains(response, f"<code>{regex}</code>", count=1, html=False)
+        self.assertFalse(self.model.objects.exists())
+
+    def test_add_view_accepts_values_matching_regex(self):
+        data = {"name": "Box", "code": "ABC", "notes": "ok then", "website": "https://example.com"}
+        response = self.client.post(self._add_url(), data)
+        self.assertEqual(response.status_code, 302, getattr(response, "content", b""))
+        obj = self.model.objects.get(name="Box")
+        self.assertEqual(obj.code, "ABC")
+        self.assertEqual(obj.website, "https://example.com")
+
+    def test_edit_view_rejects_value_not_matching_regex(self):
+        instance = self.model.objects.create(name="Box", code="ABC")
+        url = reverse(
+            "plugins:netbox_custom_objects:customobject_edit",
+            kwargs={"pk": instance.pk, "custom_object_type": self.cot.slug},
+        )
+        response = self.client.post(url, {"name": "Box", "code": "abcd"})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("code", response.context["form"].errors)
+        instance.refresh_from_db()
+        self.assertEqual(instance.code, "ABC")
 
 
 class QuickAddViewTestCase(CustomObjectsTestCase, TestCase):
