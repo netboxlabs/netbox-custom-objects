@@ -23,6 +23,10 @@ urlpatterns = [
 
     # Custom Object Type Constraints
     path(
+        "custom-object-type-constraints/",
+        include(get_model_urls(APP_LABEL, "customobjecttypeconstraint", detail=False)),
+    ),
+    path(
         "custom-object-type-constraints/<int:pk>/",
         include(get_model_urls(APP_LABEL, "customobjecttypeconstraint")),
     ),
