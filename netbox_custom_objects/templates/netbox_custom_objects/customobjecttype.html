@@ -8,11 +8,21 @@
 {% load custom_object_utils %}
 
 {% block extra_controls %}
-    {% if perms.netbox_custom_objects.change_customobjecttype %}
-        <a href="{% url 'plugins:netbox_custom_objects:customobjecttypefield_add' %}?custom_object_type={{ object.pk }}&return_url={% url 'plugins:netbox_custom_objects:customobjecttype' pk=object.pk %}" class="btn btn-primary">
-            <i class="mdi mdi-plus-thick" aria-hidden="true"></i> {% trans "Add Field" %}
-        </a>
-    {% endif %}
+  {% if perms.netbox_custom_objects.change_customobjecttype %}
+    <div class="dropdown">
+      <button type="button" class="btn btn-primary dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+        <i class="mdi mdi-plus-thick" aria-hidden="true"></i> {% trans "Add" %}
+      </button>
+      <ul class="dropdown-menu">
+        {% if perms.netbox_custom_objects.add_customobjecttypefield %}
+          <li><a class="dropdown-item" href="{% url 'plugins:netbox_custom_objects:customobjecttypefield_add' %}?custom_object_type={{ object.pk }}&return_url={% url 'plugins:netbox_custom_objects:customobjecttype_fields' pk=object.pk %}">{% trans "Field" %}</a></li>
+        {% endif %}
+        {% if perms.netbox_custom_objects.add_customobjecttypeconstraint %}
+          <li><a class="dropdown-item" href="{% url 'plugins:netbox_custom_objects:customobjecttypeconstraint_add' %}?custom_object_type={{ object.pk }}&return_url={% url 'plugins:netbox_custom_objects:customobjecttype_constraints' pk=object.pk %}">{% trans "Constraint" %}</a></li>
+        {% endif %}
+      </ul>
+    </div>
+  {% endif %}
 {% endblock %}
 
 {% block content %}
@@ -101,17 +111,33 @@
                       {% endif %}
                   </td>
                   <td>
-                  <span class="btn-group dropdown">
+                  {% with can_change=request.user|can_change:field can_delete=request.user|can_delete:field %}
+                    {% if can_change and can_delete %}
+                      <span class="btn-group dropdown">
+                          <a class="btn btn-sm btn-warning" href="{% url 'plugins:netbox_custom_objects:customobjecttypefield_edit' pk=field.pk %}?return_url={{ object.get_absolute_url }}" type="button"
+                             aria-label="{% trans 'Edit' %}"><i class="mdi mdi-pencil"></i></a>
+                          <a class="btn btn-sm btn-warning dropdown-toggle" type="button" data-bs-toggle="dropdown"
+                          style="padding-left: 2px">
+                          <span class="visually-hidden">{% trans 'Toggle Dropdown' %}</span></a>
+                          <ul class="dropdown-menu">
+                              <li><a class="dropdown-item" href="{% url 'plugins:netbox_custom_objects:customobjecttypefield_delete' pk=field.pk %}?return_url={{ object.get_absolute_url }}">
+                              <i class="mdi mdi-trash-can-outline"></i> {% trans "Delete" %}</a></li>
+                          </ul>
+                      </span>
+                    {% elif can_change %}
                       <a class="btn btn-sm btn-warning" href="{% url 'plugins:netbox_custom_objects:customobjecttypefield_edit' pk=field.pk %}?return_url={{ object.get_absolute_url }}" type="button"
                          aria-label="{% trans 'Edit' %}"><i class="mdi mdi-pencil"></i></a>
-                      <a class="btn btn-sm btn-warning dropdown-toggle" type="button" data-bs-toggle="dropdown"
-                      style="padding-left: 2px">
-                      <span class="visually-hidden">{% trans 'Toggle Dropdown' %}</span></a>
-                      <ul class="dropdown-menu">
-                          <li><a class="dropdown-item" href="{% url 'plugins:netbox_custom_objects:customobjecttypefield_delete' pk=field.pk %}?return_url={{ object.get_absolute_url }}">
-                          <i class="mdi mdi-trash-can-outline"></i> Delete</a></li>
-                      </ul>
-                  </span>
+                    {% elif can_delete %}
+                      <span class="btn-group dropdown">
+                          <a class="btn btn-sm btn-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                          <span class="visually-hidden">{% trans 'Toggle Dropdown' %}</span></a>
+                          <ul class="dropdown-menu">
+                              <li><a class="dropdown-item" href="{% url 'plugins:netbox_custom_objects:customobjecttypefield_delete' pk=field.pk %}?return_url={{ object.get_absolute_url }}">
+                              <i class="mdi mdi-trash-can-outline"></i> {% trans "Delete" %}</a></li>
+                          </ul>
+                      </span>
+                    {% endif %}
+                  {% endwith %}
                   </td>
               </tr>
             {% endfor %}

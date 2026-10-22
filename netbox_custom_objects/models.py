@@ -8,7 +8,6 @@ from datetime import date, datetime
 
 from packaging.version import Version, InvalidVersion
 
-import django_filters
 from core.choices import ObjectChangeActionChoices
 from core.models import ObjectType, ObjectChange
 from core.models.object_types import ObjectTypeManager
@@ -62,7 +61,6 @@ from netbox.models.features import (
 from netbox.plugins import get_plugin_config
 from netbox.registry import registry
 from netbox.search import FieldTypes, SearchIndex
-from utilities import filters
 from utilities.data import deepmerge, get_config_value_ci
 from utilities.datetime import datetime_from_timestamp
 from jinja2 import Undefined as _JinjaUndefined
@@ -3941,73 +3939,6 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             model = self.related_object_type.model_class()
             return model.objects.filter(pk__in=value)
         return value
-
-    def to_filter(self, lookup_expr=None):
-        # TODO: Move all this logic to field_types.py get_filterform_field methods
-        """
-        Return a django_filters Filter instance suitable for this field type.
-
-        :param lookup_expr: Custom lookup expression (optional)
-        """
-        kwargs = {"field_name": f"custom_field_data__{self.name}"}
-        if lookup_expr is not None:
-            kwargs["lookup_expr"] = lookup_expr
-
-        # Text/URL
-        if self.type in (
-            CustomFieldTypeChoices.TYPE_TEXT,
-            CustomFieldTypeChoices.TYPE_LONGTEXT,
-            CustomFieldTypeChoices.TYPE_URL,
-        ):
-            filter_class = filters.MultiValueCharFilter
-            if self.filter_logic == CustomFieldFilterLogicChoices.FILTER_LOOSE:
-                kwargs["lookup_expr"] = "icontains"
-
-        # Integer
-        elif self.type == CustomFieldTypeChoices.TYPE_INTEGER:
-            filter_class = filters.MultiValueNumberFilter
-
-        # Decimal
-        elif self.type == CustomFieldTypeChoices.TYPE_DECIMAL:
-            filter_class = filters.MultiValueDecimalFilter
-
-        # Boolean
-        elif self.type == CustomFieldTypeChoices.TYPE_BOOLEAN:
-            filter_class = django_filters.BooleanFilter
-
-        # Date
-        elif self.type == CustomFieldTypeChoices.TYPE_DATE:
-            filter_class = filters.MultiValueDateFilter
-
-        # Date & time
-        elif self.type == CustomFieldTypeChoices.TYPE_DATETIME:
-            filter_class = filters.MultiValueDateTimeFilter
-
-        # Select
-        elif self.type == CustomFieldTypeChoices.TYPE_SELECT:
-            filter_class = filters.MultiValueCharFilter
-
-        # Multiselect
-        elif self.type == CustomFieldTypeChoices.TYPE_MULTISELECT:
-            filter_class = filters.MultiValueArrayFilter
-
-        # Object
-        elif self.type == CustomFieldTypeChoices.TYPE_OBJECT:
-            filter_class = filters.MultiValueNumberFilter
-
-        # Multi-object
-        elif self.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-            filter_class = filters.MultiValueNumberFilter
-            kwargs["lookup_expr"] = "contains"
-
-        # Unsupported custom field type
-        else:
-            return None
-
-        filter_instance = filter_class(**kwargs)
-        filter_instance.custom_field = self
-
-        return filter_instance
 
     def validate(self, value):
         """

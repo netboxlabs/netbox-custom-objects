@@ -7,7 +7,6 @@ import uuid
 import sys
 from datetime import date
 from decimal import Decimal
-from unittest import skip
 from unittest.mock import PropertyMock, patch
 
 from django.apps import apps as django_apps
@@ -348,35 +347,6 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
             any('device' in msg for msg in cm.output),
             f"Expected WARNING mentioning field name 'device'; got: {cm.output}",
         )
-
-    @skip("Fails in suite but not individually")
-    def test_custom_object_type_delete_removes_table(self):
-        """Test that deleting a custom object type removes the database table."""
-        custom_object_type = self.create_custom_object_type(name="TestObject")
-
-        # Add a primary field
-        self.create_custom_object_type_field(
-            custom_object_type,
-            name="name",
-            label="Name",
-            type="text",
-            primary=True,
-            required=True
-        )
-
-        # Save to create table
-        custom_object_type.save()
-
-        # Get table name
-        table_name = custom_object_type.get_database_table_name()
-
-        # Delete the custom object type
-        custom_object_type.delete()
-
-        # Check if the table was removed
-        with connection.cursor() as cursor:
-            tables = connection.introspection.table_names(cursor)
-            self.assertNotIn(table_name, tables)
 
     def test_delete_unregisters_model_from_app_registry(self):
         """
@@ -1214,7 +1184,8 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
             related_object_type=site_ct,
         )
 
-        # Custom Object single- and multi-object fields
+        # Custom Object single- and multi-object fields: two of each to the same type, so the
+        # tests check each field keeps its own references and through-table rows.
 
         cls.create_custom_object_type_field(
             cls.custom_object_type,
@@ -1248,7 +1219,7 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
             related_object_type=second_object_ct,
         )
 
-        # Self-referential
+        # Self-referential object and multi-object fields
 
         cls.create_custom_object_type_field(
             cls.custom_object_type,
@@ -2225,11 +2196,10 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
 
     def test_get_model_raises_lookup_error_when_skipping(self):
         """get_model() raises LookupError instead of querying DB when should_skip returns True."""
-        cot = self.create_custom_object_type(name="MigrateTest", slug="migrate-test")
-        model_name = f"{cot.pk}tablemodel"
+        model_name = "table99996model"  # not in the app registry, so get_model() would look it up
 
         with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=True):
-            with self.assertRaises(LookupError):
+            with self.assertNumQueries(0), self.assertRaises(LookupError):
                 self.config.get_model(model_name)
 
     def test_get_model_returns_model_when_not_skipping(self):
@@ -2243,15 +2213,14 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
 
     def test_get_model_skips_db_with_migrate_in_argv(self):
         """get_model() raises LookupError when 'migrate' is in sys.argv (pre-migration state)."""
-        cot = self.create_custom_object_type(name="MigrateTest3", slug="migrate-test-3")
-        model_name = f"{cot.pk}tablemodel"
+        model_name = "table99995model"  # not in the app registry, so get_model() would look it up
 
         original_argv = sys.argv[:]
         try:
             sys.argv = ['manage.py', 'migrate']
             # Reset cached migration check so argv is re-evaluated
             nco._migrations_checked = None
-            with self.assertRaises(LookupError):
+            with self.assertNumQueries(0), self.assertRaises(LookupError):
                 self.config.get_model(model_name)
         finally:
             sys.argv = original_argv

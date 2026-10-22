@@ -1110,8 +1110,6 @@ class ObjectFieldType(FieldType):
     def get_form_field(self, field, for_csv_import=False, **kwargs):
         """
         Returns a form field for object relationships.
-        For custom objects, uses CustomObjectDynamicModelChoiceField.
-        For regular NetBox objects, uses DynamicModelChoiceField.
         """
         if field.is_polymorphic:
             # Polymorphic form field not yet supported in the UI; skip gracefully
@@ -1639,9 +1637,6 @@ class MultiObjectFieldType(FieldType):
         """
         Creates a through model with deferred model references
         """
-        # TODO: Register through model in AppsProxy to avoid "model was already registered" warnings
-        # app_label = str(uuid.uuid4()) + "_database_table"
-        # apps = AppsProxy(dynamic_models=None, app_label=app_label)
         meta = type(
             "Meta",
             (),

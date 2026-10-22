@@ -865,10 +865,8 @@ class ScalarFieldFiltersetTestCase(CustomObjectsTestCase):
     Subclasses must:
       - set ``match_params`` (class attr): filter params that should return obj_match
       - set ``obj_match`` / ``obj_no_match`` in ``setUpTestData``
-      - set ``total_count`` (class attr, default 2) when the fixture has more rows
     """
     match_params: dict = {}
-    total_count: int = 2
 
     def _filterset(self, params):
         model = self.cot.get_model()
@@ -878,14 +876,6 @@ class ScalarFieldFiltersetTestCase(CustomObjectsTestCase):
         pks = list(self._filterset(self.match_params).qs.values_list('pk', flat=True))
         self.assertIn(self.obj_match.pk, pks)
         self.assertNotIn(self.obj_no_match.pk, pks)
-
-    def test_no_filter_returns_all(self):
-        self.assertEqual(self._filterset({}).qs.count(), self.total_count)
-
-    def test_filter_by_id_returns_only_matching_object(self):
-        """Regression #628: ?id=<pk> was silently ignored, returning every row."""
-        pks = list(self._filterset({'id': [str(self.obj_match.pk)]}).qs.values_list('pk', flat=True))
-        self.assertEqual(pks, [self.obj_match.pk])
 
 
 class TextFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
@@ -910,6 +900,15 @@ class TextFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
         pks = list(self._filterset({'note': 'FOO'}).qs.values_list('pk', flat=True))
         self.assertIn(self.obj_match.pk, pks)
         self.assertNotIn(self.obj_no_match.pk, pks)
+
+    # The two tests below don't depend on the field type, so they run here only.
+    def test_no_filter_returns_all(self):
+        self.assertEqual(self._filterset({}).qs.count(), 2)
+
+    def test_filter_by_id_returns_only_matching_object(self):
+        """Regression #628: ?id=<pk> was silently ignored, returning every row."""
+        pks = list(self._filterset({'id': [str(self.obj_match.pk)]}).qs.values_list('pk', flat=True))
+        self.assertEqual(pks, [self.obj_match.pk])
 
 
 class TextFieldFilterLogicTestCase(CustomObjectsTestCase, TestCase):
@@ -1022,7 +1021,6 @@ class IntegerFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
     """NumberFilter with exact lookup is generated for TYPE_INTEGER fields."""
 
     match_params = {'count': 10}
-    total_count = 3
 
     @classmethod
     def setUpTestData(cls):
@@ -1047,7 +1045,6 @@ class DecimalFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
     """NumberFilter with exact lookup is generated for TYPE_DECIMAL fields."""
 
     match_params = {'price': '1.5'}
-    total_count = 3
 
     @classmethod
     def setUpTestData(cls):
@@ -1072,7 +1069,6 @@ class BooleanFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
     """BooleanFilter is generated for TYPE_BOOLEAN fields."""
 
     match_params = {'active': True}
-    total_count = 3
 
     @classmethod
     def setUpTestData(cls):
@@ -1163,7 +1159,6 @@ class ColorFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
     """A multi-value exact filter is generated for color fields."""
 
     match_params = {'shade': ['ff0000']}
-    total_count = 3
 
     @classmethod
     def setUpTestData(cls):
@@ -1191,7 +1186,6 @@ class MACAddressFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
     """A multi-value MAC address filter is generated for MAC address fields."""
 
     match_params = {'mac': ['00-1A-2B-3C-4D-5E']}
-    total_count = 3
 
     @classmethod
     def setUpTestData(cls):
@@ -1251,7 +1245,6 @@ class SelectFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
     """MultipleChoiceFilter with OR semantics is generated for TYPE_SELECT fields."""
 
     match_params = {'status': ['active']}
-    total_count = 3
 
     @classmethod
     def setUpTestData(cls):
@@ -1295,7 +1288,6 @@ class MultiSelectFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
     """ArrayContainsFilter is generated for TYPE_MULTISELECT: containment semantics, not exact match."""
 
     match_params = {'colors': ['red']}
-    total_count = 4
 
     @classmethod
     def setUpTestData(cls):
@@ -1357,7 +1349,6 @@ class ArrayFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
     """An array field gets a "contains all these values" filter, a length filter and quick search."""
 
     match_params = {'readings': '1, 3'}
-    total_count = 3
 
     @classmethod
     def setUpTestData(cls):

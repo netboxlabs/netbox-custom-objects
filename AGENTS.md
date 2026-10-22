@@ -27,7 +27,6 @@ Defer all version pins to `pyproject.toml` and `netbox_custom_objects/__init__.p
 │   ├── constants.py                — APP_LABEL, RESERVED_FIELD_NAMES.
 │   ├── dynamic_forms.py            — build_filterset_form_class() for HTMX object selector.
 │   ├── field_types.py              — FieldType base + subclasses (one per supported field type).
-│   ├── fields.py                   — Custom Django form/model field classes.
 │   ├── filtersets.py               — get_filterset_class() for dynamically generated models.
 │   ├── forms.py                    — Model forms for CustomObjectType and CustomObjectTypeField.
 │   ├── jobs.py                     — ReindexCustomObjectTypeJob background job.
@@ -35,15 +34,15 @@ Defer all version pins to `pyproject.toml` and `netbox_custom_objects/__init__.p
 │   ├── navigation.py               — Dynamic plugin menu construction.
 │   ├── search.py                   — SearchIndex registrations for static models.
 │   ├── tables.py                   — django-tables2 tables for list views.
-│   ├── template_content.py         — PluginTemplateExtension registrations.
 │   ├── urls.py                     — Web UI URL routing (80+ routes).
-│   ├── utilities.py                — AppsProxy, generate_model(), get_viewname().
+│   ├── utilities.py                — generate_model(), get_viewname().
 │   ├── views.py                    — All UI views.
 │   ├── api/
 │   │   ├── serializers.py          — get_serializer_class() + static serializers.
 │   │   ├── urls.py                 — API URL routing.
 │   │   └── views.py                — Dynamic ViewSet generation + LinkedObjectsView.
 │   ├── migrations/                 — Django schema migrations (0001–0004).
+│   ├── related_tabs/               — "Custom Objects" tab on referenced objects' detail pages.
 │   ├── templates/netbox_custom_objects/
 │   │   ├── buttons/
 │   │   ├── htmx/
@@ -122,7 +121,7 @@ Multi-object fields create a separate through table (`custom_objects_<cot_id>_<f
 
 ### API Layer (`api/`)
 
-`get_serializer_class()` in `api/serializers.py` dynamically builds a DRF serializer for each generated custom object model. `api/views.py` generates a `ModelViewSet` per type on demand. `LinkedObjectsView` finds all custom objects referencing a given NetBox object (used by `template_content.py` to inject a tab into NetBox object detail pages).
+`get_serializer_class()` in `api/serializers.py` dynamically builds a DRF serializer for each generated custom object model. `api/views.py` generates a `ModelViewSet` per type on demand. `LinkedObjectsView` finds all custom objects referencing a given NetBox object. The "Custom Objects" tab on referenced objects' detail pages is registered separately, by `related_tabs/`.
 
 ### Background Jobs (`jobs.py`)
 
@@ -137,7 +136,7 @@ Multi-object fields create a separate through table (`custom_objects_<cot_id>_<f
 | `netbox_custom_objects/__init__.py` | PluginConfig, migration detection, ObjectSelectorView patch, dynamic model registration on startup |
 | `netbox_custom_objects/models.py` | `CustomObject` (abstract base), `CustomObjectType`, `CustomObjectTypeField`, signal handlers |
 | `netbox_custom_objects/field_types.py` | Pluggable field type system |
-| `netbox_custom_objects/utilities.py` | `generate_model()`, `AppsProxy` |
+| `netbox_custom_objects/utilities.py` | `generate_model()`, `get_viewname()` |
 | `netbox_custom_objects/jobs.py` | `ReindexCustomObjectTypeJob` |
 | `netbox_custom_objects/api/views.py` | Dynamic ViewSet generation, `LinkedObjectsView` |
 | `netbox_custom_objects/api/serializers.py` | `get_serializer_class()` for dynamic models |
