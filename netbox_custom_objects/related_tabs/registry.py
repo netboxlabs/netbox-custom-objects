@@ -7,8 +7,7 @@ from .views.combined import COMBINED_LABEL, COMBINED_WEIGHT, make_co_combined_vi
 logger = logging.getLogger('netbox_custom_objects.related_tabs')
 
 # Action name / path / URL name for the combined tab on custom-object host pages.
-# Kept in sync with the {% custom_objects_tab_link %} <li> in customobject.html
-# and the custom_objects_tab_link template tag.
+# Kept in sync with the custom_object_tabs template tag.
 _CO_COMBINED_ACTION = 'custom_objects'
 _CO_COMBINED_PATH = 'custom-objects'
 # CustomObject._get_viewname('custom_objects') ->
@@ -114,7 +113,7 @@ def register_tabs():
       model's tab is live on the next request — no restart.
 
     * **Custom-object host pages (CO→CO)** — served by a single COT-agnostic URL
-      injected here (``_inject_co_urls``) plus the live ``custom_objects_tab_link``
+      injected here (``_inject_co_urls``) plus the live ``custom_object_tabs``
       template tag.
 
     All registration must happen synchronously here: NetBox builds each model's
