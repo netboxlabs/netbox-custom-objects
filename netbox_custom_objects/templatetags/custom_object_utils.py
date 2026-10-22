@@ -104,6 +104,7 @@ def dict_get(d, key):
 @register.simple_tag
 def sticky_actions_supported():
     """Whether core styles ``sticky-actions-footer`` (NetBox 4.6+); 4.5 has only ``btn-float-group-right``."""
+    # COMPAT(netbox<4.6.0): drop this tag and the legacy footer it selects.
     try:
         return Version(settings.RELEASE.version) >= Version("4.6")
     except (AttributeError, InvalidVersion):

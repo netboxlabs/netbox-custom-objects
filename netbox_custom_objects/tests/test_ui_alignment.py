@@ -21,7 +21,7 @@ from packaging.version import Version
 
 from core.models import ObjectType
 from dcim.models import Site
-from users.models import ObjectPermission
+from users.models import ObjectPermission, Owner
 
 from netbox_custom_objects.dynamic_forms import build_filterset_form_class
 from netbox_custom_objects.forms import CustomObjectTypeFilterForm
@@ -158,6 +158,24 @@ class BulkEditFooterTestCase(CustomObjectPageTestCase):
         response = self._get(self._url("bulk_edit"), HTTP_HX_REQUEST="true")
         self.assertContains(response, 'name="changelog_message"')
         self.assertNotContains(response, 'name="_apply"')
+
+
+class BulkEditOwnerTestCase(CustomObjectPageTestCase):
+
+    def test_ownership_section_rendered(self):
+        response = self.client.post(self._url("bulk_edit"), {"pk": [self.obj.pk]})
+        self.assertContains(response, '<h2 class="col-9 offset-3">Ownership</h2>')
+        self.assertContains(response, 'name="owner"')
+        self.assertContains(response, 'name="owner_group"')
+
+    def test_bulk_edit_sets_owner(self):
+        owner = Owner.objects.create(name="Network team")
+        other = self.model.objects.create(name="Beta")
+        response = self.client.post(
+            self._url("bulk_edit"), {"pk": [self.obj.pk, other.pk], "owner": owner.pk, "_apply": ""},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(set(self.model.objects.values_list("owner_id", flat=True)), {owner.pk})
 
 
 class BulkImportPaneTestCase(CustomObjectPageTestCase):

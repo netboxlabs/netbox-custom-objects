@@ -1531,7 +1531,7 @@ class CustomObjectBulkEditView(BackgroundJobURLKwargsMixin, CustomObjectTableMix
 
         form = type(
             f"{queryset.model._meta.object_name}BulkEditForm",
-            (NetBoxModelBulkEditForm,),
+            (OwnerFormMixin, NetBoxModelBulkEditForm),
             attrs,
         )
         form.model = queryset.model

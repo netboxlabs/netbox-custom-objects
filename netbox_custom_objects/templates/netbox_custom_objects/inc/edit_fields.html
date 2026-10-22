@@ -8,7 +8,6 @@
 <div class="field-group mb-5">
   {% for group, fields in form.custom_object_type_field_groups.items %}
     <div class="row">
-      {# Ungrouped fields come first; like core's first section, name it after the model. #}
       <h2 class="col-9 offset-3">{% if group %}{{ group }}{% else %}{{ form.instance|meta:"verbose_name" }}{% endif %}</h2>
     </div>
     {% for name in fields %}
