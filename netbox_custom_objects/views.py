@@ -647,7 +647,6 @@ class CustomObjectTypeBulkDeleteView(generic.BulkDeleteView):
 class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
     queryset = None
     custom_object_type = None
-    template_name = "netbox_custom_objects/custom_object_list.html"
 
     def setup(self, request, *args, **kwargs):
         super().setup(request, *args, **kwargs)
@@ -1690,7 +1689,10 @@ class CustomObjectJournalView(ConditionalLoginRequiredMixin, View):
 
     base_template = None
     tab = ViewTab(
-        label=_("Journal"), permission="extras.view_journalentry", weight=5000
+        label=_("Journal"),
+        badge=lambda obj: obj.journal_entries.count(),
+        permission="extras.view_journalentry",
+        weight=9000,
     )
 
     def get(self, request, custom_object_type, **kwargs):
@@ -1818,7 +1820,7 @@ class CustomObjectContactsView(ConditionalLoginRequiredMixin, View):
         label=_("Contacts"),
         badge=lambda obj: obj.get_contacts().count(),
         permission="tenancy.view_contactassignment",
-        weight=4500,
+        weight=5000,
     )
 
     def get(self, request, custom_object_type, **kwargs):

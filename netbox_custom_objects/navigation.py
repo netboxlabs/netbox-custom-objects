@@ -15,6 +15,7 @@ custom_object_type_plugin_menu_item = PluginMenuItem(
             "plugins:netbox_custom_objects:customobjecttype_add",
             _("Add"),
             "mdi mdi-plus-thick",
+            permissions=['netbox_custom_objects.add_customobjecttype'],
         ),
     ),
     auth_required=True,
@@ -32,10 +33,12 @@ class CustomObjectTypeMenuItems:
         CustomObjectType = apps.get_model(APP_LABEL, "CustomObjectType")
         for custom_object_type in CustomObjectType.objects.filter(group_name=self.group_name):
             model = custom_object_type.get_model()
+            add_permission = f'netbox_custom_objects.add_{model._meta.model_name}'
             add_button = PluginMenuButton(
                 None,
                 _("Add"),
                 "mdi mdi-plus-thick",
+                permissions=[add_permission],
             )
             add_button.url = reverse_lazy(
                 f"plugins:{APP_LABEL}:customobject_add",
@@ -46,7 +49,8 @@ class CustomObjectTypeMenuItems:
             bulk_import_button = PluginMenuButton(
                 None,
                 _('Import'),
-                'mdi mdi-upload'
+                'mdi mdi-upload',
+                permissions=[add_permission],
             )
             bulk_import_button.url = reverse_lazy(
                 f"plugins:{APP_LABEL}:customobject_bulk_import",

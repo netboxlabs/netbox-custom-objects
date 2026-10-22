@@ -4,39 +4,94 @@ from django.utils.module_loading import import_string
 from netbox.registry import registry
 from utilities.views import get_action_url
 
-__all__ = ('plugin_extra_tabs', 'custom_objects_tab_link')
+__all__ = ('custom_object_tabs',)
 
 register = template.Library()
 
-# journal/changelog/contacts/custom_objects are rendered as hardcoded <li>s in
-# templates/netbox_custom_objects/customobject.html (keep this set in sync with it),
-# not from the registry, so they're excluded here to avoid duplicate, never-active tabs:
-# upstream's journal/changelog/contacts views set the active-tab marker as a string
-# that ``model_view_tabs`` can't match (contacts is wired to the slug-based
-# ``customobject_contacts`` route via NetBox's ContactsMixin), and custom_objects is
-# rendered live by ``custom_objects_tab_link`` (so CO->CO tabs appear without a restart).
-_HARDCODED_TAB_NAMES = frozenset({'journal', 'changelog', 'contacts', 'custom_objects'})
+# Tabs whose views aren't in the model-view registry, because their routes are slug-based
+# (see urls.py): (registry/route name, view class name in netbox_custom_objects.views).
+# Their views set ``tab`` in the context to the name.
+_SLUG_ROUTED_TABS = (
+    ('configcontext', 'CustomObjectConfigContextView'),
+    ('contacts', 'CustomObjectContactsView'),
+    ('journal', 'CustomObjectJournalView'),
+    ('changelog', 'CustomObjectChangeLogView'),
+)
+
+
+def _tab(attrs, name, url, is_active):
+    return {
+        'name': name,
+        'url': url,
+        'label': attrs['label'],
+        'badge': attrs['badge'],
+        'weight': attrs['weight'],
+        'is_active': is_active,
+    }
+
+
+def _combined_tab(context, instance):
+    """
+    The combined "Custom Objects" tab, computed live from the DB (not the startup view registry).
+
+    This is what makes references *between* custom object types live without a NetBox
+    restart: the tab's URL is a single COT-agnostic route injected at startup
+    (``registry._inject_co_urls``) that reverses for any slug, and its visibility and badge
+    are recomputed per render here.  Hidden when the count is zero (hide_if_empty) or the
+    URL can't be reversed (plugin URLs not loaded).
+    """
+    from netbox_custom_objects.related_tabs.views.combined import (
+        COMBINED_LABEL,
+        COMBINED_WEIGHT,
+        _count_linked_custom_objects,
+    )
+
+    badge = _count_linked_custom_objects(instance)
+    if not badge:
+        return None
+    try:
+        url = get_action_url(instance, action='custom_objects', kwargs={'pk': instance.pk})
+    except NoReverseMatch:
+        return None
+
+    # Active iff we are actually on the combined-tab page.  Compare the request path to
+    # the tab URL rather than inspecting context['tab']: other plugins may also register
+    # ViewTab-bearing views on custom-object models.
+    request = context.get('request')
+    attrs = {'label': COMBINED_LABEL, 'badge': badge, 'weight': COMBINED_WEIGHT}
+    return _tab(attrs, 'custom_objects', url, request is not None and request.path == url)
 
 
 @register.inclusion_tag('tabs/model_view_tabs.html', takes_context=True)
-def plugin_extra_tabs(context, instance):
+def custom_object_tabs(context, instance):
     """
-    Render registered model-view tabs for `instance`, excluding tabs that the
-    Custom Object detail template already renders by hand (Journal, Changelog,
-    and the combined Custom Objects tab — see _HARDCODED_TAB_NAMES).
+    Render a custom object's tabs (other than its primary tab) like core's ``model_view_tabs``:
+    only those the user may view, with their badges, ordered by weight.
     """
-    app_label = instance._meta.app_label
-    model_name = instance._meta.model_name
+    from netbox_custom_objects import views as co_views
+
     user = context['request'].user
     tabs = []
 
-    try:
-        views = registry['views'][app_label][model_name]
-    except KeyError:
-        views = []
+    for name, view_name in _SLUG_ROUTED_TABS:
+        tab = getattr(co_views, view_name).tab
+        if tab.permission and not user.has_perm(tab.permission):
+            continue
+        if attrs := tab.render(instance):
+            url = get_action_url(instance, action=name, kwargs={'pk': instance.pk})
+            tabs.append(_tab(attrs, name, url, context.get('tab') == name))
 
-    for config in views:
-        if config['name'] in _HARDCODED_TAB_NAMES:
+    if combined := _combined_tab(context, instance):
+        tabs.append(combined)
+
+    # Tabs other plugins register on this model.
+    try:
+        registered = registry['views'][instance._meta.app_label][instance._meta.model_name]
+    except KeyError:
+        registered = []
+    handled = {name for name, _ in _SLUG_ROUTED_TABS} | {'custom_objects'}
+    for config in registered:
+        if config['name'] in handled:
             continue
         view = import_string(config['view']) if type(config['view']) is str else config['view']
         if tab := getattr(view, 'tab', None):
@@ -47,57 +102,6 @@ def plugin_extra_tabs(context, instance):
                     url = get_action_url(instance, action=config['name'], kwargs={'pk': instance.pk})
                 except NoReverseMatch:
                     continue
-                tabs.append(
-                    {
-                        'name': config['name'],
-                        'url': url,
-                        'label': attrs['label'],
-                        'badge': attrs['badge'],
-                        'weight': attrs['weight'],
-                        'is_active': context.get('tab') == tab,
-                    }
-                )
+                tabs.append(_tab(attrs, config['name'], url, context.get('tab') == tab))
 
-    tabs = sorted(tabs, key=lambda x: x['weight'])
-    return {'tabs': tabs}
-
-
-@register.inclusion_tag('netbox_custom_objects/related_tabs/combined/tab_link.html', takes_context=True)
-def custom_objects_tab_link(context, instance):
-    """
-    Render the combined "Custom Objects" tab nav-link on a custom object detail
-    page, computed live from the DB (not the startup view registry).
-
-    This is what makes references *between* custom object types live without a
-    NetBox restart: the tab's URL is a single COT-agnostic route injected at
-    startup (``registry._inject_co_urls``) that reverses for any slug, and the
-    nav-link's visibility/badge are recomputed per render here.  Returns an empty
-    context (no link) when the badge count is zero (hide_if_empty) or the URL
-    can't be reversed (plugin URLs not loaded).
-    """
-    from netbox_custom_objects.related_tabs.views.combined import COMBINED_LABEL, _count_linked_custom_objects
-
-    badge = _count_linked_custom_objects(instance)
-    if not badge:
-        return {'tab': None}
-
-    try:
-        url = get_action_url(instance, action='custom_objects', kwargs={'pk': instance.pk})
-    except NoReverseMatch:
-        return {'tab': None}
-
-    # Active iff we are actually on the combined-tab page.  Compare the request
-    # path to the tab URL rather than inspecting context['tab']: other plugins may
-    # also register ViewTab-bearing views on custom-object models, so a type-based
-    # check would light this link up on those tabs too.
-    request = context.get('request')
-    is_active = request is not None and request.path == url
-
-    return {
-        'tab': {
-            'url': url,
-            'label': COMBINED_LABEL,
-            'badge': badge,
-            'is_active': is_active,
-        }
-    }
+    return {'tabs': sorted(tabs, key=lambda t: t['weight'])}
