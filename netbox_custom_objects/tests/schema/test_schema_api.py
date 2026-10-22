@@ -51,6 +51,10 @@ class _SchemaAPIBase(TransactionCleanupMixin, CustomObjectsTestCase, Transaction
             token_key = self.token.key
         self.client = APIClient()
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {token_key}")
+        # Previewing a document describes existing types, so it needs view permission on them.
+        perm = ObjectPermission.objects.create(name='schema_view_cot_perm', actions=['view'])
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
 
     @property
     def preview_url(self):

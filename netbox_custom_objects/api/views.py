@@ -392,11 +392,25 @@ class SchemaPreviewView(APIView):
     permission_classes = [IsAuthenticatedOrLoginNotRequired]
 
     def post(self, request, *args, **kwargs):
+        # The diff describes existing types, so it needs the same permission as reading them.
+        if not request.user.has_perm('netbox_custom_objects.view_customobjecttype'):
+            raise PermissionDenied(
+                "You do not have permission to preview a schema document. "
+                "View permission on CustomObjectType is required."
+            )
+
         if not isinstance(request.data, dict):
             raise ValidationError({"non_field_errors": [_("Request body must be a JSON/YAML object.")]})
 
         schema_doc = request.data
         _validate_schema_doc(schema_doc)
+
+        # Under a constrained permission, refuse documents naming existing types the user can't view.
+        slugs = {type_def.get("slug") for type_def in schema_doc.get("types", [])}
+        viewable = CustomObjectType.objects.restrict(request.user, "view")
+        if CustomObjectType.objects.filter(slug__in=slugs).exclude(pk__in=viewable).exists():
+            raise PermissionDenied("You do not have permission to view one or more of these Custom Object Types.")
+
         diffs = diff_document(schema_doc)
         return Response({"diffs": [_serialize_diff(d) for d in diffs]})
 

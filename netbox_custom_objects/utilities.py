@@ -298,6 +298,32 @@ def generate_model(*args, **kwargs):
     return model
 
 
+def visible_custom_object_type_ids(user):
+    """
+    Return the ids of the Custom Object Types whose definitions ``user`` may see.
+
+    A type is visible to a user who may view the type itself (the
+    ``CustomObjectType`` record, constraints included) or the objects of that type:
+    anyone who can read the objects needs the type's structure to query them.
+    Superuser, ``EXEMPT_VIEW_PERMISSIONS`` and anonymous handling are left to
+    ``restrict()`` and ``has_perm()``, as in core.
+    """
+    from django.contrib.auth.models import AnonymousUser
+
+    from netbox_custom_objects.models import CustomObjectType
+
+    user = user or AnonymousUser()
+    all_ids = set(CustomObjectType.objects.values_list("pk", flat=True))
+    if getattr(user, "is_superuser", False):
+        return frozenset(all_ids)
+    visible = set(CustomObjectType.objects.restrict(user, "view").values_list("pk", flat=True))
+    for pk in all_ids - visible:
+        model_name = CustomObjectType.get_table_model_name(pk).lower()
+        if user.has_perm(f"{APP_LABEL}.view_{model_name}"):
+            visible.add(pk)
+    return frozenset(visible)
+
+
 def restrict_to_viewable(user, objects):
     """
     Return the subset of ``objects`` the user may view, preserving order.
