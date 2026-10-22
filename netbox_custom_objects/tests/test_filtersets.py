@@ -1186,7 +1186,6 @@ class MACAddressFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
     """A multi-value MAC address filter is generated for MAC address fields."""
 
     match_params = {'mac': ['00-1A-2B-3C-4D-5E']}
-    total_count = 3
 
     @classmethod
     def setUpTestData(cls):
