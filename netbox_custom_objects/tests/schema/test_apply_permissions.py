@@ -79,6 +79,19 @@ class SchemaApplyPermissionTestCase(_SchemaAPIBase):
         self.assertEqual(self._apply(type_def).status_code, status.HTTP_200_OK)
         self.assertTrue(self.allowed.fields.filter(name='added').exists())
 
+    def test_altering_field_needs_field_change_permission(self):
+        self._grant(CustomObjectType, ['add', 'change'])
+        self._field_perms('add')
+        field = self.create_custom_object_type_field(self.allowed, name='code', label='Code', type='text')
+        type_def = export_cot(self.allowed)
+        (field_def,) = [f for f in type_def["fields"] if f["name"] == "code"]
+        field_def["label"] = "Renamed"
+        response = self._apply(type_def)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("permission to change one or more of these fields", response.data["detail"])
+        field.refresh_from_db()
+        self.assertEqual(field.label, 'Code')
+
     def test_removing_field_needs_field_delete_permission(self):
         self._grant(CustomObjectType, ['add', 'change'])
         self._field_perms('add', 'change')
