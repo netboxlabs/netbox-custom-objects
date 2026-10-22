@@ -130,7 +130,7 @@ class GraphQLRootQueryPermissionTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     def test_invalid_token_rejected(self):
-        response = self._post(LIST_QUERY, HTTP_AUTHORIZATION="Token 0123456789abcdef0123456789abcdef01234567")
+        response = self._post(LIST_QUERY, HTTP_AUTHORIZATION=f"Token {'0' * 40}")
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
     @override_settings(LOGIN_REQUIRED=False, EXEMPT_VIEW_PERMISSIONS=[])
