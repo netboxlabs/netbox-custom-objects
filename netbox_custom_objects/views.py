@@ -25,9 +25,10 @@ from netbox.forms import (
     NetBoxModelImportForm,
 )
 from netbox.forms.mixins import OwnerMixin as OwnerFormMixin
+from netbox.object_actions import BulkDelete, DeleteObject, EditObject
 from netbox.views import generic
 from netbox.views.generic.mixins import TableMixin
-from utilities.forms import ConfirmationForm, DeleteForm, restrict_form_fields
+from utilities.forms import DeleteForm, restrict_form_fields
 from utilities.querydict import normalize_querydict
 from utilities.request import safe_for_redirect
 from utilities.forms.fields import ContentTypeChoiceField, DynamicModelChoiceField, DynamicModelMultipleChoiceField
@@ -418,8 +419,11 @@ class CustomObjectTypeDeleteView(generic.ObjectDeleteView):
 @register_model_view(CustomObjectType, 'fields', path='fields')
 class CustomObjectTypeFieldsView(generic.ObjectChildrenView):
     queryset = CustomObjectType.objects.all()
+    child_model = CustomObjectTypeField
     table = CustomObjectTypeFieldTable
-    template_name = 'netbox_custom_objects/fields.html'
+    filterset = filtersets.CustomObjectTypeFieldFilterSet
+    # No bulk delete: a field's own delete page warns how many objects lose data.
+    actions = (EditObject, DeleteObject)
     tab = ViewTab(
         label=_('Fields'),
         badge=lambda obj: CustomObjectTypeField.objects.filter(custom_object_type=obj).count(),
@@ -435,8 +439,10 @@ class CustomObjectTypeFieldsView(generic.ObjectChildrenView):
 @register_model_view(CustomObjectType, 'constraints', path='constraints')
 class CustomObjectTypeConstraintsView(generic.ObjectChildrenView):
     queryset = CustomObjectType.objects.all()
+    child_model = CustomObjectTypeConstraint
     table = CustomObjectTypeConstraintTable
-    template_name = 'netbox_custom_objects/constraints.html'
+    filterset = filtersets.CustomObjectTypeConstraintFilterSet
+    actions = (EditObject, DeleteObject, BulkDelete)
     tab = ViewTab(
         label=_('Constraints'),
         badge=lambda obj: CustomObjectTypeConstraint.objects.filter(custom_object_type=obj).count(),
@@ -496,6 +502,18 @@ class CustomObjectTypeConstraintEditView(generic.ObjectEditView):
                     pass
         return obj
 
+    def get_extra_addanother_params(self, request):
+        # Constraints aren't cloneable, so "Create & Add Another" would otherwise drop the type.
+        cot_pk = request.GET.get('custom_object_type') or request.POST.get('custom_object_type')
+        return {'custom_object_type': cot_pk} if cot_pk else {}
+
+
+@register_model_view(CustomObjectTypeConstraint, "bulk_delete", path="delete", detail=False)
+class CustomObjectTypeConstraintBulkDeleteView(generic.BulkDeleteView):
+    queryset = CustomObjectTypeConstraint.objects.all()
+    filterset = filtersets.CustomObjectTypeConstraintFilterSet
+    table = CustomObjectTypeConstraintTable
+
 
 @register_model_view(CustomObjectTypeConstraint, "delete")
 class CustomObjectTypeConstraintDeleteView(generic.ObjectDeleteView):
@@ -528,7 +546,7 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
             request: The current request
         """
         obj = self.get_object(**kwargs)
-        form = ConfirmationForm(initial=request.GET)
+        form = DeleteForm(instance=obj, initial=request.GET)
 
         model = obj.custom_object_type.get_model_with_serializer()
         if obj.is_polymorphic and obj.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:

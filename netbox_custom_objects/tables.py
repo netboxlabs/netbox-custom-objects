@@ -235,11 +235,10 @@ class CustomObjectTypeFieldTable(NetBoxTable):
     required = columns.BooleanColumn()
     default = FieldDefaultColumn(verbose_name=_('Default'))
 
-    exempt_columns = ('actions',)
-
     class Meta(NetBoxTable.Meta):
         model = CustomObjectTypeField
         fields = (
+            "pk",
             "id",
             "name",
             "type",
@@ -332,8 +331,6 @@ class CustomObjectTypeConstraintTable(NetBoxTable):
         template_code='{{ record.get_rule_display|placeholder }}',
         orderable=False,
     )
-
-    exempt_columns = ('actions',)
 
     class Meta(NetBoxTable.Meta):
         model = CustomObjectTypeConstraint
