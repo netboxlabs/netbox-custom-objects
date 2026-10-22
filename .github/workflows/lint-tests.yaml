@@ -109,8 +109,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install 'netboxlabs-netbox-branching>=1.0.4,<2.0.0'
-      - name: Tune PostgreSQL for branching test performance
-        if: ${{ matrix.with-branching == true }}
+      - name: Tune PostgreSQL for test performance
         run: |
           sudo apt-get install -y -q postgresql-client
           PGPASSWORD=netbox psql -h localhost -U netbox \
