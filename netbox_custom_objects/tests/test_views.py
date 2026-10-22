@@ -3,9 +3,11 @@ Tests for all UI views.
 """
 import uuid
 from datetime import date
+from decimal import Decimal
 from unittest import skipUnless
 
-from core.models import Job
+from core.choices import ObjectChangeActionChoices
+from core.models import Job, ObjectChange
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection
 from django.test import RequestFactory, TestCase, override_settings
@@ -15,7 +17,7 @@ from netbox.context import current_request, events_queue, query_cache
 from netbox.jobs import AsyncViewJob
 from users.models import ObjectPermission
 from utilities.request import copy_safe_request
-from utilities.testing import ViewTestCases, create_test_user
+from utilities.testing import ViewTestCases, create_test_user, post_data
 
 from netbox_custom_objects import views
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
@@ -53,27 +55,69 @@ class CustomObjectTypeViewTestCase(
 
         # Create test custom object types
         cls.custom_object_type1 = CustomObjectType.objects.create(
-            name="TestObject1",
+            name="test_object_1",
             description="First test custom object type",
             verbose_name_plural="Test Objects 1",
             slug="test-objects-1",
         )
 
         cls.custom_object_type2 = CustomObjectType.objects.create(
-            name="TestObject2",
+            name="test_object_2",
             description="Second test custom object type",
             verbose_name_plural="Test Objects 2",
             slug="test-objects-2",
+        )
+
+        cls.custom_object_type3 = CustomObjectType.objects.create(
+            name="test_object_3",
+            verbose_name_plural="Test Objects 3",
+            slug="test-objects-3",
         )
 
         cls.form_data = {
             'name': 'custom_object_type_1',
             'slug': 'custom-object-type-1s',
         }
+        cls.csv_data = (
+            "name,slug,description",
+            "imported_1,imported-1s,First import",
+            "imported_2,imported-2s,Second import",
+            "imported_3,imported-3s,Third import",
+        )
+        cls.csv_update_data = (
+            "id,description",
+            f"{cls.custom_object_type1.pk},Updated 1",
+            f"{cls.custom_object_type2.pk},Updated 2",
+            f"{cls.custom_object_type3.pk},Updated 3",
+        )
+        cls.bulk_edit_data = {"description": "Bulk edited"}
 
     def setUp(self):
         """Set up test data."""
         super().setUp()
+
+    def test_create_object_with_permission(self):
+        """
+        As the generic test, except that creating a type records two changes: the
+        post_save handler saves it again to assign its object_type.
+        """
+        obj_perm = ObjectPermission(name="Test permission", actions=["add"])
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        obj_perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+        self.assertHttpStatus(self.client.get(self._get_url("add")), 200)
+
+        data = {**self.form_data, "changelog_message": "Created"}
+        self.assertHttpStatus(self.client.post(self._get_url("add"), post_data(data)), 302)
+        instance = CustomObjectType.objects.get(slug=self.form_data["slug"])
+        self.assertInstanceEqual(instance, self.form_data)
+        create, update = ObjectChange.objects.filter(
+            changed_object_type=ContentType.objects.get_for_model(instance), changed_object_id=instance.pk
+        ).order_by("pk")
+        self.assertEqual(create.action, ObjectChangeActionChoices.ACTION_CREATE)
+        self.assertEqual(create.message, "Created")
+        self.assertEqual(update.action, ObjectChangeActionChoices.ACTION_UPDATE)
+        self.assertEqual(update.postchange_data["object_type"], instance.object_type_id)
 
     def _get_base_url(self):
         """
@@ -97,39 +141,15 @@ class CustomObjectTypeViewTestCase(
 
         return reverse(url_format.format(action), kwargs={'pk': instance.pk})
 
-    def test_create_object_with_permission(self):
-        ...
 
-    def test_create_object_with_constrained_permission(self):
-        ...
-
-    def test_bulk_edit_objects_with_permission(self):
-        ...
-
-    def test_bulk_edit_objects_with_constrained_permission(self):
-        ...
-
-    def test_bulk_update_objects_with_permission(self):
-        ...
-
-    def test_bulk_update_objects_without_change_permission(self):
-        ...
-
-    def test_bulk_import_objects_with_permission(self):
-        ...
-
-    def test_bulk_import_objects_with_constrained_permission(self):
-        ...
-
-    def test_bulk_delete_objects_with_permission(self):
-        ...
-
-    def test_bulk_delete_objects_with_constrained_permission(self):
-        ...
-
-
-class CustomObjectTypeFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase):
-    """Test cases for CustomObjectTypeField views."""
+class CustomObjectTypeFieldViewTestCase(
+    CustomObjectsTestCase,
+    ViewTestCases.GetObjectChangelogViewTestCase,
+    ViewTestCases.CreateObjectViewTestCase,
+    ViewTestCases.EditObjectViewTestCase,
+    ViewTestCases.DeleteObjectViewTestCase,
+):
+    """Add, edit and delete views for fields, which are listed and shown on their type's page."""
 
     model = CustomObjectTypeField
 
@@ -197,66 +217,6 @@ class CustomObjectTypeFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.Pri
             return reverse(url_format.format(action))
 
         return reverse(url_format.format(action), kwargs={'pk': instance.pk})
-
-    def test_list_objects_anonymous(self):
-        ...
-
-    def test_list_objects_with_permission(self):
-        ...
-
-    def test_list_objects_without_permission(self):
-        ...
-
-    def test_list_objects_with_constrained_permission(self):
-        ...
-
-    def test_get_object_with_permission(self):
-        ...
-
-    def test_get_object_with_constrained_permission(self):
-        ...
-
-    def test_get_object_changelog(self):
-        ...
-
-    def test_export_objects(self):
-        ...
-
-    def test_export_objects_anonymous(self):
-        ...
-
-    def test_bulk_edit_objects_with_permission(self):
-        ...
-
-    def test_bulk_edit_objects_without_permission(self):
-        ...
-
-    def test_bulk_edit_objects_with_constrained_permission(self):
-        ...
-
-    def test_bulk_update_objects_with_permission(self):
-        ...
-
-    def test_bulk_update_objects_without_change_permission(self):
-        ...
-
-    def test_bulk_import_objects_with_permission(self):
-        ...
-
-    def test_bulk_import_objects_without_permission(self):
-        ...
-
-    def test_bulk_import_objects_with_constrained_permission(self):
-        ...
-
-    def test_bulk_delete_objects_without_permission(self):
-        ...
-
-    def test_bulk_delete_objects_with_permission(self):
-        ...
-
-    def test_bulk_delete_objects_with_constrained_permission(self):
-        ...
 
 
 class CustomObjectTypeConstraintViewTestCase(
@@ -476,6 +436,26 @@ class CustomObjectViewTestCase(
             count=20
         )
 
+        cls.instance3 = cls.model.objects.create(
+            name="Test Instance 3",
+            description="Third test instance",
+            count=30
+        )
+
+        cls.csv_data = (
+            "name,description,count",
+            "Imported 1,First import,1",
+            "Imported 2,Second import,2",
+            "Imported 3,Third import,3",
+        )
+        cls.csv_update_data = (
+            "id,description,count",
+            f"{cls.instance1.pk},Updated 1,41",
+            f"{cls.instance2.pk},Updated 2,42",
+            f"{cls.instance3.pk},Updated 3,43",
+        )
+        cls.bulk_edit_data = {"count": 50}
+
     def setUp(self):
         """Set up test data."""
         super().setUp()
@@ -517,45 +497,6 @@ class CustomObjectViewTestCase(
             with self.subTest(tab):
                 self.assertHttpStatus(self.client.get(self._get_url(tab, self.instance1)), 200)
                 self.assertHttpStatus(self.client.get(self._get_url(tab, self.instance2)), 404)
-
-    def test_create_object_with_permission(self):
-        ...
-
-    def test_create_object_with_constrained_permission(self):
-        ...
-
-    def test_edit_object_with_permission(self):
-        ...
-
-    def test_bulk_edit_objects_with_permission(self):
-        ...
-
-    def test_bulk_edit_objects_with_constrained_permission(self):
-        ...
-
-    def test_bulk_update_objects_with_permission(self):
-        ...
-
-    def test_bulk_update_objects_without_change_permission(self):
-        ...
-
-    def test_bulk_import_objects_with_permission(self):
-        ...
-
-    def test_bulk_import_objects_without_permission(self):
-        ...
-
-    def test_bulk_import_objects_with_constrained_permission(self):
-        ...
-
-    def test_delete_object_with_permission(self):
-        ...
-
-    def test_bulk_delete_objects_with_permission(self):
-        ...
-
-    def test_bulk_delete_objects_with_constrained_permission(self):
-        ...
 
     def _assert_get_queryset_does_not_full_scan(self, view_class):
         """Regression #620 helper.
@@ -1229,6 +1170,42 @@ class ComplexCustomObjectViewTestCase(
             metadata={"complex": "data", "number": 42}
         )
 
+        cls.instance_3 = cls.model.objects.create(
+            name="Complex Test Instance 3",
+            count=30,
+            price=12.25,
+            active=True,
+            status="choice1",
+            multi_tags=["choice1"],
+            website="https://example.org",
+            metadata={"number": 3}
+        )
+
+        cls.form_data = {
+            "name": "Complex Edited",
+            "description": "Edited",
+            "count": 40,
+            "price": Decimal("99.99"),
+            "active": True,
+            "status": "choice3",
+            "multi_tags": ["choice1", "choice3"],
+            "website": "https://example.net",
+            "metadata": '{"edited": true}',
+        }
+        cls.csv_data = (
+            "name,count,price,active,status,multi_tags,website",
+            'Imported 1,1,1.50,true,choice1,"choice1,choice2",https://one.example.com',
+            "Imported 2,2,2.50,false,choice2,choice2,https://two.example.com",
+            "Imported 3,3,3.50,true,choice3,choice3,https://three.example.com",
+        )
+        cls.csv_update_data = (
+            "id,count,status",
+            f"{cls.instance_1.pk},51,choice1",
+            f"{cls.instance_2.pk},52,choice1",
+            f"{cls.instance_3.pk},53,choice2",
+        )
+        cls.bulk_edit_data = {"count": 60, "status": "choice2"}
+
     def setUp(self):
         """Set up test data."""
         super().setUp()
@@ -1259,48 +1236,6 @@ class ComplexCustomObjectViewTestCase(
         """Regression #500: changelog tab must return 200, not 500 from deprecated user kwarg."""
         url = self._get_url('changelog', self.instance_1)
         self.assertHttpStatus(self.client.get(url), 200)
-
-    def test_create_object_with_permission(self):
-        ...
-
-    def test_create_object_with_constrained_permission(self):
-        ...
-
-    def test_edit_object_with_permission(self):
-        ...
-
-    def test_edit_object_with_constrained_permission(self):
-        ...
-
-    def test_bulk_edit_objects_with_permission(self):
-        ...
-
-    def test_bulk_edit_objects_with_constrained_permission(self):
-        ...
-
-    def test_bulk_update_objects_with_permission(self):
-        ...
-
-    def test_bulk_update_objects_without_change_permission(self):
-        ...
-
-    def test_bulk_import_objects_with_permission(self):
-        ...
-
-    def test_bulk_import_objects_without_permission(self):
-        ...
-
-    def test_bulk_import_objects_with_constrained_permission(self):
-        ...
-
-    def test_delete_object_with_permission(self):
-        ...
-
-    def test_bulk_delete_objects_with_permission(self):
-        ...
-
-    def test_bulk_delete_objects_with_constrained_permission(self):
-        ...
 
 
 # COMPAT(netbox<4.6.0): CustomFieldChoiceSet has no choice_colors.
@@ -1392,6 +1327,8 @@ class ObjectFieldViewTestCase(
     """Test cases for custom objects with object and multi-object fields."""
 
     query_count_model_label = 'customobject-objectfields'
+    # The multi-object field returns related objects rather than PKs; test_edit_object_sets_sites checks it.
+    validation_excluded_fields = ["sites"]
 
     @classmethod
     def setUpTestData(cls):
@@ -1474,6 +1411,34 @@ class ObjectFieldViewTestCase(
                 device=cls.device
             )
 
+            cls.instance_3 = cls.model.objects.create(name="Object Test Instance 3")
+
+            cls.site_2 = Site.objects.create(name="Test Site 2", slug="test-site-2")
+            cls.device_2 = Device.objects.create(
+                name="Test Device 2",
+                site=cls.site_2,
+                device_type=device_type,
+                role=device_role
+            )
+            cls.form_data = {
+                "name": "Object Test Edited",
+                "device": cls.device_2.pk,
+                "sites": [cls.site.pk, cls.site_2.pk],
+            }
+            cls.csv_data = (
+                "name,device",
+                f"Imported 1,{cls.device.name}",
+                f"Imported 2,{cls.device_2.name}",
+                "Imported 3,",
+            )
+            cls.csv_update_data = (
+                "id,name",
+                f"{cls.instance_1.pk},Object Updated 1",
+                f"{cls.instance_2.pk},Object Updated 2",
+                f"{cls.instance_3.pk},Object Updated 3",
+            )
+            cls.bulk_edit_data = {"device": cls.device_2.pk}
+
         except ImportError:
             # Skip if DCIM models are not available
             cls.site = None
@@ -1513,47 +1478,12 @@ class ObjectFieldViewTestCase(
         url = self._get_url('changelog', self.instance_1)
         self.assertHttpStatus(self.client.get(url), 200)
 
-    def test_create_object_with_permission(self):
-        ...
-
-    def test_create_object_with_constrained_permission(self):
-        ...
-
-    def test_edit_object_with_permission(self):
-        ...
-
-    def test_edit_object_with_constrained_permission(self):
-        ...
-
-    def test_bulk_edit_objects_with_permission(self):
-        ...
-
-    def test_bulk_edit_objects_with_constrained_permission(self):
-        ...
-
-    def test_bulk_update_objects_with_permission(self):
-        ...
-
-    def test_bulk_update_objects_without_change_permission(self):
-        ...
-
-    def test_bulk_import_objects_with_permission(self):
-        ...
-
-    def test_bulk_import_objects_without_permission(self):
-        ...
-
-    def test_bulk_import_objects_with_constrained_permission(self):
-        ...
-
-    def test_delete_object_with_permission(self):
-        ...
-
-    def test_bulk_delete_objects_with_permission(self):
-        ...
-
-    def test_bulk_delete_objects_with_constrained_permission(self):
-        ...
+    def test_edit_object_sets_sites(self):
+        self.user.is_superuser = True
+        self.user.save()
+        response = self.client.post(self._get_url("edit", self.instance_3), post_data(self.form_data))
+        self.assertHttpStatus(response, 302)
+        self.assertCountEqual(self.instance_3.sites.all(), [self.site, self.site_2])
 
     def test_delete_confirmation_page_with_populated_multiobject_field(self):
         """Regression #477: delete confirmation page returns 200 and omits through-table model names."""
