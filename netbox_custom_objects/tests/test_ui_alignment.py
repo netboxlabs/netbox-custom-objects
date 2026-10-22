@@ -55,6 +55,9 @@ class CustomObjectPageTestCase(CustomObjectsTestCase, TestCase):
             self.cot, name="secret", label="Secret", type="text", ui_editable=CustomFieldUIEditableChoices.HIDDEN,
         )
         self.create_custom_object_type_field(
+            self.cot, name="internal", label="Internal", type="text", ui_visible=CustomFieldUIVisibleChoices.HIDDEN,
+        )
+        self.create_custom_object_type_field(
             self.cot, name="unfiltered", label="Unfiltered", type="text",
             filter_logic=CustomFieldFilterLogicChoices.FILTER_DISABLED,
         )
@@ -201,6 +204,8 @@ class FilterFormTestCase(CustomObjectPageTestCase):
         self.assertNotIn("secret", form.fields)
         self.assertNotIn("unfiltered", form.fields)
         self.assertIn("notes", form.fields)
+        # Like core, fields hidden only from display (ui_visible) can still be filtered.
+        self.assertIn("internal", form.fields)
 
     def test_fieldsets_group_fields(self):
         fieldsets = build_filterset_form_class(self.model).fieldsets
@@ -208,7 +213,7 @@ class FilterFormTestCase(CustomObjectPageTestCase):
             [(fieldset.name, list(fieldset.items)) for fieldset in fieldsets],
             [
                 (None, ["q", "filter_id", "tag"]),
-                ("Zone", ["code", "name", "notes"]),
+                ("Zone", ["code", "internal", "name", "notes"]),
                 ("Details", ["site"]),
                 ("Ownership", ["owner_group_id", "owner_id"]),
             ],
@@ -235,6 +240,7 @@ class EditFormTestCase(CustomObjectPageTestCase):
             with self.subTest(url=url):
                 response = self._get(url)
                 page_title = re.search(r'<h1 class="page-title">(.*?)</h1>', response.content.decode(), re.S)
+                self.assertIsNotNone(page_title, f"h1.page-title not found for {url}")
                 self.assertEqual(" ".join(page_title.group(1).split()), title)
                 self.assertContains(response, '<h2 class="col-9 offset-3">Zone</h2>')
                 self.assertContains(response, '<h2 class="col-9 offset-3">Details</h2>')
