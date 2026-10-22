@@ -1184,7 +1184,8 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
             related_object_type=site_ct,
         )
 
-        # Custom Object single- and multi-object fields
+        # Custom Object single- and multi-object fields: two of each to the same type, so the
+        # tests check each field keeps its own references and through-table rows.
 
         cls.create_custom_object_type_field(
             cls.custom_object_type,
@@ -1218,7 +1219,7 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
             related_object_type=second_object_ct,
         )
 
-        # Self-referential
+        # Self-referential object and multi-object fields
 
         cls.create_custom_object_type_field(
             cls.custom_object_type,

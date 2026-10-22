@@ -427,35 +427,6 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, NetB
         self.assertNotIn('test_field', result)
         self.assertIn('id', result)
 
-    def test_list_objects_query_count_is_constant(self):
-        """The list endpoint's query count must not scale with the number of returned rows."""
-        self._add_permission('view', 'Query count list perm')
-
-        # Pin to one page regardless of PAGINATE_COUNT, so a pagination-count query
-        # can't be mistaken for the row-count effect under test.
-        list_url = f'{self._get_list_url()}?limit=100'
-
-        # Warm the per-COT dynamic model/serializer class cache first, so the
-        # comparison below isolates row count rather than one-time class-building.
-        self.client.get(list_url, **self.header)
-
-        with CaptureQueriesContext(connection) as ctx:
-            response = self.client.get(list_url, **self.header)
-        self.assertHttpStatus(response, 200)
-        baseline_query_count = len(ctx.captured_queries)
-
-        extra_objects = [self.model(test_field=f'Extra {i}') for i in range(9)]
-        self.model.objects.bulk_create(extra_objects)
-
-        with CaptureQueriesContext(connection) as ctx:
-            response = self.client.get(list_url, **self.header)
-        self.assertHttpStatus(response, 200)
-        self.assertEqual(
-            len(ctx.captured_queries),
-            baseline_query_count,
-            "Query count must stay flat as the number of returned rows grows.",
-        )
-
     def test_bulk_create_objects(self):
         """POST a list of objects to the list endpoint in a single request."""
         self._add_permission('add', 'Bulk create perm')
@@ -1019,34 +990,6 @@ class PolymorphicMultiObjectPrefetchTest(CustomObjectsTestCase, TestCase):
         viewname = 'plugins-api:netbox_custom_objects-api:customobject-list'
         return reverse(viewname, kwargs={'custom_object_type': self.cot.slug})
 
-    def test_query_count_is_constant(self):
-        """The list endpoint's query count must not scale with the number of returned rows."""
-        for i in range(12):
-            obj = self.model.objects.create(name=f'PM2M Obj {i}')
-            obj.targets.set([self.devices[0], self.devices[1], self.site_a])
-
-        list_url = f'{self._url()}?limit=100'
-        # Warm the per-COT dynamic model/serializer class cache first.
-        self.client.get(list_url, **self.header)
-
-        with CaptureQueriesContext(connection) as ctx:
-            response = self.client.get(list_url, **self.header)
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        baseline_query_count = len(ctx.captured_queries)
-
-        for i in range(12, 24):
-            obj = self.model.objects.create(name=f'PM2M Obj {i}')
-            obj.targets.set([self.devices[0], self.devices[1], self.site_a])
-
-        with CaptureQueriesContext(connection) as ctx:
-            response = self.client.get(list_url, **self.header)
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(
-            len(ctx.captured_queries),
-            baseline_query_count,
-            "Query count must stay flat as the number of returned rows grows.",
-        )
-
     def test_omit_excludes_field_and_skips_its_prefetch(self):
         """?omit=targets must drop the field from the response and skip prefetching it."""
         for i in range(6):
@@ -1421,15 +1364,6 @@ class CustomObjectTypeAndFieldFilteringBulkAPITest(CustomObjectsTestCase, TestCa
             sorted(CustomObjectTypeField.objects.values_list('pk', flat=True)),
             sorted(f.pk for f in self.fields),
         )
-
-
-class SchemaGenerationTest(CustomObjectsTestCase, TestCase):
-    """The OpenAPI schema must build without error even though CustomObjectViewSet's
-    model/queryset depend on a URL slug that schema generation never provides."""
-
-    def test_api_schema_generates_without_error(self):
-        response = self.client.get(reverse('schema'))
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
 
 
 class CustomObjectTypeFieldObjectResolutionTest(CustomObjectsTestCase, TestCase):

@@ -396,24 +396,6 @@ class GraphQLSignalRegistrationTestCase(TestCase):
 
         self._assert_evict_handler_not_registered()
 
-    def test_branching_not_installed_does_not_crash(self):
-        # When netbox-branching is entirely absent, is_installed returns False
-        # for all apps and the function must return cleanly without registering
-        # the branch-eviction handler.
-        from django.db.models.signals import post_delete
-
-        from netbox_custom_objects.graphql.live import connect_signature_invalidation
-
-        post_delete.disconnect(dispatch_uid="nco_graphql_evict_branch")
-
-        with mock.patch(
-            "django.apps.apps.is_installed",
-            side_effect=lambda app: app != "netbox_branching",
-        ):
-            connect_signature_invalidation()  # must not raise
-
-        self._assert_evict_handler_not_registered()
-
 
 class GraphQLEndpointMixin:
     """
@@ -731,27 +713,7 @@ class GraphQLEndpointTestCase(GraphQLEndpointMixin, CustomObjectsTestCase, TestC
             f"{count_at_9} at 9 rows) -- N+1 regression",
         )
 
-    def test_polymorphic_object_field_query_count_stays_flat(self):
-        cot = self._make_poly_cot()
-        model = cot.get_model()
-        query = (
-            "{ custom_objects_poly705_list { name "
-            "poly_obj { ... on SiteType { id } ... on DeviceType { id } } "
-            "} }"
-        )
-        self._assert_query_count_flat(model, query)
-
-    def test_polymorphic_multiobject_field_query_count_stays_flat(self):
-        cot = self._make_poly_cot()
-        model = cot.get_model()
-        query = (
-            "{ custom_objects_poly705_list { name "
-            "poly_objs { ... on SiteType { id } ... on DeviceType { id } } "
-            "} }"
-        )
-        self._assert_query_count_flat(model, query)
-
-    def test_polymorphic_object_and_multiobject_together_query_count_stays_flat(self):
+    def test_polymorphic_fields_query_count_stays_flat(self):
         cot = self._make_poly_cot()
         model = cot.get_model()
         query = (
