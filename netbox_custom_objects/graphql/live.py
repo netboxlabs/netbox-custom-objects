@@ -57,8 +57,10 @@ _rebuild_lock = threading.Lock()
 # schemas.  Each value is an atomically swapped (signature, schema) tuple, so a
 # lockless reader can never see a schema that doesn't match its signature.
 _schema_cache = {}
-# Schemas kept per branch, one per distinct set of visible types; the oldest is
-# dropped first.  Users with the same permissions share a schema.
+# Schemas kept per branch, one per distinct set of visible types.  Users with the
+# same permissions share a schema.  The oldest is dropped first, not the least
+# recently used: the hot path reads the cache without the lock, so it can't reorder
+# entries on a hit.  The cap is meant to be large enough that churn is unlikely.
 _MAX_SCHEMAS_PER_BRANCH = 16
 # Signature cache keys this process has populated, so reset_cache (tests) can clear
 # every per-branch entry.
