@@ -1926,6 +1926,17 @@ class PolymorphicReverseDescriptorTest(CustomObjectsTestCase, TestCase):
             "COT A's _wire must not overwrite COT B's descriptor",
         )
 
+    def test_cot_delete_unwires_own_descriptor(self):
+        """Deleting the source COT removes its fields' reverse accessors, so a later
+        field can claim the related_name."""
+        self._create_gfk_field(related_name="co_deleted_cot_ref")
+        self.cot.get_model()
+        self.assertIn("co_deleted_cot_ref", Site.__dict__)
+
+        self.cot.delete()
+
+        self.assertNotIn("co_deleted_cot_ref", Site.__dict__)
+
     def test_source_model_deleted_returns_empty_queryset(self):
         """Accessing .all() on a stale reverse descriptor returns an empty queryset
         rather than raising DoesNotExist when the source COT has been deleted."""
@@ -1951,6 +1962,63 @@ class PolymorphicReverseDescriptorTest(CustomObjectsTestCase, TestCase):
         qs = manager.all()
         self.assertEqual(qs.count(), 0, ".all() must return empty queryset for deleted COT")
         self.assertFalse(manager.exists())
+
+    def _restore_stale_cache(self, model_entry, through_entry=None):
+        """Put the pre-change cache entries back, as a worker that didn't handle the
+        field save still holds them. Only cache_timestamp tells it the model is stale."""
+        key = (self.cot.pk, None)
+        with CustomObjectType._global_lock:
+            CustomObjectType._model_cache[key] = model_entry
+            if through_entry is not None:
+                CustomObjectType._through_model_cache[key] = through_entry
+
+    def test_gfk_accessor_regenerates_stale_cached_model(self):
+        """A field change on another worker bumps cache_timestamp but leaves this
+        worker's cached model untouched; the accessor must regenerate it (#766)."""
+        self._create_gfk_field(related_name="co_gfk_stale")
+        stale_model = self.cot.get_model()
+        stale_entry = CustomObjectType._model_cache[(self.cot.pk, None)]
+
+        site = Site.objects.create(name="Stale GFK Site", slug="stale-gfk-site")
+        co = stale_model.objects.create(name="co-stale")
+        co.target_obj = site
+        co.save()
+
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot, name="note", label="Note", type="text",
+        )
+        self._restore_stale_cache(stale_entry)
+        self.assertIs(CustomObjectType.get_cached_model(self.cot.pk), stale_model)
+
+        result = list(site.co_gfk_stale.all())
+        self.assertEqual([c.pk for c in result], [co.pk])
+        self.assertIsNot(type(result[0]), stale_model)
+        self.assertTrue(hasattr(result[0], "note"))
+        self.assertIsNot(CustomObjectType.get_cached_model(self.cot.pk), stale_model)
+
+    def test_m2m_accessor_regenerates_stale_cached_model(self):
+        """Same as above for the M2M reverse manager, whose through model must also
+        come from the regenerated model rather than the stale cache."""
+        self._create_m2m_field(related_name="co_m2m_stale")
+        stale_model = self.cot.get_model()
+        stale_entry = CustomObjectType._model_cache[(self.cot.pk, None)]
+        stale_throughs = dict(CustomObjectType._through_model_cache[(self.cot.pk, None)])
+
+        site = Site.objects.create(name="Stale M2M Site", slug="stale-m2m-site")
+        co = stale_model.objects.create(name="m2m-stale")
+        co.target_multi.add(site)
+
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot, name="note", label="Note", type="text",
+        )
+        self._restore_stale_cache(stale_entry, stale_throughs)
+        self.assertIs(CustomObjectType.get_cached_model(self.cot.pk), stale_model)
+
+        result = list(site.co_m2m_stale.all())
+        self.assertEqual([c.pk for c in result], [co.pk])
+        self.assertIsNot(type(result[0]), stale_model)
+        self.assertTrue(hasattr(result[0], "note"))
+        self.assertIsNot(CustomObjectType.get_cached_model(self.cot.pk), stale_model)
 
     def test_inbound_reverse_descriptor_wired_when_target_cot_generated_after_source(self):
         """Regression for startup ordering: if COT A is generated before COT B,

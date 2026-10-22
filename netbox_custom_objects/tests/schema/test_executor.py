@@ -722,6 +722,25 @@ class ExecutorSchemaDocumentTestCase(_ExecutorTestBase):
         cot.refresh_from_db()
         self.assertEqual(cot.schema_document.get("schema_version"), "1")
 
+    def test_base_columns_kept_for_new_type(self):
+        apply_document({"schema_version": "1", "types": [{
+            "name": "fresh", "slug": "fresh", "fields": [{"id": 1, "name": "name", "type": "text", "primary": True}],
+        }]})
+        cot = CustomObjectType.objects.get(slug="fresh")
+        self.assertEqual(cot.schema_document["schema_version"], "1")
+        self.assertIn("id", [c["name"] for c in cot.schema_document["base_columns"]])
+
+    def test_base_columns_kept_when_type_changes(self):
+        cot = self.create_custom_object_type(name='doctest4', slug='doc-test-4')
+        cot.refresh_from_db()
+        base_columns = cot.schema_document["base_columns"]
+        type_def = export_cot(cot)
+        type_def.setdefault("fields", []).append({"id": cot.next_schema_id + 1, "name": "added", "type": "text"})
+        apply_document({"schema_version": "1", "types": [type_def]})
+        cot.refresh_from_db()
+        self.assertEqual(cot.schema_document["types"][0]["fields"][-1]["name"], "added")
+        self.assertEqual(cot.schema_document["base_columns"], base_columns)
+
 
 # ---------------------------------------------------------------------------
 # Cross-COT dependency ordering

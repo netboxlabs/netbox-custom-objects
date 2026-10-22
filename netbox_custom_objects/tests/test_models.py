@@ -1,7 +1,9 @@
 """
 Tests for the concrete and dynamically generated models that are managed by this plugin.
 """
+import importlib.abc
 import pickle
+import uuid
 import sys
 from datetime import date
 from decimal import Decimal
@@ -12,6 +14,7 @@ from django.apps import apps as django_apps
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import IntegrityError, connection, transaction
+from django.db.models.signals import post_delete
 from django.db.utils import OperationalError, ProgrammingError
 from django.test import TestCase, override_settings, tag
 from django.urls import reverse
@@ -21,16 +24,19 @@ from rest_framework.test import APIClient
 import netbox_custom_objects as nco
 import netbox_custom_objects.models as nco_models
 
-from core.choices import JobStatusChoices
-from core.models import ObjectType
+from core.choices import JobIntervalChoices, JobStatusChoices
+from core.models import Job, ObjectType
 from dcim.models import Site
 from extras.models import CachedValue, CustomFieldChoiceSet, Tag, TaggedItem
 from netbox.search import registry
 from netbox.search.backends import get_backend
 from netbox_custom_objects.api.serializers import get_serializer_class
-from netbox_custom_objects.constants import APP_LABEL
+from netbox_custom_objects.constants import APP_LABEL, DISPLAY_EXPRESSION_SEARCH_WEIGHT
+from netbox_custom_objects import views
 from netbox_custom_objects.field_types import LazyForeignKey, ObjectFieldType, TextFieldType
-from netbox_custom_objects.jobs import ReindexCustomObjectTypeJob
+from netbox_custom_objects.filtersets import get_filterset_class
+from netbox_custom_objects.graphql.live import _active_branch_key
+from netbox_custom_objects.jobs import RefreshDisplayExpressionSearchJob, ReindexCustomObjectTypeJob
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name
 from .base import CustomObjectsTestCase, create_token
@@ -956,6 +962,26 @@ class CustomObjectTypeFieldTestCase(CustomObjectsTestCase, TestCase):
             )
             field.full_clean()
 
+    def test_custom_object_type_field_default_matches_regex_like_objects(self):
+        """
+        A default is checked against validation_regex with the same search semantics
+        RegexValidator applies to object values, so an unanchored regex that accepts an
+        object value also accepts it as the field's default.
+        """
+        field = CustomObjectTypeField(
+            custom_object_type=self.custom_object_type,
+            name="site",
+            type="url",
+            validation_regex=r"example\.com",
+            default="https://example.com",
+        )
+        field.full_clean()
+
+        field.default = "https://example.org"
+        with self.assertRaises(ValidationError) as cm:
+            field.full_clean()
+        self.assertIn("default", cm.exception.error_dict)
+
     def test_custom_object_type_field_boolean_unique_validation(self):
         """Test that boolean fields cannot be unique."""
         with self.assertRaises(ValidationError):
@@ -1561,6 +1587,140 @@ class RelatedNameTestCase(CustomObjectsTestCase, TestCase):
         )
         field.full_clean()  # blank related_name is excluded from the uniqueness constraint.
 
+    @tag('regression')  # #761
+    def test_related_name_colliding_with_target_model_attribute_rejected(self):
+        """related_name must not overwrite an existing attribute on a core target model."""
+        site_ct = self.get_site_object_type()
+        original_save = Site.save
+        # A method, a concrete field, and a core NetBox reverse accessor.
+        for field_type in ("object", "multiobject"):
+            for name in ("save", "slug", "devices"):
+                with self.subTest(field_type=field_type, related_name=name):
+                    field = CustomObjectTypeField(
+                        custom_object_type=self.cert_cot,
+                        name="site",
+                        type=field_type,
+                        related_object_type=site_ct,
+                        related_name=name,
+                    )
+                    with self.assertRaises(ValidationError) as cm:
+                        field.full_clean()
+                    self.assertIn("related_name", cm.exception.message_dict)
+        self.assertIs(Site.save, original_save)
+
+    @tag('regression')  # #761
+    def test_related_name_colliding_with_static_plugin_reverse_accessor_rejected(self):
+        """Reverse accessors from the plugin's own static models share APP_LABEL but must not be overwritten."""
+        choice_set_ot = ObjectType.objects.get_for_model(CustomFieldChoiceSet)
+        original = CustomFieldChoiceSet.choices_for_object_type
+        for field_type in ("object", "multiobject"):
+            with self.subTest(field_type=field_type):
+                field = CustomObjectTypeField(
+                    custom_object_type=self.cert_cot,
+                    name="choice_set_ref",
+                    type=field_type,
+                    related_object_type=choice_set_ot,
+                    related_name="choices_for_object_type",
+                )
+                with self.assertRaises(ValidationError) as cm:
+                    field.full_clean()
+                self.assertIn("related_name", cm.exception.message_dict)
+        self.assertIs(CustomFieldChoiceSet.choices_for_object_type, original)
+
+    @tag('regression')  # #761
+    def test_polymorphic_related_name_rejects_stale_non_polymorphic_accessor(self):
+        """A polymorphic field must not claim a name held by a stale non-polymorphic accessor.
+
+        The polymorphic wiring paths refuse to replace a non-polymorphic accessor, so accepting
+        the name would save the field without ever installing its reverse descriptor.
+        """
+        site_ct = self.get_site_object_type()
+        name = "stale_certificates"
+        self.addCleanup(lambda: name in Site.__dict__ and delattr(Site, name))
+
+        # Leave a stale FK reverse accessor behind on Site.
+        np_field = self.create_custom_object_type_field(
+            self.cert_cot,
+            name="site",
+            type="object",
+            related_object_type=site_ct,
+            related_name=name,
+        )
+        self.cert_cot.refresh_from_db()
+        self.cert_cot.get_model()
+        np_field.delete()
+        self.assertIn(name, Site.__dict__)
+
+        poly_field = self.create_custom_object_type_field(
+            self.cert_cot,
+            name="assigned_to",
+            type="object",
+            is_polymorphic=True,
+        )
+        poly_field.related_object_types.set([site_ct])
+        poly_field = CustomObjectTypeField.objects.get(pk=poly_field.pk)
+        poly_field.related_name = name
+        with self.assertRaises(ValidationError) as cm:
+            poly_field.full_clean()
+        self.assertIn("related_name", cm.exception.message_dict)
+
+    @tag('regression')  # #761
+    def test_related_name_collision_rejected_when_making_existing_field_unique(self):
+        """The clobber guard must run before the uniqueness probe installs the reverse accessor."""
+        site_ct = self.get_site_object_type()
+        original_save = Site.save
+        # Restore Site.save even if the guard regresses, so the clobber doesn't leak into other tests.
+        self.addCleanup(setattr, Site, 'save', original_save)
+        created = self.create_custom_object_type_field(
+            self.cert_cot,
+            name="site",
+            type="object",
+            related_object_type=site_ct,
+        )
+        # Load from the DB so _original is populated and the unique=False -> True probe runs.
+        field = CustomObjectTypeField.objects.get(pk=created.pk)
+        field.unique = True
+        field.related_name = "save"
+        with self.assertRaises(ValidationError) as cm:
+            field.full_clean()
+        self.assertIn("related_name", cm.exception.message_dict)
+        self.assertIs(Site.save, original_save)
+
+    @tag('regression')  # #761
+    def test_related_name_colliding_with_custom_object_target_field_rejected(self):
+        """related_name must not overwrite a field on a custom object target model."""
+        self.slb_cot.get_model()
+        for field_type in ("object", "multiobject"):
+            with self.subTest(field_type=field_type):
+                field = CustomObjectTypeField(
+                    custom_object_type=self.cert_cot,
+                    name="slb",
+                    type=field_type,
+                    related_object_type=self.slb_object_type,
+                    related_name="name",
+                )
+                with self.assertRaises(ValidationError) as cm:
+                    field.full_clean()
+                self.assertIn("related_name", cm.exception.message_dict)
+
+    @tag('regression')  # #761
+    def test_existing_field_owning_reverse_accessor_revalidates(self):
+        """Re-cleaning a field whose own reverse accessor is already installed must succeed."""
+        for field_type, name in (("object", "certificates"), ("multiobject", "certificate_set")):
+            with self.subTest(field_type=field_type):
+                field = self.create_custom_object_type_field(
+                    self.cert_cot,
+                    name=f"slb_{field_type}",
+                    type=field_type,
+                    related_object_type=self.slb_object_type,
+                    related_name=name,
+                )
+                self.cert_cot.refresh_from_db()
+                self.cert_cot.get_model()
+                self.assertTrue(hasattr(self.slb_object_type.model_class(), name))
+                field.refresh_from_db()
+                field.full_clean()  # Should not raise.
+
     # ------------------------------------------------------------------ #
     # Object (FK) reverse accessor                                        #
     # ------------------------------------------------------------------ #
@@ -1866,6 +2026,187 @@ class SearchReindexTestCase(CustomObjectsTestCase, TestCase):
             second_job = ReindexCustomObjectTypeJob.enqueue(cot_id=self.cot.pk)
 
         self.assertEqual(first_job.pk, second_job.pk)
+
+
+class DisplayExpressionSearchTestCase(CustomObjectsTestCase, TestCase):
+    """The rendered display_expression is cached for search and matched by quick search (q)."""
+
+    def setUp(self):
+        super().setUp()
+        self.cot = self.create_custom_object_type(
+            name="Service", slug="display-search", display_expression="{{ site.name }} / {{ name }}",
+        )
+        self.create_custom_object_type_field(self.cot, name="name", type="text", primary=True, required=True)
+        self.create_custom_object_type_field(
+            self.cot, name="site", type="object", related_object_type=self.get_site_object_type(),
+        )
+        self.model = self.cot.get_model()
+        self.site = Site.objects.create(name="Alpha", slug="alpha")
+        self.obj = self.model.objects.create(name="svc1", site=self.site)
+        self.object_type = ContentType.objects.get_for_model(self.model)
+
+    def _cached_display(self):
+        return list(
+            CachedValue.objects.filter(object_type=self.object_type, object_id=self.obj.pk, field='_display')
+            .values_list('value', 'weight')
+        )
+
+    def _quick_search(self, value):
+        filterset = get_filterset_class(self.model)({'q': value}, self.model.objects.all())
+        return list(filterset.qs.values_list('pk', flat=True))
+
+    def test_rendered_display_is_cached(self):
+        get_backend().cache(self.model.objects.all())
+        self.assertEqual(self._cached_display(), [("Alpha / svc1", DISPLAY_EXPRESSION_SEARCH_WEIGHT)])
+
+    def test_nothing_cached_without_display_expression(self):
+        self.cot.display_expression = ""
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue'):
+            self.cot.save()
+        self.cot.refresh_from_db()
+        model = self.cot.get_model()
+        get_backend().cache(model.objects.all())
+        self.assertEqual(self._cached_display(), [])
+
+    def test_quick_search_matches_related_values_in_display(self):
+        get_backend().cache(self.model.objects.all())
+        # "Alpha" comes only from the related site, not from the object's own columns.
+        self.assertEqual(self._quick_search("alpha"), [self.obj.pk])
+        self.assertEqual(self._quick_search("svc1"), [self.obj.pk])
+        self.assertEqual(self._quick_search("nothing"), [])
+
+    def test_reindex_picks_up_related_changes(self):
+        get_backend().cache(self.model.objects.all())
+        self.site.name = "Beta"
+        self.site.save()
+        # Renaming the site doesn't touch the custom object, so its cached display is stale...
+        self.assertEqual(self._quick_search("beta"), [])
+        # ...until the type is reindexed, as the hourly job does.
+        ReindexCustomObjectTypeJob.enqueue(cot_id=self.cot.pk, immediate=True)
+        self.assertEqual(self._quick_search("beta"), [self.obj.pk])
+
+    def test_reindex_enqueued_when_display_expression_changes(self):
+        cot = CustomObjectType.objects.get(pk=self.cot.pk)
+        cot.display_expression = "{{ name }}"
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
+            with self.captureOnCommitCallbacks(execute=True):
+                cot.save()
+        mock_enqueue.assert_called_once_with(cot_id=self.cot.pk)
+
+    def test_reindex_not_enqueued_for_other_changes(self):
+        cot = CustomObjectType.objects.get(pk=self.cot.pk)
+        cot.description = "Changed"
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
+            with self.captureOnCommitCallbacks(execute=True):
+                cot.save()
+                cot.save(update_fields=['cache_timestamp'])
+        mock_enqueue.assert_not_called()
+
+    def _row_ids(self, display):
+        rows = CachedValue.objects.filter(object_type=self.object_type)
+        rows = rows.filter(field='_display') if display else rows.exclude(field='_display')
+        return set(rows.values_list('pk', flat=True))
+
+    def _run_hourly_job(self):
+        job = Job.objects.create(name='Refresh', job_id=uuid.uuid4())
+        RefreshDisplayExpressionSearchJob(job).run()
+
+    def test_hourly_job_refreshes_only_display_rows(self):
+        self.assertEqual(
+            registry['system_jobs'][RefreshDisplayExpressionSearchJob]['interval'], JobIntervalChoices.INTERVAL_HOURLY,
+        )
+        get_backend().cache(self.model.objects.all())
+        other_rows = self._row_ids(display=False)
+        self.assertTrue(other_rows)
+        self.site.name = "Beta"
+        self.site.save()
+
+        self._run_hourly_job()
+
+        self.assertEqual(self._cached_display(), [("Beta / svc1", DISPLAY_EXPRESSION_SEARCH_WEIGHT)])
+        self.assertEqual(self._quick_search("beta"), [self.obj.pk])
+        # The object's other cached values are left in place.
+        self.assertEqual(self._row_ids(display=False), other_rows)
+
+        # Unchanged display names aren't rewritten.
+        display_rows = self._row_ids(display=True)
+        self._run_hourly_job()
+        self.assertEqual(self._row_ids(display=True), display_rows)
+
+    def test_hourly_job_renders_only_missing_names_without_related_fields(self):
+        self.create_custom_object_type(name="NoExpression", slug="no-expression")
+        own_fields_only = self.create_custom_object_type(
+            name="OwnFields", slug="own-fields", display_expression="{{ name }}",
+        )
+        self.create_custom_object_type_field(own_fields_only, name="name", type="text", primary=True)
+        # A related field the expression doesn't use can't make it drift.
+        self.create_custom_object_type_field(
+            own_fields_only, name="site", type="object", related_object_type=self.get_site_object_type(),
+        )
+        with patch('netbox_custom_objects.jobs.refresh_display_search_cache') as mock_refresh:
+            self._run_hourly_job()
+        self.assertEqual(
+            sorted((call.args[0].pk, call.kwargs['missing_only']) for call in mock_refresh.call_args_list),
+            [(self.cot.pk, False), (own_fields_only.pk, True)],
+        )
+
+    def test_hourly_job_backfills_objects_without_a_cached_name(self):
+        cot = self.create_custom_object_type(name="OwnFields", slug="own-fields", display_expression="#{{ name }}")
+        self.create_custom_object_type_field(cot, name="name", type="text", primary=True)
+        model = cot.get_model()
+        indexed, unindexed = model.objects.create(name="a"), model.objects.create(name="b")
+        object_type = ContentType.objects.get_for_model(model)
+        rows = CachedValue.objects.filter(object_type=object_type, field='_display')
+        get_backend().cache(model.objects.all())
+        # As if "b" was saved before display names were indexed.
+        rows.filter(object_id=unindexed.pk).delete()
+        indexed_row = rows.get(object_id=indexed.pk).pk
+
+        self._run_hourly_job()
+
+        self.assertEqual(
+            sorted(rows.values_list('object_id', 'value')), [(indexed.pk, "#a"), (unindexed.pk, "#b")],
+        )
+        self.assertTrue(rows.filter(pk=indexed_row).exists())
+
+    def test_hourly_job_deletes_stale_names_without_delete_signals(self):
+        get_backend().cache(self.model.objects.all())
+        self.site.name = "Beta"
+        self.site.save()
+        deleted = []
+
+        def receiver(sender, instance, **kwargs):
+            deleted.append(instance)
+
+        post_delete.connect(receiver, sender=CachedValue)
+        try:
+            self._run_hourly_job()
+        finally:
+            post_delete.disconnect(receiver, sender=CachedValue)
+        self.assertEqual(deleted, [])
+        self.assertEqual(self._cached_display(), [("Beta / svc1", DISPLAY_EXPRESSION_SEARCH_WEIGHT)])
+
+    def test_rendering_skips_fields_the_expression_does_not_use(self):
+        self.create_custom_object_type_field(
+            self.cot, name="sites", type="multiobject", related_object_type=self.get_site_object_type(),
+        )
+        cot = CustomObjectType.objects.get(pk=self.cot.pk)
+        cot.display_expression = "{{ name }}"
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue'):
+            cot.save()
+        obj = cot.get_model().objects.get(pk=self.obj.pk)
+        str(obj)  # load the type and its field definitions
+        with self.assertNumQueries(0):
+            self.assertEqual(str(obj), "svc1")
+
+    def test_caching_renders_display_once(self):
+        with patch.object(
+            nco_models.CustomObject, '_render_display_expression', autospec=True,
+            side_effect=nco_models.CustomObject._render_display_expression,
+        ) as mock_render:
+            get_backend().cache(self.model.objects.get(pk=self.obj.pk))
+        self.assertEqual(mock_render.call_count, 1)
+        self.assertEqual(self._cached_display(), [("Alpha / svc1", DISPLAY_EXPRESSION_SEARCH_WEIGHT)])
 
 
 class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
@@ -2809,6 +3150,13 @@ class StaleFKReferenceRegressionTest(CustomObjectsTestCase, TestCase):
             type="object",
             related_object_type=self.cot_a.object_type,
         )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.cot_b,
+            name="refs_a",
+            label="Refs A",
+            type="multiobject",
+            related_object_type=self.cot_a.object_type,
+        )
         # Generate B's model; this resolves the LazyForeignKey to model_a_v1
         self.cot_b.get_model()
         # Fetch fresh from cache to get the fully-resolved model
@@ -2859,6 +3207,17 @@ class StaleFKReferenceRegressionTest(CustomObjectsTestCase, TestCase):
             "B's FK field must be patched to the newly generated A class; "
             "a stale reference would cause ValueError on FK assignment",
         )
+
+    def test_b_m2m_is_patched_after_a_regeneration(self):
+        """After A is regenerated, B's multi-object field must reference the new A class, as its through model does."""
+        model_a_v2 = self.cot_a.get_model(no_cache=True)
+        obj_a = model_a_v2.objects.create(name="a")
+
+        m2m = next(f for f in self.model_b._meta.local_many_to_many if f.name == 'refs_a')
+        self.assertIs(m2m.remote_field.model, model_a_v2)
+        self.assertIs(m2m.remote_field.through._meta.get_field('target').remote_field.model, model_a_v2)
+        # Filtering joins through the through model; a mismatch breaks the join.
+        self.assertEqual(self.model_b.objects.filter(refs_a=obj_a.pk).count(), 0)
 
 
 class LazySerializerRegistrationTestCase(CustomObjectsTestCase, TestCase):
@@ -3905,3 +4264,55 @@ class CustomObjectTypeConstraintTestCase(CustomObjectsTestCase, TestCase):
         constraint = self._constraint()
         constraint.save()
         self.assertIn(constraint.db_name, self._db_constraint_names())
+
+
+class _BranchingImportBlocker(importlib.abc.MetaPathFinder):
+    """Fail on any import of netbox_branching."""
+
+    def find_spec(self, name, path, target=None):
+        if name == 'netbox_branching' or name.startswith('netbox_branching.'):
+            raise AssertionError(f'{name} was imported while netbox-branching is not enabled')
+        return None
+
+
+class BranchingInstalledNotEnabledTestCase(CustomObjectsTestCase, TestCase):
+    """
+    Nothing imports netbox-branching when it's installed but not in PLUGINS: importing it
+    registers its request processor, which then fails on every request and job.
+    """
+
+    def setUp(self):
+        super().setUp()
+        is_installed = django_apps.is_installed
+        patcher = patch.object(
+            django_apps, 'is_installed', side_effect=lambda name: name != 'netbox_branching' and is_installed(name)
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        # Unload netbox_branching (restored afterwards) so any import of it reaches the blocker.
+        modules = patch.dict(sys.modules)
+        modules.start()
+        self.addCleanup(modules.stop)
+        for name in [m for m in sys.modules if m == 'netbox_branching' or m.startswith('netbox_branching.')]:
+            del sys.modules[name]
+        blocker = _BranchingImportBlocker()
+        sys.meta_path.insert(0, blocker)
+        self.addCleanup(sys.meta_path.remove, blocker)
+
+    def test_hooks_and_branch_context_helpers(self):
+        with patch.object(nco, '_branching_hooks_registered', False):
+            nco._register_branching_hooks_once()
+            self.assertFalse(nco._branching_hooks_registered)
+        self.assertIs(nco_models._get_schema_connection(), connection)
+        self.assertIsNone(CustomObjectType._active_branch_id())
+        self.assertFalse(views._is_in_branch())
+        self.assertIsNone(_active_branch_key())
+
+    def test_field_rename_and_type_delete(self):
+        cot = self.create_custom_object_type(name='NotBranched', slug='not-branched')
+        field = self.create_custom_object_type_field(cot, name='label', type='text')
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.name = 'title'
+        field.save()
+        cot.delete()
+        self.assertFalse(CustomObjectType.objects.filter(pk=cot.pk).exists())

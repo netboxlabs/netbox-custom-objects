@@ -39,9 +39,10 @@ def ensure_existing_fk_constraints(apps, schema_editor):
     transaction.savepoint_commit(sid)
 
     for custom_object_type in queryset:
+        # Savepoint so one failing type doesn't abort the migration transaction.
         try:
-            model = custom_object_type.get_model()
-            custom_object_type._ensure_all_fk_constraints(model)
+            with transaction.atomic():
+                custom_object_type._ensure_all_fk_constraints()
         except Exception as e:
             print(f"Warning: Could not ensure FK constraints for {custom_object_type}: {e}")
 

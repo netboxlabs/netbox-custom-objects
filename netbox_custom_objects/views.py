@@ -10,7 +10,7 @@ from django.db import router, transaction
 from django.db.models import ProtectedError, Q, RestrictedError
 from django.http import Http404
 from django.shortcuts import get_object_or_404, redirect, render
-from django.urls import reverse
+from django.urls import resolve, reverse
 from django.utils.html import escape
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
@@ -48,18 +48,17 @@ from extras.choices import CustomFieldTypeChoices
 from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.dynamic_forms import build_filterset_form_class
-from netbox_custom_objects.utilities import extract_cot_id_from_model_name
+from netbox_custom_objects.utilities import extract_cot_id_from_model_name, is_branching_enabled
 
 logger = logging.getLogger("netbox_custom_objects.views")
 
 
 def _is_in_branch():
     """True if a netbox-branching branch is active in this context."""
-    try:
-        from netbox_branching.contextvars import active_branch
-        return active_branch.get() is not None
-    except ImportError:
+    if not is_branching_enabled():
         return False
+    from netbox_branching.contextvars import active_branch
+    return active_branch.get() is not None
 
 
 def _hidden_field_raw_columns(fields):
@@ -254,6 +253,29 @@ class CustomJournalEntryEditView(generic.ObjectEditView):
         obj = instance.assigned_object
         viewname = get_viewname(obj, "journal")
         return reverse(viewname, kwargs={"pk": obj.pk})
+
+
+class BackgroundJobURLKwargsMixin:
+    """
+    Restore the URL kwargs (the type's slug) when a bulk view runs as a background job.
+
+    NetBox's AsyncViewJob calls the view with only a copy of the request, so they're
+    resolved again from the request's path.
+    """
+
+    @staticmethod
+    def _url_kwargs(request, kwargs):
+        if "custom_object_type" in kwargs:
+            return kwargs
+        # COMPAT(netbox<4.7): copy_safe_request() carries only `path`, not `path_info`.
+        path = getattr(request, "path_info", None) or request.path
+        return {**resolve(path).kwargs, **kwargs}
+
+    def setup(self, request, *args, **kwargs):
+        super().setup(request, *args, **self._url_kwargs(request, kwargs))
+
+    def dispatch(self, request, *args, **kwargs):
+        return super().dispatch(request, *args, **self._url_kwargs(request, kwargs))
 
 
 class CustomObjectTableMixin(TableMixin):
@@ -672,16 +694,11 @@ class CustomObjectView(generic.ObjectView):
         return model.objects.all()
 
     def get_object(self, **kwargs):
-        custom_object_type = self.kwargs.get("custom_object_type", None)
-        object_type = get_object_or_404(
-            CustomObjectType, slug=custom_object_type
-        )
-        model = object_type.get_model_with_serializer()
         # Filter out custom_object_type from kwargs for the object lookup
         lookup_kwargs = {
             k: v for k, v in self.kwargs.items() if k != "custom_object_type"
         }
-        return get_object_or_404(model.objects.all(), **lookup_kwargs)
+        return get_object_or_404(self.queryset, **lookup_kwargs)
 
     def get_extra_context(self, request, instance):
         fields = instance.custom_object_type.fields.all().order_by(
@@ -702,8 +719,23 @@ class CustomObjectView(generic.ObjectView):
         }
 
 
+class RestrictedObjectMixin:
+    """
+    For views that look up the object in setup(), before dispatch() restricts the queryset
+    to the user's permissions: look it up again in the restricted queryset.
+    """
+
+    def has_permission(self):
+        if not super().has_permission():
+            return False
+        # super().has_permission() restricts self.queryset to the user's permitted objects.
+        if self.object.pk:
+            self.object = get_object_or_404(self.queryset, pk=self.object.pk)
+        return True
+
+
 @register_model_view(CustomObject, "edit")
-class CustomObjectEditView(generic.ObjectEditView):
+class CustomObjectEditView(RestrictedObjectMixin, generic.ObjectEditView):
     template_name = "netbox_custom_objects/customobject_edit.html"
     htmx_template_name = "netbox_custom_objects/htmx/edit_fields.html"
     _CO_QUICK_ADD_TEMPLATE = 'netbox_custom_objects/htmx/co_quick_add.html'
@@ -1185,7 +1217,7 @@ class CustomObjectEditView(generic.ObjectEditView):
 
 
 @register_model_view(CustomObject, "delete")
-class CustomObjectDeleteView(generic.ObjectDeleteView):
+class CustomObjectDeleteView(RestrictedObjectMixin, generic.ObjectDeleteView):
     queryset = None
     object = None
     default_return_url = "plugins:netbox_custom_objects:customobject_list"
@@ -1270,7 +1302,7 @@ class CustomObjectDeleteView(generic.ObjectDeleteView):
 
 
 @register_model_view(CustomObject, "bulk_edit", path="edit", detail=False)
-class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
+class CustomObjectBulkEditView(BackgroundJobURLKwargsMixin, CustomObjectTableMixin, generic.BulkEditView):
     template_name = "netbox_custom_objects/custom_object_bulk_edit.html"
     queryset = None
     custom_object_type = None
@@ -1551,7 +1583,7 @@ class CustomObjectBulkEditView(CustomObjectTableMixin, generic.BulkEditView):
 
 
 @register_model_view(CustomObject, "bulk_delete", path="delete", detail=False)
-class CustomObjectBulkDeleteView(CustomObjectTableMixin, generic.BulkDeleteView):
+class CustomObjectBulkDeleteView(BackgroundJobURLKwargsMixin, CustomObjectTableMixin, generic.BulkDeleteView):
     queryset = None
     custom_object_type = None
     table = None
@@ -1576,7 +1608,7 @@ class CustomObjectBulkDeleteView(CustomObjectTableMixin, generic.BulkDeleteView)
 
 
 @register_model_view(CustomObject, "bulk_import", path="import", detail=False)
-class CustomObjectBulkImportView(generic.BulkImportView):
+class CustomObjectBulkImportView(BackgroundJobURLKwargsMixin, generic.BulkImportView):
     template_name = "netbox_custom_objects/custom_object_bulk_import.html"
     queryset = None
     model_form = None
@@ -1670,7 +1702,7 @@ class CustomObjectJournalView(ConditionalLoginRequiredMixin, View):
 
         # Get the specific object
         lookup_kwargs = {k: v for k, v in kwargs.items() if k != "custom_object_type"}
-        obj = get_object_or_404(model.objects.all(), **lookup_kwargs)
+        obj = get_object_or_404(model.objects.restrict(request.user, "view"), **lookup_kwargs)
 
         # Get journal entries for this object
         content_type = ContentType.objects.get_for_model(model)
@@ -1742,7 +1774,7 @@ class CustomObjectChangeLogView(ConditionalLoginRequiredMixin, View):
 
         # Get the specific object
         lookup_kwargs = {k: v for k, v in kwargs.items() if k != "custom_object_type"}
-        obj = get_object_or_404(model.objects.all(), **lookup_kwargs)
+        obj = get_object_or_404(model.objects.restrict(request.user, "view"), **lookup_kwargs)
 
         # Gather all changes for this object (and its related objects)
         content_type = ContentType.objects.get_for_model(model)
@@ -1796,7 +1828,7 @@ class CustomObjectContactsView(ConditionalLoginRequiredMixin, View):
         model = object_type.get_model_with_serializer()
 
         lookup_kwargs = {k: v for k, v in kwargs.items() if k != "custom_object_type"}
-        obj = get_object_or_404(model.objects.all(), **lookup_kwargs)
+        obj = get_object_or_404(model.objects.restrict(request.user, "view"), **lookup_kwargs)
 
         contacts = (
             obj.get_contacts()
