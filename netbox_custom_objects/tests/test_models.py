@@ -27,6 +27,7 @@ from core.choices import JobIntervalChoices, JobStatusChoices
 from core.models import Job, ObjectType
 from dcim.models import Site
 from extras.models import CachedValue, CustomFieldChoiceSet, Tag, TaggedItem
+from netbox.models import BaseModel
 from netbox.search import registry
 from netbox.search.backends import get_backend
 from netbox_custom_objects.api.serializers import get_serializer_class
@@ -38,6 +39,7 @@ from netbox_custom_objects.graphql.live import _active_branch_key
 from netbox_custom_objects.jobs import RefreshDisplayExpressionSearchJob, ReindexCustomObjectTypeJob
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name
+from utilities.querysets import RestrictedQuerySet
 from .base import CustomObjectsTestCase, create_token
 
 
@@ -3838,3 +3840,47 @@ class BranchingInstalledNotEnabledTestCase(CustomObjectsTestCase, TestCase):
         field.save()
         cot.delete()
         self.assertFalse(CustomObjectType.objects.filter(pk=cot.pk).exists())
+
+
+class CustomObjectBaseModelTestCase(CustomObjectsTestCase, TestCase):
+    """CustomObject inherits NetBox's BaseModel (#771)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(name="BaseModelTest", slug="base-model-test")
+        cls.create_custom_object_type_field(cls.cot, name="name", type="text", primary=True, required=True)
+        cls.create_custom_object_type_field(cls.cot, name="code", type="text", required=False, unique=True)
+        cls.create_custom_object_type_field(cls.cot, name="notes", type="longtext", required=False, unique=True)
+
+    def test_custom_object_subclasses_base_model(self):
+        model = self.cot.get_model()
+        self.assertTrue(issubclass(model, BaseModel))
+        self.assertIsInstance(model.objects.all(), RestrictedQuerySet)
+
+    def test_blank_unique_text_values_do_not_collide(self):
+        """Two objects with blank unique text/longtext values must both validate and save."""
+        model = self.cot.get_model()
+        for name in ("first", "second"):
+            obj = model(name=name, code="", notes="")
+            obj.full_clean()
+            obj.save()
+        self.assertEqual(model.objects.count(), 2)
+        for obj in model.objects.all():
+            self.assertIsNone(obj.code)
+            self.assertIsNone(obj.notes)
+
+    def test_blank_unique_text_coerced_on_save_without_clean(self):
+        model = self.cot.get_model()
+        model.objects.create(name="first", code="", notes="")
+        obj = model.objects.create(name="second", code="", notes="")
+        obj.refresh_from_db()
+        self.assertIsNone(obj.code)
+        self.assertIsNone(obj.notes)
+
+    def test_non_unique_blank_text_is_left_alone(self):
+        model = self.cot.get_model()
+        obj = model(name="")
+        obj.save()
+        obj.refresh_from_db()
+        self.assertEqual(obj.name, "")

@@ -42,7 +42,7 @@ from extras.models import ConfigContext, ConfigContextModel, CustomField, Custom
 from extras.models.customfields import SEARCH_TYPES
 from extras.utils import is_taggable, run_validators
 from netbox.config import get_config
-from netbox.models import ChangeLoggedModel, NetBoxModel
+from netbox.models import BaseModel, ChangeLoggedModel, NetBoxModel
 from netbox.models.mixins import OwnerMixin
 from netbox.models.features import (
     BookmarksMixin,
@@ -68,7 +68,6 @@ from jinja2 import Undefined as _JinjaUndefined
 from jinja2 import meta as _jinja_meta
 from jinja2.sandbox import SandboxedEnvironment as _JinjaSandbox
 from utilities.object_types import object_type_name
-from utilities.querysets import RestrictedQuerySet
 from utilities.serialization import deserialize_object as _deserialize_object
 from utilities.string import title
 from utilities.validators import validate_regex
@@ -821,6 +820,26 @@ def _set_with_collision_preference(result, key, value):
     result[key] = value
 
 
+class _NullableUniqueCharsCompatMixin(models.Model):
+    """COMPAT(netbox<4.6.0): ``BaseModel`` only calls ``_coerce_nullable_unique_chars()`` from 4.6.0 on."""
+
+    class Meta:
+        abstract = True
+
+    def clean(self):
+        super().clean()
+        self._coerce_nullable_unique_chars()
+
+    def save(self, *args, **kwargs):
+        self._coerce_nullable_unique_chars()
+        super().save(*args, **kwargs)
+
+
+_custom_object_compat_bases = (
+    () if hasattr(BaseModel, '_coerce_nullable_unique_chars') else (_NullableUniqueCharsCompatMixin,)
+)
+
+
 class CustomObject(
     OwnerMixin,
     BookmarksMixin,
@@ -834,6 +853,8 @@ class CustomObject(
     NotificationsMixin,
     EventRulesMixin,
     TagsMixin,
+    *_custom_object_compat_bases,
+    BaseModel,
 ):
     """
     Base class for dynamically generated custom object models.
@@ -860,10 +881,23 @@ class CustomObject(
         _generated_table_model (property): Indicates this is a generated table model
     """
 
-    objects = RestrictedQuerySet.as_manager()
-
     class Meta:
         abstract = True
+
+    def _coerce_nullable_unique_chars(self):
+        """Store blank unique text values as NULL so two blank objects don't collide.
+
+        ``BaseModel`` only coerces CharFields; longtext fields are TextFields, so
+        extend the check to those too.
+        """
+        for field in self._meta.concrete_fields:
+            if (
+                isinstance(field, (models.CharField, models.TextField))
+                and field.null
+                and field.unique
+                and getattr(self, field.attname, None) == ''
+            ):
+                setattr(self, field.attname, None)
 
     @classmethod
     def resolve_field_aliases(cls, data):

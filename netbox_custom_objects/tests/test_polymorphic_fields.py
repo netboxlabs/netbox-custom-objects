@@ -1224,6 +1224,44 @@ class ReferencedObjectDeletionTest(
         # exists in the app registry), but the object is gone — accessor returns None.
         self.assertIsNone(obj.poly_obj)
 
+    def test_full_clean_flags_gfk_pointing_at_deleted_object(self):
+        """BaseModel.clean() reports a GFK whose target no longer exists (#771)."""
+        obj = self.model.objects.create(name="stale-gfk")
+        obj.poly_obj = self.site
+        obj.save()
+        self.site.delete()
+
+        obj.refresh_from_db()
+        with self.assertRaises(ValidationError) as cm:
+            obj.full_clean()
+        self.assertIn("poly_obj_object_id", cm.exception.error_dict)
+
+        # Clearing the reference makes the object valid again.
+        obj.poly_obj = None
+        obj.full_clean()
+
+    def test_full_clean_rejects_half_set_gfk(self):
+        """A content type without an object ID (or vice versa) fails validation (#771)."""
+        obj = self.model(name="half-gfk")
+        obj.poly_obj_content_type = self.site_ot
+        with self.assertRaises(ValidationError) as cm:
+            obj.full_clean()
+        self.assertIn("poly_obj_object_id", cm.exception.error_dict)
+
+        obj.poly_obj_content_type = None
+        obj.poly_obj_object_id = self.site.pk
+        with self.assertRaises(ValidationError) as cm:
+            obj.full_clean()
+        self.assertIn("poly_obj_content_type", cm.exception.error_dict)
+
+    def test_full_clean_accepts_valid_gfk(self):
+        obj = self.model(name="valid-gfk")
+        obj.poly_obj = self.site
+        obj.full_clean()
+        obj.save()
+        obj.refresh_from_db()
+        self.assertEqual(obj.poly_obj, self.site)
+
     def test_deleting_referenced_site_leaves_stale_m2m_row_excluded_from_all(self):
         """
         Deleting a Site that is in a polymorphic M2M through table leaves a stale
