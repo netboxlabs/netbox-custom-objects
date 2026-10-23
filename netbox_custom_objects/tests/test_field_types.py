@@ -644,6 +644,16 @@ class WidenDecimalAndMultiSelectColumnsTestCase(FieldTypeTestCase):
 
         self.assertEqual(self._run_migration(), [])
 
+    def test_columns_already_wider_than_the_target_are_not_narrowed(self):
+        """Only the exact legacy types are altered, so a manually widened column is left alone."""
+        self._create_legacy_fields()
+        _alter_column_type(self.table_name, "price", "numeric(20,6)")
+        _alter_column_type(self.table_name, "tags", "varchar(200)[]")
+
+        self.assertEqual(self._run_migration(), [])
+        self.assertEqual(_column_type(self.table_name, "price"), "numeric(20,6)")
+        self.assertEqual(_column_type(self.table_name, "tags"), "character varying(200)[]")
+
     def test_other_field_types_and_missing_columns_are_untouched(self):
         """Only decimal and multi-select columns are altered; a field without a column is skipped."""
         self.create_custom_object_type_field(self.custom_object_type, name="count", label="Count", type="integer")

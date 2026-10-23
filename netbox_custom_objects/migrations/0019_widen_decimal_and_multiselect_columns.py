@@ -24,7 +24,13 @@ from collections import defaultdict
 
 from django.db import migrations
 
-# The target type of each widened column, keyed by the field type whose column it is.
+# The legacy column type that is widened, and what it becomes, keyed by field type.
+# Only an exact legacy match is altered, so a column someone already widened further
+# (e.g. numeric(20,6)) is left alone rather than narrowed.
+LEGACY_TYPES = {
+    "decimal": "numeric(8,2)",
+    "multiselect": "character varying(50)[]",
+}
 TARGET_TYPES = {
     "decimal": "numeric(16,4)",
     "multiselect": "character varying(100)[]",
@@ -57,9 +63,10 @@ def _column_types(cursor, table_name):
 
 def _target_type(field_type, current_type):
     """The type *current_type* should become for a field of *field_type*, or None to leave it alone."""
-    target = TARGET_TYPES[field_type]
-    # Already widened: a no-op on fresh installs and on re-runs.
-    return None if current_type == target else target
+    # Anything but the legacy type is skipped: a no-op on fresh installs and re-runs.
+    if current_type != LEGACY_TYPES[field_type]:
+        return None
+    return TARGET_TYPES[field_type]
 
 
 def widen_decimal_and_multiselect_columns(apps, schema_editor):
