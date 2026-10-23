@@ -269,6 +269,9 @@ class BaseBranchingTests(BranchingTestBase):
                       both the URL and title values (title only reverts to its
                       default empty string, not the URL, if the replay ever
                       drops it)
+        coordinates — two backing columns (<name>_latitude, <name>_longitude)
+                      and none named after the field itself, so a replay keyed
+                      on the bare field name drops both values (#770)
 
         This exercises every distinct schema-editor operation
         (add_field, add_FK, create_through_table) across a merge cycle and
@@ -311,6 +314,7 @@ class BaseBranchingTests(BranchingTestBase):
                 ('obj_field', {'type': 'object', 'related_object_type': site_ot}),
                 ('multi_field', {'type': 'multiobject', 'related_object_type': site_ot}),
                 ('url_field', {'type': 'url'}),
+                ('coord_field', {'type': 'coordinates'}),
             ]
             for name, kwargs in field_specs:
                 f = CustomObjectTypeField.objects.create(
@@ -333,6 +337,8 @@ class BaseBranchingTests(BranchingTestBase):
                 # multi_field left empty — through-table creation is still exercised
                 url_field='https://example.com/path',
                 url_field_title='Example Path',
+                coord_field_latitude=decimal.Decimal('51.500000'),
+                coord_field_longitude=decimal.Decimal('-0.120000'),
             )
             co_pk = co.pk
 
@@ -376,6 +382,11 @@ class BaseBranchingTests(BranchingTestBase):
         self.assertEqual(
             co_main.url_field_title, 'Example Path',
             'Title value must survive replay alongside the URL value',
+        )
+        self.assertEqual(
+            (co_main.coord_field_latitude, co_main.coord_field_longitude),
+            (decimal.Decimal('51.500000'), decimal.Decimal('-0.120000')),
+            'Both coordinates columns must survive replay',
         )
 
         # Capture the multi_field's physical through-table name *while* it

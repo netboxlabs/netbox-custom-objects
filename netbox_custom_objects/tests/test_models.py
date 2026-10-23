@@ -23,8 +23,8 @@ from rest_framework.test import APIClient
 import netbox_custom_objects as nco
 import netbox_custom_objects.models as nco_models
 
-from core.choices import JobIntervalChoices, JobStatusChoices
-from core.models import Job, ObjectType
+from core.choices import JobIntervalChoices, JobStatusChoices, ObjectChangeActionChoices
+from core.models import Job, ObjectChange, ObjectType
 from dcim.models import Site
 from extras.models import CachedValue, CustomFieldChoiceSet, Tag, TaggedItem
 from netbox.search import registry
@@ -3838,3 +3838,112 @@ class BranchingInstalledNotEnabledTestCase(CustomObjectsTestCase, TestCase):
         field.save()
         cot.delete()
         self.assertFalse(CustomObjectType.objects.filter(pk=cot.pk).exists())
+
+
+class CoordinatesBackingColumnsTestCase(CustomObjectsTestCase, TestCase):
+    """
+    Regression tests for #770: a coordinates field has no column matching its own
+    name -- only ``<name>_latitude`` and ``<name>_longitude`` -- so any code path
+    that derives columns from the bare field name silently skips it.  Two such
+    paths: the deferred squash-merge replay (``_apply_deferred_co_field``) and the
+    audit-key rewrite on rename (``_rename_objectchange_field_key``).
+    """
+
+    def test_deferred_replay_fills_both_coordinates_columns(self):
+        from netbox_custom_objects.models import _deferred_co_field_data
+
+        cot = self.create_custom_object_type(name="DeferredCoordCOT", slug="deferred-coord-cot")
+        model = cot.get_model()
+        co = model.objects.create()
+        table_name = cot.get_database_table_name()
+
+        _deferred_co_field_data.set({
+            table_name: {
+                co.pk: {
+                    "data": {
+                        "geo_latitude": "12.345600",
+                        "geo_longitude": "-98.765400",
+                    },
+                },
+            },
+        })
+        try:
+            self.create_custom_object_type_field(cot, name="geo", label="Geo", type="coordinates")
+            self.assertIsNone(
+                _deferred_co_field_data.get(),
+                "deferred coordinates data must be consumed once both columns exist",
+            )
+        finally:
+            _deferred_co_field_data.set(None)
+
+        fresh_co = cot.get_model().objects.get(pk=co.pk)
+        self.assertEqual(fresh_co.geo_latitude, Decimal("12.345600"))
+        self.assertEqual(fresh_co.geo_longitude, Decimal("-98.765400"))
+
+    def test_deferred_replay_matches_coordinates_columns_under_historical_name(self):
+        """A CO recorded under the field's pre-rename name still replays after a rename."""
+        from netbox_custom_objects.models import _apply_deferred_co_field, _deferred_co_field_data
+
+        cot = self.create_custom_object_type(name="DeferredCoordRenameCOT", slug="deferred-coord-rename-cot")
+        field = self.create_custom_object_type_field(cot, name="geo", label="Geo", type="coordinates")
+        co = cot.get_model().objects.create()
+        table_name = cot.get_database_table_name()
+
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.name = "location"
+        field.save()
+        # The rename history _apply_deferred_co_field consults lives in ObjectChange.
+        ObjectChange.objects.create(
+            user_name="tester",
+            request_id=uuid.uuid4(),
+            action=ObjectChangeActionChoices.ACTION_UPDATE,
+            changed_object_type=ObjectType.objects.get_for_model(CustomObjectTypeField),
+            changed_object_id=field.pk,
+            object_repr=str(field),
+            prechange_data={"name": "geo"},
+            postchange_data={"name": "location"},
+        )
+
+        _deferred_co_field_data.set({
+            table_name: {co.pk: {"data": {"geo_latitude": "1.5", "geo_longitude": "2.5"}}},
+        })
+        try:
+            _apply_deferred_co_field(CustomObjectTypeField.objects.get(pk=field.pk))
+        finally:
+            _deferred_co_field_data.set(None)
+
+        fresh_co = cot.get_model().objects.get(pk=co.pk)
+        self.assertEqual(fresh_co.location_latitude, Decimal("1.5"))
+        self.assertEqual(fresh_co.location_longitude, Decimal("2.5"))
+
+    def test_rename_rewrites_both_coordinates_keys_in_objectchange(self):
+        cot = self.create_custom_object_type(name="RenameCoordCOT", slug="rename-coord-cot")
+        field = self.create_custom_object_type_field(cot, name="geo", label="Geo", type="coordinates")
+        self.create_custom_object_type_field(cot, name="note", label="Note", type="text")
+        model = cot.get_model()
+        co = model.objects.create(geo_latitude=Decimal("1.5"), geo_longitude=Decimal("2.5"), note="n")
+
+        change = ObjectChange.objects.create(
+            user_name="tester",
+            request_id=uuid.uuid4(),
+            action=ObjectChangeActionChoices.ACTION_UPDATE,
+            changed_object_type=ObjectType.objects.get_for_model(model),
+            changed_object_id=co.pk,
+            object_repr=str(co),
+            prechange_data={"geo_latitude": "0.0", "geo_longitude": "0.0", "note": "n"},
+            postchange_data={"geo_latitude": "1.5", "geo_longitude": "2.5", "note": "n"},
+        )
+
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        field.name = "location"
+        field.save()
+
+        change.refresh_from_db()
+        self.assertEqual(
+            change.prechange_data,
+            {"location_latitude": "0.0", "location_longitude": "0.0", "note": "n"},
+        )
+        self.assertEqual(
+            change.postchange_data,
+            {"location_latitude": "1.5", "location_longitude": "2.5", "note": "n"},
+        )

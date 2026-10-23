@@ -323,6 +323,10 @@ def _apply_deferred_co_field(field_instance):
     but the column is ``{name}_id``; TYPE_MULTIOBJECT has no parent-table
     column so it's skipped.  Historical names (rename history) are accepted
     as matches so a renamed field still picks up its pre-rename data.
+
+    Every backing column is replayed (see ``_occupied_columns``): url's
+    ``<name>_title`` and coordinates' ``<name>_latitude``/``<name>_longitude``
+    can each be set independently, so each is matched and applied on its own.
     """
     # No deferred data at all — fast path.
     deferred = _deferred_co_field_data.get()
@@ -339,57 +343,46 @@ def _apply_deferred_co_field(field_instance):
     if field_instance.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
         return
 
-    # For TYPE_OBJECT the data key is the field name but the DB column ends with _id.
-    if field_instance.type == CustomFieldTypeChoices.TYPE_OBJECT:
-        col_name = f'{field_instance.name}_id'
-    else:
-        col_name = field_instance.name
-
-    # Candidate data keys: current name + all historical names.  pk may be None
-    # when called before the field row is persisted; in that case we skip the
-    # history lookup and only match by current name.
-    candidate_keys = {field_instance.name}
+    # Candidate field names: current name + all historical names.  pk may be
+    # None when called before the field row is persisted; in that case we skip
+    # the history lookup and only match by current name.
+    names = {field_instance.name}
     if field_instance.pk is not None:
-        candidate_keys.update(_historical_names_for_field(field_instance.pk))
+        names.update(_historical_names_for_field(field_instance.pk))
 
-    # A URL field has a second backing column (<name>_title) whose value must
-    # be replayed too, or it silently reverts to its default empty string —
-    # the URL and title can be set independently, so each is matched and
-    # applied on its own.
-    title_col_name = None
-    title_candidate_keys = set()
-    if field_instance.type == CustomFieldTypeChoices.TYPE_URL:
-        from netbox_custom_objects.field_types import URLFieldType  # noqa: PLC0415
-        title_col_name = URLFieldType.title_field_name(field_instance)
-        title_candidate_keys = {f'{k}_title' for k in candidate_keys}
+    # {db column: candidate data keys}, one entry per backing column.  A data key
+    # is the column name under any of the field's names; the column suffix ("",
+    # "_title", "_latitude", ...) is the same under every name.
+    columns = {}
+    for column in _occupied_columns(field_instance.name, field_instance.type):
+        suffix = column[len(field_instance.name):]
+        # For TYPE_OBJECT the data key is the field name but the DB column ends with _id.
+        if field_instance.type == CustomFieldTypeChoices.TYPE_OBJECT:
+            column = f'{column}_id'
+        columns[column] = {f'{name}{suffix}' for name in names}
+    all_candidate_keys = set().union(*columns.values())
 
     schema_conn = _get_schema_connection()
 
     with schema_conn.cursor() as cursor:
         for co_pk, entry in per_table.items():
             data = entry['data']
-            # Distinguish "key absent" from "key present with NULL" — explicit
-            # None is a legitimate write and must reach the column.
-            matched = next((k for k in candidate_keys if k in data), None)
-            title_matched = next((k for k in title_candidate_keys if k in data), None)
-            if matched is None and title_matched is None:
-                continue
-            # table_name / col_name come from validated identifiers
-            # (^[a-z0-9_]+$ on field.name) — safe to interpolate.
-            if matched is not None:
+            for col_name, candidate_keys in columns.items():
+                # Distinguish "key absent" from "key present with NULL" — explicit
+                # None is a legitimate write and must reach the column.
+                matched = next((k for k in candidate_keys if k in data), None)
+                if matched is None:
+                    continue
+                # table_name / col_name come from validated identifiers
+                # (^[a-z0-9_]+$ on field.name) — safe to interpolate.
                 cursor.execute(
                     f'UPDATE "{table_name}" SET "{col_name}" = %s WHERE id = %s',
                     [data[matched], co_pk],
                 )
-            if title_matched is not None:
-                cursor.execute(
-                    f'UPDATE "{table_name}" SET "{title_col_name}" = %s WHERE id = %s',
-                    [data[title_matched], co_pk],
-                )
             # Pop consumed keys immediately so a mid-loop failure leaves
             # un-applied rows intact for retry but doesn't re-apply
             # rows that already succeeded.
-            for k in candidate_keys | title_candidate_keys:
+            for k in all_candidate_keys:
                 data.pop(k, None)
 
     exhausted = [pk for pk, entry in per_table.items() if not entry['data']]
@@ -422,14 +415,26 @@ def _occupied_columns(name, field_type):
     Single-column types occupy just {name}; multi-column types (coordinates,
     url) occupy more than one -- see MULTI_COLUMN_TYPES. Shared by
     CustomObjectTypeField.clean()'s collision guard (new/renamed fields going
-    forward) and detect_backing_column_collisions() (pre-existing fields at
-    heal time).
+    forward), detect_backing_column_collisions() (pre-existing fields at
+    heal time), _apply_deferred_co_field() (squash replay) and
+    _backing_column_renames() (audit-key rewrite on rename).
     """
     if field_type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
         return {f"{name}_latitude", f"{name}_longitude"}
     if field_type == CustomObjectFieldTypeChoices.TYPE_URL:
         return {name, f"{name}_title"}
     return {name}
+
+
+def _backing_column_renames(field_type, old_name, new_name):
+    """``[(old_column, new_column), ...]`` for renaming a field of *field_type*
+    from *old_name* to *new_name*: one pair per backing column, since a
+    multi-column type (coordinates, url) has no column named ``old_name``
+    itself to rewrite."""
+    return sorted(
+        (old_column, f'{new_name}{old_column[len(old_name):]}')
+        for old_column in _occupied_columns(old_name, field_type)
+    )
 
 
 def detect_backing_column_collisions(cot):
@@ -4128,10 +4133,14 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             with schema_conn.schema_editor() as schema_editor:
                 if self._state.adding:
                     if self.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+                        # Flush pending DEFERRABLE FK trigger events before ALTER TABLE,
+                        # as _schema_add_field does.
+                        schema_editor.execute('SET CONSTRAINTS ALL IMMEDIATE')
                         # Coordinates expand into two concrete columns (latitude/longitude).
                         for column_name, model_field in field_type.get_model_field(self).items():
                             bind_for_ddl(model_field, model, column_name)
                             schema_editor.add_field(model, model_field)
+                        _apply_deferred_co_field(self)
                     elif self.is_polymorphic:
                         if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
                             field_type.add_polymorphic_object_columns(self, model, schema_editor)
@@ -4218,13 +4227,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 and not self.is_polymorphic
                 and self._original_name != self.name
             ):
-                _rename_objectchange_field_key(self, self._original_name, self.name)
-                if self.type == CustomObjectFieldTypeChoices.TYPE_URL:
-                    _rename_objectchange_field_key(
-                        self,
-                        field_type.title_field_name(self.original),
-                        field_type.title_field_name(self),
-                    )
+                for old_column, new_column in _backing_column_renames(self.type, self._original_name, self.name):
+                    _rename_objectchange_field_key(self, old_column, new_column)
 
             # FK-constraint decision inside the atomic so a rollback discards it too.
             should_ensure_fk = False
