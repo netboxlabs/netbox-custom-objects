@@ -85,15 +85,15 @@ class CombinedTabTestCase(CombinedTabMixin, CustomObjectsTestCase, TestCase):
         cls.create_custom_object_type_field(
             cls.note_cot, name="zone", label="Located in", type="object", related_object_type=zone_type,
         )
-        cls.link_cot = cls.create_custom_object_type(name="link", slug="links")
-        _name_field(cls, cls.link_cot)
+        cls.bridge_cot = cls.create_custom_object_type(name="bridge", slug="bridges")
+        _name_field(cls, cls.bridge_cot)
         cls.create_custom_object_type_field(
-            cls.link_cot, name="zones", label="Covers", type="multiobject", related_object_type=zone_type,
+            cls.bridge_cot, name="zones", label="Covers", type="multiobject", related_object_type=zone_type,
         )
 
         # Generate the referencing models before the target's (see CustomObjectType.get_model).
         note_model = cls.note_cot.get_model()
-        link_model = cls.link_cot.get_model()
+        bridge_model = cls.bridge_cot.get_model()
         cls.zone_cot.refresh_from_db()
         zone_model = cls.zone_cot.get_model()
 
@@ -106,7 +106,7 @@ class CombinedTabTestCase(CombinedTabMixin, CustomObjectsTestCase, TestCase):
         note_model.objects.create(name="Note Bravo", zone=cls.zone)
         note_model.objects.create(name="Note Charlie", zone=cls.zone).tags.add(blue)
         note_model.objects.create(name="Note Echo", zone=cls.other_zone)
-        link = link_model.objects.create(name="Link Delta")
+        link = bridge_model.objects.create(name="Link Delta")
         link.zones.set([cls.zone, cls.other_zone])
         link.tags.add(red)
 
@@ -139,17 +139,17 @@ class CombinedTabTestCase(CombinedTabMixin, CustomObjectsTestCase, TestCase):
     def test_quick_search(self):
         for q, expected in (
             ("bravo", ["Note Bravo"]),
-            # Matches the type name, then the field label.
-            ("link", ["Link Delta"]),
+            # Matches only the type name, then only the field label.
+            ("bridge", ["Link Delta"]),
             ("located", ["Note Alpha", "Note Bravo", "Note Charlie"]),
         ):
             with self.subTest(q=q):
                 self.assertCountEqual(self._rows(self._get(q=q)), expected)
 
     def test_type_filter(self):
-        response = self._get(type="links")
+        response = self._get(type="bridges")
         self.assertEqual(self._rows(response), ["Link Delta"])
-        self.assertContains(response, '<option value="links" selected>')
+        self.assertContains(response, '<option value="bridges" selected>')
         # The choices come from every linked object, not just the filtered ones.
         self.assertContains(response, '<option value="notes">')
 
@@ -165,19 +165,17 @@ class CombinedTabTestCase(CombinedTabMixin, CustomObjectsTestCase, TestCase):
         self.assertContains(response, "No custom objects match your filters.")
 
     def test_sort(self):
-        for sort, expected in (
-            ("object", ["Link Delta", "Note Alpha", "Note Bravo", "Note Charlie"]),
-            ("-object", ["Note Charlie", "Note Bravo", "Note Alpha", "Link Delta"]),
-            ("-field", ["Note Alpha", "Note Bravo", "Note Charlie", "Link Delta"]),
-        ):
+        notes = ["Note Alpha", "Note Bravo", "Note Charlie"]
+        for sort, expected in (("object", ["Link Delta", *notes]), ("-object", [*reversed(notes), "Link Delta"])):
+            with self.subTest(sort=sort):
+                self.assertEqual(self._rows(self._get(sort=sort)), expected)
+        # The notes share a type and a field, and sorting is stable, so only the bridge
+        # row's place is fixed: first ascending ("bridge", "Covers"), last descending.
+        for sort, position in (("type", 0), ("-type", 3), ("field", 0), ("-field", 3)):
             with self.subTest(sort=sort):
                 rows = self._rows(self._get(sort=sort))
-                if sort == "-field":
-                    # Sorting is stable, so only the field order is fixed.
-                    self.assertCountEqual(rows[:3], expected[:3])
-                    self.assertEqual(rows[3], expected[3])
-                else:
-                    self.assertEqual(rows, expected)
+                self.assertCountEqual(rows, ["Link Delta", *notes])
+                self.assertEqual(rows.index("Link Delta"), position)
 
     def test_sort_headers_keep_filters(self):
         response = self._get(q="note", sort="object")
@@ -188,8 +186,8 @@ class CombinedTabTestCase(CombinedTabMixin, CustomObjectsTestCase, TestCase):
         self.assertContains(response, 'hx-get="?q=note&amp;sort=type"')
 
     def test_pagination(self):
-        # Core's paginator moves up to five trailing rows onto the previous page, so
-        # two pages of two need at least eight rows.
+        # Core's paginator moves up to five trailing rows onto the last page, so page 2
+        # holds just two rows only if it isn't the last page: at least ten rows.
         extra = [f"Note Page {i}" for i in range(1, 7)]
         note_model = self.note_cot.get_model()
         for name in extra:
@@ -241,7 +239,7 @@ class CombinedTabTestCase(CombinedTabMixin, CustomObjectsTestCase, TestCase):
     def test_host_without_view_permission_is_404(self):
         self.user.is_superuser = False
         self.user.save()
-        self._grant_view(self.note_cot.get_model(), self.link_cot.get_model())
+        self._grant_view(self.note_cot.get_model(), self.bridge_cot.get_model())
         self.assertEqual(self.client.get(self.url).status_code, 404)
 
 
