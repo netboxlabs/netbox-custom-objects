@@ -14,7 +14,6 @@ Adding tests for a new migration
 """
 
 import importlib
-from importlib import import_module
 
 from django.apps import apps
 from django.db import connection
@@ -111,6 +110,11 @@ class _MigrationTestCase(TestCase):
 # Migration 0008 — backfill_schema_ids
 # ===========================================================================
 
+# The backfill functions read models only through apps.get_model(), so the current
+# app registry stands in for the historical one RunPython would pass.
+_m0008 = _load_migration('0008_backfill_schema_ids')
+
+
 class SchemaIdBackfillTestCase(CustomObjectsTestCase, TestCase):
     """
     Tests for the 0008_backfill_schema_ids migration logic.
@@ -119,24 +123,6 @@ class SchemaIdBackfillTestCase(CustomObjectsTestCase, TestCase):
     replaying the full migration history), these tests call the same backfill
     function directly and verify its behaviour against real model instances.
     """
-
-    @staticmethod
-    def _run_backfill():
-        """Execute the backfill function directly against the live DB."""
-        import importlib
-        mod = importlib.import_module(
-            'netbox_custom_objects.migrations.0008_backfill_schema_ids'
-        )
-        # The function accepts (apps, schema_editor) but only uses apps.get_model().
-        # We pass a lightweight shim that delegates to the real models.
-
-        class _AppsShim:
-            @staticmethod
-            def get_model(app_label, model_name):
-                from django.apps import apps
-                return apps.get_model(app_label, model_name)
-
-        mod.assign_schema_ids(_AppsShim(), None)
 
     # ------------------------------------------------------------------
     # Core backfill behaviour
@@ -151,7 +137,7 @@ class SchemaIdBackfillTestCase(CustomObjectsTestCase, TestCase):
             custom_object_type=cot
         ).update(schema_id=None)
 
-        self._run_backfill()
+        _m0008.assign_schema_ids(apps, None)
 
         f1.refresh_from_db()
         f2.refresh_from_db()
@@ -168,7 +154,7 @@ class SchemaIdBackfillTestCase(CustomObjectsTestCase, TestCase):
             custom_object_type=cot
         ).update(schema_id=None)
 
-        self._run_backfill()
+        _m0008.assign_schema_ids(apps, None)
 
         ids = sorted(
             CustomObjectTypeField.objects.filter(custom_object_type=cot)
@@ -186,7 +172,7 @@ class SchemaIdBackfillTestCase(CustomObjectsTestCase, TestCase):
         f_new = self.create_custom_object_type_field(cot, name='new_one', type='text')
         CustomObjectTypeField.objects.filter(pk=f_new.pk).update(schema_id=None)
 
-        self._run_backfill()
+        _m0008.assign_schema_ids(apps, None)
 
         f_existing.refresh_from_db()
         f_new.refresh_from_db()
@@ -204,7 +190,7 @@ class SchemaIdBackfillTestCase(CustomObjectsTestCase, TestCase):
         f2 = self.create_custom_object_type_field(cot, name='null_one', type='text')
         CustomObjectTypeField.objects.filter(pk=f2.pk).update(schema_id=None)
 
-        self._run_backfill()
+        _m0008.assign_schema_ids(apps, None)
 
         f2.refresh_from_db()
         self.assertEqual(f2.schema_id, 6)
@@ -220,7 +206,7 @@ class SchemaIdBackfillTestCase(CustomObjectsTestCase, TestCase):
         ).update(schema_id=None)
         CustomObjectType.objects.filter(pk=cot.pk).update(next_schema_id=0)
 
-        self._run_backfill()
+        _m0008.assign_schema_ids(apps, None)
 
         cot.refresh_from_db()
         self.assertEqual(cot.next_schema_id, 3)
@@ -234,7 +220,7 @@ class SchemaIdBackfillTestCase(CustomObjectsTestCase, TestCase):
         # Artificially set next_schema_id to a large value
         CustomObjectType.objects.filter(pk=cot.pk).update(next_schema_id=99)
 
-        self._run_backfill()
+        _m0008.assign_schema_ids(apps, None)
 
         cot.refresh_from_db()
         self.assertGreaterEqual(cot.next_schema_id, 99)
@@ -247,7 +233,7 @@ class SchemaIdBackfillTestCase(CustomObjectsTestCase, TestCase):
             custom_object_type=cot
         ).update(schema_id=None)
 
-        self._run_backfill()
+        _m0008.assign_schema_ids(apps, None)
 
         ids = list(
             CustomObjectTypeField.objects.filter(custom_object_type=cot)
@@ -265,7 +251,7 @@ class SchemaIdBackfillTestCase(CustomObjectsTestCase, TestCase):
         from netbox_custom_objects.models import CustomObjectType
         CustomObjectType.objects.filter(pk__in=[cotA.pk, cotB.pk]).update(next_schema_id=0)
 
-        self._run_backfill()
+        _m0008.assign_schema_ids(apps, None)
 
         fa.refresh_from_db()
         fb.refresh_from_db()
@@ -281,13 +267,13 @@ class SchemaIdBackfillTestCase(CustomObjectsTestCase, TestCase):
             custom_object_type=cot
         ).update(schema_id=None)
 
-        self._run_backfill()
+        _m0008.assign_schema_ids(apps, None)
         ids_after_first = list(
             CustomObjectTypeField.objects.filter(custom_object_type=cot)
             .order_by('id').values_list('schema_id', flat=True)
         )
 
-        self._run_backfill()
+        _m0008.assign_schema_ids(apps, None)
         ids_after_second = list(
             CustomObjectTypeField.objects.filter(custom_object_type=cot)
             .order_by('id').values_list('schema_id', flat=True)
@@ -300,19 +286,7 @@ class SchemaIdBackfillTestCase(CustomObjectsTestCase, TestCase):
 # Migration 0010 — backfill_base_columns
 # ===========================================================================
 
-def _run_backfill():
-    """Execute the 0010 backfill function directly against the live DB."""
-    mod = importlib.import_module(
-        "netbox_custom_objects.migrations.0010_backfill_base_columns"
-    )
-
-    class _AppsShim:
-        @staticmethod
-        def get_model(app_label, model_name):
-            from django.apps import apps  # noqa: PLC0415
-            return apps.get_model(app_label, model_name)
-
-    mod.backfill_base_columns(_AppsShim(), None)
+_m0010 = _load_migration('0010_backfill_base_columns')
 
 
 class BackfillBaseColumnsTestCase(CustomObjectsTestCase, TestCase):
@@ -341,7 +315,7 @@ class BackfillBaseColumnsTestCase(CustomObjectsTestCase, TestCase):
             cot.schema_document and "base_columns" in (cot.schema_document or {})
         )
 
-        _run_backfill()
+        _m0010.backfill_base_columns(apps, None)
 
         cot.refresh_from_db()
         self.assertIn("base_columns", cot.schema_document)
@@ -352,7 +326,7 @@ class BackfillBaseColumnsTestCase(CustomObjectsTestCase, TestCase):
         cot = self.create_custom_object_type(name="bf_mandatory", slug="bf-mandatory")
         self._clear_base_columns(cot)
 
-        _run_backfill()
+        _m0010.backfill_base_columns(apps, None)
 
         cot.refresh_from_db()
         names = {c["name"] for c in cot.schema_document["base_columns"]}
@@ -366,7 +340,7 @@ class BackfillBaseColumnsTestCase(CustomObjectsTestCase, TestCase):
         self.create_custom_object_type_field(cot, name="custom_col", type="text")
         self._clear_base_columns(cot)
 
-        _run_backfill()
+        _m0010.backfill_base_columns(apps, None)
 
         cot.refresh_from_db()
         names = {c["name"] for c in cot.schema_document["base_columns"]}
@@ -377,11 +351,11 @@ class BackfillBaseColumnsTestCase(CustomObjectsTestCase, TestCase):
         cot = self.create_custom_object_type(name="bf_idem", slug="bf-idem")
         self._clear_base_columns(cot)
 
-        _run_backfill()
+        _m0010.backfill_base_columns(apps, None)
         cot.refresh_from_db()
         first_snapshot = cot.schema_document["base_columns"]
 
-        _run_backfill()
+        _m0010.backfill_base_columns(apps, None)
         cot.refresh_from_db()
         second_snapshot = cot.schema_document["base_columns"]
 
@@ -395,7 +369,7 @@ class BackfillBaseColumnsTestCase(CustomObjectsTestCase, TestCase):
         CustomObjectType.objects.filter(pk=cot.pk).update(schema_document=sentinel_doc)
         cot.refresh_from_db()
 
-        _run_backfill()
+        _m0010.backfill_base_columns(apps, None)
 
         cot.refresh_from_db()
         self.assertEqual(
@@ -413,7 +387,7 @@ class BackfillBaseColumnsTestCase(CustomObjectsTestCase, TestCase):
         for cot in cots:
             self._clear_base_columns(cot)
 
-        _run_backfill()
+        _m0010.backfill_base_columns(apps, None)
 
         for cot in cots:
             cot.refresh_from_db()
@@ -427,7 +401,7 @@ class BackfillBaseColumnsTestCase(CustomObjectsTestCase, TestCase):
         cot = self.create_custom_object_type(name="bf_keys", slug="bf-keys")
         self._clear_base_columns(cot)
 
-        _run_backfill()
+        _m0010.backfill_base_columns(apps, None)
 
         cot.refresh_from_db()
         for entry in cot.schema_document["base_columns"]:
@@ -615,6 +589,9 @@ class PartialRerunTestCase(_Migration0011TestCase):
 # Migration 0016 — widen_integer_columns
 # ===========================================================================
 
+_m0016 = _load_migration('0016_widen_integer_columns')
+
+
 class WidenIntegerColumnsTestCase(CustomObjectsTestCase, TestCase):
     @classmethod
     def setUpTestData(cls):
@@ -677,11 +654,8 @@ class WidenIntegerColumnsTestCase(CustomObjectsTestCase, TestCase):
         # (type, custom_object_type_id, name), so the current app registry is
         # equivalent to the historical one RunPython would pass. If the function
         # ever introspects historical field structure, switch to MigrationLoader.
-        migration = import_module(
-            "netbox_custom_objects.migrations.0016_widen_integer_columns"
-        )
         with connection.schema_editor() as schema_editor:
-            migration.widen_integer_columns(apps, schema_editor)
+            _m0016.widen_integer_columns(apps, schema_editor)
 
         # Column is widened, and a value beyond the 32-bit range round-trips.
         self.assertEqual(column_data_type(), "bigint")
