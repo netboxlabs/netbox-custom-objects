@@ -31,15 +31,17 @@ def _name_field(cls, cot):
 
 
 class CombinedTabMixin:
-    names = ()
 
     def _rows(self, response):
-        """Return the linked objects' names in the order the table lists them."""
+        """Return each row's object, in table order, read from its Object cell (the second default column)."""
         body = re.search(r"<tbody>(.*?)</tbody>", response.content.decode(), re.S)
         if body is None:
             return []
-        found = [(body.group(1).find(f">{name}</a>"), name) for name in self.names]
-        return [name for pos, name in sorted(found) if pos != -1]
+        rows = []
+        for row in re.findall(r"<tr>(.*?)</tr>", body.group(1), re.S):
+            cells = re.findall(r"<td[^>]*>(.*?)</td>", row, re.S)
+            rows.append(re.sub(r"<[^>]+>", "", cells[1]).strip())
+        return rows
 
     def assertTabLink(self, response, url, badge, active=False):
         """Assert the page's tab strip links to the combined tab with *badge*."""
@@ -56,7 +58,6 @@ class CombinedTabMixin:
 
 
 class CombinedTabTestCase(CombinedTabMixin, CustomObjectsTestCase, TestCase):
-    names = ("Note Alpha", "Note Bravo", "Note Charlie", "Link Delta", "Note Echo")
 
     @classmethod
     def setUpClass(cls):
@@ -193,7 +194,6 @@ class CombinedTabTestCase(CombinedTabMixin, CustomObjectsTestCase, TestCase):
         note_model = self.note_cot.get_model()
         for name in extra:
             note_model.objects.create(name=name, zone=self.zone)
-        self.names = (*self.names, *extra)
         for page, expected in (
             ("1", ["Link Delta", "Note Alpha"]),
             ("2", ["Note Bravo", "Note Charlie"]),
@@ -247,7 +247,6 @@ class CombinedTabTestCase(CombinedTabMixin, CustomObjectsTestCase, TestCase):
 
 @override_settings(ROOT_URLCONF="netbox_custom_objects.tests.combined_tab_urls")
 class CombinedTabBuiltinHostTestCase(CombinedTabMixin, CustomObjectsTestCase, TestCase):
-    names = ("Note Alpha", "Note Bravo")
 
     @classmethod
     def setUpTestData(cls):
