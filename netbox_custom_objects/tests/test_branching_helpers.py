@@ -18,11 +18,15 @@ from netbox_custom_objects.branching import (
     supports_branching_resolver,
 )
 from netbox_custom_objects.constants import APP_LABEL
-from netbox_custom_objects.models import POLY_M2M_SIDECAR_KEY
+from netbox_custom_objects.models import (
+    POLY_M2M_SIDECAR_KEY,
+    CustomObjectTypeConstraint,
+    CustomObjectTypeField,
+)
 
-FIELD_LABEL = f'{APP_LABEL}.customobjecttypefield'
-CONSTRAINT_LABEL = f'{APP_LABEL}.customobjecttypeconstraint'
-COT_LABEL = f'{APP_LABEL}.customobjecttype'
+# Taken from the models, so renaming one fails these tests until branching.py's labels follow.
+FIELD_LABEL = CustomObjectTypeField._meta.label_lower
+CONSTRAINT_LABEL = CustomObjectTypeConstraint._meta.label_lower
 
 
 def _model(app_label=APP_LABEL, model_name='table1model', m2m=(), field_objects=None, **attrs):
@@ -191,61 +195,51 @@ class AddCustomObjectDependenciesTestCase(SimpleTestCase):
         self.co_label = f'{APP_LABEL}.table1model'
         self.model = _model(m2m=[_m2m('peers', self.co_label), _m2m('devices', 'dcim.device')])
 
-    def assertEdge(self, before, after):
-        """Assert *after* is ordered after *before*."""
-        self.assertIn(before.key, after.depends_on)
-        self.assertIn(after.key, before.depended_by)
-
-    def assertNoEdges(self, *changes):
-        for cc in changes:
-            self.assertEqual((cc.depends_on, cc.depended_by), (set(), set()), cc.key)
+    def assertGraph(self, collapsed, *edges):
+        """Assert the graph's edges are exactly *edges*, each a ``(before, after)`` pair of changes."""
+        expected = {(before.key, after.key) for before, after in edges}
+        changes = collapsed.values()
+        self.assertEqual({(dep, cc.key) for cc in changes for dep in cc.depends_on}, expected)
+        self.assertEqual({(cc.key, dep) for cc in changes for dep in cc.depended_by}, expected)
 
     def test_create_depends_on_created_m2m_target(self):
         target = _change((self.co_label, 2), 'create', self.model, post={'peers': []})
         source = _change((self.co_label, 1), 'create', self.model, post={'peers': [2]})
-        _build(target, source)
-        self.assertEdge(target, source)
+        self.assertGraph(_build(target, source), (target, source))
 
     def test_create_ignores_self_reference(self):
         cc = _change((self.co_label, 1), 'create', self.model, post={'peers': [1]})
-        _build(cc)
-        self.assertNoEdges(cc)
+        self.assertGraph(_build(cc))
 
     def test_create_depends_on_field_create(self):
         field = _change((FIELD_LABEL, 11), 'create', post={'schema_id': 1, 'custom_object_type': 1})
         model = _model(field_objects={1: {'field': SimpleNamespace(pk=11)}})
         cc = _change((self.co_label, 1), 'create', model, post={'name': 'x'})
-        _build(field, cc)
-        self.assertEdge(field, cc)
+        self.assertGraph(_build(field, cc), (field, cc))
 
     def test_update_depends_on_created_target(self):
         target = _change((self.co_label, 2), 'create', self.model, post={'peers': []})
         cc = _change((self.co_label, 1), 'update', self.model, pre={'peers': []}, post={'peers': [2]})
-        _build(target, cc)
-        self.assertEdge(target, cc)
+        self.assertGraph(_build(target, cc), (target, cc))
 
     def test_update_precedes_deleting_old_target(self):
         target = _change((self.co_label, 2), 'delete', self.model, pre={'peers': []})
         cc = _change((self.co_label, 1), 'update', self.model, pre={'peers': [2]}, post={'peers': []})
-        _build(target, cc)
-        self.assertEdge(cc, target)
+        self.assertGraph(_build(target, cc), (cc, target))
 
     def test_delete_precedes_deleting_target(self):
         target = _change((self.co_label, 2), 'delete', self.model, pre={'peers': []})
         cc = _change((self.co_label, 1), 'delete', self.model, pre={'peers': [2]})
-        _build(target, cc)
-        self.assertEdge(cc, target)
+        self.assertGraph(_build(target, cc), (cc, target))
 
     def test_delete_ignores_self_reference(self):
         cc = _change((self.co_label, 1), 'delete', self.model, pre={'peers': [1]})
-        _build(cc)
-        self.assertNoEdges(cc)
+        self.assertGraph(_build(cc))
 
     def test_unregistered_model_uses_its_key_label(self):
         target = _change((self.co_label, 2), 'create', None, post={'peers': []})
         source = _change((self.co_label, 1), 'create', None, post={'peers': [2]})
-        _build(target, source)
-        self.assertEdge(target, source)
+        self.assertGraph(_build(target, source), (target, source))
 
     def test_constraint_create_depends_on_field_creates(self):
         member = _change((FIELD_LABEL, 100), 'create', post={'schema_id': 10, 'custom_object_type': 1})
@@ -256,28 +250,25 @@ class AddCustomObjectDependenciesTestCase(SimpleTestCase):
             'field_schema_ids': [10],
             'rule': [{'field': 10, 'lookup': 'gte', 'value': {'field': 11}}],
         })
-        _build(member, compared, other_type, constraint)
-        self.assertEqual(constraint.depends_on, {member.key, compared.key})
-        self.assertNoEdges(other_type)
+        self.assertGraph(
+            _build(member, compared, other_type, constraint), (member, constraint), (compared, constraint)
+        )
 
     def test_constraint_delete_precedes_field_delete(self):
         field = _change((FIELD_LABEL, 100), 'delete', pre={'schema_id': 10, 'custom_object_type': 1})
         constraint = _change(
             (CONSTRAINT_LABEL, 1), 'delete', pre={'custom_object_type': 1, 'field_schema_ids': [10]}
         )
-        _build(field, constraint)
-        self.assertEdge(constraint, field)
+        self.assertGraph(_build(field, constraint), (constraint, field))
 
     def test_constraint_schema_ids_are_not_read_as_self_references(self):
         # The generic walker would read field_schema_ids [1] as a reference to constraint 1.
         other = _change((CONSTRAINT_LABEL, 1), 'create', post={'custom_object_type': 1, 'field_schema_ids': []})
         constraint = _change((CONSTRAINT_LABEL, 2), 'create', post={'custom_object_type': 1, 'field_schema_ids': [1]})
-        _build(other, constraint)
-        self.assertNoEdges(other, constraint)
+        self.assertGraph(_build(other, constraint))
 
     def test_other_apps_and_missing_actions_are_skipped(self):
         device = _change(('dcim.device', 3), 'create', _model(app_label='dcim', model_name='device'))
         plain = _change(('dcim.site', 1), 'create', None, post={'peers': [3]})
         unresolved = _change((self.co_label, 1), None, self.model, post={'devices': [3]})
-        _build(device, plain, unresolved)
-        self.assertNoEdges(device, plain, unresolved)
+        self.assertGraph(_build(device, plain, unresolved))
