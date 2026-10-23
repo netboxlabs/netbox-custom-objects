@@ -32,6 +32,12 @@ queries only return custom objects the authenticated user has permission to view
 and objects reached through a relationship field are likewise filtered to those
 the user may view.
 
+The schema itself includes only the Custom Object Types the user may see: those
+they have permission to view, either as a type or through view permission on its
+objects. Other types have no queries and don't appear in introspection, and a
+relationship field pointing at one returns the generic `CustomObjectRelatedObjectType`
+(`id`, `object_type`, `display`, `url`) instead of that type's fields.
+
 ## Using the GraphiQL explorer
 
 NetBox's built-in GraphiQL explorer (at `/graphql/`) loads the GraphQL schema

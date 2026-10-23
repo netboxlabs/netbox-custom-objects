@@ -77,6 +77,7 @@ __all__ = (
     "graphql_safe_name",
     "reset_build_state",
     "set_cot_map",
+    "set_visible_cot_ids",
 )
 
 # Per-rebuild memoization of built GraphQL types, keyed by (cot id,
@@ -128,6 +129,7 @@ def reset_build_state():
     _building.cot_stack = []
     _building.cycle_tainted = set()
     _building.cot_map = None
+    _building.visible_cot_ids = None
 
 
 def set_cot_map(cot_map):
@@ -141,6 +143,17 @@ def set_cot_map(cot_map):
     query per reference.  Cleared by :func:`reset_build_state`.
     """
     _building.cot_map = cot_map
+
+
+def set_visible_cot_ids(cot_ids):
+    """
+    Register the ids of the custom object types the current rebuild may expose.
+
+    A relationship field pointing at any other custom object type gets the flat
+    ``CustomObjectRelatedObjectType`` stub instead of that type's definition.
+    ``None`` exposes every type.  Cleared by :func:`reset_build_state`.
+    """
+    _building.visible_cot_ids = cot_ids
 
 
 RELATIONSHIP_TYPES = (
@@ -308,6 +321,10 @@ def _custom_object_graphql_type(model_name):
     # stack holds ints, so coerce before the membership test or it never matches.
     cot_id = int(cot_id)
     stack = _in_progress_stack()
+    visible = getattr(_building, "visible_cot_ids", None)
+    if visible is not None and cot_id not in visible:
+        # Hidden from this schema's user: the field uses the stub, not the type's definition.
+        return None
     if cot_id in stack:
         # Back-reference to a type still being built — fall back to the flat stub
         # for this edge to avoid infinite recursion, and taint every type currently

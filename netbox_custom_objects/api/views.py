@@ -36,6 +36,7 @@ from netbox_custom_objects.filtersets import (
 )
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.schema.comparator import FieldOp, diff_document
+from netbox_custom_objects.schema.format import CUSTOM_OBJECTS_APP_LABEL_SLUG
 from netbox_custom_objects.schema.executor import (
     apply_diffs,
     schema_transaction,
@@ -146,6 +147,29 @@ def _check_apply_permissions(user, diffs):
             raise PermissionDenied(
                 _("You do not have permission to {action} one or more of these fields.").format(action=action)
             )
+
+
+def _check_related_types_visible(user, diffs):
+    """
+    Raise ``PermissionDenied`` if the diff would show the stored related type of a field,
+    as ``custom-objects/<slug>``, for a Custom Object Type ``user`` may not view, as for
+    the types a document names.  Related types the document itself names are the
+    caller's own input; refusing those would only reveal whether such a type exists.
+    """
+    prefix = f"{CUSTOM_OBJECTS_APP_LABEL_SLUG}/"
+    slugs = set()
+    for diff in diffs:
+        for change in diff.field_changes:
+            for attr in ("related_object_type", "related_object_types"):
+                if attr not in (change.changed_attrs or {}):
+                    continue
+                stored = change.changed_attrs[attr][0]
+                for value in stored if isinstance(stored, (list, tuple)) else [stored]:
+                    if isinstance(value, str) and value.startswith(prefix):
+                        slugs.add(value[len(prefix):])
+    viewable = CustomObjectType.objects.restrict(user, "view")
+    if slugs and CustomObjectType.objects.filter(slug__in=slugs).exclude(pk__in=viewable).exists():
+        raise PermissionDenied(_("You do not have permission to view one or more of these Custom Object Types."))
 
 
 def _check_applied_permissions(user, diffs):
@@ -457,12 +481,27 @@ class SchemaPreviewView(APIView):
     permission_classes = [IsAuthenticatedOrLoginNotRequired]
 
     def post(self, request, *args, **kwargs):
+        # The diff describes existing types, so it needs the same permission as reading them.
+        if not request.user.has_perm('netbox_custom_objects.view_customobjecttype'):
+            raise PermissionDenied(
+                "You do not have permission to preview a schema document. "
+                "View permission on CustomObjectType is required."
+            )
+
         if not isinstance(request.data, dict):
             raise ValidationError({"non_field_errors": [_("Request body must be a JSON/YAML object.")]})
 
         schema_doc = request.data
         _validate_schema_doc(schema_doc)
+
+        # Under a constrained permission, refuse documents naming existing types the user can't view.
+        slugs = {type_def.get("slug") for type_def in schema_doc.get("types", [])}
+        viewable = CustomObjectType.objects.restrict(request.user, "view")
+        if CustomObjectType.objects.filter(slug__in=slugs).exclude(pk__in=viewable).exists():
+            raise PermissionDenied("You do not have permission to view one or more of these Custom Object Types.")
+
         diffs = diff_document(schema_doc)
+        _check_related_types_visible(request.user, diffs)
         return Response({"diffs": [_serialize_diff(d) for d in diffs]})
 
 
@@ -552,6 +591,8 @@ class SchemaApplyView(APIView):
 
         diffs = diff_document(schema_doc)
         _check_apply_permissions(request.user, diffs)
+        # The response reports the diff too.
+        _check_related_types_visible(request.user, diffs)
         type_defs_by_slug = {type_def["slug"]: type_def for type_def in schema_doc.get("types", [])}
 
         try:
