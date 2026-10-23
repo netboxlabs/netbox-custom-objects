@@ -52,7 +52,8 @@ Defer all version pins to `pyproject.toml` and `netbox_custom_objects/__init__.p
 │   │   └── custom_object_utils.py
 │   └── tests/
 │       ├── base.py                         — Shared test utilities and base cases.
-│       ├── test_api.py                     — REST API endpoints (CRUD, linked objects).
+│       ├── api/                            — REST API tests: custom objects, field values, types,
+│       │                                     fields, constraints, linked objects, config context.
 │       ├── test_deletion.py                — Cascade deletion behaviour.
 │       ├── test_field_types.py             — FieldType subclass behaviour.
 │       ├── test_filtersets.py              — Filterset functionality.
@@ -187,7 +188,7 @@ After model changes, generate a migration with `python netbox/manage.py makemigr
 
 | Module | Coverage area |
 |---|---|
-| `test_api.py` | REST API endpoints (CRUD, linked objects view) |
+| `api/` | REST API endpoints: custom objects, field values, types, fields, constraints, linked objects, config context, query counts, OpenAPI |
 | `test_deletion.py` | Cascade deletion when a referenced object is deleted |
 | `test_field_types.py` | FieldType subclass behaviour (model field, form field, serializer, filter) |
 | `test_filtersets.py` | Filterset generation and filtering for custom object models |
@@ -236,7 +237,7 @@ GitHub Actions workflows in `.github/workflows/`:
 1. Add the serializer to `api/serializers.py` — `NetBoxModelSerializer` for `NetBoxModel`.
 2. Add the viewset to `api/views.py`.
 3. Register the route in `api/urls.py`.
-4. Add tests in `tests/test_api.py`.
+4. Add tests in the matching module under `tests/api/`.
 
 ### Bump the supported NetBox version
 
