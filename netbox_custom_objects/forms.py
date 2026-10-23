@@ -486,15 +486,11 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
 
         return cleaned_data
 
-    def clean_primary(self):
-        primary_fields = self.cleaned_data["custom_object_type"].fields.filter(
-            primary=True
-        )
-        if self.cleaned_data["primary"]:
-            primary_fields.update(primary=False)
-        return self.cleaned_data["primary"]
-
     def save(self, commit=True):
+        if commit and self.cleaned_data.get("primary"):
+            # Demote the type's other primary field here rather than in clean(), so a
+            # submission that fails validation leaves it in place.
+            self.instance.custom_object_type.fields.filter(primary=True).update(primary=False)
         obj = super().save(commit=commit)
         # For polymorphic multiobject fields, skip default value propagation
         if (

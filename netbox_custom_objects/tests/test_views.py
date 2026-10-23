@@ -2540,3 +2540,44 @@ class CustomObjectJournalTestCase(CustomObjectsTestCase, TestCase):
         self.assertNotContains(response, f'action="{self.add_url}"')
         self.assertEqual(self._add_entry().status_code, 403)
         self.assertFalse(JournalEntry.objects.exists())
+
+
+class FieldPrimaryTestCase(CustomObjectsTestCase, TestCase):
+    """Making a field primary through the field form demotes the type's existing primary field."""
+
+    def setUp(self):
+        super().setUp()
+        self.user.is_superuser = True
+        self.user.save()
+        self.cot = self.create_custom_object_type(name="zone", slug="zones")
+        self.name = self.create_custom_object_type_field(self.cot, name="name", label="Name", type="text", primary=True)
+        self.code = self.create_custom_object_type_field(self.cot, name="code", label="Code", type="text")
+
+    def _post(self, url, name, primary=True):
+        data = {
+            "custom_object_type": self.cot.pk, "name": name, "label": name.title(), "type": "text",
+            "ui_visible": "always", "ui_editable": "yes", "filter_logic": "loose", "search_weight": 500, "weight": 100,
+        }
+        if primary:
+            data["primary"] = "on"
+        return self.client.post(url, data)
+
+    def _primaries(self):
+        return list(self.cot.fields.filter(primary=True).values_list("name", flat=True))
+
+    def test_new_primary_field_demotes_the_old_one(self):
+        response = self._post(reverse("plugins:netbox_custom_objects:customobjecttypefield_add"), "title")
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self._primaries(), ["title"])
+
+    def test_failed_submission_keeps_the_primary_field(self):
+        # A duplicate name fails validation after the primary field has been cleaned.
+        response = self._post(reverse("plugins:netbox_custom_objects:customobjecttypefield_add"), "code")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.context["form"].errors)
+        self.assertEqual(self._primaries(), ["name"])
+
+    def test_editing_another_field_keeps_the_primary_field(self):
+        url = reverse("plugins:netbox_custom_objects:customobjecttypefield_edit", kwargs={"pk": self.code.pk})
+        self.assertEqual(self._post(url, "code", primary=False).status_code, 302)
+        self.assertEqual(self._primaries(), ["name"])
