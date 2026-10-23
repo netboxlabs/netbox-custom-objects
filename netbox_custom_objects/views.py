@@ -282,10 +282,17 @@ class BackgroundJobURLKwargsMixin:
 class CustomObjectTableMixin(TableMixin):
     def get_table(self, data, request, bulk_actions=True):
         model_fields = self.custom_object_type.fields.all()
-        fields = ["id"] + [
-            field.name
-            for field in model_fields
+        visible_fields = [
+            field for field in model_fields
             if field.ui_visible != CustomFieldUIVisibleChoices.HIDDEN
+        ]
+        fields = ["pk", "id", *(field.name for field in visible_fields), "tags", "created", "last_updated"]
+        # Fields shown only when set are left out of the defaults but stay selectable.
+        default_columns = [
+            "pk",
+            "id",
+            *(field.name for field in visible_fields if field.ui_visible == CustomFieldUIVisibleChoices.ALWAYS),
+            "tags",
         ]
 
         meta = type(
@@ -294,6 +301,7 @@ class CustomObjectTableMixin(TableMixin):
             {
                 "model": data.model,
                 "fields": fields,
+                "default_columns": default_columns,
                 "attrs": {
                     "class": "table table-hover object-list",
                 },
@@ -1232,13 +1240,18 @@ class CustomObjectDeleteView(RestrictedObjectMixin, generic.ObjectDeleteView):
 
     def get_return_url(self, request, obj=None):
         """
-        Return the URL to redirect to after deleting a custom object.
+        Like core: a safe ``return_url``, then the object while it still exists (Cancel),
+        then its type's list (after deletion).
         """
+        return_url = request.GET.get("return_url") or request.POST.get("return_url")
+        if return_url and safe_for_redirect(return_url):
+            return return_url
+        if obj is not None and obj.pk:
+            return obj.get_absolute_url()
+
         if obj:
-            # Get the custom object type from the object directly
             custom_object_type = obj.custom_object_type.slug
         else:
-            # Fallback to getting it from kwargs if object is not available
             custom_object_type = self.kwargs.get("custom_object_type")
 
         return reverse(
@@ -1507,7 +1520,7 @@ class CustomObjectBulkEditView(BackgroundJobURLKwargsMixin, CustomObjectTableMix
 
         form = type(
             f"{queryset.model._meta.object_name}BulkEditForm",
-            (NetBoxModelBulkEditForm,),
+            (OwnerFormMixin, NetBoxModelBulkEditForm),
             attrs,
         )
         form.model = queryset.model

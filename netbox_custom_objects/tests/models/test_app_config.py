@@ -207,6 +207,10 @@ class BranchingInstalledNotEnabledTestCase(CustomObjectsTestCase, TestCase):
 
     def setUp(self):
         super().setUp()
+        # The plugin's migration check builds a MigrationLoader, which imports every installed
+        # app's migrations, netbox_branching's included when it's enabled. A real process runs
+        # the check once at startup, so run (and cache) it before blocking the import.
+        nco.CustomObjectsPluginConfig._dynamic_model_creation_unsafe()
         is_installed = django_apps.is_installed
         patcher = patch.object(
             django_apps, 'is_installed', side_effect=lambda name: name != 'netbox_branching' and is_installed(name)

@@ -7,7 +7,7 @@
 {% block content %}
 
   {# Data Import Form #}
-  <div class="tab-pane show active" id="import-form" role="tabpanel" aria-labelledby="import-form-tab">
+  <div class="tab-pane show{% if import_method == 'direct' or not import_method %} active{% endif %}" id="import-form" role="tabpanel" aria-labelledby="import-form-tab">
     <div class="col col-md-12 col-lg-10 offset-lg-1">
 
       <form action="" method="post" enctype="multipart/form-data" class="form">
@@ -40,7 +40,7 @@
   </div>
 
   {# File Upload Form #}
-  <div class="tab-pane show" id="upload-form" role="tabpanel" aria-labelledby="upload-form-tab">
+  <div class="tab-pane show{% if import_method == 'upload' %} active{% endif %}" id="upload-form" role="tabpanel" aria-labelledby="upload-form-tab">
     <div class="col col-md-12 col-lg-10 offset-lg-1">
       <form action="" method="post" enctype="multipart/form-data" class="form">
         {% csrf_token %}
@@ -72,7 +72,7 @@
   </div>
 
   {# DataFile Form #}
-  <div class="tab-pane show" id="datafile-form" role="tabpanel" aria-labelledby="datafile-form-tab">
+  <div class="tab-pane show{% if import_method == 'datafile' %} active{% endif %}" id="datafile-form" role="tabpanel" aria-labelledby="datafile-form-tab">
     <div class="col col-md-12 col-lg-10 offset-lg-1">
       <form action="" method="post" enctype="multipart/form-data" class="form">
         {% csrf_token %}

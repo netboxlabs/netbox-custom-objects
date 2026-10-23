@@ -82,8 +82,9 @@
         {% include 'netbox_custom_objects/related_tabs/combined/tab_partial.html' %}
     </div>
 
-    {% block modals %}
-        {{ block.super }}
-        {% table_config_form tab_table %}
-    {% endblock modals %}
 {% endblock content %}
+
+{% block modals %}
+    {{ block.super }}
+    {% table_config_form tab_table %}
+{% endblock modals %}
