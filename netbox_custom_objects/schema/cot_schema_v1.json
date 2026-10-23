@@ -48,7 +48,8 @@
         "multiobject",
         "array",
         "color",
-        "mac_address"
+        "mac_address",
+        "coordinates"
       ]
     },
 
@@ -305,7 +306,7 @@
         {
           "properties": {
             "type": {
-              "enum": ["boolean", "date", "datetime", "url", "json", "color", "mac_address"]
+              "enum": ["boolean", "date", "datetime", "url", "json", "color", "mac_address", "coordinates"]
             }
           }
         }

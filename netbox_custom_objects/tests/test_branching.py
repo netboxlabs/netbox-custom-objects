@@ -3623,6 +3623,8 @@ class GraphQLBranchIsolationTestCase(BranchingTestBase, _TestBase):
         self.live = live_module
         live_module.reset_cache()
         self.addCleanup(live_module.reset_cache)
+        # The schema is built per user; a superuser's includes every type.
+        self.superuser = User.objects.create_superuser(username='graphql-branch-admin')
         # The startup guard returns True during the test run; patch it off so the
         # live schema machinery runs exactly as it does in production.
         patcher = mock.patch(
@@ -3658,7 +3660,7 @@ class GraphQLBranchIsolationTestCase(BranchingTestBase, _TestBase):
         # With a branch active (as the X-NetBox-Branch header path leaves it), the
         # schema reflects that branch's custom object types; main, unaffected by the
         # unmerged branch, does not.
-        baseline = self.live.get_live_schema()
+        baseline = self.live.get_live_schema(self.superuser)
         self.assertIsNotNone(baseline)
         self.assertNotIn('custom_objects_branch_only', str(baseline))
 
@@ -3674,12 +3676,12 @@ class GraphQLBranchIsolationTestCase(BranchingTestBase, _TestBase):
             )
             # The branch's own schema gains the branch-only type...
             self.assertIn(
-                'custom_objects_branch_only', str(self.live.get_live_schema())
+                'custom_objects_branch_only', str(self.live.get_live_schema(self.superuser))
             )
 
         # ...but main never does (the branch isn't merged).
         self.assertNotIn(
-            'custom_objects_branch_only', str(self.live.get_live_schema())
+            'custom_objects_branch_only', str(self.live.get_live_schema(self.superuser))
         )
 
     def test_branch_deletion_evicts_cached_schema(self):
@@ -3693,7 +3695,7 @@ class GraphQLBranchIsolationTestCase(BranchingTestBase, _TestBase):
                 custom_object_type=cot, name='name', label='Name', type='text',
                 primary=True, required=True,
             )
-            self.assertIsNotNone(self.live.get_live_schema())
+            self.assertIsNotNone(self.live.get_live_schema(self.superuser))
 
         # The branch's schema is now cached under its pk...
         self.assertIn(branch.pk, self.live._schema_cache)

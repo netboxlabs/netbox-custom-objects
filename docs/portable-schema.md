@@ -204,9 +204,9 @@ Attributes that match their defaults are omitted from exported documents to keep
 | `object` | `related_object_type` (required when `is_polymorphic` is `false`), `related_object_types` (required when `is_polymorphic` is `true`), `is_polymorphic`, `related_object_filter`, `related_name`, `on_delete_behavior` |
 | `multiobject` | `related_object_type` (required when `is_polymorphic` is `false`), `related_object_types` (required when `is_polymorphic` is `true`), `is_polymorphic`, `related_object_filter`, `related_name` |
 | `array` | `array_element_type` (required — `text`, `integer`, `decimal`, `boolean`, `date` or `datetime`), `array_tuple_size`, `array_min_length`, `array_max_length`, `validation_regex` (text elements), `validation_minimum` and `validation_maximum` (integer and decimal elements) |
-| `boolean`, `date`, `datetime`, `url`, `json`, `color`, `mac_address` | (none) |
+| `boolean`, `date`, `datetime`, `url`, `json`, `color`, `mac_address`, `coordinates` | (none) |
 
-An `array` field's `array_element_type` and `array_tuple_size`, and a field's type changing to or from `array`, can't be changed by applying a document; doing so raises `UnsupportedFieldChangeError`. For example, `{id: 3, name: coordinates, type: array, array_element_type: integer, array_tuple_size: 3, array_min_length: 2}` stores a list of at least two (x, y, z) integer points.
+An `array` field's `array_element_type` and `array_tuple_size`, and a field's type changing to or from `array`, can't be changed by applying a document; doing so raises `UnsupportedFieldChangeError`. For example, `{id: 3, name: points, type: array, array_element_type: integer, array_tuple_size: 3, array_min_length: 2}` stores a list of at least two (x, y, z) integer points.
 
 `on_delete_behavior` is one of `"set_null"` (default), `"cascade"`, or `"protect"`. It applies only to single `object` fields.
 
@@ -438,11 +438,20 @@ schema: { ... }
   `409 Conflict`.
 - The apply is **fully atomic** — a failure at any point rolls back all changes including newly
   created COT tables (PostgreSQL supports transactional DDL).
+- **Permissions:** every apply requires both add and change permission on Custom Object Types,
+  even when the document only updates existing types. Beyond that, permissions are checked as the
+  UI and REST views check them, object-level constraints included: change permission on every
+  existing Custom Object Type in the document (it rewrites their `schema_document`), add
+  permission for new types, and add, change or delete permission on the fields being added,
+  changed or removed. Missing permissions return `403 Forbidden`
+  before anything is changed; a result that falls outside a constraint returns `403` and is
+  rolled back.
 - On success, `schema_document` is persisted on each affected COT so tombstones are available
   for future export/diff cycles.
-- Schema apply is **blocked while a [NetBox Branching](branching.md) branch is active**, since
-  the executor performs direct DDL that is not branch-aware. Run schema applies from the main
-  context.
+- Schema apply **works inside a [NetBox Branching](branching.md) branch**: with a branch
+  active, the Custom Object Type and field changes are made in the branch and the DDL runs
+  against the branch's schema, so main is unchanged until the branch is merged. A failed or
+  rejected apply is rolled back in the branch too.
 
 Response `200`:
 
@@ -459,7 +468,8 @@ detail: "Schema contains destructive field removals for COT(s): circuit."
 destructive_slugs: [circuit]
 ```
 
-Response `400 Bad Request` (invalid schema, unresolvable reference, or circular COT dependency):
+Response `400 Bad Request` (invalid schema, unresolvable reference, circular COT dependency, or a
+type change to or from `coordinates` or `url`, which isn't supported):
 
 ```yaml
 error: unresolvable_reference

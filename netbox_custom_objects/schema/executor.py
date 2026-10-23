@@ -27,18 +27,26 @@ Public API
 ----------
     apply_document(schema_doc, *, allow_destructive=False) → list[COTDiff]
     apply_diffs(diffs, type_defs_by_slug, *, allow_destructive=False) → None
+    schema_transaction() — the transaction an apply runs in
 """
 
 import logging
+from contextlib import contextmanager
 
 from core.models import ObjectType
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import DEFAULT_DB_ALIAS, transaction
 from extras.models import CustomFieldChoiceSet
 
 from netbox_custom_objects import constants
 from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
+from netbox_custom_objects.models import (
+    CustomObjectType,
+    CustomObjectTypeConstraint,
+    CustomObjectTypeField,
+    _get_schema_connection,
+    is_multi_column_type_change,
+)
 from netbox_custom_objects.schema.comparator import FieldOp, diff_document
 from netbox_custom_objects.schema.format import (
     CONSTRAINT_DEFAULTS,
@@ -95,6 +103,10 @@ class UnknownObjectTypeError(Exception):
 
 class UnknownFieldTypeError(Exception):
     """Raised when a field type string in the schema has no matching DB choice."""
+
+
+class UnsupportedTypeChangeError(Exception):
+    """Raised when the schema changes a field's type in a way the DB schema can't follow."""
 
 
 # ---------------------------------------------------------------------------
@@ -384,7 +396,13 @@ def _apply_field_alter(cot, fc) -> None:
 
     for attr, (db_val, schema_val) in fc.changed_attrs.items():
         if attr == "type":
-            # comparator stores CustomFieldTypeChoices values for type diffs
+            # comparator stores CustomFieldTypeChoices values for type diffs.
+            # save() can't add or drop backing columns, so reject what clean() rejects.
+            if is_multi_column_type_change(field.type, schema_val):
+                raise UnsupportedTypeChangeError(
+                    f"Field {field.name!r} on {cot.slug!r} can't change type from {field.type!r} to "
+                    f"{schema_val!r}: coordinates and URL fields can't be converted to or from another type."
+                )
             field.type = schema_val
         elif attr == "choice_set":
             if schema_val is None:
@@ -608,6 +626,24 @@ def _add_constraints(ordered_diffs, cot_map) -> None:
 # Public API
 # ---------------------------------------------------------------------------
 
+@contextmanager
+def schema_transaction():
+    """
+    One transaction on every connection an apply writes to.
+
+    Inside a branch, the ORM writes and DDL use the branch's connection, which a
+    transaction on the default connection alone doesn't roll back; so the branch's
+    connection gets a transaction too.
+    """
+    alias = _get_schema_connection().alias
+    with transaction.atomic():
+        if alias == DEFAULT_DB_ALIAS:
+            yield
+        else:
+            with transaction.atomic(using=alias):
+                yield
+
+
 def apply_diffs(
     diffs,
     type_defs_by_slug: dict,
@@ -622,8 +658,8 @@ def apply_diffs(
     every slug in *diffs*; it provides full field definitions for ADD
     operations and the final state used to update ``schema_document``.
 
-    All DB writes are wrapped in a single :func:`~django.db.transaction.atomic`
-    block.  Any exception aborts the entire apply.
+    All DB writes are wrapped in a single :func:`schema_transaction`, so any
+    exception aborts the entire apply, inside a branch as in main.
 
     Raises:
         DestructiveChangesError  – REMOVE operations present and
@@ -641,7 +677,7 @@ def apply_diffs(
 
     ordered = _build_dep_order(diffs)
 
-    with transaction.atomic():
+    with schema_transaction():
         cot_map = _phase1_cots(ordered, type_defs_by_slug)
         _remove_constraints(ordered, cot_map)
         _phase2_fields(ordered, cot_map, allow_destructive=allow_destructive)

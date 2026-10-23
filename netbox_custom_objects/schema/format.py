@@ -39,6 +39,7 @@ FIELD_TYPE_MULTIOBJECT = "multiobject"
 FIELD_TYPE_ARRAY = "array"
 FIELD_TYPE_COLOR = "color"
 FIELD_TYPE_MAC_ADDRESS = "mac_address"
+FIELD_TYPE_COORDINATES = "coordinates"
 
 # Mapping from CustomFieldTypeChoices values to schema type names.
 # Used by the exporter; the importer uses the inverse.
@@ -59,6 +60,7 @@ CHOICES_TO_SCHEMA_TYPE = {
     CustomObjectFieldTypeChoices.TYPE_ARRAY: FIELD_TYPE_ARRAY,
     CustomObjectFieldTypeChoices.TYPE_COLOR: FIELD_TYPE_COLOR,
     CustomObjectFieldTypeChoices.TYPE_MAC_ADDRESS: FIELD_TYPE_MAC_ADDRESS,
+    CustomObjectFieldTypeChoices.TYPE_COORDINATES: FIELD_TYPE_COORDINATES,
 }
 
 SCHEMA_TYPE_TO_CHOICES = {v: k for k, v in CHOICES_TO_SCHEMA_TYPE.items()}
@@ -121,6 +123,7 @@ FIELD_TYPE_ATTRS = {
     FIELD_TYPE_JSON: set(),
     FIELD_TYPE_COLOR: set(),
     FIELD_TYPE_MAC_ADDRESS: set(),
+    FIELD_TYPE_COORDINATES: set(),
     FIELD_TYPE_SELECT: {"choice_set"},
     FIELD_TYPE_MULTISELECT: {"choice_set"},
     FIELD_TYPE_OBJECT: {
