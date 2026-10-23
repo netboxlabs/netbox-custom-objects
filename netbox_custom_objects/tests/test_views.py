@@ -2570,6 +2570,16 @@ class FieldPrimaryTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(self._primaries(), ["title"])
 
+    def test_demotion_is_change_logged(self):
+        # Logged like any other change, so a branch merge replays the demotion too.
+        self._post(reverse("plugins:netbox_custom_objects:customobjecttypefield_add"), "title")
+        change = ObjectChange.objects.filter(
+            changed_object_type=ContentType.objects.get_for_model(CustomObjectTypeField),
+            changed_object_id=self.name.pk,
+        ).latest("pk")
+        self.assertEqual(change.action, ObjectChangeActionChoices.ACTION_UPDATE)
+        self.assertEqual((change.prechange_data["primary"], change.postchange_data["primary"]), (True, False))
+
     def test_failed_submission_keeps_the_primary_field(self):
         # A duplicate name fails validation after the primary field has been cleaned.
         response = self._post(reverse("plugins:netbox_custom_objects:customobjecttypefield_add"), "code")
