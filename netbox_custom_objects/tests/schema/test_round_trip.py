@@ -15,7 +15,7 @@ import jsonschema
 from django.test import TestCase
 
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint
-from netbox_custom_objects.schema.comparator import diff_document
+from netbox_custom_objects.schema.comparator import _COT_ATTRS, diff_document
 from netbox_custom_objects.schema.executor import apply_document
 from netbox_custom_objects.schema.exporter import export_cot, export_cots
 from netbox_custom_objects.schema.format import (
@@ -57,6 +57,7 @@ class SchemaRoundTripTestCase(CustomObjectsTestCase, TestCase):
         )
         add("notes", "longtext", ui_visible="if-set", ui_editable="no", default="n/a")
         count = add("count", "integer", validation_minimum=0, validation_maximum=100, default=5)
+        # Whole-number bounds: fractional decimal bounds don't survive apply yet.
         add("ratio", "decimal", validation_minimum=0, validation_maximum=10)
         active = add("active", "boolean", default=True)
         add("born", "date", deprecated=True, deprecated_since="1.1.0", scheduled_removal="2.0.0")
@@ -136,5 +137,5 @@ class SchemaRoundTripTestCase(CustomObjectsTestCase, TestCase):
         }
         self.assertEqual(set(CONSTRAINT_ATTRS) - constraint_attrs, set())
 
-        for attr in ("version", "verbose_name", "verbose_name_plural", "description", "group_name"):
-            self.assertIn(attr, type_def)
+        # Every type attribute the format compares; name is always present.
+        self.assertEqual({attr for attr in _COT_ATTRS if attr != "name"} - set(type_def), set())
