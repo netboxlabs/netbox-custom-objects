@@ -2577,6 +2577,11 @@ class FieldPrimaryTestCase(CustomObjectsTestCase, TestCase):
         self.assertTrue(response.context["form"].errors)
         self.assertEqual(self._primaries(), ["name"])
 
+    def test_editing_the_primary_field_keeps_it_primary(self):
+        url = reverse("plugins:netbox_custom_objects:customobjecttypefield_edit", kwargs={"pk": self.name.pk})
+        self.assertEqual(self._post(url, "name").status_code, 302)
+        self.assertEqual(self._primaries(), ["name"])
+
     def test_editing_another_field_keeps_the_primary_field(self):
         url = reverse("plugins:netbox_custom_objects:customobjecttypefield_edit", kwargs={"pk": self.code.pk})
         self.assertEqual(self._post(url, "code", primary=False).status_code, 302)
