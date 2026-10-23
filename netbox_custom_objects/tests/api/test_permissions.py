@@ -5,8 +5,10 @@ Without the action's permission a write is refused (403); an object outside the 
 reached (404); and a write whose result falls outside the constraint is refused (403) and leaves nothing changed.
 """
 
+from django.conf import settings
 from django.test import TestCase
 from django.urls import reverse
+from packaging.version import Version
 from rest_framework import status
 from rest_framework.test import APIClient
 
@@ -18,6 +20,7 @@ from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConst
 from ..base import CustomObjectsTestCase, create_token
 
 API = "plugins-api:netbox_custom_objects-api"
+NETBOX_VERSION = Version(settings.RELEASE.version)
 
 
 class APIPermissionTestCase(CustomObjectsTestCase, TestCase):
@@ -98,13 +101,20 @@ class CustomObjectPermissionTestCase(APIPermissionTestCase):
         self.assertTrue(self.model.objects.filter(pk=self.other.pk).exists())
         self.assertEqual(self._delete(self._detail(self.ok)).status_code, status.HTTP_204_NO_CONTENT)
 
-    def test_bulk_delete_outside_constraint_deletes_nothing(self):
+    def test_bulk_delete_outside_constraint_spares_it(self):
         self._grant(self.model, ["view", "delete"], constraints={"name": "ok"})
         response = self.client.delete(
             self.list_url, [{"id": self.ok.pk}, {"id": self.other.pk}], format="json", **self.header,
         )
-        self.assertGreaterEqual(response.status_code, 400)
-        self.assertEqual(self.model.objects.filter(pk__in=[self.ok.pk, self.other.pk]).count(), 2)
+        self.assertTrue(self.model.objects.filter(pk=self.other.pk).exists())
+        if NETBOX_VERSION >= Version("4.7"):
+            # Core rejects the batch when any object is outside the user's queryset.
+            self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+            self.assertTrue(self.model.objects.filter(pk=self.ok.pk).exists())
+        else:
+            # COMPAT(netbox<4.7.0): core skips objects outside the queryset and deletes the rest.
+            self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+            self.assertFalse(self.model.objects.filter(pk=self.ok.pk).exists())
 
     def test_permission_on_another_type_grants_nothing(self):
         other_model = self.create_simple_custom_object_type(name="rack", slug="racks").get_model()
@@ -134,6 +144,16 @@ class CustomObjectTypePermissionTestCase(APIPermissionTestCase):
         response = self._post(self.list_url, {"name": "bad", "slug": "bad"})
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertFalse(CustomObjectType.objects.filter(slug="bad").exists())
+
+    def test_change_needs_change_permission(self):
+        self._grant(CustomObjectType, ["view"])
+        response = self._patch(self._detail(self.allowed), {"description": "x"})
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_delete_needs_delete_permission(self):
+        self._grant(CustomObjectType, ["view"])
+        self.assertEqual(self._delete(self._detail(self.allowed)).status_code, status.HTTP_403_FORBIDDEN)
+        self.assertTrue(CustomObjectType.objects.filter(pk=self.allowed.pk).exists())
 
     def test_change_outside_constraint_not_found(self):
         self._grant(CustomObjectType, ["view", "change"], constraints={"slug": "allowed"})
@@ -178,6 +198,21 @@ class CustomObjectTypeFieldPermissionTestCase(APIPermissionTestCase):
         response = self._post(self.list_url, {"custom_object_type": self.cot.pk, "name": "new", "type": "text"})
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertFalse(self.cot.fields.filter(name="new").exists())
+
+    def test_change_needs_change_permission(self):
+        self._grant(CustomObjectTypeField, ["view"])
+        self.assertEqual(self._patch(self._detail(self.code), {"label": "X"}).status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_delete_needs_delete_permission(self):
+        self._grant(CustomObjectTypeField, ["view"])
+        self.assertEqual(self._delete(self._detail(self.code)).status_code, status.HTTP_403_FORBIDDEN)
+        self.assertTrue(self.cot.fields.filter(pk=self.code.pk).exists())
+
+    def test_change_leaving_constraint_refused(self):
+        self._grant(CustomObjectTypeField, ["view", "change"], constraints={"label": "Code"})
+        self.assertEqual(self._patch(self._detail(self.code), {"label": "X"}).status_code, status.HTTP_403_FORBIDDEN)
+        self.code.refresh_from_db()
+        self.assertEqual(self.code.label, "Code")
 
     def test_change_outside_constraint_not_found(self):
         self._grant(CustomObjectTypeField, ["view", "change"], constraints={"name": "code"})
