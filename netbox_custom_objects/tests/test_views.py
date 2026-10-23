@@ -8,11 +8,12 @@ from unittest import skipUnless
 
 from core.choices import ObjectChangeActionChoices
 from core.models import Job, ObjectChange
+from dcim.models import Site
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection
 from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
-from extras.models import CustomFieldChoiceSet
+from extras.models import CustomFieldChoiceSet, JournalEntry
 from netbox.context import current_request, events_queue, query_cache
 from netbox.jobs import AsyncViewJob
 from users.models import ObjectPermission
@@ -20,6 +21,7 @@ from utilities.request import copy_safe_request
 from utilities.testing import ViewTestCases, create_test_user, post_data
 
 from netbox_custom_objects import views
+from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
 from netbox_custom_objects.utilities import is_branching_enabled
 from .base import CustomObjectsTestCase
@@ -2361,3 +2363,180 @@ class CustomObjectConfigContextViewTestCase(CustomObjectsTestCase, TestCase):
 
         response = self.client.get(self._config_context_url(cot, obj))
         self.assertEqual(response.status_code, 404)
+
+
+class FieldDeleteViewTestCase(CustomObjectsTestCase, TestCase):
+    """The field delete page warns how many objects hold a value for the field."""
+
+    def setUp(self):
+        super().setUp()
+        self.user.is_superuser = True
+        self.user.save()
+        self.cot = self.create_custom_object_type(name="widget", slug="widgets")
+        self.create_custom_object_type_field(self.cot, name="name", label="Name", type="text", primary=True)
+
+    def _url(self, field):
+        return reverse("plugins:netbox_custom_objects:customobjecttypefield_delete", kwargs={"pk": field.pk})
+
+    def assertWarnsOf(self, response, count):
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["num_dependent_objects"], count)
+        self.assertContains(response, f"in use on {count} Custom Objects")
+
+    def test_url_field_counts_objects_with_only_a_title(self):
+        field = self.create_custom_object_type_field(self.cot, name="link", label="Link", type="url")
+        model = self.cot.get_model()
+        model.objects.create(name="url", link="https://example.com")
+        model.objects.create(name="title", link_title="Docs")
+        model.objects.create(name="neither")
+        self.assertWarnsOf(self.client.get(self._url(field)), 2)
+
+    def test_polymorphic_multiobject_field_counts_each_object_once(self):
+        field = self.create_polymorphic_field(
+            self.cot, [ObjectType.objects.get_for_model(Site)], name="sites", type="multiobject",
+        )
+        model = self.cot.get_model()
+        first, second = Site.objects.create(name="A", slug="a"), Site.objects.create(name="B", slug="b")
+        model.objects.create(name="both").sites.set([first, second])
+        model.objects.create(name="one").sites.set([first])
+        model.objects.create(name="none")
+        self.assertWarnsOf(self.client.get(self._url(field)), 2)
+
+    def test_htmx_request_renders_modal(self):
+        field = self.create_custom_object_type_field(self.cot, name="code", label="Code", type="text")
+        self.cot.get_model().objects.create(name="coded", code="X1")
+        response = self.client.get(self._url(field), HTTP_HX_REQUEST="true")
+        self.assertTemplateUsed(response, "netbox_custom_objects/htmx/delete_form.html")
+        self.assertTemplateNotUsed(response, "netbox_custom_objects/field_delete.html")
+        self.assertWarnsOf(response, 1)
+
+    def test_unused_field_has_no_warning(self):
+        field = self.create_custom_object_type_field(self.cot, name="code", label="Code", type="text")
+        self.cot.get_model().objects.create(name="uncoded")
+        response = self.client.get(self._url(field))
+        self.assertEqual(response.context["num_dependent_objects"], 0)
+        self.assertNotContains(response, "in use on")
+
+
+class ProtectedObjectDeleteViewTestCase(CustomObjectsTestCase, TestCase):
+    """A custom object referenced through a Protect field can't be deleted from the UI."""
+
+    def setUp(self):
+        super().setUp()
+        self.user.is_superuser = True
+        self.user.save()
+        rack_cot = self.create_custom_object_type(name="rack", slug="racks")
+        self.create_custom_object_type_field(rack_cot, name="name", label="Name", type="text", primary=True)
+        mount_cot = self.create_custom_object_type(name="mount", slug="mounts")
+        self.create_custom_object_type_field(mount_cot, name="name", label="Name", type="text", primary=True)
+        self.create_custom_object_type_field(
+            mount_cot, name="rack", label="Rack", type="object",
+            related_object_type=ObjectType.objects.get_for_model(rack_cot.get_model()),
+            on_delete_behavior=ObjectFieldOnDeleteChoices.PROTECT,
+        )
+        # Generate the referencing model before the target's (see CustomObjectType.get_model).
+        mount_model = mount_cot.get_model()
+        rack_cot.refresh_from_db()
+        self.rack_model = rack_cot.get_model()
+        self.rack = self.rack_model.objects.create(name="R1")
+        mount_model.objects.create(name="M1", rack=self.rack)
+        self.url = reverse(
+            "plugins:netbox_custom_objects:customobject_delete",
+            kwargs={"custom_object_type": "racks", "pk": self.rack.pk},
+        )
+
+    def test_delete_page_redirects_to_object(self):
+        response = self.client.get(self.url, follow=True)
+        self.assertRedirects(response, self.rack.get_absolute_url())
+        self.assertContains(response, "M1")
+
+    def test_htmx_delete_redirects_to_object(self):
+        response = self.client.get(self.url, HTTP_HX_REQUEST="true")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["HX-Redirect"], self.rack.get_absolute_url())
+
+    def test_delete_is_refused(self):
+        response = self.client.post(self.url, {"confirm": True})
+        self.assertRedirects(response, self.rack.get_absolute_url(), fetch_redirect_response=False)
+        self.assertTrue(self.rack_model.objects.filter(pk=self.rack.pk).exists())
+
+
+class QuickAddConstraintTestCase(CustomObjectsTestCase, TestCase):
+    """Quick add refuses an object outside the user's add constraint."""
+
+    def setUp(self):
+        super().setUp()
+        self.cot = self.create_custom_object_type(name="target", slug="targets")
+        self.create_custom_object_type_field(self.cot, name="name", label="Name", type="text", primary=True)
+        self.model = self.cot.get_model()
+        perm = ObjectPermission.objects.create(name="add allowed", actions=["add"], constraints={"name": "allowed"})
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+        self.url = reverse("plugins:netbox_custom_objects:customobject_add", kwargs={"custom_object_type": "targets"})
+
+    def _quick_add(self, name):
+        return self.client.post(f"{self.url}?_quickadd=True", {"quickadd-name": name, "_quickadd": ""})
+
+    def test_object_inside_constraint_is_created(self):
+        response = self._quick_add("allowed")
+        self.assertTemplateUsed(response, "htmx/quick_add_created.html")
+        self.assertTrue(self.model.objects.filter(name="allowed").exists())
+
+    def test_object_outside_constraint_is_refused(self):
+        response = self._quick_add("other")
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "netbox_custom_objects/htmx/co_quick_add.html")
+        self.assertIn("permissions violation", " ".join(response.context["form"].non_field_errors()))
+        self.assertFalse(self.model.objects.exists())
+
+
+class CustomObjectJournalTestCase(CustomObjectsTestCase, TestCase):
+    """Journal entries are added from a custom object's Journal tab."""
+
+    def setUp(self):
+        super().setUp()
+        self.cot = self.create_custom_object_type(name="server", slug="servers")
+        self.create_custom_object_type_field(self.cot, name="name", label="Name", type="text", primary=True)
+        self.model = self.cot.get_model()
+        self.obj = self.model.objects.create(name="S1")
+        self.content_type = ContentType.objects.get_for_model(self.model)
+        self.journal_url = reverse(
+            "plugins:netbox_custom_objects:customobject_journal",
+            kwargs={"custom_object_type": "servers", "pk": self.obj.pk},
+        )
+        self.add_url = reverse("plugins:netbox_custom_objects:custom_journalentry_add")
+
+    def _grant(self, model, actions):
+        perm = ObjectPermission.objects.create(name=f"{model._meta.model_name} {actions}", actions=actions)
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(model))
+
+    def _add_entry(self):
+        return self.client.post(self.add_url, {
+            "assigned_object_type": self.content_type.pk,
+            "assigned_object_id": self.obj.pk,
+            "kind": "info",
+            "comments": "Checked the fans",
+        })
+
+    def test_add_entry_returns_to_journal(self):
+        self._grant(self.model, ["view"])
+        self._grant(JournalEntry, ["view", "add"])
+        response = self.client.get(self.journal_url)
+        self.assertContains(response, f'action="{self.add_url}"')
+
+        response = self._add_entry()
+        self.assertRedirects(response, self.journal_url, fetch_redirect_response=False)
+        entry = JournalEntry.objects.get()
+        self.assertEqual((entry.assigned_object, entry.created_by), (self.obj, self.user))
+        self.assertContains(self.client.get(self.journal_url), "Checked the fans")
+
+    def test_no_form_without_add_permission(self):
+        self._grant(self.model, ["view"])
+        self._grant(JournalEntry, ["view"])
+        response = self.client.get(self.journal_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.context["form"])
+        self.assertNotContains(response, f'action="{self.add_url}"')
+        self.assertEqual(self._add_entry().status_code, 403)
+        self.assertFalse(JournalEntry.objects.exists())
