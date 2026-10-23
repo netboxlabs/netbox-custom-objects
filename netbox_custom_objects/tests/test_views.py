@@ -2415,7 +2415,7 @@ class FieldDeleteViewTestCase(CustomObjectsTestCase, TestCase):
         self.cot.get_model().objects.create(name="uncoded")
         response = self.client.get(self._url(field))
         self.assertEqual(response.context["num_dependent_objects"], 0)
-        self.assertNotContains(response, "irreversible data loss")
+        self.assertNotContains(response, "in use on")
 
 
 class ProtectedObjectDeleteViewTestCase(CustomObjectsTestCase, TestCase):
