@@ -1309,8 +1309,8 @@ class CustomObjectBulkEditView(BackgroundJobURLKwargsMixin, CustomObjectTableMix
         if self.queryset is not None:
             return self.queryset
         custom_object_type = self.kwargs.get("custom_object_type", None)
-        self.custom_object_type = CustomObjectType.objects.get(
-            slug=custom_object_type
+        self.custom_object_type = get_object_or_404(
+            CustomObjectType, slug=custom_object_type
         )
         model = self.custom_object_type.get_model_with_serializer()
         return model.objects.all()
@@ -1589,8 +1589,8 @@ class CustomObjectBulkDeleteView(BackgroundJobURLKwargsMixin, CustomObjectTableM
         if self.queryset is not None:
             return self.queryset
         self.custom_object_type = self.kwargs.pop("custom_object_type", None)
-        self.custom_object_type = CustomObjectType.objects.get(
-            slug=self.custom_object_type
+        self.custom_object_type = get_object_or_404(
+            CustomObjectType, slug=self.custom_object_type
         )
         model = self.custom_object_type.get_model_with_serializer()
         return model.objects.all()
@@ -1620,8 +1620,8 @@ class CustomObjectBulkImportView(BackgroundJobURLKwargsMixin, generic.BulkImport
         if self.queryset is not None:
             return self.queryset
         custom_object_type = self.kwargs.get("custom_object_type", None)
-        self.custom_object_type = CustomObjectType.objects.get(
-            slug=custom_object_type
+        self.custom_object_type = get_object_or_404(
+            CustomObjectType, slug=custom_object_type
         )
         model = self.custom_object_type.get_model_with_serializer()
         return model.objects.all()
