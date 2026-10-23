@@ -29,7 +29,7 @@ from netbox_custom_objects.models import (
     detect_backing_column_collisions,
 )
 
-from .base import CustomObjectsTestCase
+from ..base import CustomObjectsTestCase
 
 
 # ---------------------------------------------------------------------------
