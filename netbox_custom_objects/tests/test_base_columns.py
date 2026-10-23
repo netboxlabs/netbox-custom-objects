@@ -6,36 +6,15 @@ Covers:
 - _store_base_column_snapshot() writes schema_document["base_columns"] and
   preserves existing schema_document keys
 - create_model() automatically stores the snapshot after table creation
-- backfill_base_columns migration function populates existing COTs and is
-  idempotent
-"""
 
-import importlib
+The 0010 backfill migration's tests are in ``tests/upgrade/test_data_migrations.py``.
+"""
 
 from django.test import TestCase
 
 from netbox_custom_objects.models import CustomObjectType
 
 from .base import CustomObjectsTestCase
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _run_backfill():
-    """Execute the 0010 backfill function directly against the live DB."""
-    mod = importlib.import_module(
-        "netbox_custom_objects.migrations.0010_backfill_base_columns"
-    )
-
-    class _AppsShim:
-        @staticmethod
-        def get_model(app_label, model_name):
-            from django.apps import apps  # noqa: PLC0415
-            return apps.get_model(app_label, model_name)
-
-    mod.backfill_base_columns(_AppsShim(), None)
 
 
 # ---------------------------------------------------------------------------
@@ -205,128 +184,3 @@ class CreateModelSnapshotTestCase(CustomObjectsTestCase, TestCase):
 
         names = {c["name"] for c in cot.schema_document["base_columns"]}
         self.assertNotIn("extra_col", names)
-
-
-# ---------------------------------------------------------------------------
-# 0010 backfill migration
-# ---------------------------------------------------------------------------
-
-class BackfillBaseColumnsTestCase(CustomObjectsTestCase, TestCase):
-    """
-    Tests for the 0010_backfill_base_columns migration function.
-
-    The migration function is called directly (bypassing the migration runner)
-    so we can verify its behaviour against real DB state.
-    """
-
-    def _clear_base_columns(self, cot):
-        """Remove base_columns from schema_document to simulate pre-feature state."""
-        doc = cot.schema_document or {}
-        doc.pop("base_columns", None)
-        # Use None if dict is now empty, to match real pre-feature state
-        CustomObjectType.objects.filter(pk=cot.pk).update(
-            schema_document=doc if doc else None
-        )
-        cot.refresh_from_db()
-
-    def test_backfill_populates_base_columns(self):
-        """COTs without base_columns must get them after backfill."""
-        cot = self.create_custom_object_type(name="bf_pop", slug="bf-pop")
-        self._clear_base_columns(cot)
-        self.assertFalse(
-            cot.schema_document and "base_columns" in (cot.schema_document or {})
-        )
-
-        _run_backfill()
-
-        cot.refresh_from_db()
-        self.assertIn("base_columns", cot.schema_document)
-        self.assertTrue(len(cot.schema_document["base_columns"]) > 0)
-
-    def test_backfill_includes_mandatory_base_columns(self):
-        """id, created, and last_updated must appear after backfill."""
-        cot = self.create_custom_object_type(name="bf_mandatory", slug="bf-mandatory")
-        self._clear_base_columns(cot)
-
-        _run_backfill()
-
-        cot.refresh_from_db()
-        names = {c["name"] for c in cot.schema_document["base_columns"]}
-        self.assertIn("id", names)
-        self.assertIn("created", names)
-        self.assertIn("last_updated", names)
-
-    def test_backfill_excludes_user_fields(self):
-        """User-defined field columns must not appear in the backfilled base_columns."""
-        cot = self.create_custom_object_type(name="bf_excl", slug="bf-excl")
-        self.create_custom_object_type_field(cot, name="custom_col", type="text")
-        self._clear_base_columns(cot)
-
-        _run_backfill()
-
-        cot.refresh_from_db()
-        names = {c["name"] for c in cot.schema_document["base_columns"]}
-        self.assertNotIn("custom_col", names)
-
-    def test_backfill_is_idempotent(self):
-        """Running backfill twice must not alter an already-backfilled snapshot."""
-        cot = self.create_custom_object_type(name="bf_idem", slug="bf-idem")
-        self._clear_base_columns(cot)
-
-        _run_backfill()
-        cot.refresh_from_db()
-        first_snapshot = cot.schema_document["base_columns"]
-
-        _run_backfill()
-        cot.refresh_from_db()
-        second_snapshot = cot.schema_document["base_columns"]
-
-        self.assertEqual(first_snapshot, second_snapshot)
-
-    def test_backfill_skips_cot_with_existing_base_columns(self):
-        """A COT that already has base_columns must not be modified."""
-        cot = self.create_custom_object_type(name="bf_skip", slug="bf-skip")
-        # Plant a sentinel value in base_columns
-        sentinel_doc = {"base_columns": [{"name": "sentinel", "field_class": "TextField", "null": True}]}
-        CustomObjectType.objects.filter(pk=cot.pk).update(schema_document=sentinel_doc)
-        cot.refresh_from_db()
-
-        _run_backfill()
-
-        cot.refresh_from_db()
-        self.assertEqual(
-            cot.schema_document["base_columns"],
-            sentinel_doc["base_columns"],
-            "Pre-existing base_columns must not be overwritten",
-        )
-
-    def test_backfill_handles_multiple_cots(self):
-        """Backfill must process all COTs in one pass."""
-        cots = [
-            self.create_custom_object_type(name=f"bf_multi{i}", slug=f"bf-multi{i}")
-            for i in range(3)
-        ]
-        for cot in cots:
-            self._clear_base_columns(cot)
-
-        _run_backfill()
-
-        for cot in cots:
-            cot.refresh_from_db()
-            self.assertIn(
-                "base_columns", cot.schema_document,
-                f"COT {cot.pk} missing base_columns after backfill",
-            )
-
-    def test_backfill_each_entry_has_required_keys(self):
-        """Every entry in the backfilled base_columns must have name, field_class, and null."""
-        cot = self.create_custom_object_type(name="bf_keys", slug="bf-keys")
-        self._clear_base_columns(cot)
-
-        _run_backfill()
-
-        cot.refresh_from_db()
-        for entry in cot.schema_document["base_columns"]:
-            self.assertIn("name", entry, f"Entry missing 'name': {entry}")
-            self.assertIn("field_class", entry, f"Entry missing 'field_class': {entry}")
-            self.assertIn("null", entry, f"Entry missing 'null': {entry}")
