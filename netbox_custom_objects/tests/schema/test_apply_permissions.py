@@ -10,7 +10,7 @@ from django.test import TransactionTestCase
 from rest_framework import status
 from users.models import ObjectPermission
 
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
 from netbox_custom_objects.schema.exporter import export_cot
 
 from ..base import TransactionCleanupMixin
@@ -124,6 +124,95 @@ class SchemaApplyPermissionTestCase(_SchemaAPIBase):
             response = self._apply({"name": "fresh", "slug": "fresh", "description": "keep"})
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         flush_events.assert_called_once()
+
+
+class SchemaApplyConstraintPermissionTestCase(_SchemaAPIBase):
+    """Constraints the document adds, alters or removes need the matching constraint permission."""
+
+    def setUp(self):
+        super().setUp()
+        self.cot = self.create_custom_object_type(name='asset', slug='assets')
+        self.code = self.create_custom_object_type_field(self.cot, name='code', type='text')
+        self.serial = self.create_custom_object_type_field(self.cot, name='serial', type='text')
+        self.existing = CustomObjectTypeConstraint.objects.create(
+            custom_object_type=self.cot, name='code_serial',
+            field_schema_ids=[self.code.schema_id, self.serial.schema_id],
+        )
+        for model, actions in (
+            (CustomObjectType, ['add', 'change']),
+            (CustomObjectTypeField, ['add', 'change', 'delete']),
+        ):
+            self._grant(model, actions)
+
+    def _grant(self, model, actions, constraints=None):
+        perm = ObjectPermission.objects.create(
+            name=f'{model._meta.model_name}-{"-".join(actions)}', actions=actions, constraints=constraints,
+        )
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(model))
+
+    def _apply(self, edit):
+        type_def = export_cot(self.cot)
+        edit(type_def)
+        schema_doc = {"schema_version": "1", "types": [type_def]}
+        return self.client.post(self.apply_url, data=self._apply_body(schema_doc), format="json")
+
+    def _add(self, name):
+        def edit(type_def):
+            type_def.setdefault("constraints", []).append(
+                {"name": name, "fields": [self.code.schema_id], "case_insensitive": True}
+            )
+        return edit
+
+    def _describe(self, description):
+        def edit(type_def):
+            (constraint,) = [c for c in type_def["constraints"] if c["name"] == "code_serial"]
+            constraint["description"] = description
+        return edit
+
+    @staticmethod
+    def _remove(type_def):
+        type_def["constraints"] = []
+        type_def["removed_constraints"] = ["code_serial"]
+
+    def test_adding_needs_add_permission(self):
+        response = self._apply(self._add("code_only"))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        # Refused up front, before anything is written.
+        self.assertIn("permission to add Custom Object Type constraints", response.data["detail"])
+        self.assertFalse(self.cot.constraints.filter(name="code_only").exists())
+
+        self._grant(CustomObjectTypeConstraint, ['add'])
+        self.assertEqual(self._apply(self._add("code_only")).status_code, status.HTTP_200_OK)
+        self.assertTrue(self.cot.constraints.filter(name="code_only").exists())
+
+    def test_adding_outside_add_constraint_refused(self):
+        self._grant(CustomObjectTypeConstraint, ['add'], constraints={'name__startswith': 'ok_'})
+        self.assertEqual(self._apply(self._add("code_only")).status_code, status.HTTP_403_FORBIDDEN)
+        self.assertFalse(self.cot.constraints.filter(name="code_only").exists())
+
+    def test_altering_needs_change_permission(self):
+        response = self._apply(self._describe("changed"))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("permission to change one or more of these constraints", response.data["detail"])
+        self.assertEqual(self.cot.constraints.get(name="code_serial").description, "")
+
+        self._grant(CustomObjectTypeConstraint, ['change'])
+        self.assertEqual(self._apply(self._describe("changed")).status_code, status.HTTP_200_OK)
+        self.assertEqual(self.cot.constraints.get(name="code_serial").description, "changed")
+
+    def test_altering_out_of_change_constraint_rolled_back(self):
+        self._grant(CustomObjectTypeConstraint, ['change'], constraints={'description': ''})
+        self.assertEqual(self._apply(self._describe("changed")).status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(self.cot.constraints.get(name="code_serial").description, "")
+
+    def test_removing_needs_delete_permission(self):
+        self.assertEqual(self._apply(self._remove).status_code, status.HTTP_403_FORBIDDEN)
+        self.assertTrue(self.cot.constraints.filter(name="code_serial").exists())
+
+        self._grant(CustomObjectTypeConstraint, ['delete'])
+        self.assertEqual(self._apply(self._remove).status_code, status.HTTP_200_OK)
+        self.assertFalse(self.cot.constraints.filter(name="code_serial").exists())
 
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')

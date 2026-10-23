@@ -442,8 +442,8 @@ schema: { ... }
   even when the document only updates existing types. Beyond that, permissions are checked as the
   UI and REST views check them, object-level constraints included: change permission on every
   existing Custom Object Type in the document (it rewrites their `schema_document`), add
-  permission for new types, and add, change or delete permission on the fields being added,
-  changed or removed. Missing permissions return `403 Forbidden`
+  permission for new types, and add, change or delete permission on the fields and constraints
+  being added, changed or removed. Missing permissions return `403 Forbidden`
   before anything is changed; a result that falls outside a constraint returns `403` and is
   rolled back.
 - On success, `schema_document` is persisted on each affected COT so tombstones are available
