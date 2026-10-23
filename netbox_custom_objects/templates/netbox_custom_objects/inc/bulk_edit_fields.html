@@ -7,6 +7,8 @@
 {% for field in form.visible_fields %}
   {% if field.name in form.meta_fields %}
     {# Handled separately in the meta section. #}
+  {% elif field.name == 'owner' or field.name == 'owner_group' %}
+    {# Rendered in the Ownership section below. #}
   {% elif field.name in form.custom_object_type_poly_obj_ct_names %}
     {# Polymorphic single-object pair: heading + type selector + object picker #}
     {% with pair=form.custom_object_type_poly_obj_pairs|dict_get:field.name %}
@@ -53,3 +55,15 @@
     {% render_field field %}
   {% endif %}
 {% endfor %}
+
+{% if form.owner %}
+  <div class="field-group mb-5">
+    <div class="row">
+      <h2 class="col-9 offset-3">{% trans "Ownership" %}</h2>
+    </div>
+    {% if form.owner_group %}
+      {% render_field form.owner_group %}
+    {% endif %}
+    {% render_field form.owner bulk_nullable=True %}
+  </div>
+{% endif %}

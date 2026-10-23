@@ -2,7 +2,7 @@
 {% load i18n %}
 
 {# HTMX partial: replaces #form_fields on bulk edit type-selector change. #}
-{# Must mirror the full contents of #form_fields in custom_object_bulk_edit.html. #}
+{# Must mirror the full contents of #form_fields in custom_object_bulk_edit.html; the buttons sit outside it. #}
 
 {% csrf_token %}
 {% for field in form.hidden_fields %}
@@ -20,9 +20,4 @@
   {% if form.background_job %}
     {% render_field form.background_job %}
   {% endif %}
-</div>
-
-<div class="btn-float-group-right">
-  <a href="{{ return_url }}" class="btn btn-outline-secondary btn-float">{% trans "Cancel" %}</a>
-  <button type="submit" name="_apply" class="btn btn-primary">{% trans "Apply" %}</button>
 </div>

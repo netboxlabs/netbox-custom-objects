@@ -9,6 +9,7 @@ from netbox.forms.mixins import ChangelogMessageMixin
 from utilities.forms.fields import (CommentField, ContentTypeChoiceField,
                                     ContentTypeMultipleChoiceField,
                                     DynamicModelChoiceField, JSONField, SlugField, TagFilterField)
+from utilities.forms.constants import BOOLEAN_WITH_BLANK_CHOICES
 from utilities.forms.rendering import FieldSet
 from utilities.forms.utils import get_field_value
 from utilities.object_types import object_type_name
@@ -143,7 +144,19 @@ class CustomObjectTypeImportForm(NetBoxModelImportForm):
 
 class CustomObjectTypeFilterForm(NetBoxModelFilterSetForm):
     model = CustomObjectType
-    fieldsets = (FieldSet("q", "filter_id", "tag"),)
+    fieldsets = (
+        FieldSet("q", "filter_id", "tag"),
+        FieldSet("group_name", "config_context_enabled", name=_("Attributes")),
+    )
+    group_name = forms.CharField(
+        label=_("Group name"),
+        required=False,
+    )
+    config_context_enabled = forms.NullBooleanField(
+        label=_("Config context support"),
+        required=False,
+        widget=forms.Select(choices=BOOLEAN_WITH_BLANK_CHOICES),
+    )
     tag = TagFilterField(model)
 
 
