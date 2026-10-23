@@ -394,17 +394,20 @@ schema: { ... }
   `409 Conflict`.
 - The apply is **fully atomic** — a failure at any point rolls back all changes including newly
   created COT tables (PostgreSQL supports transactional DDL).
-- **Permissions** are checked as the UI and REST views check them, object-level constraints
-  included: change permission on every existing Custom Object Type in the document (it rewrites
-  their `schema_document`), add permission for new types, and add, change or delete permission
-  on the fields being added, changed or removed. Missing permissions return `403 Forbidden`
+- **Permissions:** every apply requires both add and change permission on Custom Object Types,
+  even when the document only updates existing types. Beyond that, permissions are checked as the
+  UI and REST views check them, object-level constraints included: change permission on every
+  existing Custom Object Type in the document (it rewrites their `schema_document`), add
+  permission for new types, and add, change or delete permission on the fields being added,
+  changed or removed. Missing permissions return `403 Forbidden`
   before anything is changed; a result that falls outside a constraint returns `403` and is
   rolled back.
 - On success, `schema_document` is persisted on each affected COT so tombstones are available
   for future export/diff cycles.
-- Schema apply is **blocked while a [NetBox Branching](branching.md) branch is active**, since
-  the executor performs direct DDL that is not branch-aware. Run schema applies from the main
-  context.
+- Schema apply **works inside a [NetBox Branching](branching.md) branch**: with a branch
+  active, the Custom Object Type and field changes are made in the branch and the DDL runs
+  against the branch's schema, so main is unchanged until the branch is merged. A failed or
+  rejected apply is rolled back in the branch too.
 
 Response `200`:
 

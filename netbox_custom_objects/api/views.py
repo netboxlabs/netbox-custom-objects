@@ -7,7 +7,6 @@ import jsonschema
 
 from django.apps import apps as django_apps
 from django.contrib.contenttypes.models import ContentType
-from django.db import transaction
 from django.db.models import Q
 from django.http import Http404
 from django.utils.translation import gettext_lazy as _
@@ -22,6 +21,7 @@ from rest_framework.routers import APIRootView
 from rest_framework.views import APIView
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
+from core.signals import clear_events
 from netbox.api.authentication import IsAuthenticatedOrLoginNotRequired, TokenWritePermission
 from netbox.api.renderers import FormlessBrowsableAPIRenderer
 from netbox.api.viewsets import NetBoxModelViewSet
@@ -38,6 +38,7 @@ from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.schema.comparator import FieldOp, diff_document
 from netbox_custom_objects.schema.executor import (
     apply_diffs,
+    schema_transaction,
     CircularDependencyError,
     DestructiveChangesError,
     UnknownChoiceSetError,
@@ -508,8 +509,9 @@ class SchemaApplyView(APIView):
 
     Unexpected DB errors (e.g. ``IntegrityError`` from a constraint violation
     unrelated to the COT schema logic) are not caught and will surface as
-    **500 Internal Server Error**.  The entire apply is wrapped in
-    ``transaction.atomic()``, so any such failure leaves the DB unchanged.
+    **500 Internal Server Error**.  The entire apply runs in one
+    ``schema_transaction()``, so any such failure leaves the DB unchanged, inside a
+    branch as in main, and discards the events the apply queued.
     """
 
     parser_classes = _SCHEMA_PARSER_CLASSES
@@ -553,9 +555,15 @@ class SchemaApplyView(APIView):
         type_defs_by_slug = {type_def["slug"]: type_def for type_def in schema_doc.get("types", [])}
 
         try:
-            with transaction.atomic():
-                apply_diffs(diffs, type_defs_by_slug, allow_destructive=allow_destructive)
-                _check_applied_permissions(request.user, diffs)
+            with schema_transaction():
+                try:
+                    apply_diffs(diffs, type_defs_by_slug, allow_destructive=allow_destructive)
+                    _check_applied_permissions(request.user, diffs)
+                except Exception:
+                    # The saves queued their events before the apply failed; discard them with
+                    # the writes, or they're dispatched after the response.
+                    clear_events.send(sender=self)
+                    raise
         except DestructiveChangesError as exc:
             return Response(
                 {

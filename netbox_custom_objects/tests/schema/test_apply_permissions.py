@@ -2,6 +2,9 @@
 Applying a schema document enforces object-level permissions, as the UI and REST views do.
 """
 
+import unittest
+from unittest import mock
+
 from core.models import ObjectType
 from rest_framework import status
 from users.models import ObjectPermission
@@ -9,7 +12,11 @@ from users.models import ObjectPermission
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.schema.exporter import export_cot
 
+from ..test_branching import HAS_BRANCHING, _close_branch_connections, _provision_branch
 from .test_schema_api import _SchemaAPIBase
+
+if HAS_BRANCHING:
+    from netbox_branching.utilities import activate_branch
 
 
 class SchemaApplyPermissionTestCase(_SchemaAPIBase):
@@ -102,3 +109,63 @@ class SchemaApplyPermissionTestCase(_SchemaAPIBase):
         response = self._apply(type_def, allow_destructive=True)
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertTrue(self.allowed.fields.filter(pk=field.pk).exists())
+
+    def test_rejected_apply_sends_no_events(self):
+        self._grant(CustomObjectType, ['add', 'change'], constraints={'description': 'keep'})
+        with mock.patch('netbox.context_managers.flush_events') as flush_events:
+            response = self._apply(self._with_description(self.allowed, 'changed'))
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        flush_events.assert_not_called()
+
+        # An accepted apply does send its events.
+        with mock.patch('netbox.context_managers.flush_events') as flush_events:
+            response = self._apply({"name": "fresh", "slug": "fresh", "description": "keep"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        flush_events.assert_called_once()
+
+
+@unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
+class SchemaApplyBranchTestCase(_SchemaAPIBase):
+    """An apply inside a branch changes only the branch, and a rejected one not even that."""
+
+    def setUp(self):
+        super().setUp()
+        self.cot = self.create_custom_object_type(name='allowed', slug='allowed', description='keep')
+        perm = ObjectPermission.objects.create(
+            name='keep only', actions=['add', 'change'], constraints={'description': 'keep'},
+        )
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
+        self.branch = _provision_branch('Schema apply', user=self.user)
+
+    def tearDown(self):
+        _close_branch_connections()
+        super().tearDown()
+
+    def _apply_in_branch(self, *type_defs):
+        schema_doc = {"schema_version": "1", "types": list(type_defs)}
+        return self.client.post(
+            self.apply_url, data=self._apply_body(schema_doc), format="json",
+            HTTP_X_NETBOX_BRANCH=self.branch.schema_id,
+        )
+
+    def test_change_leaving_constraint_rolled_back_in_branch(self):
+        type_def = export_cot(self.cot)
+        type_def["description"] = "changed"
+        response = self._apply_in_branch(type_def)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        with activate_branch(self.branch):
+            self.assertEqual(CustomObjectType.objects.get(pk=self.cot.pk).description, 'keep')
+
+    def test_new_type_outside_constraint_not_created_in_branch(self):
+        response = self._apply_in_branch({"name": "rejected", "slug": "rejected", "description": "other"})
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        with activate_branch(self.branch):
+            self.assertFalse(CustomObjectType.objects.filter(slug='rejected').exists())
+
+    def test_accepted_apply_changes_only_the_branch(self):
+        response = self._apply_in_branch({"name": "branched", "slug": "branched", "description": "keep"})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        with activate_branch(self.branch):
+            self.assertTrue(CustomObjectType.objects.filter(slug='branched').exists())
+        self.assertFalse(CustomObjectType.objects.filter(slug='branched').exists())
