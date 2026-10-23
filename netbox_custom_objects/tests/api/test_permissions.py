@@ -37,6 +37,12 @@ class APIPermissionTestCase(CustomObjectsTestCase, TestCase):
         perm.users.add(self.user)
         perm.object_types.add(ObjectType.objects.get_for_model(model))
 
+    def _grant_action(self, model, action, constraints):
+        """Grant unrestricted view, and *action* only within *constraints*, so a write checked against
+        the view permission instead of the action's would let the test through."""
+        self._grant(model, ["view"])
+        self._grant(model, [action], constraints=constraints)
+
     def _post(self, url, data):
         return self.client.post(url, data, format="json", **self.header)
 
@@ -66,7 +72,7 @@ class CustomObjectPermissionTestCase(APIPermissionTestCase):
         self.assertFalse(self.model.objects.filter(name="new").exists())
 
     def test_create_outside_add_constraint_refused(self):
-        self._grant(self.model, ["view", "add"], constraints={"name__startswith": "ok"})
+        self._grant_action(self.model, "add", constraints={"name__startswith": "ok"})
         self.assertEqual(self._post(self.list_url, {"name": "bad"}).status_code, status.HTTP_403_FORBIDDEN)
         self.assertFalse(self.model.objects.filter(name="bad").exists())
         self.assertEqual(self._post(self.list_url, {"name": "ok-2"}).status_code, status.HTTP_201_CREATED)
@@ -75,16 +81,18 @@ class CustomObjectPermissionTestCase(APIPermissionTestCase):
         self._grant(self.model, ["view"])
         response = self._patch(self._detail(self.ok), {"description": "x"})
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.ok.refresh_from_db()
+        self.assertNotEqual(self.ok.description, "x")
 
     def test_change_outside_constraint_not_found(self):
-        self._grant(self.model, ["view", "change"], constraints={"name": "ok"})
+        self._grant_action(self.model, "change", constraints={"name": "ok"})
         response = self._patch(self._detail(self.other), {"description": "x"})
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
         self.other.refresh_from_db()
         self.assertNotEqual(self.other.description, "x")
 
     def test_change_leaving_constraint_refused(self):
-        self._grant(self.model, ["view", "change"], constraints={"name": "ok"})
+        self._grant_action(self.model, "change", constraints={"name": "ok"})
         self.assertEqual(self._patch(self._detail(self.ok), {"name": "renamed"}).status_code, status.HTTP_403_FORBIDDEN)
         self.ok.refresh_from_db()
         self.assertEqual(self.ok.name, "ok")
@@ -96,13 +104,13 @@ class CustomObjectPermissionTestCase(APIPermissionTestCase):
         self.assertTrue(self.model.objects.filter(pk=self.ok.pk).exists())
 
     def test_delete_outside_constraint_not_found(self):
-        self._grant(self.model, ["view", "delete"], constraints={"name": "ok"})
+        self._grant_action(self.model, "delete", constraints={"name": "ok"})
         self.assertEqual(self._delete(self._detail(self.other)).status_code, status.HTTP_404_NOT_FOUND)
         self.assertTrue(self.model.objects.filter(pk=self.other.pk).exists())
         self.assertEqual(self._delete(self._detail(self.ok)).status_code, status.HTTP_204_NO_CONTENT)
 
     def test_bulk_delete_outside_constraint_spares_it(self):
-        self._grant(self.model, ["view", "delete"], constraints={"name": "ok"})
+        self._grant_action(self.model, "delete", constraints={"name": "ok"})
         response = self.client.delete(
             self.list_url, [{"id": self.ok.pk}, {"id": self.other.pk}], format="json", **self.header,
         )
@@ -140,7 +148,7 @@ class CustomObjectTypePermissionTestCase(APIPermissionTestCase):
         self.assertFalse(CustomObjectType.objects.filter(slug="new").exists())
 
     def test_create_outside_add_constraint_refused(self):
-        self._grant(CustomObjectType, ["view", "add"], constraints={"slug__startswith": "ok-"})
+        self._grant_action(CustomObjectType, "add", constraints={"slug__startswith": "ok-"})
         response = self._post(self.list_url, {"name": "bad", "slug": "bad"})
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertFalse(CustomObjectType.objects.filter(slug="bad").exists())
@@ -149,6 +157,8 @@ class CustomObjectTypePermissionTestCase(APIPermissionTestCase):
         self._grant(CustomObjectType, ["view"])
         response = self._patch(self._detail(self.allowed), {"description": "x"})
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.allowed.refresh_from_db()
+        self.assertNotEqual(self.allowed.description, "x")
 
     def test_delete_needs_delete_permission(self):
         self._grant(CustomObjectType, ["view"])
@@ -156,21 +166,23 @@ class CustomObjectTypePermissionTestCase(APIPermissionTestCase):
         self.assertTrue(CustomObjectType.objects.filter(pk=self.allowed.pk).exists())
 
     def test_change_outside_constraint_not_found(self):
-        self._grant(CustomObjectType, ["view", "change"], constraints={"slug": "allowed"})
+        self._grant_action(CustomObjectType, "change", constraints={"slug": "allowed"})
         self.assertEqual(
             self._patch(self._detail(self.other), {"description": "x"}).status_code, status.HTTP_404_NOT_FOUND,
         )
+        self.other.refresh_from_db()
+        self.assertNotEqual(self.other.description, "x")
         self.assertEqual(self._patch(self._detail(self.allowed), {"description": "x"}).status_code, status.HTTP_200_OK)
 
     def test_change_leaving_constraint_refused(self):
-        self._grant(CustomObjectType, ["view", "change"], constraints={"slug": "allowed"})
+        self._grant_action(CustomObjectType, "change", constraints={"slug": "allowed"})
         response = self._patch(self._detail(self.allowed), {"slug": "moved"})
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
         self.allowed.refresh_from_db()
         self.assertEqual(self.allowed.slug, "allowed")
 
     def test_delete_outside_constraint_not_found(self):
-        self._grant(CustomObjectType, ["view", "delete"], constraints={"slug": "allowed"})
+        self._grant_action(CustomObjectType, "delete", constraints={"slug": "allowed"})
         self.assertEqual(self._delete(self._detail(self.other)).status_code, status.HTTP_404_NOT_FOUND)
         self.assertTrue(CustomObjectType.objects.filter(pk=self.other.pk).exists())
 
@@ -194,7 +206,7 @@ class CustomObjectTypeFieldPermissionTestCase(APIPermissionTestCase):
         self.assertFalse(self.cot.fields.filter(name="new").exists())
 
     def test_create_outside_add_constraint_refused(self):
-        self._grant(CustomObjectTypeField, ["view", "add"], constraints={"type": "integer"})
+        self._grant_action(CustomObjectTypeField, "add", constraints={"type": "integer"})
         response = self._post(self.list_url, {"custom_object_type": self.cot.pk, "name": "new", "type": "text"})
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
         self.assertFalse(self.cot.fields.filter(name="new").exists())
@@ -202,6 +214,8 @@ class CustomObjectTypeFieldPermissionTestCase(APIPermissionTestCase):
     def test_change_needs_change_permission(self):
         self._grant(CustomObjectTypeField, ["view"])
         self.assertEqual(self._patch(self._detail(self.code), {"label": "X"}).status_code, status.HTTP_403_FORBIDDEN)
+        self.code.refresh_from_db()
+        self.assertEqual(self.code.label, "Code")
 
     def test_delete_needs_delete_permission(self):
         self._grant(CustomObjectTypeField, ["view"])
@@ -209,19 +223,19 @@ class CustomObjectTypeFieldPermissionTestCase(APIPermissionTestCase):
         self.assertTrue(self.cot.fields.filter(pk=self.code.pk).exists())
 
     def test_change_leaving_constraint_refused(self):
-        self._grant(CustomObjectTypeField, ["view", "change"], constraints={"label": "Code"})
+        self._grant_action(CustomObjectTypeField, "change", constraints={"label": "Code"})
         self.assertEqual(self._patch(self._detail(self.code), {"label": "X"}).status_code, status.HTTP_403_FORBIDDEN)
         self.code.refresh_from_db()
         self.assertEqual(self.code.label, "Code")
 
     def test_change_outside_constraint_not_found(self):
-        self._grant(CustomObjectTypeField, ["view", "change"], constraints={"name": "code"})
+        self._grant_action(CustomObjectTypeField, "change", constraints={"name": "code"})
         self.assertEqual(self._patch(self._detail(self.notes), {"label": "X"}).status_code, status.HTTP_404_NOT_FOUND)
         self.notes.refresh_from_db()
         self.assertEqual(self.notes.label, "Notes")
 
     def test_delete_outside_constraint_not_found(self):
-        self._grant(CustomObjectTypeField, ["view", "delete"], constraints={"name": "code"})
+        self._grant_action(CustomObjectTypeField, "delete", constraints={"name": "code"})
         self.assertEqual(self._delete(self._detail(self.notes)).status_code, status.HTTP_404_NOT_FOUND)
         self.assertTrue(self.cot.fields.filter(pk=self.notes.pk).exists())
 
@@ -262,16 +276,38 @@ class CustomObjectTypeConstraintPermissionTestCase(APIPermissionTestCase):
         self.assertFalse(CustomObjectTypeConstraint.objects.filter(name="vendor_model").exists())
 
     def test_create_outside_add_constraint_refused(self):
-        self._grant(CustomObjectTypeConstraint, ["view", "add"], constraints={"name__startswith": "ok_"})
+        self._grant_action(CustomObjectTypeConstraint, "add", constraints={"name__startswith": "ok_"})
         self.assertEqual(self._post(self.list_url, self._new()).status_code, status.HTTP_403_FORBIDDEN)
         self.assertFalse(CustomObjectTypeConstraint.objects.filter(name="vendor_model").exists())
 
+    def test_change_needs_change_permission(self):
+        self._grant(CustomObjectTypeConstraint, ["view"])
+        response = self._patch(self._detail(self.existing), {"description": "x"})
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.existing.refresh_from_db()
+        self.assertNotEqual(self.existing.description, "x")
+
     def test_change_outside_constraint_not_found(self):
-        self._grant(CustomObjectTypeConstraint, ["view", "change"], constraints={"name": "nothing"})
+        self._grant_action(CustomObjectTypeConstraint, "change", constraints={"name": "nothing"})
         response = self._patch(self._detail(self.existing), {"description": "x"})
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.existing.refresh_from_db()
+        self.assertNotEqual(self.existing.description, "x")
+
+    def test_change_leaving_constraint_refused(self):
+        self._grant_action(CustomObjectTypeConstraint, "change", constraints={"name": "vendor_serial"})
+        response = self._patch(self._detail(self.existing), {"name": "renamed"})
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.existing.refresh_from_db()
+        self.assertEqual(self.existing.name, "vendor_serial")
+        self.assertEqual(self._patch(self._detail(self.existing), {"description": "x"}).status_code, status.HTTP_200_OK)
 
     def test_delete_needs_delete_permission(self):
         self._grant(CustomObjectTypeConstraint, ["view"])
         self.assertEqual(self._delete(self._detail(self.existing)).status_code, status.HTTP_403_FORBIDDEN)
+        self.assertTrue(CustomObjectTypeConstraint.objects.filter(pk=self.existing.pk).exists())
+
+    def test_delete_outside_constraint_not_found(self):
+        self._grant_action(CustomObjectTypeConstraint, "delete", constraints={"name": "nothing"})
+        self.assertEqual(self._delete(self._detail(self.existing)).status_code, status.HTTP_404_NOT_FOUND)
         self.assertTrue(CustomObjectTypeConstraint.objects.filter(pk=self.existing.pk).exists())
