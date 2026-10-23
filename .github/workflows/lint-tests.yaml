@@ -118,14 +118,9 @@ jobs:
             -c "ALTER SYSTEM SET synchronous_commit = off" \
             -c "ALTER SYSTEM SET lock_timeout = '60s'" \
             -c "SELECT pg_reload_conf()"
+      # The branching job runs the whole suite too: netbox-branching changes model
+      # routing and wires extra hooks, and some tests run only when it's installed.
       - name: Run tests
-        if: ${{ matrix.with-branching != true }}
         working-directory: netbox
         run: |
           python netbox/manage.py test netbox_custom_objects.tests --keepdb --verbosity=2
-
-      - name: Run tests (with branching)
-        if: ${{ matrix.with-branching == true }}
-        working-directory: netbox
-        run: |
-          python netbox/manage.py test netbox_custom_objects.tests.test_branching --keepdb --verbosity=2
