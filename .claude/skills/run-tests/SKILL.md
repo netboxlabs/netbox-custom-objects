@@ -40,12 +40,12 @@ Run a single test module / class / method (Django's dotted-path target):
 
 ```bash
 python netbox/manage.py test netbox_custom_objects.tests.models --keepdb
-python netbox/manage.py test netbox_custom_objects.tests.test_api --keepdb
+python netbox/manage.py test netbox_custom_objects.tests.api --keepdb
 python netbox/manage.py test netbox_custom_objects.tests.models.test_cot.CustomObjectTypeTestCase --keepdb
 ```
 
 Available test modules in `netbox_custom_objects/tests/`:
-- `test_api` — REST API endpoints (CRUD, linked objects view).
+- `api` — REST API endpoints: custom objects, field values, types, fields, constraints, linked objects, config context.
 - `test_deletion` — Cascade deletion when a referenced object is deleted.
 - `test_field_types` — FieldType subclass behaviour (model field, form field, serializer, filter).
 - `test_filtersets` — Filterset generation and filtering for custom object models.
