@@ -6,7 +6,7 @@ import json
 from unittest import mock
 
 from django.contrib.auth.models import AnonymousUser
-from django.test import TestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.urls import reverse
 from rest_framework.test import APIClient
 
@@ -14,7 +14,8 @@ from core.models import ObjectType
 from users.models import ObjectPermission
 
 from netbox_custom_objects.graphql import live as live_module
-from netbox_custom_objects.models import CustomObjectType
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.schema.exporter import export_cot
 from netbox_custom_objects.utilities import visible_custom_object_type_ids
 
 from .base import CustomObjectsTestCase, create_token
@@ -105,10 +106,60 @@ class SchemaPreviewTestCase(TypeVisibilityTestCase):
         self.assertEqual(response.status_code, 403)
         self.assertNotIn(b"codename", response.content)
 
+    def test_forbidden_for_new_type_without_view_permission(self):
+        self.assertEqual(self._preview("brand-new").status_code, 403)
+
     def test_forbidden_for_type_outside_constraint(self):
         self._grant(CustomObjectType, constraints={"slug": "contracts"})
         self.assertEqual(self._preview("secret-projects").status_code, 403)
         self.assertEqual(self._preview("contracts").status_code, 200)
+
+    def _retarget_project(self, url):
+        type_def = export_cot(self.contracts)
+        (project,) = [f for f in type_def["fields"] if f["name"] == "project"]
+        project["related_object_type"] = "dcim/site"
+        doc = {"schema_version": "1", "types": [type_def]}
+        if url.endswith("apply"):
+            doc = {"schema": doc}
+        return self.client.post(reverse(url), doc, format="json", **self.header)
+
+    def test_forbidden_when_stored_related_type_outside_constraint(self):
+        self._grant(CustomObjectType, constraints={"slug": "contracts"})
+        response = self._retarget_project("plugins-api:netbox_custom_objects-api:schema-preview")
+        self.assertEqual(response.status_code, 403)
+        self.assertNotIn(b"secret-projects", response.content)
+
+        self._grant(CustomObjectType)
+        response = self._retarget_project("plugins-api:netbox_custom_objects-api:schema-preview")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"custom-objects/secret-projects", response.content)
+
+    def test_apply_forbidden_when_stored_related_type_outside_constraint(self):
+        for model, actions in ((CustomObjectType, ["view", "add", "change"]), (CustomObjectTypeField, ["change"])):
+            perm = ObjectPermission.objects.create(
+                name=f"{model._meta.model_name}-apply", actions=actions,
+                constraints={"slug": "contracts"} if model is CustomObjectType else None,
+            )
+            perm.users.add(self.user)
+            perm.object_types.add(ObjectType.objects.get_for_model(model))
+        response = self._retarget_project("plugins-api:netbox_custom_objects-api:schema-apply")
+        self.assertEqual(response.status_code, 403)
+        self.assertNotIn(b"secret-projects", response.content)
+        self.assertEqual(self.contracts.fields.get(name="project").related_object_type, self.secrets.object_type)
+
+
+class CoreObjectTypesTestCase(TypeVisibilityTestCase):
+
+    def test_descriptions_omit_field_names(self):
+        response = self.client.get(
+            reverse("core-api:objecttype-list"), {"app_label": "netbox_custom_objects", "limit": 0}, **self.header,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn(b"codename", response.content)
+        descriptions = {
+            row["model"]: row["description"] for row in response.data["results"]
+        }
+        self.assertEqual(descriptions[self.secrets_model._meta.model_name], "An object of a Custom Object Type.")
 
 
 class GraphQLSchemaTestCase(TypeVisibilityTestCase):
@@ -163,3 +214,43 @@ class GraphQLSchemaTestCase(TypeVisibilityTestCase):
         self.user.save()
         root = self._root_fields(self._introspect(**self.header))
         self.assertTrue({"custom_objects_contracts", "custom_objects_secret_projects"} <= root)
+
+
+class SchemaCacheCapTestCase(SimpleTestCase):
+    """The cached GraphQL schemas are capped per process, across every branch."""
+
+    def setUp(self):
+        live_module.reset_cache()
+        self.addCleanup(live_module.reset_cache)
+        for patcher in (
+            mock.patch(
+                "netbox_custom_objects.CustomObjectsPluginConfig.should_skip_dynamic_model_creation",
+                return_value=False,
+            ),
+            mock.patch.object(live_module, "cached_schema_signature", return_value="signature"),
+            mock.patch.object(live_module, "build_full_schema", side_effect=lambda visible: object()),
+            mock.patch.object(live_module, "_MAX_SCHEMAS", 3),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _schema(self, branch, visible):
+        with (
+            mock.patch.object(live_module, "_active_branch_key", return_value=branch),
+            mock.patch(
+                "netbox_custom_objects.utilities.visible_custom_object_type_ids", return_value=frozenset(visible),
+            ),
+        ):
+            return live_module.get_live_schema(None)
+
+    def test_users_who_see_the_same_types_share_a_schema(self):
+        self.assertIs(self._schema(None, {1}), self._schema(None, {1}))
+
+    def test_oldest_schema_dropped_across_branches(self):
+        first = self._schema(None, {1})
+        self._schema(None, {2})
+        self._schema(7, {1})
+        self._schema(7, {2})
+        self.assertEqual(sum(len(schemas) for schemas in live_module._schema_cache.values()), 3)
+        self.assertNotIn(frozenset({1}), live_module._schema_cache[None])
+        self.assertIsNot(self._schema(None, {1}), first)

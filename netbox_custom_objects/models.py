@@ -2091,6 +2091,9 @@ class CustomObjectType(NetBoxModel):
 
         attrs = {
             "Meta": meta,
+            # Without a docstring Django generates one listing every field name, and core's
+            # object types API shows it to any user as the model's description.
+            "__doc__": "An object of a Custom Object Type.",
             # Resolvable through this module's __getattr__, so the class can be pickled.
             "__module__": __name__,
             "custom_object_type": self,

@@ -35,6 +35,7 @@ assigns the result to the view before it executes the operation.
 
 import logging
 import threading
+from collections import OrderedDict
 
 from netbox_custom_objects.utilities import is_branching_enabled
 
@@ -57,11 +58,15 @@ _rebuild_lock = threading.Lock()
 # schemas.  Each value is an atomically swapped (signature, schema) tuple, so a
 # lockless reader can never see a schema that doesn't match its signature.
 _schema_cache = {}
-# Schemas kept per branch, one per distinct set of visible types.  Users with the
-# same permissions share a schema.  The oldest is dropped first, not the least
-# recently used: the hot path reads the cache without the lock, so it can't reorder
-# entries on a hit.  The cap is meant to be large enough that churn is unlikely.
-_MAX_SCHEMAS_PER_BRANCH = 16
+# Schemas kept per process across all branches, one per branch and distinct set of
+# visible types; users with the same permissions share a schema.  Each schema holds
+# about 12MB, nearly all of it core NetBox's, so the cap bounds the memory.  The oldest
+# is dropped first, not the least recently used: the hot path reads the cache without
+# the lock, so it can't reorder entries on a hit.
+_MAX_SCHEMAS = 8
+# (branch key, visible key) of each cached schema, oldest first.  Written only under
+# _rebuild_lock.  Keys of a deleted branch's schemas linger until their turn to go.
+_schema_order = OrderedDict()
 # Signature cache keys this process has populated, so reset_cache (tests) can clear
 # every per-branch entry.
 _signature_keys_seen = set()
@@ -398,8 +403,11 @@ def get_live_schema(user):
             logger.exception("Failed to rebuild live GraphQL schema")
             return schema
         branch_schemas[visible_key] = (signature, new_schema)
-        while len(branch_schemas) > _MAX_SCHEMAS_PER_BRANCH:
-            branch_schemas.pop(next(iter(branch_schemas)))
+        _schema_order.pop((branch_key, visible_key), None)
+        _schema_order[(branch_key, visible_key)] = None
+        while _schema_order and sum(len(schemas) for schemas in _schema_cache.values()) > _MAX_SCHEMAS:
+            (old_branch, old_visible), _ = _schema_order.popitem(last=False)
+            _schema_cache.get(old_branch, {}).pop(old_visible, None)
         return new_schema
     finally:
         _rebuild_lock.release()
@@ -409,6 +417,7 @@ def reset_cache():
     """Clear the cached schemas, signatures, per-type cache, and build state (tests)."""
     global _schema_cache
     _schema_cache = {}
+    _schema_order.clear()
 
     from django.core.cache import cache
 
