@@ -1,15 +1,20 @@
 """
-Unit tests for the netbox-branching hooks in ``netbox_custom_objects.branching``.
+Unit tests for the netbox-branching hooks: those in ``netbox_custom_objects.branching``
+and the two signal receivers in ``netbox_custom_objects/__init__.py``.
 
-The hooks are pure functions over model metadata and ObjectChange payloads, so
-they're exercised with stand-in models and collapsed changes.  They don't import
-netbox-branching, and no database is required, hence ``SimpleTestCase``.
+The hooks are pure functions over model metadata, ObjectChange payloads and context
+state, so they're exercised with stand-in models and collapsed changes, and no database
+is required, hence ``SimpleTestCase``.  Only the tests that the receivers are connected
+to netbox-branching's signals need it installed, and a database: netbox-branching's own
+receivers on those signals look up event rules.
 """
 from types import SimpleNamespace
+from unittest import mock, skipUnless
 from unittest.mock import Mock
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
 
+from netbox_custom_objects import _heal_branch_on_migrate, _reset_deferred_co_field_data
 from netbox_custom_objects.branching import (
     _collect_co_refs,
     _constraint_field_refs,
@@ -22,7 +27,9 @@ from netbox_custom_objects.models import (
     POLY_M2M_SIDECAR_KEY,
     CustomObjectTypeConstraint,
     CustomObjectTypeField,
+    _deferred_co_field_data,
 )
+from netbox_custom_objects.utilities import is_branching_enabled
 
 # Taken from the models, so renaming one fails these tests until branching.py's labels follow.
 FIELD_LABEL = CustomObjectTypeField._meta.label_lower
@@ -272,3 +279,64 @@ class AddCustomObjectDependenciesTestCase(SimpleTestCase):
         plain = _change(('dcim.site', 1), 'create', None, post={'peers': [3]})
         unresolved = _change((self.co_label, 1), None, self.model, post={'devices': [3]})
         self.assertGraph(_build(device, plain, unresolved))
+
+
+class BranchingReceiversTestCase(SimpleTestCase):
+    """The receivers ``__init__.py`` connects to netbox-branching's signals."""
+
+    def setUp(self):
+        self.addCleanup(_deferred_co_field_data.set, None)
+        self.branch = SimpleNamespace(pk=1)
+
+    def test_reset_clears_deferred_field_data(self):
+        _deferred_co_field_data.set({"table1model": {1: {"data": {"code": "stale"}}}})
+        _reset_deferred_co_field_data(sender=None)
+        self.assertIsNone(_deferred_co_field_data.get())
+
+    def test_heal_on_migrate_heals_the_branch(self):
+        with mock.patch("netbox_custom_objects.mixin_migration.heal_branch") as heal_branch:
+            _heal_branch_on_migrate(sender=None, branch=self.branch, verbosity=0)
+        heal_branch.assert_called_once_with(self.branch, verbosity=0)
+
+    def test_heal_on_migrate_logs_failures(self):
+        with mock.patch("netbox_custom_objects.mixin_migration.heal_branch", side_effect=RuntimeError("boom")):
+            with self.assertLogs("netbox_custom_objects", level="ERROR") as logs:
+                _heal_branch_on_migrate(sender=None, branch=self.branch)
+        self.assertIn("healing branch 1 after migrate", logs.output[0])
+
+
+@skipUnless(is_branching_enabled(), "netbox-branching is not installed")
+class BranchingSignalConnectionTestCase(TestCase):
+    """The receivers run when netbox-branching sends its signals."""
+
+    def setUp(self):
+        self.addCleanup(_deferred_co_field_data.set, None)
+        self.branch = SimpleNamespace(pk=1)
+
+    def test_merge_sync_and_revert_clear_deferred_field_data(self):
+        from netbox_branching import signals
+
+        for name in ("pre_merge", "post_merge", "pre_sync", "post_sync", "pre_revert", "post_revert"):
+            with self.subTest(signal=name):
+                _deferred_co_field_data.set({"table1model": {1: {"data": {"code": "stale"}}}})
+                getattr(signals, name).send(sender=None, branch=self.branch, user=None)
+                self.assertIsNone(_deferred_co_field_data.get())
+
+    def test_migrate_heals_the_branch(self):
+        from netbox_branching.signals import post_migrate
+
+        with mock.patch("netbox_custom_objects.mixin_migration.heal_branch") as heal_branch:
+            post_migrate.send(sender=None, branch=self.branch, user=None)
+        heal_branch.assert_called_once_with(self.branch, verbosity=1)
+
+    def test_squash_graph_gets_custom_object_edges(self):
+        from netbox_branching.signals import squash_dependency_graph_built
+
+        label = f"{APP_LABEL}.table1model"
+        model = _model(m2m=[_m2m("peers", label)])
+        target = _change((label, 2), "create", model, post={"peers": []})
+        source = _change((label, 1), "create", model, post={"peers": [2]})
+        squash_dependency_graph_built.send(
+            sender=None, collapsed_changes={cc.key: cc for cc in (target, source)}, operation="merge",
+        )
+        self.assertEqual(source.depends_on, {target.key})
