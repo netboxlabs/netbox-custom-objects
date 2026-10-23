@@ -2542,6 +2542,19 @@ class CustomObjectJournalTestCase(CustomObjectsTestCase, TestCase):
         self.assertFalse(JournalEntry.objects.exists())
 
 
+class UnknownTypeSlugTestCase(CustomObjectsTestCase, TestCase):
+    """The custom object views return 404 for a Custom Object Type slug that doesn't exist."""
+
+    def test_unknown_slug_is_404(self):
+        self.user.is_superuser = True
+        self.user.save()
+        for action in ("list", "add", "bulk_edit", "bulk_delete", "bulk_import"):
+            url = reverse(f"plugins:netbox_custom_objects:customobject_{action}", kwargs={"custom_object_type": "nope"})
+            for method in ("get", "post"):
+                with self.subTest(action=action, method=method):
+                    self.assertEqual(getattr(self.client, method)(url).status_code, 404)
+
+
 class FieldPrimaryTestCase(CustomObjectsTestCase, TestCase):
     """Making a field primary through the field form demotes the type's existing primary field."""
 
