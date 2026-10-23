@@ -29,7 +29,7 @@ from utilities.testing import create_test_user
 
 import netbox_custom_objects as nco_pkg
 from netbox_custom_objects.schema.exporter import export_cot
-from netbox_custom_objects.models import CustomObjectType
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 
 from ..base import CustomObjectsTestCase, TransactionCleanupMixin, create_api_token
 
@@ -55,6 +55,16 @@ class _SchemaAPIBase(TransactionCleanupMixin, CustomObjectsTestCase, Transaction
         perm = ObjectPermission.objects.create(name='schema_view_cot_perm', actions=['view'])
         perm.users.add(self.user)
         perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
+
+    def _grant_apply_permissions(self):
+        """Add and change on types, plus add, change and delete on their fields."""
+        for model, actions in (
+            (CustomObjectType, ['add', 'change']),
+            (CustomObjectTypeField, ['add', 'change', 'delete']),
+        ):
+            perm = ObjectPermission.objects.create(name=f'schema_apply_{model._meta.model_name}', actions=actions)
+            perm.users.add(self.user)
+            perm.object_types.add(ObjectType.objects.get_for_model(model))
 
     @property
     def preview_url(self):
@@ -214,10 +224,7 @@ class SchemaApplyTestCase(_SchemaAPIBase):
 
     def setUp(self):
         super().setUp()
-        perm = ObjectPermission(name='schema_apply_cot_perm', actions=['add', 'change'])
-        perm.save()
-        perm.users.add(self.user)
-        perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
+        self._grant_apply_permissions()
 
     def test_apply_new_cot_returns_200(self):
         schema_doc = {
@@ -426,10 +433,7 @@ class SchemaYAMLFormatTestCase(_SchemaAPIBase):
         super().setUp()
         self.cot = self.create_custom_object_type(name='yamlcot', slug='yaml-cot')
         self.create_custom_object_type_field(self.cot, name='alpha', type='text')
-        perm = ObjectPermission(name='schema_yaml_cot_perm', actions=['add', 'change'])
-        perm.save()
-        perm.users.add(self.user)
-        perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
+        self._grant_apply_permissions()
 
     def test_preview_accepts_yaml_request_body(self):
         type_def = export_cot(self.cot)
@@ -536,10 +540,7 @@ class SchemaApplyMultiCOTRecursionTestCase(_SchemaAPIBase):
 
     def setUp(self):
         super().setUp()
-        perm = ObjectPermission(name='schema_apply_recursion_cot_perm', actions=['add', 'change'])
-        perm.save()
-        perm.users.add(self.user)
-        perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
+        self._grant_apply_permissions()
 
     def test_apply_two_new_cross_referencing_cots_in_one_request(self):
         django_apps.clear_cache()

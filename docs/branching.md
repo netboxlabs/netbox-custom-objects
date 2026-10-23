@@ -47,4 +47,4 @@ Changes to Custom Objects on branches are disallowed.
 
 ## Portable Schema
 
-Applying a [portable schema document](portable-schema.md) is also blocked while a branch is active. The schema executor performs direct DDL (`ALTER`/`DROP TABLE`) operations that are not branch-aware, so schema applies must be run from the main context.
+A [portable schema document](portable-schema.md) can be applied while a branch is active. The Custom Object Type and field changes are made in the branch and the DDL runs against the branch's schema, so main is unchanged until the branch is merged.
