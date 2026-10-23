@@ -39,9 +39,9 @@ If any of these are missing, surface the gap to the user — do not silently ski
 Run a single test module / class / method (Django's dotted-path target):
 
 ```bash
-python netbox/manage.py test netbox_custom_objects.tests.test_models --keepdb
+python netbox/manage.py test netbox_custom_objects.tests.models --keepdb
 python netbox/manage.py test netbox_custom_objects.tests.test_api --keepdb
-python netbox/manage.py test netbox_custom_objects.tests.test_models.CustomObjectTypeTestCase --keepdb
+python netbox/manage.py test netbox_custom_objects.tests.models.test_cot.CustomObjectTypeTestCase --keepdb
 ```
 
 Available test modules in `netbox_custom_objects/tests/`:
@@ -49,7 +49,7 @@ Available test modules in `netbox_custom_objects/tests/`:
 - `test_deletion` — Cascade deletion when a referenced object is deleted.
 - `test_field_types` — FieldType subclass behaviour (model field, form field, serializer, filter).
 - `test_filtersets` — Filterset generation and filtering for custom object models.
-- `test_models` — CustomObjectType and CustomObjectTypeField model logic and validation.
+- `models` — model tests: types, fields, constraints, choice sets, generated models, search, app config, utilities.
 - `test_navigation` — Dynamic navigation menu construction.
 - `test_schema_operations` — DB schema create/delete/alter for custom object tables.
 - `test_views` — UI views via NetBox's test client.

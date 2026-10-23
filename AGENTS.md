@@ -56,7 +56,8 @@ Defer all version pins to `pyproject.toml` and `netbox_custom_objects/__init__.p
 │       ├── test_deletion.py                — Cascade deletion behaviour.
 │       ├── test_field_types.py             — FieldType subclass behaviour.
 │       ├── test_filtersets.py              — Filterset functionality.
-│       ├── test_models.py                  — CustomObjectType and field model logic.
+│       ├── models/                         — Model tests: types, fields, constraints, choice sets,
+│       │                                     generated models, search, app config, utilities.
 │       ├── test_navigation.py              — Dynamic navigation menu.
 │       ├── test_schema_operations.py       — Schema creation/deletion/alteration.
 │       └── test_views.py                   — Web views.
@@ -152,8 +153,8 @@ There is no Justfile/Makefile in this repo; commands are raw. Run tests inside a
 |---|---|
 | `pip install -e '.[dev,test]'` (from this repo) | Install the plugin in editable mode with dev + test extras |
 | `python netbox/manage.py test netbox_custom_objects.tests --keepdb` | Run the full test suite |
-| `python netbox/manage.py test netbox_custom_objects.tests.test_models --keepdb` | Run a single test module |
-| `python netbox/manage.py test netbox_custom_objects.tests.test_models.CustomObjectTypeTestCase.test_name --keepdb` | Run a single test case |
+| `python netbox/manage.py test netbox_custom_objects.tests.models.test_cot --keepdb` | Run a single test module |
+| `python netbox/manage.py test netbox_custom_objects.tests.models.test_cot.CustomObjectTypeTestCase.test_name --keepdb` | Run a single test case |
 | `ruff check` | Lint |
 | `ruff format netbox_custom_objects/` | Format code |
 | `python netbox/manage.py makemigrations netbox_custom_objects` | Generate Django migrations after model changes |
@@ -190,7 +191,14 @@ After model changes, generate a migration with `python netbox/manage.py makemigr
 | `test_deletion.py` | Cascade deletion when a referenced object is deleted |
 | `test_field_types.py` | FieldType subclass behaviour (model field, form field, serializer, filter) |
 | `test_filtersets.py` | Filterset generation and filtering for custom object models |
-| `test_models.py` | CustomObjectType and CustomObjectTypeField model logic and validation |
+| `models/test_cot.py` | CustomObjectType model logic and validation, config context, display expressions |
+| `models/test_cot_fields.py` | CustomObjectTypeField model logic and validation, related names |
+| `models/test_constraints.py` | CustomObjectTypeConstraint model and the constraints it creates |
+| `models/test_choice_sets.py` | Custom objects' handling of choice set changes |
+| `models/test_dynamic_models.py` | Generated models: instances, `get_model()`, the model cache, startup ordering, pickling |
+| `models/test_search.py` | Search indexing and the reindex job |
+| `models/test_app_config.py` | The plugin's app config |
+| `models/test_utilities.py` | Utility functions |
 | `test_navigation.py` | Dynamic navigation menu construction |
 | `test_schema_operations.py` | DB schema create/delete/alter for custom object tables |
 | `test_views.py` | Web views (list, create, edit, delete) |
