@@ -55,6 +55,11 @@ class GraphQLRootQueryPermissionTestCase(CustomObjectsTestCase, TestCase):
         self.assertNotIn("errors", payload, msg=str(payload.get("errors")))
         return sorted(row["name"] for row in payload["data"]["custom_objects_server_list"])
 
+    def assertNotInSchema(self, payload, field="custom_objects_server_list"):
+        """A type the user can't see has no root queries in their schema (see visible_custom_object_type_ids)."""
+        self.assertIsNone(payload["data"])
+        self.assertIn(f"Cannot query field '{field}'", payload["errors"][0]["message"])
+
     def _grant(self, model, actions=("view",), constraints=None, enabled=True):
         perm = ObjectPermission.objects.create(
             name=f"perm-{model._meta.model_name}-{'-'.join(actions)}",
@@ -77,8 +82,8 @@ class GraphQLRootQueryPermissionTestCase(CustomObjectsTestCase, TestCase):
             [e["message"] for e in payload["errors"]], [e["message"] for e in missing["errors"]],
         )
 
-    def test_list_empty_without_view_permission(self):
-        self.assertEqual(self._names(self._gql(LIST_QUERY)), [])
+    def test_type_hidden_without_view_permission(self):
+        self.assertNotInSchema(self._gql(LIST_QUERY))
 
     def test_list_returns_all_with_view_permission(self):
         self._grant(self.model)
@@ -89,18 +94,18 @@ class GraphQLRootQueryPermissionTestCase(CustomObjectsTestCase, TestCase):
         other.objects.create(name="visible")
         self._grant(other)
 
-        payload = self._gql("{ custom_objects_server_list { name } custom_objects_other_list { name } }")
+        self.assertNotInSchema(self._gql(LIST_QUERY))
+        payload = self._gql("{ custom_objects_other_list { name } }")
         self.assertNotIn("errors", payload, msg=str(payload.get("errors")))
-        self.assertEqual(payload["data"]["custom_objects_server_list"], [])
         self.assertEqual(payload["data"]["custom_objects_other_list"], [{"name": "visible"}])
 
     def test_permission_without_view_action_grants_nothing(self):
         self._grant(self.model, actions=("add", "change", "delete"))
-        self.assertEqual(self._names(self._gql(LIST_QUERY)), [])
+        self.assertNotInSchema(self._gql(LIST_QUERY))
 
     def test_disabled_permission_grants_nothing(self):
         self._grant(self.model, enabled=False)
-        self.assertEqual(self._names(self._gql(LIST_QUERY)), [])
+        self.assertNotInSchema(self._gql(LIST_QUERY))
 
     def test_constrained_permission_filters_list(self):
         self._grant(self.model, constraints={"name": "alpha"})
@@ -122,7 +127,7 @@ class GraphQLRootQueryPermissionTestCase(CustomObjectsTestCase, TestCase):
         self._assert_same_error_as_missing(self._single(self.beta.pk))
 
     def test_single_object_without_permission_is_not_returned(self):
-        self._assert_same_error_as_missing(self._single(self.alpha.pk))
+        self.assertNotInSchema(self._single(self.alpha.pk), "custom_objects_server")
 
     @override_settings(LOGIN_REQUIRED=True)
     def test_anonymous_rejected_when_login_required(self):
@@ -137,7 +142,7 @@ class GraphQLRootQueryPermissionTestCase(CustomObjectsTestCase, TestCase):
     def test_anonymous_sees_nothing_without_exemption(self):
         response = self._post(LIST_QUERY)
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.content)
-        self.assertEqual(self._names(json.loads(response.content)), [])
+        self.assertNotInSchema(json.loads(response.content))
 
     @override_settings(LOGIN_REQUIRED=False, EXEMPT_VIEW_PERMISSIONS=["*"])
     def test_anonymous_sees_all_with_exemption(self):

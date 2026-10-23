@@ -6,14 +6,16 @@ import unittest
 from unittest import mock
 
 from core.models import ObjectType
+from django.test import TransactionTestCase
 from rest_framework import status
 from users.models import ObjectPermission
 
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.schema.exporter import export_cot
 
+from ..base import TransactionCleanupMixin
 from ..test_branching import HAS_BRANCHING, _close_branch_connections, _provision_branch
-from .test_schema_api import _SchemaAPIBase
+from .test_schema_api import _SchemaAPIBase, _SchemaAPIMixin
 
 if HAS_BRANCHING:
     from netbox_branching.utilities import activate_branch
@@ -125,7 +127,7 @@ class SchemaApplyPermissionTestCase(_SchemaAPIBase):
 
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
-class SchemaApplyBranchTestCase(_SchemaAPIBase):
+class SchemaApplyBranchTestCase(TransactionCleanupMixin, _SchemaAPIMixin, TransactionTestCase):
     """An apply inside a branch changes only the branch, and a rejected one not even that."""
 
     def setUp(self):

@@ -38,8 +38,8 @@ from ..base import CustomObjectsTestCase, create_api_token
 # Base for schema API tests
 # ---------------------------------------------------------------------------
 
-class _SchemaAPIBase(CustomObjectsTestCase, TestCase):
-    """Base class providing an authenticated API client and helper shortcuts."""
+class _SchemaAPIMixin(CustomObjectsTestCase):
+    """An authenticated API client and helper shortcuts, for a TestCase or TransactionTestCase."""
 
     def setUp(self):
         super().setUp()
@@ -82,6 +82,10 @@ class _SchemaAPIBase(CustomObjectsTestCase, TestCase):
         # next_schema_id stores the *last assigned* ID; +1 is the next available one,
         # mirroring the auto-assign logic in CustomObjectTypeField.save().
         return cot.next_schema_id + 1
+
+
+class _SchemaAPIBase(_SchemaAPIMixin, TestCase):
+    """Base class for the schema API tests."""
 
 
 # ---------------------------------------------------------------------------
