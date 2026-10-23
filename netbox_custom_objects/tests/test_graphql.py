@@ -269,6 +269,8 @@ class GraphQLLiveSchemaTestCase(CustomObjectsTestCase, TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
         self.addCleanup(live_module.reset_cache)
+        self.user.is_superuser = True
+        self.user.save()
 
     def test_signature_changes_when_type_added(self):
         sig_before = live_module.schema_signature()
@@ -285,14 +287,14 @@ class GraphQLLiveSchemaTestCase(CustomObjectsTestCase, TestCase):
 
     def test_get_live_schema_rebuilds_on_new_type(self):
         # A type that does not exist yet must not be in the schema...
-        first = live_module.get_live_schema()
+        first = live_module.get_live_schema(self.user)
         self.assertIsNotNone(first)
         self.assertNotIn("custom_objects_runtime_thing", str(first))
 
         # ...and must appear after creation, with no restart and without manually
         # clearing the cache (the signature change drives the rebuild).
         self.create_simple_custom_object_type(name="Runtime Thing", slug="runtime_thing")
-        second = live_module.get_live_schema()
+        second = live_module.get_live_schema(self.user)
         self.assertIsNot(first, second)
         sdl = str(second)
         self.assertIn("custom_objects_runtime_thing", sdl)
@@ -300,8 +302,8 @@ class GraphQLLiveSchemaTestCase(CustomObjectsTestCase, TestCase):
 
     def test_get_live_schema_cached_when_unchanged(self):
         self.create_simple_custom_object_type(name="Stable", slug="stable")
-        a = live_module.get_live_schema()
-        b = live_module.get_live_schema()
+        a = live_module.get_live_schema(self.user)
+        b = live_module.get_live_schema(self.user)
         # No DB change between calls → same cached object, no rebuild.
         self.assertIs(a, b)
 
@@ -309,13 +311,13 @@ class GraphQLLiveSchemaTestCase(CustomObjectsTestCase, TestCase):
         from netbox_custom_objects.models import CustomObjectType
 
         cot = self.create_simple_custom_object_type(name="Temp", slug="temp_type")
-        self.assertIn("custom_objects_temp_type", str(live_module.get_live_schema()))
+        self.assertIn("custom_objects_temp_type", str(live_module.get_live_schema(self.user)))
         # Delete via the queryset rather than cot.delete(): the schema-drop
         # behaviour only depends on the row being gone (which changes the
         # signature and triggers a rebuild), and this avoids the unrelated COT
         # teardown machinery.
         CustomObjectType.objects.filter(pk=cot.pk).delete()
-        self.assertNotIn("custom_objects_temp_type", str(live_module.get_live_schema()))
+        self.assertNotIn("custom_objects_temp_type", str(live_module.get_live_schema(self.user)))
 
     def test_get_live_schema_without_get_schema_extensions(self):
         # NetBox < 4.6.1 has no get_schema_extensions(); its extensions are inline.
@@ -326,7 +328,7 @@ class GraphQLLiveSchemaTestCase(CustomObjectsTestCase, TestCase):
         with mock.patch.dict(ngs.__dict__):
             ngs.__dict__.pop("get_schema_extensions", None)
             self.create_simple_custom_object_type(name="Legacy NetBox", slug="legacy_netbox")
-            schema = live_module.get_live_schema()
+            schema = live_module.get_live_schema(self.user)
 
         self.assertIsNotNone(schema)
         self.assertIn("custom_objects_legacy_netbox", str(schema))

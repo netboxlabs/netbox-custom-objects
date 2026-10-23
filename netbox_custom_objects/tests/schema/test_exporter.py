@@ -237,6 +237,11 @@ class ExporterFieldTypesTestCase(CustomObjectsTestCase, TestCase):
         self.assertNotIn("validation_minimum", f)
         self.assertNotIn("validation_maximum", f)
 
+    def test_coordinates_field_exported(self):
+        self.create_custom_object_type_field(self.cot, name='location', type='coordinates')
+        f = _field_by_name(export_cot(self.cot), "location")
+        self.assertEqual(f["type"], "coordinates")
+
     def test_select_field_choice_set_name(self):
         self.create_custom_object_type_field(
             self.cot, name='status', type='select', choice_set=self.choice_set
@@ -541,6 +546,7 @@ class ExporterSchemaValidationTestCase(CustomObjectsTestCase, TestCase):
             cls.cot, name='device', type='object',
             related_object_type=cls.device_ot
         )
+        cls.create_custom_object_type_field(cls.cot, name='location', type='coordinates')
 
     def test_single_cot_validates(self):
         self._assert_valid(export_cots([self.cot]))

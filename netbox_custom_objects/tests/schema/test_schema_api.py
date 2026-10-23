@@ -29,7 +29,7 @@ from utilities.testing import create_test_user
 
 import netbox_custom_objects as nco_pkg
 from netbox_custom_objects.schema.exporter import export_cot
-from netbox_custom_objects.models import CustomObjectType
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 
 from ..base import CustomObjectsTestCase, create_api_token
 
@@ -51,6 +51,20 @@ class _SchemaAPIBase(CustomObjectsTestCase, TestCase):
             token_key = self.token.key
         self.client = APIClient()
         self.client.credentials(HTTP_AUTHORIZATION=f"Token {token_key}")
+        # Previewing a document describes existing types, so it needs view permission on them.
+        perm = ObjectPermission.objects.create(name='schema_view_cot_perm', actions=['view'])
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
+
+    def _grant_apply_permissions(self):
+        """Add and change on types, plus add, change and delete on their fields."""
+        for model, actions in (
+            (CustomObjectType, ['add', 'change']),
+            (CustomObjectTypeField, ['add', 'change', 'delete']),
+        ):
+            perm = ObjectPermission.objects.create(name=f'schema_apply_{model._meta.model_name}', actions=actions)
+            perm.users.add(self.user)
+            perm.object_types.add(ObjectType.objects.get_for_model(model))
 
     @property
     def preview_url(self):
@@ -210,10 +224,7 @@ class SchemaApplyTestCase(_SchemaAPIBase):
 
     def setUp(self):
         super().setUp()
-        perm = ObjectPermission(name='schema_apply_cot_perm', actions=['add', 'change'])
-        perm.save()
-        perm.users.add(self.user)
-        perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
+        self._grant_apply_permissions()
 
     def test_apply_new_cot_returns_200(self):
         schema_doc = {
@@ -227,6 +238,21 @@ class SchemaApplyTestCase(_SchemaAPIBase):
         )
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertTrue(resp.data["applied"])
+
+    def test_apply_multi_column_type_change_returns_400(self):
+        cot = self.create_custom_object_type(name='applyretype', slug='apply-retype')
+        field = self.create_custom_object_type_field(cot, name='loc', type='text')
+        type_def = export_cot(cot)
+        type_def["fields"][0]["type"] = "coordinates"
+        resp = self.client.post(
+            self.apply_url,
+            data=self._apply_body({"schema_version": "1", "types": [type_def]}),
+            format="json",
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(resp.data["error"], "unsupported_type_change")
+        field.refresh_from_db()
+        self.assertEqual(field.type, "text")
 
     def test_apply_new_cot_creates_cot_in_db(self):
         schema_doc = {
@@ -423,10 +449,7 @@ class SchemaYAMLFormatTestCase(_SchemaAPIBase):
         super().setUp()
         self.cot = self.create_custom_object_type(name='yamlcot', slug='yaml-cot')
         self.create_custom_object_type_field(self.cot, name='alpha', type='text')
-        perm = ObjectPermission(name='schema_yaml_cot_perm', actions=['add', 'change'])
-        perm.save()
-        perm.users.add(self.user)
-        perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
+        self._grant_apply_permissions()
 
     def test_preview_accepts_yaml_request_body(self):
         type_def = export_cot(self.cot)
@@ -533,10 +556,7 @@ class SchemaApplyMultiCOTRecursionTestCase(_SchemaAPIBase):
 
     def setUp(self):
         super().setUp()
-        perm = ObjectPermission(name='schema_apply_recursion_cot_perm', actions=['add', 'change'])
-        perm.save()
-        perm.users.add(self.user)
-        perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
+        self._grant_apply_permissions()
 
     def test_apply_two_new_cross_referencing_cots_in_one_request(self):
         django_apps.clear_cache()

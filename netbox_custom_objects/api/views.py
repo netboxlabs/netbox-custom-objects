@@ -7,6 +7,7 @@ import jsonschema
 
 from django.apps import apps as django_apps
 from django.contrib.contenttypes.models import ContentType
+from django.db.models import Q
 from django.http import Http404
 from django.utils.translation import gettext_lazy as _
 from drf_spectacular.types import OpenApiTypes
@@ -20,6 +21,7 @@ from rest_framework.routers import APIRootView
 from rest_framework.views import APIView
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
+from core.signals import clear_events
 from netbox.api.authentication import IsAuthenticatedOrLoginNotRequired, TokenWritePermission
 from netbox.api.renderers import FormlessBrowsableAPIRenderer
 from netbox.api.viewsets import NetBoxModelViewSet
@@ -34,9 +36,11 @@ from netbox_custom_objects.filtersets import (
     get_filterset_class,
 )
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
-from netbox_custom_objects.schema.comparator import diff_document
+from netbox_custom_objects.schema.comparator import FieldOp, diff_document
+from netbox_custom_objects.schema.format import CUSTOM_OBJECTS_APP_LABEL_SLUG
 from netbox_custom_objects.schema.executor import (
-    apply_document,
+    apply_diffs,
+    schema_transaction,
     CircularDependencyError,
     DestructiveChangesError,
     InvalidConstraintError,
@@ -45,6 +49,7 @@ from netbox_custom_objects.schema.executor import (
     UnsupportedFieldChangeError,
     UnknownFieldTypeError,
     UnknownObjectTypeError,
+    UnsupportedTypeChangeError,
 )
 from . import serializers
 from .parsers import YAMLParser
@@ -112,6 +117,91 @@ def _serialize_constraint_change(cc) -> dict:
     if cc.changed_attrs:
         result["changed_attrs"] = {k: list(v) for k, v in cc.changed_attrs.items()}
     return result
+
+
+def _fields_by_op(diffs, *ops):
+    """``(type slug, field schema_id)`` for each field the diffs change with one of ``ops``."""
+    return [
+        (diff.slug, change.schema_id)
+        for diff in diffs for change in diff.field_changes if change.op in ops
+    ]
+
+
+def _restricted_count(model, user, action, **lookups):
+    return model.objects.restrict(user, action).filter(**lookups).count()
+
+
+def _field_lookup(pairs):
+    query = Q()
+    for slug, schema_id in pairs:
+        query |= Q(custom_object_type__slug=slug, schema_id=schema_id)
+    return query
+
+
+def _check_apply_permissions(user, diffs):
+    """
+    Raise ``PermissionDenied`` unless ``user`` may make every change in ``diffs``, as the
+    UI and REST views for these objects would require (object-level constraints included).
+    """
+    new_slugs = {d.slug for d in diffs if d.is_new}
+    existing_slugs = {d.slug for d in diffs if not d.is_new}
+    if existing_slugs and _restricted_count(
+        CustomObjectType, user, "change", slug__in=existing_slugs
+    ) != len(existing_slugs):
+        raise PermissionDenied(_("You do not have permission to change one or more of these Custom Object Types."))
+    if new_slugs and not user.has_perm("netbox_custom_objects.add_customobjecttype"):
+        raise PermissionDenied(_("You do not have permission to add Custom Object Types."))
+
+    if _fields_by_op(diffs, FieldOp.ADD) and not user.has_perm("netbox_custom_objects.add_customobjecttypefield"):
+        raise PermissionDenied(_("You do not have permission to add Custom Object Type fields."))
+    for op, action in ((FieldOp.ALTER, "change"), (FieldOp.REMOVE, "delete")):
+        pairs = _fields_by_op(diffs, op)
+        if pairs and CustomObjectTypeField.objects.restrict(user, action).filter(
+            _field_lookup(pairs)
+        ).count() != len(pairs):
+            raise PermissionDenied(
+                _("You do not have permission to {action} one or more of these fields.").format(action=action)
+            )
+
+
+def _check_related_types_visible(user, diffs):
+    """
+    Raise ``PermissionDenied`` if the diff would show the stored related type of a field,
+    as ``custom-objects/<slug>``, for a Custom Object Type ``user`` may not view, as for
+    the types a document names.  Related types the document itself names are the
+    caller's own input; refusing those would only reveal whether such a type exists.
+    """
+    prefix = f"{CUSTOM_OBJECTS_APP_LABEL_SLUG}/"
+    slugs = set()
+    for diff in diffs:
+        for change in diff.field_changes:
+            for attr in ("related_object_type", "related_object_types"):
+                if attr not in (change.changed_attrs or {}):
+                    continue
+                stored = change.changed_attrs[attr][0]
+                for value in stored if isinstance(stored, (list, tuple)) else [stored]:
+                    if isinstance(value, str) and value.startswith(prefix):
+                        slugs.add(value[len(prefix):])
+    viewable = CustomObjectType.objects.restrict(user, "view")
+    if slugs and CustomObjectType.objects.filter(slug__in=slugs).exclude(pk__in=viewable).exists():
+        raise PermissionDenied(_("You do not have permission to view one or more of these Custom Object Types."))
+
+
+def _check_applied_permissions(user, diffs):
+    """
+    After applying, raise ``PermissionDenied`` (rolling the apply back) unless every created
+    or changed object still falls within the user's constraints, as core's edit views check.
+    """
+    for is_new, action in ((True, "add"), (False, "change")):
+        slugs = {d.slug for d in diffs if d.is_new == is_new}
+        if slugs and _restricted_count(CustomObjectType, user, action, slug__in=slugs) != len(slugs):
+            raise PermissionDenied(_("The result would violate your Custom Object Type permission constraints."))
+    for op, action in ((FieldOp.ADD, "add"), (FieldOp.ALTER, "change")):
+        pairs = _fields_by_op(diffs, op)
+        if pairs and CustomObjectTypeField.objects.restrict(user, action).filter(
+            _field_lookup(pairs)
+        ).count() != len(pairs):
+            raise PermissionDenied(_("The result would violate your field permission constraints."))
 
 
 def _serialize_diff(diff) -> dict:
@@ -415,12 +505,27 @@ class SchemaPreviewView(APIView):
     permission_classes = [IsAuthenticatedOrLoginNotRequired]
 
     def post(self, request, *args, **kwargs):
+        # The diff describes existing types, so it needs the same permission as reading them.
+        if not request.user.has_perm('netbox_custom_objects.view_customobjecttype'):
+            raise PermissionDenied(
+                "You do not have permission to preview a schema document. "
+                "View permission on CustomObjectType is required."
+            )
+
         if not isinstance(request.data, dict):
             raise ValidationError({"non_field_errors": [_("Request body must be a JSON/YAML object.")]})
 
         schema_doc = request.data
         _validate_schema_doc(schema_doc)
+
+        # Under a constrained permission, refuse documents naming existing types the user can't view.
+        slugs = {type_def.get("slug") for type_def in schema_doc.get("types", [])}
+        viewable = CustomObjectType.objects.restrict(request.user, "view")
+        if CustomObjectType.objects.filter(slug__in=slugs).exclude(pk__in=viewable).exists():
+            raise PermissionDenied("You do not have permission to view one or more of these Custom Object Types.")
+
         diffs = diff_document(schema_doc)
+        _check_related_types_visible(request.user, diffs)
         return Response({"diffs": [_serialize_diff(d) for d in diffs]})
 
 
@@ -467,8 +572,9 @@ class SchemaApplyView(APIView):
 
     Unexpected DB errors (e.g. ``IntegrityError`` from a constraint violation
     unrelated to the COT schema logic) are not caught and will surface as
-    **500 Internal Server Error**.  The entire apply is wrapped in
-    ``transaction.atomic()``, so any such failure leaves the DB unchanged.
+    **500 Internal Server Error**.  The entire apply runs in one
+    ``schema_transaction()``, so any such failure leaves the DB unchanged, inside a
+    branch as in main, and discards the events the apply queued.
     """
 
     parser_classes = _SCHEMA_PARSER_CLASSES
@@ -477,7 +583,7 @@ class SchemaApplyView(APIView):
 
     def post(self, request, *args, **kwargs):
         # Branch context: this endpoint no longer rejects requests with an active
-        # branch.  Schema-editor calls inside ``apply_document`` route through
+        # branch.  Schema-editor calls inside ``apply_diffs`` route through
         # ``_get_schema_connection()`` in models.py, which selects the active
         # branch's connection when one is set.  The resulting DDL therefore lands
         # in the branch's PostgreSQL schema, and the CustomObjectType /
@@ -507,8 +613,22 @@ class SchemaApplyView(APIView):
 
         _validate_schema_doc(schema_doc)
 
+        diffs = diff_document(schema_doc)
+        _check_apply_permissions(request.user, diffs)
+        # The response reports the diff too.
+        _check_related_types_visible(request.user, diffs)
+        type_defs_by_slug = {type_def["slug"]: type_def for type_def in schema_doc.get("types", [])}
+
         try:
-            diffs = apply_document(schema_doc, allow_destructive=allow_destructive)
+            with schema_transaction():
+                try:
+                    apply_diffs(diffs, type_defs_by_slug, allow_destructive=allow_destructive)
+                    _check_applied_permissions(request.user, diffs)
+                except Exception:
+                    # The saves queued their events before the apply failed; discard them with
+                    # the writes, or they're dispatched after the response.
+                    clear_events.send(sender=self)
+                    raise
         except DestructiveChangesError as exc:
             return Response(
                 {
@@ -541,6 +661,11 @@ class SchemaApplyView(APIView):
         except InvalidRelatedNameError as exc:
             return Response(
                 {"error": "invalid_related_name", "detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except UnsupportedTypeChangeError as exc:
+            return Response(
+                {"error": "unsupported_type_change", "detail": str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 

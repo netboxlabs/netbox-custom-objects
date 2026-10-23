@@ -296,8 +296,21 @@ def _patch_graphql_view():
         # imposes no GraphQL-specific branch policy.  get_live_schema builds the
         # schema for whichever branch is active, so the schema and the data the query
         # returns agree, and core models resolve exactly as they do without the plugin.
+        # Core authenticates API tokens inside dispatch(), but the schema depends on the
+        # user, so do it first, as core does; core then sees an authenticated request.
+        if not request.user.is_authenticated:
+            from netbox.api.authentication import TokenAuthentication
+            from rest_framework.exceptions import AuthenticationFailed
+
+            try:
+                auth_info = TokenAuthentication().authenticate(request)
+            except AuthenticationFailed:
+                auth_info = None  # core's dispatch repeats the check and returns 403
+            if auth_info is not None:
+                request.user = auth_info[0]
+
         try:
-            live_schema = get_live_schema()
+            live_schema = get_live_schema(request.user)
             if live_schema is not None:
                 self.schema = live_schema
         except Exception:  # noqa: BLE001 - fall back to the static schema

@@ -420,6 +420,11 @@ MULTI_COLUMN_TYPES = {
 }
 
 
+def is_multi_column_type_change(old_type, new_type):
+    """True if changing a field from *old_type* to *new_type* adds or removes backing columns."""
+    return old_type != new_type and (old_type in MULTI_COLUMN_TYPES or new_type in MULTI_COLUMN_TYPES)
+
+
 def _occupied_columns(name, field_type):
     """Real DB column name(s) that a field named *name* of *field_type* occupies.
 
@@ -1058,8 +1063,9 @@ class CustomObject(
             if not expression:
                 return None
             template, names = _compile_display_expression(expression)
-            # Only the fields the expression names, since a related field's value costs queries.
-            ctx = {}
+            # Except the PK, only the fields the expression names, since a related field's value costs queries.
+            pk = '' if self.pk is None else self.pk
+            ctx = {'id': pk, 'pk': pk}
             for field_info in self._field_objects.values():
                 field_name = field_info["name"]
                 if field_name not in names:
@@ -2104,6 +2110,9 @@ class CustomObjectType(NetBoxModel):
 
         attrs = {
             "Meta": meta,
+            # Without a docstring Django generates one listing every field name, and core's
+            # object types API shows it to any user as the model's description.
+            "__doc__": "An object of a Custom Object Type.",
             # Resolvable through this module's __getattr__, so the class can be pickled.
             "__module__": __name__,
             "custom_object_type": self,
@@ -3661,8 +3670,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         if (
             self.pk
             and not self._state.adding
-            and self.type != self._original_type
-            and (self.type in MULTI_COLUMN_TYPES or self._original_type in MULTI_COLUMN_TYPES)
+            and is_multi_column_type_change(self._original_type, self.type)
         ):
             raise ValidationError(
                 {"type": _(

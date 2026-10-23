@@ -22,7 +22,9 @@ from typing import List
 import strawberry
 import strawberry_django
 
-from .types import build_object_type, clear_type_cache, graphql_safe_name, reset_build_state, set_cot_map
+from .types import (
+    build_object_type, clear_type_cache, graphql_safe_name, reset_build_state, set_cot_map, set_visible_cot_ids,
+)
 
 logger = logging.getLogger("netbox_custom_objects.graphql")
 
@@ -73,9 +75,13 @@ def _query_field_name(custom_object_type, used_names):
     return name
 
 
-def build_query_classes():
+def build_query_classes(visible_cot_ids=None):
     """
     Build the list of Strawberry query classes contributed to NetBox's schema.
+
+    ``visible_cot_ids`` limits the schema to those custom object types; the rest
+    get no query fields, and relationship fields pointing at them use the flat
+    stub type.  ``None`` includes every type.
 
     Returns an empty list when dynamic models are unavailable (during
     migrations, tests, or before migrations have been applied) or when no custom
@@ -137,6 +143,9 @@ def build_query_classes():
     # custom object resolves its target from the prefetched instance instead of
     # re-querying it (build_object_type then reuses the per-rebuild type cache).
     set_cot_map({cot.pk: cot for cot in custom_object_types})
+    set_visible_cot_ids(visible_cot_ids)
+    if visible_cot_ids is not None:
+        custom_object_types = [cot for cot in custom_object_types if cot.pk in visible_cot_ids]
 
     annotations = {}
     attrs = {}

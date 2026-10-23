@@ -35,6 +35,7 @@ assigns the result to the view before it executes the operation.
 
 import logging
 import threading
+from collections import OrderedDict
 
 from netbox_custom_objects.utilities import is_branching_enabled
 
@@ -49,12 +50,23 @@ logger = logging.getLogger("netbox_custom_objects.graphql")
 #   2. Performance: concurrent requests that find a stale schema serve it instead
 #      of blocking on the (potentially expensive) rebuild a peer is already doing.
 _rebuild_lock = threading.Lock()
-# Per-branch cache of (signature, schema), keyed by branch identifier (None = main).
-# GraphQL reflects whichever branch netbox-branching activated for the request, so
-# each branch gets its own schema reflecting that branch's custom object types.  Each
-# value is an atomically swapped (signature, schema) tuple, so a lockless reader can
-# never see a schema that doesn't match its signature.
+# Per-branch cache of (signature, schema), keyed by branch identifier (None = main)
+# and then by the set of custom object types the schema exposes (see
+# visible_custom_object_type_ids).  GraphQL reflects whichever branch netbox-branching
+# activated for the request, so each branch gets its own schemas reflecting that
+# branch's custom object types, and users who may see different types get different
+# schemas.  Each value is an atomically swapped (signature, schema) tuple, so a
+# lockless reader can never see a schema that doesn't match its signature.
 _schema_cache = {}
+# Schemas kept per process across all branches, one per branch and distinct set of
+# visible types; users with the same permissions share a schema.  Each schema holds
+# about 12MB, nearly all of it core NetBox's, so the cap bounds the memory.  The oldest
+# is dropped first, not the least recently used: the hot path reads the cache without
+# the lock, so it can't reorder entries on a hit.
+_MAX_SCHEMAS = 8
+# (branch key, visible key) of each cached schema, oldest first.  Written only under
+# _rebuild_lock.  Keys of a deleted branch's schemas linger until their turn to go.
+_schema_order = OrderedDict()
 # Signature cache keys this process has populated, so reset_cache (tests) can clear
 # every per-branch entry.
 _signature_keys_seen = set()
@@ -267,9 +279,10 @@ def _schema_extensions():
     ]
 
 
-def build_full_schema():
+def build_full_schema(visible_cot_ids=None):
     """
-    Assemble a complete NetBox GraphQL schema with the current custom object types.
+    Assemble a complete NetBox GraphQL schema with the current custom object types
+    (only ``visible_cot_ids``, if given).
 
     A ``strawberry.Schema`` is immutable once compiled, so adding/removing a root
     query field requires building a new schema — but only our custom-object slice
@@ -282,7 +295,7 @@ def build_full_schema():
     from .schema import build_query_classes
 
     static_bases, config = _get_static_query_parts()
-    bases = static_bases + tuple(build_query_classes())
+    bases = static_bases + tuple(build_query_classes(visible_cot_ids))
 
     # Every rebuild creates fresh classes with names ("Query", "Table<id>ModelType",
     # …) that were used by previous rebuilds' schemas.  This relies on Strawberry
@@ -310,10 +323,14 @@ def build_full_schema():
     )
 
 
-def get_live_schema():
+def get_live_schema(user):
     """
-    Return the schema for the current request's active branch, rebuilding it if the
-    database has changed since this process last built it for that branch.
+    Return the schema for the current request's active branch and ``user``,
+    rebuilding it if the database has changed since this process last built it.
+
+    The schema exposes only the custom object types ``user`` may see (see
+    ``visible_custom_object_type_ids``), so type and field names aren't disclosed
+    to users who can view neither the type nor its objects.
 
     netbox-branching has already scoped the active branch for the request (from the
     X-NetBox-Branch header, the ``?_branch=`` query param, or the active_branch
@@ -329,13 +346,21 @@ def get_live_schema():
     if CustomObjectsPluginConfig.should_skip_dynamic_model_creation():
         return None
 
+    from netbox_custom_objects.utilities import visible_custom_object_type_ids
+
     branch_key = _active_branch_key()
+    try:
+        visible_key = visible_custom_object_type_ids(user)
+    except Exception:  # noqa: BLE001 - DB hiccup: expose no custom object types
+        logger.warning("Could not determine the user's visible custom object types", exc_info=True)
+        visible_key = frozenset()
+    branch_schemas = _schema_cache.setdefault(branch_key, {})
 
     try:
         signature = cached_schema_signature(branch_key)
     except Exception:  # noqa: BLE001 - DB hiccup
         logger.warning("Could not compute GraphQL schema signature", exc_info=True)
-        cached = _schema_cache.get(branch_key)
+        cached = branch_schemas.get(visible_key)
         if cached is not None and cached[1] is not None:
             # We already have a (possibly slightly stale) schema for this branch.
             return cached[1]
@@ -346,9 +371,9 @@ def get_live_schema():
         # recovers.
         signature = _UNKNOWN_SIGNATURE
 
-    # Hot path: structure unchanged since this process last built for this branch —
-    # no lock, no rebuild, just return the cached schema.
-    entry = _schema_cache.get(branch_key)
+    # Hot path: structure unchanged since this process last built for this branch and
+    # set of visible types — no lock, no rebuild, just return the cached schema.
+    entry = branch_schemas.get(visible_key)
     sig, schema = entry if entry is not None else (None, None)
     if schema is not None and sig == signature:
         return schema
@@ -368,16 +393,21 @@ def get_live_schema():
     try:
         # Re-check: a prior holder may have just published a matching schema for
         # this branch (always true for the first-build blocker that just waited).
-        entry = _schema_cache.get(branch_key)
+        entry = branch_schemas.get(visible_key)
         sig, schema = entry if entry is not None else (None, None)
         if schema is not None and sig == signature:
             return schema
         try:
-            new_schema = build_full_schema()
+            new_schema = build_full_schema(visible_key)
         except Exception:  # noqa: BLE001 - never break the endpoint
             logger.exception("Failed to rebuild live GraphQL schema")
             return schema
-        _schema_cache[branch_key] = (signature, new_schema)
+        branch_schemas[visible_key] = (signature, new_schema)
+        _schema_order.pop((branch_key, visible_key), None)
+        _schema_order[(branch_key, visible_key)] = None
+        while _schema_order and sum(len(schemas) for schemas in _schema_cache.values()) > _MAX_SCHEMAS:
+            (old_branch, old_visible), _ = _schema_order.popitem(last=False)
+            _schema_cache.get(old_branch, {}).pop(old_visible, None)
         return new_schema
     finally:
         _rebuild_lock.release()
@@ -387,6 +417,7 @@ def reset_cache():
     """Clear the cached schemas, signatures, per-type cache, and build state (tests)."""
     global _schema_cache
     _schema_cache = {}
+    _schema_order.clear()
 
     from django.core.cache import cache
 

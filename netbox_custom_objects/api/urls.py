@@ -5,6 +5,7 @@ from rest_framework.reverse import reverse
 from rest_framework.views import APIView
 from netbox.api.routers import NetBoxRouter
 from netbox_custom_objects.models import CustomObjectType
+from netbox_custom_objects.utilities import visible_custom_object_type_ids
 
 from . import views
 
@@ -69,8 +70,10 @@ class CustomObjectsAPIRootView(APIView):
         except NoReverseMatch:
             pass
 
-        # Extra logic to populate roots for custom object type lists
-        for custom_object_type in CustomObjectType.objects.all():
+        # Extra logic to populate roots for custom object type lists, listing only the
+        # types whose definitions the user may see.
+        visible_ids = visible_custom_object_type_ids(request.user)
+        for custom_object_type in CustomObjectType.objects.filter(pk__in=visible_ids):
             local_kwargs = deepcopy(kwargs)
             cot_name = custom_object_type.slug
             url_name = 'customobject-list'
