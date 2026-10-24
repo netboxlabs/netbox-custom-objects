@@ -161,6 +161,20 @@ class BulkEditFooterTestCase(CustomObjectPageTestCase):
         self.assertNotContains(response, 'name="_apply"')
 
 
+class BulkDeleteConfirmationTestCase(CustomObjectPageTestCase):
+
+    def test_confirmation_page(self):
+        other = self.model.objects.create(name="Beta")
+        response = self.client.post(self._url("bulk_delete"), {"pk": [self.obj.pk]})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, self.obj.get_absolute_url())
+        self.assertNotContains(response, other.get_absolute_url())
+        self.assertContains(response, 'name="_confirm"')
+        self.assertContains(response, 'name="changelog_message"')
+        self.assertContains(response, 'name="background_job"')
+        self.assertTrue(self.model.objects.filter(pk=self.obj.pk).exists())
+
+
 class BulkEditOwnerTestCase(CustomObjectPageTestCase):
 
     def test_ownership_section_rendered(self):
