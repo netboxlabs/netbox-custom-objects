@@ -1,6 +1,7 @@
 """
-Permission enforcement on the custom-object root queries (``custom_objects_<slug>``
-and ``custom_objects_<slug>_list``), through the real ``/graphql/`` endpoint.
+Permission enforcement through the real ``/graphql/`` endpoint: on the custom-object
+root queries (``custom_objects_<slug>`` and ``custom_objects_<slug>_list``), and on
+objects reached through a custom object's relationship fields.
 """
 
 import json
@@ -12,6 +13,7 @@ from rest_framework import status
 from rest_framework.test import APIClient
 
 from core.models import ObjectType
+from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
 from users.models import ObjectPermission
 
 from netbox_custom_objects.graphql import live as live_module
@@ -149,3 +151,173 @@ class GraphQLRootQueryPermissionTestCase(CustomObjectsTestCase, TestCase):
         response = self._post(LIST_QUERY)
         self.assertEqual(response.status_code, status.HTTP_200_OK, response.content)
         self.assertEqual(self._names(json.loads(response.content)), ["alpha", "beta"])
+
+
+@override_settings(LOGIN_REQUIRED=True)
+class GraphQLPermissionTestCase(CustomObjectsTestCase, TestCase):
+    """
+    Object-level view permissions must be enforced for objects reached through a
+    custom object's relationship fields, not just for the top-level objects.
+    """
+
+    def setUp(self):
+        super().setUp()
+        live_module.reset_cache()
+        self.addCleanup(live_module.reset_cache)
+        patcher = mock.patch(
+            "netbox_custom_objects.CustomObjectsPluginConfig."
+            "should_skip_dynamic_model_creation",
+            return_value=False,
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+        # A non-superuser; permissions are granted explicitly per test.
+        self.client = APIClient()
+        token_key = create_token(self.user)
+        self.header = {"HTTP_AUTHORIZATION": f"Token {token_key}"}
+        self.url = reverse("graphql")
+
+        # COT 'Server' with a single-object field → Site, holding one Site.
+        self.site = Site.objects.create(name="Secret", slug="secret")
+        self.cot = self.create_custom_object_type(name="Server", slug="server")
+        self.create_custom_object_type_field(
+            self.cot, name="name", label="Name", type="text", primary=True, required=True
+        )
+        self.create_custom_object_type_field(
+            self.cot, name="site", label="Site", type="object",
+            related_object_type=self.get_site_object_type(),
+        )
+        self.model = self.cot.get_model()
+        self.model.objects.create(name="srv", site=self.site)
+
+    def _grant(self, model_class, name):
+        perm = ObjectPermission(name=name, actions=["view"])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(model_class))
+        return perm
+
+    def _post(self, query):
+        response = self.client.post(
+            self.url, data={"query": query}, format="json", **self.header
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.content)
+        return json.loads(response.content)
+
+    def test_related_object_hidden_without_permission(self):
+        # View permission on the custom object, but NOT on Site → the related
+        # site must be withheld (null), while the object itself is returned.
+        self._grant(self.model, "view-co")
+        payload = self._post("{ custom_objects_server_list { name site { id name } } }")
+        self.assertNotIn("errors", payload, msg=str(payload.get("errors")))
+        rows = payload["data"]["custom_objects_server_list"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["name"], "srv")
+        self.assertIsNone(rows[0]["site"])
+
+    def test_related_object_visible_with_permission(self):
+        # Granting view on Site as well makes the related object appear, proving
+        # the previous test's null was permission enforcement, not a broken field.
+        self._grant(self.model, "view-co")
+        self._grant(Site, "view-site")
+        payload = self._post("{ custom_objects_server_list { name site { id name } } }")
+        self.assertNotIn("errors", payload, msg=str(payload.get("errors")))
+        related = payload["data"]["custom_objects_server_list"][0]["site"]
+        self.assertEqual(related["id"], str(self.site.pk))
+        self.assertEqual(related["name"], "Secret")
+
+    def test_multiobject_related_filtered_by_permission(self):
+        # The multi-object resolver filters related objects through the batched
+        # permission check (_filter_viewable).  Without view permission on Device
+        # the list is empty; granting it makes the device appear.
+        manufacturer = Manufacturer.objects.create(name="Mfr", slug="mfr")
+        device_type = DeviceType.objects.create(
+            manufacturer=manufacturer, model="Model", slug="model"
+        )
+        role = DeviceRole.objects.create(name="Role", slug="role")
+        site = Site.objects.create(name="DevSite", slug="devsite")
+        device = Device.objects.create(
+            name="dev1", device_type=device_type, role=role, site=site
+        )
+        cot = self.create_multi_object_custom_object_type(name="Group", slug="group")
+        model = cot.get_model()
+        instance = model.objects.create(name="G1")
+        instance.devices.add(device)
+
+        # View on the custom object but NOT on Device → devices filtered out.
+        self._grant(model, "view-grp")
+        payload = self._post("{ custom_objects_group_list { name devices { id } } }")
+        self.assertNotIn("errors", payload, msg=str(payload.get("errors")))
+        rows = payload["data"]["custom_objects_group_list"]
+        self.assertEqual(rows[0]["name"], "G1")
+        self.assertEqual(rows[0]["devices"], [])
+
+        # Granting view on Device makes it appear (batched check lets it through).
+        self._grant(Device, "view-dev")
+        payload = self._post("{ custom_objects_group_list { name devices { id } } }")
+        self.assertNotIn("errors", payload, msg=str(payload.get("errors")))
+        devices = payload["data"]["custom_objects_group_list"][0]["devices"]
+        self.assertEqual(len(devices), 1)
+        self.assertEqual(devices[0]["id"], str(device.pk))
+
+    def test_multiobject_related_filtered_to_permitted_subset(self):
+        # The previous tests grant view on the whole model (all-or-nothing).  This
+        # exercises the core security claim at object level: a *constrained*
+        # ObjectPermission must filter related objects to just the permitted subset.
+        manufacturer = Manufacturer.objects.create(name="Mfr", slug="mfr")
+        device_type = DeviceType.objects.create(
+            manufacturer=manufacturer, model="Model", slug="model"
+        )
+        role = DeviceRole.objects.create(name="Role", slug="role")
+        site = Site.objects.create(name="DevSite", slug="devsite")
+        allowed = Device.objects.create(
+            name="allowed", device_type=device_type, role=role, site=site
+        )
+        denied = Device.objects.create(
+            name="denied", device_type=device_type, role=role, site=site
+        )
+        cot = self.create_multi_object_custom_object_type(name="Fleet", slug="fleet")
+        model = cot.get_model()
+        instance = model.objects.create(name="F1")
+        instance.devices.add(allowed, denied)
+
+        self._grant(model, "view-fleet")
+        # View on Device constrained to only the "allowed" device.
+        perm = ObjectPermission(
+            name="view-one-device", actions=["view"], constraints={"name": "allowed"}
+        )
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(Device))
+
+        payload = self._post(
+            "{ custom_objects_fleet_list { name devices { id name } } }"
+        )
+        self.assertNotIn("errors", payload, msg=str(payload.get("errors")))
+        devices = payload["data"]["custom_objects_fleet_list"][0]["devices"]
+        self.assertEqual([d["name"] for d in devices], ["allowed"])
+        self.assertEqual(devices[0]["id"], str(allowed.pk))
+
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=["*"])
+    def test_related_anonymous_access_honors_exempt_view_permissions(self):
+        # Anonymous/None traversal must defer to restrict(), exactly like NetBox's
+        # BaseObjectType.get_queryset: when the view is exempt, related objects are
+        # visible, not silently denied.
+        from django.contrib.auth.models import AnonymousUser
+
+        from netbox_custom_objects.graphql.types import _filter_viewable
+
+        self.assertEqual(_filter_viewable(AnonymousUser(), [self.site]), [self.site])
+        self.assertEqual(_filter_viewable(None, [self.site]), [self.site])
+
+    @override_settings(EXEMPT_VIEW_PERMISSIONS=[])
+    def test_related_anonymous_access_denied_without_exemption(self):
+        # And when the view is not exempt, an unauthenticated user sees nothing —
+        # again matching restrict()'s anonymous handling.
+        from django.contrib.auth.models import AnonymousUser
+
+        from netbox_custom_objects.graphql.types import _filter_viewable
+
+        self.assertEqual(_filter_viewable(AnonymousUser(), [self.site]), [])
+        self.assertEqual(_filter_viewable(None, [self.site]), [])
