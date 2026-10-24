@@ -3,7 +3,6 @@ Tests for on_delete_behavior on polymorphic Object fields: what happens to custo
 the object their polymorphic field points at is deleted.
 """
 from django.contrib.contenttypes.models import ContentType
-from django.db import transaction
 from django.db.models import ProtectedError
 from django.test import TestCase
 from django.urls import reverse
@@ -40,10 +39,13 @@ class PolymorphicOnDeleteTestCase(CustomObjectsTestCase, TestCase):
         return cot.get_model()
 
     def _delete_protected(self, obj):
-        """Delete *obj* in its own transaction, as NetBox's views do, and return the ProtectedError."""
+        """
+        Delete *obj*, expecting ProtectedError, and return it.  As for a real foreign key, the
+        error comes before the deletion's transaction starts, so the caller's transaction stays
+        usable: the assertions that follow run in the same one.
+        """
         with self.assertRaises(ProtectedError) as cm:
-            with transaction.atomic():
-                obj.delete()
+            obj.delete()
         return cm.exception
 
     def test_set_null_clears_reference(self):
@@ -77,6 +79,22 @@ class PolymorphicOnDeleteTestCase(CustomObjectsTestCase, TestCase):
         self.assertTrue(Site.objects.filter(pk=self.site.pk).exists())
         obj.refresh_from_db()
         self.assertEqual(obj.target, self.site)
+
+    def test_protect_ignores_objects_deleted_in_the_same_operation(self):
+        """A custom object that a real foreign key's cascade deletes along with the site doesn't protect it."""
+        self._make_type(ObjectFieldOnDeleteChoices.PROTECT)
+        cot = CustomObjectTypeField.objects.get(custom_object_type__slug='widget', name='target').custom_object_type
+        self.create_custom_object_type_field(
+            cot, name='site', type='object', related_object_type=self.site_ot,
+            on_delete_behavior=ObjectFieldOnDeleteChoices.CASCADE,
+        )
+        cot.refresh_from_db()
+        model = cot.get_model()
+        obj = model.objects.create(name='w1', target=self.site, site=self.site)
+
+        self.site.delete()
+
+        self.assertFalse(model.objects.filter(pk=obj.pk).exists())
 
     def test_protect_allows_deleting_an_unreferenced_object(self):
         model = self._make_type(ObjectFieldOnDeleteChoices.PROTECT)
