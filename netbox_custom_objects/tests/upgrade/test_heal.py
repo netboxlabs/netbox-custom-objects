@@ -433,7 +433,7 @@ class BackingColumnCollisionTestCase(CustomObjectsTestCase, TestCase):
             )
 
         # The safe rename: reload from DB so the rename path has the original
-        # snapshot, exactly as the edit view would (see test_schema_operations.py).
+        # snapshot, exactly as the edit view would (see test_table_schema.py).
         plain_field = CustomObjectTypeField.objects.get(pk=plain_field.pk)
         plain_field.name = "description"
         plain_field.save()
