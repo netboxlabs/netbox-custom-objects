@@ -140,8 +140,8 @@ class PolymorphicRelatedNameVisibilityTestCase(CustomObjectsTestCase, TestCase):
 
     # --- on_delete_behavior visibility ---
 
-    def test_on_delete_behavior_visible_only_for_non_polymorphic_object(self):
-        """on_delete_behavior must appear only for non-polymorphic single Object fields."""
+    def test_on_delete_behavior_visible_only_for_single_object(self):
+        """on_delete_behavior must appear only for single Object fields, polymorphic or not."""
         non_poly_obj = self._bound_form(CustomFieldTypeChoices.TYPE_OBJECT, is_polymorphic=False)
         self.assertIn("on_delete_behavior", non_poly_obj.fields)
 
@@ -153,8 +153,7 @@ class PolymorphicRelatedNameVisibilityTestCase(CustomObjectsTestCase, TestCase):
             is_polymorphic=True,
             related_object_type_ids=[str(self.site_ot.pk)],
         )
-        self.assertNotIn("on_delete_behavior", poly_obj.fields,
-                         "on_delete_behavior must not appear for polymorphic Object fields")
+        self.assertIn("on_delete_behavior", poly_obj.fields)
 
         poly_multi = self._bound_form(
             CustomFieldTypeChoices.TYPE_MULTIOBJECT,

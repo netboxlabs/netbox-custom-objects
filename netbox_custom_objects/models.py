@@ -22,7 +22,7 @@ from django.core.exceptions import FieldDoesNotExist
 from django.core.validators import MinValueValidator, RegexValidator, ValidationError
 from django.db import DEFAULT_DB_ALIAS, connection, connections, IntegrityError, models, transaction
 from django.db.utils import OperationalError, ProgrammingError
-from django.db.models import F, Q
+from django.db.models import F, ProtectedError, Q
 from django.db.models.fields.related import ForeignKey, ManyToManyField
 from django.db.models.fields.related_descriptors import ReverseManyToOneDescriptor
 from django.db.models.functions import Lower
@@ -30,7 +30,7 @@ from django.db.models.signals import m2m_changed, pre_delete, post_save
 from django.dispatch import receiver
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
-from core.signals import handle_deleted_object
+from core.signals import _signals_received, handle_deleted_object
 from extras.choices import (
     CustomFieldFilterLogicChoices,
     CustomFieldTypeChoices,
@@ -3760,11 +3760,10 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                         }
                     )
 
-        # on_delete_behavior is only meaningful for non-polymorphic Object-type fields.
-        # Polymorphic GFK fields have no real DB FK constraint to enforce (the content_type
-        # column always uses SET_NULL); silently normalise to SET_NULL so stored values
-        # never create a false impression of cascade/protect semantics.
-        if self.type != CustomFieldTypeChoices.TYPE_OBJECT or self.is_polymorphic:
+        # on_delete_behavior is only meaningful for Object-type fields.  A non-polymorphic
+        # field's database FK enforces it; apply_polymorphic_on_delete() does for a
+        # polymorphic one.
+        if self.type != CustomFieldTypeChoices.TYPE_OBJECT:
             self.on_delete_behavior = ObjectFieldOnDeleteChoices.SET_NULL
 
         # Check for recursion in object and multiobject fields (non-polymorphic only).
@@ -5393,6 +5392,94 @@ def clear_cache_on_field_delete(sender, instance, **kwargs):
     """
     if instance.custom_object_type_id:
         CustomObjectType.clear_model_cache(instance.custom_object_type_id)
+
+
+# Objects whose deletion apply_polymorphic_on_delete() is already handling further up the
+# stack, as (content type, pk).  A cascade that leads back to one of them leaves it alone.
+_polymorphic_deletions = contextvars.ContextVar('polymorphic_deletions', default=frozenset())
+
+
+@receiver(pre_delete)
+def apply_polymorphic_on_delete(sender, instance, **kwargs):
+    """
+    Apply the on_delete_behavior of the polymorphic Object fields that point at the object
+    being deleted.  A generic foreign key has no database FK, so this does in Python what the
+    database does for a non-polymorphic Object field: refuse the deletion (protect), delete
+    the referencing custom objects (cascade), or clear their reference (set null).
+    """
+    import netbox_custom_objects
+
+    if (
+        instance.pk is None
+        or sender._meta.auto_created
+        or getattr(instance, '_netbox_private', False)
+        or netbox_custom_objects._is_migrating.get()
+    ):
+        return
+    object_type = ContentType.objects.get_for_model(sender)
+    fields = list(
+        CustomObjectTypeField.objects.filter(
+            type=CustomFieldTypeChoices.TYPE_OBJECT,
+            is_polymorphic=True,
+            related_object_types=object_type.pk,
+        ).select_related('custom_object_type')
+    )
+    if not fields:
+        return
+
+    in_progress = _polymorphic_deletions.get() | {(object_type, instance.pk)}
+    referencing = []
+    for field in fields:
+        model = field.custom_object_type.get_model()
+        model_type = ContentType.objects.get_for_model(model)
+        objects = [
+            obj
+            for obj in model.objects.filter(**{
+                f'{field.name}_content_type': object_type.pk,
+                f'{field.name}_object_id': instance.pk,
+            })
+            if (model_type, obj.pk) not in in_progress
+        ]
+        if objects:
+            referencing.append((field, model_type, objects))
+
+    protected = [
+        (field, objects) for field, _model_type, objects in referencing
+        if field.on_delete_behavior == ObjectFieldOnDeleteChoices.PROTECT
+    ]
+    if protected:
+        raise ProtectedError(
+            _(
+                "Cannot delete some instances of model '{model}' because they are referenced "
+                "through protected fields: {fields}."
+            ).format(
+                model=sender.__name__,
+                fields=', '.join(
+                    f"'{field.custom_object_type.get_verbose_name()}.{field.name}'" for field, _objects in protected
+                ),
+            ),
+            {obj for _field, objects in protected for obj in objects},
+        )
+
+    # Objects whose pre_delete has already run in this request: core's handler records them.
+    # Clearing their reference now would log an update after their deletion.
+    deleted = getattr(_signals_received, 'pre_delete', set())
+    token = _polymorphic_deletions.set(in_progress)
+    try:
+        for field, model_type, objects in referencing:
+            for obj in objects:
+                if (model_type, obj.pk) in deleted:
+                    continue
+                if field.on_delete_behavior == ObjectFieldOnDeleteChoices.CASCADE:
+                    obj.delete()
+                else:
+                    # As core does for a nullable foreign key: snapshot, clear and save,
+                    # so the change is logged.
+                    obj.snapshot()
+                    setattr(obj, field.name, None)
+                    obj.save()
+    finally:
+        _polymorphic_deletions.reset(token)
 
 
 def check_removed_choices(choice_set):
