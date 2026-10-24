@@ -44,7 +44,7 @@ _CUSTOM_OBJECTS_APP = 'netbox_custom_objects'
 _CO_BASE_TEMPLATE = 'netbox_custom_objects/customobject.html'
 
 # Single source for the tab label/weight (factory, CO->CO view, registry, template tag).
-COMBINED_LABEL = 'Custom Objects'
+COMBINED_LABEL = _('Custom Objects')
 COMBINED_WEIGHT = 2000
 
 

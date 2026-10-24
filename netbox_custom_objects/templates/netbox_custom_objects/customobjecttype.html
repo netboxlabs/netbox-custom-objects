@@ -29,7 +29,7 @@
   <div class="row">
 	  <div class="col col-md-6">
       <div class="card">
-        <h5 class="card-header">{% trans "Custom Object Type" %}</h5>
+        <h2 class="card-header">{% trans "Custom Object Type" %}</h2>
         <table class="table table-hover attr-table">
           <tr>
             <th scope="row">{% trans "Name" %}</th>
@@ -67,7 +67,7 @@
       {% include 'inc/panels/comments.html' %}
       {% plugin_right_page object %}
       <div class="card">
-        <h2 class="card-header">Fields</h2>
+        <h2 class="card-header">{% trans "Fields" %}</h2>
         <table class="table table-hover attr-table">
             {% for group_name, group_fields in field_groups.items %}
               {% if group_name %}
@@ -86,7 +86,7 @@
                             class="mdi mdi-asterisk text-primary"
                             data-bs-toggle="tooltip"
                             data-bs-placement="right"
-                            title="Required"
+                            title="{% trans "Required" %}"
                           ></i>
                       {% endif %}
                   </td>
@@ -96,7 +96,7 @@
                             class="mdi mdi-snowflake text-primary"
                             data-bs-toggle="tooltip"
                             data-bs-placement="right"
-                            title="Unique"
+                            title="{% trans "Unique" %}"
                           ></i>
                       {% endif %}
                   </td>
@@ -106,7 +106,7 @@
                             class="mdi mdi-text-short text-primary"
                             data-bs-toggle="tooltip"
                             data-bs-placement="right"
-                            title="Primary name field"
+                            title="{% trans "Primary name field" %}"
                           ></i>
                       {% endif %}
                   </td>

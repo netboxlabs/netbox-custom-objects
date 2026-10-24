@@ -49,17 +49,9 @@ from extras.choices import CustomFieldTypeChoices
 from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.dynamic_forms import build_filterset_form_class
-from netbox_custom_objects.utilities import extract_cot_id_from_model_name, is_branching_enabled
+from netbox_custom_objects.utilities import extract_cot_id_from_model_name
 
 logger = logging.getLogger("netbox_custom_objects.views")
-
-
-def _is_in_branch():
-    """True if a netbox-branching branch is active in this context."""
-    if not is_branching_enabled():
-        return False
-    from netbox_branching.contextvars import active_branch
-    return active_branch.get() is not None
 
 
 def _hidden_field_raw_columns(fields):
@@ -398,14 +390,12 @@ class CustomObjectTypeView(CustomObjectTableMixin, generic.ObjectView):
 class CustomObjectTypeEditView(generic.ObjectEditView):
     queryset = CustomObjectType.objects.all()
     form = forms.CustomObjectTypeForm
-    template_name = 'netbox_custom_objects/customobjecttype_edit.html'
 
 
 @register_model_view(CustomObjectType, "delete")
 class CustomObjectTypeDeleteView(generic.ObjectDeleteView):
     queryset = CustomObjectType.objects.all()
     default_return_url = "plugins:netbox_custom_objects:customobjecttype_list"
-    template_name = 'netbox_custom_objects/customobjecttype_delete.html'
 
     def _get_dependent_objects(self, obj):
         dependent_objects = super()._get_dependent_objects(obj)
@@ -474,7 +464,6 @@ class CustomObjectTypeConstraintsView(generic.ObjectChildrenView):
 class CustomObjectTypeFieldEditView(generic.ObjectEditView):
     queryset = CustomObjectTypeField.objects.all()
     form = forms.CustomObjectTypeFieldForm
-    template_name = 'netbox_custom_objects/customobjecttypefield_edit.html'
 
     def alter_object(self, obj, request, url_args, url_kwargs):
         # For new fields, pre-populate custom_object_type from the request so that the
@@ -489,9 +478,6 @@ class CustomObjectTypeFieldEditView(generic.ObjectEditView):
                 except (ValueError, TypeError):
                     pass
         return obj
-
-    def get_extra_context(self, request, instance):
-        return {'branch_bypass_warning': _is_in_branch()}
 
 
 @register_model_view(CustomObjectTypeConstraint, "edit")
@@ -617,7 +603,6 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
 class CustomObjectTypeBulkImportView(generic.BulkImportView):
     queryset = CustomObjectType.objects.all()
     model_form = forms.CustomObjectTypeImportForm
-    template_name = 'netbox_custom_objects/customobjecttype_bulk_import.html'
 
 
 @register_model_view(CustomObjectType, "bulk_edit", path="edit", detail=False)
@@ -626,7 +611,6 @@ class CustomObjectTypeBulkEditView(generic.BulkEditView):
     filterset = filtersets.CustomObjectTypeFilterSet
     table = tables.CustomObjectTypeTable
     form = forms.CustomObjectTypeBulkEditForm
-    template_name = 'netbox_custom_objects/customobjecttype_bulk_edit.html'
 
 
 @register_model_view(CustomObjectType, "bulk_delete", path="delete", detail=False)
@@ -634,7 +618,6 @@ class CustomObjectTypeBulkDeleteView(generic.BulkDeleteView):
     queryset = CustomObjectType.objects.all()
     filterset = filtersets.CustomObjectTypeFilterSet
     table = tables.CustomObjectTypeTable
-    template_name = 'netbox_custom_objects/customobjecttype_bulk_delete.html'
 
 
 #
@@ -1299,9 +1282,6 @@ class CustomObjectDeleteView(RestrictedObjectMixin, generic.ObjectDeleteView):
             )
         }
 
-    def get_extra_context(self, request, instance):
-        return {'branch_warning': _is_in_branch()}
-
 
 @register_model_view(CustomObject, "bulk_edit", path="edit", detail=False)
 class CustomObjectBulkEditView(BackgroundJobURLKwargsMixin, CustomObjectTableMixin, generic.BulkEditView):
@@ -1590,7 +1570,6 @@ class CustomObjectBulkDeleteView(BackgroundJobURLKwargsMixin, CustomObjectTableM
     custom_object_type = None
     table = None
     form = None
-    template_name = 'netbox_custom_objects/custom_object_bulk_delete.html'
 
     def setup(self, request, *args, **kwargs):
         super().setup(request, *args, **kwargs)
