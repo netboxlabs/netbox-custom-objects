@@ -1,9 +1,8 @@
-import threading
 from unittest import mock
 
 from core.models import ObjectType
 from dcim.models import Site
-from django.db import IntegrityError, OperationalError, connection, connections, transaction
+from django.db import IntegrityError, OperationalError, connection, transaction
 from django.test import TestCase, TransactionTestCase
 from django.test.utils import CaptureQueriesContext
 from tenancy.models import Tenant
@@ -11,22 +10,7 @@ from users.models import Owner
 
 from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
-from netbox_custom_objects.tests.base import CustomObjectsTestCase, TransactionCleanupMixin
-
-
-def _fk_constraints(table, column):
-    """(referenced table, confdeltype) of each FK constraint on *table*.*column*."""
-    with connection.cursor() as cursor:
-        cursor.execute(
-            """
-            SELECT c.confrelid::regclass::text, c.confdeltype
-            FROM pg_constraint c
-            JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
-            WHERE c.contype = 'f' AND c.conrelid = %s::regclass AND a.attname = %s
-            """,
-            [table, column],
-        )
-        return cursor.fetchall()
+from netbox_custom_objects.tests.base import CustomObjectsTestCase, TransactionCleanupMixin, _fk_constraints
 
 
 class ObjectFieldFKConstraintTestCase(CustomObjectsTestCase, TestCase):
@@ -206,12 +190,6 @@ class ObjectFieldFKConstraintCommitTestCase(TransactionCleanupMixin, CustomObjec
         )
         return src, tgt, site_field
 
-    def _set(self, field, **attrs):
-        field = CustomObjectTypeField.objects.get(pk=field.pk)
-        for attr, value in attrs.items():
-            setattr(field, attr, value)
-        field.save()
-
     def test_on_delete_change_keeps_through_table_target_fk_deferred(self):
         """A through table's target FK is DEFERRABLE INITIALLY DEFERRED so a branch
         merge can insert through rows before their target custom object exists.
@@ -281,37 +259,3 @@ class ObjectFieldFKConstraintCommitTestCase(TransactionCleanupMixin, CustomObjec
         self.assertEqual(
             _fk_constraints(src.get_database_table_name(), "tgt_id"), [(tgt.get_database_table_name(), "c")],
         )
-
-    def test_delayed_hook_applies_latest_on_delete(self):
-        """Request 1's hook is delayed before it takes the lock; request 2 saves and
-        its hook finishes first.  Request 1's hook must still apply the latest value."""
-        cot = self.create_simple_custom_object_type(name="race", slug="races")
-        field = self.create_custom_object_type_field(
-            cot, name="site", type="object", related_object_type=self.get_site_object_type(),
-            on_delete_behavior=ObjectFieldOnDeleteChoices.SET_NULL,
-        )
-        original = CustomObjectType._lock_database_table
-        paused, resume = threading.Event(), threading.Event()
-
-        def delayed(self_cot, schema_conn):
-            if threading.current_thread().name == "request-1" and not paused.is_set():
-                paused.set()
-                resume.wait(10)
-            return original(self_cot, schema_conn)
-
-        def request_1():
-            try:
-                self._set(field, on_delete_behavior=ObjectFieldOnDeleteChoices.CASCADE)
-            finally:
-                connections.close_all()
-
-        with mock.patch.object(CustomObjectType, "_lock_database_table", delayed):
-            thread = threading.Thread(target=request_1, name="request-1")
-            thread.start()
-            self.assertTrue(paused.wait(10))
-            self._set(field, on_delete_behavior=ObjectFieldOnDeleteChoices.PROTECT)
-            resume.set()
-            thread.join(10)
-
-        self.assertEqual(CustomObjectTypeField.objects.get(pk=field.pk).on_delete_behavior, "protect")
-        self.assertEqual(_fk_constraints(cot.get_database_table_name(), "site_id"), [("dcim_site", "r")])

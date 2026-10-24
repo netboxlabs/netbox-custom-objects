@@ -46,10 +46,11 @@ python netbox/manage.py test netbox_custom_objects.tests.models.test_cot.CustomO
 
 Available test modules in `netbox_custom_objects/tests/`:
 - `api` — REST API endpoints: custom objects, field values, types, fields, constraints, linked objects, config context.
+- `test_concurrency` — Tests that run threads (TransactionTestCase): concurrent model generation, double submits, FK-constraint hook races.
 - `test_deletion` — Cascade deletion when a referenced object is deleted.
 - `test_field_types` — FieldType subclass behaviour (model field, form field, serializer, filter).
 - `test_filtersets` — Filterset generation and filtering for custom object models.
-- `models` — model tests: types, fields, constraints, choice sets, generated models, search, app config, utilities.
+- `models` — model tests: types, fields, constraints, choice sets, generated models, model cache, search, app config, utilities.
 - `test_navigation` — Dynamic navigation menu construction.
 - `test_table_schema` — DB schema create/delete/alter for custom object tables.
 - `test_views` — UI views via NetBox's test client.

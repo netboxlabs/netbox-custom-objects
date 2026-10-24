@@ -8,7 +8,7 @@ from django.db import connection, connections
 from django.test import Client, override_settings
 from core.models import ObjectChange, ObjectType
 from extras.models import CustomFieldChoiceSet
-from users.models import Token
+from users.models import ObjectPermission, Token
 from utilities.testing import create_test_user
 
 from netbox_custom_objects.constants import APP_LABEL
@@ -38,6 +38,29 @@ def create_token(user):
         token = Token(user=user)
         token.save()
         return token.key
+
+
+def _grant_perm(user, action, model_class, name=None):
+    perm = ObjectPermission(name=name or f"poly-test-{action}", actions=[action])
+    perm.save()
+    perm.users.add(user)
+    perm.object_types.add(ObjectType.objects.get_for_model(model_class))
+    return perm
+
+
+def _fk_constraints(table, column):
+    """(referenced table, confdeltype) of each FK constraint on *table*.*column*."""
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT c.confrelid::regclass::text, c.confdeltype
+            FROM pg_constraint c
+            JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+            WHERE c.contype = 'f' AND c.conrelid = %s::regclass AND a.attname = %s
+            """,
+            [table, column],
+        )
+        return cursor.fetchall()
 
 
 def _recreate_contenttypes():
@@ -701,3 +724,10 @@ class CustomObjectsTestCase:
         )
 
         return custom_object_type
+
+    def _set(self, field, **attrs):
+        """Reload *field* from the database, set *attrs* on it and save it."""
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        for attr, value in attrs.items():
+            setattr(field, attr, value)
+        field.save()
