@@ -1,9 +1,8 @@
-import threading
 from unittest import mock
 
 from core.models import ObjectType
 from dcim.models import Site
-from django.db import IntegrityError, OperationalError, connection, connections, transaction
+from django.db import IntegrityError, OperationalError, connection, transaction
 from django.test import TestCase, TransactionTestCase
 from django.test.utils import CaptureQueriesContext
 from tenancy.models import Tenant
@@ -281,37 +280,3 @@ class ObjectFieldFKConstraintCommitTestCase(TransactionCleanupMixin, CustomObjec
         self.assertEqual(
             _fk_constraints(src.get_database_table_name(), "tgt_id"), [(tgt.get_database_table_name(), "c")],
         )
-
-    def test_delayed_hook_applies_latest_on_delete(self):
-        """Request 1's hook is delayed before it takes the lock; request 2 saves and
-        its hook finishes first.  Request 1's hook must still apply the latest value."""
-        cot = self.create_simple_custom_object_type(name="race", slug="races")
-        field = self.create_custom_object_type_field(
-            cot, name="site", type="object", related_object_type=self.get_site_object_type(),
-            on_delete_behavior=ObjectFieldOnDeleteChoices.SET_NULL,
-        )
-        original = CustomObjectType._lock_database_table
-        paused, resume = threading.Event(), threading.Event()
-
-        def delayed(self_cot, schema_conn):
-            if threading.current_thread().name == "request-1" and not paused.is_set():
-                paused.set()
-                resume.wait(10)
-            return original(self_cot, schema_conn)
-
-        def request_1():
-            try:
-                self._set(field, on_delete_behavior=ObjectFieldOnDeleteChoices.CASCADE)
-            finally:
-                connections.close_all()
-
-        with mock.patch.object(CustomObjectType, "_lock_database_table", delayed):
-            thread = threading.Thread(target=request_1, name="request-1")
-            thread.start()
-            self.assertTrue(paused.wait(10))
-            self._set(field, on_delete_behavior=ObjectFieldOnDeleteChoices.PROTECT)
-            resume.set()
-            thread.join(10)
-
-        self.assertEqual(CustomObjectTypeField.objects.get(pk=field.pk).on_delete_behavior, "protect")
-        self.assertEqual(_fk_constraints(cot.get_database_table_name(), "site_id"), [("dcim_site", "r")])

@@ -54,6 +54,7 @@ Defer all version pins to `pyproject.toml` and `netbox_custom_objects/__init__.p
 │       ├── base.py                         — Shared test utilities and base cases.
 │       ├── api/                            — REST API tests: custom objects, field values, types,
 │       │                                     fields, constraints, linked objects, config context.
+│       ├── test_concurrency.py             — Tests that run threads (TransactionTestCase).
 │       ├── test_deletion.py                — Cascade deletion behaviour.
 │       ├── test_field_types.py             — FieldType subclass behaviour.
 │       ├── test_filtersets.py              — Filterset functionality.
@@ -189,6 +190,7 @@ After model changes, generate a migration with `python netbox/manage.py makemigr
 | Module | Coverage area |
 |---|---|
 | `api/` | REST API endpoints: custom objects, field values, types, fields, constraints, linked objects, config context, query counts, OpenAPI |
+| `test_concurrency.py` | Tests that run threads, and so need TransactionTestCase: concurrent model generation, double submits, FK-constraint hook races |
 | `test_deletion.py` | Cascade deletion when a referenced object is deleted |
 | `test_field_types.py` | FieldType subclass behaviour (model field, form field, serializer, filter) |
 | `test_filtersets.py` | Filterset generation and filtering for custom object models |
