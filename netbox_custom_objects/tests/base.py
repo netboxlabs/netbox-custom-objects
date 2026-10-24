@@ -48,6 +48,21 @@ def _grant_perm(user, action, model_class, name=None):
     return perm
 
 
+def _fk_constraints(table, column):
+    """(referenced table, confdeltype) of each FK constraint on *table*.*column*."""
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT c.confrelid::regclass::text, c.confdeltype
+            FROM pg_constraint c
+            JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+            WHERE c.contype = 'f' AND c.conrelid = %s::regclass AND a.attname = %s
+            """,
+            [table, column],
+        )
+        return cursor.fetchall()
+
+
 def _recreate_contenttypes():
     """Recreate ContentType rows for all installed apps using get_or_create.
 
@@ -709,3 +724,10 @@ class CustomObjectsTestCase:
         )
 
         return custom_object_type
+
+    def _set(self, field, **attrs):
+        """Reload *field* from the database, set *attrs* on it and save it."""
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        for attr, value in attrs.items():
+            setattr(field, attr, value)
+        field.save()

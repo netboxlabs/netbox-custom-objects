@@ -22,8 +22,7 @@ from netbox_custom_objects.field_types import FIELD_TYPE_CLASS
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from users.models import ObjectPermission
 
-from .base import CustomObjectsTestCase, TransactionCleanupMixin
-from .test_fk_constraints import _fk_constraints
+from .base import CustomObjectsTestCase, TransactionCleanupMixin, _fk_constraints
 
 
 class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
@@ -418,12 +417,6 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
 
 class FKConstraintHookRaceTestCase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
     """Two requests saving the same Object field race through the FK-constraint hook."""
-
-    def _set(self, field, **attrs):
-        field = CustomObjectTypeField.objects.get(pk=field.pk)
-        for attr, value in attrs.items():
-            setattr(field, attr, value)
-        field.save()
 
     def test_delayed_hook_applies_latest_on_delete(self):
         """Request 1's hook is delayed before it takes the lock; request 2 saves and

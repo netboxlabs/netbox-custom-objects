@@ -10,22 +10,7 @@ from users.models import Owner
 
 from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
-from netbox_custom_objects.tests.base import CustomObjectsTestCase, TransactionCleanupMixin
-
-
-def _fk_constraints(table, column):
-    """(referenced table, confdeltype) of each FK constraint on *table*.*column*."""
-    with connection.cursor() as cursor:
-        cursor.execute(
-            """
-            SELECT c.confrelid::regclass::text, c.confdeltype
-            FROM pg_constraint c
-            JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
-            WHERE c.contype = 'f' AND c.conrelid = %s::regclass AND a.attname = %s
-            """,
-            [table, column],
-        )
-        return cursor.fetchall()
+from netbox_custom_objects.tests.base import CustomObjectsTestCase, TransactionCleanupMixin, _fk_constraints
 
 
 class ObjectFieldFKConstraintTestCase(CustomObjectsTestCase, TestCase):
@@ -204,12 +189,6 @@ class ObjectFieldFKConstraintCommitTestCase(TransactionCleanupMixin, CustomObjec
             on_delete_behavior="set_null",
         )
         return src, tgt, site_field
-
-    def _set(self, field, **attrs):
-        field = CustomObjectTypeField.objects.get(pk=field.pk)
-        for attr, value in attrs.items():
-            setattr(field, attr, value)
-        field.save()
 
     def test_on_delete_change_keeps_through_table_target_fk_deferred(self):
         """A through table's target FK is DEFERRABLE INITIALLY DEFERRED so a branch
