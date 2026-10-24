@@ -5,41 +5,22 @@ objects reached through a custom object's relationship fields.
 """
 
 import json
-from unittest import mock
 
 from django.test import TestCase, override_settings
-from django.urls import reverse
 from rest_framework import status
-from rest_framework.test import APIClient
 
-from core.models import ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
-from users.models import ObjectPermission
 
-from netbox_custom_objects.graphql import live as live_module
-
-from ..base import CustomObjectsTestCase, create_token
+from ..base import CustomObjectsTestCase
+from .base import GraphQLClientMixin
 
 LIST_QUERY = "{ custom_objects_server_list { id name } }"
 
 
-class GraphQLRootQueryPermissionTestCase(CustomObjectsTestCase, TestCase):
+class GraphQLRootQueryPermissionTestCase(GraphQLClientMixin, CustomObjectsTestCase, TestCase):
 
     def setUp(self):
         super().setUp()
-        live_module.reset_cache()
-        self.addCleanup(live_module.reset_cache)
-        patcher = mock.patch(
-            "netbox_custom_objects.CustomObjectsPluginConfig.should_skip_dynamic_model_creation",
-            return_value=False,
-        )
-        patcher.start()
-        self.addCleanup(patcher.stop)
-
-        self.client = APIClient()
-        self.header = {"HTTP_AUTHORIZATION": f"Token {create_token(self.user)}"}
-        self.url = reverse("graphql")
-
         self.cot = self.create_simple_custom_object_type(name="Server", slug="server")
         self.model = self.cot.get_model()
         self.alpha = self.model.objects.create(name="alpha")
@@ -61,17 +42,6 @@ class GraphQLRootQueryPermissionTestCase(CustomObjectsTestCase, TestCase):
         """A type the user can't see has no root queries in their schema (see visible_custom_object_type_ids)."""
         self.assertIsNone(payload["data"])
         self.assertIn(f"Cannot query field '{field}'", payload["errors"][0]["message"])
-
-    def _grant(self, model, actions=("view",), constraints=None, enabled=True):
-        perm = ObjectPermission.objects.create(
-            name=f"perm-{model._meta.model_name}-{'-'.join(actions)}",
-            actions=list(actions),
-            constraints=constraints,
-            enabled=enabled,
-        )
-        perm.users.add(self.user)
-        perm.object_types.add(ObjectType.objects.get_for_model(model))
-        return perm
 
     def _single(self, pk):
         return self._gql(f'{{ custom_objects_server(id: "{pk}") {{ id name }} }}')
@@ -154,29 +124,15 @@ class GraphQLRootQueryPermissionTestCase(CustomObjectsTestCase, TestCase):
 
 
 @override_settings(LOGIN_REQUIRED=True)
-class GraphQLPermissionTestCase(CustomObjectsTestCase, TestCase):
+class GraphQLPermissionTestCase(GraphQLClientMixin, CustomObjectsTestCase, TestCase):
     """
     Object-level view permissions must be enforced for objects reached through a
     custom object's relationship fields, not just for the top-level objects.
     """
 
     def setUp(self):
-        super().setUp()
-        live_module.reset_cache()
-        self.addCleanup(live_module.reset_cache)
-        patcher = mock.patch(
-            "netbox_custom_objects.CustomObjectsPluginConfig."
-            "should_skip_dynamic_model_creation",
-            return_value=False,
-        )
-        patcher.start()
-        self.addCleanup(patcher.stop)
-
         # A non-superuser; permissions are granted explicitly per test.
-        self.client = APIClient()
-        token_key = create_token(self.user)
-        self.header = {"HTTP_AUTHORIZATION": f"Token {token_key}"}
-        self.url = reverse("graphql")
+        super().setUp()
 
         # COT 'Server' with a single-object field → Site, holding one Site.
         self.site = Site.objects.create(name="Secret", slug="secret")
@@ -191,13 +147,6 @@ class GraphQLPermissionTestCase(CustomObjectsTestCase, TestCase):
         self.model = self.cot.get_model()
         self.model.objects.create(name="srv", site=self.site)
 
-    def _grant(self, model_class, name):
-        perm = ObjectPermission(name=name, actions=["view"])
-        perm.save()
-        perm.users.add(self.user)
-        perm.object_types.add(ObjectType.objects.get_for_model(model_class))
-        return perm
-
     def _post(self, query):
         response = self.client.post(
             self.url, data={"query": query}, format="json", **self.header
@@ -208,7 +157,7 @@ class GraphQLPermissionTestCase(CustomObjectsTestCase, TestCase):
     def test_related_object_hidden_without_permission(self):
         # View permission on the custom object, but NOT on Site → the related
         # site must be withheld (null), while the object itself is returned.
-        self._grant(self.model, "view-co")
+        self._grant(self.model)
         payload = self._post("{ custom_objects_server_list { name site { id name } } }")
         self.assertNotIn("errors", payload, msg=str(payload.get("errors")))
         rows = payload["data"]["custom_objects_server_list"]
@@ -219,8 +168,8 @@ class GraphQLPermissionTestCase(CustomObjectsTestCase, TestCase):
     def test_related_object_visible_with_permission(self):
         # Granting view on Site as well makes the related object appear, proving
         # the previous test's null was permission enforcement, not a broken field.
-        self._grant(self.model, "view-co")
-        self._grant(Site, "view-site")
+        self._grant(self.model)
+        self._grant(Site)
         payload = self._post("{ custom_objects_server_list { name site { id name } } }")
         self.assertNotIn("errors", payload, msg=str(payload.get("errors")))
         related = payload["data"]["custom_objects_server_list"][0]["site"]
@@ -246,7 +195,7 @@ class GraphQLPermissionTestCase(CustomObjectsTestCase, TestCase):
         instance.devices.add(device)
 
         # View on the custom object but NOT on Device → devices filtered out.
-        self._grant(model, "view-grp")
+        self._grant(model)
         payload = self._post("{ custom_objects_group_list { name devices { id } } }")
         self.assertNotIn("errors", payload, msg=str(payload.get("errors")))
         rows = payload["data"]["custom_objects_group_list"]
@@ -254,7 +203,7 @@ class GraphQLPermissionTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(rows[0]["devices"], [])
 
         # Granting view on Device makes it appear (batched check lets it through).
-        self._grant(Device, "view-dev")
+        self._grant(Device)
         payload = self._post("{ custom_objects_group_list { name devices { id } } }")
         self.assertNotIn("errors", payload, msg=str(payload.get("errors")))
         devices = payload["data"]["custom_objects_group_list"][0]["devices"]
@@ -282,14 +231,9 @@ class GraphQLPermissionTestCase(CustomObjectsTestCase, TestCase):
         instance = model.objects.create(name="F1")
         instance.devices.add(allowed, denied)
 
-        self._grant(model, "view-fleet")
+        self._grant(model)
         # View on Device constrained to only the "allowed" device.
-        perm = ObjectPermission(
-            name="view-one-device", actions=["view"], constraints={"name": "allowed"}
-        )
-        perm.save()
-        perm.users.add(self.user)
-        perm.object_types.add(ObjectType.objects.get_for_model(Device))
+        self._grant(Device, constraints={"name": "allowed"})
 
         payload = self._post(
             "{ custom_objects_fleet_list { name devices { id name } } }"
