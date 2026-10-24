@@ -3,7 +3,6 @@ Custom-object pages follow core NetBox's markup and behaviour.
 """
 
 import re
-from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock, skipUnless
 
@@ -36,7 +35,6 @@ from .base import CustomObjectsTestCase
 
 URL_PREFIX = "plugins:netbox_custom_objects"
 NETBOX_VERSION = Version(settings.RELEASE.version)
-DOCS_MODELS = Path(__file__).resolve().parents[2] / "docs_models"
 
 
 class CustomObjectPageTestCase(CustomObjectsTestCase, TestCase):
@@ -314,12 +312,12 @@ class TypePagesTestCase(CustomObjectPageTestCase):
         self.assertContains(response, '<h2 class="card-header">Fields</h2>')
         self.assertNotContains(response, '<h5 class="card-header">')
 
-    def test_docs_urls_have_pages(self):
+    def test_docs_urls_point_at_plugin_pages(self):
+        # The lint job checks that mkdocs.models.yml builds each of these pages.
         field = self.cot.fields.get(name="name")
         constraint = CustomObjectTypeConstraint(custom_object_type=self.cot)
-        prefix = f"{settings.STATIC_URL}docs/models/"
         for obj in (self.cot, field, constraint):
             with self.subTest(model=obj._meta.model_name):
-                self.assertTrue(obj.docs_url.startswith(prefix), obj.docs_url)
-                page = obj.docs_url.removeprefix(prefix).rstrip("/")
-                self.assertTrue((DOCS_MODELS / f"{page}.md").is_file(), page)
+                self.assertEqual(
+                    obj.docs_url, f"{settings.STATIC_URL}docs/models/netbox_custom_objects/{obj._meta.model_name}/",
+                )
