@@ -8,7 +8,7 @@ from django.db import connection, connections
 from django.test import Client, override_settings
 from core.models import ObjectChange, ObjectType
 from extras.models import CustomFieldChoiceSet
-from users.models import Token
+from users.models import ObjectPermission, Token
 from utilities.testing import create_test_user
 
 from netbox_custom_objects.constants import APP_LABEL
@@ -38,6 +38,14 @@ def create_token(user):
         token = Token(user=user)
         token.save()
         return token.key
+
+
+def _grant_perm(user, action, model_class, name=None):
+    perm = ObjectPermission(name=name or f"poly-test-{action}", actions=[action])
+    perm.save()
+    perm.users.add(user)
+    perm.object_types.add(ObjectType.objects.get_for_model(model_class))
+    return perm
 
 
 def _recreate_contenttypes():
