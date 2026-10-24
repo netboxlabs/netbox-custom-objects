@@ -145,16 +145,51 @@ def _related_objects(self, related_model, related_fields, objs):
     return related_model._base_manager.using(self.using).filter(predicate)
 
 
+def _check_protection_first(real_delete):
+    """
+    Wrap a collector's ``delete()`` in ``polymorphic_on_delete()``.  That refuses the deletion if
+    a polymorphic Object field protects one of the objects, at the same point Django refuses a
+    deletion that a real foreign key protects: before any signal is sent or the deletion's
+    transaction starts.  It also looks up, once, the polymorphic fields the deletion's
+    ``pre_delete`` handler needs.
+    """
+    def delete(self):
+        if getattr(self, '_polymorphic_on_delete_prepared', False):
+            return real_delete(self)
+        from netbox_custom_objects.models import polymorphic_on_delete
+
+        self._polymorphic_on_delete_prepared = True
+        with polymorphic_on_delete(self.data):
+            return real_delete(self)
+
+    delete.checks_polymorphic_protection = True
+    return delete
+
+
 def install_collector_patch():
-    """Install the custom-object-aware ``Collector.related_objects`` (idempotent).
+    """Install the custom-object-aware ``Collector.related_objects``, and the polymorphic
+    protection check in ``Collector.delete()`` (idempotent).
+
+    NetBox's own collector opens its transaction in its ``delete()`` before calling Django's, so
+    the check wraps that one too where it exists.
 
     Like ``install_clear_cache_suppressor()``, called once from AppConfig.ready().
     """
     global _real_related_objects
-    if Collector.related_objects is _related_objects:
-        return  # already installed
-    _real_related_objects = Collector.related_objects
-    Collector.related_objects = _related_objects
+    if Collector.related_objects is not _related_objects:
+        _real_related_objects = Collector.related_objects
+        Collector.related_objects = _related_objects
+
+    collectors = [Collector]
+    try:
+        from netbox.models.deletion import CustomCollector
+        collectors.append(CustomCollector)
+    except ImportError:
+        pass
+    for collector in collectors:
+        real_delete = collector.__dict__.get('delete')
+        if real_delete is not None and not getattr(real_delete, 'checks_polymorphic_protection', False):
+            collector.delete = _check_protection_first(real_delete)
 
 
 def _is_custom_object_model(model):
