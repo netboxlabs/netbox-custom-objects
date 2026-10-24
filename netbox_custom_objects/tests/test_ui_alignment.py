@@ -3,6 +3,7 @@ Custom-object pages follow core NetBox's markup and behaviour.
 """
 
 import re
+from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock, skipUnless
 
@@ -24,7 +25,8 @@ from dcim.models import Site
 from users.models import ObjectPermission, Owner
 
 from netbox_custom_objects.dynamic_forms import build_filterset_form_class
-from netbox_custom_objects.forms import CustomObjectTypeFilterForm
+from netbox_custom_objects.forms import CustomObjectTypeFilterForm, CustomObjectTypeForm
+from netbox_custom_objects.models import CustomObjectTypeConstraint
 from netbox_custom_objects.related_tabs.views.combined import _make_tab_view
 from netbox_custom_objects.templatetags.custom_object_buttons import custom_object_clone_button
 from netbox_custom_objects.templatetags.custom_object_utils import sticky_actions_supported
@@ -34,6 +36,7 @@ from .base import CustomObjectsTestCase
 
 URL_PREFIX = "plugins:netbox_custom_objects"
 NETBOX_VERSION = Version(settings.RELEASE.version)
+DOCS_MODELS = Path(__file__).resolve().parents[2] / "docs_models"
 
 
 class CustomObjectPageTestCase(CustomObjectsTestCase, TestCase):
@@ -296,3 +299,27 @@ class CombinedTabTestCase(CustomObjectPageTestCase):
         response = self._tab()
         self.assertContains(response, "btn btn-sm btn-secondary dropdown-toggle")
         self.assertNotContains(response, "btn btn-sm btn-warning dropdown-toggle")
+
+
+class TypePagesTestCase(CustomObjectPageTestCase):
+
+    def test_type_form_sections_are_named(self):
+        self.assertEqual(
+            [str(fieldset.name) for fieldset in CustomObjectTypeForm.fieldsets], ["Custom Object Type", "Display"],
+        )
+
+    def test_type_page_panel_headings(self):
+        response = self._get(self.cot.get_absolute_url())
+        self.assertContains(response, '<h2 class="card-header">Custom Object Type</h2>')
+        self.assertContains(response, '<h2 class="card-header">Fields</h2>')
+        self.assertNotContains(response, '<h5 class="card-header">')
+
+    def test_docs_urls_have_pages(self):
+        field = self.cot.fields.get(name="name")
+        constraint = CustomObjectTypeConstraint(custom_object_type=self.cot)
+        prefix = f"{settings.STATIC_URL}docs/models/"
+        for obj in (self.cot, field, constraint):
+            with self.subTest(model=obj._meta.model_name):
+                self.assertTrue(obj.docs_url.startswith(prefix), obj.docs_url)
+                page = obj.docs_url.removeprefix(prefix).rstrip("/")
+                self.assertTrue((DOCS_MODELS / f"{page}.md").is_file(), page)
