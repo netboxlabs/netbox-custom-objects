@@ -60,7 +60,7 @@ Defer all version pins to `pyproject.toml` and `netbox_custom_objects/__init__.p
 │       ├── models/                         — Model tests: types, fields, constraints, choice sets,
 │       │                                     generated models, search, app config, utilities.
 │       ├── test_navigation.py              — Dynamic navigation menu.
-│       ├── test_schema_operations.py       — Schema creation/deletion/alteration.
+│       ├── test_table_schema.py            — Schema changes to custom object tables.
 │       └── test_views.py                   — Web views.
 ├── docs/
 │   ├── branching.md
@@ -201,7 +201,7 @@ After model changes, generate a migration with `python netbox/manage.py makemigr
 | `models/test_app_config.py` | The plugin's app config |
 | `models/test_utilities.py` | Utility functions |
 | `test_navigation.py` | Dynamic navigation menu construction |
-| `test_schema_operations.py` | DB schema create/delete/alter for custom object tables |
+| `test_table_schema.py` | DB schema create/delete/alter for custom object tables |
 | `test_views.py` | Web views (list, create, edit, delete) |
 
 ## CI/CD
