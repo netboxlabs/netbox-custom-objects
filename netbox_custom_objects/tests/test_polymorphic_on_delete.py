@@ -3,8 +3,10 @@ Tests for on_delete_behavior on polymorphic Object fields: what happens to custo
 the object their polymorphic field points at is deleted.
 """
 from django.contrib.contenttypes.models import ContentType
+from django.db import connection
 from django.db.models import ProtectedError
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from rest_framework import status
 from rest_framework.test import APIClient
@@ -124,6 +126,18 @@ class PolymorphicOnDeleteTestCase(CustomObjectsTestCase, TestCase):
         Site.objects.filter(pk__in=[self.site.pk, self.other_site.pk]).delete()
 
         self.assertFalse(model.objects.exists())
+
+    def test_fields_are_looked_up_once_per_deletion(self):
+        """Deleting many objects looks up the polymorphic fields that may point at them once, not per object."""
+        self._make_type(ObjectFieldOnDeleteChoices.CASCADE)
+        sites = [Site.objects.create(name=f'Bulk {i}', slug=f'bulk-{i}') for i in range(5)]
+        through_table = CustomObjectTypeField.related_object_types.through._meta.db_table
+
+        with CaptureQueriesContext(connection) as queries:
+            Site.objects.filter(pk__in=[site.pk for site in sites]).delete()
+
+        self.assertFalse(Site.objects.filter(pk__in=[site.pk for site in sites]).exists())
+        self.assertEqual(sum(through_table in query['sql'] for query in queries.captured_queries), 1)
 
     def test_protect_on_one_field_stops_the_cascade_on_another(self):
         cascading = self._make_type(ObjectFieldOnDeleteChoices.CASCADE, slug='cascading')

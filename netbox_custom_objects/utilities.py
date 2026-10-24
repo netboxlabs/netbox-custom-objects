@@ -147,17 +147,20 @@ def _related_objects(self, related_model, related_fields, objs):
 
 def _check_protection_first(real_delete):
     """
-    Wrap a collector's ``delete()`` so it first refuses the deletion if a polymorphic Object field
-    protects one of the objects.  Django refuses a deletion that a real foreign key protects at the
-    same point: before any signal is sent or the deletion's transaction starts.
+    Wrap a collector's ``delete()`` in ``polymorphic_on_delete()``.  That refuses the deletion if
+    a polymorphic Object field protects one of the objects, at the same point Django refuses a
+    deletion that a real foreign key protects: before any signal is sent or the deletion's
+    transaction starts.  It also looks up, once, the polymorphic fields the deletion's
+    ``pre_delete`` handler needs.
     """
     def delete(self):
-        if not getattr(self, '_polymorphic_protection_checked', False):
-            from netbox_custom_objects.models import check_polymorphic_protection
+        if getattr(self, '_polymorphic_on_delete_prepared', False):
+            return real_delete(self)
+        from netbox_custom_objects.models import polymorphic_on_delete
 
-            check_polymorphic_protection(self.data)
-            self._polymorphic_protection_checked = True
-        return real_delete(self)
+        self._polymorphic_on_delete_prepared = True
+        with polymorphic_on_delete(self.data):
+            return real_delete(self)
 
     delete.checks_polymorphic_protection = True
     return delete
