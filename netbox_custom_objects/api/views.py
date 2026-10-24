@@ -127,6 +127,21 @@ def _fields_by_op(diffs, *ops):
     ]
 
 
+def _constraints_by_op(diffs, *ops):
+    """``(type slug, constraint name)`` for each constraint the diffs change with one of ``ops``."""
+    return [
+        (diff.slug, change.name)
+        for diff in diffs for change in diff.constraint_changes if change.op in ops
+    ]
+
+
+def _constraint_lookup(pairs):
+    query = Q()
+    for slug, name in pairs:
+        query |= Q(custom_object_type__slug=slug, name=name)
+    return query
+
+
 def _restricted_count(model, user, action, **lookups):
     return model.objects.restrict(user, action).filter(**lookups).count()
 
@@ -161,6 +176,20 @@ def _check_apply_permissions(user, diffs):
         ).count() != len(pairs):
             raise PermissionDenied(
                 _("You do not have permission to {action} one or more of these fields.").format(action=action)
+            )
+
+    # An altered constraint is re-created, but for the user it's a change, as for a field.
+    if _constraints_by_op(diffs, FieldOp.ADD) and not user.has_perm(
+        "netbox_custom_objects.add_customobjecttypeconstraint"
+    ):
+        raise PermissionDenied(_("You do not have permission to add Custom Object Type constraints."))
+    for op, action in ((FieldOp.ALTER, "change"), (FieldOp.REMOVE, "delete")):
+        pairs = _constraints_by_op(diffs, op)
+        if pairs and CustomObjectTypeConstraint.objects.restrict(user, action).filter(
+            _constraint_lookup(pairs)
+        ).count() != len(pairs):
+            raise PermissionDenied(
+                _("You do not have permission to {action} one or more of these constraints.").format(action=action)
             )
 
 
@@ -202,6 +231,14 @@ def _check_applied_permissions(user, diffs):
             _field_lookup(pairs)
         ).count() != len(pairs):
             raise PermissionDenied(_("The result would violate your field permission constraints."))
+    for op, action in ((FieldOp.ADD, "add"), (FieldOp.ALTER, "change")):
+        pairs = _constraints_by_op(diffs, op)
+        if pairs and CustomObjectTypeConstraint.objects.restrict(user, action).filter(
+            _constraint_lookup(pairs)
+        ).count() != len(pairs):
+            raise PermissionDenied(
+                _("The result would violate your permission constraints for Custom Object Type constraints.")
+            )
 
 
 def _serialize_diff(diff) -> dict:
