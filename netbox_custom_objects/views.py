@@ -6,6 +6,7 @@ from core.tables import ObjectChangeTable
 from django.apps import apps as django_apps
 from django.contrib import messages
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
 from django.db import router, transaction
 from django.db.models import ProtectedError, Q, RestrictedError
 from django.http import Http404
@@ -1206,9 +1207,25 @@ class CustomObjectEditView(RestrictedObjectMixin, generic.ObjectEditView):
                     )
             return self.cleaned_data
 
+        def custom_validate_constraints(self):
+            # A polymorphic Object field's two columns aren't form fields, so Django excludes
+            # them from validation and skips every constraint over them; the database then
+            # rejects the save.  custom_clean() has set them on the instance, so validate
+            # them too, unless the field's own inputs failed.  Their constraints cover both
+            # columns, so any error is a non-field error.
+            exclude = self._get_validation_exclusions()
+            for field_name, (ct_sub, obj_sub) in self.custom_object_type_poly_obj_fields.items():
+                if ct_sub not in self._errors and obj_sub not in self._errors:
+                    exclude -= {f"{field_name}_content_type", f"{field_name}_object_id"}
+            try:
+                self.instance.validate_constraints(exclude=exclude)
+            except ValidationError as e:
+                self._update_errors(e)
+
         form_class.__init__ = custom_init
         form_class.clean = custom_clean
         form_class.save = custom_save
+        form_class.validate_constraints = custom_validate_constraints
 
         return form_class
 
