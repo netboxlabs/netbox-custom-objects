@@ -1991,8 +1991,8 @@ class CustomObjectType(NetBoxModel):
         has been set or cleared since.
         """
         has_display = bool(self.display_expression)
-        search_index = getattr(model, '_search_index', None)
-        if search_index is None or search_index.model is not model or search_index.has_display != has_display:
+        search_index = model.__dict__.get('_search_index')
+        if search_index is None or search_index.has_display != has_display:
             search_index = self._build_search_index(model, has_display)
             model._search_index = search_index
         label = f"{APP_LABEL}.{self.get_table_model_name(self.id).lower()}"
@@ -2458,7 +2458,6 @@ class CustomObjectType(NetBoxModel):
         self._store_base_column_snapshot(model)
 
         get_serializer_class(model)
-        self.register_custom_object_search_index(model)
 
     @classmethod
     def deserialize_object(cls, data, pk=None):
@@ -4425,9 +4424,6 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
             transaction.on_commit(ensure_constraint, using=_alias)
 
-        if renamed:
-            self.custom_object_type.register_custom_object_search_index(updated_model)
-
         # Clean up stale descriptor when related_name is renamed on an existing polymorphic field
         if not is_new and self.is_polymorphic and hasattr(self, '_original'):
             old_name = self.original.related_name
@@ -4533,7 +4529,6 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         updated_model = self.custom_object_type.get_model()
 
         heal_unmasked_fields(self.custom_object_type, updated_model, schema_conn)
-        self.custom_object_type.register_custom_object_search_index(updated_model)
 
         if self.search_weight > 0:
             _cot_id = self.custom_object_type_id

@@ -379,9 +379,9 @@ class SearchIndexRegistrationTestCase(CustomObjectsTestCase, TestCase):
         ):
             models = list(app_config.get_models())
         self.assertIn(self.model, models)
-        # Inside a test's transaction, atomic() adds a savepoint pair around the SELECT.
-        selects = [q["sql"] for q in queries if q["sql"].startswith("SELECT")]
-        self.assertEqual(len(selects), 1, selects)
+        # Inside a test's transaction, atomic() adds a savepoint pair around the query.
+        statements = [q["sql"] for q in queries if "SAVEPOINT" not in q["sql"]]
+        self.assertEqual(len(statements), 1, statements)
 
     def test_cached_model_reuses_its_index(self):
         search_index = registry["search"][self.label]
