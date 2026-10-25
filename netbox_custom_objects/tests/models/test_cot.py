@@ -4,8 +4,8 @@ Tests for the CustomObjectType model.
 from unittest.mock import patch
 
 from django.apps import apps as django_apps
-from django.core.exceptions import ValidationError
-from django.db import connection, transaction
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
+from django.db import DatabaseError, connection, transaction
 from django.db.utils import ProgrammingError
 from django.test import TestCase
 from django.urls import reverse
@@ -15,7 +15,7 @@ from core.models import ObjectType
 from dcim.models import Site
 from netbox.search import registry
 from netbox_custom_objects.constants import APP_LABEL
-from netbox_custom_objects.field_types import ObjectFieldType
+from netbox_custom_objects.field_types import ObjectFieldType, TextFieldType
 from netbox_custom_objects.models import CustomObjectType
 from ..base import CustomObjectsTestCase
 
@@ -710,10 +710,45 @@ class DisplayExpressionTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(str(instance), 'Arista')
 
     def test_expression_rendering_error_falls_back_to_primary_field(self):
-        # Invalid Jinja2 syntax must not raise — fall back silently
+        # An expression saved without validation (clean() rejects it) falls back silently
         cot = self._make_cot('{% invalid jinja %}')
         instance = cot.get_model().objects.create(make='HP')
         self.assertEqual(str(instance), 'HP')
+
+    def test_expression_runtime_error_falls_back_to_primary_field(self):
+        cot = self._make_cot('{{ make }} {{ 1 // 0 }}')
+        instance = cot.get_model().objects.create(make='Lenovo')
+        self.assertEqual(str(instance), 'Lenovo')
+
+    def test_bad_field_value_renders_empty(self):
+        cot = self._make_cot('{{ make }}/{{ model }}')
+        instance = cot.get_model().objects.create(make='Ubiquiti', model='USW')
+        with patch.object(TextFieldType, 'get_display_value', autospec=True, side_effect=[
+            'Ubiquiti', ObjectDoesNotExist('gone'),
+        ]):
+            self.assertEqual(str(instance), 'Ubiquiti/')
+
+    def test_database_error_propagates(self):
+        """A database error may have aborted the transaction, so it isn't hidden behind the fallback name."""
+        cot = self._make_cot('{{ make }}')
+        instance = cot.get_model().objects.create(make='Extreme')
+        # Only the expression's value fails, so swallowing the error would fall back to the primary field.
+        with patch.object(TextFieldType, 'get_display_value', side_effect=[DatabaseError('aborted'), 'Extreme']):
+            with self.assertRaises(DatabaseError):
+                str(instance)
+
+    def test_clean_rejects_invalid_syntax(self):
+        for expression in ('{% invalid jinja %}', '{% if make %}{{ make }}', '{{ make'):
+            with self.subTest(expression=expression):
+                cot = CustomObjectType(name='invalid', slug='invalid', display_expression=expression)
+                with self.assertRaises(ValidationError) as cm:
+                    cot.full_clean()
+                self.assertIn('display_expression', cm.exception.message_dict)
+
+    def test_clean_accepts_valid_expression(self):
+        expression = '{{ make }}{% if model %} / {{ model }}{% endif %}'
+        cot = CustomObjectType(name='valid', slug='valid', display_expression=expression)
+        cot.full_clean()
 
     def test_expression_empty_result_falls_back_to_primary_field(self):
         # Expression that renders to empty string falls back
@@ -764,7 +799,7 @@ class DisplayExpressionTestCase(CustomObjectsTestCase, TestCase):
 
 
 class DisplayExpressionFormValidationTestCase(CustomObjectsTestCase, TestCase):
-    """Tests for CustomObjectTypeForm.clean_display_expression()."""
+    """The type form rejects invalid display expression syntax, which CustomObjectType.clean() checks."""
 
     def _form(self, expression):
         from netbox_custom_objects.forms import CustomObjectTypeForm

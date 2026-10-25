@@ -18,7 +18,7 @@ from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
-from django.core.exceptions import FieldDoesNotExist
+from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
 from django.core.validators import MinValueValidator, RegexValidator, ValidationError
 from django.db import DEFAULT_DB_ALIAS, connection, connections, IntegrityError, models, transaction
 from django.db.utils import OperationalError, ProgrammingError
@@ -63,6 +63,7 @@ from netbox.registry import registry
 from netbox.search import FieldTypes, SearchIndex
 from utilities.data import deepmerge, get_config_value_ci
 from utilities.datetime import datetime_from_timestamp
+from jinja2 import TemplateError as _JinjaTemplateError
 from jinja2 import Undefined as _JinjaUndefined
 from jinja2 import meta as _jinja_meta
 from jinja2.sandbox import SandboxedEnvironment as _JinjaSandbox
@@ -802,6 +803,11 @@ def _build_rename_map(cot, attrs):
 
 _display_expression_env = _JinjaSandbox(undefined=_JinjaUndefined)
 
+# What rendering a display expression may raise for bad data or a bad expression, and fall
+# back from. A database error isn't among them: it can abort the transaction, so it propagates.
+_DISPLAY_VALUE_ERRORS = (ObjectDoesNotExist, AttributeError, LookupError, TypeError, ValueError)
+_DISPLAY_RENDER_ERRORS = (_JinjaTemplateError, ArithmeticError, *_DISPLAY_VALUE_ERRORS)
+
 
 @functools.lru_cache(maxsize=256)
 def _compile_display_expression(expression):
@@ -1056,7 +1062,7 @@ class CustomObject(
 
     def _render_display_expression(self):
         """Render the COT display_expression; return stripped result or None."""
-        # All access inside the try so any exception (including RelatedObjectDoesNotExist
+        # All access inside the try so a bad expression or value (including RelatedObjectDoesNotExist
         # from custom_object_type access) falls through to the primary-field fallback.
         try:
             expression = getattr(self.custom_object_type, 'display_expression', '')
@@ -1074,11 +1080,11 @@ class CustomObject(
                 try:
                     value = field_type.get_display_value(self, field_name)
                     ctx[field_name] = '' if value is None else value
-                except Exception:  # noqa: BLE001
+                except _DISPLAY_VALUE_ERRORS:
                     ctx[field_name] = ''
             rendered = template.render(**ctx).strip()
             return rendered or None
-        except Exception:  # noqa: BLE001
+        except _DISPLAY_RENDER_ERRORS:
             return None
 
     @property
@@ -1549,6 +1555,14 @@ class CustomObjectType(NetBoxModel):
                 {"slug": _("Slug field cannot be empty.")}
             )
 
+        if self.display_expression:
+            try:
+                _compile_display_expression(self.display_expression)
+            except _JinjaTemplateError as e:
+                raise ValidationError({
+                    "display_expression": _("Invalid Jinja2 syntax: %(error)s") % {"error": e},
+                }) from e
+
         # config_context_enabled is immutable after creation: the local_context_data
         # column is created once when the type's table is built (managed=False, no
         # migration), so flipping the flag would desync the generated model from the
@@ -1978,7 +1992,7 @@ class CustomObjectType(NetBoxModel):
             return []
         try:
             _, names = _compile_display_expression(self.display_expression)
-        except Exception:  # noqa: BLE001 - an invalid expression renders nothing
+        except _JinjaTemplateError:  # an invalid expression renders nothing
             return []
         return [field for field in self.fields.all() if field.name in names]
 
