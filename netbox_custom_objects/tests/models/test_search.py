@@ -4,10 +4,14 @@ Tests for custom objects in the search index, including the reindex job.
 import uuid
 from unittest.mock import patch
 
+from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
+from django.db import connection
 from django.db.models.signals import post_delete
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 
+import netbox_custom_objects as nco_package
 import netbox_custom_objects.models as nco_models
 
 from core.choices import JobIntervalChoices, JobStatusChoices
@@ -337,6 +341,74 @@ class DisplayExpressionSearchTestCase(CustomObjectsTestCase, TestCase):
             get_backend().cache(self.model.objects.get(pk=self.obj.pk))
         self.assertEqual(mock_render.call_count, 1)
         self.assertEqual(self._cached_display(), [("Alpha / svc1", DISPLAY_EXPRESSION_SEARCH_WEIGHT)])
+
+
+class SearchIndexRegistrationTestCase(CustomObjectsTestCase, TestCase):
+    """A cached model's SearchIndex is re-registered without a query, and stays current."""
+
+    def setUp(self):
+        super().setUp()
+        self.cot = self.create_custom_object_type(name="Indexed", slug="indexed")
+        self.create_custom_object_type_field(
+            self.cot, name="name", type="text", primary=True, required=True, search_weight=100,
+        )
+        self.field = self.create_custom_object_type_field(self.cot, name="serial", type="text", search_weight=500)
+        self.cot.refresh_from_db()
+        self.model = self.cot.get_model()
+        self.label = f"netbox_custom_objects.{self.cot.get_table_model_name(self.cot.id).lower()}"
+
+    def _indexed_fields(self):
+        return dict(registry["search"][self.label].fields)
+
+    def test_cached_model_runs_no_query(self):
+        with self.assertNumQueries(0):
+            self.cot.get_model()
+
+    def test_listing_the_app_models_runs_one_query(self):
+        """The app's get_models() override, which apps.clear_cache() runs, only lists the types."""
+        other = self.create_custom_object_type(name="Other", slug="other")
+        self.create_custom_object_type_field(other, name="name", type="text", primary=True, required=True)
+        other.refresh_from_db()
+        other.get_model()
+        app_config = apps.get_app_config("netbox_custom_objects")
+        # Tests skip generated models here; list them as a running instance does.
+        with (
+            patch.object(nco_package, "_app_ready", True),
+            patch.object(app_config, "should_skip_dynamic_model_creation", return_value=False),
+            CaptureQueriesContext(connection) as queries,
+        ):
+            models = list(app_config.get_models())
+        self.assertIn(self.model, models)
+        # Inside a test's transaction, atomic() adds a savepoint pair around the SELECT.
+        selects = [q["sql"] for q in queries if q["sql"].startswith("SELECT")]
+        self.assertEqual(len(selects), 1, selects)
+
+    def test_cached_model_reuses_its_index(self):
+        search_index = registry["search"][self.label]
+        registry["search"].pop(self.label)
+        self.cot.get_model()
+        self.assertIs(registry["search"][self.label], search_index)
+
+    def test_index_follows_a_changed_search_weight(self):
+        field = CustomObjectTypeField.objects.get(pk=self.field.pk)
+        field.search_weight = 0
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue'):
+            field.save()
+        self.cot.refresh_from_db()
+        self.cot.get_model()
+        self.assertEqual(self._indexed_fields(), {"name": 100})
+
+    def test_index_follows_a_display_expression_set_elsewhere(self):
+        """Another worker's display_expression change doesn't bump cache_timestamp, so the cached model is reused."""
+        CustomObjectType.objects.filter(pk=self.cot.pk).update(display_expression="{{ name }}")
+        cot = CustomObjectType.objects.get(pk=self.cot.pk)
+        self.assertIs(cot.get_model(), self.model)
+        self.assertEqual(self._indexed_fields()["_display"], DISPLAY_EXPRESSION_SEARCH_WEIGHT)
+
+        CustomObjectType.objects.filter(pk=self.cot.pk).update(display_expression="")
+        cot = CustomObjectType.objects.get(pk=self.cot.pk)
+        cot.get_model()
+        self.assertNotIn("_display", self._indexed_fields())
 
 
 class CrossCOTStubSearchIndexRegressionTestCase(CustomObjectsTestCase, TestCase):

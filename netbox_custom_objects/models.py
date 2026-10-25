@@ -1983,6 +1983,22 @@ class CustomObjectType(NetBoxModel):
         return [field for field in self.fields.all() if field.name in names]
 
     def register_custom_object_search_index(self, model):
+        """
+        Register *model*'s SearchIndex, building it on first use and keeping it on the model.
+
+        Called on every get_model() cache hit, so it runs no query: the index comes from the
+        fields the model was generated with, and is rebuilt only when the display expression
+        has been set or cleared since.
+        """
+        has_display = bool(self.display_expression)
+        search_index = getattr(model, '_search_index', None)
+        if search_index is None or search_index.model is not model or search_index.has_display != has_display:
+            search_index = self._build_search_index(model, has_display)
+            model._search_index = search_index
+        label = f"{APP_LABEL}.{self.get_table_model_name(self.id).lower()}"
+        registry["search"][label] = search_index
+
+    def _build_search_index(self, model, has_display):
         # Use local_fields / local_many_to_many directly — calling _meta.get_field()
         # triggers Django's lazy _relation_tree which re-enters get_models() and
         # recurses through get_model() for every COT.
@@ -1993,7 +2009,8 @@ class CustomObjectType(NetBoxModel):
         fields = []
         display_attrs = []
         array_fields = set()
-        for field in self.fields.all():
+        for field_info in model._field_objects.values():
+            field = field_info["field"]
             if field.name not in present:
                 continue
             if field.search_weight > 0:
@@ -2012,7 +2029,7 @@ class CustomObjectType(NetBoxModel):
             if field.context and field.type != CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                 display_attrs.append(field.name)
 
-        if self.display_expression:
+        if has_display:
             fields.append(("_display", DISPLAY_EXPRESSION_SEARCH_WEIGHT))
 
         def get_field_value(instance, field_name):
@@ -2027,14 +2044,13 @@ class CustomObjectType(NetBoxModel):
             "display_attrs": tuple(display_attrs),
             "get_field_value": staticmethod(get_field_value),
             "get_attr_type": staticmethod(_search_attr_type),
+            "has_display": has_display,
         }
-        search_index = type(
+        return type(
             f"{self.name}SearchIndex",
             (SearchIndex,),
             attrs,
         )
-        label = f"{APP_LABEL}.{self.get_table_model_name(self.id).lower()}"
-        registry["search"][label] = search_index
 
     def get_model(
         self,
@@ -2329,7 +2345,6 @@ class CustomObjectType(NetBoxModel):
         from netbox_custom_objects.api.serializers import get_serializer_class
         model = self.get_model()
         get_serializer_class(model)
-        self.register_custom_object_search_index(model)
         return model
 
     @staticmethod
