@@ -1,10 +1,12 @@
 import django_tables2 as tables
 from django.utils.translation import gettext_lazy as _
+from django_tables2.data import TableQuerysetData
 from netbox.tables import NetBoxTable, columns
 
 from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
 from netbox_custom_objects.models import (CustomObject, CustomObjectType, CustomObjectTypeConstraint,
                                           CustomObjectTypeField)
+from netbox_custom_objects.utilities import polymorphic_m2m_field_names
 
 __all__ = ("CustomObjectTable", "CustomObjectTypeConstraintTable", "CustomObjectTypeFieldTable")
 
@@ -209,6 +211,28 @@ class CustomObjectTable(NetBoxTable):
             "created",
             "last_updated",
         )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # COMPAT(netbox<4.5.4): NetBoxTable has no _apply_prefetching(), and prefetches the
+        # default columns in __init__() instead.
+        if not hasattr(NetBoxTable, "_apply_prefetching"):
+            self._prefetch_polymorphic_m2m()
+
+    def _apply_prefetching(self, columns=None):
+        super()._apply_prefetching(columns)
+        self._prefetch_polymorphic_m2m(columns)
+
+    def _prefetch_polymorphic_m2m(self, columns=None):
+        """Prefetch the polymorphic multi-object columns, which NetBox's prefetching can't find in _meta."""
+        if not isinstance(self.data, TableQuerysetData):
+            return
+        names = [
+            name for name in polymorphic_m2m_field_names(self._meta.model)
+            if name in self.columns and (self.columns[name].visible if columns is None else name in columns)
+        ]
+        if names:
+            self.data.data = self.data.data.prefetch_related(*names)
 
 
 class CustomObjectTypeConstraintTable(NetBoxTable):
