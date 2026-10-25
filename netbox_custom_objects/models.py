@@ -1560,7 +1560,9 @@ class CustomObjectType(NetBoxModel):
                 _compile_display_expression(self.display_expression)
             except _JinjaTemplateError as e:
                 raise ValidationError({
-                    "display_expression": _("Invalid Jinja2 syntax: %(error)s") % {"error": e},
+                    "display_expression": ValidationError(
+                        _("Invalid Jinja2 syntax: %(error)s"), params={"error": str(e)}, code="invalid",
+                    ),
                 }) from e
 
         # config_context_enabled is immutable after creation: the local_context_data

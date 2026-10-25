@@ -743,7 +743,9 @@ class DisplayExpressionTestCase(CustomObjectsTestCase, TestCase):
                 cot = CustomObjectType(name='invalid', slug='invalid', display_expression=expression)
                 with self.assertRaises(ValidationError) as cm:
                     cot.full_clean()
-                self.assertIn('display_expression', cm.exception.message_dict)
+                [error] = cm.exception.error_dict['display_expression']
+                self.assertEqual(error.code, 'invalid')
+                self.assertIn('Invalid Jinja2 syntax', error.messages[0])
 
     def test_clean_accepts_valid_expression(self):
         expression = '{{ make }}{% if model %} / {{ model }}{% endif %}'
