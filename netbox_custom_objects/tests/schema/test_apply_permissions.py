@@ -28,13 +28,6 @@ class SchemaApplyPermissionTestCase(_SchemaAPIBase):
         self.allowed = self.create_custom_object_type(name='allowed', slug='allowed', description='keep')
         self.other = self.create_custom_object_type(name='other', slug='other', description='keep')
 
-    def _grant(self, model, actions, constraints=None):
-        perm = ObjectPermission.objects.create(
-            name=f'{model._meta.model_name}-{"-".join(actions)}', actions=actions, constraints=constraints,
-        )
-        perm.users.add(self.user)
-        perm.object_types.add(ObjectType.objects.get_for_model(model))
-
     def _apply(self, *type_defs, allow_destructive=False):
         schema_doc = {"schema_version": "1", "types": list(type_defs)}
         return self.client.post(
@@ -144,13 +137,6 @@ class SchemaApplyConstraintPermissionTestCase(_SchemaAPIBase):
         ):
             self._grant(model, actions)
 
-    def _grant(self, model, actions, constraints=None):
-        perm = ObjectPermission.objects.create(
-            name=f'{model._meta.model_name}-{"-".join(actions)}', actions=actions, constraints=constraints,
-        )
-        perm.users.add(self.user)
-        perm.object_types.add(ObjectType.objects.get_for_model(model))
-
     def _apply(self, edit):
         type_def = export_cot(self.cot)
         edit(type_def)
@@ -201,6 +187,13 @@ class SchemaApplyConstraintPermissionTestCase(_SchemaAPIBase):
         self.assertEqual(self._apply(self._describe("changed")).status_code, status.HTTP_200_OK)
         self.assertEqual(self.cot.constraints.get(name="code_serial").description, "changed")
 
+    def test_altering_keeps_the_constraint_id(self):
+        """A change permission scoped to the constraint's ID covers it after it's altered."""
+        self._grant(CustomObjectTypeConstraint, ['change'], constraints={'pk': self.existing.pk})
+        self.assertEqual(self._apply(self._describe("changed")).status_code, status.HTTP_200_OK)
+        constraint = self.cot.constraints.get(name="code_serial")
+        self.assertEqual((constraint.pk, constraint.description), (self.existing.pk, "changed"))
+
     def test_altering_out_of_change_constraint_rolled_back(self):
         self._grant(CustomObjectTypeConstraint, ['change'], constraints={'description': ''})
         self.assertEqual(self._apply(self._describe("changed")).status_code, status.HTTP_403_FORBIDDEN)
@@ -213,6 +206,13 @@ class SchemaApplyConstraintPermissionTestCase(_SchemaAPIBase):
         self._grant(CustomObjectTypeConstraint, ['delete'])
         self.assertEqual(self._apply(self._remove).status_code, status.HTTP_200_OK)
         self.assertFalse(self.cot.constraints.filter(name="code_serial").exists())
+
+    def test_removing_outside_delete_constraint_refused(self):
+        self._grant(CustomObjectTypeConstraint, ['delete'], constraints={'name': 'other'})
+        response = self._apply(self._remove)
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertIn("permission to delete one or more of these constraints", response.data["detail"])
+        self.assertTrue(self.cot.constraints.filter(name="code_serial").exists())
 
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')

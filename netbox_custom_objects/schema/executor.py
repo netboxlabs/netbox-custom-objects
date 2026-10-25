@@ -580,26 +580,36 @@ def _phase2_fields(ordered_diffs, cot_map, *, allow_destructive: bool) -> None:
                 _apply_field_alter(cot, fc)
 
 
-def _remove_constraints(ordered_diffs, cot_map) -> None:
+def _remove_constraints(ordered_diffs, cot_map) -> dict:
     """
     Delete constraints that are removed or altered, before any field changes.
 
     An altered constraint is deleted here and re-created by :func:`_add_constraints`,
     so field changes in between never run against a constraint's old definition.
+    Returns the primary key of each altered constraint, by ``(type slug, name)``, so it's
+    re-created with the same one: permissions and links that name it keep working.
     """
+    altered_pks = {}
     for diff in ordered_diffs:
         names = [cc.name for cc in diff.constraint_changes if cc.op in (FieldOp.REMOVE, FieldOp.ALTER)]
         if diff.is_new or not names:
             continue
+        altered = {cc.name for cc in diff.constraint_changes if cc.op is FieldOp.ALTER}
         for constraint in CustomObjectTypeConstraint.objects.filter(
             custom_object_type=cot_map[diff.slug], name__in=names
         ):
+            if constraint.name in altered:
+                altered_pks[(diff.slug, constraint.name)] = constraint.pk
             constraint.delete()
             logger.info("Removed constraint %r from COT %r", constraint.name, diff.slug)
+    return altered_pks
 
 
-def _add_constraints(ordered_diffs, cot_map) -> None:
-    """Create added and altered constraints, after all field changes."""
+def _add_constraints(ordered_diffs, cot_map, altered_pks) -> None:
+    """
+    Create added and altered constraints, after all field changes.  An altered constraint
+    keeps the primary key it had (*altered_pks*, from :func:`_remove_constraints`).
+    """
     for diff in ordered_diffs:
         cot = cot_map[diff.slug]
         for cc in diff.constraint_changes:
@@ -607,6 +617,7 @@ def _add_constraints(ordered_diffs, cot_map) -> None:
                 continue
             schema_def = cc.schema_def
             constraint = CustomObjectTypeConstraint(
+                pk=altered_pks.get((diff.slug, schema_def["name"])),
                 custom_object_type=cot,
                 name=schema_def["name"],
                 field_schema_ids=list(schema_def.get("fields", [])),
@@ -679,9 +690,9 @@ def apply_diffs(
 
     with schema_transaction():
         cot_map = _phase1_cots(ordered, type_defs_by_slug)
-        _remove_constraints(ordered, cot_map)
+        altered_constraint_pks = _remove_constraints(ordered, cot_map)
         _phase2_fields(ordered, cot_map, allow_destructive=allow_destructive)
-        _add_constraints(ordered, cot_map)
+        _add_constraints(ordered, cot_map, altered_constraint_pks)
 
         # Finalise: persist schema_document and sync next_schema_id counters.
         for diff in ordered:

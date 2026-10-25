@@ -67,6 +67,13 @@ class _SchemaAPIMixin(CustomObjectsTestCase):
             perm.users.add(self.user)
             perm.object_types.add(ObjectType.objects.get_for_model(model))
 
+    def _grant(self, model, actions, constraints=None):
+        perm = ObjectPermission.objects.create(
+            name=f'{model._meta.model_name}-{"-".join(actions)}', actions=actions, constraints=constraints,
+        )
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(model))
+
     @property
     def preview_url(self):
         return reverse("plugins-api:netbox_custom_objects-api:schema-preview")
