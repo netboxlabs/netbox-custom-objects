@@ -44,6 +44,7 @@ class PolymorphicColumnPrefetchTestCase(CustomObjectsTestCase, TestCase):
         with CaptureQueriesContext(connection) as queries:
             response = self.client.get(self.url)
         self.assertEqual(response.status_code, 200)
+        # The column must render its targets: one that isn't rendered costs no queries per row either.
         self.assertContains(response, "Site 1")
         return response, len(queries)
 
