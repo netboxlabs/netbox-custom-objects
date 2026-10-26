@@ -862,9 +862,10 @@ class _BaseModelCleanMixin(models.Model):
     ``BaseModel.clean()`` validates every GenericForeignKey, but it can't honour
     ``full_clean(exclude=...)`` and it raises AttributeError when the stored content
     type has no installed model (an uninstalled plugin). Polymorphic Object fields
-    are GFKs, and the UI edit form excludes their backing columns (hidden fields
-    have no form field at all), so a stale reference would key a ValidationError
-    to a column the form doesn't have and 500 the edit page.
+    are GFKs, and the UI forms always exclude their backing columns (the pickers are
+    separate ``<name>__ct`` / ``<name>__obj`` form fields; hidden fields have none),
+    so a stale reference would key a ValidationError to a column the form doesn't
+    have and 500 the edit page.
 
     ``clean()`` therefore skips ``BaseModel.clean()`` and repeats what it does --
     nullable-unique coercion and GFK validation -- with the exclude list captured
@@ -925,7 +926,7 @@ class _BaseModelCleanMixin(models.Model):
                 continue
             # Existence by PK only: for a custom object target, model_class() is main's class, whose
             # column set may not match the active branch's schema, so selecting its columns can fail.
-            if not model.objects.filter(pk=fk_value).exists():
+            if not model._default_manager.filter(pk=fk_value).exists():
                 errors[field.fk_field] = f'Related object not found using the provided value: {fk_value}.'
         if errors:
             raise ValidationError(errors)
