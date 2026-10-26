@@ -806,7 +806,9 @@ _display_expression_env = _JinjaSandbox(undefined=_JinjaUndefined)
 # What rendering a display expression may raise for bad data or a bad expression, and fall
 # back from. A database error isn't among them: it can abort the transaction, so it propagates.
 _DISPLAY_VALUE_ERRORS = (ObjectDoesNotExist, AttributeError, LookupError, TypeError, ValueError)
-_DISPLAY_RENDER_ERRORS = (_JinjaTemplateError, ArithmeticError, *_DISPLAY_VALUE_ERRORS)
+# What compiling an invalid expression raises. Jinja's parser recurses, so deep nesting overflows the stack.
+_DISPLAY_COMPILE_ERRORS = (_JinjaTemplateError, RecursionError)
+_DISPLAY_RENDER_ERRORS = (*_DISPLAY_COMPILE_ERRORS, ArithmeticError, *_DISPLAY_VALUE_ERRORS)
 
 
 @functools.lru_cache(maxsize=256)
@@ -1558,7 +1560,7 @@ class CustomObjectType(NetBoxModel):
         if self.display_expression:
             try:
                 _compile_display_expression(self.display_expression)
-            except _JinjaTemplateError as e:
+            except _DISPLAY_COMPILE_ERRORS as e:
                 raise ValidationError({
                     "display_expression": ValidationError(
                         _("Invalid Jinja2 syntax: %(error)s"), params={"error": str(e)}, code="invalid",
@@ -1994,7 +1996,7 @@ class CustomObjectType(NetBoxModel):
             return []
         try:
             _, names = _compile_display_expression(self.display_expression)
-        except _JinjaTemplateError:  # an invalid expression renders nothing
+        except _DISPLAY_COMPILE_ERRORS:  # an invalid expression renders nothing
             return []
         return [field for field in self.fields.all() if field.name in names]
 

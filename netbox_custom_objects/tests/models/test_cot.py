@@ -682,6 +682,10 @@ class SemverValidationTestCase(CustomObjectsTestCase, TestCase):
                 field.full_clean()
 
 
+# Deep enough that Jinja's recursive parser raises RecursionError
+DEEPLY_NESTED_EXPRESSION = '{{ ' + '(' * 200 + 'make' + ')' * 200 + ' }}'
+
+
 class DisplayExpressionTestCase(CustomObjectsTestCase, TestCase):
     """Tests for CustomObjectType.display_expression Jinja2 rendering."""
 
@@ -715,6 +719,13 @@ class DisplayExpressionTestCase(CustomObjectsTestCase, TestCase):
         instance = cot.get_model().objects.create(make='HP')
         self.assertEqual(str(instance), 'HP')
 
+    def test_deeply_nested_expression_falls_back_to_primary_field(self):
+        # Saved without validation; parsing it overflows the stack
+        cot = self._make_cot(DEEPLY_NESTED_EXPRESSION)
+        instance = cot.get_model().objects.create(make='Brocade')
+        self.assertEqual(str(instance), 'Brocade')
+        self.assertEqual(cot.get_display_expression_fields(), [])
+
     def test_expression_runtime_error_falls_back_to_primary_field(self):
         cot = self._make_cot('{{ make }} {{ 1 // 0 }}')
         instance = cot.get_model().objects.create(make='Lenovo')
@@ -738,7 +749,7 @@ class DisplayExpressionTestCase(CustomObjectsTestCase, TestCase):
                 str(instance)
 
     def test_clean_rejects_invalid_syntax(self):
-        for expression in ('{% invalid jinja %}', '{% if make %}{{ make }}', '{{ make'):
+        for expression in ('{% invalid jinja %}', '{% if make %}{{ make }}', '{{ make', DEEPLY_NESTED_EXPRESSION):
             with self.subTest(expression=expression):
                 cot = CustomObjectType(name='invalid', slug='invalid', display_expression=expression)
                 with self.assertRaises(ValidationError) as cm:
