@@ -42,7 +42,7 @@ from extras.models import ConfigContext, ConfigContextModel, CustomField, Custom
 from extras.models.customfields import SEARCH_TYPES
 from extras.utils import is_taggable, run_validators
 from netbox.config import get_config
-from netbox.models import ChangeLoggedModel, NetBoxModel
+from netbox.models import BaseModel, ChangeLoggedModel, NetBoxModel
 from netbox.models.mixins import OwnerMixin
 from netbox.models.features import (
     BookmarksMixin,
@@ -68,7 +68,6 @@ from jinja2 import Undefined as _JinjaUndefined
 from jinja2 import meta as _jinja_meta
 from jinja2.sandbox import SandboxedEnvironment as _JinjaSandbox
 from utilities.object_types import object_type_name
-from utilities.querysets import RestrictedQuerySet
 from utilities.serialization import deserialize_object as _deserialize_object
 from utilities.string import title
 from dcim.fields import MACAddressField
@@ -843,6 +842,127 @@ def _set_with_collision_preference(result, key, value):
     result[key] = value
 
 
+class _NullableUniqueCharsCompatMixin(models.Model):
+    """COMPAT(netbox<4.5.10): ``BaseModel`` only defines ``_coerce_nullable_unique_chars()`` from 4.5.10 on.
+
+    ``_BaseModelCleanMixin.clean()`` calls it on every version; this supplies the
+    method and the ``save()`` hook that 4.5.10+ ``BaseModel`` has built in.
+    """
+
+    class Meta:
+        abstract = True
+
+    def _coerce_nullable_unique_chars(self):
+        # Mirrors BaseModel's 4.5.10+ coercion of blank unique nullable CharFields to NULL.
+        for field in self._meta.concrete_fields:
+            if (
+                isinstance(field, models.CharField)
+                and field.null
+                and field.unique
+                and getattr(self, field.attname, None) == ''
+            ):
+                setattr(self, field.attname, None)
+
+    def save(self, *args, **kwargs):
+        self._coerce_nullable_unique_chars()
+        super().save(*args, **kwargs)
+
+
+_custom_object_compat_bases = (
+    () if hasattr(BaseModel, '_coerce_nullable_unique_chars') else (_NullableUniqueCharsCompatMixin,)
+)
+
+
+class _BaseModelCleanMixin(models.Model):
+    """Stand-in for ``BaseModel.clean()``; must sit directly before ``BaseModel`` in the bases.
+
+    ``BaseModel.clean()`` validates every GenericForeignKey, but it can't honour
+    ``full_clean(exclude=...)`` and it raises AttributeError when the stored content
+    type has no installed model (an uninstalled plugin). Polymorphic Object fields
+    are GFKs, and the UI forms always exclude their backing columns (the pickers are
+    separate ``<name>__ct`` / ``<name>__obj`` form fields; hidden fields have none),
+    so a stale reference would key a ValidationError to a column the form doesn't
+    have and 500 the edit page.
+
+    ``clean()`` therefore skips ``BaseModel.clean()`` and repeats what it does --
+    nullable-unique coercion and GFK validation -- with the exclude list captured
+    by ``full_clean()``. Keep this in step with ``BaseModel.clean()`` upstream.
+
+    Deleting a referenced object leaves the GFK columns pointing at it (there is no
+    DB-level FK), so a saved row can hold a stale reference through no fault of the
+    caller. Only a reference that differs from the saved row is validated; bulk
+    edit, scripts and API PATCH of unrelated fields therefore leave an existing
+    stale reference as it is instead of failing on a column they never touched.
+    """
+
+    class Meta:
+        abstract = True
+
+    def full_clean(self, exclude=None, **kwargs):
+        self._clean_exclude = set(exclude or ())
+        try:
+            super().full_clean(exclude=exclude, **kwargs)
+        finally:
+            self.__dict__.pop('_clean_exclude', None)
+
+    def clean(self):
+        # Skip BaseModel.clean() (see class docstring); the rest of the MRO still runs.
+        super(BaseModel, self).clean()
+        self._coerce_nullable_unique_chars()
+        self._clean_generic_foreign_keys(getattr(self, '_clean_exclude', ()))
+
+    def _clean_generic_foreign_keys(self, exclude):
+        gfk_fields = [
+            field
+            for field in self._meta.private_fields
+            if isinstance(field, GenericForeignKey) and field.ct_field not in exclude and field.fk_field not in exclude
+        ]
+        if not gfk_fields:
+            return
+        stored = self._stored_gfk_values(gfk_fields)
+        errors = {}
+        for field in gfk_fields:
+            ct_id = getattr(self, self._meta.get_field(field.ct_field).attname, None)
+            fk_value = getattr(self, field.fk_field, None)
+            if stored is not None and stored[field.name] == (ct_id, fk_value):
+                continue  # Unchanged since the row was saved; see class docstring.
+            if ct_id is None and fk_value is not None:
+                errors[field.ct_field] = _('This field cannot be null.')
+                continue
+            if fk_value is None and ct_id is not None:
+                errors[field.fk_field] = _('This field cannot be null.')
+                continue
+            if ct_id is None:
+                continue
+            try:
+                model = field.get_content_type(id=ct_id, using=self._state.db).model_class()
+            except ContentType.DoesNotExist:
+                model = None
+            if model is None:
+                errors[field.ct_field] = _('The referenced object type is not installed.')
+                continue
+            # Existence by PK only: for a custom object target, model_class() is main's class, whose
+            # column set may not match the active branch's schema, so selecting its columns can fail.
+            if not model._default_manager.filter(pk=fk_value).exists():
+                errors[field.fk_field] = _('Related object not found using the provided value: {value}.').format(
+                    value=fk_value
+                )
+        if errors:
+            raise ValidationError(errors)
+
+    def _stored_gfk_values(self, gfk_fields):
+        """Return ``{gfk name: (content type ID, object ID)}`` as saved, or ``None`` for an unsaved instance."""
+        if self._state.adding or self.pk is None:
+            return None
+        columns = []
+        for field in gfk_fields:
+            columns += [self._meta.get_field(field.ct_field).attname, field.fk_field]
+        row = type(self)._base_manager.db_manager(self._state.db).filter(pk=self.pk).values_list(*columns).first()
+        if row is None:
+            return None
+        return {field.name: (row[i], row[i + 1]) for i, field in zip(range(0, len(row), 2), gfk_fields)}
+
+
 class CustomObject(
     OwnerMixin,
     BookmarksMixin,
@@ -856,6 +976,9 @@ class CustomObject(
     NotificationsMixin,
     EventRulesMixin,
     TagsMixin,
+    *_custom_object_compat_bases,
+    _BaseModelCleanMixin,
+    BaseModel,
 ):
     """
     Base class for dynamically generated custom object models.
@@ -882,10 +1005,24 @@ class CustomObject(
         _generated_table_model (property): Indicates this is a generated table model
     """
 
-    objects = RestrictedQuerySet.as_manager()
-
     class Meta:
         abstract = True
+
+    def _coerce_nullable_unique_chars(self):
+        """Store blank unique text values as NULL so two blank objects don't collide.
+
+        ``BaseModel`` only coerces CharFields; longtext fields are TextFields, so
+        extend the check to those too.
+        """
+        super()._coerce_nullable_unique_chars()
+        for field in self._meta.concrete_fields:
+            if (
+                isinstance(field, models.TextField)
+                and field.null
+                and field.unique
+                and getattr(self, field.attname, None) == ''
+            ):
+                setattr(self, field.attname, None)
 
     @classmethod
     def resolve_field_aliases(cls, data):
@@ -3124,6 +3261,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         self._original_on_delete_behavior = self.on_delete_behavior
         self._original_array_element_type = self.array_element_type
         self._original_array_tuple_size = self.array_tuple_size
+        self._original_search_weight = self.search_weight
 
     def __str__(self):
         return self.label or self.name.replace("_", " ").capitalize()
@@ -4453,16 +4591,17 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 _unwire_polymorphic_reverse_descriptors(self, related_name=old_name)
 
         # Reindex all objects of this type if search indexing was affected.
-        # self.original (backed by _original) is only set by from_db; the
-        # `not is_new` branch implies _state.adding is False, which implies
-        # the row came from the DB, so _original is guaranteed to exist.
+        # Compare against the __init__ snapshot: ``_original`` is only set by
+        # from_db(), so an instance created in-process and saved again has none.
         if is_new:
             needs_reindex = self.search_weight > 0
         else:
-            needs_reindex = self.search_weight != self.original.search_weight
+            needs_reindex = self.search_weight != self._original_search_weight
         if needs_reindex:
             _cot_id = self.custom_object_type_id
             transaction.on_commit(lambda: ReindexCustomObjectTypeJob.enqueue(cot_id=_cot_id))
+        # Refresh the snapshot so a later save of this instance compares against this one.
+        self._original_search_weight = self.search_weight
 
     def delete(self, *args, **kwargs):
         # Dropping the column would drop the database constraint anyway; delete the

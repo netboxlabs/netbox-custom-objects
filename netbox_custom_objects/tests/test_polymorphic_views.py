@@ -257,6 +257,46 @@ class PolymorphicFieldUITest(CustomObjectsTestCase, TestCase):
         obj.refresh_from_db()
         self.assertIsNone(obj.poly_obj)
 
+    def test_submit_edit_form_hidden_poly_obj_with_stale_target(self):
+        """A hidden polymorphic field pointing at a deleted object must not block editing (#771).
+
+        The form has no field for the GFK backing columns, so a validation error keyed
+        to them would raise ValueError in add_error() and the edit page would 500.
+        """
+        self.gfk_field.ui_editable = "hidden"
+        self.gfk_field.save()
+        model = self.cot.get_model()
+        obj = model.objects.create(name="hidden-stale")
+        obj.poly_obj = self.site2
+        obj.save()
+        site2_pk = self.site2.pk
+        self.site2.delete()
+
+        data = {"name": "hidden-stale-renamed", "csrfmiddlewaretoken": "fake"}
+        response = self.client.post(self._edit_url(obj.pk), data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.redirect_chain, "edit form was re-rendered with errors")
+        obj = model.objects.get(pk=obj.pk)
+        self.assertEqual(obj.name, "hidden-stale-renamed")
+        # The hidden field is left as it was.
+        self.assertEqual(obj.poly_obj_object_id, site2_pk)
+
+    def test_submit_edit_form_hidden_poly_obj_with_null_content_type(self):
+        """As above when the target type was deleted: content type NULL, object ID still set (#771)."""
+        self.gfk_field.ui_editable = "hidden"
+        self.gfk_field.save()
+        model = self.cot.get_model()
+        obj = model.objects.create(name="hidden-half")
+        model.objects.filter(pk=obj.pk).update(poly_obj_content_type=None, poly_obj_object_id=42)
+
+        data = {"name": "hidden-half-renamed", "csrfmiddlewaretoken": "fake"}
+        response = self.client.post(self._edit_url(obj.pk), data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.redirect_chain, "edit form was re-rendered with errors")
+        obj = model.objects.get(pk=obj.pk)
+        self.assertEqual(obj.name, "hidden-half-renamed")
+        self.assertEqual(obj.poly_obj_object_id, 42)
+
     def test_submit_edit_form_sets_polymorphic_m2m(self):
         """POST the edit form with M2M sub-fields saves values across types."""
         obj = self.model.objects.create(name="submit-m2m-obj")
@@ -373,6 +413,37 @@ class PolymorphicFieldUITest(CustomObjectsTestCase, TestCase):
         self.assertNotIn(response.status_code, [400, 403, 500])
         self.assertIn(self.site1, obj1.poly_multi.all())
         self.assertIn(self.site1, obj2.poly_multi.all())
+
+    def test_bulk_edit_leaves_stale_gfk_alone(self):
+        """Bulk editing an unrelated field must not fail on a GFK whose target is gone (#771).
+
+        BulkEditView._update_objects() calls full_clean() with no exclude, so a stale
+        reference would abort the whole operation.
+        """
+        stale_site = self.model.objects.create(name="bulk-stale-site")
+        stale_site.poly_obj = self.site2
+        stale_site.save()
+        site2_pk = self.site2.pk
+        self.site2.delete()
+        stale_type = self.model.objects.create(name="bulk-stale-type")
+        self.model.objects.filter(pk=stale_type.pk).update(poly_obj_content_type=None, poly_obj_object_id=42)
+
+        data = {
+            "pk": [stale_site.pk, stale_type.pk],
+            "_apply": "1",
+            "name": "bulk-renamed",
+            "csrfmiddlewaretoken": "fake",
+        }
+        response = self.client.post(self._bulk_edit_url(), data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.redirect_chain, "bulk edit form was re-rendered with errors")
+        stale_site.refresh_from_db()
+        stale_type.refresh_from_db()
+        self.assertEqual(stale_site.name, "bulk-renamed")
+        self.assertEqual(stale_type.name, "bulk-renamed")
+        # The stale references are left as they were.
+        self.assertEqual(stale_site.poly_obj_object_id, site2_pk)
+        self.assertEqual(stale_type.poly_obj_object_id, 42)
 
     # --- Detail view ---
 
