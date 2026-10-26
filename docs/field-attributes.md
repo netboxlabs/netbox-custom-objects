@@ -20,6 +20,9 @@ The following attributes are available when creating or editing a Custom Object 
 | `object` | Reference to a single object (built-in NetBox object or Custom Object) |
 | `multiobject` | Reference to multiple objects of the same type |
 | `coordinates` | A geographic latitude/longitude pair (with a map link) |
+| `array` | A list of values of one type, or of fixed-size tuples such as (x, y, z) points |
+| `color` | An RGB color, shown as a swatch |
+| `mac_address` | An EUI-48 MAC address |
 
 ## Common Attributes
 
@@ -31,7 +34,7 @@ The following attributes are available when creating or editing a Custom Object 
 | `Description` | Help text shown below the field in forms. |
 | `Group name` | Fields sharing the same group name are displayed together. |
 | `Required` | When enabled, a value must be provided when creating or editing an object. |
-| `Must be unique` | When enabled, no two objects of this type may share the same value for this field. Not supported for `boolean` or `multiobject` fields. |
+| `Must be unique` | When enabled, no two objects of this type may share the same value for this field. Not supported for `boolean` or `multiobject` fields. To make a combination of fields unique, add a [constraint](index.md#adding-constraints-to-the-custom-object-type) instead. |
 | `Primary name field` | When enabled, this field's value is used as the object's display name. |
 | `Context field` | When enabled, this field's value is shown as context when this object is referenced by another object. |
 | `Default` | Default value pre-populated when creating a new object. Must be a valid JSON value. |
@@ -112,6 +115,70 @@ Behaviour:
 - **Map link.** Detail views render the coordinates with a **Map** button that opens the location
   using NetBox's `MAPS_URL` configuration parameter (Google Maps by default).
 - `Must be unique` and `Default` are not supported for `coordinates` fields.
+
+## Array Fields
+
+Field type: `array`
+
+An `array` field stores a list of values of one type in a single PostgreSQL array column. Set
+**Tuple size** to store a list of fixed-size tuples instead, such as (x, y, z) points.
+
+| Attribute | Description |
+|-----------|-------------|
+| `Element type` | The type of each value: `Text`, `Integer`, `Decimal`, `Boolean`, `Date` or `Date & time`. Required. Cannot be changed after the field is created. |
+| `Tuple size` | Store a list of tuples of this many values (at least 2), e.g. `3` for (x, y, z) points. Leave blank for a list of single values. Cannot be changed after the field is created. |
+| `Minimum length` / `Maximum length` | The minimum and maximum number of items (values, or tuples). |
+| `Validation regex` | For text elements: a regular expression every value must match. |
+| `Minimum value` / `Maximum value` | For integer and decimal elements: the range every value must fall in. |
+
+For example, a `coordinates` field with element type `Integer`, tuple size `3` and minimum length
+`2` accepts `[[0, 0, 0], [10, 0, 5]]`, and rejects `[[0, 0]]` (a tuple of the wrong size) and
+`[[0, 0, 0]]` (too few items).
+
+Behaviour:
+
+- **Forms and CSV import.** Enter the value as JSON, e.g. `[1, 2, 3]` or `[[0, 0, 0], [10, 0, 5]]`;
+  dates and times as strings, e.g. `["2026-01-01"]`. In a CSV file, quote the JSON as usual.
+- **REST API and GraphQL.** The value is a JSON list (of lists, for tuples).
+- **Values.** Each value must be of the element type: an integer array rejects `1.5` and `true`
+  rather than storing `1`. An empty list `[]` is stored as no value (`null`), so a required field
+  rejects it, and the minimum length applies only to a non-empty list.
+- **Display.** Lists show as `1, 2, 3`, and tuples as `(0, 0, 0), (10, 0, 5)`.
+- **Filtering.** `?<name>=1,3` matches objects whose array contains all of the comma-separated
+  values (for tuples, anywhere in any tuple), and `?<name>__len=2` matches by the number of items.
+  Quick search matches objects whose array contains the searched value.
+- A field's type cannot be changed to or from `array`, and arrays can't be included in
+  [constraints](index.md#adding-constraints-to-the-custom-object-type).
+
+## Color Fields
+
+Field type: `color`
+
+A `color` field stores an RGB color as six lowercase hexadecimal digits without a leading `#`
+(e.g. `00ff00`), the same format as NetBox's own color fields such as a tag's color.
+
+- **Forms.** The edit form offers NetBox's named colors. A value set through the REST API or CSV
+  import that isn't one of them stays selectable when the object is edited.
+- **Default.** The field's default is picked from the same named colors, and the field list shows
+  it the same way.
+- **Display.** Detail views and tables show a color swatch, like NetBox's own color fields; CSV
+  export writes `#rrggbb`, which CSV import accepts along with uppercase digits.
+- **Filtering.** Filters match whole values, e.g. `?color=00ff00&color=ff0000`.
+
+## MAC Address Fields
+
+Field type: `mac_address`
+
+A `mac_address` field stores an EUI-48 MAC address in a PostgreSQL `macaddr` column, using NetBox's
+own `MACAddressField`, as an interface's MAC address does.
+
+- **Input.** Forms, CSV import and the REST API accept any common format (`00:1a:2b:3c:4d:5e`,
+  `00-1A-2B-3C-4D-5E`, `001a.2b3c.4d5e`, `001a2b3c4d5e`) and store the address itself, so every
+  format of the same address is equal for uniqueness, constraints and filters.
+- **Display.** Values are shown and returned as uppercase, colon-separated hex
+  (`00:1A:2B:3C:4D:5E`). The field's default is typed as plain text and shown the same way.
+- **Filtering.** `?mac=00:1a:2b:3c:4d:5e&mac=...` matches whole addresses in any format, and the
+  usual suffixes such as `__ic` match part of one. Quick search matches part of an address.
 
 ## URL Fields
 

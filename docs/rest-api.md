@@ -74,6 +74,8 @@ Available `type` values are:
 | `multiselect` | Multiple selections from a choice set |
 | `object` | Reference to a single object |
 | `multiobject` | Reference to multiple objects of the same type |
+| `color` | RGB color as six lowercase hexadecimal digits, e.g. `00ff00` |
+| `mac_address` | EUI-48 MAC address; accepted in any common format, returned as `00:1A:2B:3C:4D:5E` |
 
 Common attributes available on all field types:
 
@@ -139,6 +141,32 @@ Field types: `integer`, `decimal`
 |-----------|-------------|
 | `validation_minimum` | Minimum allowed value. |
 | `validation_maximum` | Maximum allowed value. |
+
+### Array Fields
+
+Field type: `array`
+
+```json
+{
+  "custom_object_type": 9,
+  "name": "coordinates",
+  "label": "Coordinates",
+  "type": "array",
+  "array_element_type": "integer",
+  "array_tuple_size": 3,
+  "array_min_length": 2
+}
+```
+
+| Attribute | Description |
+|-----------|-------------|
+| `array_element_type` | `text`, `integer`, `decimal`, `boolean`, `date` or `datetime`. Required. Cannot be changed after creation. |
+| `array_tuple_size` | Store a list of tuples of this many values (at least 2); `null` for a list of single values. Cannot be changed after creation. |
+| `array_min_length`, `array_max_length` | Minimum and maximum number of items (at least 1 when set). |
+| `validation_regex` | For `text` elements: a regular expression every value must match. |
+| `validation_minimum`, `validation_maximum` | For `integer` and `decimal` elements: the allowed range of every value. |
+
+An object's value is a JSON list, e.g. `"coordinates": [[0, 0, 0], [10, 0, 5]]`.
 
 ### Choice Fields
 
@@ -234,6 +262,47 @@ A polymorphic `object` or `multiobject` field can reference objects of multiple 
 
 !!! note
     The `is_polymorphic` flag and the set of allowed `related_object_types` cannot be changed after the field is created. To convert between a polymorphic and a non-polymorphic field, delete and recreate the field.
+
+## Custom Object Type Constraints
+
+Require a combination of field values to be unique by creating a constraint with a POST request to `/api/plugins/custom-objects/custom-object-type-constraints/`. `fields` lists the IDs of the fields it covers:
+
+```json
+{
+  "custom_object_type": 9,
+  "name": "vendor_serial",
+  "fields": [41, 42],
+  "case_insensitive": false,
+  "nulls_distinct": true
+}
+```
+
+| Attribute | Required | Description |
+|---|---|---|
+| `custom_object_type` | yes | ID of the Custom Object Type. |
+| `name` | yes | Internal name. Lowercase alphanumeric with underscores only; unique within the Custom Object Type. |
+| `type` | no | `unique` (the default) or `check`. |
+| `fields` | for `unique` | IDs of the fields whose combined values must be unique: at least two, or one when `case_insensitive` is `true` or there's a `condition`. Omitted or `[]` for `check`. Responses list each field's `id`, `url`, `name` and `schema_id`. |
+| `case_insensitive` | no | For `unique`: compare `text`, `longtext` and `url` fields without regard to case. Default: `false`. |
+| `nulls_distinct` | no | For `unique`: when `true`, objects that leave any constrained field empty never conflict. Default: `true`. |
+| `condition` | no | Apply the constraint only to objects matching all of these predicates, e.g. `[{"field": 43, "lookup": "isnull", "value": true}]`. `field` is a field ID (responses show the brief field object); `lookup` is `exact`, `n` (does not equal, or is empty), `in` (`value` is a list), `isnull` (`value` is `true` or `false`), or `gt`, `gte`, `lt` or `lte` (integer, decimal, date and datetime fields). A `value` of `{"field": <ID>}` compares with another field of the same kind. Object fields can only be tested with `isnull`. Default: `[]`. |
+| `rule` | for `check` | Predicates, in the same form as `condition`, that every object (matching the condition, if any) must satisfy. A comparison passes when a value it compares is empty. |
+| `error_message` | no | For `check`: the error returned when an object breaks the rule. Default: a description of the rule. |
+| `description` | no | A short description. |
+
+A check constraint names its fields in its rule instead:
+
+```json
+{
+  "custom_object_type": 9,
+  "name": "end_after_start",
+  "type": "check",
+  "rule": [{"field": 45, "lookup": "gt", "value": {"field": 44}}],
+  "error_message": "The end date must be after the start date."
+}
+```
+
+Creating or changing a constraint returns `400 Bad Request` if existing objects already violate it. Writes to custom objects that would violate a constraint also return `400 Bad Request`.
 
 ## Custom Objects
 

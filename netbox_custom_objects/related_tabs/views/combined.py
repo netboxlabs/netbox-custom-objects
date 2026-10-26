@@ -44,7 +44,7 @@ _CUSTOM_OBJECTS_APP = 'netbox_custom_objects'
 _CO_BASE_TEMPLATE = 'netbox_custom_objects/customobject.html'
 
 # Single source for the tab label/weight (factory, CO->CO view, registry, template tag).
-COMBINED_LABEL = 'Custom Objects'
+COMBINED_LABEL = _('Custom Objects')
 COMBINED_WEIGHT = 2000
 
 
@@ -588,7 +588,7 @@ def make_co_combined_view(label=COMBINED_LABEL, weight=COMBINED_WEIGHT):
     resolves the target CustomObjectType from the URL slug at request time, so it
     serves any CustomObjectType — including ones created after startup. Its URL is
     injected by ``register_tabs`` and the nav-link is rendered live by the
-    ``custom_objects_tab_link`` template tag.
+    ``custom_object_tabs`` template tag.
     """
 
     class _COCombinedTabView(ConditionalLoginRequiredMixin, View):

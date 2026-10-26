@@ -19,7 +19,7 @@ from unittest import mock
 
 from django.apps import apps as django_apps
 from django.urls import reverse
-from django.test import TransactionTestCase
+from django.test import TestCase
 from rest_framework import status
 from rest_framework.test import APIClient
 
@@ -29,17 +29,17 @@ from utilities.testing import create_test_user
 
 import netbox_custom_objects as nco_pkg
 from netbox_custom_objects.schema.exporter import export_cot
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
 
-from ..base import CustomObjectsTestCase, TransactionCleanupMixin, create_api_token
+from ..base import CustomObjectsTestCase, create_api_token
 
 
 # ---------------------------------------------------------------------------
 # Base for schema API tests
 # ---------------------------------------------------------------------------
 
-class _SchemaAPIBase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
-    """Base class providing an authenticated API client and helper shortcuts."""
+class _SchemaAPIMixin(CustomObjectsTestCase):
+    """An authenticated API client and helper shortcuts, for a TestCase or TransactionTestCase."""
 
     def setUp(self):
         super().setUp()
@@ -57,14 +57,22 @@ class _SchemaAPIBase(TransactionCleanupMixin, CustomObjectsTestCase, Transaction
         perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
 
     def _grant_apply_permissions(self):
-        """Add and change on types, plus add, change and delete on their fields."""
+        """Add and change on types, plus add, change and delete on their fields and constraints."""
         for model, actions in (
             (CustomObjectType, ['add', 'change']),
             (CustomObjectTypeField, ['add', 'change', 'delete']),
+            (CustomObjectTypeConstraint, ['add', 'change', 'delete']),
         ):
             perm = ObjectPermission.objects.create(name=f'schema_apply_{model._meta.model_name}', actions=actions)
             perm.users.add(self.user)
             perm.object_types.add(ObjectType.objects.get_for_model(model))
+
+    def _grant(self, model, actions, constraints=None):
+        perm = ObjectPermission.objects.create(
+            name=f'{model._meta.model_name}-{"-".join(actions)}', actions=actions, constraints=constraints,
+        )
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(model))
 
     @property
     def preview_url(self):
@@ -82,6 +90,10 @@ class _SchemaAPIBase(TransactionCleanupMixin, CustomObjectsTestCase, Transaction
         # next_schema_id stores the *last assigned* ID; +1 is the next available one,
         # mirroring the auto-assign logic in CustomObjectTypeField.save().
         return cot.next_schema_id + 1
+
+
+class _SchemaAPIBase(_SchemaAPIMixin, TestCase):
+    """Base class for the schema API tests."""
 
 
 # ---------------------------------------------------------------------------
@@ -375,6 +387,22 @@ class SchemaApplyTestCase(_SchemaAPIBase):
         resp = self.client.post(self.apply_url, data=self._apply_body(schema_doc), format="json")
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(resp.data["error"], "unresolvable_reference")
+
+    def test_apply_invalid_constraint_field_reference_returns_400(self):
+        cot = self.create_custom_object_type(name='applyrule', slug='apply-rule')
+        low = self.create_custom_object_type_field(cot, name='low', type='integer')
+        high = self.create_custom_object_type_field(cot, name='high', type='integer')
+        cot.refresh_from_db()
+        type_def = export_cot(cot)
+        for ref in ([low.schema_id], True):
+            with self.subTest(ref=ref):
+                rule = [{"field": high.schema_id, "lookup": "gt", "value": {"field": ref}}]
+                type_def["constraints"] = [{"name": "high_above_low", "type": "check", "rule": rule}]
+                schema_doc = {"schema_version": "1", "types": [type_def]}
+                resp = self.client.post(self.apply_url, data=self._apply_body(schema_doc), format="json")
+                self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertEqual(resp.data["error"], "invalid_constraint")
+        self.assertFalse(cot.constraints.exists())
 
     def test_apply_unresolvable_choice_set_returns_400(self):
         cot = self.create_custom_object_type(name='applycsfail', slug='apply-cs-fail')

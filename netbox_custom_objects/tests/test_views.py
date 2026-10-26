@@ -2,22 +2,27 @@
 Tests for all UI views.
 """
 import uuid
+from datetime import date
+from decimal import Decimal
 from unittest import skipUnless
 
-from core.models import Job
+from core.choices import ObjectChangeActionChoices
+from core.models import Job, ObjectChange
+from dcim.models import Site
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection
 from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
-from extras.models import CustomFieldChoiceSet
+from extras.models import CustomFieldChoiceSet, JournalEntry
 from netbox.context import current_request, events_queue, query_cache
 from netbox.jobs import AsyncViewJob
 from users.models import ObjectPermission
 from utilities.request import copy_safe_request
-from utilities.testing import ViewTestCases, create_test_user
+from utilities.testing import ViewTestCases, create_test_user, post_data
 
 from netbox_custom_objects import views
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
 from netbox_custom_objects.utilities import is_branching_enabled
 from .base import CustomObjectsTestCase
 from core.models.object_types import ObjectType
@@ -52,27 +57,69 @@ class CustomObjectTypeViewTestCase(
 
         # Create test custom object types
         cls.custom_object_type1 = CustomObjectType.objects.create(
-            name="TestObject1",
+            name="test_object_1",
             description="First test custom object type",
             verbose_name_plural="Test Objects 1",
             slug="test-objects-1",
         )
 
         cls.custom_object_type2 = CustomObjectType.objects.create(
-            name="TestObject2",
+            name="test_object_2",
             description="Second test custom object type",
             verbose_name_plural="Test Objects 2",
             slug="test-objects-2",
+        )
+
+        cls.custom_object_type3 = CustomObjectType.objects.create(
+            name="test_object_3",
+            verbose_name_plural="Test Objects 3",
+            slug="test-objects-3",
         )
 
         cls.form_data = {
             'name': 'custom_object_type_1',
             'slug': 'custom-object-type-1s',
         }
+        cls.csv_data = (
+            "name,slug,description",
+            "imported_1,imported-1s,First import",
+            "imported_2,imported-2s,Second import",
+            "imported_3,imported-3s,Third import",
+        )
+        cls.csv_update_data = (
+            "id,description",
+            f"{cls.custom_object_type1.pk},Updated 1",
+            f"{cls.custom_object_type2.pk},Updated 2",
+            f"{cls.custom_object_type3.pk},Updated 3",
+        )
+        cls.bulk_edit_data = {"description": "Bulk edited"}
 
     def setUp(self):
         """Set up test data."""
         super().setUp()
+
+    def test_create_object_with_permission(self):
+        """
+        As the generic test, except that creating a type records two changes: the
+        post_save handler saves it again to assign its object_type.
+        """
+        obj_perm = ObjectPermission(name="Test permission", actions=["add"])
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        obj_perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+        self.assertHttpStatus(self.client.get(self._get_url("add")), 200)
+
+        data = {**self.form_data, "changelog_message": "Created"}
+        self.assertHttpStatus(self.client.post(self._get_url("add"), post_data(data)), 302)
+        instance = CustomObjectType.objects.get(slug=self.form_data["slug"])
+        self.assertInstanceEqual(instance, self.form_data)
+        create, update = ObjectChange.objects.filter(
+            changed_object_type=ContentType.objects.get_for_model(instance), changed_object_id=instance.pk
+        ).order_by("pk")
+        self.assertEqual(create.action, ObjectChangeActionChoices.ACTION_CREATE)
+        self.assertEqual(create.message, "Created")
+        self.assertEqual(update.action, ObjectChangeActionChoices.ACTION_UPDATE)
+        self.assertEqual(update.postchange_data["object_type"], instance.object_type_id)
 
     def _get_base_url(self):
         """
@@ -96,39 +143,15 @@ class CustomObjectTypeViewTestCase(
 
         return reverse(url_format.format(action), kwargs={'pk': instance.pk})
 
-    def test_create_object_with_permission(self):
-        ...
 
-    def test_create_object_with_constrained_permission(self):
-        ...
-
-    def test_bulk_edit_objects_with_permission(self):
-        ...
-
-    def test_bulk_edit_objects_with_constrained_permission(self):
-        ...
-
-    def test_bulk_update_objects_with_permission(self):
-        ...
-
-    def test_bulk_update_objects_without_change_permission(self):
-        ...
-
-    def test_bulk_import_objects_with_permission(self):
-        ...
-
-    def test_bulk_import_objects_with_constrained_permission(self):
-        ...
-
-    def test_bulk_delete_objects_with_permission(self):
-        ...
-
-    def test_bulk_delete_objects_with_constrained_permission(self):
-        ...
-
-
-class CustomObjectTypeFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.PrimaryObjectViewTestCase):
-    """Test cases for CustomObjectTypeField views."""
+class CustomObjectTypeFieldViewTestCase(
+    CustomObjectsTestCase,
+    ViewTestCases.GetObjectChangelogViewTestCase,
+    ViewTestCases.CreateObjectViewTestCase,
+    ViewTestCases.EditObjectViewTestCase,
+    ViewTestCases.DeleteObjectViewTestCase,
+):
+    """Add, edit and delete views for fields, which are listed and shown on their type's page."""
 
     model = CustomObjectTypeField
 
@@ -197,65 +220,158 @@ class CustomObjectTypeFieldViewTestCase(CustomObjectsTestCase, ViewTestCases.Pri
 
         return reverse(url_format.format(action), kwargs={'pk': instance.pk})
 
-    def test_list_objects_anonymous(self):
-        ...
 
-    def test_list_objects_with_permission(self):
-        ...
+class CustomObjectTypeConstraintViewTestCase(
+    CustomObjectsTestCase,
+    ViewTestCases.GetObjectChangelogViewTestCase,
+    ViewTestCases.CreateObjectViewTestCase,
+    ViewTestCases.EditObjectViewTestCase,
+    ViewTestCases.DeleteObjectViewTestCase,
+):
+    """Add, edit and delete views for constraints, plus the type's Constraints tab."""
 
-    def test_list_objects_without_permission(self):
-        ...
+    model = CustomObjectTypeConstraint
+    # The form takes field IDs and names; the model stores schema IDs (checked separately).
+    validation_excluded_fields = ["field_schema_ids", "condition", "rule"]
 
-    def test_list_objects_with_constrained_permission(self):
-        ...
+    @classmethod
+    def setUpTestData(cls):
+        cls.custom_object_type = CustomObjectType.objects.create(name="asset", slug="assets")
+        cls.f1, cls.f2, cls.f3, cls.f4 = (
+            CustomObjectTypeField.objects.create(custom_object_type=cls.custom_object_type, name=name, type="text")
+            for name in ("vendor", "serial", "model", "tag")
+        )
+        for name, fields in (("c1", (cls.f1, cls.f2)), ("c2", (cls.f1, cls.f3)), ("c3", (cls.f2, cls.f3))):
+            CustomObjectTypeConstraint.objects.create(
+                custom_object_type=cls.custom_object_type, name=name, field_schema_ids=[f.schema_id for f in fields]
+            )
+        cls.form_data = {
+            "custom_object_type": cls.custom_object_type.pk,
+            "name": "c4",
+            "type": "unique",
+            "field_schema_ids": [cls.f1.pk, cls.f4.pk],
+            "case_insensitive": True,
+            "nulls_distinct": True,
+            "condition": '[{"field": "serial", "lookup": "isnull", "value": false}]',
+        }
 
-    def test_get_object_with_permission(self):
-        ...
+    def _get_base_url(self):
+        return 'plugins:{}:{}_{{}}'.format(self.model._meta.app_label, self.model._meta.model_name)
 
-    def test_get_object_with_constrained_permission(self):
-        ...
+    def test_create_object_with_permission(self):
+        super().test_create_object_with_permission()
+        constraint = CustomObjectTypeConstraint.objects.get(name="c4")
+        self.assertCountEqual(constraint.field_schema_ids, [self.f1.schema_id, self.f4.schema_id])
+        self.assertEqual(constraint.condition, [{"field": self.f2.schema_id, "lookup": "isnull", "value": False}])
 
-    def test_get_object_changelog(self):
-        ...
+    def test_condition_uses_field_names(self):
+        self.user.is_superuser = True
+        self.user.save()
+        constraint = CustomObjectTypeConstraint.objects.create(
+            custom_object_type=self.custom_object_type, name="c5", field_schema_ids=[self.f4.schema_id],
+            condition=[{"field": self.f3.schema_id, "lookup": "isnull", "value": True}],
+        )
+        url = reverse("plugins:netbox_custom_objects:customobjecttypeconstraint_edit", kwargs={"pk": constraint.pk})
+        self.assertContains(self.client.get(url), "&quot;field&quot;: &quot;model&quot;")
+        tab_url = reverse(
+            "plugins:netbox_custom_objects:customobjecttype_constraints", kwargs={"pk": self.custom_object_type.pk}
+        )
+        self.assertContains(self.client.get(tab_url), "Model is empty")
 
-    def test_export_objects(self):
-        ...
+        response = self.client.post(url, {
+            "custom_object_type": self.custom_object_type.pk, "name": "c5", "type": "unique",
+            "field_schema_ids": [self.f4.pk], "nulls_distinct": True,
+            "condition": '[{"field": "nope", "lookup": "isnull", "value": true}]',
+        })
+        self.assertHttpStatus(response, 200)
+        self.assertContains(response, "Unknown field(s): nope")
 
-    def test_export_objects_anonymous(self):
-        ...
+        response = self.client.post(url, {
+            "custom_object_type": self.custom_object_type.pk, "name": "c5", "type": "unique",
+            "field_schema_ids": [self.f4.pk], "nulls_distinct": True,
+            "condition": '[{"field": ["model"], "lookup": "isnull", "value": true}]',
+        })
+        self.assertHttpStatus(response, 200)
+        self.assertContains(response, "Unknown field(s): [&#x27;model&#x27;]")
 
-    def test_bulk_edit_objects_with_permission(self):
-        ...
+    def test_check_rule_uses_field_names(self):
+        self.user.is_superuser = True
+        self.user.save()
+        add_url = reverse("plugins:netbox_custom_objects:customobjecttypeconstraint_add")
+        response = self.client.post(f"{add_url}?custom_object_type={self.custom_object_type.pk}", {
+            # The unique-only checkboxes are left unticked.
+            "custom_object_type": self.custom_object_type.pk, "name": "c6", "type": "check",
+            "rule": '[{"field": "serial", "lookup": "n", "value": {"field": "model"}}]',
+            "error_message": "Serial and model must differ.",
+        })
+        self.assertHttpStatus(response, 302)
+        constraint = CustomObjectTypeConstraint.objects.get(name="c6")
+        self.assertEqual(constraint.field_schema_ids, [])
+        self.assertEqual(
+            constraint.rule, [{"field": self.f2.schema_id, "lookup": "n", "value": {"field": self.f3.schema_id}}]
+        )
 
-    def test_bulk_edit_objects_without_permission(self):
-        ...
+        url = reverse("plugins:netbox_custom_objects:customobjecttypeconstraint_edit", kwargs={"pk": constraint.pk})
+        self.assertContains(self.client.get(url), "&quot;field&quot;: &quot;model&quot;")
+        tab_url = reverse(
+            "plugins:netbox_custom_objects:customobjecttype_constraints", kwargs={"pk": self.custom_object_type.pk}
+        )
+        self.assertContains(self.client.get(tab_url), "Serial does not equal Model (or is empty)")
 
-    def test_bulk_edit_objects_with_constrained_permission(self):
-        ...
+        response = self.client.post(url, {
+            "custom_object_type": self.custom_object_type.pk, "name": "c6", "type": "check", "nulls_distinct": True,
+            "rule": '[{"field": "serial", "lookup": "n", "value": {"field": "nope"}}]',
+        })
+        self.assertHttpStatus(response, 200)
+        self.assertContains(response, "Unknown field(s): nope")
 
-    def test_bulk_update_objects_with_permission(self):
-        ...
+    def test_constraints_tab(self):
+        self.user.is_superuser = True
+        self.user.save()
+        url = reverse(
+            "plugins:netbox_custom_objects:customobjecttype_constraints", kwargs={"pk": self.custom_object_type.pk}
+        )
+        response = self.client.get(url)
+        self.assertHttpStatus(response, 200)
+        self.assertContains(response, "c1")
+        self.assertContains(response, "Vendor, Serial")
 
-    def test_bulk_update_objects_without_change_permission(self):
-        ...
+    def test_field_delete_page_lists_constraints(self):
+        self.user.is_superuser = True
+        self.user.save()
+        url = reverse("plugins:netbox_custom_objects:customobjecttypefield_delete", kwargs={"pk": self.f3.pk})
+        response = self.client.get(url)
+        self.assertHttpStatus(response, 200)
+        self.assertContains(response, "will also be deleted: c2, c3")
+        # The data-loss warning appears only when objects have a value for the field.
+        self.assertNotContains(response, "in use on")
+        self.custom_object_type.get_model().objects.create(model="m1")
+        self.assertContains(self.client.get(url), "in use on 1 Custom Objects")
 
-    def test_bulk_import_objects_with_permission(self):
-        ...
+    def test_delete_ignores_offsite_return_url(self):
+        self.user.is_superuser = True
+        self.user.save()
+        constraint = CustomObjectTypeConstraint.objects.get(name="c1")
+        cases = (
+            ("customobjecttypeconstraint_delete", constraint, constraint.get_absolute_url()),
+            ("customobjecttypefield_delete", self.f4, self.custom_object_type.get_absolute_url()),
+        )
+        for viewname, obj, expected in cases:
+            with self.subTest(viewname):
+                url = reverse(f"plugins:netbox_custom_objects:{viewname}", kwargs={"pk": obj.pk})
+                response = self.client.post(f"{url}?return_url=https://evil.example/", {"confirm": True})
+                self.assertRedirects(response, expected, fetch_redirect_response=False)
 
-    def test_bulk_import_objects_without_permission(self):
-        ...
-
-    def test_bulk_import_objects_with_constrained_permission(self):
-        ...
-
-    def test_bulk_delete_objects_without_permission(self):
-        ...
-
-    def test_bulk_delete_objects_with_permission(self):
-        ...
-
-    def test_bulk_delete_objects_with_constrained_permission(self):
-        ...
+    def test_custom_object_form_reports_duplicate(self):
+        self.user.is_superuser = True
+        self.user.save()
+        model = self.custom_object_type.get_model()
+        model.objects.create(vendor="acme", serial="1")
+        url = reverse("plugins:netbox_custom_objects:customobject_add", kwargs={"custom_object_type": "assets"})
+        response = self.client.post(url, {"vendor": "acme", "serial": "1"})
+        self.assertHttpStatus(response, 200)
+        self.assertContains(response, "already exists")
+        self.assertEqual(model.objects.count(), 1)
 
 
 class CustomObjectViewTestCase(
@@ -322,6 +438,26 @@ class CustomObjectViewTestCase(
             count=20
         )
 
+        cls.instance3 = cls.model.objects.create(
+            name="Test Instance 3",
+            description="Third test instance",
+            count=30
+        )
+
+        cls.csv_data = (
+            "name,description,count",
+            "Imported 1,First import,1",
+            "Imported 2,Second import,2",
+            "Imported 3,Third import,3",
+        )
+        cls.csv_update_data = (
+            "id,description,count",
+            f"{cls.instance1.pk},Updated 1,41",
+            f"{cls.instance2.pk},Updated 2,42",
+            f"{cls.instance3.pk},Updated 3,43",
+        )
+        cls.bulk_edit_data = {"count": 50}
+
     def setUp(self):
         """Set up test data."""
         super().setUp()
@@ -363,45 +499,6 @@ class CustomObjectViewTestCase(
             with self.subTest(tab):
                 self.assertHttpStatus(self.client.get(self._get_url(tab, self.instance1)), 200)
                 self.assertHttpStatus(self.client.get(self._get_url(tab, self.instance2)), 404)
-
-    def test_create_object_with_permission(self):
-        ...
-
-    def test_create_object_with_constrained_permission(self):
-        ...
-
-    def test_edit_object_with_permission(self):
-        ...
-
-    def test_bulk_edit_objects_with_permission(self):
-        ...
-
-    def test_bulk_edit_objects_with_constrained_permission(self):
-        ...
-
-    def test_bulk_update_objects_with_permission(self):
-        ...
-
-    def test_bulk_update_objects_without_change_permission(self):
-        ...
-
-    def test_bulk_import_objects_with_permission(self):
-        ...
-
-    def test_bulk_import_objects_without_permission(self):
-        ...
-
-    def test_bulk_import_objects_with_constrained_permission(self):
-        ...
-
-    def test_delete_object_with_permission(self):
-        ...
-
-    def test_bulk_delete_objects_with_permission(self):
-        ...
-
-    def test_bulk_delete_objects_with_constrained_permission(self):
-        ...
 
     def _assert_get_queryset_does_not_full_scan(self, view_class):
         """Regression #620 helper.
@@ -1116,6 +1213,42 @@ class ComplexCustomObjectViewTestCase(
             metadata={"complex": "data", "number": 42}
         )
 
+        cls.instance_3 = cls.model.objects.create(
+            name="Complex Test Instance 3",
+            count=30,
+            price=12.25,
+            active=True,
+            status="choice1",
+            multi_tags=["choice1"],
+            website="https://example.org",
+            metadata={"number": 3}
+        )
+
+        cls.form_data = {
+            "name": "Complex Edited",
+            "description": "Edited",
+            "count": 40,
+            "price": Decimal("99.99"),
+            "active": True,
+            "status": "choice3",
+            "multi_tags": ["choice1", "choice3"],
+            "website": "https://example.net",
+            "metadata": '{"edited": true}',
+        }
+        cls.csv_data = (
+            "name,count,price,active,status,multi_tags,website",
+            'Imported 1,1,1.50,true,choice1,"choice1,choice2",https://one.example.com',
+            "Imported 2,2,2.50,false,choice2,choice2,https://two.example.com",
+            "Imported 3,3,3.50,true,choice3,choice3,https://three.example.com",
+        )
+        cls.csv_update_data = (
+            "id,count,status",
+            f"{cls.instance_1.pk},51,choice1",
+            f"{cls.instance_2.pk},52,choice1",
+            f"{cls.instance_3.pk},53,choice2",
+        )
+        cls.bulk_edit_data = {"count": 60, "status": "choice2"}
+
     def setUp(self):
         """Set up test data."""
         super().setUp()
@@ -1146,48 +1279,6 @@ class ComplexCustomObjectViewTestCase(
         """Regression #500: changelog tab must return 200, not 500 from deprecated user kwarg."""
         url = self._get_url('changelog', self.instance_1)
         self.assertHttpStatus(self.client.get(url), 200)
-
-    def test_create_object_with_permission(self):
-        ...
-
-    def test_create_object_with_constrained_permission(self):
-        ...
-
-    def test_edit_object_with_permission(self):
-        ...
-
-    def test_edit_object_with_constrained_permission(self):
-        ...
-
-    def test_bulk_edit_objects_with_permission(self):
-        ...
-
-    def test_bulk_edit_objects_with_constrained_permission(self):
-        ...
-
-    def test_bulk_update_objects_with_permission(self):
-        ...
-
-    def test_bulk_update_objects_without_change_permission(self):
-        ...
-
-    def test_bulk_import_objects_with_permission(self):
-        ...
-
-    def test_bulk_import_objects_without_permission(self):
-        ...
-
-    def test_bulk_import_objects_with_constrained_permission(self):
-        ...
-
-    def test_delete_object_with_permission(self):
-        ...
-
-    def test_bulk_delete_objects_with_permission(self):
-        ...
-
-    def test_bulk_delete_objects_with_constrained_permission(self):
-        ...
 
 
 # COMPAT(netbox<4.6.0): CustomFieldChoiceSet has no choice_colors.
@@ -1279,6 +1370,8 @@ class ObjectFieldViewTestCase(
     """Test cases for custom objects with object and multi-object fields."""
 
     query_count_model_label = 'customobject-objectfields'
+    # The multi-object field returns related objects rather than PKs; test_edit_object_sets_sites checks it.
+    validation_excluded_fields = ["sites"]
 
     @classmethod
     def setUpTestData(cls):
@@ -1361,6 +1454,34 @@ class ObjectFieldViewTestCase(
                 device=cls.device
             )
 
+            cls.instance_3 = cls.model.objects.create(name="Object Test Instance 3")
+
+            cls.site_2 = Site.objects.create(name="Test Site 2", slug="test-site-2")
+            cls.device_2 = Device.objects.create(
+                name="Test Device 2",
+                site=cls.site_2,
+                device_type=device_type,
+                role=device_role
+            )
+            cls.form_data = {
+                "name": "Object Test Edited",
+                "device": cls.device_2.pk,
+                "sites": [cls.site.pk, cls.site_2.pk],
+            }
+            cls.csv_data = (
+                "name,device",
+                f"Imported 1,{cls.device.name}",
+                f"Imported 2,{cls.device_2.name}",
+                "Imported 3,",
+            )
+            cls.csv_update_data = (
+                "id,name",
+                f"{cls.instance_1.pk},Object Updated 1",
+                f"{cls.instance_2.pk},Object Updated 2",
+                f"{cls.instance_3.pk},Object Updated 3",
+            )
+            cls.bulk_edit_data = {"device": cls.device_2.pk}
+
         except ImportError:
             # Skip if DCIM models are not available
             cls.site = None
@@ -1400,47 +1521,12 @@ class ObjectFieldViewTestCase(
         url = self._get_url('changelog', self.instance_1)
         self.assertHttpStatus(self.client.get(url), 200)
 
-    def test_create_object_with_permission(self):
-        ...
-
-    def test_create_object_with_constrained_permission(self):
-        ...
-
-    def test_edit_object_with_permission(self):
-        ...
-
-    def test_edit_object_with_constrained_permission(self):
-        ...
-
-    def test_bulk_edit_objects_with_permission(self):
-        ...
-
-    def test_bulk_edit_objects_with_constrained_permission(self):
-        ...
-
-    def test_bulk_update_objects_with_permission(self):
-        ...
-
-    def test_bulk_update_objects_without_change_permission(self):
-        ...
-
-    def test_bulk_import_objects_with_permission(self):
-        ...
-
-    def test_bulk_import_objects_without_permission(self):
-        ...
-
-    def test_bulk_import_objects_with_constrained_permission(self):
-        ...
-
-    def test_delete_object_with_permission(self):
-        ...
-
-    def test_bulk_delete_objects_with_permission(self):
-        ...
-
-    def test_bulk_delete_objects_with_constrained_permission(self):
-        ...
+    def test_edit_object_sets_sites(self):
+        self.user.is_superuser = True
+        self.user.save()
+        response = self.client.post(self._get_url("edit", self.instance_3), post_data(self.form_data))
+        self.assertHttpStatus(response, 302)
+        self.assertCountEqual(self.instance_3.sites.all(), [self.site, self.site_2])
 
     def test_delete_confirmation_page_with_populated_multiobject_field(self):
         """Regression #477: delete confirmation page returns 200 and omits through-table model names."""
@@ -1630,6 +1716,332 @@ class CoordinatesFieldViewTest(CustomObjectsTestCase, TestCase):
         obj.refresh_from_db()
         self.assertIsNone(obj.location_latitude)
         self.assertIsNone(obj.location_longitude)
+
+
+class ArrayFieldViewTest(CustomObjectsTestCase, TestCase):
+    """UI behaviour for the array field type: JSON input, CSV import and formatted display."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.cot = CustomObjectType.objects.create(name="ZoneView", verbose_name_plural="Zone Views", slug="zone-views")
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.cot, name="name", type="text", primary=True, required=True
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.cot, name="points", type="array", array_element_type="integer",
+            array_tuple_size=3, array_min_length=2,
+        )
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.cot, name="days", type="array", array_element_type="date",
+        )
+        cls.model = cls.cot.get_model()
+
+    def setUp(self):
+        super().setUp()
+        self.user.is_superuser = True
+        self.user.save()
+
+    def _url(self, name, **kwargs):
+        return reverse(f"plugins:netbox_custom_objects:{name}", kwargs={"custom_object_type": self.cot.slug, **kwargs})
+
+    def test_create_and_edit(self):
+        response = self.client.get(self._url("customobject_add"))
+        self.assertContains(response, "A list of 3-value integer tuples, at least 2.")
+
+        response = self.client.post(self._url("customobject_add"), {
+            "name": "Zone", "points": "[[0, 0, 0], [10, 0, 5]]", "days": '["2026-01-01"]',
+        })
+        self.assertEqual(response.status_code, 302, response.content)
+        obj = self.model.objects.get(name="Zone")
+        self.assertEqual(obj.points, [[0, 0, 0], [10, 0, 5]])
+        self.assertEqual(obj.days, [date(2026, 1, 1)])
+
+        # The edit form shows the stored values compactly, dates included.
+        edit_url = self._url("customobject_edit", pk=obj.pk)
+        response = self.client.get(edit_url)
+        self.assertContains(response, "    [0, 0, 0],\n    [10, 0, 5]\n]")
+        self.assertContains(response, "[&quot;2026-01-01&quot;]")
+        response = self.client.post(edit_url, {"name": "Zone", "points": "[[0, 0, 0], [1, 1, 1]]", "days": ""})
+        self.assertEqual(response.status_code, 302, response.content)
+        obj.refresh_from_db()
+        self.assertEqual((obj.points, obj.days), ([[0, 0, 0], [1, 1, 1]], None))
+
+    def test_invalid_value_rejected(self):
+        response = self.client.post(self._url("customobject_add"), {"name": "Bad", "points": "[[0, 0, 0], [1, 1]]"})
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(self.model.objects.filter(name="Bad").exists())
+        # The model's message, not the JSON form field's "Enter a valid JSON."
+        self.assertContains(response, "Item 2 must have exactly 3 values.")
+        self.assertNotContains(response, "Enter a valid JSON")
+
+        response = self.client.post(self._url("customobject_add"), {"name": "Bad", "points": "[[0, 0, 0], 1]"})
+        self.assertContains(response, "Each item must itself be a list of values.")
+
+        # Values that aren't of the element type are rejected, not coerced or a server error.
+        cases = {
+            "a JSON string": {"points": '"abc"'},
+            "a number on dates": {"days": "[1]"},
+            "a fraction on integers": {"points": "[[0, 0, 0], [1, 1, 1.5]]"},
+            "a boolean on integers": {"points": "[[0, 0, 0], [1, 1, true]]"},
+        }
+        for label, values in cases.items():
+            with self.subTest(label):
+                response = self.client.post(self._url("customobject_add"), {"name": "Bad", **values})
+                self.assertEqual(response.status_code, 200)
+                self.assertFalse(self.model.objects.filter(name="Bad").exists())
+
+    def test_empty_list_is_no_value(self):
+        # Stored as NULL, as blank input is; the minimum length applies only to a non-empty list.
+        response = self.client.post(self._url("customobject_add"), {"name": "Empty", "points": "[]", "days": "[]"})
+        self.assertEqual(response.status_code, 302, response.content)
+        obj = self.model.objects.get(name="Empty")
+        self.assertEqual((obj.points, obj.days), (None, None))
+
+    def test_csv_import(self):
+        csv_data = 'name,points,days\nImported,"[[0, 0, 0], [1, 2, 3]]","[""2026-03-01""]"'
+        response = self.client.post(
+            self._url("customobject_bulk_import"), {"data": csv_data, "format": "csv", "csv_delimiter": ","}
+        )
+        self.assertEqual(response.status_code, 302, response.content)
+        obj = self.model.objects.get(name="Imported")
+        self.assertEqual(obj.points, [[0, 0, 0], [1, 2, 3]])
+        self.assertEqual(obj.days, [date(2026, 3, 1)])
+
+        csv_data = 'name,points,days\nCoerced,"[[0, 0, 0], [1, 2, 3.5]]",\nEmpty,[],[]'
+        response = self.client.post(
+            self._url("customobject_bulk_import"), {"data": csv_data, "format": "csv", "csv_delimiter": ","}
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(self.model.objects.filter(name__in=["Coerced", "Empty"]).exists())
+
+        csv_data = 'name,points,days\nEmpty,[],[]'
+        response = self.client.post(
+            self._url("customobject_bulk_import"), {"data": csv_data, "format": "csv", "csv_delimiter": ","}
+        )
+        self.assertEqual(response.status_code, 302, response.content)
+        obj = self.model.objects.get(name="Empty")
+        self.assertEqual((obj.points, obj.days), (None, None))
+
+    def test_list_and_detail_display(self):
+        obj = self.model.objects.create(name="Shown", points=[[0, 0, 0], [10, 0, 5]], days=[date(2026, 1, 1)])
+        self.assertContains(self.client.get(self._url("customobject_list")), "(0, 0, 0), (10, 0, 5)")
+        response = self.client.get(self._url("customobject", pk=obj.pk))
+        self.assertContains(response, "(0, 0, 0), (10, 0, 5)")
+        self.assertContains(response, "2026-01-01")
+
+    def test_field_form_shows_array_settings(self):
+        from netbox_custom_objects.forms import CustomObjectTypeFieldForm
+
+        # The type choices include this plugin's own field types, not only core's.
+        response = self.client.get(
+            reverse("plugins:netbox_custom_objects:customobjecttypefield_add") + f"?custom_object_type={self.cot.pk}"
+        )
+        self.assertContains(response, '<option value="array"')
+        self.assertContains(response, '<option value="coordinates"')
+
+        form = CustomObjectTypeFieldForm(initial={
+            "custom_object_type": self.cot.pk, "type": "array", "array_element_type": "integer",
+        })
+        for name in ("array_element_type", "array_tuple_size", "array_min_length", "array_max_length",
+                     "validation_minimum", "validation_maximum"):
+            self.assertIn(name, form.fields)
+        self.assertNotIn("validation_regex", form.fields)
+        # Element limits describe each element, not the whole value.
+        self.assertEqual(form.fields["validation_minimum"].help_text, "Minimum allowed value for each element")
+
+        form = CustomObjectTypeFieldForm(initial={
+            "custom_object_type": self.cot.pk, "type": "array", "array_element_type": "text",
+        })
+        self.assertIn("validation_regex", form.fields)
+        self.assertEqual(form.fields["validation_regex"].help_text, "Regular expression each element must match")
+        self.assertNotIn("validation_minimum", form.fields)
+
+        form = CustomObjectTypeFieldForm(initial={"custom_object_type": self.cot.pk, "type": "text"})
+        self.assertNotIn("array_element_type", form.fields)
+
+        # An existing array's shape can't be edited.
+        form = CustomObjectTypeFieldForm(instance=self.cot.fields.get(name="points"))
+        self.assertTrue(form.fields["array_element_type"].disabled)
+        self.assertTrue(form.fields["array_tuple_size"].disabled)
+        self.assertFalse(form.fields["array_max_length"].disabled)
+
+
+class ColorFieldViewTest(CustomObjectsTestCase, TestCase):
+    """UI behaviour for the color field type."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.cot = CustomObjectType.objects.create(name="Paint", verbose_name_plural="Paints", slug="paints")
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.cot, name="name", type="text", primary=True, required=True
+        )
+        CustomObjectTypeField.objects.create(custom_object_type=cls.cot, name="shade", type="color")
+        cls.model = cls.cot.get_model()
+
+    def setUp(self):
+        super().setUp()
+        perm = ObjectPermission(name="paint all", actions=["view", "add", "change", "delete"])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+
+    def _url(self, action, **kwargs):
+        return reverse(
+            f"plugins:netbox_custom_objects:customobject{action}",
+            kwargs={"custom_object_type": self.cot.slug, **kwargs},
+        )
+
+    def test_field_default_uses_the_color_picker(self):
+        perm = ObjectPermission(name="paint fields", actions=["add", "change", "view"])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectTypeField))
+        perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
+        add_url = reverse("plugins:netbox_custom_objects:customobjecttypefield_add")
+        response = self.client.get(f"{add_url}?custom_object_type={self.cot.pk}&type=color")
+        self.assertRegex(response.content.decode(), r'<select name="default"[^>]*color-select')
+
+        data = {
+            "custom_object_type": self.cot.pk, "name": "trim", "type": "color", "default": "4caf50",
+            "search_weight": 500, "filter_logic": "loose", "weight": 100, "ui_visible": "always",
+            "ui_editable": "yes",
+        }
+        response = self.client.post(f"{add_url}?custom_object_type={self.cot.pk}", data)
+        self.assertEqual(response.status_code, 302, response.content)
+        trim = self.cot.fields.get(name="trim")
+        self.assertEqual(trim.default, "4caf50")
+
+        # The field list shows the default as a swatch, not JSON; other types' defaults stay JSON.
+        CustomObjectTypeField.objects.create(custom_object_type=self.cot, name="finish", type="text", default="matte")
+        response = self.client.get(reverse("plugins:netbox_custom_objects:customobjecttype_fields", args=[self.cot.pk]))
+        self.assertContains(response, '<span class="color-label" style="background-color: #4caf50">&nbsp;</span>')
+        self.assertNotContains(response, "&quot;4caf50&quot;")
+        self.assertContains(response, "&quot;matte&quot;</pre>")
+
+        # A blank choice clears it.
+        response = self.client.post(
+            reverse("plugins:netbox_custom_objects:customobjecttypefield_edit", args=[trim.pk]),
+            {**data, "default": ""},
+        )
+        self.assertEqual(response.status_code, 302, response.content)
+        trim.refresh_from_db()
+        self.assertIsNone(trim.default)
+
+    def test_type_choices_include_plugin_types(self):
+        perm = ObjectPermission(name="paint fields", actions=["add"])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectTypeField))
+        response = self.client.get(
+            reverse("plugins:netbox_custom_objects:customobjecttypefield_add") + f"?custom_object_type={self.cot.pk}"
+        )
+        self.assertContains(response, '<option value="color"')
+        self.assertContains(response, '<option value="coordinates"')
+
+    def test_create_and_display(self):
+        response = self.client.get(self._url("_add"))
+        self.assertContains(response, 'color-select"')
+
+        response = self.client.post(self._url("_add"), {"name": "Red", "shade": "f44336"})
+        self.assertEqual(response.status_code, 302)
+        obj = self.model.objects.get(name="Red")
+        self.assertEqual(obj.shade, "f44336")
+
+        # Rendered as NetBox renders its own color fields: a bare swatch.
+        response = self.client.get(obj.get_absolute_url())
+        self.assertContains(response, '<span class="badge color-label" style="background-color: #f44336">&nbsp;</span>')
+        response = self.client.get(self._url("_list"))
+        self.assertContains(response, '<span class="color-label" style="background-color: #f44336">&nbsp;</span>')
+
+    def test_invalid_color_rejected(self):
+        response = self.client.post(self._url("_add"), {"name": "Bad", "shade": "#F44336"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Enter a valid hexadecimal RGB color code.")
+        self.assertFalse(self.model.objects.filter(name="Bad").exists())
+
+    def test_edit_keeps_a_custom_color(self):
+        obj = self.model.objects.create(name="Custom", shade="123456")
+        response = self.client.get(self._url("_edit", pk=obj.pk))
+        self.assertRegex(response.content.decode(), r'value="123456"\s+selected')
+
+    def test_csv_import_accepts_exported_values(self):
+        csv_data = "name,shade\nImported,#00FF00"
+        data = {"data": csv_data, "format": "csv", "csv_delimiter": ","}
+        response = self.client.post(self._url("_bulk_import"), data)
+        self.assertEqual(response.status_code, 302, response.content)
+        self.assertEqual(self.model.objects.get(name="Imported").shade, "00ff00")
+
+
+class MACAddressFieldViewTest(CustomObjectsTestCase, TestCase):
+    """UI behaviour for the MAC address field type."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.cot = CustomObjectType.objects.create(name="Port", verbose_name_plural="Ports", slug="ports")
+        CustomObjectTypeField.objects.create(
+            custom_object_type=cls.cot, name="name", type="text", primary=True, required=True
+        )
+        CustomObjectTypeField.objects.create(custom_object_type=cls.cot, name="mac", type="mac_address")
+        cls.model = cls.cot.get_model()
+
+    def setUp(self):
+        super().setUp()
+        perm = ObjectPermission(name="port all", actions=["view", "add", "change", "delete"])
+        perm.save()
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+        perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectTypeField))
+        perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
+
+    def _url(self, action, **kwargs):
+        return reverse(
+            f"plugins:netbox_custom_objects:customobject{action}",
+            kwargs={"custom_object_type": self.cot.slug, **kwargs},
+        )
+
+    def test_create_and_display(self):
+        response = self.client.post(self._url("_add"), {"name": "eth0", "mac": "00-1a-2b-3c-4d-5e"})
+        self.assertEqual(response.status_code, 302)
+        obj = self.model.objects.get(name="eth0")
+        self.assertEqual(str(obj.mac), "00:1A:2B:3C:4D:5E")
+        for url in (obj.get_absolute_url(), self._url("_list"), self._url("_edit", pk=obj.pk)):
+            with self.subTest(url=url):
+                self.assertContains(self.client.get(url), "00:1A:2B:3C:4D:5E")
+
+    def test_invalid_rejected(self):
+        response = self.client.post(self._url("_add"), {"name": "bad", "mac": "00:1a:2b:3c:4d"})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Invalid MAC address format")
+        self.assertFalse(self.model.objects.filter(name="bad").exists())
+
+    def test_csv_import(self):
+        data = {"data": "name,mac\neth1,001a.2b3c.4d5e", "format": "csv", "csv_delimiter": ","}
+        response = self.client.post(self._url("_bulk_import"), data)
+        self.assertEqual(response.status_code, 302, response.content)
+        self.assertEqual(str(self.model.objects.get(name="eth1").mac), "00:1A:2B:3C:4D:5E")
+
+    def test_field_default_is_plain_text(self):
+        add_url = reverse("plugins:netbox_custom_objects:customobjecttypefield_add")
+        response = self.client.get(f"{add_url}?custom_object_type={self.cot.pk}&type=mac_address")
+        self.assertRegex(response.content.decode(), r'<input type="text" name="default"')
+
+        data = {
+            "custom_object_type": self.cot.pk, "name": "uplink", "type": "mac_address", "default": "aabb.ccdd.eeff",
+            "search_weight": 500, "filter_logic": "loose", "weight": 100, "ui_visible": "always",
+            "ui_editable": "yes",
+        }
+        response = self.client.post(f"{add_url}?custom_object_type={self.cot.pk}", data)
+        self.assertEqual(response.status_code, 302, response.content)
+        self.assertEqual(self.cot.fields.get(name="uplink").default, "AA:BB:CC:DD:EE:FF")
+
+        response = self.client.get(reverse("plugins:netbox_custom_objects:customobjecttype_fields", args=[self.cot.pk]))
+        self.assertContains(response, "AA:BB:CC:DD:EE:FF")
+        self.assertNotContains(response, "&quot;AA:BB:CC:DD:EE:FF&quot;")
+
+        bad = {**data, "name": "bad", "default": "x"}
+        response = self.client.post(f"{add_url}?custom_object_type={self.cot.pk}", bad)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Invalid MAC address format")
 
 
 class URLFieldLinkTitleViewTest(CustomObjectsTestCase, TestCase):
@@ -1992,3 +2404,249 @@ class CustomObjectConfigContextViewTestCase(CustomObjectsTestCase, TestCase):
 
         response = self.client.get(self._config_context_url(cot, obj))
         self.assertEqual(response.status_code, 404)
+
+
+class FieldDeleteViewTestCase(CustomObjectsTestCase, TestCase):
+    """The field delete page warns how many objects hold a value for the field."""
+
+    def setUp(self):
+        super().setUp()
+        self.user.is_superuser = True
+        self.user.save()
+        self.cot = self.create_custom_object_type(name="widget", slug="widgets")
+        self.create_custom_object_type_field(self.cot, name="name", label="Name", type="text", primary=True)
+
+    def _url(self, field):
+        return reverse("plugins:netbox_custom_objects:customobjecttypefield_delete", kwargs={"pk": field.pk})
+
+    def assertWarnsOf(self, response, count):
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["num_dependent_objects"], count)
+        self.assertContains(response, f"in use on {count} Custom Objects")
+
+    def test_url_field_counts_objects_with_only_a_title(self):
+        field = self.create_custom_object_type_field(self.cot, name="link", label="Link", type="url")
+        model = self.cot.get_model()
+        model.objects.create(name="url", link="https://example.com")
+        model.objects.create(name="title", link_title="Docs")
+        model.objects.create(name="neither")
+        self.assertWarnsOf(self.client.get(self._url(field)), 2)
+
+    def test_polymorphic_multiobject_field_counts_each_object_once(self):
+        field = self.create_polymorphic_field(
+            self.cot, [ObjectType.objects.get_for_model(Site)], name="sites", type="multiobject",
+        )
+        model = self.cot.get_model()
+        first, second = Site.objects.create(name="A", slug="a"), Site.objects.create(name="B", slug="b")
+        model.objects.create(name="both").sites.set([first, second])
+        model.objects.create(name="one").sites.set([first])
+        model.objects.create(name="none")
+        self.assertWarnsOf(self.client.get(self._url(field)), 2)
+
+    def test_htmx_request_renders_modal(self):
+        field = self.create_custom_object_type_field(self.cot, name="code", label="Code", type="text")
+        self.cot.get_model().objects.create(name="coded", code="X1")
+        response = self.client.get(self._url(field), HTTP_HX_REQUEST="true")
+        self.assertTemplateUsed(response, "netbox_custom_objects/htmx/delete_form.html")
+        self.assertTemplateNotUsed(response, "netbox_custom_objects/field_delete.html")
+        self.assertWarnsOf(response, 1)
+
+    def test_unused_field_has_no_warning(self):
+        field = self.create_custom_object_type_field(self.cot, name="code", label="Code", type="text")
+        self.cot.get_model().objects.create(name="uncoded")
+        response = self.client.get(self._url(field))
+        self.assertEqual(response.context["num_dependent_objects"], 0)
+        self.assertNotContains(response, "in use on")
+
+
+class ProtectedObjectDeleteViewTestCase(CustomObjectsTestCase, TestCase):
+    """A custom object referenced through a Protect field can't be deleted from the UI."""
+
+    def setUp(self):
+        super().setUp()
+        self.user.is_superuser = True
+        self.user.save()
+        rack_cot = self.create_custom_object_type(name="rack", slug="racks")
+        self.create_custom_object_type_field(rack_cot, name="name", label="Name", type="text", primary=True)
+        mount_cot = self.create_custom_object_type(name="mount", slug="mounts")
+        self.create_custom_object_type_field(mount_cot, name="name", label="Name", type="text", primary=True)
+        self.create_custom_object_type_field(
+            mount_cot, name="rack", label="Rack", type="object",
+            related_object_type=ObjectType.objects.get_for_model(rack_cot.get_model()),
+            on_delete_behavior=ObjectFieldOnDeleteChoices.PROTECT,
+        )
+        # Generate the referencing model before the target's (see CustomObjectType.get_model).
+        mount_model = mount_cot.get_model()
+        rack_cot.refresh_from_db()
+        self.rack_model = rack_cot.get_model()
+        self.rack = self.rack_model.objects.create(name="R1")
+        mount_model.objects.create(name="M1", rack=self.rack)
+        self.url = reverse(
+            "plugins:netbox_custom_objects:customobject_delete",
+            kwargs={"custom_object_type": "racks", "pk": self.rack.pk},
+        )
+
+    def test_delete_page_redirects_to_object(self):
+        response = self.client.get(self.url, follow=True)
+        self.assertRedirects(response, self.rack.get_absolute_url())
+        self.assertContains(response, "M1")
+
+    def test_htmx_delete_redirects_to_object(self):
+        response = self.client.get(self.url, HTTP_HX_REQUEST="true")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response["HX-Redirect"], self.rack.get_absolute_url())
+
+    def test_delete_is_refused(self):
+        response = self.client.post(self.url, {"confirm": True})
+        self.assertRedirects(response, self.rack.get_absolute_url(), fetch_redirect_response=False)
+        self.assertTrue(self.rack_model.objects.filter(pk=self.rack.pk).exists())
+
+
+class QuickAddConstraintTestCase(CustomObjectsTestCase, TestCase):
+    """Quick add refuses an object outside the user's add constraint."""
+
+    def setUp(self):
+        super().setUp()
+        self.cot = self.create_custom_object_type(name="target", slug="targets")
+        self.create_custom_object_type_field(self.cot, name="name", label="Name", type="text", primary=True)
+        self.model = self.cot.get_model()
+        perm = ObjectPermission.objects.create(name="add allowed", actions=["add"], constraints={"name": "allowed"})
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(self.model))
+        self.url = reverse("plugins:netbox_custom_objects:customobject_add", kwargs={"custom_object_type": "targets"})
+
+    def _quick_add(self, name):
+        return self.client.post(f"{self.url}?_quickadd=True", {"quickadd-name": name, "_quickadd": ""})
+
+    def test_object_inside_constraint_is_created(self):
+        response = self._quick_add("allowed")
+        self.assertTemplateUsed(response, "htmx/quick_add_created.html")
+        self.assertTrue(self.model.objects.filter(name="allowed").exists())
+
+    def test_object_outside_constraint_is_refused(self):
+        response = self._quick_add("other")
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "netbox_custom_objects/htmx/co_quick_add.html")
+        self.assertIn("permissions violation", " ".join(response.context["form"].non_field_errors()))
+        self.assertFalse(self.model.objects.exists())
+
+
+class CustomObjectJournalTestCase(CustomObjectsTestCase, TestCase):
+    """Journal entries are added from a custom object's Journal tab."""
+
+    def setUp(self):
+        super().setUp()
+        self.cot = self.create_custom_object_type(name="server", slug="servers")
+        self.create_custom_object_type_field(self.cot, name="name", label="Name", type="text", primary=True)
+        self.model = self.cot.get_model()
+        self.obj = self.model.objects.create(name="S1")
+        self.content_type = ContentType.objects.get_for_model(self.model)
+        self.journal_url = reverse(
+            "plugins:netbox_custom_objects:customobject_journal",
+            kwargs={"custom_object_type": "servers", "pk": self.obj.pk},
+        )
+        self.add_url = reverse("plugins:netbox_custom_objects:custom_journalentry_add")
+
+    def _grant(self, model, actions):
+        perm = ObjectPermission.objects.create(name=f"{model._meta.model_name} {actions}", actions=actions)
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(model))
+
+    def _add_entry(self):
+        return self.client.post(self.add_url, {
+            "assigned_object_type": self.content_type.pk,
+            "assigned_object_id": self.obj.pk,
+            "kind": "info",
+            "comments": "Checked the fans",
+        })
+
+    def test_add_entry_returns_to_journal(self):
+        self._grant(self.model, ["view"])
+        self._grant(JournalEntry, ["view", "add"])
+        response = self.client.get(self.journal_url)
+        self.assertContains(response, f'action="{self.add_url}"')
+
+        response = self._add_entry()
+        self.assertRedirects(response, self.journal_url, fetch_redirect_response=False)
+        entry = JournalEntry.objects.get()
+        self.assertEqual((entry.assigned_object, entry.created_by), (self.obj, self.user))
+        self.assertContains(self.client.get(self.journal_url), "Checked the fans")
+
+    def test_no_form_without_add_permission(self):
+        self._grant(self.model, ["view"])
+        self._grant(JournalEntry, ["view"])
+        response = self.client.get(self.journal_url)
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.context["form"])
+        self.assertNotContains(response, f'action="{self.add_url}"')
+        self.assertEqual(self._add_entry().status_code, 403)
+        self.assertFalse(JournalEntry.objects.exists())
+
+
+class UnknownTypeSlugTestCase(CustomObjectsTestCase, TestCase):
+    """The custom object views return 404 for a Custom Object Type slug that doesn't exist."""
+
+    def test_unknown_slug_is_404(self):
+        self.user.is_superuser = True
+        self.user.save()
+        for action in ("list", "add", "bulk_edit", "bulk_delete", "bulk_import"):
+            url = reverse(f"plugins:netbox_custom_objects:customobject_{action}", kwargs={"custom_object_type": "nope"})
+            for method in ("get", "post"):
+                with self.subTest(action=action, method=method):
+                    self.assertEqual(getattr(self.client, method)(url).status_code, 404)
+
+
+class FieldPrimaryTestCase(CustomObjectsTestCase, TestCase):
+    """Making a field primary through the field form demotes the type's existing primary field."""
+
+    def setUp(self):
+        super().setUp()
+        self.user.is_superuser = True
+        self.user.save()
+        self.cot = self.create_custom_object_type(name="zone", slug="zones")
+        self.name = self.create_custom_object_type_field(self.cot, name="name", label="Name", type="text", primary=True)
+        self.code = self.create_custom_object_type_field(self.cot, name="code", label="Code", type="text")
+
+    def _post(self, url, name, primary=True):
+        data = {
+            "custom_object_type": self.cot.pk, "name": name, "label": name.title(), "type": "text",
+            "ui_visible": "always", "ui_editable": "yes", "filter_logic": "loose", "search_weight": 500, "weight": 100,
+        }
+        if primary:
+            data["primary"] = "on"
+        return self.client.post(url, data)
+
+    def _primaries(self):
+        return list(self.cot.fields.filter(primary=True).values_list("name", flat=True))
+
+    def test_new_primary_field_demotes_the_old_one(self):
+        response = self._post(reverse("plugins:netbox_custom_objects:customobjecttypefield_add"), "title")
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(self._primaries(), ["title"])
+
+    def test_demotion_is_change_logged(self):
+        # Logged like any other change, so a branch merge replays the demotion too.
+        self._post(reverse("plugins:netbox_custom_objects:customobjecttypefield_add"), "title")
+        change = ObjectChange.objects.filter(
+            changed_object_type=ContentType.objects.get_for_model(CustomObjectTypeField),
+            changed_object_id=self.name.pk,
+        ).latest("pk")
+        self.assertEqual(change.action, ObjectChangeActionChoices.ACTION_UPDATE)
+        self.assertEqual((change.prechange_data["primary"], change.postchange_data["primary"]), (True, False))
+
+    def test_failed_submission_keeps_the_primary_field(self):
+        # A duplicate name fails validation after the primary field has been cleaned.
+        response = self._post(reverse("plugins:netbox_custom_objects:customobjecttypefield_add"), "code")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.context["form"].errors)
+        self.assertEqual(self._primaries(), ["name"])
+
+    def test_editing_the_primary_field_keeps_it_primary(self):
+        url = reverse("plugins:netbox_custom_objects:customobjecttypefield_edit", kwargs={"pk": self.name.pk})
+        self.assertEqual(self._post(url, "name").status_code, 302)
+        self.assertEqual(self._primaries(), ["name"])
+
+    def test_editing_another_field_keeps_the_primary_field(self):
+        url = reverse("plugins:netbox_custom_objects:customobjecttypefield_edit", kwargs={"pk": self.code.pk})
+        self.assertEqual(self._post(url, "code", primary=False).status_code, 302)
+        self.assertEqual(self._primaries(), ["name"])

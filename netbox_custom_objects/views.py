@@ -25,10 +25,12 @@ from netbox.forms import (
     NetBoxModelImportForm,
 )
 from netbox.forms.mixins import OwnerMixin as OwnerFormMixin
+from netbox.object_actions import BulkDelete, DeleteObject, EditObject
 from netbox.views import generic
 from netbox.views.generic.mixins import TableMixin
-from utilities.forms import ConfirmationForm, DeleteForm, restrict_form_fields
+from utilities.forms import DeleteForm, restrict_form_fields
 from utilities.querydict import normalize_querydict
+from utilities.request import safe_for_redirect
 from utilities.forms.fields import ContentTypeChoiceField, DynamicModelChoiceField, DynamicModelMultipleChoiceField
 from utilities.forms.utils import get_field_value as _get_field_value
 from utilities.forms.widgets import HTMXSelect
@@ -39,24 +41,17 @@ from utilities.permissions import get_permission_for_model
 from utilities.views import ConditionalLoginRequiredMixin, ViewTab, get_viewname, register_model_view
 
 from netbox_custom_objects.filtersets import get_filterset_class
-from netbox_custom_objects.tables import CustomObjectTable, CustomObjectTypeFieldTable
+from netbox_custom_objects.tables import (CustomObjectTable, CustomObjectTypeConstraintTable,
+                                          CustomObjectTypeFieldTable)
 from . import field_types, filtersets, forms, tables
-from .models import CustomObject, CustomObjectType, CustomObjectTypeField
+from .models import CustomObject, CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
 from extras.choices import CustomFieldTypeChoices
 from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.dynamic_forms import build_filterset_form_class
-from netbox_custom_objects.utilities import extract_cot_id_from_model_name, is_branching_enabled
+from netbox_custom_objects.utilities import extract_cot_id_from_model_name
 
 logger = logging.getLogger("netbox_custom_objects.views")
-
-
-def _is_in_branch():
-    """True if a netbox-branching branch is active in this context."""
-    if not is_branching_enabled():
-        return False
-    from netbox_branching.contextvars import active_branch
-    return active_branch.get() is not None
 
 
 def _hidden_field_raw_columns(fields):
@@ -279,10 +274,17 @@ class BackgroundJobURLKwargsMixin:
 class CustomObjectTableMixin(TableMixin):
     def get_table(self, data, request, bulk_actions=True):
         model_fields = self.custom_object_type.fields.all()
-        fields = ["id"] + [
-            field.name
-            for field in model_fields
+        visible_fields = [
+            field for field in model_fields
             if field.ui_visible != CustomFieldUIVisibleChoices.HIDDEN
+        ]
+        fields = ["pk", "id", *(field.name for field in visible_fields), "tags", "created", "last_updated"]
+        # Fields shown only when set are left out of the defaults but stay selectable.
+        default_columns = [
+            "pk",
+            "id",
+            *(field.name for field in visible_fields if field.ui_visible == CustomFieldUIVisibleChoices.ALWAYS),
+            "tags",
         ]
 
         meta = type(
@@ -291,6 +293,7 @@ class CustomObjectTableMixin(TableMixin):
             {
                 "model": data.model,
                 "fields": fields,
+                "default_columns": default_columns,
                 "attrs": {
                     "class": "table table-hover object-list",
                 },
@@ -387,14 +390,12 @@ class CustomObjectTypeView(CustomObjectTableMixin, generic.ObjectView):
 class CustomObjectTypeEditView(generic.ObjectEditView):
     queryset = CustomObjectType.objects.all()
     form = forms.CustomObjectTypeForm
-    template_name = 'netbox_custom_objects/customobjecttype_edit.html'
 
 
 @register_model_view(CustomObjectType, "delete")
 class CustomObjectTypeDeleteView(generic.ObjectDeleteView):
     queryset = CustomObjectType.objects.all()
     default_return_url = "plugins:netbox_custom_objects:customobjecttype_list"
-    template_name = 'netbox_custom_objects/customobjecttype_delete.html'
 
     def _get_dependent_objects(self, obj):
         dependent_objects = super()._get_dependent_objects(obj)
@@ -416,8 +417,11 @@ class CustomObjectTypeDeleteView(generic.ObjectDeleteView):
 @register_model_view(CustomObjectType, 'fields', path='fields')
 class CustomObjectTypeFieldsView(generic.ObjectChildrenView):
     queryset = CustomObjectType.objects.all()
+    child_model = CustomObjectTypeField
     table = CustomObjectTypeFieldTable
-    template_name = 'netbox_custom_objects/fields.html'
+    filterset = filtersets.CustomObjectTypeFieldFilterSet
+    # No bulk delete: a field's own delete page warns how many objects lose data.
+    actions = (EditObject, DeleteObject)
     tab = ViewTab(
         label=_('Fields'),
         badge=lambda obj: CustomObjectTypeField.objects.filter(custom_object_type=obj).count(),
@@ -430,6 +434,27 @@ class CustomObjectTypeFieldsView(generic.ObjectChildrenView):
         return CustomObjectTypeField.objects.restrict(request.user, 'view').filter(custom_object_type=parent)
 
 
+@register_model_view(CustomObjectType, 'constraints', path='constraints')
+class CustomObjectTypeConstraintsView(generic.ObjectChildrenView):
+    queryset = CustomObjectType.objects.all()
+    child_model = CustomObjectTypeConstraint
+    table = CustomObjectTypeConstraintTable
+    filterset = filtersets.CustomObjectTypeConstraintFilterSet
+    actions = (EditObject, DeleteObject, BulkDelete)
+    tab = ViewTab(
+        label=_('Constraints'),
+        badge=lambda obj: CustomObjectTypeConstraint.objects.filter(custom_object_type=obj).count(),
+        permission='netbox_custom_objects.view_customobjecttypeconstraint',
+        weight=525,
+        hide_if_empty=False
+    )
+
+    def get_children(self, request, parent):
+        return CustomObjectTypeConstraint.objects.restrict(request.user, 'view').filter(
+            custom_object_type=parent
+        ).prefetch_related('custom_object_type__fields')
+
+
 #
 # Custom Object Type Fields
 #
@@ -439,7 +464,6 @@ class CustomObjectTypeFieldsView(generic.ObjectChildrenView):
 class CustomObjectTypeFieldEditView(generic.ObjectEditView):
     queryset = CustomObjectTypeField.objects.all()
     form = forms.CustomObjectTypeFieldForm
-    template_name = 'netbox_custom_objects/customobjecttypefield_edit.html'
 
     def alter_object(self, obj, request, url_args, url_kwargs):
         # For new fields, pre-populate custom_object_type from the request so that the
@@ -455,8 +479,46 @@ class CustomObjectTypeFieldEditView(generic.ObjectEditView):
                     pass
         return obj
 
-    def get_extra_context(self, request, instance):
-        return {'branch_bypass_warning': _is_in_branch()}
+
+@register_model_view(CustomObjectTypeConstraint, "edit")
+class CustomObjectTypeConstraintEditView(generic.ObjectEditView):
+    queryset = CustomObjectTypeConstraint.objects.all()
+    form = forms.CustomObjectTypeConstraintForm
+
+    def alter_object(self, obj, request, url_args, url_kwargs):
+        # New constraints take their custom object type from the Add link's query parameter.
+        if not obj.pk:
+            cot_pk = request.GET.get('custom_object_type') or request.POST.get('custom_object_type')
+            if cot_pk:
+                try:
+                    obj.custom_object_type_id = int(cot_pk)
+                except (ValueError, TypeError):
+                    pass
+        return obj
+
+    def get_extra_addanother_params(self, request):
+        # Constraints aren't cloneable, so "Create & Add Another" would otherwise drop the type.
+        cot_pk = request.GET.get('custom_object_type') or request.POST.get('custom_object_type')
+        return {'custom_object_type': cot_pk} if cot_pk else {}
+
+
+@register_model_view(CustomObjectTypeConstraint, "bulk_delete", path="delete", detail=False)
+class CustomObjectTypeConstraintBulkDeleteView(generic.BulkDeleteView):
+    queryset = CustomObjectTypeConstraint.objects.all()
+    filterset = filtersets.CustomObjectTypeConstraintFilterSet
+    table = CustomObjectTypeConstraintTable
+
+
+@register_model_view(CustomObjectTypeConstraint, "delete")
+class CustomObjectTypeConstraintDeleteView(generic.ObjectDeleteView):
+    queryset = CustomObjectTypeConstraint.objects.all()
+
+    def get_return_url(self, request, obj=None):
+        # Core's fallback needs obj.pk, which is gone after the delete.
+        return_url = request.GET.get("return_url")
+        if return_url and safe_for_redirect(return_url):
+            return return_url
+        return obj.get_absolute_url()
 
 
 @register_model_view(CustomObjectTypeField, "delete")
@@ -465,7 +527,10 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
     queryset = CustomObjectTypeField.objects.all()
 
     def get_return_url(self, request, obj=None):
-        return request.GET.get("return_url") or obj.custom_object_type.get_absolute_url()
+        return_url = request.GET.get("return_url")
+        if return_url and safe_for_redirect(return_url):
+            return return_url
+        return obj.custom_object_type.get_absolute_url()
 
     def get(self, request, *args, **kwargs):
         """
@@ -475,7 +540,7 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
             request: The current request
         """
         obj = self.get_object(**kwargs)
-        form = ConfirmationForm(initial=request.GET)
+        form = DeleteForm(instance=obj, initial=request.GET)
 
         model = obj.custom_object_type.get_model_with_serializer()
         if obj.is_polymorphic and obj.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
@@ -500,6 +565,8 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
         else:
             num_dependent_objects = model.objects.filter(**{f"{obj.name}__isnull": False}).count()
 
+        constraints = list(obj.constraints)
+
         # If this is an HTMX request, return only the rendered deletion form as modal content
         if htmx_partial(request):
             viewname = get_viewname(self.queryset.model, action="delete")
@@ -513,6 +580,7 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
                     "form": form,
                     "form_url": form_url,
                     "num_dependent_objects": num_dependent_objects,
+                    "constraints": constraints,
                     **self.get_extra_context(request, obj),
                 },
             )
@@ -525,44 +593,16 @@ class CustomObjectTypeFieldDeleteView(generic.ObjectDeleteView):
                 "form": form,
                 "return_url": self.get_return_url(request, obj),
                 "num_dependent_objects": num_dependent_objects,
+                "constraints": constraints,
                 **self.get_extra_context(request, obj),
             },
         )
-
-    def _get_dependent_objects(self, obj):
-        dependent_objects = super()._get_dependent_objects(obj)
-        model = obj.custom_object_type.get_model_with_serializer()
-
-        if obj.is_polymorphic and obj.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
-            # Polymorphic M2M: the field is a descriptor, not a real column — query
-            # via the through table and return the source objects.
-            from django.apps import apps as django_apps
-            try:
-                through = django_apps.get_model(APP_LABEL, obj.through_model_name)
-                source_ids = through.objects.values_list("source_id", flat=True).distinct()
-                dependent_objects[model] = list(model.objects.filter(pk__in=source_ids))
-            except LookupError:
-                dependent_objects[model] = []
-        elif obj.is_polymorphic and obj.type == CustomFieldTypeChoices.TYPE_OBJECT:
-            # Polymorphic GFK: filter on the concrete content_type column.
-            ct_field = f"{obj.name}_content_type__isnull"
-            dependent_objects[model] = list(model.objects.filter(**{ct_field: False}))
-        elif obj.type == CustomObjectFieldTypeChoices.TYPE_URL:
-            title_col = field_types.FIELD_TYPE_CLASS[obj.type]().title_field_name(obj)
-            dependent_objects[model] = list(model.objects.filter(
-                Q(**{f"{obj.name}__isnull": False}) | ~Q(**{title_col: ""})
-            ))
-        else:
-            dependent_objects[model] = list(model.objects.filter(**{f"{obj.name}__isnull": False}))
-
-        return dependent_objects
 
 
 @register_model_view(CustomObjectType, "bulk_import", path="import", detail=False)
 class CustomObjectTypeBulkImportView(generic.BulkImportView):
     queryset = CustomObjectType.objects.all()
     model_form = forms.CustomObjectTypeImportForm
-    template_name = 'netbox_custom_objects/customobjecttype_bulk_import.html'
 
 
 @register_model_view(CustomObjectType, "bulk_edit", path="edit", detail=False)
@@ -571,7 +611,6 @@ class CustomObjectTypeBulkEditView(generic.BulkEditView):
     filterset = filtersets.CustomObjectTypeFilterSet
     table = tables.CustomObjectTypeTable
     form = forms.CustomObjectTypeBulkEditForm
-    template_name = 'netbox_custom_objects/customobjecttype_bulk_edit.html'
 
 
 @register_model_view(CustomObjectType, "bulk_delete", path="delete", detail=False)
@@ -579,7 +618,6 @@ class CustomObjectTypeBulkDeleteView(generic.BulkDeleteView):
     queryset = CustomObjectType.objects.all()
     filterset = filtersets.CustomObjectTypeFilterSet
     table = tables.CustomObjectTypeTable
-    template_name = 'netbox_custom_objects/customobjecttype_bulk_delete.html'
 
 
 #
@@ -590,7 +628,6 @@ class CustomObjectTypeBulkDeleteView(generic.BulkDeleteView):
 class CustomObjectListView(CustomObjectTableMixin, generic.ObjectListView):
     queryset = None
     custom_object_type = None
-    template_name = "netbox_custom_objects/custom_object_list.html"
 
     def setup(self, request, *args, **kwargs):
         super().setup(request, *args, **kwargs)
@@ -1152,9 +1189,26 @@ class CustomObjectEditView(RestrictedObjectMixin, generic.ObjectEditView):
                     )
             return self.cleaned_data
 
+        base_validation_exclusions = form_class._get_validation_exclusions
+
+        def custom_validation_exclusions(self):
+            # A polymorphic Object field's two columns aren't form fields, so Django excludes
+            # them from model validation and skips every constraint over them; the database
+            # then rejects the save.  custom_clean() has set them on the instance, so validate
+            # them too, unless the field's own inputs failed.  Django asks for these exclusions
+            # wherever it validates the model: in full_clean() and, from Django 6, also in
+            # validate_unique() and validate_constraints().  Constraints over a polymorphic
+            # field cover both columns, so a violation is a non-field error.
+            exclude = base_validation_exclusions(self)
+            for field_name, (ct_sub, obj_sub) in self.custom_object_type_poly_obj_fields.items():
+                if ct_sub not in self._errors and obj_sub not in self._errors:
+                    exclude -= {f"{field_name}_content_type", f"{field_name}_object_id"}
+            return exclude
+
         form_class.__init__ = custom_init
         form_class.clean = custom_clean
         form_class.save = custom_save
+        form_class._get_validation_exclusions = custom_validation_exclusions
 
         return form_class
 
@@ -1186,13 +1240,18 @@ class CustomObjectDeleteView(RestrictedObjectMixin, generic.ObjectDeleteView):
 
     def get_return_url(self, request, obj=None):
         """
-        Return the URL to redirect to after deleting a custom object.
+        Like core: a safe ``return_url``, then the object while it still exists (Cancel),
+        then its type's list (after deletion).
         """
+        return_url = request.GET.get("return_url") or request.POST.get("return_url")
+        if return_url and safe_for_redirect(return_url):
+            return return_url
+        if obj is not None and obj.pk:
+            return obj.get_absolute_url()
+
         if obj:
-            # Get the custom object type from the object directly
             custom_object_type = obj.custom_object_type.slug
         else:
-            # Fallback to getting it from kwargs if object is not available
             custom_object_type = self.kwargs.get("custom_object_type")
 
         return reverse(
@@ -1240,9 +1299,6 @@ class CustomObjectDeleteView(RestrictedObjectMixin, generic.ObjectDeleteView):
             )
         }
 
-    def get_extra_context(self, request, instance):
-        return {'branch_warning': _is_in_branch()}
-
 
 @register_model_view(CustomObject, "bulk_edit", path="edit", detail=False)
 class CustomObjectBulkEditView(BackgroundJobURLKwargsMixin, CustomObjectTableMixin, generic.BulkEditView):
@@ -1263,8 +1319,8 @@ class CustomObjectBulkEditView(BackgroundJobURLKwargsMixin, CustomObjectTableMix
         if self.queryset is not None:
             return self.queryset
         custom_object_type = self.kwargs.get("custom_object_type", None)
-        self.custom_object_type = CustomObjectType.objects.get(
-            slug=custom_object_type
+        self.custom_object_type = get_object_or_404(
+            CustomObjectType, slug=custom_object_type
         )
         model = self.custom_object_type.get_model_with_serializer()
         return model.objects.all()
@@ -1461,7 +1517,7 @@ class CustomObjectBulkEditView(BackgroundJobURLKwargsMixin, CustomObjectTableMix
 
         form = type(
             f"{queryset.model._meta.object_name}BulkEditForm",
-            (NetBoxModelBulkEditForm,),
+            (OwnerFormMixin, NetBoxModelBulkEditForm),
             attrs,
         )
         form.model = queryset.model
@@ -1531,7 +1587,6 @@ class CustomObjectBulkDeleteView(BackgroundJobURLKwargsMixin, CustomObjectTableM
     custom_object_type = None
     table = None
     form = None
-    template_name = 'netbox_custom_objects/custom_object_bulk_delete.html'
 
     def setup(self, request, *args, **kwargs):
         super().setup(request, *args, **kwargs)
@@ -1543,8 +1598,8 @@ class CustomObjectBulkDeleteView(BackgroundJobURLKwargsMixin, CustomObjectTableM
         if self.queryset is not None:
             return self.queryset
         self.custom_object_type = self.kwargs.pop("custom_object_type", None)
-        self.custom_object_type = CustomObjectType.objects.get(
-            slug=self.custom_object_type
+        self.custom_object_type = get_object_or_404(
+            CustomObjectType, slug=self.custom_object_type
         )
         model = self.custom_object_type.get_model_with_serializer()
         return model.objects.all()
@@ -1574,8 +1629,8 @@ class CustomObjectBulkImportView(BackgroundJobURLKwargsMixin, generic.BulkImport
         if self.queryset is not None:
             return self.queryset
         custom_object_type = self.kwargs.get("custom_object_type", None)
-        self.custom_object_type = CustomObjectType.objects.get(
-            slug=custom_object_type
+        self.custom_object_type = get_object_or_404(
+            CustomObjectType, slug=custom_object_type
         )
         model = self.custom_object_type.get_model_with_serializer()
         return model.objects.all()
@@ -1633,7 +1688,10 @@ class CustomObjectJournalView(ConditionalLoginRequiredMixin, View):
 
     base_template = None
     tab = ViewTab(
-        label=_("Journal"), permission="extras.view_journalentry", weight=5000
+        label=_("Journal"),
+        badge=lambda obj: obj.journal_entries.count(),
+        permission="extras.view_journalentry",
+        weight=9000,
     )
 
     def get(self, request, custom_object_type, **kwargs):
@@ -1761,7 +1819,7 @@ class CustomObjectContactsView(ConditionalLoginRequiredMixin, View):
         label=_("Contacts"),
         badge=lambda obj: obj.get_contacts().count(),
         permission="tenancy.view_contactassignment",
-        weight=4500,
+        weight=5000,
     )
 
     def get(self, request, custom_object_type, **kwargs):

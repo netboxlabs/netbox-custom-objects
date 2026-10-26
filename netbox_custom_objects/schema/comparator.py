@@ -15,6 +15,7 @@ Data model
     COTDiff          — top-level result for one COT
       .cot_changes   — {attr: (db_val, schema_val)} for COT-level attribute changes
       .field_changes — list[FieldChange]
+      .constraint_changes — list[ConstraintChange]
       .warnings      — non-fatal issues (e.g. untracked DB fields)
 
     FieldChange
@@ -46,12 +47,18 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING
 
+from django.core.exceptions import ValidationError
+
 from netbox_custom_objects import constants
-from netbox_custom_objects.models import CustomObjectType
+from netbox_custom_objects.choices import ConstraintLookupChoices
+from netbox_custom_objects.models import CustomObjectType, normalize_predicate_value
+from netbox_custom_objects.utilities import predicate_field_ref
 
 if TYPE_CHECKING:
     from django.contrib.contenttypes.models import ContentType
 from netbox_custom_objects.schema.format import (
+    CONSTRAINT_ATTRS,
+    CONSTRAINT_DEFAULTS,
     CUSTOM_OBJECTS_APP_LABEL_SLUG,
     FIELD_BASE_ATTRS,
     FIELD_DEFAULTS,
@@ -103,6 +110,16 @@ class FieldChange:
 
 
 @dataclass
+class ConstraintChange:
+    """A single constraint-level operation within a COTDiff, matched by name."""
+    op: FieldOp
+    name: str
+    schema_def: dict                             # the schema constraint dict ({} for REMOVE)
+    changed_attrs: dict[str, tuple] = field(default_factory=dict)
+    # {attr: (db_value, schema_value)} — populated for ALTER
+
+
+@dataclass
 class COTDiff:
     """All changes needed to bring one COT in sync with a schema definition."""
     name: str                                    # from schema
@@ -111,6 +128,7 @@ class COTDiff:
     cot_changes: dict[str, tuple] = field(default_factory=dict)
     # {attr: (db_val, schema_val)} for COT-level attribute differences
     field_changes: list[FieldChange] = field(default_factory=list)
+    constraint_changes: list[ConstraintChange] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
     @property
@@ -122,7 +140,7 @@ class COTDiff:
         the COT itself must still be created.  Callers should check ``is_new``
         independently when deciding whether to run a create operation.
         """
-        return bool(self.cot_changes or self.field_changes)
+        return bool(self.cot_changes or self.field_changes or self.constraint_changes)
 
     @property
     def has_destructive_changes(self) -> bool:
@@ -222,6 +240,13 @@ def _compare_field_attrs(db_field, schema_field: dict, cot_slug_cache: dict, war
         if dv != sv:
             changes["validation_maximum"] = (dv, sv)
 
+    for attr in ("array_element_type", "array_tuple_size", "array_min_length", "array_max_length"):
+        if attr in type_specific:
+            dv = getattr(db_field, attr)
+            sv = schema_field.get(attr, FIELD_DEFAULTS[attr])
+            if dv != sv:
+                changes[attr] = (dv, sv)
+
     if "choice_set" in type_specific:
         dv = db_field.choice_set.name if db_field.choice_set_id else None
         sv = schema_field.get("choice_set")
@@ -261,6 +286,14 @@ def _compare_field_attrs(db_field, schema_field: dict, cot_slug_cache: dict, war
         if dv != sv:
             changes["related_object_filter"] = (dv, sv)
 
+    # Exports from before related_name was in the format omit it, so a missing key keeps
+    # the field's name; "" clears it.
+    if "related_name" in type_specific and "related_name" in schema_field:
+        dv = db_field.related_name or FIELD_DEFAULTS["related_name"]
+        sv = schema_field["related_name"]
+        if dv != sv:
+            changes["related_name"] = (dv, sv)
+
     if "on_delete_behavior" in type_specific:
         dv = db_field.on_delete_behavior or FIELD_DEFAULTS["on_delete_behavior"]
         sv = schema_field.get("on_delete_behavior", FIELD_DEFAULTS["on_delete_behavior"])
@@ -268,6 +301,83 @@ def _compare_field_attrs(db_field, schema_field: dict, cot_slug_cache: dict, war
             changes["on_delete_behavior"] = (dv, sv)
 
     return changes
+
+
+def _normalize_predicates(predicates, fields_by_schema_id: dict):
+    """
+    Return *predicates* with their values written as the model stores them, so that
+    a document spelling a value differently (e.g. a MAC address) isn't a change.
+    """
+    if not isinstance(predicates, list):
+        return predicates
+    normalized = []
+    for predicate in predicates:
+        if not isinstance(predicate, dict):
+            normalized.append(predicate)
+            continue
+        schema_id, lookup, value = predicate.get("field"), predicate.get("lookup"), predicate.get("value")
+        field = fields_by_schema_id.get(schema_id) if isinstance(schema_id, int) else None
+        if field is None or lookup == ConstraintLookupChoices.ISNULL or predicate_field_ref(value) is not None:
+            normalized.append(predicate)
+            continue
+        try:
+            value = normalize_predicate_value(field, lookup, value)
+        except (ValidationError, TypeError):
+            # Invalid; applying the document reports it.
+            pass
+        normalized.append({**predicate, "value": value})
+    return normalized
+
+
+def _compare_constraint_attrs(db_constraint, schema_constraint: dict, fields_by_schema_id: dict) -> dict[str, tuple]:
+    """Return ``{attr: (db_value, schema_value)}`` for constraint attributes that differ."""
+    changes: dict[str, tuple] = {}
+    for attr in CONSTRAINT_ATTRS:
+        if attr == "fields":
+            db_val = list(db_constraint.field_schema_ids)
+            schema_val = list(schema_constraint.get("fields", []))
+        else:
+            db_val = getattr(db_constraint, attr)
+            schema_val = schema_constraint.get(attr, CONSTRAINT_DEFAULTS[attr])
+            if attr in ("condition", "rule"):
+                schema_val = _normalize_predicates(schema_val, fields_by_schema_id)
+        if db_val != schema_val:
+            changes[attr] = (db_val, schema_val)
+    return changes
+
+
+def _diff_constraints(cot, type_def: dict, diff: COTDiff) -> None:
+    """
+    Append constraint changes to *diff*. A DB constraint absent from the schema is
+    removed only when named in ``removed_constraints``; otherwise it's reported as a warning.
+    """
+    schema_constraints = {sc["name"]: sc for sc in type_def.get("constraints", [])}
+    removed = set(type_def.get("removed_constraints", []))
+    db_constraints = {c.name: c for c in cot.constraints.all()} if cot is not None else {}
+    fields_by_schema_id = {f.schema_id: f for f in cot.fields.all()} if db_constraints else {}
+
+    for name, schema_constraint in schema_constraints.items():
+        if name in db_constraints:
+            changed = _compare_constraint_attrs(db_constraints[name], schema_constraint, fields_by_schema_id)
+            if changed:
+                diff.constraint_changes.append(ConstraintChange(
+                    op=FieldOp.ALTER, name=name, schema_def=schema_constraint, changed_attrs=changed,
+                ))
+        else:
+            diff.constraint_changes.append(ConstraintChange(
+                op=FieldOp.ADD, name=name, schema_def=schema_constraint,
+            ))
+
+    for name in db_constraints:
+        if name in schema_constraints:
+            continue
+        if name in removed:
+            diff.constraint_changes.append(ConstraintChange(op=FieldOp.REMOVE, name=name, schema_def={}))
+        else:
+            diff.warnings.append(
+                f"Constraint {name!r} exists in the DB but is absent from both schema.constraints "
+                "and schema.removed_constraints. It will not be affected by apply operations."
+            )
 
 
 def _compare_cot_attrs(cot, type_def: dict) -> dict[str, tuple]:
@@ -324,12 +434,14 @@ def diff_cot(type_def: dict) -> COTDiff:
             )
             for sf in type_def.get("fields", [])
         ]
-        return COTDiff(
+        diff = COTDiff(
             name=name,
             slug=slug,
             is_new=True,
             field_changes=field_changes,
         )
+        _diff_constraints(None, type_def, diff)
+        return diff
 
     diff = COTDiff(name=name, slug=slug, is_new=False)
 
@@ -414,6 +526,8 @@ def diff_cot(type_def: dict) -> COTDiff:
                 "It was likely added outside the schema workflow and will not be "
                 "affected by apply operations."
             )
+
+    _diff_constraints(cot, type_def, diff)
 
     return diff
 

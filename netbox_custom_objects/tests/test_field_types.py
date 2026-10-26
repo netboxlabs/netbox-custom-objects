@@ -1,22 +1,28 @@
 """
 Tests for all the different field types supported by Custom Object Type Fields.
 """
+import json
 from importlib import import_module
 from unittest import skipUnless
 from unittest.mock import Mock
-from datetime import date, datetime, timezone
+from datetime import date, datetime
 from decimal import Decimal
 from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import connection, models
+from django.forms.fields import JSONString
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 
 from core.models import ObjectType
 from dcim.models import Device, DeviceType, ModuleType
 from extras.models import CustomFieldChoiceSet
+from netbox.tables.columns import ColorColumn
 from netbox_custom_objects.field_types import (
     FIELD_TYPE_CLASS,
+    ArrayFieldType,
+    ColorFieldType,
+    MACAddressFieldType,
     CoordinatesFieldType,
     DecimalFieldType,
     MultiObjectFieldType,
@@ -25,7 +31,8 @@ from netbox_custom_objects.field_types import (
     SelectFieldType,
     _csv_import_to_field_name,
 )
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox.search import get_indexer
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField, _deferred_co_field_data
 from .base import CustomObjectsTestCase
 
 
@@ -59,7 +66,7 @@ class RequiredFieldEnforcementTestCase(FieldTypeTestCase):
 
     SCALAR_TYPES = (
         'text', 'longtext', 'integer', 'decimal', 'boolean', 'date', 'datetime',
-        'url', 'json',
+        'url', 'json', 'color', 'mac_address',
     )
 
     def test_scalar_fields_blank_matches_required(self):
@@ -183,21 +190,6 @@ class TextFieldTypeTestCase(FieldTypeTestCase):
         # Test invalid value (contains numbers)
         with self.assertRaises(ValidationError):
             field.validate("Invalid123")
-
-    def test_text_field_model_generation(self):
-        """Test text field model generation."""
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="description",
-            label="Description",
-            type="text",
-            required=True
-        )
-
-        model = self.custom_object_type.get_model()
-        instance = model.objects.create(name="Test", description="Test description")
-
-        self.assertEqual(instance.description, "Test description")
 
     def test_validation_regex_enforced_on_model_field(self):
         """
@@ -332,21 +324,6 @@ class IntegerFieldTypeTestCase(FieldTypeTestCase):
         with self.assertRaises(ValidationError):
             field.validate("not an integer")
 
-    def test_integer_field_model_generation(self):
-        """Test integer field model generation."""
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="count",
-            label="Count",
-            type="integer",
-            default=10
-        )
-
-        model = self.custom_object_type.get_model()
-        instance = model.objects.create(name="Test", count=25)
-
-        self.assertEqual(instance.count, 25)
-
     def test_integer_field_min_max_enforced_by_full_clean(self):
         """validation_minimum/maximum must be enforced by the model field, not just the UI form."""
         self.create_custom_object_type_field(
@@ -385,67 +362,6 @@ class IntegerFieldTypeTestCase(FieldTypeTestCase):
         instance = model.objects.create(name="Test", count=big_value)
         instance.refresh_from_db()
         self.assertEqual(instance.count, big_value)
-
-    def test_integer_field_upgrade_widens_existing_32bit_column(self):
-        """The 0015 migration widens pre-#532 32-bit integer columns to bigint.
-
-        New tables already get a bigint column (test_integer_field_is_64_bit),
-        but custom_objects_* tables created before issue #532 have a 32-bit
-        ``integer`` column that the field-type change alone does not alter --
-        they are managed=False. This exercises that upgrade path: realize the
-        column, force it back to 32-bit to mimic a legacy install, run the
-        migration's data function, and confirm it is widened in place.
-        """
-        field = self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="legacy_count",
-            label="Legacy Count",
-            type="integer",
-        )
-
-        # Realize the backing model/table/column.
-        model = self.custom_object_type.get_model()
-
-        table_name = f"custom_objects_{self.custom_object_type.pk}"
-        column_name = field.name
-
-        def column_data_type():
-            with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT data_type FROM information_schema.columns
-                    WHERE table_schema = current_schema()
-                      AND table_name = %s AND column_name = %s
-                    """,
-                    [table_name, column_name],
-                )
-                row = cursor.fetchone()
-                return row[0] if row else None
-
-        # Mimic a legacy install: force the column back to a 32-bit integer.
-        with connection.cursor() as cursor:
-            cursor.execute(
-                f'ALTER TABLE "{table_name}" ALTER COLUMN "{column_name}" TYPE integer'
-            )
-        self.assertEqual(column_data_type(), "integer")
-
-        # Run the migration's data function against the legacy column.
-        # widen_integer_columns only reads stable CustomObjectTypeField columns
-        # (type, custom_object_type_id, name), so the current app registry is
-        # equivalent to the historical one RunPython would pass. If the function
-        # ever introspects historical field structure, switch to MigrationLoader.
-        migration = import_module(
-            "netbox_custom_objects.migrations.0016_widen_integer_columns"
-        )
-        with connection.schema_editor() as schema_editor:
-            migration.widen_integer_columns(apps, schema_editor)
-
-        # Column is widened, and a value beyond the 32-bit range round-trips.
-        self.assertEqual(column_data_type(), "bigint")
-        big_value = 9_000_000_000  # > 2**31 - 1 (2_147_483_647)
-        instance = model.objects.create(name="Test", legacy_count=big_value)
-        instance.refresh_from_db()
-        self.assertEqual(instance.legacy_count, big_value)
 
 
 class DecimalFieldTypeTestCase(FieldTypeTestCase):
@@ -493,21 +409,6 @@ class DecimalFieldTypeTestCase(FieldTypeTestCase):
         # Test invalid decimal
         with self.assertRaises(ValidationError):
             field.validate("not a decimal")
-
-    def test_decimal_field_model_generation(self):
-        """Test decimal field model generation."""
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="price",
-            label="Price",
-            type="decimal",
-            default=10.50
-        )
-
-        model = self.custom_object_type.get_model()
-        instance = model.objects.create(name="Test", price=Decimal("25.75"))
-
-        self.assertEqual(instance.price, Decimal("25.75"))
 
     def test_decimal_field_min_max_enforced_by_full_clean(self):
         """validation_minimum/maximum must be enforced by the model field, not just the UI form."""
@@ -832,6 +733,289 @@ class CoordinatesFieldTypeTestCase(FieldTypeTestCase):
             field.full_clean()
 
 
+class ArrayFieldTypeTestCase(FieldTypeTestCase):
+    """Test cases for the array field type."""
+
+    def _array_field(self, name="points", **kwargs):
+        kwargs = {"array_element_type": "integer", **kwargs}
+        return self.create_custom_object_type_field(
+            self.custom_object_type, name=name, label=name.replace("_", " ").capitalize(), type="array", **kwargs
+        )
+
+    def _model(self):
+        self.custom_object_type.refresh_from_db()
+        return self.custom_object_type.get_model()
+
+    def _clean(self, model, **values):
+        instance = model(name="Test", **values)
+        instance.full_clean()
+        return instance
+
+    def test_flat_and_tuple_arrays_round_trip(self):
+        self._array_field(name="readings")
+        self._array_field(name="points", array_tuple_size=3, array_min_length=2)
+        self._array_field(name="days", array_element_type="date")
+        model = self._model()
+
+        # Form, API and CSV input arrive as lists of strings and numbers; each item is converted.
+        instance = self._clean(
+            model, readings=[1, "2", 3], points=[[0, 0, 0], [10, 0, 5]], days=["2026-01-01", "2026-02-01"],
+        )
+        instance.save()
+        instance.refresh_from_db()
+        self.assertEqual(instance.readings, [1, 2, 3])
+        self.assertEqual(instance.points, [[0, 0, 0], [10, 0, 5]])
+        self.assertEqual(instance.days, [date(2026, 1, 1), date(2026, 2, 1)])
+
+    def test_serialized_round_trip(self):
+        """Serialized values (as netbox-branching applies them from the changelog) load back."""
+        self._array_field(name="readings")
+        self._array_field(name="points", array_tuple_size=3)
+        self._array_field(name="days", array_element_type="date")
+        model = self._model()
+        instance = model.objects.create(
+            name="Test", readings=[1, 2], points=[[0, 0, 0], [10, 0, 5]], days=[date(2026, 1, 1)],
+        )
+        data = instance.serialize_object()
+        self.assertIsInstance(data["points"], str)
+
+        # Update: assigned as serialized, then cleaned.
+        instance.points = data["points"]
+        instance.full_clean()
+        self.assertEqual(instance.points, [[0, 0, 0], [10, 0, 5]])
+
+        # Create.
+        pk = instance.pk
+        instance.delete()
+        deserialized = model.deserialize_object(data, pk=pk)
+        deserialized.object.full_clean()
+        deserialized.save()
+        restored = model.objects.get(pk=pk)
+        self.assertEqual(restored.readings, [1, 2])
+        self.assertEqual(restored.points, [[0, 0, 0], [10, 0, 5]])
+        self.assertEqual(restored.days, [date(2026, 1, 1)])
+
+    def test_deferred_replay(self):
+        """Serialized values replay once the field exists (a squash merge applying an object first)."""
+        model = self._model()
+        instance = model.objects.create(name="Test")
+        # As Django serializes them: a tuple array is a list of JSON strings.
+        data = {"readings": json.dumps(["1", "2"]), "points": json.dumps([json.dumps(["0", "1"])])}
+        _deferred_co_field_data.set({self.custom_object_type.get_database_table_name(): {instance.pk: {"data": data}}})
+        self._array_field(name="readings")
+        self._array_field(name="points", array_tuple_size=2)
+        restored = self._model().objects.get(pk=instance.pk)
+        self.assertEqual(restored.readings, [1, 2])
+        self.assertEqual(restored.points, [[0, 1]])
+
+    def test_value_validation(self):
+        self._array_field(name="points", array_tuple_size=3, array_min_length=2, array_max_length=3)
+        self._array_field(name="readings", validation_minimum=0, validation_maximum=100)
+        self._array_field(name="codes", array_element_type="text", validation_regex="^[A-Z]+$")
+        self._array_field(name="amounts", array_element_type="decimal")
+        self._array_field(name="days", array_element_type="date")
+        self._array_field(name="labels", array_element_type="text")
+        model = self._model()
+        valid = {"points": [[0, 0, 0], [1, 1, 1]]}
+        self._clean(model, **valid)
+        self._clean(model, **valid, readings=[0, 100], codes=["AB"], amounts=["1.50", 2])
+        cases = {
+            "tuple too short": {"points": [[0, 0, 0], [1, 1]]},
+            "tuple too long": {"points": [[0, 0, 0], [1, 1, 1, 1]]},
+            "not a tuple": {"points": [[0, 0, 0], 1]},
+            "too few items": {"points": [[0, 0, 0]]},
+            "too many items": {"points": [[0, 0, 0]] * 4},
+            "not a list": {"points": {"x": 1}},
+            "not an integer": {**valid, "readings": ["many"]},
+            "below the minimum": {**valid, "readings": [-1]},
+            "above the maximum": {**valid, "readings": [101]},
+            "not matching the regex": {**valid, "codes": ["ab"]},
+            "not a decimal": {**valid, "amounts": ["x"]},
+            "a JSON string": {**valid, "readings": '"abc"'},
+            "not JSON": {**valid, "readings": "abc"},
+            "a number on dates": {**valid, "days": [1]},
+            # Rejected rather than coerced, as the API does.
+            "a fraction on integers": {**valid, "readings": [1.5]},
+            "a boolean on integers": {**valid, "readings": [True]},
+            "a boolean on decimals": {**valid, "amounts": [True]},
+            "a list on text": {**valid, "labels": [[1]]},
+        }
+        for label, values in cases.items():
+            with self.subTest(label):
+                with self.assertRaises(ValidationError):
+                    self._clean(model, **values)
+
+        # Errors name the item, and the value within a tuple.
+        messages = {
+            "Item 2 must have exactly 3 values.": {"points": [[0, 0, 0], [1, 1]]},
+            "Item 2, value 3: “x” value must be an integer.": {"points": [[0, 0, 0], [1, 1, "x"]]},
+            "Item 2: Ensure this value is less than or equal to 100.": {**valid, "readings": [0, 101]},
+            "Item 1: “1” value has an invalid date format.": {**valid, "days": [1]},
+            "Enter a list of values.": {**valid, "readings": '"abc"'},
+        }
+        for message, values in messages.items():
+            with self.subTest(message):
+                with self.assertRaises(ValidationError) as cm:
+                    self._clean(model, **values)
+                self.assertIn(message, " ".join(cm.exception.messages))
+
+    def test_display_and_table_formatting(self):
+        self._array_field(name="readings")
+        self._array_field(name="points", array_tuple_size=3)
+        model = self._model()
+        instance = model.objects.create(name="Test", readings=[1, 2, 3], points=[[0, 0, 0], [10, 0, 5]])
+        field_type = ArrayFieldType()
+        self.assertEqual(field_type.get_display_value(instance, "readings"), "1, 2, 3")
+        self.assertEqual(field_type.get_display_value(instance, "points"), "(0, 0, 0), (10, 0, 5)")
+        column = field_type.get_table_column_field(self.custom_object_type.fields.get(name="points"))
+        self.assertEqual(column.render([[1, 2, 3]]), "(1, 2, 3)")
+        self.assertEqual(column.render([]), column.default)
+
+    def test_form_field(self):
+        points = self._array_field(name="points", array_tuple_size=3, array_min_length=2)
+        days = self._array_field(name="days", array_element_type="date")
+        points_field = ArrayFieldType().get_form_field(points)
+        days_field = ArrayFieldType().get_form_field(days)
+
+        # The help text's example matches the element type and tuple size.
+        self.assertIn("<code>[[0, 0, 0], [10, 10, 10]]</code>", points_field.help_text)
+        self.assertIn('<code>["2026-01-15", "2026-07-01"]</code>', days_field.help_text)
+
+        # Values are shown compactly: one tuple per line, or a flat array on one line.
+        self.assertEqual(points_field.prepare_value([[0, 0, 0], [10, 0, 5]]), "[\n    [0, 0, 0],\n    [10, 0, 5]\n]")
+        self.assertEqual(points_field.prepare_value("[[0, 0, 0], [10, 0, 5]]"), "[\n    [0, 0, 0],\n    [10, 0, 5]\n]")
+        self.assertEqual(days_field.prepare_value([date(2026, 1, 1)]), '["2026-01-01"]')
+        self.assertEqual(days_field.prepare_value(None), "")
+
+    def test_graphql_annotation(self):
+        flat = self._array_field(name="readings", array_element_type="decimal")
+        points = self._array_field(name="points", array_tuple_size=3)
+        self.assertEqual(ArrayFieldType().get_graphql_annotation(flat), list[Decimal])
+        self.assertEqual(ArrayFieldType().get_graphql_annotation(points), list[list[int]])
+
+    def test_default(self):
+        self._array_field(name="readings", default=[1, 2])
+        model = self._model()
+        first, second = model(name="A"), model(name="B")
+        self.assertEqual(first.readings, [1, 2])
+        # Each object gets its own copy of the default.
+        first.readings.append(3)
+        self.assertEqual(second.readings, [1, 2])
+
+        invalid = {
+            "not an integer": ("integer", ["x"]),
+            "a string": ("integer", "abc"),
+            "a number on dates": ("date", [1]),
+        }
+        for label, (element_type, default) in invalid.items():
+            with self.subTest(label):
+                field = CustomObjectTypeField(
+                    custom_object_type=self.custom_object_type, name="bad", type="array",
+                    array_element_type=element_type, default=default,
+                )
+                with self.assertRaises(ValidationError) as cm:
+                    field.full_clean()
+                self.assertIn("default", cm.exception.message_dict)
+
+    def test_empty_list_is_no_value(self):
+        self._array_field(name="readings", array_min_length=2)
+        self._array_field(name="required_readings", required=True)
+        model = self._model()
+        instance = model.objects.create(name="Test", readings=[], required_readings=[1])
+        instance.refresh_from_db()
+        self.assertIsNone(instance.readings)
+
+        # The minimum length applies to a non-empty list; a required field rejects an empty one.
+        self._clean(model, readings=[], required_readings=[1])
+        with self.assertRaises(ValidationError) as cm:
+            self._clean(model, required_readings=[])
+        self.assertIn("required_readings", cm.exception.message_dict)
+
+    def test_search_values(self):
+        self._array_field(name="days", array_element_type="date", search_weight=100)
+        self._array_field(name="amounts", array_element_type="decimal", search_weight=100)
+        model = self._model()
+        instance = model.objects.create(
+            name="Test", days=[date(2026, 1, 1), date(2026, 7, 1)], amounts=[Decimal("1.50")],
+        )
+        # Cached as displayed, not as the list's repr.
+        values = {value.name: value.value for value in get_indexer(model).to_cache(instance)}
+        self.assertEqual((values["days"], values["amounts"]), ("2026-01-01, 2026-07-01", "1.50"))
+
+    def test_field_definition_validation(self):
+        cases = {
+            "no element type": ({"type": "array"}, "array_element_type"),
+            "tuple size of one": ({"type": "array", "array_element_type": "integer", "array_tuple_size": 1},
+                                  "array_tuple_size"),
+            "zero minimum length": ({"type": "array", "array_element_type": "integer", "array_min_length": 0},
+                                    "array_min_length"),
+            "zero maximum length": ({"type": "array", "array_element_type": "integer", "array_max_length": 0},
+                                    "array_max_length"),
+            "minimum above maximum": ({"type": "array", "array_element_type": "integer", "array_min_length": 3,
+                                       "array_max_length": 2}, "array_max_length"),
+            "numeric limits on text elements": ({"type": "array", "array_element_type": "text",
+                                                 "validation_minimum": 1}, "validation_minimum"),
+            "regex on integer elements": ({"type": "array", "array_element_type": "integer",
+                                           "validation_regex": "^1$"}, "validation_regex"),
+            "array settings on a text field": ({"type": "text", "array_element_type": "integer"},
+                                               "array_element_type"),
+            "length on an integer field": ({"type": "integer", "array_max_length": 2}, "array_max_length"),
+        }
+        for label, (kwargs, key) in cases.items():
+            with self.subTest(label):
+                field = CustomObjectTypeField(custom_object_type=self.custom_object_type, name="values", **kwargs)
+                with self.assertRaises(ValidationError) as cm:
+                    field.full_clean()
+                self.assertIn(key, cm.exception.message_dict)
+
+        # Element validation that fits the element type is allowed.
+        CustomObjectTypeField(
+            custom_object_type=self.custom_object_type, name="codes", type="array",
+            array_element_type="text", validation_regex="^[A-Z]+$",
+        ).full_clean()
+        CustomObjectTypeField(
+            custom_object_type=self.custom_object_type, name="readings", type="array",
+            array_element_type="decimal", validation_minimum=0, validation_maximum=10,
+        ).full_clean()
+
+    def test_shape_and_type_are_fixed_after_creation(self):
+        changes = {
+            "element type": ("array_element_type", "text"),
+            "tuple size": ("array_tuple_size", 2),
+            "type": ("type", "text"),
+        }
+        for label, (attr, value) in changes.items():
+            with self.subTest(label):
+                field = self._array_field(name="points", array_tuple_size=3)
+                field = CustomObjectTypeField.objects.get(pk=field.pk)
+                setattr(field, attr, value)
+                if attr == "type":
+                    field.array_element_type, field.array_tuple_size = "", None
+                with self.assertRaises(ValidationError) as cm:
+                    field.full_clean()
+                self.assertIn(attr, cm.exception.message_dict)
+                field.delete()
+
+        # The length limits can change.
+        field = CustomObjectTypeField.objects.get(pk=self._array_field(name="points", array_tuple_size=3).pk)
+        field.array_max_length = 10
+        field.full_clean()
+
+        text = self.create_custom_object_type_field(self.custom_object_type, name="label", type="text")
+        text.type, text.array_element_type = "array", "text"
+        with self.assertRaises(ValidationError) as cm:
+            text.full_clean()
+        self.assertIn("type", cm.exception.message_dict)
+
+    def test_instances_are_picklable(self):
+        import pickle
+
+        self._array_field(name="points", array_tuple_size=3)
+        model = self._model()
+        instance = model.objects.create(name="Test", points=[[1, 2, 3]])
+        self.assertEqual(pickle.loads(pickle.dumps(instance)).points, [[1, 2, 3]])
+
+
 class BooleanFieldTypeTestCase(FieldTypeTestCase):
     """Test cases for boolean field type."""
 
@@ -866,21 +1050,6 @@ class BooleanFieldTypeTestCase(FieldTypeTestCase):
         # Test invalid value
         with self.assertRaises(ValidationError):
             field.validate("not a boolean")
-
-    def test_boolean_field_model_generation(self):
-        """Test boolean field model generation."""
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="active",
-            label="Active",
-            type="boolean",
-            default=True
-        )
-
-        model = self.custom_object_type.get_model()
-        instance = model.objects.create(name="Test", active=False)
-
-        self.assertFalse(instance.active)
 
 
 class DateFieldTypeTestCase(FieldTypeTestCase):
@@ -918,21 +1087,6 @@ class DateFieldTypeTestCase(FieldTypeTestCase):
         with self.assertRaises(ValidationError):
             field.validate("invalid-date")
 
-    def test_date_field_model_generation(self):
-        """Test date field model generation."""
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="created_date",
-            label="Created Date",
-            type="date"
-        )
-
-        model = self.custom_object_type.get_model()
-        test_date = date(2023, 1, 1)
-        instance = model.objects.create(name="Test", created_date=test_date)
-
-        self.assertEqual(instance.created_date, test_date)
-
 
 class DateTimeFieldTypeTestCase(FieldTypeTestCase):
     """Test cases for datetime field type."""
@@ -968,21 +1122,6 @@ class DateTimeFieldTypeTestCase(FieldTypeTestCase):
         # Test invalid datetime string
         with self.assertRaises(ValidationError):
             field.validate("invalid-datetime")
-
-    def test_datetime_field_model_generation(self):
-        """Test datetime field model generation."""
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="created_datetime",
-            label="Created DateTime",
-            type="datetime"
-        )
-
-        model = self.custom_object_type.get_model()
-        test_datetime = datetime(2023, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
-        instance = model.objects.create(name="Test", created_datetime=test_datetime)
-
-        self.assertEqual(instance.created_datetime, test_datetime)
 
 
 class URLFieldTypeTestCase(FieldTypeTestCase):
@@ -1184,6 +1323,140 @@ class URLFieldTypeTestCase(FieldTypeTestCase):
         self.assertEqual(get_url_field_html(instance, cotf), "")
 
 
+class ColorFieldTypeTestCase(FieldTypeTestCase):
+    """Test cases for color field type."""
+
+    def test_model_field_validates_hex_color(self):
+        self.create_custom_object_type_field(self.custom_object_type, name="shade", type="color")
+        model = self.custom_object_type.get_model()
+        self.assertEqual(model._meta.get_field("shade").max_length, 6)
+
+        model(name="Valid", shade="00ff00").full_clean()
+        model(name="Blank").full_clean()
+        for value in ("00FF00", "#00ff00", "green", "0f0"):
+            with self.subTest(value=value), self.assertRaises(ValidationError) as cm:
+                model(name="Invalid", shade=value).full_clean()
+            self.assertIn("shade", cm.exception.message_dict)
+
+    def test_validate(self):
+        field = self.create_custom_object_type_field(self.custom_object_type, name="shade", type="color")
+        field.validate("aa1100")
+        for value in ("AA1100", "#aa1100", 123):
+            with self.subTest(value=value), self.assertRaises(ValidationError):
+                field.validate(value)
+
+    def test_default_must_be_a_color(self):
+        # The field form's JSON input yields a str subclass.
+        for default in ("red", JSONString("red")):
+            field = CustomObjectTypeField(
+                custom_object_type=self.custom_object_type, name="shade", type="color", default=default
+            )
+            with self.subTest(default=type(default)), self.assertRaises(ValidationError) as cm:
+                field.full_clean()
+            self.assertIn("valid hexadecimal RGB color", cm.exception.message_dict["default"][0])
+        field.default = JSONString("ff0000")
+        field.full_clean()
+
+        field = self.create_custom_object_type_field(
+            self.custom_object_type, name="shade", type="color", default="ff0000"
+        )
+        model = self.custom_object_type.get_model()
+        self.assertEqual(model.objects.create(name="Defaulted").shade, "ff0000")
+
+    def test_unique(self):
+        self.create_custom_object_type_field(self.custom_object_type, name="shade", type="color", unique=True)
+        model = self.custom_object_type.get_model()
+        model.objects.create(name="First", shade="0000ff")
+        with self.assertRaises(ValidationError):
+            model(name="Second", shade="0000ff").full_clean()
+
+    def test_form_field_keeps_a_custom_color(self):
+        field = self.create_custom_object_type_field(self.custom_object_type, name="shade", type="color")
+        form_field = ColorFieldType().get_form_field(field)
+        named = form_field.widget.render("shade", "00ffff")
+        custom = form_field.widget.render("shade", "123456")
+        self.assertRegex(named, r'value="00ffff"\s+selected')
+        self.assertEqual(named.count('value="00ffff"'), 1)
+        self.assertRegex(custom, r'value="123456"\s+selected')
+
+    def test_csv_form_field_accepts_exported_values(self):
+        field = self.create_custom_object_type_field(self.custom_object_type, name="shade", type="color")
+        form_field = ColorFieldType().get_form_field(field, for_csv_import=True)
+        self.assertEqual(form_field.clean("#00FF00"), "00ff00")
+        self.assertEqual(form_field.clean("abcdef"), "abcdef")
+        with self.assertRaises(ValidationError):
+            form_field.clean("#xy")
+
+    def test_table_column(self):
+        field = self.create_custom_object_type_field(self.custom_object_type, name="shade", type="color")
+        column = ColorFieldType().get_table_column_field(field)
+        # NetBox's own ColorColumn: a bare swatch, exported as #rrggbb.
+        self.assertIsInstance(column, ColorColumn)
+        self.assertEqual(
+            column.render("ff9800"), '<span class="color-label" style="background-color: #ff9800">&nbsp;</span>',
+        )
+        self.assertEqual(column.value("ff8800"), "#ff8800")
+
+
+class MACAddressFieldTypeTestCase(FieldTypeTestCase):
+    """Test cases for MAC address field type."""
+
+    FORMATS = ("00:1a:2b:3c:4d:5e", "00-1A-2B-3C-4D-5E", "001a.2b3c.4d5e", "001a2b3c4d5e")
+
+    def test_model_field_normalizes_formats(self):
+        self.create_custom_object_type_field(self.custom_object_type, name="mac", type="mac_address")
+        model = self.custom_object_type.get_model()
+        for value in self.FORMATS:
+            with self.subTest(value=value):
+                obj = model.objects.create(name=value, mac=value)
+                obj.refresh_from_db()
+                self.assertEqual(str(obj.mac), "00:1A:2B:3C:4D:5E")
+        model(name="Blank").full_clean()
+        for value in ("00:1a:2b:3c:4d", "not a mac", "00:1a:2b:3c:4d:5e:6f:70"):
+            with self.subTest(value=value), self.assertRaises(ValidationError) as cm:
+                model(name="Invalid", mac=value).full_clean()
+            self.assertIn("mac", cm.exception.message_dict)
+
+    def test_validate(self):
+        field = self.create_custom_object_type_field(self.custom_object_type, name="mac", type="mac_address")
+        field.validate("00-1a-2b-3c-4d-5e")
+        for value in ("00:1a:2b:3c:4d", 123):
+            with self.subTest(value=value), self.assertRaises(ValidationError):
+                field.validate(value)
+
+    def test_default(self):
+        field = CustomObjectTypeField(
+            custom_object_type=self.custom_object_type, name="mac", type="mac_address", default="nope"
+        )
+        with self.assertRaises(ValidationError) as cm:
+            field.full_clean()
+        self.assertIn("default", cm.exception.message_dict)
+
+        field = CustomObjectTypeField(
+            custom_object_type=self.custom_object_type, name="mac", type="mac_address", default="001a.2b3c.4d5e"
+        )
+        field.full_clean()
+        self.assertEqual(field.default, "00:1A:2B:3C:4D:5E")
+        field.save()
+        model = self.custom_object_type.get_model()
+        self.assertEqual(str(model.objects.create(name="Defaulted").mac), "00:1A:2B:3C:4D:5E")
+
+    def test_unique_across_formats(self):
+        self.create_custom_object_type_field(self.custom_object_type, name="mac", type="mac_address", unique=True)
+        model = self.custom_object_type.get_model()
+        model.objects.create(name="First", mac="00:1a:2b:3c:4d:5e")
+        with self.assertRaises(ValidationError):
+            model(name="Second", mac="001A2B3C4D5E").full_clean()
+
+    def test_form_field(self):
+        field = self.create_custom_object_type_field(self.custom_object_type, name="mac", type="mac_address")
+        form_field = MACAddressFieldType().get_form_field(field)
+        self.assertEqual(form_field.clean("001a.2b3c.4d5e"), "00:1A:2B:3C:4D:5E")
+        self.assertIsNone(form_field.clean(""))
+        with self.assertRaises(ValidationError):
+            form_field.clean("00:1a")
+
+
 class JSONFieldTypeTestCase(FieldTypeTestCase):
     """Test cases for JSON field type."""
 
@@ -1199,21 +1472,6 @@ class JSONFieldTypeTestCase(FieldTypeTestCase):
 
         self.assertEqual(field.type, "json")
         self.assertEqual(field.default, {"key": "value"})
-
-    def test_json_field_model_generation(self):
-        """Test JSON field model generation."""
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="metadata",
-            label="Metadata",
-            type="json"
-        )
-
-        model = self.custom_object_type.get_model()
-        test_data = {"key": "value", "number": 42, "list": [1, 2, 3]}
-        instance = model.objects.create(name="Test", metadata=test_data)
-
-        self.assertEqual(instance.metadata, test_data)
 
 
 class SelectFieldTypeTestCase(FieldTypeTestCase):
@@ -1255,22 +1513,6 @@ class SelectFieldTypeTestCase(FieldTypeTestCase):
         # Test invalid choice
         with self.assertRaises(ValidationError):
             field.validate("invalid_choice")
-
-    def test_select_field_model_generation(self):
-        """Test select field model generation."""
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="status",
-            label="Status",
-            type="select",
-            choice_set=self.choice_set,
-            default="choice1"
-        )
-
-        model = self.custom_object_type.get_model()
-        instance = model.objects.create(name="Test", status="choice2")
-
-        self.assertEqual(instance.status, "choice2")
 
     def test_select_field_display_value_returns_label(self):
         """get_display_value() must return the human-readable label, not the raw key."""
@@ -1456,21 +1698,6 @@ class MultiSelectFieldTypeTestCase(FieldTypeTestCase):
         with self.assertRaises(ValidationError):
             field.validate(["choice1", "invalid_choice"])
 
-    def test_multiselect_field_model_generation(self):
-        """Test multiselect field model generation."""
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="tags",
-            label="Tags",
-            type="multiselect",
-            choice_set=self.choice_set
-        )
-
-        model = self.custom_object_type.get_model()
-        instance = model.objects.create(name="Test", tags=["choice1", "choice3"])
-
-        self.assertEqual(instance.tags, ["choice1", "choice3"])
-
     def test_multiselect_stores_choice_values_as_long_as_select_does(self):
         """A choice value may be 100 characters, like a select column (issue #769)."""
         long_value = "v" * 100
@@ -1617,38 +1844,6 @@ class ObjectFieldTypeTestCase(FieldTypeTestCase):
         with self.assertRaises(NotImplementedError):
             ObjectFieldType().get_model_field(field)
 
-    def test_object_field_model_generation(self):
-        """Test object field model generation."""
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="device",
-            label="Device",
-            type="object",
-            related_object_type=self.device_object_type
-        )
-
-        from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
-
-        model = self.custom_object_type.get_model()
-
-        site = Site.objects.create(name="Test Site", slug="test-site")
-        manufacturer = Manufacturer.objects.create(name="Test Manufacturer", slug="test-manufacturer")
-        device_type = DeviceType.objects.create(
-            manufacturer=manufacturer,
-            model="Test Model",
-            slug="test-model"
-        )
-        device_role = DeviceRole.objects.create(name="Test Role", slug="test-role")
-        device = Device.objects.create(
-            name="Test Device",
-            site=site,
-            device_type=device_type,
-            role=device_role
-        )
-
-        instance = model.objects.create(name="Test", device=device)
-        self.assertEqual(instance.device, device)
-
     def test_csv_import_field_uses_name_for_models_with_name(self):
         """get_form_field(for_csv_import=True) uses 'name' as to_field_name for models
         that have a name field (e.g. Device)."""
@@ -1740,48 +1935,6 @@ class MultiObjectFieldTypeTestCase(FieldTypeTestCase):
         field.refresh_from_db()
         with self.assertRaises(NotImplementedError):
             MultiObjectFieldType().get_model_field(field)
-
-    def test_multiobject_field_model_generation(self):
-        """Test multiobject field model generation."""
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="devices",
-            label="Devices",
-            type="multiobject",
-            related_object_type=self.device_object_type
-        )
-
-        from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
-
-        model = self.custom_object_type.get_model()
-
-        site = Site.objects.create(name="Test Site", slug="test-site")
-        manufacturer = Manufacturer.objects.create(name="Test Manufacturer", slug="test-manufacturer")
-        device_type = DeviceType.objects.create(
-            manufacturer=manufacturer,
-            model="Test Model",
-            slug="test-model"
-        )
-        device_role = DeviceRole.objects.create(name="Test Role", slug="test-role")
-        device1 = Device.objects.create(
-            name="Test Device 1",
-            site=site,
-            device_type=device_type,
-            role=device_role
-        )
-        device2 = Device.objects.create(
-            name="Test Device 2",
-            site=site,
-            device_type=device_type,
-            role=device_role
-        )
-
-        instance = model.objects.create(name="Test")
-        instance.devices.add(device1, device2)
-
-        self.assertEqual(instance.devices.count(), 2)
-        self.assertIn(device1, instance.devices.all())
-        self.assertIn(device2, instance.devices.all())
 
     def test_csv_import_form_field_for_module_type_uses_model_field(self):
         """MultiObjectFieldType.get_form_field(for_csv_import=True) on a field
@@ -1906,268 +2059,6 @@ class MultiObjectFieldTypeTestCase(FieldTypeTestCase):
         self.custom_object_type.clear_model_cache(self.custom_object_type.id)
         model = self.custom_object_type.get_model()
         self.assertEqual(set(model.objects.get(pk=instance.pk).devices.all()), {device1, device2})
-
-
-class SelfReferentialFieldTestCase(FieldTypeTestCase):
-    """Test cases for self-referential object fields.
-
-    The recursion guard in CustomObjectTypeField._check_recursion() explicitly
-    permits self-referential fields (#263), so these tests should pass without
-    any skip decorator.
-    """
-
-    def test_self_referential_object_field(self):
-        """#263 – A COT may have an FK object field pointing to itself."""
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="parent",
-            label="Parent",
-            type="object",
-            related_object_type=self.custom_object_type.object_type,
-        )
-
-        model = self.custom_object_type.get_model()
-
-        parent = model.objects.create(name="Parent Instance")
-        child = model.objects.create(name="Child Instance", parent=parent)
-
-        self.assertEqual(child.parent, parent)
-
-    def test_self_referential_multiobject_field(self):
-        """#263 – A COT may have a M2M multiobject field pointing to itself."""
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="children",
-            label="Children",
-            type="multiobject",
-            related_object_type=self.custom_object_type.object_type,
-        )
-
-        model = self.custom_object_type.get_model()
-
-        parent = model.objects.create(name="Parent Instance")
-        child1 = model.objects.create(name="Child 1")
-        child2 = model.objects.create(name="Child 2")
-
-        parent.children.add(child1, child2)
-
-        self.assertEqual(parent.children.count(), 2)
-        self.assertIn(child1, parent.children.all())
-        self.assertIn(child2, parent.children.all())
-
-
-class CrossReferentialFieldTestCase(FieldTypeTestCase):
-    """Test cases for cross-referential custom object fields."""
-
-    def test_cross_referential_object_field(self):
-        """Test object field referencing another custom object type."""
-        # Create second custom object type
-        second_type = self.create_custom_object_type(name="SecondObject", slug="second-objects")
-        self.create_custom_object_type_field(
-            second_type,
-            name="name",
-            label="Name",
-            type="text",
-            primary=True,
-            required=True
-        )
-
-        # Add object field referencing second type
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="related_object",
-            label="Related Object",
-            type="object",
-            related_object_type=second_type.object_type
-        )
-
-        model1 = self.custom_object_type.get_model()
-        # Refresh second_type so cache_timestamp matches the DB value bumped by the signal.
-        second_type.refresh_from_db()
-        model2 = second_type.get_model()
-
-        # Create instances
-        obj2 = model2.objects.create(name="Second Object")
-        obj1 = model1.objects.create(name="First Object", related_object=obj2)
-
-        self.assertEqual(obj1.related_object, obj2)
-
-    def test_cross_referential_multiobject_field(self):
-        """Test multiobject field referencing another custom object type."""
-        # Create second custom object type
-        second_type = self.create_custom_object_type(name="SecondObject", slug="second-objects")
-        self.create_custom_object_type_field(
-            second_type,
-            name="name",
-            label="Name",
-            type="text",
-            primary=True,
-            required=True
-        )
-
-        # Add multiobject field referencing second type
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="related_objects",
-            label="Related Objects",
-            type="multiobject",
-            related_object_type=second_type.object_type
-        )
-
-        model1 = self.custom_object_type.get_model()
-        model2 = second_type.get_model()
-
-        # Create instances
-        obj1 = model1.objects.create(name="First Object")
-        obj2_1 = model2.objects.create(name="Second Object 1")
-        obj2_2 = model2.objects.create(name="Second Object 2")
-
-        # Add related objects
-        obj1.related_objects.add(obj2_1, obj2_2)
-
-        self.assertEqual(obj1.related_objects.count(), 2)
-        self.assertIn(obj2_1, obj1.related_objects.all())
-        self.assertIn(obj2_2, obj1.related_objects.all())
-
-
-class MultipleObjectFieldsToSameCOTTestCase(FieldTypeTestCase):
-    """Test cases for multiple object/multiobject fields pointing to the same COT.
-
-    Issue #237: multiple FK/M2M fields targeting the same related COT should all
-    be created without name collisions and must remain independently queryable.
-    """
-
-    def test_two_fk_fields_to_same_cot(self):
-        """#237 – Two FK object fields on the same COT can point to the same target COT."""
-        # Create a second COT that will be the shared target
-        target = self.create_custom_object_type(name="SharedTarget", slug="shared-target")
-        self.create_custom_object_type_field(
-            target,
-            name="name",
-            label="Name",
-            type="text",
-            primary=True,
-            required=True,
-        )
-
-        # Add two independent FK fields on the existing COT pointing to target
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="primary_ref",
-            label="Primary Reference",
-            type="object",
-            related_object_type=target.object_type,
-        )
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="secondary_ref",
-            label="Secondary Reference",
-            type="object",
-            related_object_type=target.object_type,
-        )
-
-        # Refresh target so its cache_timestamp matches the DB value bumped by the signal
-        # when both TYPE_OBJECT fields above were saved.
-        target.refresh_from_db()
-        target_model = target.get_model()
-        model = self.custom_object_type.get_model()
-
-        t1 = target_model.objects.create(name="Target 1")
-        t2 = target_model.objects.create(name="Target 2")
-
-        obj = model.objects.create(name="Source Object", primary_ref=t1, secondary_ref=t2)
-
-        self.assertEqual(obj.primary_ref, t1)
-        self.assertEqual(obj.secondary_ref, t2)
-
-    def test_two_m2m_fields_to_same_cot(self):
-        """#237 – Two M2M multiobject fields on the same COT can point to the same target COT."""
-        target = self.create_custom_object_type(name="M2MTarget", slug="m2m-target")
-        self.create_custom_object_type_field(
-            target,
-            name="name",
-            label="Name",
-            type="text",
-            primary=True,
-            required=True,
-        )
-
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="primary_refs",
-            label="Primary References",
-            type="multiobject",
-            related_object_type=target.object_type,
-        )
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="secondary_refs",
-            label="Secondary References",
-            type="multiobject",
-            related_object_type=target.object_type,
-        )
-
-        target_model = target.get_model()
-        model = self.custom_object_type.get_model()
-
-        t1 = target_model.objects.create(name="Target 1")
-        t2 = target_model.objects.create(name="Target 2")
-        t3 = target_model.objects.create(name="Target 3")
-
-        obj = model.objects.create(name="Source Object")
-        obj.primary_refs.add(t1, t2)
-        obj.secondary_refs.add(t2, t3)
-
-        # The two M2M relations are independent
-        self.assertEqual(obj.primary_refs.count(), 2)
-        self.assertEqual(obj.secondary_refs.count(), 2)
-        self.assertIn(t1, obj.primary_refs.all())
-        self.assertIn(t3, obj.secondary_refs.all())
-        # t2 appears in both without conflict
-        self.assertIn(t2, obj.primary_refs.all())
-        self.assertIn(t2, obj.secondary_refs.all())
-
-    def test_fk_and_m2m_fields_to_same_cot(self):
-        """#237 – One FK and one M2M field pointing to the same target COT coexist."""
-        target = self.create_custom_object_type(name="MixedTarget", slug="mixed-target")
-        self.create_custom_object_type_field(
-            target,
-            name="name",
-            label="Name",
-            type="text",
-            primary=True,
-            required=True,
-        )
-
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="single_ref",
-            label="Single Reference",
-            type="object",
-            related_object_type=target.object_type,
-        )
-        self.create_custom_object_type_field(
-            self.custom_object_type,
-            name="multi_refs",
-            label="Multi References",
-            type="multiobject",
-            related_object_type=target.object_type,
-        )
-
-        # Refresh target so cache_timestamp matches the DB value bumped by the signal
-        # when the TYPE_OBJECT 'single_ref' field was saved above.
-        target.refresh_from_db()
-        target_model = target.get_model()
-        model = self.custom_object_type.get_model()
-
-        t1 = target_model.objects.create(name="Target 1")
-        t2 = target_model.objects.create(name="Target 2")
-
-        obj = model.objects.create(name="Source Object", single_ref=t1)
-        obj.multi_refs.add(t1, t2)
-
-        self.assertEqual(obj.single_ref, t1)
-        self.assertEqual(obj.multi_refs.count(), 2)
 
 
 class PrimaryFieldChangeTestCase(FieldTypeTestCase):

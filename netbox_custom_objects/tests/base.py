@@ -8,7 +8,7 @@ from django.db import connection, connections
 from django.test import Client, override_settings
 from core.models import ObjectChange, ObjectType
 from extras.models import CustomFieldChoiceSet
-from users.models import Token
+from users.models import ObjectPermission, Token
 from utilities.testing import create_test_user
 
 from netbox_custom_objects.constants import APP_LABEL
@@ -38,6 +38,29 @@ def create_token(user):
         token = Token(user=user)
         token.save()
         return token.key
+
+
+def _grant_perm(user, action, model_class, name=None):
+    perm = ObjectPermission(name=name or f"poly-test-{action}", actions=[action])
+    perm.save()
+    perm.users.add(user)
+    perm.object_types.add(ObjectType.objects.get_for_model(model_class))
+    return perm
+
+
+def _fk_constraints(table, column):
+    """(referenced table, confdeltype) of each FK constraint on *table*.*column*."""
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT c.confrelid::regclass::text, c.confdeltype
+            FROM pg_constraint c
+            JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey)
+            WHERE c.contype = 'f' AND c.conrelid = %s::regclass AND a.attname = %s
+            """,
+            [table, column],
+        )
+        return cursor.fetchall()
 
 
 def _recreate_contenttypes():
@@ -266,6 +289,29 @@ def _reset_netbox_request_context():
         logger.debug('netbox.context.query_cache has no .set(); skipping reset')
 
 
+def _reverse_descriptors():
+    """Return (model, name) for every polymorphic reverse descriptor set on a model class."""
+    from netbox_custom_objects.field_types import (
+        PolymorphicMultiObjectReverseDescriptor,
+        PolymorphicObjectReverseDescriptor,
+    )
+    return {
+        (model, name)
+        for model in django_apps.get_models()
+        for name, attr in vars(model).items()
+        if isinstance(attr, (PolymorphicObjectReverseDescriptor, PolymorphicMultiObjectReverseDescriptor))
+    }
+
+
+def _remove_reverse_descriptors(keep=frozenset()):
+    """
+    Remove polymorphic reverse descriptors other than *keep* from model classes.
+    Rolling back a test drops the fields that set them, but not the class attributes.
+    """
+    for model, name in _reverse_descriptors() - keep:
+        delattr(model, name)
+
+
 def create_api_token(user):
     """Create an API token for *user*, handling the NetBox ≥ 4.5 version field."""
     try:
@@ -403,6 +449,7 @@ class CustomObjectsTestCase:
             name: frozenset(f.column for f in model._meta.local_fields)
             for name, model in app_models.items()
         }
+        self._reverse_descriptor_snapshot = _reverse_descriptors()
 
     def tearDown(self):
         """Clean up after each test."""
@@ -421,6 +468,7 @@ class CustomObjectsTestCase:
             # skip per-test model cleanup to avoid deleting static models.
             super().tearDown()
             return
+        _remove_reverse_descriptors(keep=self._reverse_descriptor_snapshot)
         app_models = django_apps.all_models.get(APP_LABEL, {})
         to_remove = []
         for name, model in list(app_models.items()):
@@ -454,6 +502,7 @@ class CustomObjectsTestCase:
         # the registry first so the cascade collector never tries to query those
         # dropped tables.  Static plugin models (CustomObjectType, etc.) must
         # NOT be removed.
+        _remove_reverse_descriptors()
         app_models = django_apps.all_models.get(APP_LABEL, {})
         dynamic = [
             name for name, model in list(app_models.items())
@@ -675,3 +724,10 @@ class CustomObjectsTestCase:
         )
 
         return custom_object_type
+
+    def _set(self, field, **attrs):
+        """Reload *field* from the database, set *attrs* on it and save it."""
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        for attr, value in attrs.items():
+            setattr(field, attr, value)
+        field.save()

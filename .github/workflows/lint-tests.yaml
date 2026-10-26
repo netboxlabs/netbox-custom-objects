@@ -35,7 +35,9 @@ jobs:
       - name: Build in-app model documentation
         run: |
           mkdocs build -f mkdocs.models.yml
-          test -f netbox_custom_objects/static/docs/models/netbox_custom_objects/customobjecttype/index.html
+          for page in customobjecttype customobjecttypefield customobjecttypeconstraint; do
+            test -f netbox_custom_objects/static/docs/models/netbox_custom_objects/$page/index.html
+          done
   tests:
     name: tests (${{ matrix.name }})
     runs-on: ubuntu-latest
@@ -109,8 +111,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install 'netboxlabs-netbox-branching>=1.0.4,<2.0.0'
-      - name: Tune PostgreSQL for branching test performance
-        if: ${{ matrix.with-branching == true }}
+      - name: Tune PostgreSQL for test performance
         run: |
           sudo apt-get install -y -q postgresql-client
           PGPASSWORD=netbox psql -h localhost -U netbox \
@@ -119,14 +120,9 @@ jobs:
             -c "ALTER SYSTEM SET synchronous_commit = off" \
             -c "ALTER SYSTEM SET lock_timeout = '60s'" \
             -c "SELECT pg_reload_conf()"
+      # The branching job runs the whole suite too: netbox-branching changes model
+      # routing and wires extra hooks, and some tests run only when it's installed.
       - name: Run tests
-        if: ${{ matrix.with-branching != true }}
         working-directory: netbox
         run: |
           python netbox/manage.py test netbox_custom_objects.tests --keepdb --verbosity=2
-
-      - name: Run tests (with branching)
-        if: ${{ matrix.with-branching == true }}
-        working-directory: netbox
-        run: |
-          python netbox/manage.py test netbox_custom_objects.tests.test_branching --keepdb --verbosity=2

@@ -10,9 +10,34 @@ class CustomObjectFieldTypeChoices(CustomFieldTypeChoices):
     """
 
     TYPE_COORDINATES = "coordinates"
+    TYPE_ARRAY = "array"
+    TYPE_COLOR = "color"
+    TYPE_MAC_ADDRESS = "mac_address"
 
     CHOICES = CustomFieldTypeChoices.CHOICES + (
         (TYPE_COORDINATES, _("Coordinates")),
+        (TYPE_ARRAY, _("Array")),
+        (TYPE_COLOR, _("Color")),
+        (TYPE_MAC_ADDRESS, _("MAC address")),
+    )
+
+
+class ArrayElementTypeChoices(ChoiceSet):
+    """The type of each value in an array field."""
+    TEXT = "text"
+    INTEGER = "integer"
+    DECIMAL = "decimal"
+    BOOLEAN = "boolean"
+    DATE = "date"
+    DATETIME = "datetime"
+
+    CHOICES = (
+        (TEXT, _("Text")),
+        (INTEGER, _("Integer")),
+        (DECIMAL, _("Decimal")),
+        (BOOLEAN, _("Boolean")),
+        (DATE, _("Date")),
+        (DATETIME, _("Date & time")),
     )
 
 
@@ -62,4 +87,38 @@ class SearchWeightChoices(ChoiceSet):
         (WEIGHT_MEDIUM, _('Medium (500)')),
         (WEIGHT_LOW, _('Low (1000)')),
         (WEIGHT_NONE, _('Not searchable')),
+    )
+
+
+class ConstraintTypeChoices(ChoiceSet):
+    """The kinds of constraint a Custom Object Type can enforce on its objects."""
+    UNIQUE = "unique"
+    CHECK = "check"
+
+    CHOICES = (
+        (UNIQUE, _("Unique")),
+        (CHECK, _("Check")),
+    )
+
+
+class ConstraintLookupChoices(ChoiceSet):
+    """How a constraint condition or rule compares a field's value."""
+    EXACT = "exact"
+    NOT_EQUAL = "n"
+    IN = "in"
+    ISNULL = "isnull"
+    GT = "gt"
+    GTE = "gte"
+    LT = "lt"
+    LTE = "lte"
+
+    CHOICES = (
+        (EXACT, _("Equals")),
+        (NOT_EQUAL, _("Does not equal (or is empty)")),
+        (IN, _("Is one of")),
+        (ISNULL, _("Is empty")),
+        (GT, _("Is greater than")),
+        (GTE, _("Is at least")),
+        (LT, _("Is less than")),
+        (LTE, _("Is at most")),
     )

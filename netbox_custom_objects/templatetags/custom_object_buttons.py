@@ -1,23 +1,18 @@
-from core.models import ObjectType
 from django import template
 from django.contrib.contenttypes.models import ContentType
-from django.urls import NoReverseMatch, reverse
-from extras.models import Bookmark, ExportTemplate, Subscription
+from django.urls import reverse
+from django.utils.translation import gettext_lazy as _
+from extras.models import Bookmark, Subscription
 from netbox.models.features import NotificationsMixin
 from utilities.querydict import prepare_cloned_fields
 
 from netbox_custom_objects.utilities import get_viewname
 
 __all__ = (
-    "custom_object_add_button",
     "custom_object_bookmark_button",
-    "custom_object_bulk_delete_button",
-    "custom_object_bulk_edit_button",
     "custom_object_clone_button",
     "custom_object_delete_button",
     "custom_object_edit_button",
-    "custom_object_export_button",
-    "custom_object_import_button",
     "custom_object_subscribe_button",
     "custom_object_sync_button",
 )
@@ -82,13 +77,11 @@ def custom_object_clone_button(instance):
         kwargs={"custom_object_type": instance.custom_object_type.slug}
     )
 
-    # Populate cloned field values
+    # Populate cloned field values; with none, there's nothing to clone, so no button.
     param_string = prepare_cloned_fields(instance).urlencode()
-    if param_string:
-        url = f"{url}?{param_string}"
 
     return {
-        "url": url,
+        "url": f"{url}?{param_string}" if param_string else None,
     }
 
 
@@ -105,7 +98,7 @@ def custom_object_edit_button(instance):
 
     return {
         "url": url,
-        "label": "Edit",
+        "label": _("Edit"),
     }
 
 
@@ -176,111 +169,6 @@ def custom_object_sync_button(instance):
     url = reverse(viewname, kwargs={"pk": instance.pk})
 
     return {
-        "label": "Sync",
-        "url": url,
-    }
-
-
-#
-# List buttons
-#
-
-
-@register.inclusion_tag("buttons/add.html")
-def custom_object_add_button(model, custom_object_type, action="add"):
-    try:
-        viewname = get_viewname(model, action)
-        url = reverse(
-            viewname, kwargs={"custom_object_type": custom_object_type.slug}
-        )
-    except NoReverseMatch:
-        url = None
-
-    return {
-        "label": "Add",
-        "url": url,
-    }
-
-
-@register.inclusion_tag("buttons/import.html")
-def custom_object_import_button(model, custom_object_type, action="bulk_import"):
-    try:
-        viewname = get_viewname(model, action)
-        url = reverse(
-            viewname, kwargs={"custom_object_type": custom_object_type.slug}
-        )
-    except NoReverseMatch:
-        url = None
-
-    return {
-        "label": "Import",
-        "url": url,
-    }
-
-
-@register.inclusion_tag("buttons/export.html", takes_context=True)
-def custom_object_export_button(context, model):
-    object_type = ObjectType.objects.get_for_model(model)
-    user = context["request"].user
-
-    # Determine if the "all data" export returns CSV or YAML
-    data_format = "YAML" if hasattr(object_type.model_class(), "to_yaml") else "CSV"
-
-    # Retrieve all export templates for this model
-    export_templates = ExportTemplate.objects.restrict(user, "view").filter(
-        object_types=object_type
-    )
-
-    return {
-        "label": "Export",
-        "perms": context["perms"],
-        "object_type": object_type,
-        "url_params": (
-            context["request"].GET.urlencode() if context["request"].GET else ""
-        ),
-        "export_templates": export_templates,
-        "data_format": data_format,
-    }
-
-
-@register.inclusion_tag("buttons/bulk_edit.html", takes_context=True)
-def custom_object_bulk_edit_button(
-    context, model, custom_object_type, action="bulk_edit", query_params=None
-):
-    try:
-        viewname = get_viewname(model, action)
-        url = reverse(
-            viewname, kwargs={"custom_object_type": custom_object_type.slug}
-        )
-
-        if query_params:
-            url = f"{url}?{query_params.urlencode()}"
-    except NoReverseMatch:
-        url = None
-
-    return {
-        "label": "Edit Selected",
-        "htmx_navigation": context.get("htmx_navigation"),
-        "url": url,
-    }
-
-
-@register.inclusion_tag("buttons/bulk_delete.html", takes_context=True)
-def custom_object_bulk_delete_button(
-    context, model, custom_object_type, action="bulk_delete", query_params=None
-):
-    try:
-        viewname = get_viewname(model, action)
-        url = reverse(
-            viewname, kwargs={"custom_object_type": custom_object_type.slug}
-        )
-        if query_params:
-            url = f"{url}?{query_params.urlencode()}"
-    except NoReverseMatch:
-        url = None
-
-    return {
-        "label": "Delete Selected",
-        "htmx_navigation": context.get("htmx_navigation"),
+        "label": _("Sync"),
         "url": url,
     }

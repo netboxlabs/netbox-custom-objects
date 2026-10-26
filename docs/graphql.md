@@ -114,7 +114,7 @@ filter based on its type:
 
 | Custom field type | Filter | Example |
 |-------------------|--------|---------|
-| text, long text, URL, select | String lookups | `name: {i_contains: "web"}` |
+| text, long text, URL, select, color, MAC address | String lookups | `name: {i_contains: "web"}` |
 | integer, decimal | Comparison lookups | `cpu_count: {range: {start: 2, end: 8}}` |
 | boolean | `exact` / `is_null` | `active: {exact: true}` |
 | date, datetime | Comparison and date-part lookups | `purchased: {year: {exact: 2026}}` |
@@ -139,6 +139,8 @@ matches objects pointing at that type.
 Nested filters are unavailable for relationships that close a reference cycle.
 For single-object relationships, use `<field>_id` (or, for a polymorphic field,
 `<field>_<app_label>_<model>_id`) instead.
+Array fields can't be filtered in GraphQL yet, and are returned as lists (of lists,
+for tuples).
 
 A field whose **Filter logic** is set to **Disabled** has no filter, as in the
 REST API.
@@ -173,7 +175,7 @@ Scalar custom fields map to their natural GraphQL types:
 
 | Custom field type | GraphQL type |
 |-------------------|--------------|
-| text, long text, URL, select | `String` |
+| text, long text, URL, select, color, MAC address | `String` |
 | integer | `Int` |
 | decimal | `Decimal` |
 | boolean | `Boolean` |

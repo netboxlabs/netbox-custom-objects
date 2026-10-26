@@ -15,13 +15,13 @@ Covers:
 import unittest
 from pathlib import Path
 
-from django.test import TestCase, TransactionTestCase
+from django.test import TestCase
 
 from netbox_custom_objects.schema.exporter import export_cot, export_cots
 from netbox_custom_objects.models import CustomObjectTypeField
 from netbox_custom_objects.schema.format import SCHEMA_FORMAT_VERSION
 
-from ..base import CustomObjectsTestCase, TransactionCleanupMixin
+from ..base import CustomObjectsTestCase
 
 try:
     import jsonschema
@@ -267,6 +267,22 @@ class ExporterFieldTypesTestCase(CustomObjectsTestCase, TestCase):
         f = _field_by_name(export_cot(self.cot), "rack")
         self.assertEqual(f["related_object_type"], "custom-objects/rack")
 
+    def test_array_field_attributes(self):
+        self.create_custom_object_type_field(
+            self.cot, name='points', type='array', array_element_type='integer', array_tuple_size=3,
+            array_min_length=2, validation_minimum=0,
+        )
+        self.create_custom_object_type_field(self.cot, name='tags_list', type='array', array_element_type='text')
+        type_def = export_cot(self.cot)
+        self.assertEqual(
+            {k: v for k, v in _field_by_name(type_def, "points").items() if k not in ("id", "name", "label")},
+            {"type": "array", "array_element_type": "integer", "array_tuple_size": 3, "array_min_length": 2,
+             "validation_minimum": 0},
+        )
+        tags = _field_by_name(type_def, "tags_list")
+        self.assertEqual(tags["array_element_type"], "text")
+        self.assertNotIn("array_tuple_size", tags)
+
     def test_object_field_filter_included_when_set(self):
         self.create_custom_object_type_field(
             self.cot, name='filtered_device', type='object',
@@ -283,6 +299,17 @@ class ExporterFieldTypesTestCase(CustomObjectsTestCase, TestCase):
         )
         f = _field_by_name(export_cot(self.cot), "unfiltered")
         self.assertNotIn("related_object_filter", f)
+
+    def test_related_name_included_when_set(self):
+        self.create_custom_object_type_field(
+            self.cot, name='named', type='object', related_object_type=self.device_ot, related_name='widgets',
+        )
+        self.create_custom_object_type_field(
+            self.cot, name='unnamed', type='multiobject', related_object_type=self.device_ot,
+        )
+        type_def = export_cot(self.cot)
+        self.assertEqual(_field_by_name(type_def, "named")["related_name"], "widgets")
+        self.assertNotIn("related_name", _field_by_name(type_def, "unnamed"))
 
     def test_on_delete_behavior_default_omitted(self):
         """SET_NULL (the default) must not appear in the exported schema."""
@@ -423,9 +450,7 @@ class ExporterDeprecationTestCase(CustomObjectsTestCase, TestCase):
         self.assertNotIn("removed_fields", cot_def)
 
 
-class ExporterSchemaIdTestCase(
-    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
-):
+class ExporterSchemaIdTestCase(CustomObjectsTestCase, TestCase):
     """Fields without schema_id are skipped with a warning."""
 
     def test_field_without_schema_id_is_skipped(self):
@@ -533,6 +558,14 @@ class ExporterSchemaValidationTestCase(CustomObjectsTestCase, TestCase):
     def test_multi_type_document_validates(self):
         cot2 = self.create_custom_object_type(name='second', slug='second')
         self._assert_valid(export_cots([self.cot, cot2]))
+
+    def test_array_field_validates(self):
+        cot = self.create_custom_object_type(name='arrayvalid', slug='array-valid')
+        self.create_custom_object_type_field(
+            cot, name='points', type='array', array_element_type='decimal', array_tuple_size=3,
+            array_max_length=10, validation_maximum=100,
+        )
+        self._assert_valid(export_cots([cot]))
 
     def test_polymorphic_object_field_validates(self):
         site_ot = self.get_site_object_type()

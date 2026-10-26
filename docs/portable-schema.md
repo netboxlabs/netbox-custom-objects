@@ -160,6 +160,8 @@ YAML or JSON, and is used by the API endpoints before any DB access.
 | `group_name` | no | Navigation menu grouping. |
 | `fields` | yes | Array of active field definitions. |
 | `removed_fields` | no | Array of tombstone records for previously removed fields. |
+| `constraints` | no | Array of [constraint definitions](#constraint-definition). |
+| `removed_constraints` | no | Names of constraints to remove. |
 
 !!! note
     The `comments` attribute on Custom Object Types and Custom Object Type Fields is intentionally **excluded** from the schema document format. It is editorial annotation rather than structural schema, and including it would create noise in diffs and across-installation sharing.
@@ -199,11 +201,16 @@ Attributes that match their defaults are omitted from exported documents to keep
 | `text`, `longtext` | `validation_regex` |
 | `integer`, `decimal` | `validation_minimum`, `validation_maximum` |
 | `select`, `multiselect` | `choice_set` (required — **name** of a `CustomFieldChoiceSet`) |
-| `object` | `related_object_type` (required when `is_polymorphic` is `false`), `related_object_types` (required when `is_polymorphic` is `true`), `is_polymorphic`, `related_object_filter`, `on_delete_behavior` |
-| `multiobject` | `related_object_type` (required when `is_polymorphic` is `false`), `related_object_types` (required when `is_polymorphic` is `true`), `is_polymorphic`, `related_object_filter` |
-| `boolean`, `date`, `datetime`, `url`, `json`, `coordinates` | (none) |
+| `object` | `related_object_type` (required when `is_polymorphic` is `false`), `related_object_types` (required when `is_polymorphic` is `true`), `is_polymorphic`, `related_object_filter`, `related_name`, `on_delete_behavior` |
+| `multiobject` | `related_object_type` (required when `is_polymorphic` is `false`), `related_object_types` (required when `is_polymorphic` is `true`), `is_polymorphic`, `related_object_filter`, `related_name` |
+| `array` | `array_element_type` (required — `text`, `integer`, `decimal`, `boolean`, `date` or `datetime`), `array_tuple_size`, `array_min_length`, `array_max_length`, `validation_regex` (text elements), `validation_minimum` and `validation_maximum` (integer and decimal elements) |
+| `boolean`, `date`, `datetime`, `url`, `json`, `color`, `mac_address`, `coordinates` | (none) |
+
+An `array` field's `array_element_type` and `array_tuple_size`, and a field's type changing to or from `array`, can't be changed by applying a document; doing so raises `UnsupportedFieldChangeError`. For example, `{id: 3, name: points, type: array, array_element_type: integer, array_tuple_size: 3, array_min_length: 2}` stores a list of at least two (x, y, z) integer points.
 
 `on_delete_behavior` is one of `"set_null"` (default), `"cascade"`, or `"protect"`. It applies only to single `object` fields.
+
+`related_name` names the reverse relation on the related object type, e.g. `related_name: widgets` lets a `device` object field be followed back as `device.widgets`. It's optional: with the default `""`, a non-polymorphic object field gets a generated name, and multi-object and polymorphic fields get no reverse relation. When a document omits it, an existing field keeps its name (documents exported before `related_name` was added don't include it); `""` clears it. It uses lowercase letters, digits and single underscores (max 100 characters), and must be unique among the fields pointing at each object type. Changing it renames the reverse relation.
 
 `is_polymorphic` defaults to `false`. When `true`, the field uses a generic foreign key and accepts references to any of the types listed in `related_object_types`. The `is_polymorphic` flag and the set of allowed types cannot be changed after the field is created.
 
@@ -213,6 +220,43 @@ Attributes that match their defaults are omitted from exported documents to keep
 
 - **Built-in NetBox model:** `"dcim/device"`, `"ipam/prefix"`
 - **Custom Object Type:** `"custom-objects/<cot-slug>"`, e.g. `"custom-objects/circuit"`
+
+### Constraint Definition
+
+```yaml
+constraints:
+  - name: vendor_serial
+    fields: [1, 2]
+  - name: serial_ci
+    fields: [2]
+    case_insensitive: true
+  - name: name_unique_top_level
+    fields: [3]
+    condition:
+      - {field: 4, lookup: isnull, value: true}
+  - name: end_after_start
+    type: check
+    rule:
+      - {field: 6, lookup: gt, value: {field: 5}}
+    error_message: The end date must be after the start date.
+```
+
+| Key | Required | Description |
+|-----|----------|-------------|
+| `name` | yes | Constraint name, must match identifier pattern. Used as the lookup key when applying. |
+| `type` | no | `"unique"` or `"check"`. Default: `"unique"`. |
+| `fields` | for `unique` | The `id`s of the fields whose combined values must be unique. Omitted for `check`. |
+| `case_insensitive` | no | For `unique`: compare text and URL fields without regard to case. Default: `false`. |
+| `nulls_distinct` | no | For `unique`: objects that leave a constrained field empty never conflict. Default: `true`. |
+| `condition` | no | Apply the constraint only to objects matching all of these predicates. Each is `{field, lookup, value}`: `field` is a field `id`; `lookup` is `exact`, `n` (does not equal, or is empty), `in` (`value` is a list), `isnull` (`value` is `true` or `false`), or `gt`, `gte`, `lt` or `lte` (integer, decimal, date and datetime fields). A `value` of `{field: <id>}` compares with another field of the same kind. Object fields can only be tested with `isnull`. Default: `[]`. |
+| `rule` | for `check` | Predicates, in the same form as `condition`, that every object (matching the condition, if any) must satisfy. A comparison passes when a value it compares is empty. |
+| `error_message` | no | For `check`: the error shown when an object breaks the rule (max 200 characters). Default: `""`, which describes the rule. |
+| `description` | no | Short description (max 200 characters). |
+
+Constraints are matched by name. As with fields, a constraint in the DB but absent from
+`constraints` is left in place (with a warning) unless its name is listed in
+`removed_constraints`. Removing a constraint doesn't delete data, so it doesn't need
+`allow_destructive`.
 
 ### Tombstone Record
 
@@ -398,8 +442,8 @@ schema: { ... }
   even when the document only updates existing types. Beyond that, permissions are checked as the
   UI and REST views check them, object-level constraints included: change permission on every
   existing Custom Object Type in the document (it rewrites their `schema_document`), add
-  permission for new types, and add, change or delete permission on the fields being added,
-  changed or removed. Missing permissions return `403 Forbidden`
+  permission for new types, and add, change or delete permission on the fields and constraints
+  being added, changed or removed. Missing permissions return `403 Forbidden`
   before anything is changed; a result that falls outside a constraint returns `403` and is
   rolled back.
 - On success, `schema_document` is persisted on each affected COT so tombstones are available
@@ -488,6 +532,7 @@ diff  = diff_cot(type_def)          # COTDiff
 | `is_new` | `bool` | `True` if no COT with this slug exists in the DB |
 | `cot_changes` | `dict[str, tuple]` | `{attr: (db_value, schema_value)}` for changed top-level attributes |
 | `field_changes` | `list[FieldChange]` | Per-field operations |
+| `constraint_changes` | `list[ConstraintChange]` | Per-constraint operations (`op`, `name`, `schema_def`, `changed_attrs`), matched by name |
 | `warnings` | `list[str]` | Non-fatal issues (untracked fields, ambiguous absences) |
 
 Convenience properties: `has_changes`, `has_destructive_changes`, `adds`, `removes`, `alters`.
@@ -539,9 +584,18 @@ full rollback.
 | `UnknownChoiceSetError` | A `choice_set` name cannot be resolved |
 | `UnknownObjectTypeError` | A `related_object_type` string cannot be resolved |
 | `UnknownFieldTypeError` | A `type` value is not one of the supported field type strings |
+| `UnsupportedFieldChangeError` | A document changes an `array` field's element type or tuple size, or a field's type to or from `array` |
+| `InvalidConstraintError` | A constraint fails validation, e.g. existing objects already violate it |
+| `InvalidRelatedNameError` | A field's `related_name` is already used for its object type, or clashes with an attribute of a polymorphic field's target model |
 
 `DestructiveChangesError` is raised **before** the transaction opens, so the DB is never
 touched. The other exceptions may be raised mid-transaction, triggering a full rollback.
+
+### Constraint Ordering
+
+Removed and changed constraints are deleted before any field operations, and added and
+changed constraints are created after them, so a constraint can cover a field added in the
+same document and never blocks a field change that the document also makes.
 
 ### Dependency Ordering
 

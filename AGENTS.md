@@ -27,7 +27,6 @@ Defer all version pins to `pyproject.toml` and `netbox_custom_objects/__init__.p
 │   ├── constants.py                — APP_LABEL, RESERVED_FIELD_NAMES.
 │   ├── dynamic_forms.py            — build_filterset_form_class() for HTMX object selector.
 │   ├── field_types.py              — FieldType base + subclasses (one per supported field type).
-│   ├── fields.py                   — Custom Django form/model field classes.
 │   ├── filtersets.py               — get_filterset_class() for dynamically generated models.
 │   ├── forms.py                    — Model forms for CustomObjectType and CustomObjectTypeField.
 │   ├── jobs.py                     — ReindexCustomObjectTypeJob background job.
@@ -35,15 +34,15 @@ Defer all version pins to `pyproject.toml` and `netbox_custom_objects/__init__.p
 │   ├── navigation.py               — Dynamic plugin menu construction.
 │   ├── search.py                   — SearchIndex registrations for static models.
 │   ├── tables.py                   — django-tables2 tables for list views.
-│   ├── template_content.py         — PluginTemplateExtension registrations.
 │   ├── urls.py                     — Web UI URL routing (80+ routes).
-│   ├── utilities.py                — AppsProxy, generate_model(), get_viewname().
+│   ├── utilities.py                — generate_model(), get_viewname().
 │   ├── views.py                    — All UI views.
 │   ├── api/
 │   │   ├── serializers.py          — get_serializer_class() + static serializers.
 │   │   ├── urls.py                 — API URL routing.
 │   │   └── views.py                — Dynamic ViewSet generation + LinkedObjectsView.
 │   ├── migrations/                 — Django schema migrations (0001–0004).
+│   ├── related_tabs/               — "Custom Objects" tab on referenced objects' detail pages.
 │   ├── templates/netbox_custom_objects/
 │   │   ├── buttons/
 │   │   ├── htmx/
@@ -53,13 +52,16 @@ Defer all version pins to `pyproject.toml` and `netbox_custom_objects/__init__.p
 │   │   └── custom_object_utils.py
 │   └── tests/
 │       ├── base.py                         — Shared test utilities and base cases.
-│       ├── test_api.py                     — REST API endpoints (CRUD, linked objects).
+│       ├── api/                            — REST API tests: custom objects, field values, types,
+│       │                                     fields, constraints, linked objects, config context.
+│       ├── test_concurrency.py             — Tests that run threads (TransactionTestCase).
 │       ├── test_deletion.py                — Cascade deletion behaviour.
 │       ├── test_field_types.py             — FieldType subclass behaviour.
 │       ├── test_filtersets.py              — Filterset functionality.
-│       ├── test_models.py                  — CustomObjectType and field model logic.
+│       ├── models/                         — Model tests: types, fields, constraints, choice sets,
+│       │                                     generated models, model cache, search, app config, utilities.
 │       ├── test_navigation.py              — Dynamic navigation menu.
-│       ├── test_schema_operations.py       — Schema creation/deletion/alteration.
+│       ├── test_table_schema.py            — Schema changes to custom object tables.
 │       └── test_views.py                   — Web views.
 ├── docs/
 │   ├── branching.md
@@ -122,7 +124,7 @@ Multi-object fields create a separate through table (`custom_objects_<cot_id>_<f
 
 ### API Layer (`api/`)
 
-`get_serializer_class()` in `api/serializers.py` dynamically builds a DRF serializer for each generated custom object model. `api/views.py` generates a `ModelViewSet` per type on demand. `LinkedObjectsView` finds all custom objects referencing a given NetBox object (used by `template_content.py` to inject a tab into NetBox object detail pages).
+`get_serializer_class()` in `api/serializers.py` dynamically builds a DRF serializer for each generated custom object model. `api/views.py` generates a `ModelViewSet` per type on demand. `LinkedObjectsView` finds all custom objects referencing a given NetBox object. The "Custom Objects" tab on referenced objects' detail pages is registered separately, by `related_tabs/`.
 
 ### Background Jobs (`jobs.py`)
 
@@ -137,7 +139,7 @@ Multi-object fields create a separate through table (`custom_objects_<cot_id>_<f
 | `netbox_custom_objects/__init__.py` | PluginConfig, migration detection, ObjectSelectorView patch, dynamic model registration on startup |
 | `netbox_custom_objects/models.py` | `CustomObject` (abstract base), `CustomObjectType`, `CustomObjectTypeField`, signal handlers |
 | `netbox_custom_objects/field_types.py` | Pluggable field type system |
-| `netbox_custom_objects/utilities.py` | `generate_model()`, `AppsProxy` |
+| `netbox_custom_objects/utilities.py` | `generate_model()`, `get_viewname()` |
 | `netbox_custom_objects/jobs.py` | `ReindexCustomObjectTypeJob` |
 | `netbox_custom_objects/api/views.py` | Dynamic ViewSet generation, `LinkedObjectsView` |
 | `netbox_custom_objects/api/serializers.py` | `get_serializer_class()` for dynamic models |
@@ -153,8 +155,8 @@ There is no Justfile/Makefile in this repo; commands are raw. Run tests inside a
 |---|---|
 | `pip install -e '.[dev,test]'` (from this repo) | Install the plugin in editable mode with dev + test extras |
 | `python netbox/manage.py test netbox_custom_objects.tests --keepdb` | Run the full test suite |
-| `python netbox/manage.py test netbox_custom_objects.tests.test_models --keepdb` | Run a single test module |
-| `python netbox/manage.py test netbox_custom_objects.tests.test_models.CustomObjectTypeTestCase.test_name --keepdb` | Run a single test case |
+| `python netbox/manage.py test netbox_custom_objects.tests.models.test_cot --keepdb` | Run a single test module |
+| `python netbox/manage.py test netbox_custom_objects.tests.models.test_cot.CustomObjectTypeTestCase.test_name --keepdb` | Run a single test case |
 | `ruff check` | Lint |
 | `ruff format netbox_custom_objects/` | Format code |
 | `python netbox/manage.py makemigrations netbox_custom_objects` | Generate Django migrations after model changes |
@@ -187,13 +189,22 @@ After model changes, generate a migration with `python netbox/manage.py makemigr
 
 | Module | Coverage area |
 |---|---|
-| `test_api.py` | REST API endpoints (CRUD, linked objects view) |
+| `api/` | REST API endpoints: custom objects, field values, types, fields, constraints, linked objects, config context, query counts, OpenAPI |
+| `test_concurrency.py` | Tests that run threads, and so need TransactionTestCase: concurrent model generation, double submits, FK-constraint hook races |
 | `test_deletion.py` | Cascade deletion when a referenced object is deleted |
 | `test_field_types.py` | FieldType subclass behaviour (model field, form field, serializer, filter) |
 | `test_filtersets.py` | Filterset generation and filtering for custom object models |
-| `test_models.py` | CustomObjectType and CustomObjectTypeField model logic and validation |
+| `models/test_cot.py` | CustomObjectType model logic and validation, config context, display expressions |
+| `models/test_cot_fields.py` | CustomObjectTypeField model logic and validation, related names |
+| `models/test_constraints.py` | CustomObjectTypeConstraint model and the constraints it creates |
+| `models/test_choice_sets.py` | Custom objects' handling of choice set changes |
+| `models/test_dynamic_models.py` | Generated models: instances, `get_model()`, the model cache, startup ordering, pickling |
+| `models/test_model_cache.py` | Model cache invalidation, registering generated models, cache and registry consistency |
+| `models/test_search.py` | Search indexing and the reindex job |
+| `models/test_app_config.py` | The plugin's app config |
+| `models/test_utilities.py` | Utility functions |
 | `test_navigation.py` | Dynamic navigation menu construction |
-| `test_schema_operations.py` | DB schema create/delete/alter for custom object tables |
+| `test_table_schema.py` | DB schema create/delete/alter for custom object tables |
 | `test_views.py` | Web views (list, create, edit, delete) |
 
 ## CI/CD
@@ -229,7 +240,7 @@ GitHub Actions workflows in `.github/workflows/`:
 1. Add the serializer to `api/serializers.py` — `NetBoxModelSerializer` for `NetBoxModel`.
 2. Add the viewset to `api/views.py`.
 3. Register the route in `api/urls.py`.
-4. Add tests in `tests/test_api.py`.
+4. Add tests in the matching module under `tests/api/`.
 
 ### Bump the supported NetBox version
 

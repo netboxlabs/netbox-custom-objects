@@ -30,19 +30,24 @@ from utilities.permissions import get_permission_for_model
 
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.filtersets import (
+    CustomObjectTypeConstraintFilterSet,
     CustomObjectTypeFieldFilterSet,
     CustomObjectTypeFilterSet,
     get_filterset_class,
 )
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
 from netbox_custom_objects.schema.comparator import FieldOp, diff_document
 from netbox_custom_objects.schema.format import CUSTOM_OBJECTS_APP_LABEL_SLUG
+from netbox_custom_objects.utilities import polymorphic_m2m_field_names
 from netbox_custom_objects.schema.executor import (
     apply_diffs,
     schema_transaction,
     CircularDependencyError,
     DestructiveChangesError,
+    InvalidConstraintError,
+    InvalidRelatedNameError,
     UnknownChoiceSetError,
+    UnsupportedFieldChangeError,
     UnknownFieldTypeError,
     UnknownObjectTypeError,
     UnsupportedTypeChangeError,
@@ -104,12 +109,38 @@ def _serialize_field_change(fc) -> dict:
     return result
 
 
+def _serialize_constraint_change(cc) -> dict:
+    result = {
+        "op": cc.op.value,
+        "name": cc.name,
+        "schema_def": cc.schema_def,
+    }
+    if cc.changed_attrs:
+        result["changed_attrs"] = {k: list(v) for k, v in cc.changed_attrs.items()}
+    return result
+
+
 def _fields_by_op(diffs, *ops):
     """``(type slug, field schema_id)`` for each field the diffs change with one of ``ops``."""
     return [
         (diff.slug, change.schema_id)
         for diff in diffs for change in diff.field_changes if change.op in ops
     ]
+
+
+def _constraints_by_op(diffs, *ops):
+    """``(type slug, constraint name)`` for each constraint the diffs change with one of ``ops``."""
+    return [
+        (diff.slug, change.name)
+        for diff in diffs for change in diff.constraint_changes if change.op in ops
+    ]
+
+
+def _constraint_lookup(pairs):
+    query = Q()
+    for slug, name in pairs:
+        query |= Q(custom_object_type__slug=slug, name=name)
+    return query
 
 
 def _restricted_count(model, user, action, **lookups):
@@ -146,6 +177,20 @@ def _check_apply_permissions(user, diffs):
         ).count() != len(pairs):
             raise PermissionDenied(
                 _("You do not have permission to {action} one or more of these fields.").format(action=action)
+            )
+
+    # An altered constraint is re-created, but for the user it's a change, as for a field.
+    if _constraints_by_op(diffs, FieldOp.ADD) and not user.has_perm(
+        "netbox_custom_objects.add_customobjecttypeconstraint"
+    ):
+        raise PermissionDenied(_("You do not have permission to add Custom Object Type constraints."))
+    for op, action in ((FieldOp.ALTER, "change"), (FieldOp.REMOVE, "delete")):
+        pairs = _constraints_by_op(diffs, op)
+        if pairs and CustomObjectTypeConstraint.objects.restrict(user, action).filter(
+            _constraint_lookup(pairs)
+        ).count() != len(pairs):
+            raise PermissionDenied(
+                _("You do not have permission to {action} one or more of these constraints.").format(action=action)
             )
 
 
@@ -187,6 +232,14 @@ def _check_applied_permissions(user, diffs):
             _field_lookup(pairs)
         ).count() != len(pairs):
             raise PermissionDenied(_("The result would violate your field permission constraints."))
+    for op, action in ((FieldOp.ADD, "add"), (FieldOp.ALTER, "change")):
+        pairs = _constraints_by_op(diffs, op)
+        if pairs and CustomObjectTypeConstraint.objects.restrict(user, action).filter(
+            _constraint_lookup(pairs)
+        ).count() != len(pairs):
+            raise PermissionDenied(
+                _("The result would violate your permission constraints for Custom Object Type constraints.")
+            )
 
 
 def _serialize_diff(diff) -> dict:
@@ -198,6 +251,7 @@ def _serialize_diff(diff) -> dict:
         "has_destructive_changes": diff.has_destructive_changes,
         "cot_changes": {k: list(v) for k, v in diff.cot_changes.items()},
         "field_changes": [_serialize_field_change(fc) for fc in diff.field_changes],
+        "constraint_changes": [_serialize_constraint_change(cc) for cc in diff.constraint_changes],
         "warnings": diff.warnings,
     }
 
@@ -217,6 +271,14 @@ class CustomObjectTypeFieldViewSet(NetBoxModelViewSet):
     queryset = CustomObjectTypeField.objects.prefetch_related('related_object_types')
     serializer_class = serializers.CustomObjectTypeFieldSerializer
     filterset_class = CustomObjectTypeFieldFilterSet
+
+
+class CustomObjectTypeConstraintViewSet(NetBoxModelViewSet):
+    queryset = CustomObjectTypeConstraint.objects.select_related('custom_object_type').prefetch_related(
+        'custom_object_type__fields'
+    )
+    serializer_class = serializers.CustomObjectTypeConstraintSerializer
+    filterset_class = CustomObjectTypeConstraintFilterSet
 
 
 @extend_schema(parameters=[
@@ -273,20 +335,13 @@ class CustomObjectViewSet(NetBoxModelViewSet):
             raise Http404
         qs = super().get_queryset()
 
-        # Polymorphic multi-object fields are backed by a custom manager, not a
-        # real registered Django relation, so get_prefetches_for_serializer()
-        # can't discover them via _meta.get_field(). Add them explicitly.
+        # get_prefetches_for_serializer() can't discover polymorphic multi-object
+        # fields via _meta.get_field(), so add the requested ones explicitly.
         fields = self.field_kwargs.get('fields')
         omit = self.field_kwargs.get('omit') or ()
         polymorphic_m2m_fields = [
-            info['name']
-            for info in self.model._field_objects.values()
-            if (
-                info['field'].type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
-                and info['field'].is_polymorphic
-                and (fields is None or info['name'] in fields)
-                and info['name'] not in omit
-            )
+            name for name in polymorphic_m2m_field_names(self.model)
+            if (fields is None or name in fields) and name not in omit
         ]
         if polymorphic_m2m_fields:
             qs = qs.prefetch_related(*polymorphic_m2m_fields)
@@ -543,8 +598,8 @@ class SchemaApplyView(APIView):
         detail: "Schema contains destructive ..."
         destructive_slugs: [my-cot]
 
-    **400 Bad Request** — circular COT dependency, unresolvable FK target,
-    or invalid schema document structure.
+    **400 Bad Request** — circular COT dependency, unresolvable FK target, a constraint
+    that fails validation, or invalid schema document structure.
 
     Unexpected DB errors (e.g. ``IntegrityError`` from a constraint violation
     unrelated to the COT schema logic) are not caught and will surface as
@@ -622,6 +677,21 @@ class SchemaApplyView(APIView):
         except (UnknownChoiceSetError, UnknownFieldTypeError, UnknownObjectTypeError) as exc:
             return Response(
                 {"error": "unresolvable_reference", "detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except InvalidConstraintError as exc:
+            return Response(
+                {"error": "invalid_constraint", "detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except UnsupportedFieldChangeError as exc:
+            return Response(
+                {"error": "unsupported_field_change", "detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except InvalidRelatedNameError as exc:
+            return Response(
+                {"error": "invalid_related_name", "detail": str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         except UnsupportedTypeChangeError as exc:

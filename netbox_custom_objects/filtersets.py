@@ -16,13 +16,15 @@ from extras.choices import CustomFieldFilterLogicChoices, CustomFieldTypeChoices
 from extras.models import CachedValue, CustomFieldChoiceSet
 from netbox.filtersets import ChangeLoggedModelFilterSet, NetBoxModelFilterSet
 from users.models import Owner, OwnerGroup
+from utilities.filters import MultiValueCharFilter, MultiValueMACAddressFilter
 
-from .choices import CustomObjectFieldTypeChoices
+from .choices import ConstraintTypeChoices, CustomObjectFieldTypeChoices
 from .constants import APP_LABEL
-from .models import CustomObjectType, CustomObjectTypeField
+from .models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
 
 __all__ = (
     "ArrayContainsFilter",
+    "CustomObjectTypeConstraintFilterSet",
     "CustomObjectTypeFieldFilterSet",
     "CustomObjectTypeFilterSet",
     "NonPolymorphicMultiObjectFilter",
@@ -149,6 +151,49 @@ class ArrayContainsFilter(django_filters.MultipleChoiceFilter):
         for v in value:
             q |= Q(**{f"{self.field_name}__contains": [v]})
         return qs.filter(q).distinct()
+
+
+def array_contains_lookup(field, values):
+    """
+    Return the ``__contains`` value matching an array that contains all *values*, or
+    None if a value isn't of the array's element type. PostgreSQL compares array
+    elements regardless of nesting, so a tuple array takes the values as one tuple.
+    """
+    from netbox_custom_objects.field_types import ArrayFieldType
+
+    # The element type's own range checks, so a value too large for the column matches
+    # nothing rather than failing in the database. Not the field's limits, which can
+    # change after values are stored.
+    element_field = ArrayFieldType._element_model_field(field, field_validators=False)
+    try:
+        coerced = [element_field.clean(value, None) for value in values]
+    except django_forms.ValidationError:
+        return None
+    return [coerced] if field.array_tuple_size else coerced
+
+
+class ArrayValuesFilter(django_filters.Filter):
+    """
+    Filter for an array field: objects whose array contains all of the comma-separated values.
+
+    A plain Filter rather than a CharFilter, so NetBox doesn't derive string lookup
+    variants (__ic, __n, ...) from it, which don't apply to arrays.
+    """
+
+    field_class = django_forms.CharField
+
+    def __init__(self, *args, custom_field, **kwargs):
+        self.custom_field = custom_field
+        super().__init__(*args, **kwargs)
+
+    def filter(self, qs, value):
+        values = [v.strip() for v in (value or "").split(",") if v.strip()]
+        if not values:
+            return qs
+        lookup = array_contains_lookup(self.custom_field, values)
+        if lookup is None:
+            return qs.none()
+        return qs.filter(**{f"{self.field_name}__contains": lookup})
 
 
 class NonPolymorphicObjectFilter(django_filters.Filter):
@@ -290,6 +335,8 @@ FIELD_TYPE_FILTERS = {
     # NonPolymorphicMultiObjectFilter uses field__in=pks, which Django's ORM
     # translates to a JOIN through the through table at the SQL level.
     CustomFieldTypeChoices.TYPE_MULTIOBJECT: FilterSpec(NonPolymorphicMultiObjectFilter),
+    CustomObjectFieldTypeChoices.TYPE_COLOR: FilterSpec(MultiValueCharFilter),
+    CustomObjectFieldTypeChoices.TYPE_MAC_ADDRESS: FilterSpec(MultiValueMACAddressFilter),
 }
 
 # Field types whose base filter's lookup_expr is driven by field.filter_logic,
@@ -393,6 +440,10 @@ class CustomObjectTypeFieldFilterSet(ChangeLoggedModelFilterSet):
             "validation_minimum",
             "validation_maximum",
             "validation_regex",
+            "array_element_type",
+            "array_tuple_size",
+            "array_min_length",
+            "array_max_length",
             "schema_id",
             "deprecated",
             "deprecated_since",
@@ -407,6 +458,44 @@ class CustomObjectTypeFieldFilterSet(ChangeLoggedModelFilterSet):
             | Q(label__icontains=value)
             | Q(description__icontains=value)
         )
+
+
+class CustomObjectTypeConstraintFilterSet(ChangeLoggedModelFilterSet):
+    q = django_filters.CharFilter(
+        method="search",
+        label=_("Search"),
+    )
+    custom_object_type_id = django_filters.ModelMultipleChoiceFilter(
+        queryset=CustomObjectType.objects.all(),
+        distinct=False,
+        label=_("Custom object type (ID)"),
+    )
+    custom_object_type = django_filters.ModelMultipleChoiceFilter(
+        field_name="custom_object_type__slug",
+        queryset=CustomObjectType.objects.all(),
+        distinct=False,
+        to_field_name="slug",
+        label=_("Custom object type (slug)"),
+    )
+    type = django_filters.MultipleChoiceFilter(
+        choices=ConstraintTypeChoices,
+        distinct=False,
+    )
+
+    class Meta:
+        model = CustomObjectTypeConstraint
+        fields = (
+            "id",
+            "name",
+            "description",
+            "case_insensitive",
+            "nulls_distinct",
+        )
+
+    def search(self, queryset, name, value):
+        if not value.strip():
+            return queryset
+        return queryset.filter(Q(name__icontains=value) | Q(description__icontains=value))
 
 
 def _build_polymorphic_filters(field) -> dict:
@@ -465,6 +554,15 @@ def build_filter_for_field(field) -> dict:
             ),
             f"{field.name}_longitude": django_filters.NumberFilter(
                 field_name=f"{field.name}_longitude", label=f"{base_label} (longitude)"
+            ),
+        }
+
+    if field.type == CustomObjectFieldTypeChoices.TYPE_ARRAY:
+        label = field.label or field.name
+        return {
+            field.name: ArrayValuesFilter(field_name=field.name, label=label, custom_field=field),
+            f"{field.name}__len": django_filters.NumberFilter(
+                field_name=field.name, lookup_expr="len", label=f"{label} (length)"
             ),
         }
 
@@ -552,12 +650,18 @@ def get_filterset_class(model):
                 CustomFieldTypeChoices.TYPE_JSON,
                 CustomFieldTypeChoices.TYPE_URL,
                 CustomFieldTypeChoices.TYPE_SELECT,
+                CustomObjectFieldTypeChoices.TYPE_MAC_ADDRESS,
             ]:
                 q |= Q(**{f"{field.name}__icontains": value})
             elif field.type == CustomFieldTypeChoices.TYPE_MULTISELECT:
                 # ArrayField does not support icontains; use array containment
                 # to check whether the searched value is an element in the array.
                 q |= Q(**{f"{field.name}__contains": [value]})
+            elif field.type == CustomObjectFieldTypeChoices.TYPE_ARRAY:
+                # Arrays holding the searched value as an element.
+                lookup = array_contains_lookup(field, [value])
+                if lookup is not None:
+                    q |= Q(**{f"{field.name}__contains": lookup})
             elif field.type in [
                 CustomFieldTypeChoices.TYPE_INTEGER,
                 CustomFieldTypeChoices.TYPE_DECIMAL,

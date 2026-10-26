@@ -348,6 +348,15 @@ class ComparatorFieldAlterTestCase(CustomObjectsTestCase, TestCase):
         rack_alters = [fc for fc in result.alters if fc.db_name == "rack_field"]
         self.assertEqual(rack_alters, [], "Custom COT related_object_type round-trips cleanly")
 
+    def test_array_attribute_changes_detected(self):
+        self.create_custom_object_type_field(
+            self.cot, name='points', type='array', array_element_type='integer', array_tuple_size=3,
+        )
+        self.assertEqual([fc for fc in diff_cot(export_cot(self.cot)).alters if fc.db_name == "points"], [])
+        result = self._alter_field("points", array_max_length=5, array_tuple_size=2)
+        fc = next(fc for fc in result.alters if fc.db_name == "points")
+        self.assertEqual(fc.changed_attrs, {"array_max_length": (None, 5), "array_tuple_size": (3, 2)})
+
     def test_related_object_filter_change_detected(self):
         self.create_custom_object_type_field(
             self.cot, name='filtered', type='object',
@@ -357,6 +366,27 @@ class ComparatorFieldAlterTestCase(CustomObjectsTestCase, TestCase):
         result = self._alter_field("filtered", related_object_filter={"site_id": [2]})
         fc = next(fc for fc in result.alters if fc.db_name == "filtered")
         self.assertIn("related_object_filter", fc.changed_attrs)
+
+    def test_related_name_change_detected(self):
+        self.create_custom_object_type_field(
+            self.cot, name='named', type='object', related_object_type=self.device_ot, related_name='widgets',
+        )
+        self.assertEqual(
+            [fc for fc in diff_cot(export_cot(self.cot)).alters if fc.db_name == "named"], [],
+            "related_name round-trips cleanly",
+        )
+        result = self._alter_field("named", related_name="gadgets")
+        fc = next(fc for fc in result.alters if fc.db_name == "named")
+        self.assertEqual(fc.changed_attrs, {"related_name": ("widgets", "gadgets")})
+
+        # Without the key (as in exports from before it was in the format), the name is kept;
+        # "" clears it.
+        type_def = export_cot(self.cot)
+        del next(f for f in type_def["fields"] if f["name"] == "named")["related_name"]
+        self.assertEqual([fc for fc in diff_cot(type_def).alters if fc.db_name == "named"], [])
+        result = self._alter_field("named", related_name="")
+        fc = next(fc for fc in result.alters if fc.db_name == "named")
+        self.assertEqual(fc.changed_attrs, {"related_name": ("widgets", "")})
 
     def test_on_delete_behavior_change_detected(self):
         self.create_custom_object_type_field(

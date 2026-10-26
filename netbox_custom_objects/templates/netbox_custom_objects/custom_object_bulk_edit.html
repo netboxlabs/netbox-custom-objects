@@ -3,13 +3,15 @@
 {% load helpers %}
 {% load i18n %}
 {% load render_table from django_tables2 %}
+{% load custom_object_utils %}
 
 
 {% block content %}
+  {% sticky_actions_supported as sticky_actions %}
 
   {# Edit form #}
   <div class="tab-pane show active" id="edit-form" role="tabpanel" aria-labelledby="edit-form-tab">
-    <form action="" method="post" class="form form-horizontal mt-5">
+    <form action="" method="post" class="form form-horizontal{% if sticky_actions %} object-edit--with-sticky-actions{% endif %} mt-5">
       <div id="form_fields" hx-disinherit="hx-select hx-swap">
         {% csrf_token %}
         {% if request.POST.return_url %}
@@ -25,6 +27,19 @@
           {% for fieldset in form.fieldsets %}
             {% render_fieldset form fieldset %}
           {% endfor %}
+
+          {# Render owner field (if defined) #}
+          {% if form.owner %}
+            <div class="field-group mb-5">
+              <div class="row">
+                <h2 class="col-9 offset-3">{% trans "Ownership" %}</h2>
+              </div>
+              {% if form.owner_group %}
+                {% render_field form.owner_group %}
+              {% endif %}
+              {% render_field form.owner bulk_nullable=True %}
+            </div>
+          {% endif %}
 
           {# Render tag add/remove fields #}
           {% if form.add_tags and form.remove_tags %}
@@ -71,12 +86,21 @@
           {% endif %}
           {% render_field form.background_job %}
         </div>
+      </div>{# /form_fields #}
 
+      {% if sticky_actions %}
+        <div class="sticky-actions sticky-actions-footer d-print-none" data-sticky-position="full" data-sticky-when="always">
+          <div class="btn-list">
+            <a href="{{ return_url }}" class="btn btn-outline-secondary">{% trans "Cancel" %}</a>
+            <button type="submit" name="_apply" class="btn btn-primary">{% trans "Apply" %}</button>
+          </div>
+        </div>
+      {% else %}
         <div class="btn-float-group-right">
           <a href="{{ return_url }}" class="btn btn-outline-secondary btn-float">{% trans "Cancel" %}</a>
           <button type="submit" name="_apply" class="btn btn-primary">{% trans "Apply" %}</button>
         </div>
-      </div>
+      {% endif %}
     </form>
   </div>
 

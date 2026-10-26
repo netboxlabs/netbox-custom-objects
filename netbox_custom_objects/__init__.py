@@ -347,7 +347,6 @@ class CustomObjectsPluginConfig(PluginConfig):
     # Surfaced as a system check warning (checks.check_related_tabs_registration)
     # so the swallowed exception isn't invisible outside the logs.
     _register_tabs_error = None
-    template_extensions = "template_content.template_extensions"
     # Registers the custom_objects Jinja filter (jinja_env.filters).
     # COMPAT(netbox<4.7): older NetBox never reads this attribute (see ready()).
     jinja_filters = "jinja_env.filters"
@@ -709,8 +708,11 @@ class CustomObjectsPluginConfig(PluginConfig):
 
     def get_models(self, include_auto_created=False, include_swapped=False):
         """Return all models for this plugin, including custom object type models."""
-        # Get the regular Django models first
+        # Get the regular Django models first. Generated models are registered with the
+        # app too, so remember them and don't yield them twice below.
+        seen = set()
         for model in super().get_models(include_auto_created, include_swapped):
+            seen.add(model)
             yield model
 
         # Re-entrant call (issues #685/#686): generate_model() registers a COT's
@@ -758,12 +760,14 @@ class CustomObjectsPluginConfig(PluginConfig):
                         for custom_type in custom_object_types:
                             model = custom_type.get_model()
                             if model:
-                                yield model
+                                if model not in seen:
+                                    yield model
 
                                 # If include_auto_created is True, also yield through models
                                 if include_auto_created and hasattr(model, '_through_models'):
                                     for through_model in model._through_models:
-                                        yield through_model
+                                        if through_model not in seen:
+                                            yield through_model
                 except (ProgrammingError, OperationalError):
                     # DB schema is incomplete (unapplied migrations). Yield nothing —
                     # dynamic models will be available once migrations have run.

@@ -1,18 +1,14 @@
-from urllib.parse import quote
-
 import django_tables2 as tables
-from django.contrib.auth.models import AnonymousUser
-from django.template import Context, Template
-from django.urls import reverse
-from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
+from django_tables2.data import TableQuerysetData
 from netbox.tables import NetBoxTable, columns
-from utilities.permissions import get_permission_for_model
 
-from netbox_custom_objects.models import CustomObject, CustomObjectType, CustomObjectTypeField
-from netbox_custom_objects.utilities import get_viewname
+from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
+from netbox_custom_objects.models import (CustomObject, CustomObjectType, CustomObjectTypeConstraint,
+                                          CustomObjectTypeField)
+from netbox_custom_objects.utilities import polymorphic_m2m_field_names
 
-__all__ = ("CustomObjectTable", "CustomObjectTypeFieldTable")
+__all__ = ("CustomObjectTable", "CustomObjectTypeConstraintTable", "CustomObjectTypeFieldTable")
 
 
 OBJECTCHANGE_FULL_NAME = """
@@ -122,89 +118,15 @@ class CustomObjectTagColumn(columns.TagColumn):
         )
 
 
-class CustomObjectActionsColumn(columns.ActionsColumn):
+class FieldDefaultColumn(tables.JSONColumn):
+    """Shows color and MAC address defaults the way their values are shown, instead of as JSON."""
 
-    def render(self, record, table, **kwargs):
-        model = table.Meta.model
-
-        # Skip if no actions or extra buttons are defined
-        if not (self.actions or self.extra_buttons):
-            return ""
-        # Skip dummy records (e.g. available VLANs or IP ranges replacing individual IPs)
-        if type(record) is not model or not getattr(record, "pk", None):
-            return ""
-
-        if request := getattr(table, "context", {}).get("request"):
-            return_url = request.GET.get("return_url", request.get_full_path())
-            url_appendix = f"?return_url={quote(return_url)}"
-        else:
-            url_appendix = ""
-
-        html = ""
-
-        # Compile actions menu
-        button = None
-        dropdown_class = "secondary"
-        dropdown_links = []
-        user = getattr(request, "user", AnonymousUser())
-        for idx, (action, attrs) in enumerate(self.actions.items()):
-            permission = get_permission_for_model(model, attrs.permission)
-            if attrs.permission is None or user.has_perm(permission):
-                url = reverse(
-                    get_viewname(model, action),
-                    kwargs={
-                        "pk": record.pk,
-                        "custom_object_type": record.custom_object_type.slug,
-                    },
-                )
-
-                # Render a separate button if a) only one action exists, or b) if split_actions is True
-                if len(self.actions) == 1 or (self.split_actions and idx == 0):
-                    dropdown_class = attrs.css_class
-                    button = (
-                        f'<a class="btn btn-sm btn-{attrs.css_class}" href="{url}{url_appendix}" type="button" '
-                        f'aria-label="{attrs.title}">'
-                        f'<i class="mdi mdi-{attrs.icon}"></i></a>'
-                    )
-
-                # Add dropdown menu items
-                else:
-                    dropdown_links.append(
-                        f'<li><a class="dropdown-item" href="{url}{url_appendix}">'
-                        f'<i class="mdi mdi-{attrs.icon}"></i> {attrs.title}</a></li>'
-                    )
-
-        # Create the actions dropdown menu
-        toggle_text = _("Toggle Dropdown")
-        if button and dropdown_links:
-            html += (
-                f'<span class="btn-group dropdown">'
-                f"  {button}"
-                f'  <a class="btn btn-sm btn-{dropdown_class} dropdown-toggle" type="button" data-bs-toggle="dropdown" '
-                f'style="padding-left: 2px">'
-                f'  <span class="visually-hidden">{toggle_text}</span></a>'
-                f'  <ul class="dropdown-menu">{"".join(dropdown_links)}</ul>'
-                f"</span>"
-            )
-        elif button:
-            html += button
-        elif dropdown_links:
-            html += (
-                f'<span class="btn-group dropdown">'
-                f'  <a class="btn btn-sm btn-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">'
-                f'  <span class="visually-hidden">{toggle_text}</span></a>'
-                f'  <ul class="dropdown-menu">{"".join(dropdown_links)}</ul>'
-                f"</span>"
-            )
-
-        # Render any extra buttons from template code
-        if self.extra_buttons:
-            template = Template(self.extra_buttons)
-            context = getattr(table, "context", Context())
-            context.update({"record": record})
-            html = template.render(context) + html
-
-        return mark_safe(html)
+    def render(self, record, value):
+        if record.type == CustomObjectFieldTypeChoices.TYPE_COLOR:
+            return columns.ColorColumn().render(value)
+        if record.type == CustomObjectFieldTypeChoices.TYPE_MAC_ADDRESS:
+            return value
+        return super().render(record, value)
 
 
 class CustomObjectTypeFieldTable(NetBoxTable):
@@ -220,12 +142,12 @@ class CustomObjectTypeFieldTable(NetBoxTable):
     )
     primary = columns.BooleanColumn()
     required = columns.BooleanColumn()
-
-    exempt_columns = ('actions',)
+    default = FieldDefaultColumn(verbose_name=_('Default'))
 
     class Meta(NetBoxTable.Meta):
         model = CustomObjectTypeField
         fields = (
+            "pk",
             "id",
             "name",
             "type",
@@ -267,9 +189,7 @@ class CustomObjectTypeFieldTable(NetBoxTable):
 class CustomObjectTable(NetBoxTable):
     pk = columns.ToggleColumn(visible=False)
     id = tables.Column(linkify=True, verbose_name=_("ID"))
-    actions = CustomObjectActionsColumn(
-        actions=('edit', 'delete'),
-    )
+    actions = columns.ActionsColumn()
     tags = CustomObjectTagColumn()
 
     class Meta(NetBoxTable.Meta):
@@ -290,4 +210,81 @@ class CustomObjectTable(NetBoxTable):
             "custom_object_type",
             "created",
             "last_updated",
+        )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # COMPAT(netbox<4.5.4): NetBoxTable has no _apply_prefetching(), and prefetches the
+        # default columns in __init__() instead.
+        if not hasattr(NetBoxTable, "_apply_prefetching"):
+            self._prefetch_polymorphic_m2m()
+
+    def _apply_prefetching(self, columns=None):
+        super()._apply_prefetching(columns)
+        self._prefetch_polymorphic_m2m(columns)
+
+    def _prefetch_polymorphic_m2m(self, columns=None):
+        """Prefetch the polymorphic multi-object columns, which NetBox's prefetching can't find in _meta."""
+        if not isinstance(self.data, TableQuerysetData):
+            return
+        names = [
+            name for name in polymorphic_m2m_field_names(self._meta.model)
+            if name in self.columns and (self.columns[name].visible if columns is None else name in columns)
+        ]
+        if names:
+            self.data.data = self.data.data.prefetch_related(*names)
+
+
+class CustomObjectTypeConstraintTable(NetBoxTable):
+    name = tables.Column(
+        verbose_name=_('Name'),
+    )
+    constrained_fields = tables.TemplateColumn(
+        verbose_name=_('Fields'),
+        template_code='{{ record.get_fields|join:", "|placeholder }}',
+        orderable=False,
+    )
+    case_insensitive = columns.BooleanColumn(
+        verbose_name=_('Case-insensitive')
+    )
+    nulls_distinct = columns.BooleanColumn(
+        verbose_name=_('Empty values distinct')
+    )
+    condition = tables.TemplateColumn(
+        verbose_name=_('Condition'),
+        template_code='{{ record.get_condition_display|placeholder }}',
+        orderable=False,
+    )
+    rule = tables.TemplateColumn(
+        verbose_name=_('Rule'),
+        template_code='{{ record.get_rule_display|placeholder }}',
+        orderable=False,
+    )
+
+    class Meta(NetBoxTable.Meta):
+        model = CustomObjectTypeConstraint
+        fields = (
+            "pk",
+            "id",
+            "name",
+            "type",
+            "constrained_fields",
+            "case_insensitive",
+            "nulls_distinct",
+            "condition",
+            "rule",
+            "error_message",
+            "description",
+            "created",
+            "last_updated",
+        )
+        default_columns = (
+            "name",
+            "type",
+            "constrained_fields",
+            "case_insensitive",
+            "nulls_distinct",
+            "condition",
+            "rule",
+            "description",
         )

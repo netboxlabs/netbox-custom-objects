@@ -12,19 +12,26 @@ Covers:
 - schema_document persisted after apply
 - next_schema_id counter synced after explicit-schema_id ADD
 - Transaction atomicity: partial failure rolls back entirely
+- Constraint ADD, ALTER and REMOVE, and their ordering around field changes
 """
 
-from django.test import SimpleTestCase, TransactionTestCase
+import copy
+
+from django.test import SimpleTestCase, TestCase
 
 from netbox_custom_objects.schema.comparator import (
     COTDiff,
     FieldChange,
     FieldOp,
     diff_cot,
+    diff_document,
 )
 from netbox_custom_objects.schema.executor import (
     CircularDependencyError,
     DestructiveChangesError,
+    InvalidConstraintError,
+    InvalidRelatedNameError,
+    UnsupportedFieldChangeError,
     UnknownChoiceSetError,
     UnknownFieldTypeError,
     UnknownObjectTypeError,
@@ -34,9 +41,9 @@ from netbox_custom_objects.schema.executor import (
     apply_diffs,
 )
 from netbox_custom_objects.schema.exporter import export_cot
-from netbox_custom_objects.models import CustomObjectType
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint
 
-from ..base import CustomObjectsTestCase, TransactionCleanupMixin
+from ..base import CustomObjectsTestCase
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +150,7 @@ class ExecutorBuildDepOrderTestCase(SimpleTestCase):
 # Helper base for DDL tests
 # ---------------------------------------------------------------------------
 
-class _ExecutorTestBase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
+class _ExecutorTestBase(CustomObjectsTestCase, TestCase):
     """Common base for executor integration tests that touch the DB."""
     pass
 
@@ -349,6 +356,27 @@ class ExecutorFieldAddTestCase(_ExecutorTestBase):
         field = self.cot.fields.get(name="newfield")
         self.assertEqual(field.schema_id, next_id)
 
+    def test_added_color_field(self):
+        type_def = export_cot(self.cot)
+        next_id = self.cot.next_schema_id + 1
+        type_def["fields"].append({"id": next_id, "name": "shade", "type": "color", "default": "00ff00"})
+        apply_document({"schema_version": "1", "types": [type_def]})
+        field = self.cot.fields.get(name="shade")
+        self.assertEqual((field.type, field.default), ("color", "00ff00"))
+        self.assertEqual(export_cot(self.cot)["fields"][-1], {"id": next_id, "name": "shade", "type": "color",
+                                                               "default": "00ff00"})
+
+    def test_added_mac_address_field(self):
+        type_def = export_cot(self.cot)
+        next_id = self.cot.next_schema_id + 1
+        type_def["fields"].append({"id": next_id, "name": "mac", "type": "mac_address", "default": "001a2b3c4d5e"})
+        apply_document({"schema_version": "1", "types": [type_def]})
+        self.assertEqual(self.cot.fields.get(name="mac").type, "mac_address")
+        self.cot.refresh_from_db()
+        obj = self.cot.get_model().objects.create()
+        obj.refresh_from_db()
+        self.assertEqual(str(obj.mac), "00:1A:2B:3C:4D:5E")
+
     def test_added_coordinates_field_round_trips(self):
         type_def = export_cot(self.cot)
         next_id = self.cot.next_schema_id + 1
@@ -548,6 +576,87 @@ class ExecutorFieldAlterTestCase(_ExecutorTestBase):
         self.assertEqual(
             obj_field.related_object_type, site_ot,
         )
+
+    def test_array_field(self):
+        cot = self.create_custom_object_type(name='zone', slug='zone')
+        cot.refresh_from_db()
+        type_def = export_cot(cot)
+        type_def.setdefault("fields", []).append({
+            "id": cot.next_schema_id + 1, "name": "points", "type": "array", "array_element_type": "integer",
+            "array_tuple_size": 3, "array_min_length": 2,
+        })
+        apply_document({"schema_version": "1", "types": [type_def]})
+        field = cot.fields.get(name="points")
+        self.assertEqual(
+            (field.type, field.array_element_type, field.array_tuple_size, field.array_min_length),
+            ("array", "integer", 3, 2),
+        )
+        model = CustomObjectType.objects.get(pk=cot.pk).get_model()
+        model.objects.create(points=[[0, 0, 0], [1, 2, 3]])
+
+        # The length limits can change.
+        type_def = export_cot(cot)
+        type_def["fields"][-1]["array_max_length"] = 10
+        apply_document({"schema_version": "1", "types": [type_def]})
+        field.refresh_from_db()
+        self.assertEqual(field.array_max_length, 10)
+
+        # The element type, tuple size and the type itself can't.
+        changes = {
+            "element type": {"array_element_type": "decimal"},
+            "tuple size": {"array_tuple_size": 2},
+            "type": {"type": "text", "array_element_type": None},
+        }
+        for label, change in changes.items():
+            with self.subTest(label):
+                type_def = export_cot(cot)
+                type_def["fields"][-1].update(change)
+                type_def["fields"][-1] = {k: v for k, v in type_def["fields"][-1].items() if v is not None}
+                with self.assertRaises(UnsupportedFieldChangeError):
+                    apply_document({"schema_version": "1", "types": [type_def]})
+        field.refresh_from_db()
+        self.assertEqual((field.type, field.array_element_type, field.array_tuple_size), ("array", "integer", 3))
+
+    def test_related_name(self):
+        from dcim.models import Device
+
+        obj_cot = self.create_custom_object_type(name='named', slug='named')
+        obj_cot.refresh_from_db()
+        type_def = export_cot(obj_cot)
+        type_def.setdefault("fields", []).append({
+            "id": obj_cot.next_schema_id + 1, "name": "device", "type": "object",
+            "related_object_type": "dcim/device", "related_name": "widgets",
+        })
+        apply_document({"schema_version": "1", "types": [type_def]})
+        field = obj_cot.fields.get(name="device")
+        self.assertEqual(field.related_name, "widgets")
+        obj_cot.get_model()
+        self.assertTrue(hasattr(Device, "widgets"))
+        self.assertEqual(export_cot(obj_cot)["fields"][-1]["related_name"], "widgets")
+
+        type_def = export_cot(obj_cot)
+        type_def["fields"][-1]["related_name"] = "gadgets"
+        apply_document({"schema_version": "1", "types": [type_def]})
+        field.refresh_from_db()
+        self.assertEqual(field.related_name, "gadgets")
+        CustomObjectType.objects.get(pk=obj_cot.pk).get_model()
+        self.assertTrue(hasattr(Device, "gadgets"))
+
+    def test_related_name_already_used(self):
+        device_ot = self.get_device_object_type()
+        self.create_custom_object_type_field(
+            self.cot, name='device', type='object', related_object_type=device_ot, related_name='widgets',
+        )
+        other = self.create_custom_object_type(name='other', slug='other')
+        other.refresh_from_db()
+        type_def = export_cot(other)
+        type_def.setdefault("fields", []).append({
+            "id": other.next_schema_id + 1, "name": "device", "type": "object",
+            "related_object_type": "dcim/device", "related_name": "widgets",
+        })
+        with self.assertRaisesRegex(InvalidRelatedNameError, "already used by field"):
+            apply_document({"schema_version": "1", "types": [type_def]})
+        self.assertFalse(other.fields.exists())
 
     def test_alter_field_type(self):
         type_def = export_cot(self.cot)
@@ -871,6 +980,44 @@ class ExecutorPolymorphicFieldTestCase(_ExecutorTestBase):
         )
         self.assertEqual(encoded, ["dcim/device", "dcim/site"])
 
+    def test_add_polymorphic_field_with_related_name(self):
+        from dcim.models import Device, Site
+
+        cot = self.create_custom_object_type(name='polynamed', slug='poly-named')
+
+        def document(related_name):
+            return {"schema_version": "1", "types": [{"name": "polynamed", "slug": "poly-named", "fields": [{
+                "id": 1, "name": "poly_obj", "type": "object", "is_polymorphic": True,
+                "related_object_types": ["dcim/device", "dcim/site"], "related_name": related_name,
+            }]}]}
+
+        # Device already has an "interfaces" attribute; the field isn't created.
+        with self.assertRaisesRegex(InvalidRelatedNameError, "conflicts with an existing attribute"):
+            apply_document(document("interfaces"))
+        self.assertFalse(cot.fields.exists())
+        self.assertEqual(type(Device.interfaces).__name__, "ReverseManyToOneDescriptor")
+        # Nor is the reverse relation added to the other target, which a rollback wouldn't undo.
+        self.assertFalse(hasattr(Site, "interfaces"))
+
+        apply_document(document("poly_widgets"))
+        self.assertEqual(cot.fields.get(name="poly_obj").related_name, "poly_widgets")
+        self.assertTrue(hasattr(Device, "poly_widgets"))
+        self.assertTrue(hasattr(Site, "poly_widgets"))
+
+    def test_alter_polymorphic_types_with_taken_related_name(self):
+        from ipam.models import Prefix
+
+        cot = self.create_custom_object_type(name='polytaken', slug='poly-taken')
+        field = self.create_polymorphic_field(cot, [self.site_ot], name='poly_obj', related_name='interfaces')
+        type_def = export_cot(cot)
+        type_def["fields"][-1]["related_object_types"] = ["dcim/device", "ipam/prefix"]
+
+        # Device already has an "interfaces" attribute; the types aren't changed.
+        with self.assertRaisesRegex(InvalidRelatedNameError, "conflicts with an existing attribute"):
+            apply_document({"schema_version": "1", "types": [type_def]})
+        self.assertEqual(list(field.related_object_types.all()), [self.site_ot])
+        self.assertFalse(hasattr(Prefix, "interfaces"))
+
     def test_add_polymorphic_multiobject_field(self):
         cot = self.create_custom_object_type(name='polyadd2', slug='poly-add-2')
         schema_doc = {
@@ -946,3 +1093,171 @@ class ExecutorPolymorphicFieldTestCase(_ExecutorTestBase):
         apply_document(schema_doc)
         self.assertTrue(CustomObjectType.objects.filter(slug="cot-poly-a").exists())
         self.assertTrue(CustomObjectType.objects.filter(slug="cot-poly-b").exists())
+
+
+# ---------------------------------------------------------------------------
+# Constraints
+# ---------------------------------------------------------------------------
+
+class ExecutorConstraintTestCase(_ExecutorTestBase):
+    """Constraints are exported, diffed by name, and applied around field changes."""
+
+    def setUp(self):
+        super().setUp()
+        self.cot = self.create_custom_object_type(name='asset', slug='assets')
+        self.vendor = self.create_custom_object_type_field(self.cot, name='vendor', type='text')
+        self.serial = self.create_custom_object_type_field(self.cot, name='serial', type='text')
+
+    def _document(self, **changes):
+        type_def = {**export_cot(self.cot), **changes}
+        return {"schema_version": "1", "types": [type_def]}
+
+    def _constraint_def(self, **kwargs):
+        return {"name": "vendor_serial", "fields": [self.vendor.schema_id, self.serial.schema_id], **kwargs}
+
+    def test_new_cot_with_constraint(self):
+        apply_document({"schema_version": "1", "types": [{
+            "name": "fresh",
+            "slug": "fresh",
+            "fields": [{"id": 1, "name": "a", "type": "text"}, {"id": 2, "name": "b", "type": "text"}],
+            "constraints": [{"name": "a_b", "fields": [1, 2], "case_insensitive": True}],
+        }]})
+        constraint = CustomObjectTypeConstraint.objects.get(custom_object_type__slug="fresh")
+        self.assertEqual(constraint.field_schema_ids, [1, 2])
+        self.assertTrue(constraint.case_insensitive)
+
+    def test_add_export_and_round_trip(self):
+        apply_document(self._document(constraints=[self._constraint_def(description="Serials")]))
+        self.cot.refresh_from_db()
+        self.assertEqual(
+            export_cot(self.cot)["constraints"],
+            [{**self._constraint_def(), "description": "Serials"}],
+        )
+        # Re-applying the export changes nothing.
+        diff = diff_document(self._document())[0]
+        self.assertEqual(diff.constraint_changes, [])
+
+    def test_alter(self):
+        apply_document(self._document(constraints=[self._constraint_def()]))
+        diff = apply_document(self._document(constraints=[self._constraint_def(nulls_distinct=False)]))[0]
+        self.assertEqual(diff.constraint_changes[0].op, FieldOp.ALTER)
+        self.assertEqual(diff.constraint_changes[0].changed_attrs, {"nulls_distinct": (True, False)})
+        self.assertFalse(CustomObjectTypeConstraint.objects.get().nulls_distinct)
+
+    @property
+    def _serial_only(self):
+        return {"name": "vendor_serial", "fields": [self.serial.schema_id], "case_insensitive": True}
+
+    def test_alter_keeps_the_primary_key(self):
+        """An altered constraint is re-created after the field changes, with the primary key it had."""
+        apply_document(self._document(constraints=[self._constraint_def()]))
+        pk = CustomObjectTypeConstraint.objects.get().pk
+        apply_document(self._document(constraints=[self._serial_only]))
+        constraint = CustomObjectTypeConstraint.objects.get()
+        self.assertEqual(constraint.pk, pk)
+        self.assertEqual(constraint.field_schema_ids, [self.serial.schema_id])
+
+    def test_alter_checks_existing_objects(self):
+        apply_document(self._document(constraints=[self._constraint_def()]))
+        model = self.cot.get_model()
+        model.objects.create(vendor="acme", serial="1")
+        model.objects.create(vendor="other", serial="1")
+        with self.assertRaisesMessage(InvalidConstraintError, "already have duplicate values"):
+            apply_document(self._document(constraints=[self._serial_only]))
+        self.assertEqual(
+            CustomObjectTypeConstraint.objects.get().field_schema_ids, [self.vendor.schema_id, self.serial.schema_id],
+        )
+
+    def test_condition(self):
+        condition = [{"field": self.vendor.schema_id, "lookup": "isnull", "value": False}]
+        constraint_def = {"name": "serial_if_vendor", "fields": [self.serial.schema_id], "condition": condition}
+        apply_document(self._document(constraints=[constraint_def]))
+        self.assertEqual(CustomObjectTypeConstraint.objects.get().condition, condition)
+        self.cot.refresh_from_db()
+        self.assertEqual(export_cot(self.cot)["constraints"], [constraint_def])
+        self.assertEqual(diff_document(self._document())[0].constraint_changes, [])
+
+        changed = [{**condition[0], "value": True}]
+        diff = apply_document(self._document(constraints=[{**constraint_def, "condition": changed}]))[0]
+        self.assertEqual(diff.constraint_changes[0].changed_attrs, {"condition": (condition, changed)})
+        self.assertEqual(CustomObjectTypeConstraint.objects.get().condition, changed)
+
+    def test_check(self):
+        rule = [{"field": self.serial.schema_id, "lookup": "n", "value": {"field": self.vendor.schema_id}}]
+        constraint_def = {"name": "serial_not_vendor", "type": "check", "rule": rule}
+        apply_document(self._document(constraints=[constraint_def]))
+        constraint = CustomObjectTypeConstraint.objects.get()
+        self.assertEqual((constraint.type, constraint.field_schema_ids, constraint.rule), ("check", [], rule))
+        self.cot.refresh_from_db()
+        self.assertEqual(export_cot(self.cot)["constraints"], [constraint_def])
+        self.assertEqual(diff_document(self._document())[0].constraint_changes, [])
+
+        changed = {**constraint_def, "error_message": "Serial can't match vendor."}
+        diff = apply_document(self._document(constraints=[changed]))[0]
+        self.assertEqual(
+            diff.constraint_changes[0].changed_attrs, {"error_message": ("", "Serial can't match vendor.")}
+        )
+        self.assertEqual(CustomObjectTypeConstraint.objects.get().error_message, "Serial can't match vendor.")
+
+    def test_mac_address_values_compare_normalized(self):
+        mac = self.create_custom_object_type_field(self.cot, name='mac', type='mac_address')
+        condition = [{"field": mac.schema_id, "lookup": "exact", "value": "00-1a-2b-3c-4d-5e"}]
+        rule = [{"field": mac.schema_id, "lookup": "in", "value": ["001a.2b3c.4d5e", "aa:bb:cc:dd:ee:ff"]}]
+        document = self._document(constraints=[
+            self._constraint_def(condition=condition),
+            {"name": "known_mac", "type": "check", "rule": rule},
+        ])
+        apply_document(copy.deepcopy(document))
+        stored = CustomObjectTypeConstraint.objects.get(name="known_mac").rule
+        self.assertEqual(stored[0]["value"], ["00:1A:2B:3C:4D:5E", "AA:BB:CC:DD:EE:FF"])
+        # The same document, spelling the addresses differently, is no change.
+        self.assertEqual(diff_document(document)[0].constraint_changes, [])
+
+    def test_remove_needs_removed_constraints(self):
+        apply_document(self._document(constraints=[self._constraint_def()]))
+
+        diff = apply_document(self._document(constraints=[]))[0]
+        self.assertEqual(diff.constraint_changes, [])
+        self.assertTrue(any("vendor_serial" in w for w in diff.warnings))
+        self.assertTrue(CustomObjectTypeConstraint.objects.exists())
+
+        diff = apply_document(self._document(constraints=[], removed_constraints=["vendor_serial"]))[0]
+        self.assertEqual(diff.constraint_changes[0].op, FieldOp.REMOVE)
+        self.assertFalse(diff.has_destructive_changes)
+        self.assertFalse(CustomObjectTypeConstraint.objects.exists())
+        self.cot.refresh_from_db()
+        self.assertEqual(export_cot(self.cot)["removed_constraints"], ["vendor_serial"])
+
+    def test_constraint_on_field_added_in_same_document(self):
+        doc = self._document()
+        doc["types"][0]["fields"].append({"id": 50, "name": "model", "type": "text"})
+        doc["types"][0]["constraints"] = [{"name": "vendor_model", "fields": [self.vendor.schema_id, 50]}]
+        apply_document(doc)
+        self.assertEqual(CustomObjectTypeConstraint.objects.get().field_schema_ids, [self.vendor.schema_id, 50])
+
+    def test_type_change_of_constrained_field_rejected(self):
+        apply_document(self._document(constraints=[self._constraint_def()]))
+        doc = self._document()
+        serial = next(f for f in doc["types"][0]["fields"] if f["name"] == "serial")
+        serial["type"] = "integer"
+        with self.assertRaisesMessage(InvalidConstraintError, "vendor_serial"):
+            apply_document(doc, allow_destructive=True)
+        self.serial.refresh_from_db()
+        self.assertEqual(self.serial.type, "text")
+
+        # Removing the constraint in the same document allows the change.
+        doc["types"][0].update(constraints=[], removed_constraints=["vendor_serial"])
+        apply_document(doc, allow_destructive=True)
+        self.serial.refresh_from_db()
+        self.assertEqual(self.serial.type, "integer")
+
+    def test_invalid_constraint_rolls_back(self):
+        model = self.cot.get_model()
+        model.objects.create(vendor="acme", serial="1")
+        model.objects.create(vendor="acme", serial="1")
+        doc = self._document(description="changed", constraints=[self._constraint_def()])
+        with self.assertRaises(InvalidConstraintError):
+            apply_document(doc)
+        self.assertFalse(CustomObjectTypeConstraint.objects.exists())
+        self.cot.refresh_from_db()
+        self.assertEqual(self.cot.description, "A test custom object type")

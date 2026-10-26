@@ -1,10 +1,12 @@
 from django import template
+from django.conf import settings
 from extras.choices import CustomFieldUIVisibleChoices
 
 from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
-from netbox_custom_objects.field_types import URLFieldType
+from netbox_custom_objects.field_types import URLFieldType, format_array_value
 from netbox_custom_objects.models import CustomObjectTypeField
 from netbox_custom_objects.utilities import build_map_url
+from packaging.version import InvalidVersion, Version
 
 __all__ = (
     "get_field_object_type",
@@ -14,6 +16,7 @@ __all__ = (
     "get_child_relations",
     "get_coordinate_map_url",
     "get_url_field_html",
+    "sticky_actions_supported",
 )
 
 register = template.Library()
@@ -39,6 +42,8 @@ def get_field_value(obj, field: CustomObjectTypeField):
         if latitude is None or longitude is None:
             return None
         return f"{latitude}, {longitude}"
+    if field.type == CustomObjectFieldTypeChoices.TYPE_ARRAY:
+        return format_array_value(getattr(obj, field.name)) or None
     return getattr(obj, field.name)
 
 
@@ -94,3 +99,13 @@ def get_child_relations(obj, field: CustomObjectTypeField):
 def dict_get(d, key):
     """Look up a key in a dict from a template (e.g. ``mydict|dict_get:name``)."""
     return d.get(key)
+
+
+@register.simple_tag
+def sticky_actions_supported():
+    """Whether core styles ``sticky-actions-footer`` (NetBox 4.6+); 4.5 has only ``btn-float-group-right``."""
+    # COMPAT(netbox<4.6.0): drop this tag and the legacy footer it selects.
+    try:
+        return Version(settings.RELEASE.version) >= Version("4.6")
+    except (AttributeError, InvalidVersion):
+        return True

@@ -865,10 +865,8 @@ class ScalarFieldFiltersetTestCase(CustomObjectsTestCase):
     Subclasses must:
       - set ``match_params`` (class attr): filter params that should return obj_match
       - set ``obj_match`` / ``obj_no_match`` in ``setUpTestData``
-      - set ``total_count`` (class attr, default 2) when the fixture has more rows
     """
     match_params: dict = {}
-    total_count: int = 2
 
     def _filterset(self, params):
         model = self.cot.get_model()
@@ -878,14 +876,6 @@ class ScalarFieldFiltersetTestCase(CustomObjectsTestCase):
         pks = list(self._filterset(self.match_params).qs.values_list('pk', flat=True))
         self.assertIn(self.obj_match.pk, pks)
         self.assertNotIn(self.obj_no_match.pk, pks)
-
-    def test_no_filter_returns_all(self):
-        self.assertEqual(self._filterset({}).qs.count(), self.total_count)
-
-    def test_filter_by_id_returns_only_matching_object(self):
-        """Regression #628: ?id=<pk> was silently ignored, returning every row."""
-        pks = list(self._filterset({'id': [str(self.obj_match.pk)]}).qs.values_list('pk', flat=True))
-        self.assertEqual(pks, [self.obj_match.pk])
 
 
 class TextFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
@@ -910,6 +900,15 @@ class TextFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
         pks = list(self._filterset({'note': 'FOO'}).qs.values_list('pk', flat=True))
         self.assertIn(self.obj_match.pk, pks)
         self.assertNotIn(self.obj_no_match.pk, pks)
+
+    # The two tests below don't depend on the field type, so they run here only.
+    def test_no_filter_returns_all(self):
+        self.assertEqual(self._filterset({}).qs.count(), 2)
+
+    def test_filter_by_id_returns_only_matching_object(self):
+        """Regression #628: ?id=<pk> was silently ignored, returning every row."""
+        pks = list(self._filterset({'id': [str(self.obj_match.pk)]}).qs.values_list('pk', flat=True))
+        self.assertEqual(pks, [self.obj_match.pk])
 
 
 class TextFieldFilterLogicTestCase(CustomObjectsTestCase, TestCase):
@@ -1022,7 +1021,6 @@ class IntegerFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
     """NumberFilter with exact lookup is generated for TYPE_INTEGER fields."""
 
     match_params = {'count': 10}
-    total_count = 3
 
     @classmethod
     def setUpTestData(cls):
@@ -1047,7 +1045,6 @@ class DecimalFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
     """NumberFilter with exact lookup is generated for TYPE_DECIMAL fields."""
 
     match_params = {'price': '1.5'}
-    total_count = 3
 
     @classmethod
     def setUpTestData(cls):
@@ -1072,7 +1069,6 @@ class BooleanFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
     """BooleanFilter is generated for TYPE_BOOLEAN fields."""
 
     match_params = {'active': True}
-    total_count = 3
 
     @classmethod
     def setUpTestData(cls):
@@ -1159,6 +1155,73 @@ class URLFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
         cls.obj_no_match = model.objects.create(name='gl', link='https://gitlab.com/example')
 
 
+class ColorFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
+    """A multi-value exact filter is generated for color fields."""
+
+    match_params = {'shade': ['ff0000']}
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(name='ColorFS', slug='color-fs')
+        cls.create_custom_object_type_field(
+            cls.cot, name='name', label='Name', type='text', primary=True, required=True
+        )
+        cls.create_custom_object_type_field(cls.cot, name='shade', label='Shade', type='color')
+
+        model = cls.cot.get_model()
+        cls.obj_match = model.objects.create(name='red', shade='ff0000')
+        cls.obj_no_match = model.objects.create(name='green', shade='00ff00')
+        cls.obj_other = model.objects.create(name='blue', shade='0000ff')
+
+    def test_multiple_values(self):
+        pks = set(self._filterset({'shade': ['ff0000', '0000ff']}).qs.values_list('pk', flat=True))
+        self.assertEqual(pks, {self.obj_match.pk, self.obj_other.pk})
+
+    def test_exact_match_only(self):
+        self.assertFalse(self._filterset({'shade': ['ff00']}).qs.exists())
+
+
+class MACAddressFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
+    """A multi-value MAC address filter is generated for MAC address fields."""
+
+    match_params = {'mac': ['00-1A-2B-3C-4D-5E']}
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(name='MACFS', slug='mac-fs')
+        cls.create_custom_object_type_field(
+            cls.cot, name='name', label='Name', type='text', primary=True, required=True
+        )
+        cls.create_custom_object_type_field(cls.cot, name='mac', label='MAC', type='mac_address')
+
+        model = cls.cot.get_model()
+        cls.obj_match = model.objects.create(name='eth0', mac='00:1a:2b:3c:4d:5e')
+        cls.obj_no_match = model.objects.create(name='eth1', mac='00:1a:2b:3c:4d:5f')
+        cls.obj_other = model.objects.create(name='eth2', mac='aa:bb:cc:dd:ee:ff')
+
+    def test_multiple_values_in_any_format(self):
+        pks = set(self._filterset({'mac': ['001a2b3c4d5e', 'AA:BB:CC:DD:EE:FF']}).qs.values_list('pk', flat=True))
+        self.assertEqual(pks, {self.obj_match.pk, self.obj_other.pk})
+
+    def test_partial_match(self):
+        pks = set(self._filterset({'mac__ic': ['3c:4d']}).qs.values_list('pk', flat=True))
+        self.assertEqual(pks, {self.obj_match.pk, self.obj_no_match.pk})
+
+    def test_invalid_value_matches_nothing(self):
+        # Older NetBox releases match nothing; newer ones reject the value as an invalid filter.
+        filterset = self._filterset({'mac': ['nope']})
+        if filterset.is_valid():
+            self.assertFalse(filterset.qs.exists())
+        else:
+            self.assertIn('mac', filterset.errors)
+
+    def test_quick_search(self):
+        pks = set(self._filterset({'q': 'BB:CC'}).qs.values_list('pk', flat=True))
+        self.assertEqual(pks, {self.obj_other.pk})
+
+
 class JSONFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
     """CharFilter with icontains is generated for TYPE_JSON fields."""
 
@@ -1182,7 +1245,6 @@ class SelectFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
     """MultipleChoiceFilter with OR semantics is generated for TYPE_SELECT fields."""
 
     match_params = {'status': ['active']}
-    total_count = 3
 
     @classmethod
     def setUpTestData(cls):
@@ -1226,7 +1288,6 @@ class MultiSelectFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
     """ArrayContainsFilter is generated for TYPE_MULTISELECT: containment semantics, not exact match."""
 
     match_params = {'colors': ['red']}
-    total_count = 4
 
     @classmethod
     def setUpTestData(cls):
@@ -1282,6 +1343,66 @@ class MultiSelectFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
         model = self.cot.get_model()
         fs_class = get_filterset_class(model)
         self.assertIsInstance(fs_class.base_filters.get('colors'), ArrayContainsFilter)
+
+
+class ArrayFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
+    """An array field gets a "contains all these values" filter, a length filter and quick search."""
+
+    match_params = {'readings': '1, 3'}
+
+    @classmethod
+    def setUpTestData(cls):
+        super().setUpTestData()
+        cls.cot = cls.create_custom_object_type(name='ArrayFS', slug='array-fs')
+        cls.create_custom_object_type_field(
+            cls.cot, name='name', label='Name', type='text', primary=True, required=True
+        )
+        cls.create_custom_object_type_field(
+            cls.cot, name='readings', label='Readings', type='array', array_element_type='integer'
+        )
+        cls.create_custom_object_type_field(
+            cls.cot, name='points', label='Points', type='array', array_element_type='integer',
+            array_tuple_size=3,
+        )
+        cls.create_custom_object_type_field(
+            cls.cot, name='tags_list', label='Tags', type='array', array_element_type='text'
+        )
+        cls.create_custom_object_type_field(
+            cls.cot, name='amounts', label='Amounts', type='array', array_element_type='decimal'
+        )
+
+        model = cls.cot.get_model()
+        cls.obj_match = model.objects.create(
+            name='a', readings=[1, 2, 3], points=[[0, 0, 0], [7, 8, 9]], tags_list=['edge', 'core']
+        )
+        cls.obj_no_match = model.objects.create(name='b', readings=[1, 2], points=[[1, 1, 1]], tags_list=['edge'])
+        cls.obj_none = model.objects.create(name='c')
+
+    def _pks(self, params):
+        return set(self._filterset(params).qs.values_list('pk', flat=True))
+
+    def test_contains_all_values(self):
+        self.assertEqual(self._pks({'readings': '1'}), {self.obj_match.pk, self.obj_no_match.pk})
+        self.assertEqual(self._pks({'readings': '2,3'}), {self.obj_match.pk})
+        self.assertEqual(self._pks({'tags_list': 'core'}), {self.obj_match.pk})
+        self.assertEqual(self._pks({'points': '7,8,9'}), {self.obj_match.pk})
+        # A value that isn't of the element type matches nothing.
+        self.assertEqual(self._pks({'readings': 'x'}), set())
+        # As does one too large for the element type.
+        self.assertEqual(self._pks({'readings': '99999999999999999999'}), set())
+        self.assertEqual(self._pks({'amounts': '1000000'}), set())
+
+    def test_length(self):
+        self.assertEqual(self._pks({'readings__len': 2}), {self.obj_no_match.pk})
+        self.assertEqual(self._pks({'points__len': 2}), {self.obj_match.pk})
+
+    def test_quick_search(self):
+        self.assertEqual(self._pks({'q': 'core'}), {self.obj_match.pk})
+        self.assertEqual(self._pks({'q': '3'}), {self.obj_match.pk})
+        self.assertEqual(self._pks({'q': '9'}), {self.obj_match.pk})
+        # A value too large for an element type skips that field.
+        self.assertEqual(self._pks({'q': '1000000'}), set())
+        self.assertEqual(self._pks({'q': '99999999999999999999'}), set())
 
 
 # ---------------------------------------------------------------------------

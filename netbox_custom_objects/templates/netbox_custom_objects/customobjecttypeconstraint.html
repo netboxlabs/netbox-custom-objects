@@ -1,0 +1,14 @@
+{% extends 'generic/object.html' %}
+{% load i18n %}
+
+{% block breadcrumbs %}
+  <li class="breadcrumb-item">
+    <a href="{% url 'plugins:netbox_custom_objects:customobjecttype_list' %}">{% trans "Custom Object Types" %}</a>
+  </li>
+  <li class="breadcrumb-item">
+    <a href="{{ object.custom_object_type.get_absolute_url }}">{{ object.custom_object_type }}</a>
+  </li>
+  <li class="breadcrumb-item">
+    <a href="{{ object.get_absolute_url }}">{% trans "Constraints" %}</a>
+  </li>
+{% endblock breadcrumbs %}

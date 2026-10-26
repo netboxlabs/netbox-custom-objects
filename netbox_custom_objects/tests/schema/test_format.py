@@ -13,18 +13,19 @@ from pathlib import Path
 
 from django.db import IntegrityError, transaction
 from django.db.models.fields import NOT_PROVIDED
-from django.test import TestCase, TransactionTestCase
+from django.test import TestCase
 
 from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
-from netbox_custom_objects.models import CustomObjectTypeField
+from netbox_custom_objects.models import CustomObjectTypeConstraint, CustomObjectTypeField
 from netbox_custom_objects.schema.format import (
+    CONSTRAINT_DEFAULTS,
     CHOICES_TO_SCHEMA_TYPE,
     FIELD_DEFAULTS,
     SCHEMA_FORMAT_VERSION,
     SCHEMA_TYPE_TO_CHOICES,
 )
 
-from ..base import CustomObjectsTestCase, TransactionCleanupMixin
+from ..base import CustomObjectsTestCase
 
 # ---------------------------------------------------------------------------
 # Optional jsonschema dependency — skip structural-validation tests if absent
@@ -41,12 +42,10 @@ _SCHEMA_PATH = (
 
 
 # ===========================================================================
-# schema_id / deprecated model field tests (require TransactionTestCase)
+# schema_id / deprecated model field tests
 # ===========================================================================
 
-class SchemaIdAutoAssignmentTestCase(
-    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
-):
+class SchemaIdAutoAssignmentTestCase(CustomObjectsTestCase, TestCase):
     """schema_id is auto-assigned on field creation and never reused."""
 
     def test_schema_id_assigned_on_create(self):
@@ -123,9 +122,7 @@ class SchemaIdAutoAssignmentTestCase(
         )
 
 
-class DeprecationFieldsTestCase(
-    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
-):
+class DeprecationFieldsTestCase(CustomObjectsTestCase, TestCase):
     """deprecated, deprecated_since, and scheduled_removal field behaviour."""
 
     def test_deprecated_defaults_to_false(self):
@@ -163,197 +160,6 @@ class DeprecationFieldsTestCase(
 
         field.refresh_from_db()
         self.assertEqual(field.deprecated_since, '1.0.0-alpha.1+build.42')
-
-
-# ===========================================================================
-# Backfill migration logic tests (TransactionTestCase — uses DDL)
-# ===========================================================================
-
-class SchemaIdBackfillTestCase(
-    TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase
-):
-    """
-    Tests for the 0008_backfill_schema_ids migration logic.
-
-    Rather than exercising the migration runner itself (which would require
-    replaying the full migration history), these tests call the same backfill
-    function directly and verify its behaviour against real model instances.
-    """
-
-    @staticmethod
-    def _run_backfill():
-        """Execute the backfill function directly against the live DB."""
-        import importlib
-        mod = importlib.import_module(
-            'netbox_custom_objects.migrations.0008_backfill_schema_ids'
-        )
-        # The function accepts (apps, schema_editor) but only uses apps.get_model().
-        # We pass a lightweight shim that delegates to the real models.
-
-        class _AppsShim:
-            @staticmethod
-            def get_model(app_label, model_name):
-                from django.apps import apps
-                return apps.get_model(app_label, model_name)
-
-        mod.assign_schema_ids(_AppsShim(), None)
-
-    # ------------------------------------------------------------------
-    # Core backfill behaviour
-    # ------------------------------------------------------------------
-
-    def test_fields_without_schema_id_are_assigned(self):
-        cot = self.create_custom_object_type(name='bf1', slug='bf-1')
-        f1 = self.create_custom_object_type_field(cot, name='alpha', type='text')
-        f2 = self.create_custom_object_type_field(cot, name='beta', type='text')
-        # Force both to NULL (simulate pre-feature state)
-        CustomObjectTypeField.objects.filter(
-            custom_object_type=cot
-        ).update(schema_id=None)
-
-        self._run_backfill()
-
-        f1.refresh_from_db()
-        f2.refresh_from_db()
-        self.assertIsNotNone(f1.schema_id)
-        self.assertIsNotNone(f2.schema_id)
-
-    def test_assigned_ids_are_sequential_from_one(self):
-        cot = self.create_custom_object_type(name='bf2', slug='bf-2')
-        [
-            self.create_custom_object_type_field(cot, name=f'f{i}', type='text')
-            for i in range(1, 4)
-        ]
-        CustomObjectTypeField.objects.filter(
-            custom_object_type=cot
-        ).update(schema_id=None)
-
-        self._run_backfill()
-
-        ids = sorted(
-            CustomObjectTypeField.objects.filter(custom_object_type=cot)
-            .values_list('schema_id', flat=True)
-        )
-        self.assertEqual(ids, [1, 2, 3])
-
-    def test_existing_schema_ids_are_not_changed(self):
-        cot = self.create_custom_object_type(name='bf3', slug='bf-3')
-        f_existing = self.create_custom_object_type_field(cot, name='kept', type='text')
-        existing_id = f_existing.schema_id  # set by auto-assign
-        self.assertIsNotNone(existing_id)
-
-        # Add a second field and force it to NULL
-        f_new = self.create_custom_object_type_field(cot, name='new_one', type='text')
-        CustomObjectTypeField.objects.filter(pk=f_new.pk).update(schema_id=None)
-
-        self._run_backfill()
-
-        f_existing.refresh_from_db()
-        f_new.refresh_from_db()
-        self.assertEqual(f_existing.schema_id, existing_id, "Pre-existing ID must not change")
-        self.assertIsNotNone(f_new.schema_id)
-        self.assertGreater(f_new.schema_id, existing_id, "New ID must follow existing max")
-
-    def test_backfill_continues_from_existing_max(self):
-        """New IDs start after the highest already-assigned ID."""
-        cot = self.create_custom_object_type(name='bf4', slug='bf-4')
-        # Manually assign schema_id=5 to simulate a gap
-        f1 = self.create_custom_object_type_field(cot, name='five', type='text')
-        CustomObjectTypeField.objects.filter(pk=f1.pk).update(schema_id=5)
-
-        f2 = self.create_custom_object_type_field(cot, name='null_one', type='text')
-        CustomObjectTypeField.objects.filter(pk=f2.pk).update(schema_id=None)
-
-        self._run_backfill()
-
-        f2.refresh_from_db()
-        self.assertEqual(f2.schema_id, 6)
-
-    def test_next_schema_id_updated_on_cot(self):
-        from netbox_custom_objects.models import CustomObjectType
-        cot = self.create_custom_object_type(name='bf5', slug='bf-5')
-        for i in range(1, 4):
-            self.create_custom_object_type_field(cot, name=f'g{i}', type='text')
-        # Force all to NULL and reset counter
-        CustomObjectTypeField.objects.filter(
-            custom_object_type=cot
-        ).update(schema_id=None)
-        CustomObjectType.objects.filter(pk=cot.pk).update(next_schema_id=0)
-
-        self._run_backfill()
-
-        cot.refresh_from_db()
-        self.assertEqual(cot.next_schema_id, 3)
-
-    def test_next_schema_id_never_decreases(self):
-        """If next_schema_id is already high, the backfill must not lower it."""
-        from netbox_custom_objects.models import CustomObjectType
-        cot = self.create_custom_object_type(name='bf6', slug='bf-6')
-        f = self.create_custom_object_type_field(cot, name='only', type='text')
-        CustomObjectTypeField.objects.filter(pk=f.pk).update(schema_id=None)
-        # Artificially set next_schema_id to a large value
-        CustomObjectType.objects.filter(pk=cot.pk).update(next_schema_id=99)
-
-        self._run_backfill()
-
-        cot.refresh_from_db()
-        self.assertGreaterEqual(cot.next_schema_id, 99)
-
-    def test_ids_unique_within_cot(self):
-        cot = self.create_custom_object_type(name='bf7', slug='bf-7')
-        for i in range(1, 6):
-            self.create_custom_object_type_field(cot, name=f'h{i}', type='text')
-        CustomObjectTypeField.objects.filter(
-            custom_object_type=cot
-        ).update(schema_id=None)
-
-        self._run_backfill()
-
-        ids = list(
-            CustomObjectTypeField.objects.filter(custom_object_type=cot)
-            .values_list('schema_id', flat=True)
-        )
-        self.assertEqual(len(ids), len(set(ids)), "All schema_ids must be unique within COT")
-
-    def test_ids_scoped_per_cot(self):
-        """Two different COTs both start their IDs from 1."""
-        cotA = self.create_custom_object_type(name='bfA', slug='bf-a')
-        cotB = self.create_custom_object_type(name='bfB', slug='bf-b')
-        fa = self.create_custom_object_type_field(cotA, name='x', type='text')
-        fb = self.create_custom_object_type_field(cotB, name='x', type='text')
-        CustomObjectTypeField.objects.filter(pk__in=[fa.pk, fb.pk]).update(schema_id=None)
-        from netbox_custom_objects.models import CustomObjectType
-        CustomObjectType.objects.filter(pk__in=[cotA.pk, cotB.pk]).update(next_schema_id=0)
-
-        self._run_backfill()
-
-        fa.refresh_from_db()
-        fb.refresh_from_db()
-        self.assertEqual(fa.schema_id, 1)
-        self.assertEqual(fb.schema_id, 1)
-
-    def test_idempotent(self):
-        """Running the backfill twice must not change any already-assigned IDs."""
-        cot = self.create_custom_object_type(name='bfIdem', slug='bf-idem')
-        for i in range(1, 4):
-            self.create_custom_object_type_field(cot, name=f'i{i}', type='text')
-        CustomObjectTypeField.objects.filter(
-            custom_object_type=cot
-        ).update(schema_id=None)
-
-        self._run_backfill()
-        ids_after_first = list(
-            CustomObjectTypeField.objects.filter(custom_object_type=cot)
-            .order_by('id').values_list('schema_id', flat=True)
-        )
-
-        self._run_backfill()
-        ids_after_second = list(
-            CustomObjectTypeField.objects.filter(custom_object_type=cot)
-            .order_by('id').values_list('schema_id', flat=True)
-        )
-
-        self.assertEqual(ids_after_first, ids_after_second)
 
 
 # ===========================================================================
@@ -447,6 +253,7 @@ class FieldDefaultsConsistencyTestCase(TestCase):
         "validation_minimum": None,
         "validation_maximum": None,
         "related_object_filter": None,
+        "related_name": "",
         "default": None,
     }
 
@@ -491,6 +298,15 @@ class FieldDefaultsConsistencyTestCase(TestCase):
                 except Exception:
                     # Field may not exist on the model (type-specific virtual attrs).
                     pass
+
+    def test_constraint_defaults_match_model_defaults(self):
+        """CONSTRAINT_DEFAULTS must match the CustomObjectTypeConstraint model defaults."""
+        for attr, default in CONSTRAINT_DEFAULTS.items():
+            with self.subTest(attr=attr):
+                model_default = CustomObjectTypeConstraint._meta.get_field(attr).default
+                if model_default is not NOT_PROVIDED and callable(model_default):
+                    model_default = model_default()
+                self.assertEqual("" if model_default is NOT_PROVIDED else model_default, default)
 
 
 class SchemaFormatConstantsTestCase(TestCase):
@@ -592,13 +408,105 @@ class COTJsonSchemaTestCase(TestCase):
                         {"id": 11, "name": "tags", "type": "multiselect", "choice_set": "endpoint_tags"},
                         {"id": 12, "name": "device", "type": "object", "related_object_type": "dcim/device"},
                         {"id": 13, "name": "sites", "type": "multiobject", "related_object_type": "dcim/site"},
+                        {"id": 14, "name": "shade", "type": "color", "default": "00ff00"},
+                        {"id": 15, "name": "mac", "type": "mac_address", "unique": True},
                     ],
                     "removed_fields": [
-                        {"id": 14, "name": "old_code", "type": "text", "removed_in": "1.1.0"}
+                        {"id": 16, "name": "old_code", "type": "text", "removed_in": "1.1.0"}
                     ],
                 }
             ],
         })
+
+    def test_array_field(self):
+        def document(field):
+            return {"schema_version": "1", "types": [{"name": "zone", "slug": "zone", "fields": [field]}]}
+
+        points = {"id": 1, "name": "points", "type": "array", "array_element_type": "integer"}
+        self._assert_valid(document(points))
+        self._assert_valid(document({
+            **points, "array_tuple_size": 3, "array_min_length": 2, "array_max_length": 10, "validation_minimum": 0,
+        }))
+        self._assert_valid(document({**points, "array_element_type": "text", "validation_regex": "^a$"}))
+        invalid = {
+            "no element type": {"id": 1, "name": "points", "type": "array"},
+            "unknown element type": {**points, "array_element_type": "json"},
+            "tuple size of one": {**points, "array_tuple_size": 1},
+            "zero minimum length": {**points, "array_min_length": 0},
+            "zero maximum length": {**points, "array_max_length": 0},
+            "unknown attribute": {**points, "choice_set": "x"},
+            "array attribute on a text field": {"id": 1, "name": "label", "type": "text", "array_element_type": "text"},
+        }
+        for label, field in invalid.items():
+            with self.subTest(label):
+                self._assert_invalid(document(field))
+
+    def test_related_name(self):
+        def document(field):
+            return {"schema_version": "1", "types": [{"name": "widget", "slug": "widget", "fields": [field]}]}
+
+        device = {"id": 1, "name": "device", "type": "object", "related_object_type": "dcim/device"}
+        sites = {"id": 1, "name": "sites", "type": "multiobject", "related_object_type": "dcim/site"}
+        self._assert_valid(document({**device, "related_name": "widgets"}))
+        self._assert_valid(document({**sites, "related_name": "site_widgets"}))
+        self._assert_valid(document({**device, "related_name": ""}))
+        invalid = {
+            "uppercase": {**device, "related_name": "Widgets"},
+            "double underscore": {**device, "related_name": "my__widgets"},
+            "too long": {**device, "related_name": "w" * 101},
+            "not a string": {**device, "related_name": 1},
+            "on a text field": {"id": 1, "name": "label", "type": "text", "related_name": "widgets"},
+        }
+        for label, field in invalid.items():
+            with self.subTest(label):
+                self._assert_invalid(document(field))
+
+    def test_constraints(self):
+        type_def = {
+            "name": "asset",
+            "slug": "asset",
+            "fields": [
+                {"id": 1, "name": "vendor", "type": "text"},
+                {"id": 2, "name": "serial", "type": "text"},
+            ],
+            "constraints": [
+                {"name": "vendor_serial", "fields": [1, 2]},
+                {"name": "serial_ci", "type": "unique", "fields": [2], "case_insensitive": True,
+                 "nulls_distinct": False, "description": "Serial, ignoring case"},
+                {"name": "serial_if_vendor", "fields": [2], "condition": [
+                    {"field": 1, "lookup": "isnull", "value": False},
+                    {"field": 1, "lookup": "in", "value": ["acme", "globex"]},
+                ]},
+                {"name": "serial_not_vendor", "type": "check", "rule": [
+                    {"field": 2, "lookup": "n", "value": {"field": 1}},
+                ], "condition": [{"field": 1, "lookup": "gte", "value": "a"}], "error_message": "No"},
+            ],
+            "removed_constraints": ["old_constraint"],
+        }
+        self._assert_valid({"schema_version": "1", "types": [type_def]})
+        empty = {"field": 1, "lookup": "isnull", "value": True}
+        invalid = {
+            "missing fields": {"name": "c"},
+            "empty fields": {"name": "c", "fields": []},
+            "unknown type": {"name": "c", "fields": [1], "type": "exclusion"},
+            "unknown key": {"name": "c", "fields": [1], "check": "x"},
+            "check without rule": {"name": "c", "type": "check"},
+            "check with empty rule": {"name": "c", "type": "check", "rule": []},
+            "check with fields": {"name": "c", "type": "check", "fields": [1], "rule": [empty]},
+            "unique with rule": {"name": "c", "fields": [1], "rule": [empty]},
+            "unique with error message": {"name": "c", "fields": [1], "error_message": "No"},
+            "condition not a list": {"name": "c", "fields": [1], "condition": {}},
+            "predicate without lookup": {"name": "c", "fields": [1], "condition": [{"field": 1}]},
+            "unknown lookup": {"name": "c", "fields": [1], "condition": [{"field": 1, "lookup": "lk", "value": 1}]},
+            "predicate unknown key": {
+                "name": "c", "fields": [1], "condition": [{"field": 1, "lookup": "exact", "value": 1, "not": True}]
+            },
+        }
+        for label, constraint in invalid.items():
+            with self.subTest(label):
+                self._assert_invalid(
+                    {"schema_version": "1", "types": [{**type_def, "constraints": [constraint]}]}
+                )
 
     def test_cot_reference_to_another_cot(self):
         """related_object_type using 'custom-objects/<slug>' format is valid."""

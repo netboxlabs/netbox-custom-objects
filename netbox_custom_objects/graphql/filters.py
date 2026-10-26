@@ -26,6 +26,7 @@ from strawberry_django import BaseFilterLookup, ComparisonFilterLookup, DateFilt
 from strawberry_django.filters import lookup_name_conversion_map, process_filters
 from strawberry_django.utils.typing import get_django_definition
 
+from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
 from netbox_custom_objects.constants import APP_LABEL
 
 try:
@@ -65,6 +66,8 @@ SCALAR_FILTER_ANNOTATIONS = {
     CustomFieldTypeChoices.TYPE_LONGTEXT: _lookup(StrFilterLookup, str),
     CustomFieldTypeChoices.TYPE_URL: _lookup(StrFilterLookup, str),
     CustomFieldTypeChoices.TYPE_SELECT: _lookup(StrFilterLookup, str),
+    CustomObjectFieldTypeChoices.TYPE_COLOR: _lookup(StrFilterLookup, str),
+    CustomObjectFieldTypeChoices.TYPE_MAC_ADDRESS: _lookup(StrFilterLookup, str),
     # Integer fields are BigIntegerFields; GraphQL Int is only 32-bit.
     CustomFieldTypeChoices.TYPE_INTEGER: ComparisonFilterLookup[BigInt],
     CustomFieldTypeChoices.TYPE_DECIMAL: ComparisonFilterLookup[decimal.Decimal],

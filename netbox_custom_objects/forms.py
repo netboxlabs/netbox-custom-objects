@@ -1,26 +1,33 @@
 from django import forms
 from django.utils.translation import gettext_lazy as _
-from jinja2.sandbox import SandboxedEnvironment as _JinjaSandbox
 from extras.choices import CustomFieldTypeChoices
 from extras.forms import CustomFieldForm
 from netbox.forms import (NetBoxModelBulkEditForm, NetBoxModelFilterSetForm,
                           NetBoxModelForm, NetBoxModelImportForm)
+from netbox.forms.mixins import ChangelogMessageMixin
 from utilities.forms.fields import (CommentField, ContentTypeChoiceField,
                                     ContentTypeMultipleChoiceField,
-                                    DynamicModelChoiceField, SlugField, TagFilterField)
+                                    DynamicModelChoiceField, JSONField, SlugField, TagFilterField)
+from utilities.forms.constants import BOOLEAN_WITH_BLANK_CHOICES
 from utilities.forms.rendering import FieldSet
 from utilities.forms.utils import get_field_value
 from utilities.object_types import object_type_name
 
-from netbox_custom_objects.choices import SearchWeightChoices
-from netbox_custom_objects.utilities import extract_cot_id_from_model_name
+from netbox_custom_objects.choices import (
+    ArrayElementTypeChoices, ConstraintTypeChoices, CustomObjectFieldTypeChoices, SearchWeightChoices,
+)
+from netbox_custom_objects.utilities import extract_cot_id_from_model_name, predicate_field_ref
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.field_types import (
+    CustomColorSelect,
+    MACAddressFormField,
     PolymorphicObjectReverseDescriptor,
     PolymorphicMultiObjectReverseDescriptor,
 )
-from netbox_custom_objects.models import (CustomObjectObjectType,
+from netbox_custom_objects.models import (CONSTRAINT_FIELD_TYPES,
+                                          CustomObjectObjectType,
                                           CustomObjectType,
+                                          CustomObjectTypeConstraint,
                                           CustomObjectTypeField)
 
 __all__ = (
@@ -29,6 +36,7 @@ __all__ = (
     "CustomObjectTypeImportForm",
     "CustomObjectTypeFilterForm",
     "CustomObjectTypeFieldForm",
+    "CustomObjectTypeConstraintForm",
     "CustomObjectType",
 )
 
@@ -62,12 +70,11 @@ class CustomObjectTypeForm(NetBoxModelForm):
     )
 
     fieldsets = (
-        FieldSet("name"),
+        FieldSet("name", "version", "description", "config_context_enabled", "tags", name=_("Custom Object Type")),
         FieldSet(
-            "verbose_name", "verbose_name_plural", "display_expression", "group_name",
+            "verbose_name", "verbose_name_plural", "slug", "display_expression", "group_name",
             name=_("Display"),
         ),
-        FieldSet("slug", "version", "description", "config_context_enabled", "tags"),
     )
     comments = CommentField()
 
@@ -88,18 +95,6 @@ class CustomObjectTypeForm(NetBoxModelForm):
             self.fields["config_context_enabled"].help_text = _(
                 "Config context support cannot be changed after creation."
             )
-
-    def clean_display_expression(self):
-        expression = self.cleaned_data.get('display_expression', '')
-        if expression:
-            try:
-                _JinjaSandbox().parse(expression)
-            except Exception as e:
-                raise forms.ValidationError(
-                    _("Invalid Jinja2 syntax: %(error)s"),
-                    params={'error': str(e)},
-                ) from e
-        return expression
 
 
 class CustomObjectTypeBulkEditForm(NetBoxModelBulkEditForm):
@@ -135,7 +130,19 @@ class CustomObjectTypeImportForm(NetBoxModelImportForm):
 
 class CustomObjectTypeFilterForm(NetBoxModelFilterSetForm):
     model = CustomObjectType
-    fieldsets = (FieldSet("q", "filter_id", "tag"),)
+    fieldsets = (
+        FieldSet("q", "filter_id", "tag"),
+        FieldSet("group_name", "config_context_enabled", name=_("Attributes")),
+    )
+    group_name = forms.CharField(
+        label=_("Group name"),
+        required=False,
+    )
+    config_context_enabled = forms.NullBooleanField(
+        label=_("Config context support"),
+        required=False,
+        widget=forms.Select(choices=BOOLEAN_WITH_BLANK_CHOICES),
+    )
     tag = TagFilterField(model)
 
 
@@ -182,6 +189,16 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
         label=_("Object types"),
         help_text=_("The type(s) of object that have this custom field"),
         required=False,
+    )
+    # Core's choices omit this plugin's own field types (coordinates, array, color).
+    type = forms.ChoiceField(
+        label=_("Type"),
+        choices=CustomObjectFieldTypeChoices,
+        initial=CustomObjectFieldTypeChoices.TYPE_TEXT,
+        help_text=_(
+            "The type of data stored in this field. For object/multi-object fields, select the related object "
+            "type below."
+        ),
     )
     custom_object_type = DynamicModelChoiceField(
         queryset=CustomObjectType.objects.all(),
@@ -314,6 +331,8 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
                 if not all(isinstance(item, str) and item in _related_names for item in fs.items)
             )
 
+        self._init_array_fields(field_type)
+
         # custom_object_type is always read-only: new fields are always created in the
         # context of a specific COT (passed via URL param), and existing fields cannot
         # be moved to a different COT.
@@ -331,6 +350,24 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
         # Multi-object fields may not be set unique
         if get_field_value(self, 'type') == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
             self.fields["unique"].disabled = True
+
+        # A color field's default is picked like its values, not typed as JSON.
+        if field_type == CustomObjectFieldTypeChoices.TYPE_COLOR:
+            self.fields["default"] = forms.CharField(
+                label=self.fields["default"].label,
+                required=False,
+                empty_value=None,
+                widget=CustomColorSelect,
+                help_text=_("Color given to new objects"),
+            )
+        # A MAC address default is typed as plain text, not JSON.
+        elif field_type == CustomObjectFieldTypeChoices.TYPE_MAC_ADDRESS:
+            self.fields["default"] = MACAddressFormField(
+                label=self.fields["default"].label,
+                required=False,
+                empty_value=None,
+                help_text=_("MAC address given to new objects, e.g. 00:1A:2B:3C:4D:5E"),
+            )
 
         # Add related_name (and on_delete_behavior for non-polymorphic single-object
         # fields) to the Related Object fieldset.  Polymorphic mode removes
@@ -352,6 +389,47 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
         else:
             del self.fields["related_name"]
             del self.fields["on_delete_behavior"]
+
+    # The model's help text describes whole-value limits; for arrays they apply to each element.
+    ARRAY_VALIDATION_HELP_TEXT = {
+        "validation_minimum": _("Minimum allowed value for each element"),
+        "validation_maximum": _("Maximum allowed value for each element"),
+        "validation_regex": _("Regular expression each element must match"),
+    }
+
+    def _init_array_fields(self, field_type):
+        """Show the array settings, and the validation that applies to its element type, for array fields."""
+        array_fields = ("array_element_type", "array_tuple_size", "array_min_length", "array_max_length")
+        if field_type != CustomObjectFieldTypeChoices.TYPE_ARRAY:
+            for name in array_fields:
+                self.fields.pop(name, None)
+            return
+        # Changing the element type re-renders the form with its validation settings.
+        self.fields["array_element_type"].widget.attrs.update({
+            'hx-get': '.',
+            'hx-include': '#form_fields',
+            'hx-target': '#form_fields',
+        })
+        element_type = get_field_value(self, "array_element_type")
+        if element_type in (ArrayElementTypeChoices.INTEGER, ArrayElementTypeChoices.DECIMAL):
+            validation = ("validation_minimum", "validation_maximum")
+        elif element_type == ArrayElementTypeChoices.TEXT:
+            validation = ("validation_regex",)
+        else:
+            validation = ()
+        # The parent form drops these for types it doesn't know.
+        for name in validation:
+            if name not in self.fields:
+                self.fields[name] = CustomObjectTypeField._meta.get_field(name).formfield()
+            self.fields[name].help_text = self.ARRAY_VALIDATION_HELP_TEXT[name]
+        self.fieldsets = (
+            self.fieldsets[0],
+            FieldSet(*array_fields, *validation, name=_("Array")),
+            *self.fieldsets[1:],
+        )
+        if self.instance.pk:
+            self.fields["array_element_type"].disabled = True
+            self.fields["array_tuple_size"].disabled = True
 
     def clean(self):
         cleaned_data = super().clean()
@@ -407,15 +485,16 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
 
         return cleaned_data
 
-    def clean_primary(self):
-        primary_fields = self.cleaned_data["custom_object_type"].fields.filter(
-            primary=True
-        )
-        if self.cleaned_data["primary"]:
-            primary_fields.update(primary=False)
-        return self.cleaned_data["primary"]
-
     def save(self, commit=True):
+        if commit and self.cleaned_data.get("primary"):
+            # Demote the type's other primary field here rather than in clean(), so a
+            # submission that fails validation leaves it in place.  Save each one rather
+            # than update() them, so the change is logged and a branch merge replays it.
+            other_primaries = self.instance.custom_object_type.fields.filter(primary=True)
+            for field in other_primaries.exclude(pk=self.instance.pk):
+                field.snapshot()
+                field.primary = False
+                field.save()
         obj = super().save(commit=commit)
         # For polymorphic multiobject fields, skip default value propagation
         if (
@@ -432,3 +511,139 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
                 if not model_field.exists():
                     model_field.set(qs)
         return obj
+
+
+class CustomObjectTypeConstraintForm(ChangelogMessageMixin, forms.ModelForm):
+    custom_object_type = DynamicModelChoiceField(
+        queryset=CustomObjectType.objects.all(),
+        label=_("Custom object type"),
+        disabled=True,
+    )
+    field_schema_ids = forms.ModelMultipleChoiceField(
+        queryset=CustomObjectTypeField.objects.none(),
+        required=False,
+        label=_("Fields"),
+        help_text=_("For a unique constraint: the fields whose combined values must be unique"),
+    )
+    condition = JSONField(
+        required=False,
+        label=_("Condition"),
+        help_text=_(
+            "Apply the constraint only to objects matching all of these predicates. Lookups: exact, "
+            'n (does not equal, or is empty), in (a list of values), isnull (true or false), gt, gte, lt, lte. '
+            'Example: <code>[{"field": "parent", "lookup": "isnull", "value": true}]</code>'
+        ),
+    )
+    rule = JSONField(
+        required=False,
+        label=_("Rule"),
+        help_text=_(
+            "For a check constraint: predicates every object (matching the condition, if any) must satisfy, "
+            "with the same lookups. A comparison passes when a value is empty. To compare two fields, use "
+            '<code>{"field": ...}</code> as the value. Example: '
+            '<code>[{"field": "end_date", "lookup": "gt", "value": {"field": "start_date"}}]</code>'
+        ),
+    )
+
+    fieldsets = (
+        FieldSet(
+            "custom_object_type",
+            "name",
+            "type",
+            "description",
+            name=_("Constraint"),
+        ),
+        FieldSet(
+            "field_schema_ids",
+            "case_insensitive",
+            "nulls_distinct",
+            name=_("Unique"),
+        ),
+        FieldSet(
+            "rule",
+            "error_message",
+            name=_("Check"),
+        ),
+        FieldSet(
+            "condition",
+            name=_("Condition"),
+        ),
+    )
+
+    class Meta:
+        model = CustomObjectTypeConstraint
+        fields = (
+            "custom_object_type",
+            "name",
+            "type",
+            "field_schema_ids",
+            "case_insensitive",
+            "nulls_distinct",
+            "condition",
+            "rule",
+            "error_message",
+            "description",
+        )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # The custom object type is set by the view (from the instance or the
+        # ?custom_object_type= query parameter); offer only its eligible fields.
+        self.fields["field_schema_ids"].queryset = CustomObjectTypeField.objects.filter(
+            custom_object_type_id=self.instance.custom_object_type_id,
+            type__in=CONSTRAINT_FIELD_TYPES,
+        )
+        if self.instance.pk:
+            self.initial["field_schema_ids"] = [f.pk for f in self.instance.get_fields()]
+        # The model stores fields by schema ID; the form shows and accepts field names.
+        if (self.instance.condition or self.instance.rule) and not self.is_bound:
+            names = {f.schema_id: f.name for f in self._cot_fields()}
+            for attr in ("condition", "rule"):
+                if getattr(self.instance, attr):
+                    self.initial[attr] = [
+                        self._map_fields(p, lambda ref: names.get(ref, ref)) for p in getattr(self.instance, attr)
+                    ]
+
+    def _cot_fields(self):
+        return CustomObjectTypeField.objects.filter(custom_object_type_id=self.instance.custom_object_type_id)
+
+    @staticmethod
+    def _map_fields(predicate, convert):
+        predicate = {**predicate, "field": convert(predicate.get("field"))}
+        other = predicate_field_ref(predicate.get("value"))
+        if other is not None:
+            predicate["value"] = {"field": convert(other)}
+        return predicate
+
+    def clean_field_schema_ids(self):
+        return [f.schema_id for f in self.cleaned_data["field_schema_ids"]]
+
+    def _clean_predicates(self, attr):
+        predicates = self.cleaned_data[attr]
+        if not predicates:
+            return []
+        if not isinstance(predicates, list) or not all(isinstance(p, dict) for p in predicates):
+            raise forms.ValidationError(_("Expected a list of predicates."))
+        schema_ids = {f.name: f.schema_id for f in self._cot_fields()}
+        refs = [p.get("field") for p in predicates] + [
+            ref for p in predicates if (ref := predicate_field_ref(p.get("value"))) is not None
+        ]
+        unknown = [str(ref) for ref in refs if not isinstance(ref, str) or ref not in schema_ids]
+        if unknown:
+            raise forms.ValidationError(
+                _("Unknown field(s): {names}").format(names=", ".join(unknown))
+            )
+        return [self._map_fields(p, schema_ids.get) for p in predicates]
+
+    def clean_condition(self):
+        return self._clean_predicates("condition")
+
+    def clean(self):
+        cleaned_data = super().clean()
+        # An unchecked box posts False; empty values only matter to unique constraints.
+        if cleaned_data.get("type") == ConstraintTypeChoices.CHECK:
+            cleaned_data["nulls_distinct"] = True
+        return cleaned_data
+
+    def clean_rule(self):
+        return self._clean_predicates("rule")

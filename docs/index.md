@@ -111,6 +111,39 @@ Additional optional fields include `Description`, `Version`, `Group name`, and `
 
 See [Field Attributes](field-attributes.md) for the full list of attributes available on each field type.
 
+### Adding Constraints to the Custom Object Type
+
+A field's `Must be unique` setting makes its values unique on their own. To require that a *combination* of field values is unique, for example a serial number that only has to be unique per vendor, add a constraint: open the Custom Object Type, go to the `Constraints` tab and click `+ Add Constraint`.
+
+- **Fields** — the fields whose combined values must be unique. Pick at least two, or one when the constraint is case-insensitive or has a condition. Text, long text, integer, decimal, boolean, date, datetime, URL, selection and object fields (including polymorphic object fields, which count as both the object's type and its ID) can be included.
+- **Case-insensitive** — compare text and URL fields without regard to case, so `ACME` and `acme` conflict.
+- **Empty values are distinct** — enabled by default, so objects that leave any of the constrained fields empty never conflict. Disable it to treat empty values as equal.
+- **Condition** — optionally, apply the constraint only to objects that match all of a list of predicates, for example to make `name` unique only among objects with no `parent`:
+
+    ```json
+    [{"field": "parent", "lookup": "isnull", "value": true}]
+    ```
+
+    Each predicate names a field and a lookup: `exact`, `n` (does not equal, or is empty), `in` (a list of values), `isnull` (`true` for empty, `false` for not empty), or `gt`, `gte`, `lt` and `lte` (greater than, at least, less than, at most; integer, decimal, date and datetime fields only). Instead of a value, `{"field": "other_field"}` compares with another field of the same kind (text, URL and selection; integer and decimal; date; datetime; or boolean). The same field types as above can be tested; object fields can only be tested with `isnull`. Blank text counts as empty, so test for it with `isnull` rather than comparing with `""`; in a condition, a comparison with an empty value doesn't match.
+
+To require something of every object instead, such as an end date after its start date, add a constraint of type **Check**:
+
+- **Rule** — predicates, in the same form as a condition, that every object must satisfy:
+
+    ```json
+    [{"field": "end_date", "lookup": "gt", "value": {"field": "start_date"}}]
+    ```
+
+    A comparison passes when a value it compares is empty, so this rule allows objects with no start or end date. To require a value, add a predicate such as `{"field": "end_date", "lookup": "isnull", "value": false}`.
+- **Condition** — optionally, apply the rule only to objects that match it. For example, to require a bandwidth above zero for WAN links only, use the condition `[{"field": "kind", "lookup": "exact", "value": "wan"}]` with the rule `[{"field": "bandwidth_mbps", "lookup": "gt", "value": 0}]`.
+- **Error message** — optionally, the error to show when an object breaks the rule, e.g. "The end date must be after the start date." Without one, the error describes the rule.
+
+A check constraint has no fields of its own, isn't case-insensitive, and keeps empty values distinct; those settings apply to unique constraints.
+
+The database enforces constraints, so they apply to the UI, the REST API, imports and scripts alike, and a constraint can't be added while existing objects already break it. Saving an object that would break one shows a validation error.
+
+A constrained field can be renamed. Its type can't be changed until it's removed from its constraints (including their conditions and rules), and deleting it deletes the constraints that include or test it.
+
 ### Interacting with Custom Objects
 
 Typically, NetBox administrators are responsible for thinking through modelling requirements and creating Custom Object Types for other users to interact with day-to-day. Having created a `DHCP Scope` Custom Object Type, here is how others interact with it.
@@ -205,7 +238,7 @@ Deleting a Custom Object Type drops an entire database table and should be done 
 
 #### Deleting Custom Object Type Fields
 
-Deleting a Custom Object Type Field drops an entire database column and should be done with caution. You will be warned about the impact before you proceed. We recommend that only administrators have permission to delete Custom Object Type Fields.
+Deleting a Custom Object Type Field drops an entire database column and should be done with caution. You will be warned about the impact before you proceed, including any constraints that will be deleted with the field. We recommend that only administrators have permission to delete Custom Object Type Fields.
 
 #### Deleting Custom Objects
 
