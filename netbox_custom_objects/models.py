@@ -1983,6 +1983,22 @@ class CustomObjectType(NetBoxModel):
         return [field for field in self.fields.all() if field.name in names]
 
     def register_custom_object_search_index(self, model):
+        """
+        Register *model*'s SearchIndex, building it on first use and keeping it on the model.
+
+        Called on every get_model() cache hit, so it runs no query: the index comes from the
+        fields the model was generated with, and is rebuilt only when the display expression
+        has been set or cleared since.
+        """
+        has_display = bool(self.display_expression)
+        search_index = model.__dict__.get('_search_index')
+        if search_index is None or search_index.has_display != has_display:
+            search_index = self._build_search_index(model, has_display)
+            model._search_index = search_index
+        label = f"{APP_LABEL}.{self.get_table_model_name(self.id).lower()}"
+        registry["search"][label] = search_index
+
+    def _build_search_index(self, model, has_display):
         # Use local_fields / local_many_to_many directly — calling _meta.get_field()
         # triggers Django's lazy _relation_tree which re-enters get_models() and
         # recurses through get_model() for every COT.
@@ -1993,7 +2009,8 @@ class CustomObjectType(NetBoxModel):
         fields = []
         display_attrs = []
         array_fields = set()
-        for field in self.fields.all():
+        for field_info in model._field_objects.values():
+            field = field_info["field"]
             if field.name not in present:
                 continue
             if field.search_weight > 0:
@@ -2012,7 +2029,7 @@ class CustomObjectType(NetBoxModel):
             if field.context and field.type != CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                 display_attrs.append(field.name)
 
-        if self.display_expression:
+        if has_display:
             fields.append(("_display", DISPLAY_EXPRESSION_SEARCH_WEIGHT))
 
         def get_field_value(instance, field_name):
@@ -2027,14 +2044,13 @@ class CustomObjectType(NetBoxModel):
             "display_attrs": tuple(display_attrs),
             "get_field_value": staticmethod(get_field_value),
             "get_attr_type": staticmethod(_search_attr_type),
+            "has_display": has_display,
         }
-        search_index = type(
+        return type(
             f"{self.name}SearchIndex",
             (SearchIndex,),
             attrs,
         )
-        label = f"{APP_LABEL}.{self.get_table_model_name(self.id).lower()}"
-        registry["search"][label] = search_index
 
     def get_model(
         self,
@@ -2329,7 +2345,6 @@ class CustomObjectType(NetBoxModel):
         from netbox_custom_objects.api.serializers import get_serializer_class
         model = self.get_model()
         get_serializer_class(model)
-        self.register_custom_object_search_index(model)
         return model
 
     @staticmethod
@@ -2443,7 +2458,6 @@ class CustomObjectType(NetBoxModel):
         self._store_base_column_snapshot(model)
 
         get_serializer_class(model)
-        self.register_custom_object_search_index(model)
 
     @classmethod
     def deserialize_object(cls, data, pk=None):
@@ -3132,7 +3146,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
     @property
     def docs_url(self):
-        return f"{settings.STATIC_URL}docs/models/extras/customfield/"
+        return f"{settings.STATIC_URL}docs/models/{APP_LABEL}/customobjecttypefield/"
 
     @property
     def search_type(self):
@@ -4410,9 +4424,6 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
             transaction.on_commit(ensure_constraint, using=_alias)
 
-        if renamed:
-            self.custom_object_type.register_custom_object_search_index(updated_model)
-
         # Clean up stale descriptor when related_name is renamed on an existing polymorphic field
         if not is_new and self.is_polymorphic and hasattr(self, '_original'):
             old_name = self.original.related_name
@@ -4518,7 +4529,6 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         updated_model = self.custom_object_type.get_model()
 
         heal_unmasked_fields(self.custom_object_type, updated_model, schema_conn)
-        self.custom_object_type.register_custom_object_search_index(updated_model)
 
         if self.search_weight > 0:
             _cot_id = self.custom_object_type_id

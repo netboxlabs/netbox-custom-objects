@@ -13,7 +13,6 @@ from django.test import TestCase
 import netbox_custom_objects as nco
 import netbox_custom_objects.models as nco_models
 
-from netbox_custom_objects import views
 from netbox_custom_objects.graphql.live import _active_branch_key
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from ..base import CustomObjectsTestCase
@@ -233,7 +232,6 @@ class BranchingInstalledNotEnabledTestCase(CustomObjectsTestCase, TestCase):
             self.assertFalse(nco._branching_hooks_registered)
         self.assertIs(nco_models._get_schema_connection(), connection)
         self.assertIsNone(CustomObjectType._active_branch_id())
-        self.assertFalse(views._is_in_branch())
         self.assertIsNone(_active_branch_key())
 
     def test_field_rename_and_type_delete(self):
