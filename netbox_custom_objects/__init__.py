@@ -6,7 +6,7 @@ import warnings
 from django.db import connection, transaction
 from django.db.migrations.loader import MigrationLoader
 from django.db.migrations.recorder import MigrationRecorder
-from django.db.models.signals import pre_migrate, post_migrate
+from django.db.models.signals import pre_delete, pre_migrate, post_migrate
 from django.db.utils import OperationalError, ProgrammingError
 from netbox.plugins import PluginConfig
 
@@ -509,6 +509,15 @@ class CustomObjectsPluginConfig(PluginConfig):
 
         from .models import CustomObjectType
         from netbox_custom_objects.api.serializers import get_serializer_class
+
+        # Run core's pre_delete handler after apply_polymorphic_on_delete(), so what a
+        # polymorphic field's on-delete behaviour deletes or clears is logged before the
+        # deletion that caused it.  Django logs a real foreign key's dependents first too, and
+        # a branch revert relies on it: it restores the referenced object before the
+        # custom objects pointing at it.
+        from core.signals import handle_deleted_object
+        pre_delete.disconnect(handle_deleted_object)
+        pre_delete.connect(handle_deleted_object)
 
         # Connect migration signals to track migration state
         pre_migrate.connect(_migration_started)

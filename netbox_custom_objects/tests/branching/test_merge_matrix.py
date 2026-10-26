@@ -12,6 +12,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import IntegrityError, connection as main_conn, transaction
 from extras.models import CustomFieldChoiceSet
 
+from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
 from netbox_custom_objects.models import (
     USER_TABLE_DATABASE_NAME_PREFIX,
     CustomObjectType,
@@ -1201,6 +1202,65 @@ class BaseBranchingTests(BranchingTestBase):
         branch.revert(user=self.user, commit=True)
         self.assertFalse(CustomObjectType.objects.filter(pk=cot_pk).exists())
         self.assertFalse(CustomObjectTypeField.objects.filter(pk=field_pk).exists())
+
+    def test_polymorphic_object_field_cascade_merge_and_revert(self):
+        """
+        A Site deleted inside a branch cascades to the CO whose polymorphic OBJECT
+        field references it with on_delete_behavior=cascade.  Merge removes both
+        from main; revert restores both, with the CO still pointing at the Site.
+        """
+        site_ot = ObjectType.objects.get(app_label='dcim', model='site')
+        site_ct = ContentType.objects.get_for_model(Site)
+
+        with event_tracking(self.request):
+            site = Site.objects.create(name='Cascade Site', slug='cascade-site')
+            cot = CustomObjectType.objects.create(name='poly_cascade_cot', slug='poly-cascade-cot')
+            field = CustomObjectTypeField.objects.create(
+                custom_object_type=cot,
+                name='target',
+                label='Target',
+                type='object',
+                is_polymorphic=True,
+                on_delete_behavior=ObjectFieldOnDeleteChoices.CASCADE,
+            )
+            field.related_object_types.set([site_ot])
+            co = cot.get_model().objects.create(target=site)
+
+        site_pk, co_pk = site.pk, co.pk
+        branch = _provision_branch('Poly Cascade Branch', self.MERGE_STRATEGY, self.user)
+        branch_request = _make_request(self.user)
+
+        with activate_branch(branch), event_tracking(branch_request):
+            Site.objects.get(pk=site_pk).delete()
+            self.assertFalse(
+                cot.get_model().objects.filter(pk=co_pk).exists(),
+                'Deleting the Site in the branch must cascade to the CO',
+            )
+
+        self.assertTrue(Site.objects.filter(pk=site_pk).exists(), 'Site must still exist in main before merge')
+        self.assertTrue(
+            cot.get_model().objects.filter(pk=co_pk).exists(),
+            'CO must still exist in main before merge',
+        )
+
+        # ── merge ─────────────────────────────────────────────────────────
+        branch.merge(user=self.user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        self.assertFalse(Site.objects.filter(pk=site_pk).exists(), 'Site must be deleted from main after merge')
+        self.assertFalse(
+            cot.get_model().objects.filter(pk=co_pk).exists(),
+            'CO must be deleted from main after merge',
+        )
+
+        # ── revert ────────────────────────────────────────────────────────
+        branch.revert(user=self.user, commit=True)
+
+        self.assertTrue(Site.objects.filter(pk=site_pk).exists(), 'Site must be restored in main after revert')
+        co_main = cot.get_model().objects.get(pk=co_pk)
+        self.assertEqual(co_main.target_content_type_id, site_ct.pk)
+        self.assertEqual(co_main.target_object_id, site_pk)
 
     # ── polymorphic MULTIOBJECT field merge/revert ────────────────────────
 

@@ -369,14 +369,14 @@ class CustomObjectTypeFieldForm(CustomFieldForm):
                 help_text=_("MAC address given to new objects, e.g. 00:1A:2B:3C:4D:5E"),
             )
 
-        # Add related_name (and on_delete_behavior for non-polymorphic single-object
-        # fields) to the Related Object fieldset.  Polymorphic mode removes
-        # related_object_type from self.fields and substitutes related_object_types,
-        # so check for either to detect object/multiobject fields (issue #522).
+        # Add related_name (and on_delete_behavior for single-object fields) to the
+        # Related Object fieldset.  Polymorphic mode removes related_object_type from
+        # self.fields and substitutes related_object_types, so check for either to
+        # detect object/multiobject fields (issue #522).
         is_object_field = "related_object_type" in self.fields or "related_object_types" in self.fields
         if is_object_field:
             field_type = get_field_value(self, 'type')
-            is_single_object = field_type == CustomFieldTypeChoices.TYPE_OBJECT and not is_polymorphic
+            is_single_object = field_type == CustomFieldTypeChoices.TYPE_OBJECT
             extra = ("related_name", "on_delete_behavior") if is_single_object else ("related_name",)
             self.fieldsets = tuple(
                 FieldSet(*fs.items, *extra, name=fs.name)
