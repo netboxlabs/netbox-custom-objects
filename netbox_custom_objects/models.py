@@ -3132,7 +3132,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
     @property
     def docs_url(self):
-        return f"{settings.STATIC_URL}docs/models/extras/customfield/"
+        return f"{settings.STATIC_URL}docs/models/{APP_LABEL}/customobjecttypefield/"
 
     @property
     def search_type(self):

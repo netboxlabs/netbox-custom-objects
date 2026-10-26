@@ -24,7 +24,8 @@ from dcim.models import Site
 from users.models import ObjectPermission, Owner
 
 from netbox_custom_objects.dynamic_forms import build_filterset_form_class
-from netbox_custom_objects.forms import CustomObjectTypeFilterForm
+from netbox_custom_objects.forms import CustomObjectTypeFilterForm, CustomObjectTypeForm
+from netbox_custom_objects.models import CustomObjectTypeConstraint
 from netbox_custom_objects.related_tabs.views.combined import _make_tab_view
 from netbox_custom_objects.templatetags.custom_object_buttons import custom_object_clone_button
 from netbox_custom_objects.templatetags.custom_object_utils import sticky_actions_supported
@@ -158,6 +159,20 @@ class BulkEditFooterTestCase(CustomObjectPageTestCase):
         response = self._get(self._url("bulk_edit"), HTTP_HX_REQUEST="true")
         self.assertContains(response, 'name="changelog_message"')
         self.assertNotContains(response, 'name="_apply"')
+
+
+class BulkDeleteConfirmationTestCase(CustomObjectPageTestCase):
+
+    def test_confirmation_page(self):
+        other = self.model.objects.create(name="Beta")
+        response = self.client.post(self._url("bulk_delete"), {"pk": [self.obj.pk]})
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, self.obj.get_absolute_url())
+        self.assertNotContains(response, other.get_absolute_url())
+        self.assertContains(response, 'name="_confirm"')
+        self.assertContains(response, 'name="changelog_message"')
+        self.assertContains(response, 'name="background_job"')
+        self.assertTrue(self.model.objects.filter(pk=self.obj.pk).exists())
 
 
 class BulkEditOwnerTestCase(CustomObjectPageTestCase):
@@ -296,3 +311,27 @@ class CombinedTabTestCase(CustomObjectPageTestCase):
         response = self._tab()
         self.assertContains(response, "btn btn-sm btn-secondary dropdown-toggle")
         self.assertNotContains(response, "btn btn-sm btn-warning dropdown-toggle")
+
+
+class TypePagesTestCase(CustomObjectPageTestCase):
+
+    def test_type_form_sections_are_named(self):
+        self.assertEqual(
+            [str(fieldset.name) for fieldset in CustomObjectTypeForm.fieldsets], ["Custom Object Type", "Display"],
+        )
+
+    def test_type_page_panel_headings(self):
+        response = self._get(self.cot.get_absolute_url())
+        self.assertContains(response, '<h2 class="card-header">Custom Object Type</h2>')
+        self.assertContains(response, '<h2 class="card-header">Fields</h2>')
+        self.assertNotContains(response, '<h5 class="card-header">')
+
+    def test_docs_urls_point_at_plugin_pages(self):
+        # The lint job checks that mkdocs.models.yml builds each of these pages.
+        field = self.cot.fields.get(name="name")
+        constraint = CustomObjectTypeConstraint(custom_object_type=self.cot)
+        for obj in (self.cot, field, constraint):
+            with self.subTest(model=obj._meta.model_name):
+                self.assertEqual(
+                    obj.docs_url, f"{settings.STATIC_URL}docs/models/netbox_custom_objects/{obj._meta.model_name}/",
+                )
