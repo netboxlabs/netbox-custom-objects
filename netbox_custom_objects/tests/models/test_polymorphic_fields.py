@@ -1,7 +1,6 @@
 """
-Polymorphic object and multi-object fields at the model layer: through-model
-registration, deleting referenced objects, cycle detection, reverse descriptors,
-``get_models()`` re-entrancy and cache registry consistency.
+Polymorphic object and multi-object fields at the model layer: deleting referenced
+objects, cycle detection and reverse descriptors.
 """
 
 from django.core.exceptions import ValidationError
@@ -10,59 +9,8 @@ from django.test import TestCase
 from core.models import ObjectType
 from dcim.models import Site
 
-from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.tests.base import CustomObjectsTestCase
-
-
-# ---------------------------------------------------------------------------
-# Through-model registration
-# ---------------------------------------------------------------------------
-
-class PolymorphicThroughModelRegistrationTest(CustomObjectsTestCase, TestCase):
-    """Verify the through model is re-registered on model regeneration (simulates restart)."""
-
-    def setUp(self):
-        super().setUp()
-        from utilities.testing import create_test_user
-        self.user = create_test_user("poly-reg-user")
-        self.client.force_login(self.user)
-
-        self.cot = CustomObjectType.objects.create(
-            name="RegTest", slug="reg-test",
-            verbose_name_plural="Reg Tests",
-        )
-        CustomObjectTypeField.objects.create(
-            custom_object_type=self.cot,
-            name="name", type="text", primary=True,
-        )
-        self.m2m_field = CustomObjectTypeField.objects.create(
-            custom_object_type=self.cot,
-            name="links", type="multiobject", is_polymorphic=True,
-        )
-        site_ot = ObjectType.objects.get(app_label="dcim", model="site")
-        self.m2m_field.related_object_types.set([site_ot])
-
-    def test_through_model_registered_after_get_model(self):
-        """After clearing the cache and calling get_model(), the through model is accessible."""
-        from django.apps import apps as django_apps
-        from netbox_custom_objects.constants import APP_LABEL
-
-        # Simulate restart by clearing cache
-        CustomObjectType.clear_model_cache()
-
-        # Re-generate the model (as a request would)
-        self.cot.get_model()
-
-        # The through model must be findable
-        through_name = self.m2m_field.through_model_name
-        try:
-            through = django_apps.get_model(APP_LABEL, through_name)
-        except LookupError:
-            self.fail(
-                f"Through model '{through_name}' not in app registry after get_model()."
-            )
-        self.assertIsNotNone(through)
 
 
 # ---------------------------------------------------------------------------
@@ -1086,129 +1034,4 @@ class PolymorphicReverseDescriptorTest(CustomObjectsTestCase, TestCase):
         self.assertIs(
             Site.__dict__.get("co_shared_ref"), descriptor_b,
             "_unwire must not remove a descriptor owned by a different CO field",
-        )
-
-
-# ---------------------------------------------------------------------------
-# get_models() re-entrancy (issue #686)
-# ---------------------------------------------------------------------------
-
-class PolymorphicReverseDescriptorRecursionTestCase(CustomObjectsTestCase, TestCase):
-    """Regression test for issue #686: generating a polymorphic field's
-    reverse descriptor raised RecursionError."""
-
-    def test_get_model_with_polymorphic_related_name_does_not_recurse(self):
-        from unittest import mock
-
-        from django.apps import apps as django_apps
-
-        import netbox_custom_objects as nco_pkg
-
-        site_ot = ObjectType.objects.get(app_label="dcim", model="site")
-        prefix_ot = ObjectType.objects.get(app_label="ipam", model="prefix")
-
-        cot = CustomObjectType.objects.create(
-            name="RecursionRevTest", slug="recursion-rev-test",
-            verbose_name_plural="Recursion Rev Tests",
-        )
-        CustomObjectTypeField.objects.create(
-            custom_object_type=cot, name="name", type="text", primary=True, required=True,
-        )
-        field = CustomObjectTypeField.objects.create(
-            custom_object_type=cot,
-            name="target_obj", label="Target", type="object",
-            is_polymorphic=True,
-            related_name="rev_recursion_test",
-        )
-        field.related_object_types.set([site_ot, prefix_ot])
-
-        # Force the model out of cache and the relation-tree cold, so
-        # get_model() -> _after_model_generation() -> related_object_types.all()
-        # hits the "first access" path that triggers apps.get_models().
-        cot.clear_model_cache(cot.id)
-        django_apps.clear_cache()
-
-        # should_skip_dynamic_model_creation() disables get_models()'s
-        # CustomObjectType loop under `manage.py test`; bypass it so this test
-        # exercises the real vulnerable code path.
-        app_config = django_apps.get_app_config('netbox_custom_objects')
-        with (
-            mock.patch.object(nco_pkg, '_app_ready', True),
-            mock.patch.object(app_config, 'should_skip_dynamic_model_creation', return_value=False),
-        ):
-            # Must not raise RecursionError.
-            model = cot.get_model()
-        self.assertFalse(nco_pkg._generating_models.get())
-        # Look up the registered class directly rather than trusting `model`:
-        # a nested get_models() call triggered mid-generation (as above) can
-        # leave get_model()'s return value out of sync with what's actually
-        # registered in the app registry.
-        registered_model = django_apps.get_model(APP_LABEL, model.__name__)
-        self.assertIn(
-            registered_model,
-            django_apps.get_models(),
-            "Generated model should be returned by apps.get_models().",
-        )
-        self.assertTrue(
-            hasattr(Site, "rev_recursion_test"),
-            "Reverse descriptor must still be set on Site after get_model()",
-        )
-        self.assertIsNotNone(model)
-
-
-class GetModelCacheRegistryConsistencyTestCase(CustomObjectsTestCase, TestCase):
-    """Regression test: a re-entrant get_model() for the same COT could leave
-    _model_cache and apps.all_models pointing at two different classes."""
-
-    def test_get_model_registers_the_same_class_it_returns_and_caches(self):
-        from unittest import mock
-
-        from django.apps import apps as django_apps
-
-        import netbox_custom_objects as nco_pkg
-
-        site_ot = ObjectType.objects.get(app_label="dcim", model="site")
-        prefix_ot = ObjectType.objects.get(app_label="ipam", model="prefix")
-
-        cot = CustomObjectType.objects.create(
-            name="CacheRegistryTest", slug="cache-registry-test",
-            verbose_name_plural="Cache Registry Tests",
-        )
-        CustomObjectTypeField.objects.create(
-            custom_object_type=cot, name="name", type="text", primary=True, required=True,
-        )
-        field = CustomObjectTypeField.objects.create(
-            custom_object_type=cot,
-            name="target_obj", label="Target", type="object",
-            is_polymorphic=True,
-            related_name="rev_cache_registry_test",
-        )
-        field.related_object_types.set([site_ot, prefix_ot])
-
-        # Same setup as the sibling recursion test, to force the re-entrant path.
-        cot.clear_model_cache(cot.id)
-        django_apps.clear_cache()
-
-        app_config = django_apps.get_app_config('netbox_custom_objects')
-        with (
-            mock.patch.object(nco_pkg, '_app_ready', True),
-            mock.patch.object(app_config, 'should_skip_dynamic_model_creation', return_value=False),
-        ):
-            model = cot.get_model()
-        self.assertFalse(nco_pkg._generating_models.get())
-
-        cached_model = CustomObjectType.get_cached_model(cot.id)
-        registered_model = django_apps.get_model(APP_LABEL, model.__name__)
-
-        # Must be the exact same class object, not just an equal one.
-        self.assertIs(cached_model, model, "get_cached_model() must return the same class get_model() returned")
-        self.assertIs(
-            registered_model, model,
-            "apps.all_models must register the same class get_model() returned/cached, not a stray "
-            "class from a re-entrant regeneration",
-        )
-        self.assertIn(
-            registered_model,
-            django_apps.get_models(),
-            "Generated model should be returned by apps.get_models().",
         )

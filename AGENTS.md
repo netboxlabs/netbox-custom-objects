@@ -58,7 +58,7 @@ Defer all version pins to `pyproject.toml` and `netbox_custom_objects/__init__.p
 │       ├── test_field_types.py             — FieldType subclass behaviour.
 │       ├── test_filtersets.py              — Filterset functionality.
 │       ├── models/                         — Model tests: types, fields, constraints, choice sets,
-│       │                                     generated models, search, app config, utilities.
+│       │                                     generated models, model cache, search, app config, utilities.
 │       ├── test_navigation.py              — Dynamic navigation menu.
 │       ├── test_table_schema.py            — Schema changes to custom object tables.
 │       └── test_views.py                   — Web views.
@@ -197,6 +197,7 @@ After model changes, generate a migration with `python netbox/manage.py makemigr
 | `models/test_constraints.py` | CustomObjectTypeConstraint model and the constraints it creates |
 | `models/test_choice_sets.py` | Custom objects' handling of choice set changes |
 | `models/test_dynamic_models.py` | Generated models: instances, `get_model()`, the model cache, startup ordering, pickling |
+| `models/test_model_cache.py` | Model cache invalidation, registering generated models, cache and registry consistency |
 | `models/test_search.py` | Search indexing and the reindex job |
 | `models/test_app_config.py` | The plugin's app config |
 | `models/test_utilities.py` | Utility functions |
