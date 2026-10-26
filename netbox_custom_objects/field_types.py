@@ -2378,17 +2378,31 @@ class PolymorphicManyToManyManager:
                 objects.append(obj)
         yield from sorted(objects, key=str)
 
-    def all(self):
+    def _prefetched(self):
+        """The objects prefetch_related() fetched for this field, or None."""
         try:
-            cached = self.instance._prefetched_objects_cache[self.field_name]
+            return self.instance._prefetched_objects_cache[self.field_name]
         except (AttributeError, KeyError):
+            return None
+
+    def all(self):
+        cached = self._prefetched()
+        if cached is None:
             return PolymorphicResultList(self._get_objects)
         return PolymorphicResultList(lambda: sorted(cached, key=str))
 
+    # Like Django's related managers, count() and exists() answer from a prefetch, so a
+    # table's per-row exists() check doesn't undo it.
     def count(self):
+        cached = self._prefetched()
+        if cached is not None:
+            return len(cached)
         return self._get_through_model().objects.filter(source_id=self.instance.pk).count()
 
     def exists(self):
+        cached = self._prefetched()
+        if cached is not None:
+            return bool(cached)
         return self._get_through_model().objects.filter(source_id=self.instance.pk).exists()
 
     def _fire_m2m_changed(self, action, pk_set):

@@ -67,6 +67,23 @@ def build_map_url(latitude, longitude):
             return maps_url.replace("{lat}", str(latitude)).replace("{lon}", str(longitude))
         return f"{maps_url}{latitude},{longitude}"
 
+
+def polymorphic_m2m_field_names(model):
+    """
+    Names of *model*'s polymorphic multi-object fields.
+
+    A custom manager backs these, not a registered Django relation, so they aren't in
+    ``_meta`` and NetBox's automatic prefetching (by tables and serializers) misses them.
+    ``prefetch_related()`` handles them, so callers add them themselves.
+    """
+    from extras.choices import CustomFieldTypeChoices
+
+    return [
+        info["name"]
+        for info in getattr(model, "_field_objects", {}).values()
+        if info["field"].type == CustomFieldTypeChoices.TYPE_MULTIOBJECT and info["field"].is_polymorphic
+    ]
+
 # ---------------------------------------------------------------------------
 # Thread-safe apps.clear_cache suppression
 # ---------------------------------------------------------------------------

@@ -38,6 +38,7 @@ from netbox_custom_objects.filtersets import (
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
 from netbox_custom_objects.schema.comparator import FieldOp, diff_document
 from netbox_custom_objects.schema.format import CUSTOM_OBJECTS_APP_LABEL_SLUG
+from netbox_custom_objects.utilities import polymorphic_m2m_field_names
 from netbox_custom_objects.schema.executor import (
     apply_diffs,
     schema_transaction,
@@ -297,20 +298,13 @@ class CustomObjectViewSet(NetBoxModelViewSet):
             raise Http404
         qs = super().get_queryset()
 
-        # Polymorphic multi-object fields are backed by a custom manager, not a
-        # real registered Django relation, so get_prefetches_for_serializer()
-        # can't discover them via _meta.get_field(). Add them explicitly.
+        # get_prefetches_for_serializer() can't discover polymorphic multi-object
+        # fields via _meta.get_field(), so add the requested ones explicitly.
         fields = self.field_kwargs.get('fields')
         omit = self.field_kwargs.get('omit') or ()
         polymorphic_m2m_fields = [
-            info['name']
-            for info in self.model._field_objects.values()
-            if (
-                info['field'].type == CustomFieldTypeChoices.TYPE_MULTIOBJECT
-                and info['field'].is_polymorphic
-                and (fields is None or info['name'] in fields)
-                and info['name'] not in omit
-            )
+            name for name in polymorphic_m2m_field_names(self.model)
+            if (fields is None or name in fields) and name not in omit
         ]
         if polymorphic_m2m_fields:
             qs = qs.prefetch_related(*polymorphic_m2m_fields)
