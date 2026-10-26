@@ -826,17 +826,17 @@ def _set_with_collision_preference(result, key, value):
 
 
 class _NullableUniqueCharsCompatMixin(models.Model):
-    """COMPAT(netbox<4.6.0): ``BaseModel`` only defines ``_coerce_nullable_unique_chars()`` from 4.6.0 on.
+    """COMPAT(netbox<4.5.10): ``BaseModel`` only defines ``_coerce_nullable_unique_chars()`` from 4.5.10 on.
 
     ``_BaseModelCleanMixin.clean()`` calls it on every version; this supplies the
-    method and the ``save()`` hook that 4.6.0+ ``BaseModel`` has built in.
+    method and the ``save()`` hook that 4.5.10+ ``BaseModel`` has built in.
     """
 
     class Meta:
         abstract = True
 
     def _coerce_nullable_unique_chars(self):
-        # Mirrors BaseModel's 4.6.0+ coercion of blank unique nullable CharFields to NULL.
+        # Mirrors BaseModel's 4.5.10+ coercion of blank unique nullable CharFields to NULL.
         for field in self._meta.concrete_fields:
             if (
                 isinstance(field, models.CharField)
@@ -927,7 +927,9 @@ class _BaseModelCleanMixin(models.Model):
             # Existence by PK only: for a custom object target, model_class() is main's class, whose
             # column set may not match the active branch's schema, so selecting its columns can fail.
             if not model._default_manager.filter(pk=fk_value).exists():
-                errors[field.fk_field] = f'Related object not found using the provided value: {fk_value}.'
+                errors[field.fk_field] = _('Related object not found using the provided value: {value}.').format(
+                    value=fk_value
+                )
         if errors:
             raise ValidationError(errors)
 
