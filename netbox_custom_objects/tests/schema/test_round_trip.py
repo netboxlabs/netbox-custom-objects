@@ -97,12 +97,17 @@ class SchemaRoundTripTestCase(CustomObjectsTestCase, TestCase):
         return cot
 
     def _copy_definition(self):
-        """The source's definition as a new type.  Reverse relation names are per target model, so they change too."""
+        """
+        The source's definition as a new type.  Reverse relation names are per target model, so they change too,
+        and the self-reference points at the copy, so apply resolves a type created in the same document.
+        """
         type_def = copy.deepcopy(self.document["types"][0])
         type_def.update(name="rt_copy", slug="rt-copy")
         for field_def in type_def["fields"]:
             if field_def.get("related_name"):
                 field_def["related_name"] += "_copy"
+            if field_def.get("related_object_type") == "custom-objects/rt-source":
+                field_def["related_object_type"] = "custom-objects/rt-copy"
         return type_def
 
     def test_export_validates(self):
