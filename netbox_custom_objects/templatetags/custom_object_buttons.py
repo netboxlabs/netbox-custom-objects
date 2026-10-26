@@ -1,6 +1,7 @@
 from django import template
 from django.contrib.contenttypes.models import ContentType
 from django.urls import reverse
+from django.utils.translation import gettext_lazy as _
 from extras.models import Bookmark, Subscription
 from netbox.models.features import NotificationsMixin
 from utilities.querydict import prepare_cloned_fields
@@ -97,7 +98,7 @@ def custom_object_edit_button(instance):
 
     return {
         "url": url,
-        "label": "Edit",
+        "label": _("Edit"),
     }
 
 
@@ -168,6 +169,6 @@ def custom_object_sync_button(instance):
     url = reverse(viewname, kwargs={"pk": instance.pk})
 
     return {
-        "label": "Sync",
+        "label": _("Sync"),
         "url": url,
     }

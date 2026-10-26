@@ -19,7 +19,7 @@ from django.conf import settings
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
-from django.core.exceptions import FieldDoesNotExist
+from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
 from django.core.validators import MinValueValidator, RegexValidator, ValidationError
 from django.db import DEFAULT_DB_ALIAS, connection, connections, IntegrityError, models, transaction
 from django.db.utils import OperationalError, ProgrammingError
@@ -64,6 +64,7 @@ from netbox.registry import registry
 from netbox.search import FieldTypes, SearchIndex
 from utilities.data import deepmerge, get_config_value_ci
 from utilities.datetime import datetime_from_timestamp
+from jinja2 import TemplateError as _JinjaTemplateError
 from jinja2 import Undefined as _JinjaUndefined
 from jinja2 import meta as _jinja_meta
 from jinja2.sandbox import SandboxedEnvironment as _JinjaSandbox
@@ -803,6 +804,13 @@ def _build_rename_map(cot, attrs):
 
 _display_expression_env = _JinjaSandbox(undefined=_JinjaUndefined)
 
+# What rendering a display expression may raise for bad data or a bad expression, and fall
+# back from. A database error isn't among them: it can abort the transaction, so it propagates.
+_DISPLAY_VALUE_ERRORS = (ObjectDoesNotExist, AttributeError, LookupError, TypeError, ValueError)
+# What compiling an invalid expression raises. Jinja's parser recurses, so deep nesting overflows the stack.
+_DISPLAY_COMPILE_ERRORS = (_JinjaTemplateError, RecursionError)
+_DISPLAY_RENDER_ERRORS = (*_DISPLAY_COMPILE_ERRORS, ArithmeticError, *_DISPLAY_VALUE_ERRORS)
+
 
 @functools.lru_cache(maxsize=256)
 def _compile_display_expression(expression):
@@ -1057,7 +1065,7 @@ class CustomObject(
 
     def _render_display_expression(self):
         """Render the COT display_expression; return stripped result or None."""
-        # All access inside the try so any exception (including RelatedObjectDoesNotExist
+        # All access inside the try so a bad expression or value (including RelatedObjectDoesNotExist
         # from custom_object_type access) falls through to the primary-field fallback.
         try:
             expression = getattr(self.custom_object_type, 'display_expression', '')
@@ -1075,11 +1083,11 @@ class CustomObject(
                 try:
                     value = field_type.get_display_value(self, field_name)
                     ctx[field_name] = '' if value is None else value
-                except Exception:  # noqa: BLE001
+                except _DISPLAY_VALUE_ERRORS:
                     ctx[field_name] = ''
             rendered = template.render(**ctx).strip()
             return rendered or None
-        except Exception:  # noqa: BLE001
+        except _DISPLAY_RENDER_ERRORS:
             return None
 
     @property
@@ -1550,6 +1558,16 @@ class CustomObjectType(NetBoxModel):
                 {"slug": _("Slug field cannot be empty.")}
             )
 
+        if self.display_expression:
+            try:
+                _compile_display_expression(self.display_expression)
+            except _DISPLAY_COMPILE_ERRORS as e:
+                raise ValidationError({
+                    "display_expression": ValidationError(
+                        _("Invalid Jinja2 syntax: %(error)s"), params={"error": str(e)}, code="invalid",
+                    ),
+                }) from e
+
         # config_context_enabled is immutable after creation: the local_context_data
         # column is created once when the type's table is built (managed=False, no
         # migration), so flipping the flag would desync the generated model from the
@@ -1979,11 +1997,27 @@ class CustomObjectType(NetBoxModel):
             return []
         try:
             _, names = _compile_display_expression(self.display_expression)
-        except Exception:  # noqa: BLE001 - an invalid expression renders nothing
+        except _DISPLAY_COMPILE_ERRORS:  # an invalid expression renders nothing
             return []
         return [field for field in self.fields.all() if field.name in names]
 
     def register_custom_object_search_index(self, model):
+        """
+        Register *model*'s SearchIndex, building it on first use and keeping it on the model.
+
+        Called on every get_model() cache hit, so it runs no query: the index comes from the
+        fields the model was generated with, and is rebuilt only when the display expression
+        has been set or cleared since.
+        """
+        has_display = bool(self.display_expression)
+        search_index = model.__dict__.get('_search_index')
+        if search_index is None or search_index.has_display != has_display:
+            search_index = self._build_search_index(model, has_display)
+            model._search_index = search_index
+        label = f"{APP_LABEL}.{self.get_table_model_name(self.id).lower()}"
+        registry["search"][label] = search_index
+
+    def _build_search_index(self, model, has_display):
         # Use local_fields / local_many_to_many directly — calling _meta.get_field()
         # triggers Django's lazy _relation_tree which re-enters get_models() and
         # recurses through get_model() for every COT.
@@ -1994,7 +2028,8 @@ class CustomObjectType(NetBoxModel):
         fields = []
         display_attrs = []
         array_fields = set()
-        for field in self.fields.all():
+        for field_info in model._field_objects.values():
+            field = field_info["field"]
             if field.name not in present:
                 continue
             if field.search_weight > 0:
@@ -2013,7 +2048,7 @@ class CustomObjectType(NetBoxModel):
             if field.context and field.type != CustomFieldTypeChoices.TYPE_MULTIOBJECT:
                 display_attrs.append(field.name)
 
-        if self.display_expression:
+        if has_display:
             fields.append(("_display", DISPLAY_EXPRESSION_SEARCH_WEIGHT))
 
         def get_field_value(instance, field_name):
@@ -2028,14 +2063,13 @@ class CustomObjectType(NetBoxModel):
             "display_attrs": tuple(display_attrs),
             "get_field_value": staticmethod(get_field_value),
             "get_attr_type": staticmethod(_search_attr_type),
+            "has_display": has_display,
         }
-        search_index = type(
+        return type(
             f"{self.name}SearchIndex",
             (SearchIndex,),
             attrs,
         )
-        label = f"{APP_LABEL}.{self.get_table_model_name(self.id).lower()}"
-        registry["search"][label] = search_index
 
     def get_model(
         self,
@@ -2330,7 +2364,6 @@ class CustomObjectType(NetBoxModel):
         from netbox_custom_objects.api.serializers import get_serializer_class
         model = self.get_model()
         get_serializer_class(model)
-        self.register_custom_object_search_index(model)
         return model
 
     @staticmethod
@@ -2444,7 +2477,6 @@ class CustomObjectType(NetBoxModel):
         self._store_base_column_snapshot(model)
 
         get_serializer_class(model)
-        self.register_custom_object_search_index(model)
 
     @classmethod
     def deserialize_object(cls, data, pk=None):
@@ -3133,7 +3165,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
     @property
     def docs_url(self):
-        return f"{settings.STATIC_URL}docs/models/extras/customfield/"
+        return f"{settings.STATIC_URL}docs/models/{APP_LABEL}/customobjecttypefield/"
 
     @property
     def search_type(self):
@@ -4410,9 +4442,6 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
 
             transaction.on_commit(ensure_constraint, using=_alias)
 
-        if renamed:
-            self.custom_object_type.register_custom_object_search_index(updated_model)
-
         # Clean up stale descriptor when related_name is renamed on an existing polymorphic field
         if not is_new and self.is_polymorphic and hasattr(self, '_original'):
             old_name = self.original.related_name
@@ -4518,7 +4547,6 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         updated_model = self.custom_object_type.get_model()
 
         heal_unmasked_fields(self.custom_object_type, updated_model, schema_conn)
-        self.custom_object_type.register_custom_object_search_index(updated_model)
 
         if self.search_weight > 0:
             _cot_id = self.custom_object_type_id
