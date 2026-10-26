@@ -810,6 +810,47 @@ class CustomObjectViewTestCase(
 
         self.assertEqual(set(instance.sites.values_list('pk', flat=True)), {site_a.pk, site_b.pk})
 
+    def test_edit_form_multiobject_default_for_cot_target_uses_full_cached_model(self):
+        """
+        Regression #776: resolving a multi-object default that targets another COT must
+        use plain get_model(), so the form build leaves a full model in the cache rather
+        than an uncached partial one.
+        """
+        target = self.create_custom_object_type(name='MoDefaultTarget776', slug='mo-default-target-776')
+        self.create_custom_object_type_field(
+            target, name='name', label='Name', type='text', primary=True,
+        )
+        self.create_custom_object_type_field(
+            target, name='site', label='Site', type='object',
+            related_object_type=self.get_site_object_type(),
+        )
+        target_model = target.get_model()
+        t1 = target_model.objects.create(name='t1')
+        t2 = target_model.objects.create(name='t2')
+
+        cot = self.create_custom_object_type(name='MoDefaultSource776', slug='mo-default-source-776')
+        self.create_custom_object_type_field(
+            cot, name='name', label='Name', type='text', primary=True,
+        )
+        self.create_custom_object_type_field(
+            cot, name='targets', label='Targets', type='multiobject',
+            related_object_type=target.object_type,
+            default=[t1.pk, t2.pk],
+        )
+
+        request = RequestFactory().get('/')
+        request.user = self.user
+
+        view = views.CustomObjectEditView()
+        view.setup(request, custom_object_type=cot.slug)
+
+        CustomObjectType.clear_model_cache(target.id)
+        form = view.form(instance=view.object)
+
+        self.assertEqual(set(form.initial['targets']), {t1.pk, t2.pk})
+        self.assertTrue(CustomObjectType.is_model_cached(target.id))
+        self.assertIn('site', {f.name for f in target.get_model()._meta.local_fields})
+
     def test_edit_form_preserves_hidden_multiobject_relation_on_edit(self):
         """
         Regression #645: editing an object must not clear a hidden MultiObject field's
