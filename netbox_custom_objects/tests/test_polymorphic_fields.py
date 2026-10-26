@@ -346,6 +346,23 @@ class PolymorphicFieldAPITest(TransactionCleanupMixin, CustomObjectsTestCase, Tr
         obj.refresh_from_db()
         self.assertIsNone(obj.poly_obj)
 
+    def test_patch_object_whose_gfk_model_is_not_installed_returns_400(self):
+        """A stored content type with no installed model (e.g. an uninstalled plugin) is a 400, not a 500 (#771)."""
+        from django.contrib.contenttypes.models import ContentType
+        _grant_perm(self.user, "change", self.model, "co-change")
+        gone = ContentType.objects.create(app_label="gone_plugin", model="widget")
+        obj = self.model.objects.create(name="gone-model-obj")
+        self.model.objects.filter(pk=obj.pk).update(poly_obj_content_type=gone, poly_obj_object_id=1)
+
+        response = self.client.patch(
+            self._obj_detail_url(obj.pk),
+            json.dumps({"name": "gone-model-renamed"}),
+            content_type="application/json",
+            **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.content)
+        self.assertIn("poly_obj_content_type", response.json())
+
     def test_custom_validator_sees_gfk_value_on_api_create(self):
         """A CUSTOM_VALIDATORS validate() call during API create must see the
         submitted polymorphic GFK value, not None (#677)."""
@@ -879,6 +896,46 @@ class PolymorphicFieldUITest(TransactionCleanupMixin, CustomObjectsTestCase, Tra
         obj.refresh_from_db()
         self.assertIsNone(obj.poly_obj)
 
+    def test_submit_edit_form_hidden_poly_obj_with_stale_target(self):
+        """A hidden polymorphic field pointing at a deleted object must not block editing (#771).
+
+        The form has no field for the GFK backing columns, so a validation error keyed
+        to them would raise ValueError in add_error() and the edit page would 500.
+        """
+        self.gfk_field.ui_editable = "hidden"
+        self.gfk_field.save()
+        model = self.cot.get_model()
+        obj = model.objects.create(name="hidden-stale")
+        obj.poly_obj = self.site2
+        obj.save()
+        site2_pk = self.site2.pk
+        self.site2.delete()
+
+        data = {"name": "hidden-stale-renamed", "csrfmiddlewaretoken": "fake"}
+        response = self.client.post(self._edit_url(obj.pk), data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.redirect_chain, "edit form was re-rendered with errors")
+        obj = model.objects.get(pk=obj.pk)
+        self.assertEqual(obj.name, "hidden-stale-renamed")
+        # The hidden field is left as it was.
+        self.assertEqual(obj.poly_obj_object_id, site2_pk)
+
+    def test_submit_edit_form_hidden_poly_obj_with_null_content_type(self):
+        """As above when the target type was deleted: content type NULL, object ID still set (#771)."""
+        self.gfk_field.ui_editable = "hidden"
+        self.gfk_field.save()
+        model = self.cot.get_model()
+        obj = model.objects.create(name="hidden-half")
+        model.objects.filter(pk=obj.pk).update(poly_obj_content_type=None, poly_obj_object_id=42)
+
+        data = {"name": "hidden-half-renamed", "csrfmiddlewaretoken": "fake"}
+        response = self.client.post(self._edit_url(obj.pk), data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.redirect_chain, "edit form was re-rendered with errors")
+        obj = model.objects.get(pk=obj.pk)
+        self.assertEqual(obj.name, "hidden-half-renamed")
+        self.assertEqual(obj.poly_obj_object_id, 42)
+
     def test_submit_edit_form_sets_polymorphic_m2m(self):
         """POST the edit form with M2M sub-fields saves values across types."""
         obj = self.model.objects.create(name="submit-m2m-obj")
@@ -1253,6 +1310,31 @@ class ReferencedObjectDeletionTest(
         with self.assertRaises(ValidationError) as cm:
             obj.full_clean()
         self.assertIn("poly_obj_content_type", cm.exception.error_dict)
+
+    def test_full_clean_skips_gfk_columns_it_was_told_to_exclude(self):
+        """A stale GFK is ignored when its backing columns are excluded, as a ModelForm does (#771)."""
+        obj = self.model.objects.create(name="stale-gfk-excluded")
+        obj.poly_obj = self.site
+        obj.save()
+        self.site.delete()
+
+        obj.refresh_from_db()
+        with self.assertRaises(ValidationError):
+            obj.full_clean()
+        obj.full_clean(exclude=["poly_obj_content_type", "poly_obj_object_id"])
+
+    def test_full_clean_flags_gfk_whose_model_is_not_installed(self):
+        """A content type with no installed model is reported on its column, not raised as AttributeError (#771)."""
+        from django.contrib.contenttypes.models import ContentType
+        gone = ContentType.objects.create(app_label="gone_plugin", model="widget")
+        obj = self.model.objects.create(name="gone-model")
+        self.model.objects.filter(pk=obj.pk).update(poly_obj_content_type=gone, poly_obj_object_id=1)
+
+        obj.refresh_from_db()
+        with self.assertRaises(ValidationError) as cm:
+            obj.full_clean()
+        self.assertIn("poly_obj_content_type", cm.exception.error_dict)
+        obj.full_clean(exclude=["poly_obj_content_type", "poly_obj_object_id"])
 
     def test_full_clean_accepts_valid_gfk(self):
         obj = self.model(name="valid-gfk")
