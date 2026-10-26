@@ -1772,7 +1772,7 @@ class MultiObjectFieldType(FieldType):
                 )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
 
-            model = custom_object_type.get_model(skip_object_fields=True)
+            model = custom_object_type.get_model()
             has_context = bool(getattr(model, '_context_field_ids', []))
         else:
             # This is a regular NetBox model

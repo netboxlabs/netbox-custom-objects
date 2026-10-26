@@ -1798,6 +1798,34 @@ class MultiObjectFieldTypeTestCase(FieldTypeTestCase):
         self.assertEqual(form_field.to_field_name, 'model',
                          "ModuleType multi-object CSV import must use 'model', not 'name'")
 
+    def test_get_form_field_for_cot_target_uses_full_cached_model(self):
+        """Regression #776: the form field must resolve a COT target with plain
+        get_model() so the target's object fields are present and the generated
+        model lands in the cache, rather than building an uncached partial model
+        on every form render."""
+        target = self.create_custom_object_type(name="FormTarget776", slug="form-target-776")
+        self.create_custom_object_type_field(
+            target, name="name", label="Name", type="text", primary=True,
+        )
+        self.create_custom_object_type_field(
+            target, name="device", label="Device", type="object",
+            related_object_type=self.device_object_type,
+        )
+        cotf = self.create_custom_object_type_field(
+            self.custom_object_type, name="targets", label="Targets", type="multiobject",
+            related_object_type=target.object_type,
+        )
+
+        CustomObjectType.clear_model_cache(target.id)
+        self.assertFalse(CustomObjectType.is_model_cached(target.id))
+
+        form_field = MultiObjectFieldType().get_form_field(cotf)
+        model = form_field.queryset.model
+
+        self.assertIn("device", {f.name for f in model._meta.local_fields})
+        self.assertTrue(CustomObjectType.is_model_cached(target.id))
+        self.assertIs(model, target.get_model())
+
     def test_change_multiobject_field_to_object_rejected(self):
         """An existing multiobject field cannot be converted to a scalar type."""
         field = self.create_custom_object_type_field(
