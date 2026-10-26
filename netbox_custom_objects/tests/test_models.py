@@ -3857,6 +3857,21 @@ class CustomObjectBaseModelTestCase(CustomObjectsTestCase, TestCase):
         model = self.cot.get_model()
         self.assertTrue(issubclass(model, BaseModel))
         self.assertIsInstance(model.objects.all(), RestrictedQuerySet)
+        # _BaseModelCleanMixin.clean() skips exactly one class with super(BaseModel, self).
+        mro = model.__mro__
+        self.assertEqual(mro.index(BaseModel), mro.index(nco_models._BaseModelCleanMixin) + 1)
+
+    def test_search_weight_reindex_tracks_each_save(self):
+        """A field instance saved more than once reindexes on every weight change, not just the first."""
+        field = self.create_custom_object_type_field(self.cot, name="tracked", type="text", search_weight=100)
+        field = CustomObjectTypeField.objects.get(pk=field.pk)
+        with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
+            with self.captureOnCommitCallbacks(execute=True):
+                field.search_weight = 0
+                field.save()
+                field.search_weight = 100
+                field.save()
+        self.assertEqual(mock_enqueue.call_count, 2)
 
     def test_blank_unique_text_values_do_not_collide(self):
         """Two objects with blank unique text/longtext values must both validate and save."""

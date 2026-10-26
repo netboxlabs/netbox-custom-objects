@@ -1036,6 +1036,37 @@ class PolymorphicFieldUITest(TransactionCleanupMixin, CustomObjectsTestCase, Tra
         self.assertIn(self.site1, obj1.poly_multi.all())
         self.assertIn(self.site1, obj2.poly_multi.all())
 
+    def test_bulk_edit_leaves_stale_gfk_alone(self):
+        """Bulk editing an unrelated field must not fail on a GFK whose target is gone (#771).
+
+        BulkEditView._update_objects() calls full_clean() with no exclude, so a stale
+        reference would abort the whole operation.
+        """
+        stale_site = self.model.objects.create(name="bulk-stale-site")
+        stale_site.poly_obj = self.site2
+        stale_site.save()
+        site2_pk = self.site2.pk
+        self.site2.delete()
+        stale_type = self.model.objects.create(name="bulk-stale-type")
+        self.model.objects.filter(pk=stale_type.pk).update(poly_obj_content_type=None, poly_obj_object_id=42)
+
+        data = {
+            "pk": [stale_site.pk, stale_type.pk],
+            "_apply": "1",
+            "name": "bulk-renamed",
+            "csrfmiddlewaretoken": "fake",
+        }
+        response = self.client.post(self._bulk_edit_url(), data, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.redirect_chain, "bulk edit form was re-rendered with errors")
+        stale_site.refresh_from_db()
+        stale_type.refresh_from_db()
+        self.assertEqual(stale_site.name, "bulk-renamed")
+        self.assertEqual(stale_type.name, "bulk-renamed")
+        # The stale references are left as they were.
+        self.assertEqual(stale_site.poly_obj_object_id, site2_pk)
+        self.assertEqual(stale_type.poly_obj_object_id, 42)
+
     # --- Detail view ---
 
     def test_detail_view_shows_type_column_for_polymorphic_m2m(self):
@@ -1264,20 +1295,42 @@ class ReferencedObjectDeletionTest(
         # exists in the app registry), but the object is gone — accessor returns None.
         self.assertIsNone(obj.poly_obj)
 
-    def test_full_clean_flags_gfk_pointing_at_deleted_object(self):
-        """BaseModel.clean() reports a GFK whose target no longer exists (#771)."""
-        obj = self.model.objects.create(name="stale-gfk")
-        obj.poly_obj = self.site
-        obj.save()
+    def test_full_clean_flags_newly_assigned_gfk_pointing_at_deleted_object(self):
+        """A reference being set to an object that no longer exists is rejected (#771)."""
+        site_pk = self.site.pk
         self.site.delete()
-
-        obj.refresh_from_db()
+        obj = self.model(name="stale-gfk", poly_obj_content_type=self.site_ot, poly_obj_object_id=site_pk)
         with self.assertRaises(ValidationError) as cm:
             obj.full_clean()
         self.assertIn("poly_obj_object_id", cm.exception.error_dict)
 
         # Clearing the reference makes the object valid again.
         obj.poly_obj = None
+        obj.full_clean()
+
+    def test_full_clean_leaves_stored_stale_gfk_alone(self):
+        """A saved reference whose target was deleted later is only re-validated once it changes (#771)."""
+        obj = self.model.objects.create(name="stored-stale")
+        obj.poly_obj = self.site
+        obj.save()
+        site_pk = self.site.pk
+        self.site.delete()
+
+        obj = self.model.objects.get(pk=obj.pk)
+        obj.name = "stored-stale-renamed"
+        obj.full_clean()
+
+        obj.poly_obj_object_id = site_pk + 1
+        with self.assertRaises(ValidationError) as cm:
+            obj.full_clean()
+        self.assertIn("poly_obj_object_id", cm.exception.error_dict)
+
+    def test_full_clean_leaves_stored_half_set_gfk_alone(self):
+        """As above when the target type was deleted: content type NULL, object ID still set (#771)."""
+        obj = self.model.objects.create(name="stored-half")
+        self.model.objects.filter(pk=obj.pk).update(poly_obj_content_type=None, poly_obj_object_id=42)
+        obj = self.model.objects.get(pk=obj.pk)
+        obj.name = "stored-half-renamed"
         obj.full_clean()
 
     def test_full_clean_rejects_half_set_gfk(self):
@@ -1295,13 +1348,10 @@ class ReferencedObjectDeletionTest(
         self.assertIn("poly_obj_content_type", cm.exception.error_dict)
 
     def test_full_clean_skips_gfk_columns_it_was_told_to_exclude(self):
-        """A stale GFK is ignored when its backing columns are excluded, as a ModelForm does (#771)."""
-        obj = self.model.objects.create(name="stale-gfk-excluded")
-        obj.poly_obj = self.site
-        obj.save()
+        """A bad reference is ignored when its backing columns are excluded, as a ModelForm does (#771)."""
+        site_pk = self.site.pk
         self.site.delete()
-
-        obj.refresh_from_db()
+        obj = self.model(name="stale-gfk-excluded", poly_obj_content_type=self.site_ot, poly_obj_object_id=site_pk)
         with self.assertRaises(ValidationError):
             obj.full_clean()
         obj.full_clean(exclude=["poly_obj_content_type", "poly_obj_object_id"])
@@ -1310,10 +1360,9 @@ class ReferencedObjectDeletionTest(
         """A content type with no installed model is reported on its column, not raised as AttributeError (#771)."""
         from django.contrib.contenttypes.models import ContentType
         gone = ContentType.objects.create(app_label="gone_plugin", model="widget")
-        obj = self.model.objects.create(name="gone-model")
-        self.model.objects.filter(pk=obj.pk).update(poly_obj_content_type=gone, poly_obj_object_id=1)
-
-        obj.refresh_from_db()
+        # get_for_id() caches the row process-wide; don't let it outlive the test.
+        self.addCleanup(ContentType.objects.clear_cache)
+        obj = self.model(name="gone-model", poly_obj_content_type=gone, poly_obj_object_id=1)
         with self.assertRaises(ValidationError) as cm:
             obj.full_clean()
         self.assertIn("poly_obj_content_type", cm.exception.error_dict)

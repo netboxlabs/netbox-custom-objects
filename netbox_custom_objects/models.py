@@ -18,7 +18,7 @@ from django.conf import settings
 # from django.contrib.contenttypes.management import create_contenttypes
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
+from django.core.exceptions import FieldDoesNotExist
 from django.core.validators import RegexValidator, ValidationError
 from django.db import DEFAULT_DB_ALIAS, connection, connections, IntegrityError, models, transaction
 from django.db.utils import OperationalError, ProgrammingError
@@ -869,6 +869,12 @@ class _BaseModelCleanMixin(models.Model):
     ``clean()`` therefore skips ``BaseModel.clean()`` and repeats what it does --
     nullable-unique coercion and GFK validation -- with the exclude list captured
     by ``full_clean()``. Keep this in step with ``BaseModel.clean()`` upstream.
+
+    Deleting a referenced object leaves the GFK columns pointing at it (there is no
+    DB-level FK), so a saved row can hold a stale reference through no fault of the
+    caller. Only a reference that differs from the saved row is validated; bulk
+    edit, scripts and API PATCH of unrelated fields therefore leave an existing
+    stale reference as it is instead of failing on a column they never touched.
     """
 
     class Meta:
@@ -879,7 +885,7 @@ class _BaseModelCleanMixin(models.Model):
         try:
             super().full_clean(exclude=exclude, **kwargs)
         finally:
-            del self._clean_exclude
+            self.__dict__.pop('_clean_exclude', None)
 
     def clean(self):
         # Skip BaseModel.clean() (see class docstring); the rest of the MRO still runs.
@@ -888,14 +894,20 @@ class _BaseModelCleanMixin(models.Model):
         self._clean_generic_foreign_keys(getattr(self, '_clean_exclude', ()))
 
     def _clean_generic_foreign_keys(self, exclude):
+        gfk_fields = [
+            field
+            for field in self._meta.private_fields
+            if isinstance(field, GenericForeignKey) and field.ct_field not in exclude and field.fk_field not in exclude
+        ]
+        if not gfk_fields:
+            return
+        stored = self._stored_gfk_values(gfk_fields)
         errors = {}
-        for field in self._meta.private_fields:
-            if not isinstance(field, GenericForeignKey):
-                continue
-            if field.ct_field in exclude or field.fk_field in exclude:
-                continue
+        for field in gfk_fields:
             ct_id = getattr(self, self._meta.get_field(field.ct_field).attname, None)
             fk_value = getattr(self, field.fk_field, None)
+            if stored is not None and stored[field.name] == (ct_id, fk_value):
+                continue  # Unchanged since the row was saved; see class docstring.
             if ct_id is None and fk_value is not None:
                 errors[field.ct_field] = _('This field cannot be null.')
                 continue
@@ -911,15 +923,24 @@ class _BaseModelCleanMixin(models.Model):
             if model is None:
                 errors[field.ct_field] = _('The referenced object type is not installed.')
                 continue
-            try:
-                obj = model.objects.get(pk=fk_value)
-            except ObjectDoesNotExist:
+            # Existence by PK only: for a custom object target, model_class() is main's class, whose
+            # column set may not match the active branch's schema, so selecting its columns can fail.
+            if not model.objects.filter(pk=fk_value).exists():
                 errors[field.fk_field] = f'Related object not found using the provided value: {fk_value}.'
-                continue
-            # Cache the resolved object on the descriptor, as BaseModel.clean() does.
-            setattr(self, field.name, obj)
         if errors:
             raise ValidationError(errors)
+
+    def _stored_gfk_values(self, gfk_fields):
+        """Return ``{gfk name: (content type ID, object ID)}`` as saved, or ``None`` for an unsaved instance."""
+        if self._state.adding or self.pk is None:
+            return None
+        columns = []
+        for field in gfk_fields:
+            columns += [self._meta.get_field(field.ct_field).attname, field.fk_field]
+        row = type(self)._base_manager.db_manager(self._state.db).filter(pk=self.pk).values_list(*columns).first()
+        if row is None:
+            return None
+        return {field.name: (row[i], row[i + 1]) for i, field in zip(range(0, len(row), 2), gfk_fields)}
 
 
 class CustomObject(
@@ -4441,6 +4462,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         if needs_reindex:
             _cot_id = self.custom_object_type_id
             transaction.on_commit(lambda: ReindexCustomObjectTypeJob.enqueue(cot_id=_cot_id))
+        # Refresh the snapshot so a later save of this instance compares against this one.
+        self._original_search_weight = self.search_weight
 
     def delete(self, *args, **kwargs):
         field_type = FIELD_TYPE_CLASS[self.type]()
