@@ -328,10 +328,10 @@ class PolymorphicFieldAPITest(CustomObjectsTestCase, TestCase):
         """PATCH of another field is not blocked by a stored reference whose target was deleted (#771)."""
         _grant_perm(self.user, "change", self.model, "co-change-stale")
         obj = self.model.objects.create(name="gfk-stale-obj")
-        obj.poly_obj = self.site
-        obj.save()
         site_pk = self.site.pk
         self.site.delete()
+        # Deleting the target now clears the reference, so write the stale one back as older data would have it.
+        self.model.objects.filter(pk=obj.pk).update(poly_obj_content_type=self.site_ot, poly_obj_object_id=site_pk)
 
         response = self.client.patch(
             self._obj_detail_url(obj.pk),

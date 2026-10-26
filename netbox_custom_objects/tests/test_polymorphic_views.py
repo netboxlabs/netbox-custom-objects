@@ -267,10 +267,10 @@ class PolymorphicFieldUITest(CustomObjectsTestCase, TestCase):
         self.gfk_field.save()
         model = self.cot.get_model()
         obj = model.objects.create(name="hidden-stale")
-        obj.poly_obj = self.site2
-        obj.save()
         site2_pk = self.site2.pk
         self.site2.delete()
+        # Deleting the target now clears the reference, so write the stale one back as older data would have it.
+        model.objects.filter(pk=obj.pk).update(poly_obj_content_type=self.site_ot, poly_obj_object_id=site2_pk)
 
         data = {"name": "hidden-stale-renamed", "csrfmiddlewaretoken": "fake"}
         response = self.client.post(self._edit_url(obj.pk), data, follow=True)
@@ -421,10 +421,12 @@ class PolymorphicFieldUITest(CustomObjectsTestCase, TestCase):
         reference would abort the whole operation.
         """
         stale_site = self.model.objects.create(name="bulk-stale-site")
-        stale_site.poly_obj = self.site2
-        stale_site.save()
         site2_pk = self.site2.pk
         self.site2.delete()
+        # Deleting the target now clears the reference, so write the stale one back as older data would have it.
+        self.model.objects.filter(pk=stale_site.pk).update(
+            poly_obj_content_type=self.site_ot, poly_obj_object_id=site2_pk
+        )
         stale_type = self.model.objects.create(name="bulk-stale-type")
         self.model.objects.filter(pk=stale_type.pk).update(poly_obj_content_type=None, poly_obj_object_id=42)
 

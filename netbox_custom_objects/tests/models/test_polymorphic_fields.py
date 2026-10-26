@@ -98,10 +98,10 @@ class ReferencedObjectDeletionTest(CustomObjectsTestCase, TestCase):
     def test_full_clean_leaves_stored_stale_gfk_alone(self):
         """A saved reference whose target was deleted later is only re-validated once it changes (#771)."""
         obj = self.model.objects.create(name="stored-stale")
-        obj.poly_obj = self.site
-        obj.save()
         site_pk = self.site.pk
         self.site.delete()
+        # Deleting the target now clears the reference, so write the stale one back as older data would have it.
+        self.model.objects.filter(pk=obj.pk).update(poly_obj_content_type=self.site_ot, poly_obj_object_id=site_pk)
 
         obj = self.model.objects.get(pk=obj.pk)
         obj.name = "stored-stale-renamed"
