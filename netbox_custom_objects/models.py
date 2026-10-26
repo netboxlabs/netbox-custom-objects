@@ -18,7 +18,7 @@ from django.conf import settings
 # from django.contrib.contenttypes.management import create_contenttypes
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import FieldDoesNotExist
+from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
 from django.core.validators import RegexValidator, ValidationError
 from django.db import DEFAULT_DB_ALIAS, connection, connections, IntegrityError, models, transaction
 from django.db.utils import OperationalError, ProgrammingError
@@ -826,7 +826,11 @@ def _set_with_collision_preference(result, key, value):
 
 
 class _NullableUniqueCharsCompatMixin(models.Model):
-    """COMPAT(netbox<4.6.0): ``BaseModel`` only defines and calls ``_coerce_nullable_unique_chars()`` from 4.6.0 on."""
+    """COMPAT(netbox<4.6.0): ``BaseModel`` only defines ``_coerce_nullable_unique_chars()`` from 4.6.0 on.
+
+    ``_BaseModelCleanMixin.clean()`` calls it on every version; this supplies the
+    method and the ``save()`` hook that 4.6.0+ ``BaseModel`` has built in.
+    """
 
     class Meta:
         abstract = True
@@ -842,10 +846,6 @@ class _NullableUniqueCharsCompatMixin(models.Model):
             ):
                 setattr(self, field.attname, None)
 
-    def clean(self):
-        super().clean()
-        self._coerce_nullable_unique_chars()
-
     def save(self, *args, **kwargs):
         self._coerce_nullable_unique_chars()
         super().save(*args, **kwargs)
@@ -854,6 +854,72 @@ class _NullableUniqueCharsCompatMixin(models.Model):
 _custom_object_compat_bases = (
     () if hasattr(BaseModel, '_coerce_nullable_unique_chars') else (_NullableUniqueCharsCompatMixin,)
 )
+
+
+class _BaseModelCleanMixin(models.Model):
+    """Stand-in for ``BaseModel.clean()``; must sit directly before ``BaseModel`` in the bases.
+
+    ``BaseModel.clean()`` validates every GenericForeignKey, but it can't honour
+    ``full_clean(exclude=...)`` and it raises AttributeError when the stored content
+    type has no installed model (an uninstalled plugin). Polymorphic Object fields
+    are GFKs, and the UI edit form excludes their backing columns (hidden fields
+    have no form field at all), so a stale reference would key a ValidationError
+    to a column the form doesn't have and 500 the edit page.
+
+    ``clean()`` therefore skips ``BaseModel.clean()`` and repeats what it does --
+    nullable-unique coercion and GFK validation -- with the exclude list captured
+    by ``full_clean()``. Keep this in step with ``BaseModel.clean()`` upstream.
+    """
+
+    class Meta:
+        abstract = True
+
+    def full_clean(self, exclude=None, **kwargs):
+        self._clean_exclude = set(exclude or ())
+        try:
+            super().full_clean(exclude=exclude, **kwargs)
+        finally:
+            del self._clean_exclude
+
+    def clean(self):
+        # Skip BaseModel.clean() (see class docstring); the rest of the MRO still runs.
+        super(BaseModel, self).clean()
+        self._coerce_nullable_unique_chars()
+        self._clean_generic_foreign_keys(getattr(self, '_clean_exclude', ()))
+
+    def _clean_generic_foreign_keys(self, exclude):
+        errors = {}
+        for field in self._meta.private_fields:
+            if not isinstance(field, GenericForeignKey):
+                continue
+            if field.ct_field in exclude or field.fk_field in exclude:
+                continue
+            ct_id = getattr(self, self._meta.get_field(field.ct_field).attname, None)
+            fk_value = getattr(self, field.fk_field, None)
+            if ct_id is None and fk_value is not None:
+                errors[field.ct_field] = _('This field cannot be null.')
+                continue
+            if fk_value is None and ct_id is not None:
+                errors[field.fk_field] = _('This field cannot be null.')
+                continue
+            if ct_id is None:
+                continue
+            try:
+                model = field.get_content_type(id=ct_id, using=self._state.db).model_class()
+            except ContentType.DoesNotExist:
+                model = None
+            if model is None:
+                errors[field.ct_field] = _('The referenced object type is not installed.')
+                continue
+            try:
+                obj = model.objects.get(pk=fk_value)
+            except ObjectDoesNotExist:
+                errors[field.fk_field] = f'Related object not found using the provided value: {fk_value}.'
+                continue
+            # Cache the resolved object on the descriptor, as BaseModel.clean() does.
+            setattr(self, field.name, obj)
+        if errors:
+            raise ValidationError(errors)
 
 
 class CustomObject(
@@ -870,6 +936,7 @@ class CustomObject(
     EventRulesMixin,
     TagsMixin,
     *_custom_object_compat_bases,
+    _BaseModelCleanMixin,
     BaseModel,
 ):
     """
@@ -3072,6 +3139,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         self._original_related_object_type_id = self.related_object_type_id
         self._original_is_polymorphic = self.is_polymorphic
         self._original_on_delete_behavior = self.on_delete_behavior
+        self._original_search_weight = self.search_weight
 
     def __str__(self):
         return self.label or self.name.replace("_", " ").capitalize()
@@ -4364,13 +4432,12 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 _unwire_polymorphic_reverse_descriptors(self, related_name=old_name)
 
         # Reindex all objects of this type if search indexing was affected.
-        # self.original (backed by _original) is only set by from_db; the
-        # `not is_new` branch implies _state.adding is False, which implies
-        # the row came from the DB, so _original is guaranteed to exist.
+        # Compare against the __init__ snapshot: ``_original`` is only set by
+        # from_db(), so an instance created in-process and saved again has none.
         if is_new:
             needs_reindex = self.search_weight > 0
         else:
-            needs_reindex = self.search_weight != self.original.search_weight
+            needs_reindex = self.search_weight != self._original_search_weight
         if needs_reindex:
             _cot_id = self.custom_object_type_id
             transaction.on_commit(lambda: ReindexCustomObjectTypeJob.enqueue(cot_id=_cot_id))

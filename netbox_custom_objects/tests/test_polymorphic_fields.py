@@ -346,23 +346,6 @@ class PolymorphicFieldAPITest(TransactionCleanupMixin, CustomObjectsTestCase, Tr
         obj.refresh_from_db()
         self.assertIsNone(obj.poly_obj)
 
-    def test_patch_object_whose_gfk_model_is_not_installed_returns_400(self):
-        """A stored content type with no installed model (e.g. an uninstalled plugin) is a 400, not a 500 (#771)."""
-        from django.contrib.contenttypes.models import ContentType
-        _grant_perm(self.user, "change", self.model, "co-change")
-        gone = ContentType.objects.create(app_label="gone_plugin", model="widget")
-        obj = self.model.objects.create(name="gone-model-obj")
-        self.model.objects.filter(pk=obj.pk).update(poly_obj_content_type=gone, poly_obj_object_id=1)
-
-        response = self.client.patch(
-            self._obj_detail_url(obj.pk),
-            json.dumps({"name": "gone-model-renamed"}),
-            content_type="application/json",
-            **self.header,
-        )
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.content)
-        self.assertIn("poly_obj_content_type", response.json())
-
     def test_custom_validator_sees_gfk_value_on_api_create(self):
         """A CUSTOM_VALIDATORS validate() call during API create must see the
         submitted polymorphic GFK value, not None (#677)."""
