@@ -167,6 +167,39 @@ class CustomObjectTypeAPITest(CustomObjectsTestCase, TestCase):
         cot.refresh_from_db()
         self.assertFalse(cot.config_context_enabled)
 
+    def test_create_with_invalid_display_expression_returns_400(self):
+        data = {'name': 'bad_expr', 'slug': 'bad-expr', 'display_expression': '{% if name %}{{ name }}'}
+        url = reverse('plugins-api:netbox_custom_objects-api:customobjecttype-list')
+        response = self.client.post(url, data, format='json', **self.header)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('display_expression', response.data)
+        self.assertFalse(CustomObjectType.objects.filter(slug='bad-expr').exists())
+
+    def test_create_with_deeply_nested_display_expression_returns_400(self):
+        expression = '{{ ' + '(' * 200 + 'name' + ')' * 200 + ' }}'
+        data = {'name': 'deep_expr', 'slug': 'deep-expr', 'display_expression': expression}
+        url = reverse('plugins-api:netbox_custom_objects-api:customobjecttype-list')
+        response = self.client.post(url, data, format='json', **self.header)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('display_expression', response.data)
+        self.assertFalse(CustomObjectType.objects.filter(slug='deep-expr').exists())
+
+    def test_patch_with_invalid_display_expression_returns_400(self):
+        self._add_change_permission()
+        cot = CustomObjectType.objects.create(name='expr_patch', slug='expr-patch', display_expression='{{ name }}')
+        url = reverse(
+            'plugins-api:netbox_custom_objects-api:customobjecttype-detail',
+            kwargs={'pk': cot.pk},
+        )
+        response = APIClient().patch(url, {'display_expression': '{{ name'}, format='json', **self.header)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('display_expression', response.data)
+        cot.refresh_from_db()
+        self.assertEqual(cot.display_expression, '{{ name }}')
+
 
 class CustomObjectTypeAndFieldViewSetPermissionTest(CustomObjectsTestCase, TestCase):
     """CustomObjectTypeViewSet/CustomObjectTypeFieldViewSet must enforce object-level permissions on LIST."""
