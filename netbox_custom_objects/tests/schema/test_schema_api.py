@@ -29,7 +29,7 @@ from utilities.testing import create_test_user
 
 import netbox_custom_objects as nco_pkg
 from netbox_custom_objects.schema.exporter import export_cot
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
 
 from ..base import CustomObjectsTestCase, create_api_token
 
@@ -57,14 +57,22 @@ class _SchemaAPIMixin(CustomObjectsTestCase):
         perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
 
     def _grant_apply_permissions(self):
-        """Add and change on types, plus add, change and delete on their fields."""
+        """Add and change on types, plus add, change and delete on their fields and constraints."""
         for model, actions in (
             (CustomObjectType, ['add', 'change']),
             (CustomObjectTypeField, ['add', 'change', 'delete']),
+            (CustomObjectTypeConstraint, ['add', 'change', 'delete']),
         ):
             perm = ObjectPermission.objects.create(name=f'schema_apply_{model._meta.model_name}', actions=actions)
             perm.users.add(self.user)
             perm.object_types.add(ObjectType.objects.get_for_model(model))
+
+    def _grant(self, model, actions, constraints=None):
+        perm = ObjectPermission.objects.create(
+            name=f'{model._meta.model_name}-{"-".join(actions)}', actions=actions, constraints=constraints,
+        )
+        perm.users.add(self.user)
+        perm.object_types.add(ObjectType.objects.get_for_model(model))
 
     @property
     def preview_url(self):

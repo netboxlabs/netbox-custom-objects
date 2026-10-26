@@ -1144,6 +1144,30 @@ class ExecutorConstraintTestCase(_ExecutorTestBase):
         self.assertEqual(diff.constraint_changes[0].changed_attrs, {"nulls_distinct": (True, False)})
         self.assertFalse(CustomObjectTypeConstraint.objects.get().nulls_distinct)
 
+    @property
+    def _serial_only(self):
+        return {"name": "vendor_serial", "fields": [self.serial.schema_id], "case_insensitive": True}
+
+    def test_alter_keeps_the_primary_key(self):
+        """An altered constraint is re-created after the field changes, with the primary key it had."""
+        apply_document(self._document(constraints=[self._constraint_def()]))
+        pk = CustomObjectTypeConstraint.objects.get().pk
+        apply_document(self._document(constraints=[self._serial_only]))
+        constraint = CustomObjectTypeConstraint.objects.get()
+        self.assertEqual(constraint.pk, pk)
+        self.assertEqual(constraint.field_schema_ids, [self.serial.schema_id])
+
+    def test_alter_checks_existing_objects(self):
+        apply_document(self._document(constraints=[self._constraint_def()]))
+        model = self.cot.get_model()
+        model.objects.create(vendor="acme", serial="1")
+        model.objects.create(vendor="other", serial="1")
+        with self.assertRaisesMessage(InvalidConstraintError, "already have duplicate values"):
+            apply_document(self._document(constraints=[self._serial_only]))
+        self.assertEqual(
+            CustomObjectTypeConstraint.objects.get().field_schema_ids, [self.vendor.schema_id, self.serial.schema_id],
+        )
+
     def test_condition(self):
         condition = [{"field": self.vendor.schema_id, "lookup": "isnull", "value": False}]
         constraint_def = {"name": "serial_if_vendor", "fields": [self.serial.schema_id], "condition": condition}
