@@ -90,7 +90,7 @@ Field types: `object`, `multiobject`
 | `Related object types` | For polymorphic fields, the set of object types that may be referenced. Cannot be changed after the field is created. |
 | `Related object filter` | A JSON `query_params` dict used to filter the object selection drop-down (e.g. `{"status": "active"}`). |
 | `Reverse relation name` | Name for the reverse relation accessor on the related object. For example, setting this to `ssl_profiles` on a Certificate → SLB field allows `slb.ssl_profiles.all()` in export templates. |
-| `On delete behavior` | What happens when the referenced object is deleted: `Set null` (clear the field, keep this object), `Cascade` (delete this object too), or `Protect` (prevent deletion of the referenced object). Default: `Set null`. Changing it applies only to later deletes; existing values that already point at a deleted object are left as they are. **Applies only to `object` fields, not `multiobject`.** |
+| `On delete behavior` | What happens when the referenced object is deleted: `Set null` (clear the field, keep this object), `Cascade` (delete this object too), or `Protect` (prevent deletion of the referenced object). Default: `Set null`. Changing it applies only to later deletes; existing values that already point at a deleted object are left as they are. **Applies only to `object` fields, polymorphic or not, not `multiobject`.** |
 
 !!! note
     To reference another Custom Object Type, choose `Custom Objects > <Custom Object Type name>` in the **Related object type** dropdown. To create a polymorphic field that may reference objects of multiple types, enable **Polymorphic** and select the allowed types under **Related object types**.

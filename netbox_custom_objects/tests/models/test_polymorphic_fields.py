@@ -22,11 +22,10 @@ class ReferencedObjectDeletionTest(CustomObjectsTestCase, TestCase):
     Tests for the on_delete behaviour when a referenced object (e.g. a Site) or
     the CustomObjectType itself is deleted.
 
-    GFK fields use on_delete=SET_NULL on the content_type FK (so deleting the
-    ContentType row nulls the pointer), but there is no DB-level FK from
-    object_id to the concrete target table — generic relations cannot express
-    that.  Deleting a Site therefore leaves a stale object_id; Django's GFK
-    accessor silently returns None in that case.
+    A GFK field has no DB-level FK from object_id to the concrete target table;
+    generic relations cannot express that.  The field's on_delete_behavior is
+    applied in Python instead, so deleting a Site referenced by a field with the
+    default SET_NULL clears both columns.
 
     Polymorphic M2M through-tables store (source_id, content_type_id, object_id).
     The content_type FK has on_delete=CASCADE (so deleting the ContentType drops
@@ -69,22 +68,18 @@ class ReferencedObjectDeletionTest(CustomObjectsTestCase, TestCase):
 
     def test_deleting_referenced_site_nulls_gfk_accessor(self):
         """
-        Deleting a Site that is referenced by a polymorphic GFK field does not
-        raise an exception and causes the accessor to return None.
-
-        There is no DB FK from object_id → dcim_site, so the row is not touched
-        at the DB level; Django's GenericForeignKey.__get__ returns None when
-        the target object no longer exists.
+        Deleting a Site that is referenced by a polymorphic GFK field with the
+        default SET_NULL behaviour clears the reference, so the accessor returns None.
         """
-        obj = self.model.objects.create(name="stale-gfk")
+        obj = self.model.objects.create(name="cleared-gfk")
         obj.poly_obj = self.site
         obj.save()
 
         self.site.delete()
 
         obj.refresh_from_db()
-        # The content_type column still points to the Site ContentType (site still
-        # exists in the app registry), but the object is gone — accessor returns None.
+        self.assertIsNone(obj.poly_obj_content_type_id)
+        self.assertIsNone(obj.poly_obj_object_id)
         self.assertIsNone(obj.poly_obj)
 
     def test_full_clean_flags_newly_assigned_gfk_pointing_at_deleted_object(self):
