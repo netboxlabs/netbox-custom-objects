@@ -63,6 +63,9 @@ Field types: `integer`, `decimal`
 | `Minimum value` | Minimum allowed numeric value. |
 | `Maximum value` | Maximum allowed numeric value. |
 
+A `decimal` value has up to 16 digits in total, 4 of them after the decimal point, as
+for a NetBox decimal custom field.
+
 ## Choice Fields
 
 Field types: `select`, `multiselect`
@@ -70,6 +73,8 @@ Field types: `select`, `multiselect`
 | Attribute | Description |
 |-----------|-------------|
 | `Choice set` | A NetBox [Custom Field Choice Set](https://netboxlabs.com/docs/netbox/customization/custom-fields/#custom-field-choices) that defines the available options. Required. |
+
+A choice value may be up to 100 characters long, for `select` and `multiselect` alike.
 
 ## Object Reference Fields
 

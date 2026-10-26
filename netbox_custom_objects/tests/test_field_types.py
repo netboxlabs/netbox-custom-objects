@@ -10,6 +10,7 @@ from django.apps import apps
 from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import connection, models
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 
 from core.models import ObjectType
 from dcim.models import Device, DeviceType, ModuleType
@@ -17,6 +18,7 @@ from extras.models import CustomFieldChoiceSet
 from netbox_custom_objects.field_types import (
     FIELD_TYPE_CLASS,
     CoordinatesFieldType,
+    DecimalFieldType,
     MultiObjectFieldType,
     MultiSelectFieldType,
     ObjectFieldType,
@@ -523,6 +525,151 @@ class DecimalFieldTypeTestCase(FieldTypeTestCase):
             model(name="Test", price=Decimal("-1.00")).full_clean()
         with self.assertRaises(ValidationError):
             model(name="Test", price=Decimal("101.00")).full_clean()
+
+    def test_decimal_precision_is_the_same_in_every_layer(self):
+        """The model, serializer and form all accept 16 digits with 4 decimal places (issue #769).
+
+        The column used to be numeric(8,2) while the form accepted 12/4, so the form
+        took values the database then rejected.
+        """
+        field = self.create_custom_object_type_field(
+            self.custom_object_type, name="price", label="Price", type="decimal",
+        )
+        model = self.custom_object_type.get_model(no_cache=True)
+        field_type = DecimalFieldType()
+
+        for layer in (
+            model._meta.get_field("price"),
+            field_type.get_serializer_field(field),
+            field_type.get_form_field(field),
+        ):
+            self.assertEqual((layer.max_digits, layer.decimal_places), (16, 4), layer)
+
+        widest = Decimal("123456789012.3456")
+        self.assertEqual(field_type.get_form_field(field).clean(str(widest)), widest)
+        instance = model(name="Test", price=widest)
+        instance.full_clean()
+        instance.save()
+        instance.refresh_from_db()
+        self.assertEqual(instance.price, widest)
+
+        too_wide = "1234567890123.4567"
+        with self.assertRaises(ValidationError):
+            field_type.get_form_field(field).clean(too_wide)
+        with self.assertRaises(ValidationError):
+            model(name="Test", price=Decimal(too_wide)).full_clean()
+
+
+def _column_type(table_name, column_name):
+    """The column's type as PostgreSQL formats it, e.g. ``numeric(16,4)``, or None if absent."""
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            SELECT pg_catalog.format_type(a.atttypid, a.atttypmod)
+            FROM pg_catalog.pg_attribute a
+            JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+            JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = current_schema() AND c.relname = %s AND a.attname = %s
+              AND a.attnum > 0 AND NOT a.attisdropped
+            """,
+            [table_name, column_name],
+        )
+        row = cursor.fetchone()
+        return row[0] if row else None
+
+
+def _alter_column_type(table_name, column_name, column_type):
+    with connection.cursor() as cursor:
+        cursor.execute(f'ALTER TABLE "{table_name}" ALTER COLUMN "{column_name}" TYPE {column_type}')
+
+
+class WidenDecimalAndMultiSelectColumnsTestCase(FieldTypeTestCase):
+    """The 0019 migration widens pre-#769 decimal and multi-select columns in place.
+
+    New tables get numeric(16,4) and varchar(100)[] columns directly, but tables
+    created earlier are managed=False and keep numeric(8,2) / varchar(50)[] until
+    the migration alters them.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.choice_set = self.create_choice_set()
+        self.table_name = f"custom_objects_{self.custom_object_type.pk}"
+
+    def _run_migration(self):
+        """Run the migration's data function and return the ALTER TABLE statements it executed.
+
+        It only reads stable CustomObjectTypeField columns (type, custom_object_type_id,
+        name), so the current app registry stands in for the historical one.
+        """
+        migration = import_module("netbox_custom_objects.migrations.0019_widen_decimal_and_multiselect_columns")
+        with CaptureQueriesContext(connection) as queries, connection.schema_editor() as schema_editor:
+            migration.widen_decimal_and_multiselect_columns(apps, schema_editor)
+        return [q["sql"] for q in queries.captured_queries if q["sql"].startswith("ALTER TABLE")]
+
+    def _create_legacy_fields(self):
+        """Create a decimal and a multi-select field, then narrow their columns to the pre-#769 types."""
+        self.create_custom_object_type_field(self.custom_object_type, name="price", label="Price", type="decimal")
+        self.create_custom_object_type_field(
+            self.custom_object_type, name="tags", label="Tags", type="multiselect", choice_set=self.choice_set,
+        )
+        # Realize the backing table and columns.
+        model = self.custom_object_type.get_model(no_cache=True)
+        _alter_column_type(self.table_name, "price", "numeric(8,2)")
+        _alter_column_type(self.table_name, "tags", "varchar(50)[]")
+        self.assertEqual(_column_type(self.table_name, "price"), "numeric(8,2)")
+        self.assertEqual(_column_type(self.table_name, "tags"), "character varying(50)[]")
+        return model
+
+    def test_legacy_columns_are_widened_in_one_statement_per_table(self):
+        """Both columns of a table are widened by a single ALTER TABLE (one rewrite per table)."""
+        model = self._create_legacy_fields()
+
+        statements = self._run_migration()
+
+        self.assertEqual(len(statements), 1, statements)
+        self.assertEqual(_column_type(self.table_name, "price"), "numeric(16,4)")
+        self.assertEqual(_column_type(self.table_name, "tags"), "character varying(100)[]")
+
+        # Values that only fit the widened types round-trip.
+        instance = model.objects.create(name="Test", price=Decimal("123456789012.3456"), tags=["c" * 100])
+        instance.refresh_from_db()
+        self.assertEqual(instance.price, Decimal("123456789012.3456"))
+        self.assertEqual(instance.tags, ["c" * 100])
+
+    def test_rerun_and_fresh_install_are_no_ops(self):
+        """Columns already at the new types are skipped, so the migration is idempotent."""
+        self._create_legacy_fields()
+        self._run_migration()
+
+        self.assertEqual(self._run_migration(), [])
+
+    def test_columns_already_wider_than_the_target_are_not_narrowed(self):
+        """Only the exact legacy types are altered, so a manually widened column is left alone."""
+        self._create_legacy_fields()
+        _alter_column_type(self.table_name, "price", "numeric(20,6)")
+        _alter_column_type(self.table_name, "tags", "varchar(200)[]")
+
+        self.assertEqual(self._run_migration(), [])
+        self.assertEqual(_column_type(self.table_name, "price"), "numeric(20,6)")
+        self.assertEqual(_column_type(self.table_name, "tags"), "character varying(200)[]")
+
+    def test_other_field_types_and_missing_columns_are_untouched(self):
+        """Only decimal and multi-select columns are altered; a field without a column is skipped."""
+        self.create_custom_object_type_field(self.custom_object_type, name="count", label="Count", type="integer")
+        self.create_custom_object_type_field(
+            self.custom_object_type, name="color", label="Color", type="select", choice_set=self.choice_set,
+        )
+        self.custom_object_type.get_model(no_cache=True)
+        CustomObjectTypeField.objects.create(
+            custom_object_type=self.custom_object_type, name="ghost", label="Ghost", type="decimal",
+        )
+        with connection.cursor() as cursor:
+            cursor.execute(f'ALTER TABLE "{self.table_name}" DROP COLUMN "ghost"')
+
+        self.assertEqual(self._run_migration(), [])
+        self.assertEqual(_column_type(self.table_name, "count"), "bigint")
+        self.assertEqual(_column_type(self.table_name, "color"), "character varying(100)")
 
 
 class CoordinatesFieldTypeTestCase(FieldTypeTestCase):
@@ -1323,6 +1470,22 @@ class MultiSelectFieldTypeTestCase(FieldTypeTestCase):
         instance = model.objects.create(name="Test", tags=["choice1", "choice3"])
 
         self.assertEqual(instance.tags, ["choice1", "choice3"])
+
+    def test_multiselect_stores_choice_values_as_long_as_select_does(self):
+        """A choice value may be 100 characters, like a select column (issue #769)."""
+        long_value = "v" * 100
+        choice_set = self.create_choice_set(name="Long values", extra_choices=[[long_value, "Long"]])
+        self.create_custom_object_type_field(
+            self.custom_object_type, name="tags", label="Tags", type="multiselect", choice_set=choice_set,
+        )
+        model = self.custom_object_type.get_model(no_cache=True)
+        self.assertEqual(model._meta.get_field("tags").base_field.max_length, 100)
+
+        instance = model(name="Test", tags=[long_value])
+        instance.full_clean()
+        instance.save()
+        instance.refresh_from_db()
+        self.assertEqual(instance.tags, [long_value])
 
     def test_multiselect_field_display_value_returns_labels(self):
         """get_display_value() must return comma-joined human-readable labels, not raw keys."""

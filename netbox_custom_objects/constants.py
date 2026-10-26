@@ -13,6 +13,13 @@ INCLUDE_MODELS = (
 
 APP_LABEL = "netbox_custom_objects"
 
+# Column sizes shared by the model, serializer and form layers, so every layer
+# accepts exactly the values the database can store. Decimal precision matches
+# NetBox's custom fields (issue #769).
+DECIMAL_MAX_DIGITS = 16
+DECIMAL_PLACES = 4
+CHOICE_VALUE_MAX_LENGTH = 100
+
 # Convention for config-context aggregation (issue #98): a single, non-polymorphic
 # OBJECT field named as the key and pointing at the given (app_label, model) feeds the
 # matching ConfigContext assignment dimension read by
