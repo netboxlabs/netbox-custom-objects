@@ -329,7 +329,7 @@ def _patch_graphql_view():
             live_schema = get_live_schema(request.user)
             if live_schema is not None:
                 self.schema = live_schema
-        except Exception:
+        except Exception:  # fall back to the static schema
             logger.warning('Failed to load live GraphQL schema; using static schema', exc_info=True)
         return _original_dispatch(self, request, *args, **kwargs)
 

@@ -50,7 +50,7 @@ def signal_custom_object_type_deleted(cot_id):
         # token also sees the mark.
         cache.set(_DELETED_TYPE_CACHE_KEY.format(cot_id), True, None)
         cache.set(_TOKEN_CACHE_KEY, uuid.uuid4().hex, None)
-    except Exception:
+    except Exception:  # cache down: other workers keep the stale model until restart
         logger.warning('Could not signal a Custom Object Type deletion to other workers', exc_info=True)
 
 
@@ -62,7 +62,7 @@ def evict_deleted_custom_object_types(**kwargs):
     global _seen_token
     try:
         token = cache.get(_TOKEN_CACHE_KEY)
-    except Exception:
+    except Exception:  # cache down: nothing to act on
         return
     if token is None or token == _seen_token:
         return
@@ -76,7 +76,7 @@ def evict_deleted_custom_object_types(**kwargs):
             registered[int(cot_id)] = (model_name, model)
     try:
         marked = cache.get_many([_DELETED_TYPE_CACHE_KEY.format(cot_id) for cot_id in registered])
-    except Exception:
+    except Exception:  # cache down: try again next time
         return
     deleted = {cot_id for cot_id in registered if _DELETED_TYPE_CACHE_KEY.format(cot_id) in marked}
 

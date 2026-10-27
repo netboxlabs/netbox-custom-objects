@@ -56,7 +56,7 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
             while not stop.is_set():
                 try:
                     CustomObjectType.objects.get(pk=cot.pk).get_model(no_cache=True)
-                except Exception as e:
+                except Exception as e:  # captured for the assertion below
                     with reader_errors_lock:
                         reader_errors.append(e)
                 finally:
@@ -192,7 +192,7 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
             try:
                 with connection.schema_editor() as schema_editor:
                     field_type.create_polymorphic_m2m_table(field, writer_model, schema_editor)
-            except Exception as e:
+            except Exception as e:  # surfaced via the assertion below
                 writer_result['error'] = e
             finally:
                 connection.close()
@@ -204,7 +204,7 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
             reader_may_proceed.wait(timeout=5)
             try:
                 reader_result['model'] = CustomObjectType.objects.get(pk=cot.pk).get_model(no_cache=True)
-            except Exception as e:
+            except Exception as e:  # surfaced via the assertion below
                 reader_result['error'] = e
             finally:
                 reader_done.set()
@@ -314,7 +314,7 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
             except ProgrammingError as e:
                 # The other way to lose (see the docstring); anything else is a real error.
                 results[key] = {'lost': e} if isinstance(e.__cause__, DuplicateTable) else {'error': e}
-            except Exception as e:
+            except Exception as e:  # surfaced via the assertion below
                 results[key] = {'error': e}
             finally:
                 connection.close()
@@ -371,7 +371,7 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
             while not stop.is_set():
                 try:
                     CustomObjectType.objects.get(pk=cot.pk).get_model(no_cache=True)
-                except Exception as e:
+                except Exception as e:  # captured for the assertion below
                     with reader_errors_lock:
                         reader_errors.append(e)
                 finally:

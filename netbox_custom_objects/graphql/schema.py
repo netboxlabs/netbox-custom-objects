@@ -135,7 +135,7 @@ def build_query_classes(visible_cot_ids=None):
             'related_object_types'
         )
         custom_object_types = list(CustomObjectType.objects.prefetch_related(Prefetch('fields', queryset=fields_qs)))
-    except Exception:
+    except Exception:  # DB may be unavailable at import time
         logger.debug('Could not load custom object types for GraphQL schema', exc_info=True)
         return []
 
@@ -154,7 +154,7 @@ def build_query_classes(visible_cot_ids=None):
     for cot in custom_object_types:
         try:
             gql_type = build_object_type(cot)
-        except Exception:
+        except Exception:  # never break the whole schema for one type
             logger.warning(
                 'Failed to build GraphQL type for custom object type %r (id=%s); skipping',
                 cot.name,

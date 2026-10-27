@@ -26,7 +26,7 @@ no registered GraphQL type, the field falls back to a lightweight, uniform
 import logging
 import re
 import threading
-from typing import Annotated, Optional
+from typing import Annotated, Optional, Union
 
 import strawberry
 import strawberry_django
@@ -240,11 +240,11 @@ def _related_repr(obj):
         return None
     try:
         url = obj.get_absolute_url()
-    except Exception:
+    except Exception:  # URL resolution is best-effort
         url = None
     try:
         display = str(obj)
-    except Exception:
+    except Exception:  # a broken __str__ must not fail the whole field
         # Degrade to a stable identifier so one unrenderable object becomes a
         # placeholder rather than erroring the entire (possibly multi-object) field;
         # pk and _meta are safe even when __str__ raises.
@@ -282,7 +282,7 @@ def _build_model_type_registry():
             module = import_module(module_name)
         except ModuleNotFoundError:
             continue
-        except Exception:
+        except Exception:  # a broken app module must not break the schema
             logger.debug('Could not import %s for the GraphQL type registry', module_name, exc_info=True)
             continue
         for value in vars(module).values():
@@ -406,7 +406,11 @@ def _relationship_union_name(field):
 
 def _relationship_annotation(members, is_list, union_name):
     """Build the resolver return annotation from the resolved member types."""
-    inner = members[0] if len(members) == 1 else Annotated[tuple(members), strawberry.union(union_name)]
+    if len(members) == 1:  # noqa: SIM108 - keeps the noqa below on its own line
+        inner = members[0]
+    else:
+        # Union[] of a runtime tuple of types; the `X | Y` form can't be built from one.
+        inner = Annotated[Union[tuple(members)], strawberry.union(union_name)]  # noqa: UP007
     return list[inner] if is_list else Optional[inner]
 
 
@@ -488,7 +492,7 @@ def _make_relationship_resolver(field, members, native_models):
                 return []
             try:
                 related = list(value.all())
-            except Exception:
+            except Exception:  # never let one field break the query
                 logger.warning('Failed to resolve multi-object GraphQL field %r', field_name, exc_info=True)
                 return []
             return [_coerce_related(obj, native_models) for obj in _filter_viewable(user, related)]
