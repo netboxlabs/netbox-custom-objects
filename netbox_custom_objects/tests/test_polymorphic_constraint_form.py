@@ -2,6 +2,7 @@
 Tests for constraints over a polymorphic Object field in the custom object edit form: a violation
 must come back as a form error, as it does for other fields, not a database error.
 """
+
 from django.contrib.contenttypes.models import ContentType
 from django.test import TestCase
 from django.urls import reverse
@@ -16,7 +17,6 @@ from .base import CustomObjectsTestCase
 
 
 class PolymorphicConstraintFormTestCase(CustomObjectsTestCase, TestCase):
-
     def setUp(self):
         super().setUp()
         self.user = create_test_user('poly-constraint-form')
@@ -31,7 +31,8 @@ class PolymorphicConstraintFormTestCase(CustomObjectsTestCase, TestCase):
         self.name = self.create_custom_object_type_field(self.cot, name='name', type='text', primary=True)
         self.action = self.create_custom_object_type_field(self.cot, name='action', type='text')
         self.target = self.create_polymorphic_field(
-            self.cot, [ObjectType.objects.get_for_model(Site), ObjectType.objects.get_for_model(Prefix)],
+            self.cot,
+            [ObjectType.objects.get_for_model(Site), ObjectType.objects.get_for_model(Prefix)],
             name='target',
         )
 
@@ -44,7 +45,8 @@ class PolymorphicConstraintFormTestCase(CustomObjectsTestCase, TestCase):
 
     def _add_unique_constraint(self):
         return self._add_constraint(
-            name='name_unique_per_target', field_schema_ids=[self.name.schema_id, self.target.schema_id],
+            name='name_unique_per_target',
+            field_schema_ids=[self.name.schema_id, self.target.schema_id],
         )
 
     def _post(self, data, obj=None):
@@ -96,7 +98,8 @@ class PolymorphicConstraintFormTestCase(CustomObjectsTestCase, TestCase):
 
     def test_check_violation_is_a_form_error(self):
         model = self._add_constraint(
-            name='remark_has_no_target', type='check',
+            name='remark_has_no_target',
+            type='check',
             condition=[{'field': self.action.schema_id, 'lookup': 'exact', 'value': 'remark'}],
             rule=[{'field': self.target.schema_id, 'lookup': 'isnull', 'value': True}],
             error_message='A remark has no target.',

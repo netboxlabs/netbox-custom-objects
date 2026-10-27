@@ -2,6 +2,7 @@
 Tests for the model cache and Django's app registry: invalidation when fields change, registering
 generated models, and keeping the cached and registered classes consistent.
 """
+
 from unittest import mock
 from unittest.mock import patch
 
@@ -42,7 +43,7 @@ class ModelCacheInvalidationTestCase(CustomObjectsTestCase, TestCase):
         self.assertNotEqual(
             cot.cache_timestamp,
             initial_timestamp,
-            "cache_timestamp must be updated after a field is saved.",
+            'cache_timestamp must be updated after a field is saved.',
         )
 
     def test_cache_invalidation_on_cotf_delete(self):
@@ -63,7 +64,7 @@ class ModelCacheInvalidationTestCase(CustomObjectsTestCase, TestCase):
         self.assertNotEqual(
             cot.cache_timestamp,
             timestamp_after_add,
-            "cache_timestamp must be updated after a field is deleted.",
+            'cache_timestamp must be updated after a field is deleted.',
         )
 
     def test_object_field_save_bumps_related_cot_cache_timestamp(self):
@@ -236,7 +237,7 @@ class ModelRegistryTestCase(CustomObjectsTestCase, TestCase):
         self.assertIn(
             model,
             apps.get_models(),
-            "Generated model should be returned by apps.get_models().",
+            'Generated model should be returned by apps.get_models().',
         )
 
     def test_model_regenerated_after_field_added(self):
@@ -286,7 +287,7 @@ class ModelRegistryTestCase(CustomObjectsTestCase, TestCase):
         self.assertIn(
             model_name,
             apps.all_models.get(APP_LABEL, {}),
-            "Model should be in registry before deletion.",
+            'Model should be in registry before deletion.',
         )
 
         cot.delete()
@@ -307,15 +308,25 @@ class ModelRegistryTestCase(CustomObjectsTestCase, TestCase):
         cot_source = self.create_simple_custom_object_type(name='rwsrc', slug='rw-src')
         cot_target = self.create_simple_custom_object_type(name='rwtrg', slug='rw-trg')
         self.create_custom_object_type_field(
-            cot_source, name='ref', label='Reference', type='object',
+            cot_source,
+            name='ref',
+            label='Reference',
+            type='object',
             related_object_type=cot_target.object_type,
         )
         self.create_custom_object_type_field(
-            cot_source, name='refs', label='References', type='multiobject',
+            cot_source,
+            name='refs',
+            label='References',
+            type='multiobject',
             related_object_type=cot_target.object_type,
         )
         poly_field = self.create_custom_object_type_field(
-            cot_source, name='poly', label='Polymorphic', type='multiobject', is_polymorphic=True,
+            cot_source,
+            name='poly',
+            label='Polymorphic',
+            type='multiobject',
+            is_polymorphic=True,
         )
         poly_field.related_object_types.set([cot_target.object_type, ObjectType.objects.get_for_model(Site)])
 
@@ -333,7 +344,9 @@ class ModelRegistryTestCase(CustomObjectsTestCase, TestCase):
             cot_target.refresh_from_db()
             cot_target.get_model(no_cache=True)
         branch_poly_through = CustomObjectType.get_cached_through_model(
-            cot_source.pk, poly_field.through_model_name, -1,
+            cot_source.pk,
+            poly_field.through_model_name,
+            -1,
         )
         self.assertIsNotNone(branch_poly_through)
         self.assertIsNot(branch_poly_through, main_poly_through)
@@ -366,22 +379,27 @@ class PolymorphicThroughModelRegistrationTestCase(CustomObjectsTestCase, TestCas
 
     def setUp(self):
         super().setUp()
-        self.user = create_test_user("poly-reg-user")
+        self.user = create_test_user('poly-reg-user')
         self.client.force_login(self.user)
 
         self.cot = CustomObjectType.objects.create(
-            name="RegTest", slug="reg-test",
-            verbose_name_plural="Reg Tests",
+            name='RegTest',
+            slug='reg-test',
+            verbose_name_plural='Reg Tests',
         )
         CustomObjectTypeField.objects.create(
             custom_object_type=self.cot,
-            name="name", type="text", primary=True,
+            name='name',
+            type='text',
+            primary=True,
         )
         self.m2m_field = CustomObjectTypeField.objects.create(
             custom_object_type=self.cot,
-            name="links", type="multiobject", is_polymorphic=True,
+            name='links',
+            type='multiobject',
+            is_polymorphic=True,
         )
-        site_ot = ObjectType.objects.get(app_label="dcim", model="site")
+        site_ot = ObjectType.objects.get(app_label='dcim', model='site')
         self.m2m_field.related_object_types.set([site_ot])
 
     def test_through_model_registered_after_get_model(self):
@@ -397,9 +415,7 @@ class PolymorphicThroughModelRegistrationTestCase(CustomObjectsTestCase, TestCas
         try:
             through = apps.get_model(APP_LABEL, through_name)
         except LookupError:
-            self.fail(
-                f"Through model '{through_name}' not in app registry after get_model()."
-            )
+            self.fail(f"Through model '{through_name}' not in app registry after get_model().")
         self.assertIsNotNone(through)
 
 
@@ -416,7 +432,8 @@ class FailedFieldChangeTestCase(CustomObjectsTestCase, TestCase):
         registered = apps.all_models[APP_LABEL].get(model.__name__.lower())
         if registered is not None:
             self.assertEqual(
-                {f.column for f in registered._meta.concrete_fields}, self._db_columns(model),
+                {f.column for f in registered._meta.concrete_fields},
+                self._db_columns(model),
             )
         # Selecting every column must not hit a column that doesn't exist.
         list(model.objects.all())
@@ -500,7 +517,9 @@ class FailedFieldChangeTestCase(CustomObjectsTestCase, TestCase):
         ):
             with self.assertRaises(RuntimeError):
                 self.create_custom_object_type_field(
-                    cot, name='site', type='object',
+                    cot,
+                    name='site',
+                    type='object',
                     related_object_type=ObjectType.objects.get_for_model(Site),
                     related_name='failed_links',
                 )
@@ -557,21 +576,28 @@ class PolymorphicReverseDescriptorRecursionTestCase(CustomObjectsTestCase, TestC
     reverse descriptor raised RecursionError."""
 
     def test_get_model_with_polymorphic_related_name_does_not_recurse(self):
-        site_ot = ObjectType.objects.get(app_label="dcim", model="site")
-        prefix_ot = ObjectType.objects.get(app_label="ipam", model="prefix")
+        site_ot = ObjectType.objects.get(app_label='dcim', model='site')
+        prefix_ot = ObjectType.objects.get(app_label='ipam', model='prefix')
 
         cot = CustomObjectType.objects.create(
-            name="RecursionRevTest", slug="recursion-rev-test",
-            verbose_name_plural="Recursion Rev Tests",
+            name='RecursionRevTest',
+            slug='recursion-rev-test',
+            verbose_name_plural='Recursion Rev Tests',
         )
         CustomObjectTypeField.objects.create(
-            custom_object_type=cot, name="name", type="text", primary=True, required=True,
+            custom_object_type=cot,
+            name='name',
+            type='text',
+            primary=True,
+            required=True,
         )
         field = CustomObjectTypeField.objects.create(
             custom_object_type=cot,
-            name="target_obj", label="Target", type="object",
+            name='target_obj',
+            label='Target',
+            type='object',
             is_polymorphic=True,
-            related_name="rev_recursion_test",
+            related_name='rev_recursion_test',
         )
         field.related_object_types.set([site_ot, prefix_ot])
 
@@ -600,11 +626,11 @@ class PolymorphicReverseDescriptorRecursionTestCase(CustomObjectsTestCase, TestC
         self.assertIn(
             registered_model,
             apps.get_models(),
-            "Generated model should be returned by apps.get_models().",
+            'Generated model should be returned by apps.get_models().',
         )
         self.assertTrue(
-            hasattr(Site, "rev_recursion_test"),
-            "Reverse descriptor must still be set on Site after get_model()",
+            hasattr(Site, 'rev_recursion_test'),
+            'Reverse descriptor must still be set on Site after get_model()',
         )
         self.assertIsNotNone(model)
 
@@ -614,21 +640,28 @@ class GetModelCacheRegistryConsistencyTestCase(CustomObjectsTestCase, TestCase):
     _model_cache and apps.all_models pointing at two different classes."""
 
     def test_get_model_registers_the_same_class_it_returns_and_caches(self):
-        site_ot = ObjectType.objects.get(app_label="dcim", model="site")
-        prefix_ot = ObjectType.objects.get(app_label="ipam", model="prefix")
+        site_ot = ObjectType.objects.get(app_label='dcim', model='site')
+        prefix_ot = ObjectType.objects.get(app_label='ipam', model='prefix')
 
         cot = CustomObjectType.objects.create(
-            name="CacheRegistryTest", slug="cache-registry-test",
-            verbose_name_plural="Cache Registry Tests",
+            name='CacheRegistryTest',
+            slug='cache-registry-test',
+            verbose_name_plural='Cache Registry Tests',
         )
         CustomObjectTypeField.objects.create(
-            custom_object_type=cot, name="name", type="text", primary=True, required=True,
+            custom_object_type=cot,
+            name='name',
+            type='text',
+            primary=True,
+            required=True,
         )
         field = CustomObjectTypeField.objects.create(
             custom_object_type=cot,
-            name="target_obj", label="Target", type="object",
+            name='target_obj',
+            label='Target',
+            type='object',
             is_polymorphic=True,
-            related_name="rev_cache_registry_test",
+            related_name='rev_cache_registry_test',
         )
         field.related_object_types.set([site_ot, prefix_ot])
 
@@ -648,14 +681,15 @@ class GetModelCacheRegistryConsistencyTestCase(CustomObjectsTestCase, TestCase):
         registered_model = apps.get_model(APP_LABEL, model.__name__)
 
         # Must be the exact same class object, not just an equal one.
-        self.assertIs(cached_model, model, "get_cached_model() must return the same class get_model() returned")
+        self.assertIs(cached_model, model, 'get_cached_model() must return the same class get_model() returned')
         self.assertIs(
-            registered_model, model,
-            "apps.all_models must register the same class get_model() returned/cached, not a stray "
-            "class from a re-entrant regeneration",
+            registered_model,
+            model,
+            'apps.all_models must register the same class get_model() returned/cached, not a stray '
+            'class from a re-entrant regeneration',
         )
         self.assertIn(
             registered_model,
             apps.get_models(),
-            "Generated model should be returned by apps.get_models().",
+            'Generated model should be returned by apps.get_models().',
         )

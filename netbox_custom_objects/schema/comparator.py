@@ -70,12 +70,12 @@ from netbox_custom_objects.schema.format import (
 # COT-level attributes that may change between schema versions.
 # Each maps to its schema-absent default (empty string).
 _COT_ATTRS = (
-    "name",
-    "version",
-    "verbose_name",
-    "verbose_name_plural",
-    "description",
-    "group_name",
+    'name',
+    'version',
+    'verbose_name',
+    'verbose_name_plural',
+    'description',
+    'group_name',
 )
 
 
@@ -83,38 +83,41 @@ _COT_ATTRS = (
 # Data structures
 # ---------------------------------------------------------------------------
 
+
 class FieldOp(Enum):
-    ADD = "add"        # field exists in schema but not in DB
-    REMOVE = "remove"  # field tombstoned in schema; still exists in DB
-    ALTER = "alter"    # field in both; has differences (may include rename/type change)
+    ADD = 'add'  # field exists in schema but not in DB
+    REMOVE = 'remove'  # field tombstoned in schema; still exists in DB
+    ALTER = 'alter'  # field in both; has differences (may include rename/type change)
 
 
 @dataclass
 class FieldChange:
     """A single field-level operation within a COTDiff."""
+
     op: FieldOp
     schema_id: int
-    db_name: str | None                          # current DB name; None for ADD
-    schema_def: dict                             # the schema field dict
+    db_name: str | None  # current DB name; None for ADD
+    schema_def: dict  # the schema field dict
     changed_attrs: dict[str, tuple] = field(default_factory=dict)
     # {attr: (db_value, schema_value)} — populated for ALTER;
     # includes "name" if renamed, "type" if type differs.
 
     @property
     def is_rename(self) -> bool:
-        return "name" in self.changed_attrs
+        return 'name' in self.changed_attrs
 
     @property
     def is_type_change(self) -> bool:
-        return "type" in self.changed_attrs
+        return 'type' in self.changed_attrs
 
 
 @dataclass
 class ConstraintChange:
     """A single constraint-level operation within a COTDiff, matched by name."""
+
     op: FieldOp
     name: str
-    schema_def: dict                             # the schema constraint dict ({} for REMOVE)
+    schema_def: dict  # the schema constraint dict ({} for REMOVE)
     changed_attrs: dict[str, tuple] = field(default_factory=dict)
     # {attr: (db_value, schema_value)} — populated for ALTER
 
@@ -122,9 +125,10 @@ class ConstraintChange:
 @dataclass
 class COTDiff:
     """All changes needed to bring one COT in sync with a schema definition."""
-    name: str                                    # from schema
-    slug: str                                    # from schema (used as lookup key)
-    is_new: bool                                 # True → COT does not yet exist in DB
+
+    name: str  # from schema
+    slug: str  # from schema (used as lookup key)
+    is_new: bool  # True → COT does not yet exist in DB
     cot_changes: dict[str, tuple] = field(default_factory=dict)
     # {attr: (db_val, schema_val)} for COT-level attribute differences
     field_changes: list[FieldChange] = field(default_factory=list)
@@ -164,7 +168,8 @@ class COTDiff:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _encode_related_object_type(rot: "ContentType", cot_slug_cache: dict, warnings: list) -> str:
+
+def _encode_related_object_type(rot: 'ContentType', cot_slug_cache: dict, warnings: list) -> str:
     """
     Encode a related ObjectType FK as a schema ``related_object_type`` string.
     Shares the same encoding logic as ``exporter._encode_related_object_type``
@@ -184,13 +189,13 @@ def _encode_related_object_type(rot: "ContentType", cot_slug_cache: dict, warnin
             slug = cot_slug_cache.get(cot_id)
             if slug is None:
                 warnings.append(
-                    f"CustomObjectType pk={cot_id} is referenced by a field but "
-                    "no longer exists in the DB. The related_object_type comparison "
-                    "for this field may be inaccurate."
+                    f'CustomObjectType pk={cot_id} is referenced by a field but '
+                    'no longer exists in the DB. The related_object_type comparison '
+                    'for this field may be inaccurate.'
                 )
-                return f"{CUSTOM_OBJECTS_APP_LABEL_SLUG}/<deleted:{cot_id}>"
-            return f"{CUSTOM_OBJECTS_APP_LABEL_SLUG}/{slug}"
-    return f"{rot.app_label}/{rot.model}"
+                return f'{CUSTOM_OBJECTS_APP_LABEL_SLUG}/<deleted:{cot_id}>'
+            return f'{CUSTOM_OBJECTS_APP_LABEL_SLUG}/{slug}'
+    return f'{rot.app_label}/{rot.model}'
 
 
 def _compare_field_attrs(db_field, schema_field: dict, cot_slug_cache: dict, warnings: list) -> dict[str, tuple]:
@@ -200,17 +205,17 @@ def _compare_field_attrs(db_field, schema_field: dict, cot_slug_cache: dict, war
     *schema_field* (the schema dict for that field).
     """
     changes: dict[str, tuple] = {}
-    schema_type = schema_field["type"]  # schema string, e.g. "text"
+    schema_type = schema_field['type']  # schema string, e.g. "text"
 
     # ── name ────────────────────────────────────────────────────────────────
-    schema_name = schema_field["name"]
+    schema_name = schema_field['name']
     if db_field.name != schema_name:
-        changes["name"] = (db_field.name, schema_name)
+        changes['name'] = (db_field.name, schema_name)
 
     # ── type ─────────────────────────────────────────────────────────────────
     expected_choice = SCHEMA_TYPE_TO_CHOICES[schema_type]
     if db_field.type != expected_choice:
-        changes["type"] = (db_field.type, expected_choice)
+        changes['type'] = (db_field.type, expected_choice)
 
     # ── base scalar attributes ───────────────────────────────────────────────
     for attr in FIELD_BASE_ATTRS:
@@ -222,83 +227,85 @@ def _compare_field_attrs(db_field, schema_field: dict, cot_slug_cache: dict, war
     # ── type-specific attributes ─────────────────────────────────────────────
     type_specific = FIELD_TYPE_ATTRS.get(schema_type, set())
 
-    if "validation_regex" in type_specific:
-        dv = db_field.validation_regex or ""
-        sv = schema_field.get("validation_regex", "")
+    if 'validation_regex' in type_specific:
+        dv = db_field.validation_regex or ''
+        sv = schema_field.get('validation_regex', '')
         if dv != sv:
-            changes["validation_regex"] = (dv, sv)
+            changes['validation_regex'] = (dv, sv)
 
-    if "validation_minimum" in type_specific:
+    if 'validation_minimum' in type_specific:
         dv = db_field.validation_minimum
-        sv = schema_field.get("validation_minimum", None)
+        sv = schema_field.get('validation_minimum', None)
         if dv != sv:
-            changes["validation_minimum"] = (dv, sv)
+            changes['validation_minimum'] = (dv, sv)
 
-    if "validation_maximum" in type_specific:
+    if 'validation_maximum' in type_specific:
         dv = db_field.validation_maximum
-        sv = schema_field.get("validation_maximum", None)
+        sv = schema_field.get('validation_maximum', None)
         if dv != sv:
-            changes["validation_maximum"] = (dv, sv)
+            changes['validation_maximum'] = (dv, sv)
 
-    for attr in ("array_element_type", "array_tuple_size", "array_min_length", "array_max_length"):
+    for attr in ('array_element_type', 'array_tuple_size', 'array_min_length', 'array_max_length'):
         if attr in type_specific:
             dv = getattr(db_field, attr)
             sv = schema_field.get(attr, FIELD_DEFAULTS[attr])
             if dv != sv:
                 changes[attr] = (dv, sv)
 
-    if "choice_set" in type_specific:
+    if 'choice_set' in type_specific:
         dv = db_field.choice_set.name if db_field.choice_set_id else None
-        sv = schema_field.get("choice_set")
+        sv = schema_field.get('choice_set')
         if dv != sv:
-            changes["choice_set"] = (dv, sv)
+            changes['choice_set'] = (dv, sv)
 
-    if "is_polymorphic" in type_specific:
+    if 'is_polymorphic' in type_specific:
         dv = db_field.is_polymorphic
-        sv = schema_field.get("is_polymorphic", FIELD_DEFAULTS.get("is_polymorphic", False))
+        sv = schema_field.get('is_polymorphic', FIELD_DEFAULTS.get('is_polymorphic', False))
         if dv != sv:
-            changes["is_polymorphic"] = (dv, sv)
+            changes['is_polymorphic'] = (dv, sv)
 
-    if "related_object_type" in type_specific:
+    if 'related_object_type' in type_specific:
         # Only compare for non-polymorphic fields; polymorphic fields use related_object_types.
-        if not db_field.is_polymorphic and not schema_field.get("is_polymorphic", False):
+        if not db_field.is_polymorphic and not schema_field.get('is_polymorphic', False):
             dv = (
-                _encode_related_object_type(db_field.related_object_type, cot_slug_cache, warnings)
-            ) if db_field.related_object_type_id else None
-            sv = schema_field.get("related_object_type")
+                (_encode_related_object_type(db_field.related_object_type, cot_slug_cache, warnings))
+                if db_field.related_object_type_id
+                else None
+            )
+            sv = schema_field.get('related_object_type')
             if dv != sv:
-                changes["related_object_type"] = (dv, sv)
+                changes['related_object_type'] = (dv, sv)
 
-    if "related_object_types" in type_specific:
+    if 'related_object_types' in type_specific:
         # Only compare for polymorphic fields.
-        if db_field.is_polymorphic or schema_field.get("is_polymorphic", False):
+        if db_field.is_polymorphic or schema_field.get('is_polymorphic', False):
             dv = sorted(
                 _encode_related_object_type(rot, cot_slug_cache, warnings)
                 for rot in db_field.related_object_types.all()
             )
-            sv = sorted(schema_field.get("related_object_types", []))
+            sv = sorted(schema_field.get('related_object_types', []))
             if dv != sv:
-                changes["related_object_types"] = (dv, sv)
+                changes['related_object_types'] = (dv, sv)
 
-    if "related_object_filter" in type_specific:
+    if 'related_object_filter' in type_specific:
         dv = db_field.related_object_filter
-        sv = schema_field.get("related_object_filter", None)
+        sv = schema_field.get('related_object_filter', None)
         if dv != sv:
-            changes["related_object_filter"] = (dv, sv)
+            changes['related_object_filter'] = (dv, sv)
 
     # Exports from before related_name was in the format omit it, so a missing key keeps
     # the field's name; "" clears it.
-    if "related_name" in type_specific and "related_name" in schema_field:
-        dv = db_field.related_name or FIELD_DEFAULTS["related_name"]
-        sv = schema_field["related_name"]
+    if 'related_name' in type_specific and 'related_name' in schema_field:
+        dv = db_field.related_name or FIELD_DEFAULTS['related_name']
+        sv = schema_field['related_name']
         if dv != sv:
-            changes["related_name"] = (dv, sv)
+            changes['related_name'] = (dv, sv)
 
-    if "on_delete_behavior" in type_specific:
-        dv = db_field.on_delete_behavior or FIELD_DEFAULTS["on_delete_behavior"]
-        sv = schema_field.get("on_delete_behavior", FIELD_DEFAULTS["on_delete_behavior"])
+    if 'on_delete_behavior' in type_specific:
+        dv = db_field.on_delete_behavior or FIELD_DEFAULTS['on_delete_behavior']
+        sv = schema_field.get('on_delete_behavior', FIELD_DEFAULTS['on_delete_behavior'])
         if dv != sv:
-            changes["on_delete_behavior"] = (dv, sv)
+            changes['on_delete_behavior'] = (dv, sv)
 
     return changes
 
@@ -315,7 +322,7 @@ def _normalize_predicates(predicates, fields_by_schema_id: dict):
         if not isinstance(predicate, dict):
             normalized.append(predicate)
             continue
-        schema_id, lookup, value = predicate.get("field"), predicate.get("lookup"), predicate.get("value")
+        schema_id, lookup, value = predicate.get('field'), predicate.get('lookup'), predicate.get('value')
         field = fields_by_schema_id.get(schema_id) if isinstance(schema_id, int) else None
         if field is None or lookup == ConstraintLookupChoices.ISNULL or predicate_field_ref(value) is not None:
             normalized.append(predicate)
@@ -325,7 +332,7 @@ def _normalize_predicates(predicates, fields_by_schema_id: dict):
         except (ValidationError, TypeError):
             # Invalid; applying the document reports it.
             pass
-        normalized.append({**predicate, "value": value})
+        normalized.append({**predicate, 'value': value})
     return normalized
 
 
@@ -333,13 +340,13 @@ def _compare_constraint_attrs(db_constraint, schema_constraint: dict, fields_by_
     """Return ``{attr: (db_value, schema_value)}`` for constraint attributes that differ."""
     changes: dict[str, tuple] = {}
     for attr in CONSTRAINT_ATTRS:
-        if attr == "fields":
+        if attr == 'fields':
             db_val = list(db_constraint.field_schema_ids)
-            schema_val = list(schema_constraint.get("fields", []))
+            schema_val = list(schema_constraint.get('fields', []))
         else:
             db_val = getattr(db_constraint, attr)
             schema_val = schema_constraint.get(attr, CONSTRAINT_DEFAULTS[attr])
-            if attr in ("condition", "rule"):
+            if attr in ('condition', 'rule'):
                 schema_val = _normalize_predicates(schema_val, fields_by_schema_id)
         if db_val != schema_val:
             changes[attr] = (db_val, schema_val)
@@ -351,8 +358,8 @@ def _diff_constraints(cot, type_def: dict, diff: COTDiff) -> None:
     Append constraint changes to *diff*. A DB constraint absent from the schema is
     removed only when named in ``removed_constraints``; otherwise it's reported as a warning.
     """
-    schema_constraints = {sc["name"]: sc for sc in type_def.get("constraints", [])}
-    removed = set(type_def.get("removed_constraints", []))
+    schema_constraints = {sc['name']: sc for sc in type_def.get('constraints', [])}
+    removed = set(type_def.get('removed_constraints', []))
     db_constraints = {c.name: c for c in cot.constraints.all()} if cot is not None else {}
     fields_by_schema_id = {f.schema_id: f for f in cot.fields.all()} if db_constraints else {}
 
@@ -360,13 +367,22 @@ def _diff_constraints(cot, type_def: dict, diff: COTDiff) -> None:
         if name in db_constraints:
             changed = _compare_constraint_attrs(db_constraints[name], schema_constraint, fields_by_schema_id)
             if changed:
-                diff.constraint_changes.append(ConstraintChange(
-                    op=FieldOp.ALTER, name=name, schema_def=schema_constraint, changed_attrs=changed,
-                ))
+                diff.constraint_changes.append(
+                    ConstraintChange(
+                        op=FieldOp.ALTER,
+                        name=name,
+                        schema_def=schema_constraint,
+                        changed_attrs=changed,
+                    )
+                )
         else:
-            diff.constraint_changes.append(ConstraintChange(
-                op=FieldOp.ADD, name=name, schema_def=schema_constraint,
-            ))
+            diff.constraint_changes.append(
+                ConstraintChange(
+                    op=FieldOp.ADD,
+                    name=name,
+                    schema_def=schema_constraint,
+                )
+            )
 
     for name in db_constraints:
         if name in schema_constraints:
@@ -375,8 +391,8 @@ def _diff_constraints(cot, type_def: dict, diff: COTDiff) -> None:
             diff.constraint_changes.append(ConstraintChange(op=FieldOp.REMOVE, name=name, schema_def={}))
         else:
             diff.warnings.append(
-                f"Constraint {name!r} exists in the DB but is absent from both schema.constraints "
-                "and schema.removed_constraints. It will not be affected by apply operations."
+                f'Constraint {name!r} exists in the DB but is absent from both schema.constraints '
+                'and schema.removed_constraints. It will not be affected by apply operations.'
             )
 
 
@@ -391,8 +407,8 @@ def _compare_cot_attrs(cot, type_def: dict) -> dict[str, tuple]:
         # All _COT_ATTRS are string fields; None and "" both mean "absent" — same
         # convention as the exporter.  _COT_ATTRS must never include numeric or
         # boolean fields, as `or ""` would swallow falsy values like 0 or False.
-        db_val = getattr(cot, attr) or ""
-        schema_val = type_def.get(attr) or ""
+        db_val = getattr(cot, attr) or ''
+        schema_val = type_def.get(attr) or ''
         if db_val != schema_val:
             changes[attr] = (db_val, schema_val)
     return changes
@@ -401,6 +417,7 @@ def _compare_cot_attrs(cot, type_def: dict) -> dict[str, tuple]:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def diff_cot(type_def: dict) -> COTDiff:
     """
@@ -411,14 +428,12 @@ def diff_cot(type_def: dict) -> COTDiff:
 
     Returns a :class:`COTDiff` describing what would need to change.
     """
-    missing = [k for k in ("slug", "name") if k not in type_def]
+    missing = [k for k in ('slug', 'name') if k not in type_def]
     if missing:
-        raise ValueError(
-            f"type_def is missing required key(s) {missing}; got keys: {list(type_def)}"
-        )
+        raise ValueError(f'type_def is missing required key(s) {missing}; got keys: {list(type_def)}')
 
-    slug = type_def["slug"]
-    name = type_def["name"]
+    slug = type_def['slug']
+    name = type_def['name']
 
     # ── COT existence check ──────────────────────────────────────────────────
     try:
@@ -428,11 +443,11 @@ def diff_cot(type_def: dict) -> COTDiff:
         field_changes = [
             FieldChange(
                 op=FieldOp.ADD,
-                schema_id=sf["id"],
+                schema_id=sf['id'],
                 db_name=None,
                 schema_def=sf,
             )
-            for sf in type_def.get("fields", [])
+            for sf in type_def.get('fields', [])
         ]
         diff = COTDiff(
             name=name,
@@ -449,21 +464,17 @@ def diff_cot(type_def: dict) -> COTDiff:
     diff.cot_changes = _compare_cot_attrs(cot, type_def)
 
     # ── Build lookup indexes ─────────────────────────────────────────────────
-    schema_fields: dict[int, dict] = {
-        sf["id"]: sf for sf in type_def.get("fields", [])
-    }
+    schema_fields: dict[int, dict] = {sf['id']: sf for sf in type_def.get('fields', [])}
     # Map schema_id → full tombstone dict so REMOVE FieldChanges carry the
     # original field definition (name, type, etc.) rather than an empty dict.
-    tombstoned: dict[int, dict] = {
-        rf["id"]: rf for rf in type_def.get("removed_fields", [])
-    }
+    tombstoned: dict[int, dict] = {rf['id']: rf for rf in type_def.get('removed_fields', [])}
     # Single query for all fields; partition into tracked/untracked in Python.
     db_fields: dict[int, object] = {}
-    for f in cot.fields.select_related("choice_set", "related_object_type").prefetch_related("related_object_types"):
+    for f in cot.fields.select_related('choice_set', 'related_object_type').prefetch_related('related_object_types'):
         if f.schema_id is None:
             diff.warnings.append(
-                f"Field {f.name!r} (pk={f.pk}) has no schema_id and cannot be "
-                "tracked by the schema diff. It will not be affected by apply operations."
+                f'Field {f.name!r} (pk={f.pk}) has no schema_id and cannot be '
+                'tracked by the schema diff. It will not be affected by apply operations.'
             )
         else:
             db_fields[f.schema_id] = f
@@ -483,8 +494,7 @@ def diff_cot(type_def: dict) -> COTDiff:
                 if m:
                     cot_ids.add(int(m.group(1)))
     cot_slug_cache: dict[int, str] = (
-        dict(CustomObjectType.objects.filter(pk__in=cot_ids).values_list("pk", "slug"))
-        if cot_ids else {}
+        dict(CustomObjectType.objects.filter(pk__in=cot_ids).values_list('pk', 'slug')) if cot_ids else {}
     )
 
     # ── Schema fields → ADD or ALTER ─────────────────────────────────────────
@@ -493,38 +503,44 @@ def diff_cot(type_def: dict) -> COTDiff:
             db_field = db_fields[schema_id]
             changed = _compare_field_attrs(db_field, schema_field, cot_slug_cache, diff.warnings)
             if changed:
-                diff.field_changes.append(FieldChange(
-                    op=FieldOp.ALTER,
-                    schema_id=schema_id,
-                    db_name=db_field.name,
-                    schema_def=schema_field,
-                    changed_attrs=changed,
-                ))
+                diff.field_changes.append(
+                    FieldChange(
+                        op=FieldOp.ALTER,
+                        schema_id=schema_id,
+                        db_name=db_field.name,
+                        schema_def=schema_field,
+                        changed_attrs=changed,
+                    )
+                )
         else:
-            diff.field_changes.append(FieldChange(
-                op=FieldOp.ADD,
-                schema_id=schema_id,
-                db_name=None,
-                schema_def=schema_field,
-            ))
+            diff.field_changes.append(
+                FieldChange(
+                    op=FieldOp.ADD,
+                    schema_id=schema_id,
+                    db_name=None,
+                    schema_def=schema_field,
+                )
+            )
 
     # ── DB fields absent from schema → REMOVE or warn ────────────────────────
     for schema_id, db_field in db_fields.items():
         if schema_id in schema_fields:
             continue  # already handled above
         if schema_id in tombstoned:
-            diff.field_changes.append(FieldChange(
-                op=FieldOp.REMOVE,
-                schema_id=schema_id,
-                db_name=db_field.name,
-                schema_def=tombstoned[schema_id],
-            ))
+            diff.field_changes.append(
+                FieldChange(
+                    op=FieldOp.REMOVE,
+                    schema_id=schema_id,
+                    db_name=db_field.name,
+                    schema_def=tombstoned[schema_id],
+                )
+            )
         else:
             diff.warnings.append(
-                f"Field {db_field.name!r} (schema_id={schema_id}) exists in the DB "
-                "but is absent from both schema.fields and schema.removed_fields. "
-                "It was likely added outside the schema workflow and will not be "
-                "affected by apply operations."
+                f'Field {db_field.name!r} (schema_id={schema_id}) exists in the DB '
+                'but is absent from both schema.fields and schema.removed_fields. '
+                'It was likely added outside the schema workflow and will not be '
+                'affected by apply operations.'
             )
 
     _diff_constraints(cot, type_def, diff)
@@ -539,4 +555,4 @@ def diff_document(schema_doc: dict) -> list[COTDiff]:
     Returns a list of :class:`COTDiff` objects, one per entry in
     ``schema_doc["types"]``.
     """
-    return [diff_cot(type_def) for type_def in schema_doc.get("types", [])]
+    return [diff_cot(type_def) for type_def in schema_doc.get('types', [])]

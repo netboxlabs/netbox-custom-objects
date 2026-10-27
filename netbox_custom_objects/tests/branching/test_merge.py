@@ -3,6 +3,7 @@ Merging branch changes beyond the strategy matrix: field attribute changes, tags
 journal entries, choice sets and search weight, and changes made in both main and the
 branch before the merge.
 """
+
 import unittest
 
 from django.contrib.contenttypes.models import ContentType
@@ -30,6 +31,7 @@ if HAS_BRANCHING:
 
 # ── Field attribute changes & COT update (iterative only) ─────────────────────
 
+
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
 class FieldAttributeChangesTestCase(BranchingTestBase, _TestBase):
     """
@@ -43,8 +45,10 @@ class FieldAttributeChangesTestCase(BranchingTestBase, _TestBase):
         """COT name / verbose_name / description / version edited inside branch."""
         with event_tracking(self.request):
             cot = CustomObjectType.objects.create(
-                name='meta_cot', slug='meta-cot',
-                verbose_name='Original Name', description='original',
+                name='meta_cot',
+                slug='meta-cot',
+                verbose_name='Original Name',
+                description='original',
                 version='1.0.0',
             )
 
@@ -82,7 +86,10 @@ class FieldAttributeChangesTestCase(BranchingTestBase, _TestBase):
         with event_tracking(self.request):
             cot = CustomObjectType.objects.create(name='retype_cot', slug='retype-cot')
             field = CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='value', label='Value', type='text',
+                custom_object_type=cot,
+                name='value',
+                label='Value',
+                type='text',
             )
             Model = cot.get_model()
             # Use a value that parses as both text and integer so the
@@ -111,8 +118,7 @@ class FieldAttributeChangesTestCase(BranchingTestBase, _TestBase):
         co_table = cot_main.get_database_table_name()
         with main_conn.cursor() as cursor:
             cursor.execute(
-                'SELECT data_type FROM information_schema.columns '
-                'WHERE table_name = %s AND column_name = %s',
+                'SELECT data_type FROM information_schema.columns WHERE table_name = %s AND column_name = %s',
                 [co_table, 'value'],
             )
             data_type = cursor.fetchone()[0]
@@ -127,10 +133,18 @@ class FieldAttributeChangesTestCase(BranchingTestBase, _TestBase):
         with event_tracking(self.request):
             cot = CustomObjectType.objects.create(name='primary_cot', slug='primary-cot')
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='code', label='Code', type='text', primary=True,
+                custom_object_type=cot,
+                name='code',
+                label='Code',
+                type='text',
+                primary=True,
             )
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='title', label='Title', type='text', primary=False,
+                custom_object_type=cot,
+                name='title',
+                label='Title',
+                type='text',
+                primary=False,
             )
             Model = cot.get_model()
             co = Model.objects.create(code='ABC', title='Widget')
@@ -174,7 +188,10 @@ class FieldAttributeChangesTestCase(BranchingTestBase, _TestBase):
         with event_tracking(self.request):
             cot = CustomObjectType.objects.create(name='required_cot', slug='required-cot')
             field = CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='note', label='Note', type='text',
+                custom_object_type=cot,
+                name='note',
+                label='Note',
+                type='text',
                 required=False,
             )
 
@@ -202,19 +219,20 @@ class FieldAttributeChangesTestCase(BranchingTestBase, _TestBase):
         co_table = cot_main.get_database_table_name()
         with main_conn.cursor() as cursor:
             cursor.execute(
-                'SELECT is_nullable FROM information_schema.columns '
-                'WHERE table_name = %s AND column_name = %s',
+                'SELECT is_nullable FROM information_schema.columns WHERE table_name = %s AND column_name = %s',
                 [co_table, 'note'],
             )
             is_nullable = cursor.fetchone()[0]
         self.assertEqual(
-            is_nullable, 'YES',
+            is_nullable,
+            'YES',
             'required=True must NOT produce NOT NULL — this plugin enforces '
             'required at the form layer only (field_types.py hardcodes null=True).',
         )
 
 
 # ── Tags + journal entries survive merge ──────────────────────────────────────
+
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
 class TagsAndJournalTestCase(BranchingTestBase, _TestBase):
@@ -233,7 +251,10 @@ class TagsAndJournalTestCase(BranchingTestBase, _TestBase):
             tag_b = Tag.objects.create(name='Branch Tag B', slug='branch-tag-b')
             cot = CustomObjectType.objects.create(name='tagged_cot', slug='tagged-cot')
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='label', label='Label', type='text',
+                custom_object_type=cot,
+                name='label',
+                label='Label',
+                type='text',
             )
 
         cot_pk = cot.pk
@@ -266,7 +287,10 @@ class TagsAndJournalTestCase(BranchingTestBase, _TestBase):
         with event_tracking(self.request):
             cot = CustomObjectType.objects.create(name='journal_cot', slug='journal-cot')
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='label', label='Label', type='text',
+                custom_object_type=cot,
+                name='label',
+                label='Label',
+                type='text',
             )
 
         cot_pk = cot.pk
@@ -292,7 +316,8 @@ class TagsAndJournalTestCase(BranchingTestBase, _TestBase):
         Model = CustomObjectType.objects.get(pk=cot_pk).get_model()
         co_ct = ContentType.objects.get_for_model(Model)
         entries = JournalEntry.objects.filter(
-            assigned_object_type=co_ct, assigned_object_id=co_pk,
+            assigned_object_type=co_ct,
+            assigned_object_id=co_pk,
         )
         self.assertEqual(
             list(entries.values_list('comments', flat=True)),
@@ -301,6 +326,7 @@ class TagsAndJournalTestCase(BranchingTestBase, _TestBase):
 
 
 # ── ChoiceSet lifecycle, search_weight, sync-then-merge ───────────────────────
+
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
 class ChoiceSetSearchLifecycleTestCase(BranchingTestBase, _TestBase):
@@ -316,8 +342,11 @@ class ChoiceSetSearchLifecycleTestCase(BranchingTestBase, _TestBase):
             )
             cot = CustomObjectType.objects.create(name='cs_cot', slug='cs-cot')
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='c', label='Choice',
-                type='select', choice_set=cs,
+                custom_object_type=cot,
+                name='c',
+                label='Choice',
+                type='select',
+                choice_set=cs,
             )
 
         cs_pk = cs.pk
@@ -347,8 +376,11 @@ class ChoiceSetSearchLifecycleTestCase(BranchingTestBase, _TestBase):
         with event_tracking(self.request):
             cot = CustomObjectType.objects.create(name='sw_cot', slug='sw-cot')
             field = CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='label', label='Label',
-                type='text', search_weight=10,
+                custom_object_type=cot,
+                name='label',
+                label='Label',
+                type='text',
+                search_weight=10,
             )
 
         field_pk = field.pk
@@ -366,7 +398,8 @@ class ChoiceSetSearchLifecycleTestCase(BranchingTestBase, _TestBase):
         self.assertEqual(branch.status, BranchStatusChoices.MERGED)
 
         self.assertEqual(
-            CustomObjectTypeField.objects.get(pk=field_pk).search_weight, 100,
+            CustomObjectTypeField.objects.get(pk=field_pk).search_weight,
+            100,
         )
 
     def test_sync_then_branch_edit_then_merge_lifecycle(self):
@@ -381,7 +414,10 @@ class ChoiceSetSearchLifecycleTestCase(BranchingTestBase, _TestBase):
         with event_tracking(self.request):
             cot = CustomObjectType.objects.create(name='lifecycle_cot', slug='lifecycle-cot')
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='label', label='Label', type='text',
+                custom_object_type=cot,
+                name='label',
+                label='Label',
+                type='text',
             )
             Model = cot.get_model()
             co = Model.objects.create(label='initial')
@@ -413,12 +449,14 @@ class ChoiceSetSearchLifecycleTestCase(BranchingTestBase, _TestBase):
 
         co.refresh_from_db()
         self.assertEqual(
-            co.label, 'edited after sync',
+            co.label,
+            'edited after sync',
             'Edit made after sync must propagate to main on merge',
         )
 
 
 # ── Concurrent-edit merge tests ───────────────────────────────────────────────
+
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
 class BaseConcurrentEditMergeTestCase(BranchingTestBase):
@@ -462,7 +500,10 @@ class BaseConcurrentEditMergeTestCase(BranchingTestBase):
         with event_tracking(request):
             cot = CustomObjectType.objects.create(name='merge_rename_cot', slug='merge-rename-cot')
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='alpha', label='Alpha', type='text',
+                custom_object_type=cot,
+                name='alpha',
+                label='Alpha',
+                type='text',
             )
             Model = cot.get_model()
             co_existing = Model.objects.create(alpha='original')
@@ -500,10 +541,12 @@ class BaseConcurrentEditMergeTestCase(BranchingTestBase):
         field_main = CustomObjectTypeField.objects.get(custom_object_type=cot)
         self.assertEqual(field_main.name, 'beta', 'Field must be "beta" in main after merge')
         self.assertEqual(MergedModel.objects.get(pk=co_existing_pk).beta, 'updated in branch')
-        self.assertTrue(MergedModel.objects.filter(pk=branch_new_pk).exists(),
-                        'CO created in branch must be in main after merge')
-        self.assertTrue(MergedModel.objects.filter(pk=main_new_pk).exists(),
-                        'CO added in main must still be present after merge')
+        self.assertTrue(
+            MergedModel.objects.filter(pk=branch_new_pk).exists(), 'CO created in branch must be in main after merge'
+        )
+        self.assertTrue(
+            MergedModel.objects.filter(pk=main_new_pk).exists(), 'CO added in main must still be present after merge'
+        )
 
         # ── revert ────────────────────────────────────────────────────────
         branch.revert(user=self.user, commit=True)
@@ -512,8 +555,9 @@ class BaseConcurrentEditMergeTestCase(BranchingTestBase):
         self.assertEqual(field_reverted.name, 'alpha', 'Field must be "alpha" after revert')
         RevertedModel = cot.get_model()
         self.assertEqual(RevertedModel.objects.get(pk=co_existing_pk).alpha, 'original')
-        self.assertFalse(RevertedModel.objects.filter(pk=branch_new_pk).exists(),
-                         'CO created in branch must be gone after revert')
+        self.assertFalse(
+            RevertedModel.objects.filter(pk=branch_new_pk).exists(), 'CO created in branch must be gone after revert'
+        )
 
     def test_co_values_modified_in_both_merge(self):
         """
@@ -536,7 +580,10 @@ class BaseConcurrentEditMergeTestCase(BranchingTestBase):
         with event_tracking(request):
             cot = CustomObjectType.objects.create(name='merge_co_cot', slug='merge-co-cot')
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='notes', label='Notes', type='text',
+                custom_object_type=cot,
+                name='notes',
+                label='Notes',
+                type='text',
             )
             Model = cot.get_model()
             co_shared = Model.objects.create(notes='original')
@@ -568,8 +615,7 @@ class BaseConcurrentEditMergeTestCase(BranchingTestBase):
         MM = cot.get_model()
         self.assertEqual(MM.objects.get(pk=co_shared_pk).notes, 'modified in branch')
         self.assertTrue(MM.objects.filter(pk=branch_new_pk).exists())
-        self.assertTrue(MM.objects.filter(pk=main_new_pk).exists(),
-                        'CO added to main must survive the merge')
+        self.assertTrue(MM.objects.filter(pk=main_new_pk).exists(), 'CO added to main must survive the merge')
 
         # ── revert ────────────────────────────────────────────────────────
         branch.revert(user=self.user, commit=True)
@@ -582,10 +628,12 @@ class BaseConcurrentEditMergeTestCase(BranchingTestBase):
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
 class IterativeConcurrentEditMergeTestCase(BaseConcurrentEditMergeTestCase, _TestBase):
     """Run BaseConcurrentEditMergeTestCase with the iterative merge strategy."""
+
     MERGE_STRATEGY = 'iterative'
 
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
 class SquashConcurrentEditMergeTestCase(BaseConcurrentEditMergeTestCase, _TestBase):
     """Run BaseConcurrentEditMergeTestCase with the squash merge strategy."""
+
     MERGE_STRATEGY = 'squash'

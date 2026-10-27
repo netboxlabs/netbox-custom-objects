@@ -25,7 +25,7 @@ class _StrictBoolLoader(yaml.SafeLoader):
         if self.check_event(yaml.events.AliasEvent):
             event = self.peek_event()
             raise yaml.composer.ComposerError(
-                None, None, "YAML anchors/aliases are not permitted in schema documents", event.start_mark
+                None, None, 'YAML anchors/aliases are not permitted in schema documents', event.start_mark
             )
         return super().compose_node(parent, index)
 
@@ -50,11 +50,11 @@ class YAMLParser(BaseParser):
         try:
             data = yaml.load(stream, Loader=_StrictBoolLoader)
         except yaml.YAMLError as exc:
-            raise ParseError(f"YAML parse error: {exc}")
+            raise ParseError(f'YAML parse error: {exc}')
         if data is None:
             # Covers both an empty body and an explicit YAML `null` document --
             # yaml.load() can't tell them apart, and neither is ever a valid
             # schema/apply body (both endpoints require a mapping). Matches
             # JSONParser, which also raises ParseError (400) for an empty body.
-            raise ParseError("YAML parse error: request body must be a mapping (object), not null or empty.")
+            raise ParseError('YAML parse error: request body must be a mapping (object), not null or empty.')
         return data

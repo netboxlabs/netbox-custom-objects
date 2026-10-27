@@ -2,6 +2,7 @@
 Tests for the generated custom object models: instances, get_model(), the model cache,
 startup ordering, stale references and pickling.
 """
+
 import pickle
 import uuid
 from decimal import Decimal
@@ -38,120 +39,109 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
     def setUpTestData(cls):
         """Set up test data that should be created once for the entire test class."""
         super().setUpTestData()
-        cls.custom_object_type = cls.create_custom_object_type(name="TestObject", slug="test-objects")
-        cls.cot_1_model_name = (
-            cls.custom_object_type.get_table_model_name(cls.custom_object_type.id).lower()
-        )
+        cls.custom_object_type = cls.create_custom_object_type(name='TestObject', slug='test-objects')
+        cls.cot_1_model_name = cls.custom_object_type.get_table_model_name(cls.custom_object_type.id).lower()
         first_object_ct = ObjectType.objects.get(app_label='netbox_custom_objects', model=cls.cot_1_model_name)
-        cls.second_custom_object_type = cls.create_custom_object_type(name="TestObject2", slug="test-objects2")
-        cls.cot_2_model_name = (
-            cls.second_custom_object_type.get_table_model_name(cls.second_custom_object_type.id).lower()
-        )
+        cls.second_custom_object_type = cls.create_custom_object_type(name='TestObject2', slug='test-objects2')
+        cls.cot_2_model_name = cls.second_custom_object_type.get_table_model_name(
+            cls.second_custom_object_type.id
+        ).lower()
         second_object_ct = ObjectType.objects.get(app_label='netbox_custom_objects', model=cls.cot_2_model_name)
 
         # Add a primary field
         cls.create_custom_object_type_field(
-            cls.custom_object_type,
-            name="name",
-            label="Name",
-            type="text",
-            primary=True,
-            required=True
+            cls.custom_object_type, name='name', label='Name', type='text', primary=True, required=True
         )
 
         # Add additional fields
         cls.create_custom_object_type_field(
-            cls.custom_object_type,
-            name="description",
-            label="Description",
-            type="text",
-            required=False
+            cls.custom_object_type, name='description', label='Description', type='text', required=False
         )
 
         cls.create_custom_object_type_field(
             cls.custom_object_type,
-            name="count",
-            label="Count",
-            type="integer",
+            name='count',
+            label='Count',
+            type='integer',
             validation_minimum=0,
-            validation_maximum=100
+            validation_maximum=100,
         )
 
         cls.create_custom_object_type_field(
             cls.custom_object_type,
-            name="price",
-            label="Price",
-            type="decimal",
+            name='price',
+            label='Price',
+            type='decimal',
             validation_minimum=0,
-            validation_maximum=100
+            validation_maximum=100,
         )
 
         cls.create_custom_object_type_field(
             cls.custom_object_type,
-            name="is_active",
-            label="Is active",
-            type="boolean",
+            name='is_active',
+            label='Is active',
+            type='boolean',
         )
 
         cls.create_custom_object_type_field(
             cls.custom_object_type,
-            name="created_on",
-            label="Created on (date)",
-            type="date",
+            name='created_on',
+            label='Created on (date)',
+            type='date',
         )
 
         cls.create_custom_object_type_field(
             cls.custom_object_type,
-            name="created_at",
-            label="Created at (datetime)",
-            type="datetime",
+            name='created_at',
+            label='Created at (datetime)',
+            type='datetime',
         )
 
         cls.create_custom_object_type_field(
             cls.custom_object_type,
-            name="url",
-            label="URL",
-            type="url",
+            name='url',
+            label='URL',
+            type='url',
         )
 
         cls.create_custom_object_type_field(
             cls.custom_object_type,
-            name="data",
-            label="JSON data",
-            type="json",
+            name='data',
+            label='JSON data',
+            type='json',
         )
 
         choice_set = cls.create_choice_set()
         cls.create_custom_object_type_field(
             cls.custom_object_type,
-            name="country",
-            label="Single country",
-            type="select",
+            name='country',
+            label='Single country',
+            type='select',
             choice_set=choice_set,
         )
 
         cls.create_custom_object_type_field(
             cls.custom_object_type,
-            name="countries",
-            label="Countries",
-            type="multiselect",
+            name='countries',
+            label='Countries',
+            type='multiselect',
             choice_set=choice_set,
         )
 
         site_ct = cls.get_site_object_type()
         cls.create_custom_object_type_field(
             cls.custom_object_type,
-            name="site",
-            label="Single site",
-            type="object",
+            name='site',
+            label='Single site',
+            type='object',
             related_object_type=site_ct,
         )
 
         cls.create_custom_object_type_field(
             cls.custom_object_type,
-            name="sites",
-            label="Sites",
-            type="multiobject",
+            name='sites',
+            label='Sites',
+            type='multiobject',
             related_object_type=site_ct,
         )
 
@@ -160,33 +150,33 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
 
         cls.create_custom_object_type_field(
             cls.custom_object_type,
-            name="second_object_single",
-            label="Second Object Single",
-            type="object",
+            name='second_object_single',
+            label='Second Object Single',
+            type='object',
             related_object_type=second_object_ct,
         )
 
         cls.create_custom_object_type_field(
             cls.custom_object_type,
-            name="second_object_single_2",
-            label="Second Object Single 2",
-            type="object",
+            name='second_object_single_2',
+            label='Second Object Single 2',
+            type='object',
             related_object_type=second_object_ct,
         )
 
         cls.create_custom_object_type_field(
             cls.custom_object_type,
-            name="second_object_multi",
-            label="Second Object Multi",
-            type="multiobject",
+            name='second_object_multi',
+            label='Second Object Multi',
+            type='multiobject',
             related_object_type=second_object_ct,
         )
 
         cls.create_custom_object_type_field(
             cls.custom_object_type,
-            name="second_object_multi_2",
-            label="Second Object Multi 2",
-            type="multiobject",
+            name='second_object_multi_2',
+            label='Second Object Multi 2',
+            type='multiobject',
             related_object_type=second_object_ct,
         )
 
@@ -194,17 +184,17 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
 
         cls.create_custom_object_type_field(
             cls.custom_object_type,
-            name="self_ref_single",
-            label="Self Ref Single",
-            type="object",
+            name='self_ref_single',
+            label='Self Ref Single',
+            type='object',
             related_object_type=first_object_ct,
         )
 
         cls.create_custom_object_type_field(
             cls.custom_object_type,
-            name="self_ref_multi",
-            label="Self Ref Multi",
-            type="multiobject",
+            name='self_ref_multi',
+            label='Self Ref Multi',
+            type='multiobject',
             related_object_type=first_object_ct,
         )
 
@@ -232,17 +222,17 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
         second_object_2 = second_object_model.objects.create()
 
         instance = self.model.objects.create(
-            name="Test Instance",
-            description="A test instance",
+            name='Test Instance',
+            description='A test instance',
             count=50,
-            price=Decimal("10.50"),
+            price=Decimal('10.50'),
             is_active=True,
             created_on=now,
             created_at=now,
-            url="http://example.com",
-            data={"foo": "bar"},
-            country="US",
-            countries=["US", "AU"],
+            url='http://example.com',
+            data={'foo': 'bar'},
+            country='US',
+            countries=['US', 'AU'],
             site=site,
             second_object_single=second_object_1,
             second_object_single_2=second_object_2,
@@ -255,21 +245,21 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
         instance.self_ref_multi.add(first_object_1)
         instance.self_ref_multi.add(first_object_2)
 
-        self.assertEqual(instance.name, "Test Instance")
-        self.assertEqual(instance.description, "A test instance")
+        self.assertEqual(instance.name, 'Test Instance')
+        self.assertEqual(instance.description, 'A test instance')
         self.assertEqual(instance.count, 50)
-        self.assertEqual(instance.price, Decimal("10.50"))
+        self.assertEqual(instance.price, Decimal('10.50'))
         self.assertEqual(instance.is_active, True)
         self.assertEqual(instance.created_on.date(), now.date())
         self.assertEqual(instance.created_at, now)
-        self.assertEqual(instance.url, "http://example.com")
-        self.assertEqual(instance.data, {"foo": "bar"})
-        self.assertEqual(instance.country, "US")
-        self.assertEqual(instance.countries, ["US", "AU"])
+        self.assertEqual(instance.url, 'http://example.com')
+        self.assertEqual(instance.data, {'foo': 'bar'})
+        self.assertEqual(instance.country, 'US')
+        self.assertEqual(instance.countries, ['US', 'AU'])
         self.assertEqual(instance.site, site)
         self.assertEqual(instance.sites.all().count(), 1)
         self.assertIn(site, instance.sites.all())
-        self.assertEqual(str(instance), "Test Instance")
+        self.assertEqual(str(instance), 'Test Instance')
         # Object Fields pointing to Custom Objects
         self.assertEqual(instance.second_object_single, second_object_1)
         self.assertEqual(instance.second_object_single_2, second_object_2)
@@ -281,22 +271,19 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
 
     def test_custom_object_get_absolute_url(self):
         """Test get_absolute_url method for custom objects."""
-        instance = self.model.objects.create(name="Test Instance")
+        instance = self.model.objects.create(name='Test Instance')
         expected_url = reverse(
-            "plugins:netbox_custom_objects:customobject",
-            kwargs={
-                "custom_object_type": self.custom_object_type.slug,
-                "pk": instance.pk
-            }
+            'plugins:netbox_custom_objects:customobject',
+            kwargs={'custom_object_type': self.custom_object_type.slug, 'pk': instance.pk},
         )
         self.assertEqual(instance.get_absolute_url(), expected_url)
 
     def test_custom_object_queryset_operations(self):
         """Test queryset operations on custom objects."""
         # Create multiple instances
-        self.model.objects.create(name="Instance 1", count=10)
-        self.model.objects.create(name="Instance 2", count=20)
-        self.model.objects.create(name="Instance 3", count=30)
+        self.model.objects.create(name='Instance 1', count=10)
+        self.model.objects.create(name='Instance 2', count=20)
+        self.model.objects.create(name='Instance 3', count=30)
 
         # Test filtering
         filtered = self.model.objects.filter(count__gte=20)
@@ -304,27 +291,27 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
 
         # Test ordering
         ordered = self.model.objects.order_by('count')
-        self.assertEqual(ordered.first().name, "Instance 1")
-        self.assertEqual(ordered.last().name, "Instance 3")
+        self.assertEqual(ordered.first().name, 'Instance 1')
+        self.assertEqual(ordered.last().name, 'Instance 3')
 
     def test_custom_object_update(self):
         """Test updating custom object instances."""
-        instance = self.model.objects.create(name="Test Instance", count=10)
+        instance = self.model.objects.create(name='Test Instance', count=10)
 
         # Update the instance
-        instance.name = "Updated Instance"
+        instance.name = 'Updated Instance'
         instance.count = 25
         instance.save()
 
         # Refresh from database
         instance.refresh_from_db()
 
-        self.assertEqual(instance.name, "Updated Instance")
+        self.assertEqual(instance.name, 'Updated Instance')
         self.assertEqual(instance.count, 25)
 
     def test_custom_object_delete(self):
         """Test deleting custom object instances."""
-        instance = self.model.objects.create(name="Test Instance")
+        instance = self.model.objects.create(name='Test Instance')
 
         # Delete the instance
         instance.delete()
@@ -332,46 +319,54 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
         # Verify it's gone
         self.assertEqual(self.model.objects.count(), 0)
 
-    @override_settings(CUSTOM_VALIDATORS={
-        "netbox_custom_objects.test-objects": [{"name": {"min_length": 5}}],
-    })
+    @override_settings(
+        CUSTOM_VALIDATORS={
+            'netbox_custom_objects.test-objects': [{'name': {'min_length': 5}}],
+        }
+    )
     def test_custom_validators_slug_key_enforced(self):
         """CUSTOM_VALIDATORS keyed by COT slug is applied during full_clean()."""
-        instance = self.model(name="ab")
+        instance = self.model(name='ab')
         with self.assertRaises(ValidationError):
             instance.full_clean()
 
-    @override_settings(CUSTOM_VALIDATORS={
-        "netbox_custom_objects.test-objects": [{"name": {"min_length": 5}}],
-    })
+    @override_settings(
+        CUSTOM_VALIDATORS={
+            'netbox_custom_objects.test-objects': [{'name': {'min_length': 5}}],
+        }
+    )
     def test_custom_validators_slug_key_passes_for_valid_value(self):
         """CUSTOM_VALIDATORS slug-key validator passes when the value satisfies the rule."""
-        instance = self.model(name="abcde")
+        instance = self.model(name='abcde')
         # Should not raise
         instance.full_clean()
 
-    @override_settings(CUSTOM_VALIDATORS={
-        "netbox_custom_objects.test-objects": [{"count": {"min": 10}}],
-    })
+    @override_settings(
+        CUSTOM_VALIDATORS={
+            'netbox_custom_objects.test-objects': [{'count': {'min': 10}}],
+        }
+    )
     def test_custom_validators_non_text_field_enforced(self):
         """CUSTOM_VALIDATORS is applied to non-text fields (integer count < min raises)."""
-        instance = self.model(name="valid", count=5)
+        instance = self.model(name='valid', count=5)
         with self.assertRaises(ValidationError):
             instance.full_clean()
 
     @override_settings(CUSTOM_VALIDATORS={})
     def test_custom_validators_no_key_configured_passes(self):
         """When no CUSTOM_VALIDATORS key is configured for this COT, clean() passes."""
-        instance = self.model(name="x")
+        instance = self.model(name='x')
         # Should not raise regardless of field value
         instance.full_clean()
 
-    @override_settings(CUSTOM_VALIDATORS={
-        "NETBOX_CUSTOM_OBJECTS.TEST-OBJECTS": [{"name": {"min_length": 5}}],
-    })
+    @override_settings(
+        CUSTOM_VALIDATORS={
+            'NETBOX_CUSTOM_OBJECTS.TEST-OBJECTS': [{'name': {'min_length': 5}}],
+        }
+    )
     def test_custom_validators_slug_key_case_insensitive(self):
         """CUSTOM_VALIDATORS key lookup is case-insensitive."""
-        instance = self.model(name="ab")
+        instance = self.model(name='ab')
         with self.assertRaises(ValidationError):
             instance.full_clean()
 
@@ -382,13 +377,13 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
         primary field (e.g. the field was silently skipped during regeneration
         due to a stale ContentType).
         """
-        instance = self.model.objects.create(name="Test Instance")
+        instance = self.model.objects.create(name='Test Instance')
         # Confirm normal __str__ works first.
-        self.assertEqual(str(instance), "Test Instance")
+        self.assertEqual(str(instance), 'Test Instance')
         # Simulate the stale-model scenario: get_display_value raises AttributeError.
-        with patch.object(TextFieldType, 'get_display_value', side_effect=AttributeError("missing attr")):
+        with patch.object(TextFieldType, 'get_display_value', side_effect=AttributeError('missing attr')):
             result = str(instance)
-        expected = f"{self.custom_object_type.display_name} {instance.id}"
+        expected = f'{self.custom_object_type.display_name} {instance.id}'
         self.assertEqual(result, expected)
 
 
@@ -399,26 +394,33 @@ class M2MSerializationRegressionTestCase(CustomObjectsTestCase, TestCase):
     """
 
     def test_serialize_object_includes_m2m_values(self):
-        cot = self.create_custom_object_type(name="M2MSerialize", slug="m2m-serialize")
+        cot = self.create_custom_object_type(name='M2MSerialize', slug='m2m-serialize')
         site_ct = self.get_site_object_type()
         self.create_custom_object_type_field(
-            cot, name="name", label="Name", type="text", primary=True,
+            cot,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
         )
         self.create_custom_object_type_field(
-            cot, name="sites", label="Sites", type="multiobject",
+            cot,
+            name='sites',
+            label='Sites',
+            type='multiobject',
             related_object_type=site_ct,
         )
         model = cot.get_model()
         site_model = site_ct.model_class()
-        site_a = site_model.objects.create(name="A", slug="a")
-        site_b = site_model.objects.create(name="B", slug="b")
+        site_a = site_model.objects.create(name='A', slug='a')
+        site_b = site_model.objects.create(name='B', slug='b')
 
-        obj = model.objects.create(name="obj")
+        obj = model.objects.create(name='obj')
         obj.sites.set([site_a, site_b])
 
         data = obj.serialize_object()
-        self.assertIn("sites", data)
-        self.assertEqual(set(data["sites"]), {site_a.pk, site_b.pk})
+        self.assertIn('sites', data)
+        self.assertEqual(set(data['sites']), {site_a.pk, site_b.pk})
 
 
 class CrossCOTGetModelOutsideReadyTestCase(CustomObjectsTestCase, TestCase):
@@ -429,23 +431,34 @@ class CrossCOTGetModelOutsideReadyTestCase(CustomObjectsTestCase, TestCase):
         """Build a fresh target/source COT pair, uniquely named so registry
         mutations in one test method can't bleed into another."""
         target_type = CustomObjectType.objects.create(
-            name=f"ForwarderProfile637{suffix}", slug=f"forwarder-profile-637-{suffix}",
+            name=f'ForwarderProfile637{suffix}',
+            slug=f'forwarder-profile-637-{suffix}',
         )
         CustomObjectTypeField.objects.create(
-            custom_object_type=target_type, name="name", label="Name",
-            type="text", primary=True,
+            custom_object_type=target_type,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
         )
         source_type = CustomObjectType.objects.create(
-            name=f"DnsZone637{suffix}", slug=f"dns-zone-637-{suffix}",
+            name=f'DnsZone637{suffix}',
+            slug=f'dns-zone-637-{suffix}',
         )
         CustomObjectTypeField.objects.create(
-            custom_object_type=source_type, name="name", label="Name",
-            type="text", primary=True,
+            custom_object_type=source_type,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
         )
         target_ct = ObjectType.objects.get_for_model(target_type.get_model())
         CustomObjectTypeField.objects.create(
-            custom_object_type=source_type, name="forwarder_profile",
-            label="Forwarder Profile", type="object", related_object_type=target_ct,
+            custom_object_type=source_type,
+            name='forwarder_profile',
+            label='Forwarder Profile',
+            type='object',
+            related_object_type=target_ct,
         )
         return target_type, source_type
 
@@ -459,7 +472,7 @@ class CrossCOTGetModelOutsideReadyTestCase(CustomObjectsTestCase, TestCase):
     def test_get_model_omits_cross_cot_field_when_unsafe(self):
         """Omits an unregistered cross-COT field rather than leaving a dangling
         LazyForeignKey, and doesn't cache the degraded model."""
-        target_type, source_type = self._make_cross_cot_pair("a")
+        target_type, source_type = self._make_cross_cot_pair('a')
         self._unregister(target_type, source_type)
         config = django_apps.get_app_config(APP_LABEL)
 
@@ -474,7 +487,7 @@ class CrossCOTGetModelOutsideReadyTestCase(CustomObjectsTestCase, TestCase):
         """Reproduces the reported symptom: system checks must not raise E300/E307."""
         from django.core.checks.registry import registry as checks_registry
 
-        target_type, source_type = self._make_cross_cot_pair("b")
+        target_type, source_type = self._make_cross_cot_pair('b')
         self._unregister(target_type, source_type)
         config = django_apps.get_app_config(APP_LABEL)
 
@@ -488,7 +501,7 @@ class CrossCOTGetModelOutsideReadyTestCase(CustomObjectsTestCase, TestCase):
     def test_get_model_regenerates_in_full_on_next_normal_call(self):
         """Once the degraded model's target is registered again, a later call
         fully re-resolves the cross-COT field."""
-        target_type, source_type = self._make_cross_cot_pair("c")
+        target_type, source_type = self._make_cross_cot_pair('c')
         self._unregister(target_type, source_type)
         config = django_apps.get_app_config(APP_LABEL)
 
@@ -502,7 +515,7 @@ class CrossCOTGetModelOutsideReadyTestCase(CustomObjectsTestCase, TestCase):
 
     def test_get_model_unaffected_during_ordinary_test_run(self):
         """Ordinary test-suite get_model() calls stay fully hydrated."""
-        target_type, source_type = self._make_cross_cot_pair("d")
+        target_type, source_type = self._make_cross_cot_pair('d')
         model = source_type.get_model(no_cache=True)
         field = model._meta.get_field('forwarder_profile')
         self.assertFalse(isinstance(field.remote_field.model, str))
@@ -512,15 +525,22 @@ class CrossCOTGetModelOutsideReadyTestCase(CustomObjectsTestCase, TestCase):
         the way a cross-COT LazyForeignKey can, so it must not be dropped during
         the unsafe window."""
         source_type = CustomObjectType.objects.create(
-            name="DnsZone637e", slug="dns-zone-637-e",
+            name='DnsZone637e',
+            slug='dns-zone-637-e',
         )
         CustomObjectTypeField.objects.create(
-            custom_object_type=source_type, name="name", label="Name",
-            type="text", primary=True,
+            custom_object_type=source_type,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
         )
         CustomObjectTypeField.objects.create(
-            custom_object_type=source_type, name="device", label="Device",
-            type="object", related_object_type=self.get_device_object_type(),
+            custom_object_type=source_type,
+            name='device',
+            label='Device',
+            type='object',
+            related_object_type=self.get_device_object_type(),
         )
         self._unregister(source_type)
         config = django_apps.get_app_config(APP_LABEL)
@@ -535,15 +555,22 @@ class CrossCOTGetModelOutsideReadyTestCase(CustomObjectsTestCase, TestCase):
         """A polymorphic Object field uses a GFK, which needs no app-registry
         resolution, so it must not be dropped during the unsafe window either."""
         source_type = CustomObjectType.objects.create(
-            name="DnsZone637f", slug="dns-zone-637-f",
+            name='DnsZone637f',
+            slug='dns-zone-637-f',
         )
         CustomObjectTypeField.objects.create(
-            custom_object_type=source_type, name="name", label="Name",
-            type="text", primary=True,
+            custom_object_type=source_type,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
         )
         CustomObjectTypeField.objects.create(
-            custom_object_type=source_type, name="owner", label="Owner",
-            type="object", is_polymorphic=True,
+            custom_object_type=source_type,
+            name='owner',
+            label='Owner',
+            type='object',
+            is_polymorphic=True,
         )
         self._unregister(source_type)
         config = django_apps.get_app_config(APP_LABEL)
@@ -572,43 +599,69 @@ class NestedCOTStartupOrderingTestCase(CustomObjectsTestCase, TestCase):
         # (worst-case: each model is processed before its FK target exists in the registry)
 
         cls.gamma_type = CustomObjectType.objects.create(
-            name="gamma_type", slug="gamma-type", verbose_name_plural="gamma_types",
+            name='gamma_type',
+            slug='gamma-type',
+            verbose_name_plural='gamma_types',
         )
         CustomObjectTypeField.objects.create(
-            custom_object_type=cls.gamma_type, name="name", label="Name",
-            type="text", primary=True, required=True,
+            custom_object_type=cls.gamma_type,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
+            required=True,
         )
 
         cls.beta_type = CustomObjectType.objects.create(
-            name="beta_type", slug="beta-type", verbose_name_plural="beta_types",
+            name='beta_type',
+            slug='beta-type',
+            verbose_name_plural='beta_types',
         )
         CustomObjectTypeField.objects.create(
-            custom_object_type=cls.beta_type, name="name", label="Name",
-            type="text", primary=True, required=True,
+            custom_object_type=cls.beta_type,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
+            required=True,
         )
         gamma_model = cls.gamma_type.get_model()
         gamma_ot = ObjectType.objects.get(
-            app_label=gamma_model._meta.app_label, model=gamma_model._meta.model_name,
+            app_label=gamma_model._meta.app_label,
+            model=gamma_model._meta.model_name,
         )
         CustomObjectTypeField.objects.create(
-            custom_object_type=cls.beta_type, name="gamma", label="Gamma",
-            type="object", related_object_type=gamma_ot,
+            custom_object_type=cls.beta_type,
+            name='gamma',
+            label='Gamma',
+            type='object',
+            related_object_type=gamma_ot,
         )
 
         cls.alpha_type = CustomObjectType.objects.create(
-            name="alpha_type", slug="alpha-type", verbose_name_plural="alpha_types",
+            name='alpha_type',
+            slug='alpha-type',
+            verbose_name_plural='alpha_types',
         )
         CustomObjectTypeField.objects.create(
-            custom_object_type=cls.alpha_type, name="name", label="Name",
-            type="text", primary=True, required=True,
+            custom_object_type=cls.alpha_type,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
+            required=True,
         )
         beta_model = cls.beta_type.get_model()
         beta_ot = ObjectType.objects.get(
-            app_label=beta_model._meta.app_label, model=beta_model._meta.model_name,
+            app_label=beta_model._meta.app_label,
+            model=beta_model._meta.model_name,
         )
         CustomObjectTypeField.objects.create(
-            custom_object_type=cls.alpha_type, name="beta", label="Beta",
-            type="object", related_object_type=beta_ot,
+            custom_object_type=cls.alpha_type,
+            name='beta',
+            label='Beta',
+            type='object',
+            related_object_type=beta_ot,
         )
 
     def _simulate_startup_ordering(self):
@@ -642,16 +695,14 @@ class NestedCOTStartupOrderingTestCase(CustomObjectsTestCase, TestCase):
         models = self._simulate_startup_ordering()
         beta_model = models['beta-type']
         field_names = [f.name for f in beta_model._meta.local_fields]
-        self.assertIn('gamma', field_names,
-                      "beta_type FK field to gamma_type must be present after startup")
+        self.assertIn('gamma', field_names, 'beta_type FK field to gamma_type must be present after startup')
 
     def test_alpha_type_has_beta_fk_after_startup(self):
         """alpha_type model must have its FK to beta_type after the startup passes."""
         models = self._simulate_startup_ordering()
         alpha_model = models['alpha-type']
         field_names = [f.name for f in alpha_model._meta.local_fields]
-        self.assertIn('beta', field_names,
-                      "alpha_type FK field to beta_type must be present after startup")
+        self.assertIn('beta', field_names, 'alpha_type FK field to beta_type must be present after startup')
 
     def test_three_level_chain_fk_targets_are_full_models(self):
         """FK remote_field.model on each level must be the full model (with its own FKs)."""
@@ -661,8 +712,11 @@ class NestedCOTStartupOrderingTestCase(CustomObjectsTestCase, TestCase):
         beta_fk = alpha_model._meta.get_field('beta')
         related_beta = beta_fk.related_model
         # The related model must have its own FK to gamma_type
-        self.assertIn('gamma', [f.name for f in related_beta._meta.local_fields],
-                      "beta_type (as FK target from alpha_type) must itself have FK to gamma_type")
+        self.assertIn(
+            'gamma',
+            [f.name for f in related_beta._meta.local_fields],
+            'beta_type (as FK target from alpha_type) must itself have FK to gamma_type',
+        )
 
 
 class CycleDetectionFalsePositiveRegressionTestCase(CustomObjectsTestCase, TestCase):
@@ -683,29 +737,38 @@ class CycleDetectionFalsePositiveRegressionTestCase(CustomObjectsTestCase, TestC
         super().setUp()
         # COT Control: has a self-referencing multiobject field
         self.cot_control = CustomObjectType.objects.create(
-            name="ControlCycle", slug="control-cycle",
-            verbose_name_plural="ControlCycles",
+            name='ControlCycle',
+            slug='control-cycle',
+            verbose_name_plural='ControlCycles',
         )
         CustomObjectTypeField.objects.create(
             custom_object_type=self.cot_control,
-            name="name", type="text", primary=True, required=True,
+            name='name',
+            type='text',
+            primary=True,
+            required=True,
         )
         # Self-referencing M:N field
         self.cot_control.get_model()
         CustomObjectTypeField.objects.create(
             custom_object_type=self.cot_control,
-            name="refs", type="multiobject",
+            name='refs',
+            type='multiobject',
             related_object_type=self.cot_control.object_type,
         )
 
         # COT EC: will hold the FK to Control
         self.cot_ec = CustomObjectType.objects.create(
-            name="ECCycle", slug="ec-cycle",
-            verbose_name_plural="ECCycles",
+            name='ECCycle',
+            slug='ec-cycle',
+            verbose_name_plural='ECCycles',
         )
         CustomObjectTypeField.objects.create(
             custom_object_type=self.cot_ec,
-            name="name", type="text", primary=True, required=True,
+            name='name',
+            type='text',
+            primary=True,
+            required=True,
         )
         self.cot_ec.get_model()
 
@@ -720,8 +783,8 @@ class CycleDetectionFalsePositiveRegressionTestCase(CustomObjectsTestCase, TestC
         # directly.  _check_recursion() is the method called from clean().
         field = CustomObjectTypeField(
             custom_object_type=self.cot_ec,
-            name="control_ref",
-            type="object",
+            name='control_ref',
+            type='object',
             related_object_type=self.cot_control.object_type,
         )
         # Must NOT raise ValidationError ("Circular reference detected")
@@ -729,47 +792,55 @@ class CycleDetectionFalsePositiveRegressionTestCase(CustomObjectsTestCase, TestC
             field._check_recursion()
         except ValidationError as exc:
             self.fail(
-                f"_check_recursion() raised ValidationError for a valid EC→Control FK "
-                f"(Control has a self-referencing M:N field). "
-                f"This is a false positive. Error: {exc}"
+                f'_check_recursion() raised ValidationError for a valid EC→Control FK '
+                f'(Control has a self-referencing M:N field). '
+                f'This is a false positive. Error: {exc}'
             )
 
     def test_genuine_cycle_is_still_detected(self):
         """A genuine A → B → A cycle must still be detected."""
         # Create COT Alpha and Beta
         cot_alpha = CustomObjectType.objects.create(
-            name="AlphaCycle", slug="alpha-cycle",
-            verbose_name_plural="AlphaCycles",
+            name='AlphaCycle',
+            slug='alpha-cycle',
+            verbose_name_plural='AlphaCycles',
         )
         CustomObjectTypeField.objects.create(
             custom_object_type=cot_alpha,
-            name="name", type="text", primary=True, required=True,
+            name='name',
+            type='text',
+            primary=True,
+            required=True,
         )
         cot_alpha.get_model()
 
         cot_beta = CustomObjectType.objects.create(
-            name="BetaCycle", slug="beta-cycle",
-            verbose_name_plural="BetaCycles",
+            name='BetaCycle',
+            slug='beta-cycle',
+            verbose_name_plural='BetaCycles',
         )
         CustomObjectTypeField.objects.create(
             custom_object_type=cot_beta,
-            name="name", type="text", primary=True, required=True,
+            name='name',
+            type='text',
+            primary=True,
+            required=True,
         )
         cot_beta.get_model()
 
         # Beta → Alpha (legitimate so far)
         CustomObjectTypeField.objects.create(
             custom_object_type=cot_beta,
-            name="alpha_ref",
-            type="object",
+            name='alpha_ref',
+            type='object',
             related_object_type=cot_alpha.object_type,
         )
 
         # Alpha → Beta: this creates a genuine cycle A → B → A
         field = CustomObjectTypeField(
             custom_object_type=cot_alpha,
-            name="beta_ref",
-            type="object",
+            name='beta_ref',
+            type='object',
             related_object_type=cot_beta.object_type,
         )
         with self.assertRaises(ValidationError):
@@ -797,38 +868,46 @@ class StaleFKReferenceRegressionTestCase(CustomObjectsTestCase, TestCase):
         super().setUp()
         # COT A (target of the FK)
         self.cot_a = CustomObjectType.objects.create(
-            name="FkTargetA", slug="fk-target-a",
-            verbose_name_plural="FkTargetAs",
+            name='FkTargetA',
+            slug='fk-target-a',
+            verbose_name_plural='FkTargetAs',
         )
         CustomObjectTypeField.objects.create(
             custom_object_type=self.cot_a,
-            name="name", type="text", primary=True, required=True,
+            name='name',
+            type='text',
+            primary=True,
+            required=True,
         )
 
         # COT B (source: has a direct FK to COT A)
         self.cot_b = CustomObjectType.objects.create(
-            name="FkSourceB", slug="fk-source-b",
-            verbose_name_plural="FkSourceBs",
+            name='FkSourceB',
+            slug='fk-source-b',
+            verbose_name_plural='FkSourceBs',
         )
         CustomObjectTypeField.objects.create(
             custom_object_type=self.cot_b,
-            name="name", type="text", primary=True, required=True,
+            name='name',
+            type='text',
+            primary=True,
+            required=True,
         )
 
         # Generate A first so its ObjectType exists, then create the FK field on B
         self.model_a_v1 = self.cot_a.get_model()
         CustomObjectTypeField.objects.create(
             custom_object_type=self.cot_b,
-            name="ref_a",
-            label="Ref A",
-            type="object",
+            name='ref_a',
+            label='Ref A',
+            type='object',
             related_object_type=self.cot_a.object_type,
         )
         CustomObjectTypeField.objects.create(
             custom_object_type=self.cot_b,
-            name="refs_a",
-            label="Refs A",
-            type="multiobject",
+            name='refs_a',
+            label='Refs A',
+            type='multiobject',
             related_object_type=self.cot_a.object_type,
         )
         # Generate B's model; this resolves the LazyForeignKey to model_a_v1
@@ -849,11 +928,13 @@ class StaleFKReferenceRegressionTestCase(CustomObjectsTestCase, TestCase):
         self.assertIsNotNone(fk, "B must have an 'ref_a' FK field")
         # remote_field.model must be the class (not a string) after generation
         self.assertNotIsInstance(
-            fk.remote_field.model, str,
-            "FK must be resolved to a class, not a string reference",
+            fk.remote_field.model,
+            str,
+            'FK must be resolved to a class, not a string reference',
         )
         self.assertIs(
-            fk.remote_field.model, self.model_a_v1,
+            fk.remote_field.model,
+            self.model_a_v1,
             "B's FK must initially point to A's first model class",
         )
 
@@ -870,22 +951,22 @@ class StaleFKReferenceRegressionTestCase(CustomObjectsTestCase, TestCase):
         model_a_v2 = self.cot_a.get_model(no_cache=True)
 
         # The regenerated class must be a distinct Python object
-        self.assertIsNot(model_a_v2, self.model_a_v1,
-                         "Regenerated A must be a new Python class object")
+        self.assertIsNot(model_a_v2, self.model_a_v1, 'Regenerated A must be a new Python class object')
 
         # B's FK field must now reference A v2, not v1
         fk = self._get_fk_field(self.model_b, 'ref_a')
         self.assertIsNotNone(fk, "B must still have an 'ref_a' FK field")
         self.assertIs(
-            fk.remote_field.model, model_a_v2,
+            fk.remote_field.model,
+            model_a_v2,
             "B's FK field must be patched to the newly generated A class; "
-            "a stale reference would cause ValueError on FK assignment",
+            'a stale reference would cause ValueError on FK assignment',
         )
 
     def test_b_m2m_is_patched_after_a_regeneration(self):
         """After A is regenerated, B's multi-object field must reference the new A class, as its through model does."""
         model_a_v2 = self.cot_a.get_model(no_cache=True)
-        obj_a = model_a_v2.objects.create(name="a")
+        obj_a = model_a_v2.objects.create(name='a')
 
         m2m = next(f for f in self.model_b._meta.local_many_to_many if f.name == 'refs_a')
         self.assertIs(m2m.remote_field.model, model_a_v2)
@@ -912,23 +993,38 @@ class LazySerializerRegistrationTestCase(CustomObjectsTestCase, TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.parent_cot = CustomObjectType.objects.create(
-            name="lazy_parent", slug="lazy-parent", verbose_name_plural="lazy_parents",
+            name='lazy_parent',
+            slug='lazy-parent',
+            verbose_name_plural='lazy_parents',
         )
         CustomObjectTypeField.objects.create(
-            custom_object_type=cls.parent_cot, name="title", label="Title",
-            type="text", primary=True, required=True,
+            custom_object_type=cls.parent_cot,
+            name='title',
+            label='Title',
+            type='text',
+            primary=True,
+            required=True,
         )
 
         cls.child_cot = CustomObjectType.objects.create(
-            name="lazy_child", slug="lazy-child", verbose_name_plural="lazy_children",
+            name='lazy_child',
+            slug='lazy-child',
+            verbose_name_plural='lazy_children',
         )
         CustomObjectTypeField.objects.create(
-            custom_object_type=cls.child_cot, name="title", label="Title",
-            type="text", primary=True, required=True,
+            custom_object_type=cls.child_cot,
+            name='title',
+            label='Title',
+            type='text',
+            primary=True,
+            required=True,
         )
         CustomObjectTypeField.objects.create(
-            custom_object_type=cls.child_cot, name="parent", label="Parent",
-            type="object", related_object_type=cls.parent_cot.object_type,
+            custom_object_type=cls.child_cot,
+            name='parent',
+            label='Parent',
+            type='object',
+            related_object_type=cls.parent_cot.object_type,
         )
 
     def _clear_serializer_registrations(self):
@@ -936,10 +1032,11 @@ class LazySerializerRegistrationTestCase(CustomObjectsTestCase, TestCase):
         from the module so that serializer_resolver() and get_serializer_class()
         behave as they would in a fresh worker process."""
         import netbox_custom_objects.api.serializers as ser_module
+
         parent_model = self.parent_cot.get_model()
         child_model = self.child_cot.get_model()
         for model in (parent_model, child_model):
-            attr = f"{model._meta.object_name}Serializer"
+            attr = f'{model._meta.object_name}Serializer'
             ser_module.__dict__.pop(attr, None)
 
     def test_resolver_generates_serializer_on_demand(self):
@@ -951,24 +1048,25 @@ class LazySerializerRegistrationTestCase(CustomObjectsTestCase, TestCase):
         back to an import-path lookup, so a missing startup-time registration can
         never raise SerializerNotFound."""
         import netbox_custom_objects.api.serializers as ser_module
+
         self._clear_serializer_registrations()
 
         parent_model = self.parent_cot.get_model()
-        serializer_name = f"{parent_model._meta.object_name}Serializer"
+        serializer_name = f'{parent_model._meta.object_name}Serializer'
 
         # Attribute must not be in __dict__ after clearing
-        self.assertNotIn(serializer_name, ser_module.__dict__,
-                         "precondition: serializer must not be pre-registered")
+        self.assertNotIn(serializer_name, ser_module.__dict__, 'precondition: serializer must not be pre-registered')
 
         # The resolver must generate and return a valid serializer class on demand
         serializer_cls = ser_module.serializer_resolver(parent_model)
         self.assertIsNotNone(serializer_cls)
-        self.assertIn("title", serializer_cls.Meta.fields)
+        self.assertIn('title', serializer_cls.Meta.fields)
 
         # After the resolver fires, the full serializer is cached in __dict__
         # (get_serializer_class registers it via setattr)
-        self.assertIn(serializer_name, ser_module.__dict__,
-                      "serializer must be cached in module __dict__ after first resolution")
+        self.assertIn(
+            serializer_name, ser_module.__dict__, 'serializer must be cached in module __dict__ after first resolution'
+        )
 
     def test_skip_object_fields_does_not_overwrite_full_serializer(self):
         """get_serializer_class(model, skip_object_fields=True) must not overwrite
@@ -976,10 +1074,11 @@ class LazySerializerRegistrationTestCase(CustomObjectsTestCase, TestCase):
         (registered via skip_object_fields=False) must remain accessible after
         a partial serializer is built for the same model."""
         import netbox_custom_objects.api.serializers as ser_module
+
         self._clear_serializer_registrations()
 
         parent_model = self.parent_cot.get_model()
-        serializer_name = f"{parent_model._meta.object_name}Serializer"
+        serializer_name = f'{parent_model._meta.object_name}Serializer'
 
         # Register the full serializer first
         full_serializer = get_serializer_class(parent_model, skip_object_fields=False)
@@ -991,34 +1090,41 @@ class LazySerializerRegistrationTestCase(CustomObjectsTestCase, TestCase):
 
         # Module must still hold the FULL serializer, not the partial one
         registered = getattr(ser_module, serializer_name)
-        self.assertIs(registered, full_serializer,
-                      "full serializer must not be overwritten by the partial variant")
-        self.assertIsNot(registered, partial_serializer,
-                         "partial serializer must be a distinct object, not stored on module")
+        self.assertIs(registered, full_serializer, 'full serializer must not be overwritten by the partial variant')
+        self.assertIsNot(
+            registered, partial_serializer, 'partial serializer must be a distinct object, not stored on module'
+        )
 
     def test_child_serializer_does_not_clobber_parent_serializer(self):
         """Building child's serializer (which creates a nested partial for parent)
         must leave the parent's full module-level serializer intact."""
         import netbox_custom_objects.api.serializers as ser_module
+
         self._clear_serializer_registrations()
 
         parent_model = self.parent_cot.get_model()
         child_model = self.child_cot.get_model()
-        parent_serializer_name = f"{parent_model._meta.object_name}Serializer"
+        parent_serializer_name = f'{parent_model._meta.object_name}Serializer'
 
         # Register parent's full serializer first
         full_parent_serializer = get_serializer_class(parent_model)
-        self.assertIn("title", full_parent_serializer.Meta.fields)
+        self.assertIn('title', full_parent_serializer.Meta.fields)
 
         # Build child serializer — internally calls get_serializer_class(parent, skip_object_fields=True)
         get_serializer_class(child_model)
 
         # Parent's full serializer must be unchanged
         registered_parent = getattr(ser_module, parent_serializer_name)
-        self.assertIs(registered_parent, full_parent_serializer,
-                      "building child serializer must not clobber parent's full serializer")
-        self.assertIn("title", registered_parent.Meta.fields,
-                      "parent's full field set must be intact after child serializer is built")
+        self.assertIs(
+            registered_parent,
+            full_parent_serializer,
+            "building child serializer must not clobber parent's full serializer",
+        )
+        self.assertIn(
+            'title',
+            registered_parent.Meta.fields,
+            "parent's full field set must be intact after child serializer is built",
+        )
 
 
 class DeferredCOFieldReplayOrderingTestCase(CustomObjectsTestCase, TestCase):
@@ -1042,33 +1148,39 @@ class DeferredCOFieldReplayOrderingTestCase(CustomObjectsTestCase, TestCase):
     def test_title_column_exists_before_deferred_title_replay_runs(self):
         from netbox_custom_objects.models import _deferred_co_field_data
 
-        cot = self.create_custom_object_type(name="DeferredCOT", slug="deferred-cot")
+        cot = self.create_custom_object_type(name='DeferredCOT', slug='deferred-cot')
         model = cot.get_model()
         co = model.objects.create()
         table_name = cot.get_database_table_name()
 
-        _deferred_co_field_data.set({
-            table_name: {
-                co.pk: {
-                    "data": {
-                        "website": "https://example.com/",
-                        "website_title": "Example Site",
+        _deferred_co_field_data.set(
+            {
+                table_name: {
+                    co.pk: {
+                        'data': {
+                            'website': 'https://example.com/',
+                            'website_title': 'Example Site',
+                        },
                     },
                 },
-            },
-        })
+            }
+        )
         try:
             self.create_custom_object_type_field(
-                cot, name="website", label="Website", type="url",
+                cot,
+                name='website',
+                label='Website',
+                type='url',
             )
         finally:
             _deferred_co_field_data.set(None)
 
         fresh_co = cot.get_model().objects.get(pk=co.pk)
-        self.assertEqual(fresh_co.website, "https://example.com/")
+        self.assertEqual(fresh_co.website, 'https://example.com/')
         self.assertEqual(
-            fresh_co.website_title, "Example Site",
-            "deferred title value must be replayed once the title column exists",
+            fresh_co.website_title,
+            'Example Site',
+            'deferred title value must be replayed once the title column exists',
         )
 
 
@@ -1078,10 +1190,10 @@ class CustomObjectBaseModelTestCase(CustomObjectsTestCase, TestCase):
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
-        cls.cot = cls.create_custom_object_type(name="BaseModelTest", slug="base-model-test")
-        cls.create_custom_object_type_field(cls.cot, name="name", type="text", primary=True, required=True)
-        cls.create_custom_object_type_field(cls.cot, name="code", type="text", required=False, unique=True)
-        cls.create_custom_object_type_field(cls.cot, name="notes", type="longtext", required=False, unique=True)
+        cls.cot = cls.create_custom_object_type(name='BaseModelTest', slug='base-model-test')
+        cls.create_custom_object_type_field(cls.cot, name='name', type='text', primary=True, required=True)
+        cls.create_custom_object_type_field(cls.cot, name='code', type='text', required=False, unique=True)
+        cls.create_custom_object_type_field(cls.cot, name='notes', type='longtext', required=False, unique=True)
 
     def test_custom_object_subclasses_base_model(self):
         model = self.cot.get_model()
@@ -1093,7 +1205,7 @@ class CustomObjectBaseModelTestCase(CustomObjectsTestCase, TestCase):
 
     def test_search_weight_reindex_tracks_each_save(self):
         """A field instance saved more than once reindexes on every weight change, not just the first."""
-        field = self.create_custom_object_type_field(self.cot, name="tracked", type="text", search_weight=100)
+        field = self.create_custom_object_type_field(self.cot, name='tracked', type='text', search_weight=100)
         field = CustomObjectTypeField.objects.get(pk=field.pk)
         with patch.object(ReindexCustomObjectTypeJob, 'enqueue') as mock_enqueue:
             with self.captureOnCommitCallbacks(execute=True):
@@ -1106,8 +1218,8 @@ class CustomObjectBaseModelTestCase(CustomObjectsTestCase, TestCase):
     def test_blank_unique_text_values_do_not_collide(self):
         """Two objects with blank unique text/longtext values must both validate and save."""
         model = self.cot.get_model()
-        for name in ("first", "second"):
-            obj = model(name=name, code="", notes="")
+        for name in ('first', 'second'):
+            obj = model(name=name, code='', notes='')
             obj.full_clean()
             obj.save()
         self.assertEqual(model.objects.count(), 2)
@@ -1117,8 +1229,8 @@ class CustomObjectBaseModelTestCase(CustomObjectsTestCase, TestCase):
 
     def test_blank_unique_text_coerced_on_save_without_clean(self):
         model = self.cot.get_model()
-        model.objects.create(name="first", code="", notes="")
-        obj = model.objects.create(name="second", code="", notes="")
+        model.objects.create(name='first', code='', notes='')
+        obj = model.objects.create(name='second', code='', notes='')
         obj.refresh_from_db()
         self.assertIsNone(obj.code)
         self.assertIsNone(obj.notes)
@@ -1126,10 +1238,10 @@ class CustomObjectBaseModelTestCase(CustomObjectsTestCase, TestCase):
     def test_non_unique_blank_text_is_left_alone(self):
         model = self.cot.get_model()
         # full_clean() is skipped on purpose: this exercises the save() hook alone.
-        obj = model(name="")
+        obj = model(name='')
         obj.save()
         obj.refresh_from_db()
-        self.assertEqual(obj.name, "")
+        self.assertEqual(obj.name, '')
 
 
 class CoordinatesBackingColumnsTestCase(CustomObjectsTestCase, TestCase):
@@ -1144,100 +1256,104 @@ class CoordinatesBackingColumnsTestCase(CustomObjectsTestCase, TestCase):
     def test_deferred_replay_fills_both_coordinates_columns(self):
         from netbox_custom_objects.models import _deferred_co_field_data
 
-        cot = self.create_custom_object_type(name="DeferredCoordCOT", slug="deferred-coord-cot")
+        cot = self.create_custom_object_type(name='DeferredCoordCOT', slug='deferred-coord-cot')
         model = cot.get_model()
         co = model.objects.create()
         table_name = cot.get_database_table_name()
 
-        _deferred_co_field_data.set({
-            table_name: {
-                co.pk: {
-                    "data": {
-                        "geo_latitude": "12.345600",
-                        "geo_longitude": "-98.765400",
+        _deferred_co_field_data.set(
+            {
+                table_name: {
+                    co.pk: {
+                        'data': {
+                            'geo_latitude': '12.345600',
+                            'geo_longitude': '-98.765400',
+                        },
                     },
                 },
-            },
-        })
+            }
+        )
         try:
-            self.create_custom_object_type_field(cot, name="geo", label="Geo", type="coordinates")
+            self.create_custom_object_type_field(cot, name='geo', label='Geo', type='coordinates')
             self.assertIsNone(
                 _deferred_co_field_data.get(),
-                "deferred coordinates data must be consumed once both columns exist",
+                'deferred coordinates data must be consumed once both columns exist',
             )
         finally:
             _deferred_co_field_data.set(None)
 
         fresh_co = cot.get_model().objects.get(pk=co.pk)
-        self.assertEqual(fresh_co.geo_latitude, Decimal("12.345600"))
-        self.assertEqual(fresh_co.geo_longitude, Decimal("-98.765400"))
+        self.assertEqual(fresh_co.geo_latitude, Decimal('12.345600'))
+        self.assertEqual(fresh_co.geo_longitude, Decimal('-98.765400'))
 
     def test_deferred_replay_matches_coordinates_columns_under_historical_name(self):
         """A CO recorded under the field's pre-rename name still replays after a rename."""
         from netbox_custom_objects.models import _apply_deferred_co_field, _deferred_co_field_data
 
-        cot = self.create_custom_object_type(name="DeferredCoordRenameCOT", slug="deferred-coord-rename-cot")
-        field = self.create_custom_object_type_field(cot, name="geo", label="Geo", type="coordinates")
+        cot = self.create_custom_object_type(name='DeferredCoordRenameCOT', slug='deferred-coord-rename-cot')
+        field = self.create_custom_object_type_field(cot, name='geo', label='Geo', type='coordinates')
         co = cot.get_model().objects.create()
         table_name = cot.get_database_table_name()
 
         field = CustomObjectTypeField.objects.get(pk=field.pk)
-        field.name = "location"
+        field.name = 'location'
         field.save()
         # The rename history _apply_deferred_co_field consults lives in ObjectChange.
         ObjectChange.objects.create(
-            user_name="tester",
+            user_name='tester',
             request_id=uuid.uuid4(),
             action=ObjectChangeActionChoices.ACTION_UPDATE,
             changed_object_type=ObjectType.objects.get_for_model(CustomObjectTypeField),
             changed_object_id=field.pk,
             object_repr=str(field),
-            prechange_data={"name": "geo"},
-            postchange_data={"name": "location"},
+            prechange_data={'name': 'geo'},
+            postchange_data={'name': 'location'},
         )
 
-        _deferred_co_field_data.set({
-            table_name: {co.pk: {"data": {"geo_latitude": "1.5", "geo_longitude": "2.5"}}},
-        })
+        _deferred_co_field_data.set(
+            {
+                table_name: {co.pk: {'data': {'geo_latitude': '1.5', 'geo_longitude': '2.5'}}},
+            }
+        )
         try:
             _apply_deferred_co_field(CustomObjectTypeField.objects.get(pk=field.pk))
         finally:
             _deferred_co_field_data.set(None)
 
         fresh_co = cot.get_model().objects.get(pk=co.pk)
-        self.assertEqual(fresh_co.location_latitude, Decimal("1.5"))
-        self.assertEqual(fresh_co.location_longitude, Decimal("2.5"))
+        self.assertEqual(fresh_co.location_latitude, Decimal('1.5'))
+        self.assertEqual(fresh_co.location_longitude, Decimal('2.5'))
 
     def test_rename_rewrites_both_coordinates_keys_in_objectchange(self):
-        cot = self.create_custom_object_type(name="RenameCoordCOT", slug="rename-coord-cot")
-        field = self.create_custom_object_type_field(cot, name="geo", label="Geo", type="coordinates")
-        self.create_custom_object_type_field(cot, name="note", label="Note", type="text")
+        cot = self.create_custom_object_type(name='RenameCoordCOT', slug='rename-coord-cot')
+        field = self.create_custom_object_type_field(cot, name='geo', label='Geo', type='coordinates')
+        self.create_custom_object_type_field(cot, name='note', label='Note', type='text')
         model = cot.get_model()
-        co = model.objects.create(geo_latitude=Decimal("1.5"), geo_longitude=Decimal("2.5"), note="n")
+        co = model.objects.create(geo_latitude=Decimal('1.5'), geo_longitude=Decimal('2.5'), note='n')
 
         change = ObjectChange.objects.create(
-            user_name="tester",
+            user_name='tester',
             request_id=uuid.uuid4(),
             action=ObjectChangeActionChoices.ACTION_UPDATE,
             changed_object_type=ObjectType.objects.get_for_model(model),
             changed_object_id=co.pk,
             object_repr=str(co),
-            prechange_data={"geo_latitude": "0.0", "geo_longitude": "0.0", "note": "n"},
-            postchange_data={"geo_latitude": "1.5", "geo_longitude": "2.5", "note": "n"},
+            prechange_data={'geo_latitude': '0.0', 'geo_longitude': '0.0', 'note': 'n'},
+            postchange_data={'geo_latitude': '1.5', 'geo_longitude': '2.5', 'note': 'n'},
         )
 
         field = CustomObjectTypeField.objects.get(pk=field.pk)
-        field.name = "location"
+        field.name = 'location'
         field.save()
 
         change.refresh_from_db()
         self.assertEqual(
             change.prechange_data,
-            {"location_latitude": "0.0", "location_longitude": "0.0", "note": "n"},
+            {'location_latitude': '0.0', 'location_longitude': '0.0', 'note': 'n'},
         )
         self.assertEqual(
             change.postchange_data,
-            {"location_latitude": "1.5", "location_longitude": "2.5", "note": "n"},
+            {'location_latitude': '1.5', 'location_longitude': '2.5', 'note': 'n'},
         )
 
 
@@ -1247,11 +1363,16 @@ class PhantomTaggedObjectsTestCase(CustomObjectsTestCase, TestCase):
 
     def setUp(self):
         super().setUp()
-        self.cot = self.create_custom_object_type(name="SslProfile", slug="ssl-profiles")
+        self.cot = self.create_custom_object_type(name='SslProfile', slug='ssl-profiles')
         self.create_custom_object_type_field(
-            self.cot, name="name", label="Name", type="text", primary=True, required=True,
+            self.cot,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
+            required=True,
         )
-        self.tag = Tag.objects.create(name="unbound", slug="unbound")
+        self.tag = Tag.objects.create(name='unbound', slug='unbound')
 
     def _tagged_item_count(self):
         ct = ContentType.objects.get_for_model(self.cot.get_model())
@@ -1264,7 +1385,7 @@ class PhantomTaggedObjectsTestCase(CustomObjectsTestCase, TestCase):
 
     def test_direct_delete_removes_tagged_item(self):
         model = self.cot.get_model()
-        obj = model.objects.create(name="profile-a")
+        obj = model.objects.create(name='profile-a')
         obj.tags.set([self.tag])
         self.assertEqual(self._tagged_item_count(), 1)
 
@@ -1274,7 +1395,7 @@ class PhantomTaggedObjectsTestCase(CustomObjectsTestCase, TestCase):
 
     def test_queryset_bulk_delete_removes_tagged_item(self):
         model = self.cot.get_model()
-        obj = model.objects.create(name="profile-b")
+        obj = model.objects.create(name='profile-b')
         obj.tags.set([self.tag])
         self.assertEqual(self._tagged_item_count(), 1)
 
@@ -1284,7 +1405,7 @@ class PhantomTaggedObjectsTestCase(CustomObjectsTestCase, TestCase):
 
     def test_delete_after_model_regeneration_removes_tagged_item(self):
         model = self.cot.get_model()
-        obj = model.objects.create(name="profile-c")
+        obj = model.objects.create(name='profile-c')
         obj.tags.set([self.tag])
         self.assertEqual(self._tagged_item_count(), 1)
 
@@ -1296,9 +1417,9 @@ class PhantomTaggedObjectsTestCase(CustomObjectsTestCase, TestCase):
 
     def test_filtering_by_tag_matches_actual_object_count(self):
         model = self.cot.get_model()
-        kept = model.objects.create(name="profile-kept")
+        kept = model.objects.create(name='profile-kept')
         kept.tags.set([self.tag])
-        deleted = model.objects.create(name="profile-deleted")
+        deleted = model.objects.create(name='profile-deleted')
         deleted.tags.set([self.tag])
         deleted.delete()
 
@@ -1316,10 +1437,19 @@ class CustomObjectPicklingTestCase(CustomObjectsTestCase, TestCase):
         super().setUp()
         self.cot = self.create_custom_object_type(name='Session', slug='session')
         self.create_custom_object_type_field(
-            self.cot, name='name', label='Name', type='text', primary=True, required=True,
+            self.cot,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
+            required=True,
         )
         self.create_custom_object_type_field(
-            self.cot, name='site', label='Site', type='object', related_object_type=self.get_site_object_type(),
+            self.cot,
+            name='site',
+            label='Site',
+            type='object',
+            related_object_type=self.get_site_object_type(),
         )
         self.model = self.cot.get_model()
         self.site = Site.objects.create(name='Pickle Site', slug='pickle-site')

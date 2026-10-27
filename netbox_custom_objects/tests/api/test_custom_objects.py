@@ -1,6 +1,7 @@
 """
 Tests for the custom object REST API endpoints.
 """
+
 import uuid
 from unittest import skipUnless
 
@@ -72,26 +73,20 @@ class CustomObjectAPITestCaseMixin:
 
     def test_create_object_without_permission(self):
         """POST to the list endpoint without permission returns 403."""
-        response = self.client.post(
-            self._get_list_url(), self.create_data[0], format='json', **self.header
-        )
+        response = self.client.post(self._get_list_url(), self.create_data[0], format='json', **self.header)
         self.assertHttpStatus(response, 403)
 
     def test_update_object_without_permission(self):
         """PATCH a single object without permission returns 403."""
         instance = self._get_queryset().first()
-        response = self.client.patch(
-            self._get_detail_url(instance), self.update_data, format='json', **self.header
-        )
+        response = self.client.patch(self._get_detail_url(instance), self.update_data, format='json', **self.header)
         self.assertHttpStatus(response, 403)
 
     def test_update_object(self):
         """PATCH a single object returns 200 and persists the changes."""
         self._add_permission('change', 'Update object perm')
         instance = self._get_queryset().first()
-        response = self.client.patch(
-            self._get_detail_url(instance), self.update_data, format='json', **self.header
-        )
+        response = self.client.patch(self._get_detail_url(instance), self.update_data, format='json', **self.header)
         self.assertHttpStatus(response, 200)
         instance.refresh_from_db()
         for field, value in self.update_data.items():
@@ -178,7 +173,7 @@ class CustomObjectAPITestCase(CustomObjectsTestCase, CustomObjectAPITestCaseMixi
                 site=sites[0],
                 rack=racks[0],
                 cluster=clusters[0],
-                local_context_data={'A': 1}
+                local_context_data={'A': 1},
             ),
             Device(
                 device_type=device_types[0],
@@ -187,7 +182,7 @@ class CustomObjectAPITestCase(CustomObjectsTestCase, CustomObjectAPITestCaseMixi
                 site=sites[0],
                 rack=racks[0],
                 cluster=clusters[0],
-                local_context_data={'B': 2}
+                local_context_data={'B': 2},
             ),
             Device(
                 device_type=device_types[0],
@@ -196,27 +191,27 @@ class CustomObjectAPITestCase(CustomObjectsTestCase, CustomObjectAPITestCaseMixi
                 site=sites[0],
                 rack=racks[0],
                 cluster=clusters[0],
-                local_context_data={'C': 3}
+                local_context_data={'C': 3},
             ),
         )
         Device.objects.bulk_create(devices)
 
         # Create test custom object types
         cls.custom_object_type1 = CustomObjectType.objects.create(
-            name="TestObject1",
-            description="First test custom object type",
-            verbose_name_plural="Test Objects 1",
-            slug="test-objects-1",
+            name='TestObject1',
+            description='First test custom object type',
+            verbose_name_plural='Test Objects 1',
+            slug='test-objects-1',
         )
 
         cls.custom_object_type2 = CustomObjectType.objects.create(
-            name="TestObject2",
-            description="Second test custom object type",
-            verbose_name_plural="Test Objects 2",
-            slug="test-objects-2",
+            name='TestObject2',
+            description='Second test custom object type',
+            verbose_name_plural='Test Objects 2',
+            slug='test-objects-2',
         )
 
-        cls.custom_object_type3 = cls.create_complex_custom_object_type(name="ComplexObject")
+        cls.custom_object_type3 = cls.create_complex_custom_object_type(name='ComplexObject')
 
         cls.create_custom_object_type_field(cls.custom_object_type1)
         cls.model = cls.custom_object_type1.get_model()
@@ -345,7 +340,8 @@ class CustomObjectAPITestCase(CustomObjectsTestCase, CustomObjectAPITestCaseMixi
         self.assertEqual(self._exported_values(self._export('&test_field=002')), ['Test 002'])
         # limit/offset don't apply: the export renders every matching object.
         self.assertEqual(
-            self._exported_values(self._export('&limit=1&offset=1')), ['Test 001', 'Test 002', 'Test 003'],
+            self._exported_values(self._export('&limit=1&offset=1')),
+            ['Test 001', 'Test 002', 'Test 003'],
         )
 
     def test_export_respects_object_level_permission_constraints(self):
@@ -420,9 +416,7 @@ class CustomObjectAPITestCase(CustomObjectsTestCase, CustomObjectAPITestCaseMixi
         self._add_permission('add', 'Bulk create perm')
 
         initial_count = self._get_queryset().count()
-        response = self.client.post(
-            self._get_list_url(), self.create_data, format='json', **self.header
-        )
+        response = self.client.post(self._get_list_url(), self.create_data, format='json', **self.header)
 
         self.assertHttpStatus(response, 201)
         self.assertEqual(len(response.data), len(self.create_data))
@@ -435,20 +429,18 @@ class CustomObjectAPITestCase(CustomObjectsTestCase, CustomObjectAPITestCaseMixi
         self._add_permission('delete', 'Bulk delete perm')
 
         initial_count = self._get_queryset().count()
-        self.assertGreaterEqual(initial_count, 2, "Need at least 2 objects to test bulk delete.")
+        self.assertGreaterEqual(initial_count, 2, 'Need at least 2 objects to test bulk delete.')
         instances = list(self._get_queryset()[:2])
         data = [{'id': instance.pk} for instance in instances]
 
-        response = self.client.delete(
-            self._get_list_url(), data, format='json', **self.header
-        )
+        response = self.client.delete(self._get_list_url(), data, format='json', **self.header)
 
         self.assertHttpStatus(response, 204)
         self.assertEqual(self._get_queryset().count(), initial_count - 2)
         for instance in instances:
             self.assertFalse(
                 self._get_queryset().filter(pk=instance.pk).exists(),
-                f"Object {instance.pk} should have been deleted.",
+                f'Object {instance.pk} should have been deleted.',
             )
 
     def test_bulk_update_objects(self):
@@ -462,9 +454,7 @@ class CustomObjectAPITestCase(CustomObjectsTestCase, CustomObjectAPITestCaseMixi
         }
         data = [{'id': pk, 'test_field': value} for pk, value in updates.items()]
 
-        response = self.client.patch(
-            self._get_list_url(), data, format='json', **self.header
-        )
+        response = self.client.patch(self._get_list_url(), data, format='json', **self.header)
 
         self.assertHttpStatus(response, 200)
         instances[0].refresh_from_db()
@@ -483,9 +473,7 @@ class CustomObjectAPITestCase(CustomObjectsTestCase, CustomObjectAPITestCaseMixi
         data = [{'id': instance.pk, 'test_field': 'Should not apply'}]
         initial_job_count = Job.objects.count()
 
-        response = self.client.patch(
-            f'{self._get_list_url()}?background=true', data, format='json', **self.header
-        )
+        response = self.client.patch(f'{self._get_list_url()}?background=true', data, format='json', **self.header)
 
         self.assertHttpStatus(response, 400)
         self.assertEqual(Job.objects.count(), initial_job_count)
@@ -504,7 +492,7 @@ class CustomObjectAPITestCase(CustomObjectsTestCase, CustomObjectAPITestCaseMixi
         self.assertHttpStatus(response, 204)
         self.assertFalse(
             self._get_queryset().filter(pk=instance.pk).exists(),
-            "Deleted object should no longer exist in the database.",
+            'Deleted object should no longer exist in the database.',
         )
 
     def test_create_with_nested_serializers(self):
@@ -517,10 +505,7 @@ class CustomObjectAPITestCase(CustomObjectsTestCase, CustomObjectAPITestCaseMixi
         self.model = model
 
         # Add object-level permission
-        obj_perm = ObjectPermission(
-            name='Test permission',
-            actions=['add']
-        )
+        obj_perm = ObjectPermission(name='Test permission', actions=['add'])
         obj_perm.save()
         obj_perm.users.add(self.user)
         obj_perm.object_types.add(ObjectType.objects.get_for_model(self.model))
@@ -640,10 +625,16 @@ class PolymorphicMultiObjectPrefetchTestCase(CustomObjectsTestCase, TestCase):
         self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
 
         self.cot = CustomObjectsTestCase.create_custom_object_type(
-            name='PolyM2MPrefetchTest', slug='poly-m2m-prefetch-test',
+            name='PolyM2MPrefetchTest',
+            slug='poly-m2m-prefetch-test',
         )
         CustomObjectsTestCase.create_custom_object_type_field(
-            self.cot, name='name', label='Name', type='text', primary=True, required=True,
+            self.cot,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
+            required=True,
         )
         CustomObjectsTestCase.create_polymorphic_field(
             self.cot,
@@ -659,15 +650,16 @@ class PolymorphicMultiObjectPrefetchTestCase(CustomObjectsTestCase, TestCase):
 
         manufacturer = Manufacturer.objects.create(name='PM2M Mfr', slug='pm2m-mfr')
         device_type = DeviceType.objects.create(
-            manufacturer=manufacturer, model='PM2M Type', slug='pm2m-type',
+            manufacturer=manufacturer,
+            model='PM2M Type',
+            slug='pm2m-type',
         )
         role = DeviceRole.objects.create(name='PM2M Role', slug='pm2m-role', color='ffffff')
         self.site_a = Site.objects.create(name='PM2M Site A', slug='pm2m-site-a')
         self.site_b = Site.objects.create(name='PM2M Site B', slug='pm2m-site-b')
-        self.devices = Device.objects.bulk_create([
-            Device(device_type=device_type, role=role, name=f'PM2M Device {i}', site=self.site_a)
-            for i in range(3)
-        ])
+        self.devices = Device.objects.bulk_create(
+            [Device(device_type=device_type, role=role, name=f'PM2M Device {i}', site=self.site_a) for i in range(3)]
+        )
 
         perm = ObjectPermission(name='PM2M view perm', actions=['view'])
         perm.save()
@@ -745,9 +737,7 @@ class SerializerFieldCoverageTestCase(CustomObjectsTestCase, TestCase):
         token_key = create_token(self.user)
         self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
 
-        self.cot = CustomObjectsTestCase.create_custom_object_type(
-            name='SerializerTest', slug='serializer-test'
-        )
+        self.cot = CustomObjectsTestCase.create_custom_object_type(name='SerializerTest', slug='serializer-test')
         # Primary text field
         CustomObjectsTestCase.create_custom_object_type_field(
             self.cot,
@@ -888,9 +878,7 @@ class ContextFieldApiTestCase(CustomObjectsTestCase, TestCase):
         perm_a = ObjectPermission(name='ctx-api-perm-a', actions=['view'])
         perm_a.save()
         perm_a.users.add(self.user)
-        perm_a.object_types.add(
-            ObjectType.objects.get_for_model(self.model_with_primary)
-        )
+        perm_a.object_types.add(ObjectType.objects.get_for_model(self.model_with_primary))
 
         # --- COT B: no primary field + context field (fallback display) ---
         self.cot_no_primary = CustomObjectsTestCase.create_custom_object_type(
@@ -904,9 +892,7 @@ class ContextFieldApiTestCase(CustomObjectsTestCase, TestCase):
         perm_b = ObjectPermission(name='ctx-api-perm-b', actions=['view'])
         perm_b.save()
         perm_b.users.add(self.user)
-        perm_b.object_types.add(
-            ObjectType.objects.get_for_model(self.model_no_primary)
-        )
+        perm_b.object_types.add(ObjectType.objects.get_for_model(self.model_no_primary))
 
         # --- COT C: primary field + two context fields ---
         self.cot_multi_ctx = CustomObjectsTestCase.create_custom_object_type(
@@ -926,9 +912,7 @@ class ContextFieldApiTestCase(CustomObjectsTestCase, TestCase):
         perm_c = ObjectPermission(name='ctx-api-perm-c', actions=['view'])
         perm_c.save()
         perm_c.users.add(self.user)
-        perm_c.object_types.add(
-            ObjectType.objects.get_for_model(self.model_multi_ctx)
-        )
+        perm_c.object_types.add(ObjectType.objects.get_for_model(self.model_multi_ctx))
 
     def tearDown(self):
         CustomObjectType.clear_model_cache()
@@ -945,6 +929,7 @@ class ContextFieldApiTestCase(CustomObjectsTestCase, TestCase):
     def test_serializer_meta_includes_context_field(self):
         """get_serializer_class() must add _context to Meta.fields and brief_fields."""
         from netbox_custom_objects.api.serializers import get_serializer_class
+
         cls = get_serializer_class(self.model_with_primary)
         self.assertIn('_context', cls.Meta.fields)
         self.assertIn('_context', cls.Meta.brief_fields)
@@ -952,12 +937,9 @@ class ContextFieldApiTestCase(CustomObjectsTestCase, TestCase):
     def test_serializer_meta_excludes_context_when_no_context_fields(self):
         """_context must not appear when the COT has no context fields."""
         from netbox_custom_objects.api.serializers import get_serializer_class
-        cot = CustomObjectsTestCase.create_custom_object_type(
-            name='ctxapinoctx', slug='ctx-api-no-ctx'
-        )
-        CustomObjectsTestCase.create_custom_object_type_field(
-            cot, name='name', type='text', primary=True
-        )
+
+        cot = CustomObjectsTestCase.create_custom_object_type(name='ctxapinoctx', slug='ctx-api-no-ctx')
+        CustomObjectsTestCase.create_custom_object_type_field(cot, name='name', type='text', primary=True)
         model = cot.get_model()
         cls = get_serializer_class(model)
         self.assertNotIn('_context', cls.Meta.fields)
@@ -968,18 +950,14 @@ class ContextFieldApiTestCase(CustomObjectsTestCase, TestCase):
     def test_display_equals_primary_field_value(self):
         """display must be the primary field value, not the fallback."""
         instance = self.model_with_primary.objects.create(name='Route-A', owner='Alice')
-        response = self.client.get(
-            self._detail_url(self.cot_with_primary, instance)
-        )
+        response = self.client.get(self._detail_url(self.cot_with_primary, instance))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['display'], 'Route-A')
 
     def test_context_display_value_with_primary_field(self):
         """_context.display must equal the context field value when primary is set."""
         instance = self.model_with_primary.objects.create(name='Route-A', owner='Alice')
-        response = self.client.get(
-            self._detail_url(self.cot_with_primary, instance)
-        )
+        response = self.client.get(self._detail_url(self.cot_with_primary, instance))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIsNotNone(response.data['_context'])
         self.assertEqual(response.data['_context']['display'], 'Alice')
@@ -987,9 +965,7 @@ class ContextFieldApiTestCase(CustomObjectsTestCase, TestCase):
     def test_context_null_when_context_field_has_no_value(self):
         """_context must be null when the context field carries no value."""
         instance = self.model_with_primary.objects.create(name='Route-B')
-        response = self.client.get(
-            self._detail_url(self.cot_with_primary, instance)
-        )
+        response = self.client.get(self._detail_url(self.cot_with_primary, instance))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIsNone(response.data['_context'])
 
@@ -998,19 +974,15 @@ class ContextFieldApiTestCase(CustomObjectsTestCase, TestCase):
     def test_display_uses_fallback_when_no_primary_field(self):
         """display must use the fallback format when no primary field is configured."""
         instance = self.model_no_primary.objects.create(owner='Bob')
-        expected = f"{self.cot_no_primary.display_name} {instance.id}"
-        response = self.client.get(
-            self._detail_url(self.cot_no_primary, instance)
-        )
+        expected = f'{self.cot_no_primary.display_name} {instance.id}'
+        response = self.client.get(self._detail_url(self.cot_no_primary, instance))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['display'], expected)
 
     def test_context_display_value_with_fallback_display(self):
         """_context.display must work correctly even when display uses the fallback name."""
         instance = self.model_no_primary.objects.create(owner='Bob')
-        response = self.client.get(
-            self._detail_url(self.cot_no_primary, instance)
-        )
+        response = self.client.get(self._detail_url(self.cot_no_primary, instance))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIsNotNone(response.data['_context'])
         self.assertEqual(response.data['_context']['display'], 'Bob')
@@ -1019,12 +991,8 @@ class ContextFieldApiTestCase(CustomObjectsTestCase, TestCase):
 
     def test_multiple_context_fields_joined_in_display(self):
         """_context.display must join all context field values with ', '."""
-        instance = self.model_multi_ctx.objects.create(
-            name='Route-C', owner='Carol', region='EU'
-        )
-        response = self.client.get(
-            self._detail_url(self.cot_multi_ctx, instance)
-        )
+        instance = self.model_multi_ctx.objects.create(name='Route-C', owner='Carol', region='EU')
+        response = self.client.get(self._detail_url(self.cot_multi_ctx, instance))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIsNotNone(response.data['_context'])
         self.assertEqual(response.data['_context']['display'], 'Carol, EU')
@@ -1033,9 +1001,7 @@ class ContextFieldApiTestCase(CustomObjectsTestCase, TestCase):
         """_context.display must only include context fields that have a value."""
         instance = self.model_multi_ctx.objects.create(name='Route-D', owner='Dave')
         # region (second context field) is not set
-        response = self.client.get(
-            self._detail_url(self.cot_multi_ctx, instance)
-        )
+        response = self.client.get(self._detail_url(self.cot_multi_ctx, instance))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertIsNotNone(response.data['_context'])
         self.assertEqual(response.data['_context']['display'], 'Dave')
@@ -1054,20 +1020,24 @@ class CrossCOTMultiObjectAPITestCase(CustomObjectsTestCase, TestCase):
         self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
 
         # COT_SOURCE has a multiobject field → COT_TARGET
-        self.cot_target = CustomObjectsTestCase.create_custom_object_type(
-            name='CrossTarget', slug='cross-target'
-        )
+        self.cot_target = CustomObjectsTestCase.create_custom_object_type(name='CrossTarget', slug='cross-target')
         CustomObjectsTestCase.create_custom_object_type_field(
-            self.cot_target, name='name', label='Name', type='text',
-            primary=True, required=True,
+            self.cot_target,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
+            required=True,
         )
 
-        self.cot_source = CustomObjectsTestCase.create_custom_object_type(
-            name='CrossSource', slug='cross-source'
-        )
+        self.cot_source = CustomObjectsTestCase.create_custom_object_type(name='CrossSource', slug='cross-source')
         CustomObjectsTestCase.create_custom_object_type_field(
-            self.cot_source, name='name', label='Name', type='text',
-            primary=True, required=True,
+            self.cot_source,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
+            required=True,
         )
         CustomObjectsTestCase.create_custom_object_type_field(
             self.cot_source,
@@ -1211,6 +1181,7 @@ class OwnerAPITestCase(CustomObjectsTestCase, TestCase):
     def setUp(self):
         super().setUp()
         from netbox_custom_objects.models import CustomObjectType
+
         self.cot = CustomObjectType.objects.create(name='OwnedThing', slug='owned-thing')
         self.model = self.cot.get_model()
         token = create_token(self.user)
@@ -1238,6 +1209,7 @@ class OwnerAPITestCase(CustomObjectsTestCase, TestCase):
 
     def _grant_owner_view(self, suffix=''):
         from users.models import Owner
+
         perm = ObjectPermission(name=f'view-owner{suffix}', actions=['view'])
         perm.save()
         perm.users.add(self.user)
@@ -1262,6 +1234,7 @@ class OwnerAPITestCase(CustomObjectsTestCase, TestCase):
     def test_create_with_owner(self):
         """POST with owner=<pk> must persist the owner FK."""
         from users.models import Owner
+
         owner = Owner.objects.create(name='create-owner')
         self._add_perm('add', self.model)
         self._grant_owner_view('-create')
@@ -1283,6 +1256,7 @@ class OwnerAPITestCase(CustomObjectsTestCase, TestCase):
     def test_patch_sets_owner(self):
         """PATCH with owner=<pk> must update the owner FK."""
         from users.models import Owner
+
         obj = self.model.objects.create()
         owner = Owner.objects.create(name='patch-owner')
         self._add_perm('change', self.model)
@@ -1305,6 +1279,7 @@ class OwnerAPITestCase(CustomObjectsTestCase, TestCase):
     def test_patch_clears_owner(self):
         """PATCH with owner=null must clear the owner FK."""
         from users.models import Owner
+
         owner = Owner.objects.create(name='clear-owner')
         obj = self.model.objects.create(owner=owner)
         self._add_perm('change', self.model)
@@ -1322,6 +1297,7 @@ class OwnerAPITestCase(CustomObjectsTestCase, TestCase):
     def test_filter_by_owner_id(self):
         """?owner_id=<pk> must return only instances with that owner."""
         from users.models import Owner
+
         owner_a = Owner.objects.create(name='filter-owner-a')
         owner_b = Owner.objects.create(name='filter-owner-b')
         obj_a = self.model.objects.create(owner=owner_a)
@@ -1341,6 +1317,7 @@ class OwnerAPITestCase(CustomObjectsTestCase, TestCase):
     def test_filter_by_owner_group_id(self):
         """?owner_group_id=<pk> must return only instances whose owner belongs to that group."""
         from users.models import Owner, OwnerGroup
+
         group_x = OwnerGroup.objects.create(name='group-x')
         group_y = OwnerGroup.objects.create(name='group-y')
         owner_x = Owner.objects.create(name='owner-in-x', group=group_x)
@@ -1390,20 +1367,28 @@ class NullOptionalObjectFieldTestCase(CustomObjectsTestCase, TestCase):
         self.client = APIClient()
         self.client.credentials(HTTP_AUTHORIZATION=f'Token {token_key}')
 
-        self.cot = CustomObjectsTestCase.create_custom_object_type(
-            name='NullObjTest', slug='null-obj-test'
-        )
+        self.cot = CustomObjectsTestCase.create_custom_object_type(name='NullObjTest', slug='null-obj-test')
         CustomObjectsTestCase.create_custom_object_type_field(
-            self.cot, name='name', type='text', primary=True, required=True,
+            self.cot,
+            name='name',
+            type='text',
+            primary=True,
+            required=True,
         )
         device_ct = CustomObjectsTestCase.get_device_object_type()
         CustomObjectsTestCase.create_custom_object_type_field(
-            self.cot, name='device', type='object',
-            related_object_type=device_ct, required=False,
+            self.cot,
+            name='device',
+            type='object',
+            related_object_type=device_ct,
+            required=False,
         )
         CustomObjectsTestCase.create_custom_object_type_field(
-            self.cot, name='devices', type='multiobject',
-            related_object_type=device_ct, required=False,
+            self.cot,
+            name='devices',
+            type='multiobject',
+            related_object_type=device_ct,
+            required=False,
         )
         self.model = self.cot.get_model()
 
@@ -1454,13 +1439,9 @@ class NullOptionalObjectFieldTestCase(CustomObjectsTestCase, TestCase):
         """PATCH with null on an optional object field must clear it and return 200."""
         site = Site.objects.create(name='null-test-site', slug='null-test-site')
         manufacturer = Manufacturer.objects.create(name='null-mfr', slug='null-mfr')
-        device_type = DeviceType.objects.create(
-            manufacturer=manufacturer, model='null-dt', slug='null-dt'
-        )
+        device_type = DeviceType.objects.create(manufacturer=manufacturer, model='null-dt', slug='null-dt')
         device_role = DeviceRole.objects.create(name='null-role', slug='null-role')
-        device = Device.objects.create(
-            name='null-dev', site=site, device_type=device_type, role=device_role
-        )
+        device = Device.objects.create(name='null-dev', site=site, device_type=device_type, role=device_role)
         obj = self.model.objects.create(name='patch-null-obj', device=device)
         self.assertIsNotNone(obj.device)
 
@@ -1477,13 +1458,9 @@ class NullOptionalObjectFieldTestCase(CustomObjectsTestCase, TestCase):
         """PATCH with null on an optional multiobject field must clear it and return 200."""
         site = Site.objects.create(name='null-multi-site', slug='null-multi-site')
         manufacturer = Manufacturer.objects.create(name='null-multi-mfr', slug='null-multi-mfr')
-        device_type = DeviceType.objects.create(
-            manufacturer=manufacturer, model='null-multi-dt', slug='null-multi-dt'
-        )
+        device_type = DeviceType.objects.create(manufacturer=manufacturer, model='null-multi-dt', slug='null-multi-dt')
         device_role = DeviceRole.objects.create(name='null-multi-role', slug='null-multi-role')
-        device = Device.objects.create(
-            name='null-multi-dev', site=site, device_type=device_type, role=device_role
-        )
+        device = Device.objects.create(name='null-multi-dev', site=site, device_type=device_type, role=device_role)
         obj = self.model.objects.create(name='patch-null-multi-obj')
         obj.devices.add(device)
         self.assertEqual(obj.devices.count(), 1)
@@ -1501,15 +1478,20 @@ class NullOptionalObjectFieldTestCase(CustomObjectsTestCase, TestCase):
         """POST with null on a required object field must still return 400."""
         device_ct = CustomObjectsTestCase.get_device_object_type()
         uid = uuid.uuid4().hex[:8]
-        cot = CustomObjectsTestCase.create_custom_object_type(
-            name=f'NullReqTest-{uid}', slug=f'null-req-test-{uid}'
+        cot = CustomObjectsTestCase.create_custom_object_type(name=f'NullReqTest-{uid}', slug=f'null-req-test-{uid}')
+        CustomObjectsTestCase.create_custom_object_type_field(
+            cot,
+            name='name',
+            type='text',
+            primary=True,
+            required=True,
         )
         CustomObjectsTestCase.create_custom_object_type_field(
-            cot, name='name', type='text', primary=True, required=True,
-        )
-        CustomObjectsTestCase.create_custom_object_type_field(
-            cot, name='req_device', type='object',
-            related_object_type=device_ct, required=True,
+            cot,
+            name='req_device',
+            type='object',
+            related_object_type=device_ct,
+            required=True,
         )
         model = cot.get_model()
         for action in ('add', 'view'):

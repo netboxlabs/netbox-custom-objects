@@ -8,6 +8,7 @@ is required, hence ``SimpleTestCase``.  Only the tests that the receivers are co
 to netbox-branching's signals need it installed, and a database: netbox-branching's own
 receivers on those signals look up event rules.
 """
+
 from types import SimpleNamespace
 from unittest import mock, skipUnless
 from unittest.mock import Mock
@@ -68,7 +69,6 @@ def _build(*changes):
 
 
 class SupportsBranchingResolverTestCase(SimpleTestCase):
-
     def test_through_model_is_branchable(self):
         model = _model(model_name='through_custom_objects_table1model_devices')
         self.assertIs(supports_branching_resolver(model), True)
@@ -85,7 +85,6 @@ class SupportsBranchingResolverTestCase(SimpleTestCase):
 
 
 class ObjectChangeFieldMigratorTestCase(SimpleTestCase):
-
     def test_delegates_to_resolve_field_aliases(self):
         resolve = Mock(return_value={'new_name': 1})
         model = _model(resolve_field_aliases=resolve)
@@ -105,7 +104,6 @@ class ObjectChangeFieldMigratorTestCase(SimpleTestCase):
 
 
 class CollectCORefsTestCase(SimpleTestCase):
-
     def test_empty_data(self):
         self.assertEqual(_collect_co_refs(_model(), None), set())
         self.assertEqual(_collect_co_refs(_model(), {}), set())
@@ -123,12 +121,14 @@ class CollectCORefsTestCase(SimpleTestCase):
         self.assertEqual(_collect_co_refs(model, {'devices': [], 'sites': ['a', 5]}), {('dcim.site', 5)})
 
     def test_field_objects_add_field_refs(self):
-        model = _model(field_objects={
-            1: {'field': SimpleNamespace(pk=11)},
-            2: {'field': SimpleNamespace(pk=None)},
-            3: {'field': None},
-            4: 'not-a-dict',
-        })
+        model = _model(
+            field_objects={
+                1: {'field': SimpleNamespace(pk=11)},
+                2: {'field': SimpleNamespace(pk=None)},
+                3: {'field': None},
+                4: 'not-a-dict',
+            }
+        )
         self.assertEqual(_collect_co_refs(model, {'name': 'x'}), {(FIELD_LABEL, 11)})
 
     def test_poly_m2m_sidecar_adds_field_refs(self):
@@ -161,7 +161,6 @@ class CollectCORefsTestCase(SimpleTestCase):
 
 
 class ConstraintFieldRefsTestCase(SimpleTestCase):
-
     def setUp(self):
         self.fields = {
             (1, 10): (FIELD_LABEL, 100),
@@ -197,7 +196,6 @@ class ConstraintFieldRefsTestCase(SimpleTestCase):
 
 
 class AddCustomObjectDependenciesTestCase(SimpleTestCase):
-
     def setUp(self):
         self.co_label = f'{APP_LABEL}.table1model'
         self.model = _model(m2m=[_m2m('peers', self.co_label), _m2m('devices', 'dcim.device')])
@@ -252,20 +250,20 @@ class AddCustomObjectDependenciesTestCase(SimpleTestCase):
         member = _change((FIELD_LABEL, 100), 'create', post={'schema_id': 10, 'custom_object_type': 1})
         compared = _change((FIELD_LABEL, 101), 'create', post={'schema_id': 11, 'custom_object_type': 1})
         other_type = _change((FIELD_LABEL, 200), 'create', post={'schema_id': 10, 'custom_object_type': 2})
-        constraint = _change((CONSTRAINT_LABEL, 1), 'create', post={
-            'custom_object_type': 1,
-            'field_schema_ids': [10],
-            'rule': [{'field': 10, 'lookup': 'gte', 'value': {'field': 11}}],
-        })
-        self.assertGraph(
-            _build(member, compared, other_type, constraint), (member, constraint), (compared, constraint)
+        constraint = _change(
+            (CONSTRAINT_LABEL, 1),
+            'create',
+            post={
+                'custom_object_type': 1,
+                'field_schema_ids': [10],
+                'rule': [{'field': 10, 'lookup': 'gte', 'value': {'field': 11}}],
+            },
         )
+        self.assertGraph(_build(member, compared, other_type, constraint), (member, constraint), (compared, constraint))
 
     def test_constraint_delete_precedes_field_delete(self):
         field = _change((FIELD_LABEL, 100), 'delete', pre={'schema_id': 10, 'custom_object_type': 1})
-        constraint = _change(
-            (CONSTRAINT_LABEL, 1), 'delete', pre={'custom_object_type': 1, 'field_schema_ids': [10]}
-        )
+        constraint = _change((CONSTRAINT_LABEL, 1), 'delete', pre={'custom_object_type': 1, 'field_schema_ids': [10]})
         self.assertGraph(_build(field, constraint), (constraint, field))
 
     def test_constraint_schema_ids_are_not_read_as_self_references(self):
@@ -289,23 +287,23 @@ class BranchingReceiversTestCase(SimpleTestCase):
         self.branch = SimpleNamespace(pk=1)
 
     def test_reset_clears_deferred_field_data(self):
-        _deferred_co_field_data.set({"table1model": {1: {"data": {"code": "stale"}}}})
+        _deferred_co_field_data.set({'table1model': {1: {'data': {'code': 'stale'}}}})
         _reset_deferred_co_field_data(sender=None)
         self.assertIsNone(_deferred_co_field_data.get())
 
     def test_heal_on_migrate_heals_the_branch(self):
-        with mock.patch("netbox_custom_objects.mixin_migration.heal_branch") as heal_branch:
+        with mock.patch('netbox_custom_objects.mixin_migration.heal_branch') as heal_branch:
             _heal_branch_on_migrate(sender=None, branch=self.branch, verbosity=0)
         heal_branch.assert_called_once_with(self.branch, verbosity=0)
 
     def test_heal_on_migrate_logs_failures(self):
-        with mock.patch("netbox_custom_objects.mixin_migration.heal_branch", side_effect=RuntimeError("boom")):
-            with self.assertLogs("netbox_custom_objects", level="ERROR") as logs:
+        with mock.patch('netbox_custom_objects.mixin_migration.heal_branch', side_effect=RuntimeError('boom')):
+            with self.assertLogs('netbox_custom_objects', level='ERROR') as logs:
                 _heal_branch_on_migrate(sender=None, branch=self.branch)
-        self.assertIn("healing branch 1 after migrate", logs.output[0])
+        self.assertIn('healing branch 1 after migrate', logs.output[0])
 
 
-@skipUnless(is_branching_enabled(), "netbox-branching is not installed")
+@skipUnless(is_branching_enabled(), 'netbox-branching is not installed')
 class BranchingSignalConnectionTestCase(TestCase):
     """The receivers run when netbox-branching sends its signals."""
 
@@ -316,27 +314,29 @@ class BranchingSignalConnectionTestCase(TestCase):
     def test_merge_sync_and_revert_clear_deferred_field_data(self):
         from netbox_branching import signals
 
-        for name in ("pre_merge", "post_merge", "pre_sync", "post_sync", "pre_revert", "post_revert"):
+        for name in ('pre_merge', 'post_merge', 'pre_sync', 'post_sync', 'pre_revert', 'post_revert'):
             with self.subTest(signal=name):
-                _deferred_co_field_data.set({"table1model": {1: {"data": {"code": "stale"}}}})
+                _deferred_co_field_data.set({'table1model': {1: {'data': {'code': 'stale'}}}})
                 getattr(signals, name).send(sender=None, branch=self.branch, user=None)
                 self.assertIsNone(_deferred_co_field_data.get())
 
     def test_migrate_heals_the_branch(self):
         from netbox_branching.signals import post_migrate
 
-        with mock.patch("netbox_custom_objects.mixin_migration.heal_branch") as heal_branch:
+        with mock.patch('netbox_custom_objects.mixin_migration.heal_branch') as heal_branch:
             post_migrate.send(sender=None, branch=self.branch, user=None)
         heal_branch.assert_called_once_with(self.branch, verbosity=1)
 
     def test_squash_graph_gets_custom_object_edges(self):
         from netbox_branching.signals import squash_dependency_graph_built
 
-        label = f"{APP_LABEL}.table1model"
-        model = _model(m2m=[_m2m("peers", label)])
-        target = _change((label, 2), "create", model, post={"peers": []})
-        source = _change((label, 1), "create", model, post={"peers": [2]})
+        label = f'{APP_LABEL}.table1model'
+        model = _model(m2m=[_m2m('peers', label)])
+        target = _change((label, 2), 'create', model, post={'peers': []})
+        source = _change((label, 1), 'create', model, post={'peers': [2]})
         squash_dependency_graph_built.send(
-            sender=None, collapsed_changes={cc.key: cc for cc in (target, source)}, operation="merge",
+            sender=None,
+            collapsed_changes={cc.key: cc for cc in (target, source)},
+            operation='merge',
         )
         self.assertEqual(source.depends_on, {target.key})

@@ -1,6 +1,7 @@
 """
 Tests for the Custom Object Type field REST API endpoint.
 """
+
 import json
 
 from django.test import TestCase, tag
@@ -37,6 +38,7 @@ class CustomObjectTypeFieldObjectResolutionTestCase(CustomObjectsTestCase, TestC
         obj_perm.save()
         obj_perm.users.add(self.user)
         from netbox_custom_objects.models import CustomObjectTypeField
+
         obj_perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectTypeField))
 
         # The parent COT that owns the new field
@@ -75,40 +77,45 @@ class CustomObjectTypeFieldObjectResolutionTestCase(CustomObjectsTestCase, TestC
         """app_label='custom-objects' + model=<cot slug> must succeed."""
         response = self._post_field('custom-objects', self.target_cot.slug)
         self.assertEqual(
-            response.status_code, status.HTTP_201_CREATED,
-            f"Expected 201, got {response.status_code}: {response.data}",
+            response.status_code,
+            status.HTTP_201_CREATED,
+            f'Expected 201, got {response.status_code}: {response.data}',
         )
 
     def test_public_app_label_with_internal_model_name_accepted(self):
         """app_label='custom-objects' + model=<table{N}model> must succeed."""
         response = self._post_field('custom-objects', self._internal_model_name())
         self.assertEqual(
-            response.status_code, status.HTTP_201_CREATED,
-            f"Expected 201, got {response.status_code}: {response.data}",
+            response.status_code,
+            status.HTTP_201_CREATED,
+            f'Expected 201, got {response.status_code}: {response.data}',
         )
 
     def test_internal_app_label_with_slug_accepted(self):
         """app_label='netbox_custom_objects' + model=<cot slug> must succeed."""
         response = self._post_field('netbox_custom_objects', self.target_cot.slug)
         self.assertEqual(
-            response.status_code, status.HTTP_201_CREATED,
-            f"Expected 201, got {response.status_code}: {response.data}",
+            response.status_code,
+            status.HTTP_201_CREATED,
+            f'Expected 201, got {response.status_code}: {response.data}',
         )
 
     def test_internal_app_label_with_internal_model_name_accepted(self):
         """app_label='netbox_custom_objects' + model=<table{N}model> must succeed (original behaviour)."""
         response = self._post_field('netbox_custom_objects', self._internal_model_name())
         self.assertEqual(
-            response.status_code, status.HTTP_201_CREATED,
-            f"Expected 201, got {response.status_code}: {response.data}",
+            response.status_code,
+            status.HTTP_201_CREATED,
+            f'Expected 201, got {response.status_code}: {response.data}',
         )
 
     def test_multiobject_public_app_label_with_slug_accepted(self):
         """Same resolution must work for multiobject field type."""
         response = self._post_field('custom-objects', self.target_cot.slug, field_type='multiobject')
         self.assertEqual(
-            response.status_code, status.HTTP_201_CREATED,
-            f"Expected 201, got {response.status_code}: {response.data}",
+            response.status_code,
+            status.HTTP_201_CREATED,
+            f'Expected 201, got {response.status_code}: {response.data}',
         )
 
     def test_nonexistent_slug_returns_400(self):
@@ -208,9 +215,7 @@ class SchemaIdReadOnlyTestCase(CustomObjectsTestCase, TestCase):
             'type': 'text',
             'schema_id': 999,
         }
-        response = self.client.post(
-            self._field_list_url(), data, format='json', **self.header
-        )
+        response = self.client.post(self._field_list_url(), data, format='json', **self.header)
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertNotEqual(response.data['schema_id'], 999)
 

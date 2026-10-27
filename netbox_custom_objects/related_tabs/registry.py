@@ -38,9 +38,7 @@ def _inject_co_urls():
         return
 
     full_path = f'<str:custom_object_type>/<int:pk>/{_CO_COMBINED_PATH}/'
-    co_urls.urlpatterns.append(
-        url_path(full_path, make_co_combined_view().as_view(), name=CO_COMBINED_URL_NAME)
-    )
+    co_urls.urlpatterns.append(url_path(full_path, make_co_combined_view().as_view(), name=CO_COMBINED_URL_NAME))
     logger.debug("injected URL pattern '%s'", CO_COMBINED_URL_NAME)
 
 
@@ -77,7 +75,9 @@ def _public_host_model_classes():
         except Exception:
             logger.exception(
                 'skipping ObjectType pk=%s (%s.%s): error resolving its model class',
-                ot.pk, ot.app_label, ot.model,
+                ot.pk,
+                ot.app_label,
+                ot.model,
             )
             continue
         if model is None:
@@ -86,7 +86,9 @@ def _public_host_model_classes():
             logger.debug(
                 'skipping ObjectType pk=%s (%s.%s): no installed model — likely a stale row from an '
                 'uninstalled plugin or a deleted Custom Object Type',
-                ot.pk, ot.app_label, ot.model,
+                ot.pk,
+                ot.app_label,
+                ot.model,
             )
             continue
         key = (model._meta.app_label, model._meta.model_name)

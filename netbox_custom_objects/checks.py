@@ -55,38 +55,43 @@ def check_branching_compatibility(app_configs, **kwargs):
     try:
         netbox_version = Version(settings.RELEASE.version)
         if netbox_version < Version(REQUIRED_NETBOX_VERSION_FOR_BRANCHING):
-            errors.append(Error(
-                f'netbox-custom-objects requires NetBox >= {REQUIRED_NETBOX_VERSION_FOR_BRANCHING} '
-                f'when netbox-branching is installed (detected {netbox_version}).',
-                hint='Upgrade NetBox, or remove netbox-branching from PLUGINS '
-                     'if you do not need branching support for custom objects.',
-                id='netbox_custom_objects.E001',
-            ))
+            errors.append(
+                Error(
+                    f'netbox-custom-objects requires NetBox >= {REQUIRED_NETBOX_VERSION_FOR_BRANCHING} '
+                    f'when netbox-branching is installed (detected {netbox_version}).',
+                    hint='Upgrade NetBox, or remove netbox-branching from PLUGINS '
+                    'if you do not need branching support for custom objects.',
+                    id='netbox_custom_objects.E001',
+                )
+            )
     except (AttributeError, InvalidVersion):
         pass  # settings.RELEASE missing/unparseable — other checks surface it
 
     try:
         branching_version = Version(_get_branching_version())
         if branching_version < Version(REQUIRED_BRANCHING_VERSION):
-            errors.append(Error(
-                f'netbox-custom-objects requires netbox-branching >= '
-                f'{REQUIRED_BRANCHING_VERSION} (detected {branching_version}).',
-                hint=f'Upgrade with: pip install "netboxlabs-netbox-branching>={REQUIRED_BRANCHING_VERSION}"',
-                id='netbox_custom_objects.E002',
-            ))
+            errors.append(
+                Error(
+                    f'netbox-custom-objects requires netbox-branching >= '
+                    f'{REQUIRED_BRANCHING_VERSION} (detected {branching_version}).',
+                    hint=f'Upgrade with: pip install "netboxlabs-netbox-branching>={REQUIRED_BRANCHING_VERSION}"',
+                    id='netbox_custom_objects.E002',
+                )
+            )
     except PackageNotFoundError:
         # netbox-branching is an installed app but its distribution metadata
         # isn't discoverable (e.g. an editable checkout without dist-info), so
         # the version floor can't be enforced.  Warn rather than silently pass
         # so an incompatible checkout doesn't slip through unnoticed.
-        errors.append(Warning(
-            'netbox-branching is installed but its version could not be '
-            f'determined, so the >= {REQUIRED_BRANCHING_VERSION} requirement '
-            'cannot be verified.',
-            hint='If using an editable install of netboxlabs-netbox-branching, '
-                 'reinstall with: pip install -e .',
-            id='netbox_custom_objects.W001',
-        ))
+        errors.append(
+            Warning(
+                'netbox-branching is installed but its version could not be '
+                f'determined, so the >= {REQUIRED_BRANCHING_VERSION} requirement '
+                'cannot be verified.',
+                hint='If using an editable install of netboxlabs-netbox-branching, reinstall with: pip install -e .',
+                id='netbox_custom_objects.W001',
+            )
+        )
     except InvalidVersion:
         pass  # unparseable version string — skip rather than emit a confusing error
 
@@ -111,12 +116,14 @@ def check_related_tabs_registration(app_configs, **kwargs):
     if not error:
         return []
 
-    return [Warning(
-        f'The combined "Custom Objects" related tab failed to register at startup '
-        f'and will not appear on object detail pages ({error}).',
-        hint='Resolve the underlying error (full traceback is in the NetBox log) and restart NetBox.',
-        id='netbox_custom_objects.W002',
-    )]
+    return [
+        Warning(
+            f'The combined "Custom Objects" related tab failed to register at startup '
+            f'and will not appear on object detail pages ({error}).',
+            hint='Resolve the underlying error (full traceback is in the NetBox log) and restart NetBox.',
+            id='netbox_custom_objects.W002',
+        )
+    ]
 
 
 @register()
@@ -125,8 +132,10 @@ def check_multiobject_display_setting(app_configs, **kwargs):
     value = get_plugin_config('netbox_custom_objects', 'max_multiobject_display')
     if isinstance(value, int) and value >= 1:
         return []
-    return [Warning(
-        f'PLUGINS_CONFIG max_multiobject_display must be a positive integer (got {value!r}); using the default 3.',
-        hint="Set 'max_multiobject_display' to a positive integer under PLUGINS_CONFIG['netbox_custom_objects'].",
-        id='netbox_custom_objects.W003',
-    )]
+    return [
+        Warning(
+            f'PLUGINS_CONFIG max_multiobject_display must be a positive integer (got {value!r}); using the default 3.',
+            hint="Set 'max_multiobject_display' to a positive integer under PLUGINS_CONFIG['netbox_custom_objects'].",
+            id='netbox_custom_objects.W003',
+        )
+    ]

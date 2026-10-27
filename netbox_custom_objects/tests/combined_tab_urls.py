@@ -4,6 +4,7 @@ URLconf adding the combined "Custom Objects" tab on Site.
 The plugin registers the tab on built-in models from ``ready()``, which returns early
 under the test runner, so ``CombinedTabBuiltinHostTestCase`` routes the tab here.
 """
+
 from django.urls import path
 from netbox.urls import urlpatterns as netbox_urlpatterns
 

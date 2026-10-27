@@ -37,6 +37,7 @@ except ImportError:
         except TemplateDoesNotExist:
             return 'generic/object.html'
 
+
 logger = logging.getLogger('netbox_custom_objects.related_tabs')
 
 _CUSTOM_OBJECTS_APP = 'netbox_custom_objects'
@@ -396,8 +397,7 @@ def _batch_multiobject_values(pairs, user=None):
             all_targets = [t for targets in per_obj_targets.values() for t in targets]
             viewable_pks = {t.pk for t in restrict_to_viewable(user, all_targets)}
             per_obj_targets = {
-                oid: [t for t in targets if t.pk in viewable_pks]
-                for oid, targets in per_obj_targets.items()
+                oid: [t for t in targets if t.pk in viewable_pks] for oid, targets in per_obj_targets.items()
             }
         for obj in objs:
             resolved[(id(obj), key)] = per_obj_targets[id(obj)][:limit]
@@ -515,9 +515,7 @@ def _render_combined_tab(request, instance, tab):
 
     # Filters preserved on the column sort links (each link adds its own ?sort=)
     base_params = {
-        key: value
-        for key, value in (('q', q), ('type', type_slug), ('tag', tag_slug), ('per_page', per_page))
-        if value
+        key: value for key, value in (('q', q), ('type', type_slug), ('tag', tag_slug), ('per_page', per_page)) if value
     }
 
     sort_headers = {

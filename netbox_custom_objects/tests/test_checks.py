@@ -7,6 +7,7 @@ is installed, so every branch is exercised by mocking its three inputs:
 ``apps.is_installed``, ``settings.RELEASE``, and the importlib.metadata
 ``version`` lookup.  No database is required, hence ``SimpleTestCase``.
 """
+
 from importlib.metadata import PackageNotFoundError
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -38,9 +39,11 @@ def _run(*, branching_installed=True, netbox_version='4.6.2', branching_version=
     if release is not None:
         settings_stub.RELEASE = release
 
-    with patch.object(checks.apps, 'is_installed', return_value=branching_installed), \
-         patch.object(checks, 'settings', settings_stub), \
-         patch.object(checks, '_pkg_version', fake_pkg_version):
+    with (
+        patch.object(checks.apps, 'is_installed', return_value=branching_installed),
+        patch.object(checks, 'settings', settings_stub),
+        patch.object(checks, '_pkg_version', fake_pkg_version),
+    ):
         return checks.check_branching_compatibility(app_configs=None)
 
 

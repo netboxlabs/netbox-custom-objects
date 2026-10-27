@@ -196,10 +196,14 @@ class RegisterTabsAppInitWarningTestCase(TestCase):
 
     def test_register_tabs_suppresses_branching_routing_warning(self):
         """netbox-branching warns about routing that query when it's loaded after this plugin."""
+
         def routed_query():
             warnings.warn_explicit(
                 'Routing database query before branching support is initialized.',
-                UserWarning, 'database.py', 1, module='netbox_branching.database',
+                UserWarning,
+                'database.py',
+                1,
+                module='netbox_branching.database',
             )
 
         target = 'netbox_custom_objects.related_tabs.registry.register_tabs'

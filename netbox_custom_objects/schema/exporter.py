@@ -39,28 +39,29 @@ logger = logging.getLogger(__name__)
 # Type-specific attributes (validation_*, choice_set, related_*) are handled
 # separately via FIELD_TYPE_ATTRS.
 _BASE_ATTRS = (
-    "label",
-    "description",
-    "group_name",
-    "primary",
-    "required",
-    "unique",
-    "default",
-    "weight",
-    "search_weight",
-    "filter_logic",
-    "ui_visible",
-    "ui_editable",
-    "is_cloneable",
-    "deprecated",
-    "deprecated_since",
-    "scheduled_removal",
+    'label',
+    'description',
+    'group_name',
+    'primary',
+    'required',
+    'unique',
+    'default',
+    'weight',
+    'search_weight',
+    'filter_logic',
+    'ui_visible',
+    'ui_editable',
+    'is_cloneable',
+    'deprecated',
+    'deprecated_since',
+    'scheduled_removal',
 )
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
 
 def _encode_related_object_type(rot) -> str:
     """
@@ -75,10 +76,11 @@ def _encode_related_object_type(rot) -> str:
             # Avoid a circular import — import here so the module can be loaded
             # independently of the full Django app stack in unit tests.
             from netbox_custom_objects.models import CustomObjectType  # noqa: PLC0415
+
             cot_id = int(m.group(1))
             slug = CustomObjectType.objects.values_list('slug', flat=True).get(pk=cot_id)
-            return f"{CUSTOM_OBJECTS_APP_LABEL_SLUG}/{slug}"
-    return f"{rot.app_label}/{rot.model}"
+            return f'{CUSTOM_OBJECTS_APP_LABEL_SLUG}/{slug}'
+    return f'{rot.app_label}/{rot.model}'
 
 
 def _export_field(field) -> dict:
@@ -90,16 +92,15 @@ def _export_field(field) -> dict:
     """
     if field.schema_id is None:
         raise ValueError(
-            f"Field {field.name!r} on COT {field.custom_object_type_id!r} "
-            "has no schema_id and cannot be exported."
+            f'Field {field.name!r} on COT {field.custom_object_type_id!r} has no schema_id and cannot be exported.'
         )
 
     schema_type = CHOICES_TO_SCHEMA_TYPE[field.type]
 
     result = {
-        "id": field.schema_id,
-        "name": field.name,
-        "type": schema_type,
+        'id': field.schema_id,
+        'name': field.name,
+        'type': schema_type,
     }
 
     # ── Base attributes (omit when equal to documented defaults) ────────────
@@ -110,45 +111,43 @@ def _export_field(field) -> dict:
 
     # ── Type-specific attributes ─────────────────────────────────────────────
     for attr in sorted(FIELD_TYPE_ATTRS[schema_type]):
-        if attr == "choice_set":
+        if attr == 'choice_set':
             # Required for select/multiselect; validate.
             if field.choice_set is None:
-                raise ValueError(
-                    f"Field {field.name!r} is type {schema_type!r} but has no choice_set assigned."
-                )
-            result["choice_set"] = field.choice_set.name
-        elif attr == "is_polymorphic":
+                raise ValueError(f'Field {field.name!r} is type {schema_type!r} but has no choice_set assigned.')
+            result['choice_set'] = field.choice_set.name
+        elif attr == 'is_polymorphic':
             if field.is_polymorphic:
-                result["is_polymorphic"] = True
-        elif attr == "related_object_type":
+                result['is_polymorphic'] = True
+        elif attr == 'related_object_type':
             # Only for non-polymorphic object/multiobject; always present when applicable.
             if not field.is_polymorphic:
-                result["related_object_type"] = _encode_related_object_type(
-                    field.related_object_type
-                )
-        elif attr == "related_object_types":
+                result['related_object_type'] = _encode_related_object_type(field.related_object_type)
+        elif attr == 'related_object_types':
             # Only for polymorphic object/multiobject; encode each allowed type.
             if field.is_polymorphic:
-                encoded = sorted(
-                    _encode_related_object_type(rot)
-                    for rot in field.related_object_types.all()
-                )
+                encoded = sorted(_encode_related_object_type(rot) for rot in field.related_object_types.all())
                 if encoded:
-                    result["related_object_types"] = encoded
-        elif attr == "related_object_filter":
+                    result['related_object_types'] = encoded
+        elif attr == 'related_object_filter':
             value = field.related_object_filter
-            if value != FIELD_DEFAULTS.get("related_object_filter"):
-                result["related_object_filter"] = value
-        elif attr == "related_name":
+            if value != FIELD_DEFAULTS.get('related_object_filter'):
+                result['related_object_filter'] = value
+        elif attr == 'related_name':
             if field.related_name:
-                result["related_name"] = field.related_name
-        elif attr == "on_delete_behavior":
-            value = field.on_delete_behavior or FIELD_DEFAULTS["on_delete_behavior"]
-            if value != FIELD_DEFAULTS["on_delete_behavior"]:
+                result['related_name'] = field.related_name
+        elif attr == 'on_delete_behavior':
+            value = field.on_delete_behavior or FIELD_DEFAULTS['on_delete_behavior']
+            if value != FIELD_DEFAULTS['on_delete_behavior']:
                 result[attr] = value
         elif attr in (
-            "validation_regex", "validation_minimum", "validation_maximum",
-            "array_element_type", "array_tuple_size", "array_min_length", "array_max_length",
+            'validation_regex',
+            'validation_minimum',
+            'validation_maximum',
+            'array_element_type',
+            'array_tuple_size',
+            'array_min_length',
+            'array_max_length',
         ):
             value = getattr(field, attr)
             if value != FIELD_DEFAULTS.get(attr):
@@ -159,9 +158,9 @@ def _export_field(field) -> dict:
 
 def _export_constraint(constraint) -> dict:
     """Serialise a ``CustomObjectTypeConstraint`` to a schema constraint dict."""
-    result = {"name": constraint.name}
+    result = {'name': constraint.name}
     if constraint.field_schema_ids:
-        result["fields"] = list(constraint.field_schema_ids)
+        result['fields'] = list(constraint.field_schema_ids)
     for attr, default in CONSTRAINT_DEFAULTS.items():
         value = getattr(constraint, attr)
         if value != default:
@@ -173,9 +172,9 @@ def _removed_constraints_from_document(cot) -> list:
     """Return the ``removed_constraints`` names for *cot* from its stored ``schema_document``."""
     if not cot.schema_document:
         return []
-    for type_def in cot.schema_document.get("types", []):
-        if type_def.get("slug") == cot.slug:
-            return list(type_def.get("removed_constraints", []))
+    for type_def in cot.schema_document.get('types', []):
+        if type_def.get('slug') == cot.slug:
+            return list(type_def.get('removed_constraints', []))
     return []
 
 
@@ -187,15 +186,16 @@ def _removed_fields_from_document(cot) -> list:
     """
     if not cot.schema_document:
         return []
-    for type_def in cot.schema_document.get("types", []):
-        if type_def.get("slug") == cot.slug:
-            return list(type_def.get("removed_fields", []))
+    for type_def in cot.schema_document.get('types', []):
+        if type_def.get('slug') == cot.slug:
+            return list(type_def.get('removed_fields', []))
     return []
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def export_cot(cot) -> dict:
     """
@@ -205,30 +205,30 @@ def export_cot(cot) -> dict:
     Fields without a ``schema_id`` are skipped; a WARNING is logged for each.
     """
     result: dict = {
-        "name": cot.name,
-        "slug": cot.slug,
+        'name': cot.name,
+        'slug': cot.slug,
     }
 
     # Optional COT-level attributes — omit when blank/unset.
     if cot.version:
-        result["version"] = cot.version
+        result['version'] = cot.version
     if cot.verbose_name:
-        result["verbose_name"] = cot.verbose_name
+        result['verbose_name'] = cot.verbose_name
     if cot.verbose_name_plural:
-        result["verbose_name_plural"] = cot.verbose_name_plural
+        result['verbose_name_plural'] = cot.verbose_name_plural
     if cot.description:
-        result["description"] = cot.description
+        result['description'] = cot.description
     if cot.group_name:
-        result["group_name"] = cot.group_name
+        result['group_name'] = cot.group_name
 
     # Active + deprecated fields, ordered by schema_id for stable output.
     exported_fields = []
-    for field in cot.fields.order_by("schema_id").prefetch_related("related_object_types"):
+    for field in cot.fields.order_by('schema_id').prefetch_related('related_object_types'):
         if field.schema_id is None:
             logger.warning(
-                "Skipping field %r on COT %r during export: no schema_id assigned. "
-                "This field was likely created before the schema-format feature was "
-                "introduced and cannot be tracked portably.",
+                'Skipping field %r on COT %r during export: no schema_id assigned. '
+                'This field was likely created before the schema-format feature was '
+                'introduced and cannot be tracked portably.',
                 field.name,
                 cot.name,
             )
@@ -236,21 +236,21 @@ def export_cot(cot) -> dict:
         exported_fields.append(_export_field(field))
 
     if exported_fields:
-        result["fields"] = exported_fields
+        result['fields'] = exported_fields
 
     # Tombstones from previous apply operations.
     removed = _removed_fields_from_document(cot)
     if removed:
-        result["removed_fields"] = removed
+        result['removed_fields'] = removed
 
-    constraints = [_export_constraint(c) for c in cot.constraints.order_by("name")]
+    constraints = [_export_constraint(c) for c in cot.constraints.order_by('name')]
     if constraints:
-        result["constraints"] = constraints
+        result['constraints'] = constraints
     # A removed name may since have been reused for a new constraint.
-    current_names = {c["name"] for c in constraints}
+    current_names = {c['name'] for c in constraints}
     removed_constraints = [n for n in _removed_constraints_from_document(cot) if n not in current_names]
     if removed_constraints:
-        result["removed_constraints"] = removed_constraints
+        result['removed_constraints'] = removed_constraints
 
     return result
 
@@ -264,8 +264,8 @@ def export_cots(cots) -> dict:
     *cots* may be any iterable of ``CustomObjectType`` instances.
     """
     if not cots:
-        raise ValueError("Minimum 1 Custom Object Type required.")
+        raise ValueError('Minimum 1 Custom Object Type required.')
     return {
-        "schema_version": SCHEMA_FORMAT_VERSION,
-        "types": [export_cot(cot) for cot in cots],
+        'schema_version': SCHEMA_FORMAT_VERSION,
+        'types': [export_cot(cot) for cot in cots],
     }

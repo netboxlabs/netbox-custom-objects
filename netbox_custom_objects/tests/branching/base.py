@@ -9,6 +9,7 @@ These tests use TransactionTestCase (not TestCase) because branch schemas live
 in separate PostgreSQL schemas backed by distinct database connections that
 cannot be rolled back inside a single SAVEPOINT-based transaction.
 """
+
 import logging
 import os
 import time
@@ -53,9 +54,7 @@ _TestBase = TransactionTestCase if HAS_BRANCHING else object
 
 # Provisioning timeout for branch tests. Override via the
 # ``NETBOX_CO_BRANCH_PROVISION_TIMEOUT`` env var (seconds) when CI flakes.
-BRANCH_PROVISION_TIMEOUT = float(
-    os.environ.get('NETBOX_CO_BRANCH_PROVISION_TIMEOUT', '30')
-)
+BRANCH_PROVISION_TIMEOUT = float(os.environ.get('NETBOX_CO_BRANCH_PROVISION_TIMEOUT', '30'))
 
 
 def _provision_branch(name, merge_strategy=None, user=None, timeout=None):
@@ -76,10 +75,7 @@ def _provision_branch(name, merge_strategy=None, user=None, timeout=None):
         if branch.status == BranchStatusChoices.READY:
             return branch
         time.sleep(0.1)
-    raise TimeoutError(
-        f'Branch {name!r} did not reach READY within {timeout:.0f} s '
-        f'(status={branch.status!r})'
-    )
+    raise TimeoutError(f'Branch {name!r} did not reach READY within {timeout:.0f} s (status={branch.status!r})')
 
 
 def _close_branch_connections():
@@ -91,13 +87,15 @@ def _close_branch_connections():
     multi-pass teardown stays quiet.
     """
     from django.db.utils import DatabaseError
+
     for branch in Branch.objects.all():
         try:
             connections[branch.connection_name].close()
         except DatabaseError:
             logger.debug(
                 'failed to close branch connection %r',
-                branch.connection_name, exc_info=True,
+                branch.connection_name,
+                exc_info=True,
             )
 
 

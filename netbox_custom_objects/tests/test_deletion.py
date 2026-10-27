@@ -5,6 +5,7 @@ The database enforces on-delete behaviour with FK constraints that a field adds 
 its transaction commits, so the tests that delete with raw SQL run the field's
 on-commit callbacks. ORM deletes use the model field's on_delete and don't need them.
 """
+
 from unittest import mock
 
 from django.apps import apps as django_apps
@@ -35,19 +36,15 @@ class DeletionTestCase(CustomObjectsTestCase, TestCase):
     def _field_exists_on_model(self, model, field_name):
         return field_name in {f.name for f in model._meta.get_fields()}
 
-    def _make_device(self, suffix=""):
+    def _make_device(self, suffix=''):
         """Create a minimal Device and return it."""
         site = Site.objects.create(name=f'Del Test Site{suffix}', slug=f'del-test-site{suffix}')
         manufacturer = Manufacturer.objects.create(name=f'Del Test Mfr{suffix}', slug=f'del-test-mfr{suffix}')
         device_type = DeviceType.objects.create(
             manufacturer=manufacturer, model=f'Del Test Type{suffix}', slug=f'del-test-type{suffix}'
         )
-        role = DeviceRole.objects.create(
-            name=f'Del Test Role{suffix}', slug=f'del-test-role{suffix}', color='aaaaaa'
-        )
-        return Device.objects.create(
-            name=f'Del Test Device{suffix}', site=site, device_type=device_type, role=role
-        )
+        role = DeviceRole.objects.create(name=f'Del Test Role{suffix}', slug=f'del-test-role{suffix}', color='aaaaaa')
+        return Device.objects.create(name=f'Del Test Device{suffix}', site=site, device_type=device_type, role=role)
 
     # ------------------------------------------------------------------
     # Tests
@@ -110,12 +107,12 @@ class DeletionTestCase(CustomObjectsTestCase, TestCase):
 
         self.assertTrue(
             model_b.objects.filter(pk=obj_b.pk).exists(),
-            "Custom Object B must survive when Object A is deleted (SET NULL, not CASCADE).",
+            'Custom Object B must survive when Object A is deleted (SET NULL, not CASCADE).',
         )
         obj_b.refresh_from_db()
         self.assertIsNone(
             obj_b.ref_a_id,
-            "The ref_a field on Object B must be NULL after Object A is deleted.",
+            'The ref_a field on Object B must be NULL after Object A is deleted.',
         )
 
     def test_delete_cot_referenced_by_another_cot(self):
@@ -137,7 +134,7 @@ class DeletionTestCase(CustomObjectsTestCase, TestCase):
 
         self.assertFalse(
             CustomObjectTypeField.objects.filter(pk=ref_field_id).exists(),
-            "Field referencing the deleted COT should have been removed.",
+            'Field referencing the deleted COT should have been removed.',
         )
         # The source COT itself must survive
         self.assertTrue(CustomObjectType.objects.filter(pk=cot_source.pk).exists())
@@ -203,10 +200,10 @@ class DeletionTestCase(CustomObjectsTestCase, TestCase):
         self.assertFalse(Device.objects.filter(pk=device_pk).exists())
         self.assertTrue(
             model.objects.filter(pk=co.pk).exists(),
-            "Custom Object must survive when Device is deleted (SET NULL).",
+            'Custom Object must survive when Device is deleted (SET NULL).',
         )
         co.refresh_from_db()
-        self.assertIsNone(co.device_id, "device field must be NULL after Device is deleted.")
+        self.assertIsNone(co.device_id, 'device field must be NULL after Device is deleted.')
 
     def test_delete_referenced_core_object_cascade(self):
         """on_delete_behavior=cascade: deleting the referenced core object must also delete the CO."""
@@ -235,7 +232,7 @@ class DeletionTestCase(CustomObjectsTestCase, TestCase):
         self.assertFalse(Device.objects.filter(pk=device_pk).exists())
         self.assertFalse(
             model.objects.filter(pk=co_pk).exists(),
-            "Custom Object must be deleted when Device is deleted (CASCADE).",
+            'Custom Object must be deleted when Device is deleted (CASCADE).',
         )
 
     def test_delete_referenced_core_object_protect(self):
@@ -260,7 +257,7 @@ class DeletionTestCase(CustomObjectsTestCase, TestCase):
 
         # The DB-level RESTRICT constraint should prevent deletion.
         # PostgreSQL raises an IntegrityError wrapping a ForeignKeyViolation.
-        with self.assertRaises(IntegrityError, msg="RESTRICT should prevent deletion of the referenced Device"):
+        with self.assertRaises(IntegrityError, msg='RESTRICT should prevent deletion of the referenced Device'):
             with transaction.atomic(), connection.cursor() as cursor:
                 cursor.execute('DELETE FROM dcim_device WHERE id = %s', [device_pk])
 
@@ -298,7 +295,7 @@ class DeletionTestCase(CustomObjectsTestCase, TestCase):
 
         self.assertFalse(
             model_source.objects.filter(pk=obj_source_pk).exists(),
-            "Source CO must be deleted when its CASCADE target CO is deleted.",
+            'Source CO must be deleted when its CASCADE target CO is deleted.',
         )
 
     def test_delete_co_referenced_by_another_co_protect(self):
@@ -330,7 +327,7 @@ class DeletionTestCase(CustomObjectsTestCase, TestCase):
         # Both objects must remain intact.
         self.assertTrue(
             model_target.objects.filter(pk=obj_target.pk).exists(),
-            "Target CO must survive when deletion is blocked by PROTECT.",
+            'Target CO must survive when deletion is blocked by PROTECT.',
         )
 
     def test_change_on_delete_behavior_protect_to_set_null(self):
@@ -354,7 +351,7 @@ class DeletionTestCase(CustomObjectsTestCase, TestCase):
         device_pk = device.pk
 
         # Confirm PROTECT is in effect: raw DELETE must be blocked.
-        with self.assertRaises(IntegrityError, msg="RESTRICT should block deletion before the change"):
+        with self.assertRaises(IntegrityError, msg='RESTRICT should block deletion before the change'):
             with transaction.atomic(), connection.cursor() as cursor:
                 cursor.execute('DELETE FROM dcim_device WHERE id = %s', [device_pk])
 
@@ -371,10 +368,10 @@ class DeletionTestCase(CustomObjectsTestCase, TestCase):
         self.assertFalse(Device.objects.filter(pk=device_pk).exists())
         self.assertTrue(
             model.objects.filter(pk=co.pk).exists(),
-            "CO must survive after switching to SET_NULL and deleting the Device.",
+            'CO must survive after switching to SET_NULL and deleting the Device.',
         )
         co.refresh_from_db()
-        self.assertIsNone(co.device_id, "device field must be NULL after Device is deleted.")
+        self.assertIsNone(co.device_id, 'device field must be NULL after Device is deleted.')
 
     def test_change_on_delete_behavior_protect_to_cascade(self):
         """Changing on_delete_behavior from PROTECT to CASCADE on an existing field must update
@@ -397,7 +394,7 @@ class DeletionTestCase(CustomObjectsTestCase, TestCase):
         device_pk = device.pk
 
         # Confirm PROTECT is in effect.
-        with self.assertRaises(IntegrityError, msg="RESTRICT should block deletion before the change"):
+        with self.assertRaises(IntegrityError, msg='RESTRICT should block deletion before the change'):
             with transaction.atomic(), connection.cursor() as cursor:
                 cursor.execute('DELETE FROM dcim_device WHERE id = %s', [device_pk])
 
@@ -414,7 +411,7 @@ class DeletionTestCase(CustomObjectsTestCase, TestCase):
         self.assertFalse(Device.objects.filter(pk=device_pk).exists())
         self.assertFalse(
             model.objects.filter(pk=co_pk).exists(),
-            "CO must be deleted after switching to CASCADE and deleting the Device.",
+            'CO must be deleted after switching to CASCADE and deleting the Device.',
         )
 
     def test_protect_co_to_co_enforced_at_db_level(self):
@@ -447,14 +444,15 @@ class DeletionTestCase(CustomObjectsTestCase, TestCase):
         model_source.objects.create(name='Source Object', ref_target=obj_target)
 
         target_table = cot_target.get_database_table_name()
-        with self.assertRaises(IntegrityError,
-                               msg="DB-level ON DELETE RESTRICT must block raw-SQL deletion of the target"):
+        with self.assertRaises(
+            IntegrityError, msg='DB-level ON DELETE RESTRICT must block raw-SQL deletion of the target'
+        ):
             with transaction.atomic(), connection.cursor() as cursor:
                 cursor.execute(f'DELETE FROM {target_table} WHERE id = %s', [obj_target.pk])
 
         self.assertTrue(
             model_target.objects.filter(pk=obj_target.pk).exists(),
-            "Target object must survive the failed deletion.",
+            'Target object must survive the failed deletion.',
         )
 
     # ------------------------------------------------------------------
@@ -674,15 +672,25 @@ class DeletionTestCase(CustomObjectsTestCase, TestCase):
         cot_source = self.create_simple_custom_object_type(name='ctxsrc', slug='ctx-src')
         cot_target = self.create_simple_custom_object_type(name='ctxtrg', slug='ctx-trg')
         self.create_custom_object_type_field(
-            cot_source, name='ref', label='Reference', type='object',
+            cot_source,
+            name='ref',
+            label='Reference',
+            type='object',
             related_object_type=cot_target.object_type,
         )
         self.create_custom_object_type_field(
-            cot_source, name='refs', label='References', type='multiobject',
+            cot_source,
+            name='refs',
+            label='References',
+            type='multiobject',
             related_object_type=cot_target.object_type,
         )
         poly_field = self.create_custom_object_type_field(
-            cot_source, name='poly', label='Polymorphic', type='multiobject', is_polymorphic=True,
+            cot_source,
+            name='poly',
+            label='Polymorphic',
+            type='multiobject',
+            is_polymorphic=True,
         )
         poly_field.related_object_types.set([cot_target.object_type, ObjectType.objects.get_for_model(Site)])
 

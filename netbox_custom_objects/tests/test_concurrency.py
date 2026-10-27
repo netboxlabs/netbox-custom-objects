@@ -2,6 +2,7 @@
 Tests that run threads. They use TransactionTestCase, because each thread uses its own
 database connection and only sees committed data.
 """
+
 import threading
 from unittest import mock
 from unittest.mock import patch
@@ -81,9 +82,9 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
                 t.join()
 
         self.assertEqual(
-            reader_errors, [],
-            "concurrent get_model() calls must not raise while a polymorphic "
-            "multiobject field is being created",
+            reader_errors,
+            [],
+            'concurrent get_model() calls must not raise while a polymorphic multiobject field is being created',
         )
 
         # get_model() and the through model's "source" FK must agree on which
@@ -92,9 +93,10 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
         through_model = apps.get_model(APP_LABEL, field.through_model_name)
         source_field = through_model._meta.get_field('source')
         self.assertIs(
-            source_field.remote_field.model, final_model,
+            source_field.remote_field.model,
+            final_model,
             "the registered through model's source FK must point at the model class "
-            "get_model() currently returns, not an orphaned duplicate from a losing thread",
+            'get_model() currently returns, not an orphaned duplicate from a losing thread',
         )
 
         obj = final_model.objects.create(name='Instance 1')
@@ -219,11 +221,11 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
         # A join() timeout leaves the result dicts empty rather than raising, so without these
         # checks a hung thread could silently make the assertions below vacuously pass -- e.g. a
         # writer that never finished never reaches the mismatch-inducing repoint at all.
-        self.assertFalse(t_w.is_alive(), "writer thread did not complete within the join timeout")
-        self.assertFalse(t_r.is_alive(), "reader thread did not complete within the join timeout")
+        self.assertFalse(t_w.is_alive(), 'writer thread did not complete within the join timeout')
+        self.assertFalse(t_r.is_alive(), 'reader thread did not complete within the join timeout')
 
-        self.assertNotIn('error', writer_result, f"writer raised: {writer_result.get('error')!r}")
-        self.assertNotIn('error', reader_result, f"reader raised: {reader_result.get('error')!r}")
+        self.assertNotIn('error', writer_result, f'writer raised: {writer_result.get("error")!r}')
+        self.assertNotIn('error', reader_result, f'reader raised: {reader_result.get("error")!r}')
 
         # Without the fix, this reliably produces a mismatch: reader's model
         # cached while writer's model is left on the through's "source" FK,
@@ -232,9 +234,10 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
         through_model = apps.get_model(APP_LABEL, field.through_model_name)
         source_field = through_model._meta.get_field('source')
         self.assertIs(
-            source_field.remote_field.model, final_model,
+            source_field.remote_field.model,
+            final_model,
             "the registered through model's source FK must point at the model class "
-            "get_model() currently returns -- a mismatch here is the stale-class bug",
+            'get_model() currently returns -- a mismatch here is the stale-class bug',
         )
 
         obj = final_model.objects.create(name='Instance 1')
@@ -258,8 +261,9 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
         )
         response = self.client.get(delete_url)
         self.assertEqual(
-            response.status_code, 200,
-            f"delete-confirmation GET must render, not crash (got {response.status_code})",
+            response.status_code,
+            200,
+            f'delete-confirmation GET must render, not crash (got {response.status_code})',
         )
 
         obj.delete()  # Must not raise ValueError: "Cannot query ...: Must be ... instance."
@@ -322,15 +326,15 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
         t_a.join(timeout=15)
         t_b.join(timeout=15)
 
-        self.assertFalse(t_a.is_alive(), "thread A did not complete within the join timeout (deadlocked?)")
-        self.assertFalse(t_b.is_alive(), "thread B did not complete within the join timeout (deadlocked?)")
+        self.assertFalse(t_a.is_alive(), 'thread A did not complete within the join timeout (deadlocked?)')
+        self.assertFalse(t_b.is_alive(), 'thread B did not complete within the join timeout (deadlocked?)')
         for key, result in results.items():
-            self.assertNotIn('error', result, f"thread {key} raised an unexpected error: {result.get('error')!r}")
+            self.assertNotIn('error', result, f'thread {key} raised an unexpected error: {result.get("error")!r}')
 
         succeeded = [key for key, result in results.items() if 'field' in result]
         lost = [key for key, result in results.items() if 'lost' in result]
-        self.assertEqual(len(succeeded), 1, f"expected exactly one winner: {results!r}")
-        self.assertEqual(len(lost), 1, f"expected exactly one loser: {results!r}")
+        self.assertEqual(len(succeeded), 1, f'expected exactly one winner: {results!r}')
+        self.assertEqual(len(lost), 1, f'expected exactly one loser: {results!r}')
 
     def test_field_creation_via_public_save_path_with_two_type_setup_yields_consistent_through_model(self):
         """
@@ -393,9 +397,10 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
                 t.join()
 
         self.assertEqual(
-            reader_errors, [],
-            "concurrent get_model() calls must not raise while a polymorphic multiobject field "
-            "with the reported two-type setup is being created",
+            reader_errors,
+            [],
+            'concurrent get_model() calls must not raise while a polymorphic multiobject field '
+            'with the reported two-type setup is being created',
         )
         self.assertEqual(set(field.related_object_types.all()), {self_ot, other_ot})
 
@@ -405,9 +410,10 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
         through_model = apps.get_model(APP_LABEL, field.through_model_name)
         source_field = through_model._meta.get_field('source')
         self.assertIs(
-            source_field.remote_field.model, final_model,
+            source_field.remote_field.model,
+            final_model,
             "the registered through model's source FK must point at the model class "
-            "get_model() currently returns, not an orphaned duplicate from a losing thread",
+            'get_model() currently returns, not an orphaned duplicate from a losing thread',
         )
 
         obj = final_model.objects.create(name='Instance 1')
@@ -421,16 +427,19 @@ class FKConstraintHookRaceTestCase(TransactionCleanupMixin, CustomObjectsTestCas
     def test_delayed_hook_applies_latest_on_delete(self):
         """Request 1's hook is delayed before it takes the lock; request 2 saves and
         its hook finishes first.  Request 1's hook must still apply the latest value."""
-        cot = self.create_simple_custom_object_type(name="race", slug="races")
+        cot = self.create_simple_custom_object_type(name='race', slug='races')
         field = self.create_custom_object_type_field(
-            cot, name="site", type="object", related_object_type=self.get_site_object_type(),
+            cot,
+            name='site',
+            type='object',
+            related_object_type=self.get_site_object_type(),
             on_delete_behavior=ObjectFieldOnDeleteChoices.SET_NULL,
         )
         original = CustomObjectType._lock_database_table
         paused, resume = threading.Event(), threading.Event()
 
         def delayed(self_cot, schema_conn):
-            if threading.current_thread().name == "request-1" and not paused.is_set():
+            if threading.current_thread().name == 'request-1' and not paused.is_set():
                 paused.set()
                 resume.wait(10)
             return original(self_cot, schema_conn)
@@ -441,13 +450,13 @@ class FKConstraintHookRaceTestCase(TransactionCleanupMixin, CustomObjectsTestCas
             finally:
                 connections.close_all()
 
-        with mock.patch.object(CustomObjectType, "_lock_database_table", delayed):
-            thread = threading.Thread(target=request_1, name="request-1")
+        with mock.patch.object(CustomObjectType, '_lock_database_table', delayed):
+            thread = threading.Thread(target=request_1, name='request-1')
             thread.start()
             self.assertTrue(paused.wait(10))
             self._set(field, on_delete_behavior=ObjectFieldOnDeleteChoices.PROTECT)
             resume.set()
             thread.join(10)
 
-        self.assertEqual(CustomObjectTypeField.objects.get(pk=field.pk).on_delete_behavior, "protect")
-        self.assertEqual(_fk_constraints(cot.get_database_table_name(), "site_id"), [("dcim_site", "r")])
+        self.assertEqual(CustomObjectTypeField.objects.get(pk=field.pk).on_delete_behavior, 'protect')
+        self.assertEqual(_fk_constraints(cot.get_database_table_name(), 'site_id'), [('dcim_site', 'r')])

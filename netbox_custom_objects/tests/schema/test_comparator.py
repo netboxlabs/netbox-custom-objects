@@ -36,27 +36,38 @@ from ..base import CustomObjectsTestCase
 # Test cases
 # ---------------------------------------------------------------------------
 
+
 class ComparatorCleanDiffTestCase(CustomObjectsTestCase, TestCase):
     """Round-trip: export → diff should produce no changes."""
 
     @classmethod
     def setUpTestData(cls):
         cls.cot = cls.create_custom_object_type(
-            name='clean', slug='clean', version='1.0.0',
+            name='clean',
+            slug='clean',
+            version='1.0.0',
         )
         cls.choice_set = cls.create_choice_set(name='Clean Choices')
         cls.device_ot = cls.get_device_object_type()
 
         cls.create_custom_object_type_field(cls.cot, name='label', type='text')
         cls.create_custom_object_type_field(
-            cls.cot, name='count', type='integer',
-            validation_minimum=0, validation_maximum=100,
+            cls.cot,
+            name='count',
+            type='integer',
+            validation_minimum=0,
+            validation_maximum=100,
         )
         cls.create_custom_object_type_field(
-            cls.cot, name='status', type='select', choice_set=cls.choice_set,
+            cls.cot,
+            name='status',
+            type='select',
+            choice_set=cls.choice_set,
         )
         cls.create_custom_object_type_field(
-            cls.cot, name='device', type='object',
+            cls.cot,
+            name='device',
+            type='object',
             related_object_type=cls.device_ot,
         )
 
@@ -83,39 +94,43 @@ class ComparatorNewCOTTestCase(CustomObjectsTestCase, TestCase):
     """COT not yet in DB → is_new=True, all fields are ADD."""
 
     def test_new_cot_is_new(self):
-        result = diff_cot({
-            "name": "newtype",
-            "slug": "newtype",
-            "fields": [
-                {"id": 1, "name": "label", "type": "text"},
-                {"id": 2, "name": "count", "type": "integer"},
-            ],
-        })
+        result = diff_cot(
+            {
+                'name': 'newtype',
+                'slug': 'newtype',
+                'fields': [
+                    {'id': 1, 'name': 'label', 'type': 'text'},
+                    {'id': 2, 'name': 'count', 'type': 'integer'},
+                ],
+            }
+        )
         self.assertTrue(result.is_new)
 
     def test_new_cot_all_fields_are_add(self):
-        result = diff_cot({
-            "name": "newtype2",
-            "slug": "newtype2",
-            "fields": [
-                {"id": 1, "name": "label", "type": "text"},
-                {"id": 2, "name": "count", "type": "integer"},
-            ],
-        })
+        result = diff_cot(
+            {
+                'name': 'newtype2',
+                'slug': 'newtype2',
+                'fields': [
+                    {'id': 1, 'name': 'label', 'type': 'text'},
+                    {'id': 2, 'name': 'count', 'type': 'integer'},
+                ],
+            }
+        )
         self.assertEqual(len(result.field_changes), 2)
         for fc in result.field_changes:
             self.assertIs(fc.op, FieldOp.ADD)
 
     def test_new_cot_no_fields_no_field_changes(self):
-        result = diff_cot({"name": "empty", "slug": "empty"})
+        result = diff_cot({'name': 'empty', 'slug': 'empty'})
         self.assertTrue(result.is_new)
         self.assertEqual(result.field_changes, [])
 
     def test_missing_required_keys_raises_value_error(self):
         with self.assertRaises(ValueError):
-            diff_cot({"name": "no-slug"})
+            diff_cot({'name': 'no-slug'})
         with self.assertRaises(ValueError):
-            diff_cot({"slug": "no-name"})
+            diff_cot({'slug': 'no-name'})
         with self.assertRaises(ValueError):
             diff_cot({})
 
@@ -126,33 +141,36 @@ class ComparatorCOTAttrsTestCase(CustomObjectsTestCase, TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.cot = cls.create_custom_object_type(
-            name='attrtest', slug='attr-test',
-            version='1.0.0', description='old desc',
-            verbose_name='', verbose_name_plural='',
+            name='attrtest',
+            slug='attr-test',
+            version='1.0.0',
+            description='old desc',
+            verbose_name='',
+            verbose_name_plural='',
         )
 
     def test_version_change_detected(self):
         type_def = export_cot(self.cot)
-        type_def["version"] = "2.0.0"
+        type_def['version'] = '2.0.0'
         result = diff_cot(type_def)
-        self.assertIn("version", result.cot_changes)
-        self.assertEqual(result.cot_changes["version"], ("1.0.0", "2.0.0"))
+        self.assertIn('version', result.cot_changes)
+        self.assertEqual(result.cot_changes['version'], ('1.0.0', '2.0.0'))
 
     def test_description_change_detected(self):
         type_def = export_cot(self.cot)
-        type_def["description"] = "new desc"
+        type_def['description'] = 'new desc'
         result = diff_cot(type_def)
-        self.assertIn("description", result.cot_changes)
+        self.assertIn('description', result.cot_changes)
 
     def test_unchanged_cot_attrs_not_in_cot_changes(self):
         type_def = export_cot(self.cot)
         result = diff_cot(type_def)
-        self.assertNotIn("version", result.cot_changes)
-        self.assertNotIn("description", result.cot_changes)
+        self.assertNotIn('version', result.cot_changes)
+        self.assertNotIn('description', result.cot_changes)
 
     def test_cot_changes_do_not_produce_field_changes(self):
         type_def = export_cot(self.cot)
-        type_def["version"] = "9.9.9"
+        type_def['version'] = '9.9.9'
         result = diff_cot(type_def)
         self.assertEqual(result.field_changes, [])
 
@@ -168,21 +186,17 @@ class ComparatorFieldAddTestCase(CustomObjectsTestCase, TestCase):
     def test_new_field_in_schema_is_add(self):
         type_def = export_cot(self.cot)
         # Append a field with a new schema_id that doesn't exist in DB
-        type_def.setdefault("fields", []).append(
-            {"id": 999, "name": "brand_new", "type": "boolean"}
-        )
+        type_def.setdefault('fields', []).append({'id': 999, 'name': 'brand_new', 'type': 'boolean'})
         result = diff_cot(type_def)
         adds = result.adds
         self.assertEqual(len(adds), 1)
         self.assertEqual(adds[0].schema_id, 999)
         self.assertIsNone(adds[0].db_name)
-        self.assertEqual(adds[0].schema_def["name"], "brand_new")
+        self.assertEqual(adds[0].schema_def['name'], 'brand_new')
 
     def test_add_does_not_affect_existing_fields(self):
         type_def = export_cot(self.cot)
-        type_def.setdefault("fields", []).append(
-            {"id": 999, "name": "extra", "type": "text"}
-        )
+        type_def.setdefault('fields', []).append({'id': 999, 'name': 'extra', 'type': 'text'})
         result = diff_cot(type_def)
         # existing field should not appear in changes
         self.assertEqual(len(result.alters), 0)
@@ -194,35 +208,29 @@ class ComparatorFieldRemoveTestCase(CustomObjectsTestCase, TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.cot = cls.create_custom_object_type(name='removetest', slug='remove-test')
-        cls.field = cls.create_custom_object_type_field(
-            cls.cot, name='to_remove', type='text'
-        )
+        cls.field = cls.create_custom_object_type_field(cls.cot, name='to_remove', type='text')
 
     def test_tombstoned_db_field_is_remove(self):
         field_schema_id = self.field.schema_id
         type_def = {
-            "name": self.cot.name,
-            "slug": self.cot.slug,
-            "fields": [],
-            "removed_fields": [
-                {"id": field_schema_id, "name": "to_remove", "type": "text"}
-            ],
+            'name': self.cot.name,
+            'slug': self.cot.slug,
+            'fields': [],
+            'removed_fields': [{'id': field_schema_id, 'name': 'to_remove', 'type': 'text'}],
         }
         result = diff_cot(type_def)
         removes = result.removes
         self.assertEqual(len(removes), 1)
         self.assertEqual(removes[0].schema_id, field_schema_id)
-        self.assertEqual(removes[0].db_name, "to_remove")
+        self.assertEqual(removes[0].db_name, 'to_remove')
 
     def test_remove_is_flagged_as_destructive(self):
         field_schema_id = self.field.schema_id
         type_def = {
-            "name": self.cot.name,
-            "slug": self.cot.slug,
-            "fields": [],
-            "removed_fields": [
-                {"id": field_schema_id, "name": "to_remove", "type": "text"}
-            ],
+            'name': self.cot.name,
+            'slug': self.cot.slug,
+            'fields': [],
+            'removed_fields': [{'id': field_schema_id, 'name': 'to_remove', 'type': 'text'}],
         }
         result = diff_cot(type_def)
         self.assertTrue(result.has_destructive_changes)
@@ -230,11 +238,11 @@ class ComparatorFieldRemoveTestCase(CustomObjectsTestCase, TestCase):
     def test_already_removed_from_db_is_noop(self):
         """If tombstoned field is already gone from DB, no REMOVE emitted."""
         type_def = {
-            "name": self.cot.name,
-            "slug": self.cot.slug,
-            "fields": [],
-            "removed_fields": [
-                {"id": 9999, "name": "ghost", "type": "text"}  # not in DB
+            'name': self.cot.name,
+            'slug': self.cot.slug,
+            'fields': [],
+            'removed_fields': [
+                {'id': 9999, 'name': 'ghost', 'type': 'text'}  # not in DB
             ],
         }
         result = diff_cot(type_def)
@@ -256,183 +264,192 @@ class ComparatorFieldAlterTestCase(CustomObjectsTestCase, TestCase):
     def _alter_field(self, field_name, **overrides):
         """Export the COT, override one field's schema dict, return diff."""
         type_def = export_cot(self.cot)
-        for sf in type_def.get("fields", []):
-            if sf["name"] == field_name:
+        for sf in type_def.get('fields', []):
+            if sf['name'] == field_name:
                 sf.update(overrides)
                 break
         else:
-            raise AssertionError(f"field {field_name!r} not found in exported schema")
+            raise AssertionError(f'field {field_name!r} not found in exported schema')
         return diff_cot(type_def)
 
     def test_rename_detected(self):
         self.create_custom_object_type_field(self.cot, name='old_name', type='text')
-        result = self._alter_field("old_name", name="new_name")
-        fc = next(fc for fc in result.alters if fc.db_name == "old_name")
+        result = self._alter_field('old_name', name='new_name')
+        fc = next(fc for fc in result.alters if fc.db_name == 'old_name')
         self.assertTrue(fc.is_rename)
-        self.assertEqual(fc.changed_attrs["name"], ("old_name", "new_name"))
+        self.assertEqual(fc.changed_attrs['name'], ('old_name', 'new_name'))
 
     def test_type_change_detected(self):
         self.create_custom_object_type_field(self.cot, name='typed', type='text')
-        result = self._alter_field("typed", type="longtext")
-        fc = next(fc for fc in result.alters if fc.db_name == "typed")
+        result = self._alter_field('typed', type='longtext')
+        fc = next(fc for fc in result.alters if fc.db_name == 'typed')
         self.assertTrue(fc.is_type_change)
-        self.assertIn("type", fc.changed_attrs)
+        self.assertIn('type', fc.changed_attrs)
 
     def test_required_change_detected(self):
-        self.create_custom_object_type_field(
-            self.cot, name='req_field', type='text', required=False
-        )
-        result = self._alter_field("req_field", required=True)
-        fc = next(fc for fc in result.alters if fc.db_name == "req_field")
-        self.assertIn("required", fc.changed_attrs)
-        self.assertEqual(fc.changed_attrs["required"], (False, True))
+        self.create_custom_object_type_field(self.cot, name='req_field', type='text', required=False)
+        result = self._alter_field('req_field', required=True)
+        fc = next(fc for fc in result.alters if fc.db_name == 'req_field')
+        self.assertIn('required', fc.changed_attrs)
+        self.assertEqual(fc.changed_attrs['required'], (False, True))
 
     def test_weight_change_detected(self):
-        self.create_custom_object_type_field(
-            self.cot, name='weighted', type='text', weight=100
-        )
-        result = self._alter_field("weighted", weight=200)
-        fc = next(fc for fc in result.alters if fc.db_name == "weighted")
-        self.assertIn("weight", fc.changed_attrs)
+        self.create_custom_object_type_field(self.cot, name='weighted', type='text', weight=100)
+        result = self._alter_field('weighted', weight=200)
+        fc = next(fc for fc in result.alters if fc.db_name == 'weighted')
+        self.assertIn('weight', fc.changed_attrs)
 
     def test_validation_regex_change_detected(self):
-        self.create_custom_object_type_field(
-            self.cot, name='regex_field', type='text',
-            validation_regex=r'^[A-Z]+$'
-        )
-        result = self._alter_field("regex_field", validation_regex=r'^\d+$')
-        fc = next(fc for fc in result.alters if fc.db_name == "regex_field")
-        self.assertIn("validation_regex", fc.changed_attrs)
+        self.create_custom_object_type_field(self.cot, name='regex_field', type='text', validation_regex=r'^[A-Z]+$')
+        result = self._alter_field('regex_field', validation_regex=r'^\d+$')
+        fc = next(fc for fc in result.alters if fc.db_name == 'regex_field')
+        self.assertIn('validation_regex', fc.changed_attrs)
 
     def test_validation_min_max_change_detected(self):
         self.create_custom_object_type_field(
-            self.cot, name='numeric', type='integer',
-            validation_minimum=0, validation_maximum=100
+            self.cot, name='numeric', type='integer', validation_minimum=0, validation_maximum=100
         )
-        result = self._alter_field("numeric", validation_minimum=10, validation_maximum=200)
-        fc = next(fc for fc in result.alters if fc.db_name == "numeric")
-        self.assertIn("validation_minimum", fc.changed_attrs)
-        self.assertIn("validation_maximum", fc.changed_attrs)
+        result = self._alter_field('numeric', validation_minimum=10, validation_maximum=200)
+        fc = next(fc for fc in result.alters if fc.db_name == 'numeric')
+        self.assertIn('validation_minimum', fc.changed_attrs)
+        self.assertIn('validation_maximum', fc.changed_attrs)
 
     def test_choice_set_change_detected(self):
         self.create_custom_object_type_field(
-            self.cot, name='select_field', type='select',
+            self.cot,
+            name='select_field',
+            type='select',
             choice_set=self.choice_set_a,
         )
-        result = self._alter_field("select_field", choice_set="Set B")
-        fc = next(fc for fc in result.alters if fc.db_name == "select_field")
-        self.assertIn("choice_set", fc.changed_attrs)
-        self.assertEqual(fc.changed_attrs["choice_set"], ("Set A", "Set B"))
+        result = self._alter_field('select_field', choice_set='Set B')
+        fc = next(fc for fc in result.alters if fc.db_name == 'select_field')
+        self.assertIn('choice_set', fc.changed_attrs)
+        self.assertEqual(fc.changed_attrs['choice_set'], ('Set A', 'Set B'))
 
     def test_related_object_type_change_detected(self):
         self.create_custom_object_type_field(
-            self.cot, name='obj_field', type='object',
+            self.cot,
+            name='obj_field',
+            type='object',
             related_object_type=self.device_ot,
         )
-        result = self._alter_field("obj_field", related_object_type="dcim/site")
-        fc = next(fc for fc in result.alters if fc.db_name == "obj_field")
-        self.assertIn("related_object_type", fc.changed_attrs)
-        self.assertEqual(fc.changed_attrs["related_object_type"][0], "dcim/device")
-        self.assertEqual(fc.changed_attrs["related_object_type"][1], "dcim/site")
+        result = self._alter_field('obj_field', related_object_type='dcim/site')
+        fc = next(fc for fc in result.alters if fc.db_name == 'obj_field')
+        self.assertIn('related_object_type', fc.changed_attrs)
+        self.assertEqual(fc.changed_attrs['related_object_type'][0], 'dcim/device')
+        self.assertEqual(fc.changed_attrs['related_object_type'][1], 'dcim/site')
 
     def test_related_object_type_custom_cot_encoding(self):
         other_cot = self.create_custom_object_type(name='rack', slug='rack')
         rack_ot = other_cot.object_type
         self.create_custom_object_type_field(
-            self.cot, name='rack_field', type='object',
+            self.cot,
+            name='rack_field',
+            type='object',
             related_object_type=rack_ot,
         )
         # Export and re-diff — should be clean (no change)
         type_def = export_cot(self.cot)
         result = diff_cot(type_def)
-        rack_alters = [fc for fc in result.alters if fc.db_name == "rack_field"]
-        self.assertEqual(rack_alters, [], "Custom COT related_object_type round-trips cleanly")
+        rack_alters = [fc for fc in result.alters if fc.db_name == 'rack_field']
+        self.assertEqual(rack_alters, [], 'Custom COT related_object_type round-trips cleanly')
 
     def test_array_attribute_changes_detected(self):
         self.create_custom_object_type_field(
-            self.cot, name='points', type='array', array_element_type='integer', array_tuple_size=3,
+            self.cot,
+            name='points',
+            type='array',
+            array_element_type='integer',
+            array_tuple_size=3,
         )
-        self.assertEqual([fc for fc in diff_cot(export_cot(self.cot)).alters if fc.db_name == "points"], [])
-        result = self._alter_field("points", array_max_length=5, array_tuple_size=2)
-        fc = next(fc for fc in result.alters if fc.db_name == "points")
-        self.assertEqual(fc.changed_attrs, {"array_max_length": (None, 5), "array_tuple_size": (3, 2)})
+        self.assertEqual([fc for fc in diff_cot(export_cot(self.cot)).alters if fc.db_name == 'points'], [])
+        result = self._alter_field('points', array_max_length=5, array_tuple_size=2)
+        fc = next(fc for fc in result.alters if fc.db_name == 'points')
+        self.assertEqual(fc.changed_attrs, {'array_max_length': (None, 5), 'array_tuple_size': (3, 2)})
 
     def test_related_object_filter_change_detected(self):
         self.create_custom_object_type_field(
-            self.cot, name='filtered', type='object',
+            self.cot,
+            name='filtered',
+            type='object',
             related_object_type=self.device_ot,
-            related_object_filter={"site_id": [1]},
+            related_object_filter={'site_id': [1]},
         )
-        result = self._alter_field("filtered", related_object_filter={"site_id": [2]})
-        fc = next(fc for fc in result.alters if fc.db_name == "filtered")
-        self.assertIn("related_object_filter", fc.changed_attrs)
+        result = self._alter_field('filtered', related_object_filter={'site_id': [2]})
+        fc = next(fc for fc in result.alters if fc.db_name == 'filtered')
+        self.assertIn('related_object_filter', fc.changed_attrs)
 
     def test_related_name_change_detected(self):
         self.create_custom_object_type_field(
-            self.cot, name='named', type='object', related_object_type=self.device_ot, related_name='widgets',
+            self.cot,
+            name='named',
+            type='object',
+            related_object_type=self.device_ot,
+            related_name='widgets',
         )
         self.assertEqual(
-            [fc for fc in diff_cot(export_cot(self.cot)).alters if fc.db_name == "named"], [],
-            "related_name round-trips cleanly",
+            [fc for fc in diff_cot(export_cot(self.cot)).alters if fc.db_name == 'named'],
+            [],
+            'related_name round-trips cleanly',
         )
-        result = self._alter_field("named", related_name="gadgets")
-        fc = next(fc for fc in result.alters if fc.db_name == "named")
-        self.assertEqual(fc.changed_attrs, {"related_name": ("widgets", "gadgets")})
+        result = self._alter_field('named', related_name='gadgets')
+        fc = next(fc for fc in result.alters if fc.db_name == 'named')
+        self.assertEqual(fc.changed_attrs, {'related_name': ('widgets', 'gadgets')})
 
         # Without the key (as in exports from before it was in the format), the name is kept;
         # "" clears it.
         type_def = export_cot(self.cot)
-        del next(f for f in type_def["fields"] if f["name"] == "named")["related_name"]
-        self.assertEqual([fc for fc in diff_cot(type_def).alters if fc.db_name == "named"], [])
-        result = self._alter_field("named", related_name="")
-        fc = next(fc for fc in result.alters if fc.db_name == "named")
-        self.assertEqual(fc.changed_attrs, {"related_name": ("widgets", "")})
+        del next(f for f in type_def['fields'] if f['name'] == 'named')['related_name']
+        self.assertEqual([fc for fc in diff_cot(type_def).alters if fc.db_name == 'named'], [])
+        result = self._alter_field('named', related_name='')
+        fc = next(fc for fc in result.alters if fc.db_name == 'named')
+        self.assertEqual(fc.changed_attrs, {'related_name': ('widgets', '')})
 
     def test_on_delete_behavior_change_detected(self):
         self.create_custom_object_type_field(
-            self.cot, name='odchange', type='object',
+            self.cot,
+            name='odchange',
+            type='object',
             related_object_type=self.device_ot,
         )
-        result = self._alter_field("odchange", on_delete_behavior="cascade")
-        fc = next(fc for fc in result.alters if fc.db_name == "odchange")
-        self.assertIn("on_delete_behavior", fc.changed_attrs)
-        self.assertEqual(fc.changed_attrs["on_delete_behavior"], ("set_null", "cascade"))
+        result = self._alter_field('odchange', on_delete_behavior='cascade')
+        fc = next(fc for fc in result.alters if fc.db_name == 'odchange')
+        self.assertIn('on_delete_behavior', fc.changed_attrs)
+        self.assertEqual(fc.changed_attrs['on_delete_behavior'], ('set_null', 'cascade'))
 
     def test_on_delete_behavior_default_no_diff(self):
         """SET_NULL not present in schema dict → same as default → no diff."""
         self.create_custom_object_type_field(
-            self.cot, name='oddefault', type='object',
+            self.cot,
+            name='oddefault',
+            type='object',
             related_object_type=self.device_ot,
         )
         # Export omits on_delete_behavior when it's the default; re-diffing must produce no ALTER.
         type_def = export_cot(self.cot)
         result = diff_cot(type_def)
-        oddefault_alters = [fc for fc in result.alters if fc.db_name == "oddefault"]
+        oddefault_alters = [fc for fc in result.alters if fc.db_name == 'oddefault']
         self.assertEqual(oddefault_alters, [])
 
     def test_no_alter_when_nothing_changed(self):
-        self.create_custom_object_type_field(
-            self.cot, name='unchanged', type='text'
-        )
+        self.create_custom_object_type_field(self.cot, name='unchanged', type='text')
         type_def = export_cot(self.cot)
         result = diff_cot(type_def)
-        unchanged_alters = [fc for fc in result.alters if fc.db_name == "unchanged"]
+        unchanged_alters = [fc for fc in result.alters if fc.db_name == 'unchanged']
         self.assertEqual(unchanged_alters, [])
 
     def test_deprecated_change_detected(self):
-        self.create_custom_object_type_field(
-            self.cot, name='dep_field', type='text'
-        )
+        self.create_custom_object_type_field(self.cot, name='dep_field', type='text')
         result = self._alter_field(
-            "dep_field",
+            'dep_field',
             deprecated=True,
-            deprecated_since="1.1.0",
-            scheduled_removal="2.0.0",
+            deprecated_since='1.1.0',
+            scheduled_removal='2.0.0',
         )
-        fc = next(fc for fc in result.alters if fc.db_name == "dep_field")
-        self.assertIn("deprecated", fc.changed_attrs)
-        self.assertIn("deprecated_since", fc.changed_attrs)
-        self.assertIn("scheduled_removal", fc.changed_attrs)
+        fc = next(fc for fc in result.alters if fc.db_name == 'dep_field')
+        self.assertIn('deprecated', fc.changed_attrs)
+        self.assertIn('deprecated_since', fc.changed_attrs)
+        self.assertIn('scheduled_removal', fc.changed_attrs)
 
 
 class ComparatorPolymorphicTestCase(CustomObjectsTestCase, TestCase):
@@ -446,63 +463,57 @@ class ComparatorPolymorphicTestCase(CustomObjectsTestCase, TestCase):
         cls.prefix_ot = cls.get_prefix_object_type()
 
     def test_polymorphic_field_clean_round_trip(self):
-        self.create_polymorphic_field(
-            self.cot, [self.device_ot, self.site_ot], name='poly_clean', type='object'
-        )
+        self.create_polymorphic_field(self.cot, [self.device_ot, self.site_ot], name='poly_clean', type='object')
         type_def = export_cot(self.cot)
         result = diff_cot(type_def)
-        poly_alters = [fc for fc in result.alters if fc.db_name == "poly_clean"]
+        poly_alters = [fc for fc in result.alters if fc.db_name == 'poly_clean']
         self.assertEqual(poly_alters, [])
 
     def test_polymorphic_related_object_types_change_detected(self):
-        self.create_polymorphic_field(
-            self.cot, [self.device_ot, self.site_ot], name='poly_change', type='object'
-        )
+        self.create_polymorphic_field(self.cot, [self.device_ot, self.site_ot], name='poly_change', type='object')
         type_def = export_cot(self.cot)
-        for sf in type_def.get("fields", []):
-            if sf["name"] == "poly_change":
-                sf["related_object_types"] = ["dcim/device", "ipam/prefix"]
+        for sf in type_def.get('fields', []):
+            if sf['name'] == 'poly_change':
+                sf['related_object_types'] = ['dcim/device', 'ipam/prefix']
                 break
         result = diff_cot(type_def)
-        fc = next(fc for fc in result.alters if fc.db_name == "poly_change")
-        self.assertIn("related_object_types", fc.changed_attrs)
-        db_val, schema_val = fc.changed_attrs["related_object_types"]
-        self.assertIn("dcim/site", db_val)
-        self.assertIn("ipam/prefix", schema_val)
+        fc = next(fc for fc in result.alters if fc.db_name == 'poly_change')
+        self.assertIn('related_object_types', fc.changed_attrs)
+        db_val, schema_val = fc.changed_attrs['related_object_types']
+        self.assertIn('dcim/site', db_val)
+        self.assertIn('ipam/prefix', schema_val)
 
     def test_is_polymorphic_change_detected(self):
-        self.create_polymorphic_field(
-            self.cot, [self.device_ot], name='poly_flag', type='object'
-        )
+        self.create_polymorphic_field(self.cot, [self.device_ot], name='poly_flag', type='object')
         type_def = export_cot(self.cot)
-        for sf in type_def.get("fields", []):
-            if sf["name"] == "poly_flag":
-                sf["is_polymorphic"] = False
-                sf["related_object_type"] = "dcim/device"
-                sf.pop("related_object_types", None)
+        for sf in type_def.get('fields', []):
+            if sf['name'] == 'poly_flag':
+                sf['is_polymorphic'] = False
+                sf['related_object_type'] = 'dcim/device'
+                sf.pop('related_object_types', None)
                 break
         result = diff_cot(type_def)
-        fc = next(fc for fc in result.alters if fc.db_name == "poly_flag")
-        self.assertIn("is_polymorphic", fc.changed_attrs)
-        self.assertEqual(fc.changed_attrs["is_polymorphic"], (True, False))
+        fc = next(fc for fc in result.alters if fc.db_name == 'poly_flag')
+        self.assertIn('is_polymorphic', fc.changed_attrs)
+        self.assertEqual(fc.changed_attrs['is_polymorphic'], (True, False))
 
     def test_non_polymorphic_field_does_not_diff_related_object_types(self):
         self.create_custom_object_type_field(
-            self.cot, name='normal', type='object',
+            self.cot,
+            name='normal',
+            type='object',
             related_object_type=self.device_ot,
         )
         type_def = export_cot(self.cot)
         result = diff_cot(type_def)
-        normal_alters = [fc for fc in result.alters if fc.db_name == "normal"]
+        normal_alters = [fc for fc in result.alters if fc.db_name == 'normal']
         self.assertEqual(normal_alters, [])
 
     def test_polymorphic_multiobject_clean_round_trip(self):
-        self.create_polymorphic_field(
-            self.cot, [self.device_ot, self.site_ot], name='poly_multi', type='multiobject'
-        )
+        self.create_polymorphic_field(self.cot, [self.device_ot, self.site_ot], name='poly_multi', type='multiobject')
         type_def = export_cot(self.cot)
         result = diff_cot(type_def)
-        poly_alters = [fc for fc in result.alters if fc.db_name == "poly_multi"]
+        poly_alters = [fc for fc in result.alters if fc.db_name == 'poly_multi']
         self.assertEqual(poly_alters, [])
 
 
@@ -514,21 +525,17 @@ class ComparatorWarningsTestCase(CustomObjectsTestCase, TestCase):
         cls.cot = cls.create_custom_object_type(name='warntest', slug='warn-test')
 
     def test_untracked_field_emits_warning(self):
-        f = self.create_custom_object_type_field(
-            self.cot, name='untracked', type='text'
-        )
+        f = self.create_custom_object_type_field(self.cot, name='untracked', type='text')
         CustomObjectTypeField.objects.filter(pk=f.pk).update(schema_id=None)
         type_def = export_cot(self.cot)  # won't include the untracked field
         result = diff_cot(type_def)
         self.assertTrue(
-            any("untracked" in w for w in result.warnings),
-            "Expected warning about field with no schema_id",
+            any('untracked' in w for w in result.warnings),
+            'Expected warning about field with no schema_id',
         )
 
     def test_untracked_field_not_in_field_changes(self):
-        f = self.create_custom_object_type_field(
-            self.cot, name='untracked2', type='text'
-        )
+        f = self.create_custom_object_type_field(self.cot, name='untracked2', type='text')
         CustomObjectTypeField.objects.filter(pk=f.pk).update(schema_id=None)
         type_def = export_cot(self.cot)
         result = diff_cot(type_def)
@@ -547,23 +554,21 @@ class ComparatorWarningsTestCase(CustomObjectsTestCase, TestCase):
         warnings = []
         result = _encode_related_object_type(rot, cot_slug_cache={}, warnings=warnings)
         self.assertEqual(len(warnings), 1)
-        self.assertIn("no longer exists", warnings[0])
-        self.assertIn("<deleted:", result)
+        self.assertIn('no longer exists', warnings[0])
+        self.assertIn('<deleted:', result)
 
     def test_db_field_absent_from_schema_and_not_tombstoned_emits_warning(self):
-        self.create_custom_object_type_field(
-            self.cot, name='mystery', type='text'
-        )
+        self.create_custom_object_type_field(self.cot, name='mystery', type='text')
         # Schema with empty fields (field not tombstoned, just absent)
         type_def = {
-            "name": self.cot.name,
-            "slug": self.cot.slug,
-            "fields": [],
+            'name': self.cot.name,
+            'slug': self.cot.slug,
+            'fields': [],
         }
         result = diff_cot(type_def)
         self.assertTrue(
-            any("mystery" in w for w in result.warnings),
-            "Expected warning about field absent from schema but not tombstoned",
+            any('mystery' in w for w in result.warnings),
+            'Expected warning about field absent from schema but not tombstoned',
         )
         # Must NOT be a REMOVE
         self.assertFalse(result.has_destructive_changes)
@@ -592,11 +597,11 @@ class ComparatorMultiCOTTestCase(CustomObjectsTestCase, TestCase):
 
     def test_document_diff_mixed_new_and_existing(self):
         doc = export_cots([self.cot1])
-        doc["types"].append({"name": "brandnew", "slug": "brand-new"})
+        doc['types'].append({'name': 'brandnew', 'slug': 'brand-new'})
         diffs = diff_document(doc)
         self.assertEqual(len(diffs), 2)
-        existing = next(d for d in diffs if d.slug == "multi-1")
-        new_ = next(d for d in diffs if d.slug == "brand-new")
+        existing = next(d for d in diffs if d.slug == 'multi-1')
+        new_ = next(d for d in diffs if d.slug == 'brand-new')
         self.assertFalse(existing.is_new)
         self.assertTrue(new_.is_new)
 
@@ -604,7 +609,7 @@ class ComparatorMultiCOTTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(diff_document({}), [])
 
     def test_document_empty_types_list_returns_empty(self):
-        self.assertEqual(diff_document({"types": []}), [])
+        self.assertEqual(diff_document({'types': []}), [])
 
 
 class ComparatorHelperPropertiesTestCase(CustomObjectsTestCase, TestCase):
@@ -613,9 +618,7 @@ class ComparatorHelperPropertiesTestCase(CustomObjectsTestCase, TestCase):
     @classmethod
     def setUpTestData(cls):
         cls.cot = cls.create_custom_object_type(name='helpers', slug='helpers')
-        cls.field = cls.create_custom_object_type_field(
-            cls.cot, name='h1', type='text'
-        )
+        cls.field = cls.create_custom_object_type_field(cls.cot, name='h1', type='text')
 
     def test_has_changes_false_when_clean(self):
         type_def = export_cot(self.cot)
@@ -624,9 +627,7 @@ class ComparatorHelperPropertiesTestCase(CustomObjectsTestCase, TestCase):
 
     def test_has_changes_true_when_field_added(self):
         type_def = export_cot(self.cot)
-        type_def.setdefault("fields", []).append(
-            {"id": 999, "name": "extra", "type": "text"}
-        )
+        type_def.setdefault('fields', []).append({'id': 999, 'name': 'extra', 'type': 'text'})
         result = diff_cot(type_def)
         self.assertTrue(result.has_changes)
 
@@ -638,13 +639,13 @@ class ComparatorHelperPropertiesTestCase(CustomObjectsTestCase, TestCase):
     def test_adds_removes_alters_filters_correctly(self):
         fid = self.field.schema_id
         type_def = {
-            "name": self.cot.name,
-            "slug": self.cot.slug,
-            "fields": [
-                {"id": fid, "name": "h1", "type": "text", "required": True},  # alter
-                {"id": 888, "name": "new_one", "type": "boolean"},              # add
+            'name': self.cot.name,
+            'slug': self.cot.slug,
+            'fields': [
+                {'id': fid, 'name': 'h1', 'type': 'text', 'required': True},  # alter
+                {'id': 888, 'name': 'new_one', 'type': 'boolean'},  # add
             ],
-            "removed_fields": [],
+            'removed_fields': [],
         }
         result = diff_cot(type_def)
         self.assertEqual(len(result.adds), 1)

@@ -35,13 +35,25 @@ class CustomObjectAPIQueryCountTestCase(CustomObjectsTestCase, TestCase):
         super().setUp()
         self.cot = self.create_custom_object_type(name='Relational', slug='relational')
         self.create_custom_object_type_field(
-            self.cot, name='name', label='Name', type='text', primary=True, required=True,
+            self.cot,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
+            required=True,
         )
         self.create_custom_object_type_field(
-            self.cot, name='site', label='Site', type='object', related_object_type=self.get_site_object_type(),
+            self.cot,
+            name='site',
+            label='Site',
+            type='object',
+            related_object_type=self.get_site_object_type(),
         )
         self.create_custom_object_type_field(
-            self.cot, name='sites', label='Sites', type='multiobject',
+            self.cot,
+            name='sites',
+            label='Sites',
+            type='multiobject',
             related_object_type=self.get_site_object_type(),
         )
         targets = [self.get_site_object_type(), self.get_device_object_type()]

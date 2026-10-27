@@ -32,8 +32,7 @@ class GraphQLClientMixin:
         live_module.reset_cache()
         self.addCleanup(live_module.reset_cache)
         patcher = mock.patch(
-            "netbox_custom_objects.CustomObjectsPluginConfig."
-            "should_skip_dynamic_model_creation",
+            'netbox_custom_objects.CustomObjectsPluginConfig.should_skip_dynamic_model_creation',
             return_value=False,
         )
         patcher.start()
@@ -43,12 +42,12 @@ class GraphQLClientMixin:
         # base class), mirroring how an API client reaches the endpoint.
         self.client = APIClient()
         token_key = create_token(self.user)
-        self.header = {"HTTP_AUTHORIZATION": f"Token {token_key}"}
-        self.url = reverse("graphql")
+        self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
+        self.url = reverse('graphql')
 
-    def _grant(self, model, actions=("view",), constraints=None, enabled=True):
+    def _grant(self, model, actions=('view',), constraints=None, enabled=True):
         perm = ObjectPermission.objects.create(
-            name=f"perm-{model._meta.model_name}-{'-'.join(actions)}",
+            name=f'perm-{model._meta.model_name}-{"-".join(actions)}',
             actions=list(actions),
             constraints=constraints,
             enabled=enabled,
@@ -71,15 +70,11 @@ class GraphQLEndpointMixin(GraphQLClientMixin):
         self.user.save()
 
     def _gql(self, query):
-        response = self.client.post(
-            self.url, data={"query": query}, format="json", **self.header
-        )
-        self.assertEqual(
-            response.status_code, status.HTTP_200_OK, getattr(response, "content", response)
-        )
+        response = self.client.post(self.url, data={'query': query}, format='json', **self.header)
+        self.assertEqual(response.status_code, status.HTTP_200_OK, getattr(response, 'content', response))
         payload = json.loads(response.content)
-        self.assertNotIn("errors", payload, msg=str(payload.get("errors")))
-        return payload["data"]
+        self.assertNotIn('errors', payload, msg=str(payload.get('errors')))
+        return payload['data']
 
-    def _make_site(self, name="Site", slug="site", region=None):
+    def _make_site(self, name='Site', slug='site', region=None):
         return Site.objects.create(name=name, slug=slug, region=region)

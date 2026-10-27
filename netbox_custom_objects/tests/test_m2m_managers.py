@@ -6,6 +6,7 @@ TransactionTestCase so the transaction tests run in autocommit mode: in a
 TestCase the per-test transaction would roll back partial writes on its own
 and hide a manager that doesn't wrap its writes in one.
 """
+
 from django.db import connection
 from django.db.models.signals import m2m_changed
 from django.test import TransactionTestCase
@@ -63,15 +64,22 @@ def _statements(ctx, verb, table):
 
 
 class CustomManyToManyManagerWriteTestCase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
-
     def setUp(self):
         super().setUp()
         self.cot = CustomObjectType.objects.create(name='M2MWrite', slug='m2m-write', verbose_name_plural='M2M Writes')
         CustomObjectTypeField.objects.create(
-            custom_object_type=self.cot, name='name', label='Name', type='text', primary=True, required=True,
+            custom_object_type=self.cot,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
+            required=True,
         )
         CustomObjectTypeField.objects.create(
-            custom_object_type=self.cot, name='sites', label='Sites', type='multiobject',
+            custom_object_type=self.cot,
+            name='sites',
+            label='Sites',
+            type='multiobject',
             related_object_type=ObjectType.objects.get(app_label='dcim', model='site'),
         )
         self.model = self.cot.get_model()
@@ -179,30 +187,47 @@ class CustomManyToManyManagerWriteTestCase(TransactionCleanupMixin, CustomObject
         self.obj.sites.add(self.sites[0], self.sites[1])
         with _SignalRecorder(self.through) as rec:
             self.obj.sites.set([self.sites[1], self.sites[2]])
-        self.assertEqual(rec.calls, [
-            ('pre_remove', {self.sites[0].pk}), ('post_remove', {self.sites[0].pk}),
-            ('pre_add', {self.sites[2].pk}), ('post_add', {self.sites[2].pk}),
-        ])
+        self.assertEqual(
+            rec.calls,
+            [
+                ('pre_remove', {self.sites[0].pk}),
+                ('post_remove', {self.sites[0].pk}),
+                ('pre_add', {self.sites[2].pk}),
+                ('post_add', {self.sites[2].pk}),
+            ],
+        )
         self.assertEqual(self._linked(), {self.sites[1].pk, self.sites[2].pk})
 
 
 class PolymorphicManyToManyManagerWriteTestCase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
-
     def setUp(self):
         super().setUp()
         self.cot = CustomObjectType.objects.create(
-            name='PolyWrite', slug='poly-write', verbose_name_plural='Poly Writes',
+            name='PolyWrite',
+            slug='poly-write',
+            verbose_name_plural='Poly Writes',
         )
         CustomObjectTypeField.objects.create(
-            custom_object_type=self.cot, name='name', label='Name', type='text', primary=True, required=True,
+            custom_object_type=self.cot,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
+            required=True,
         )
         field = CustomObjectTypeField.objects.create(
-            custom_object_type=self.cot, name='targets', label='Targets', type='multiobject', is_polymorphic=True,
+            custom_object_type=self.cot,
+            name='targets',
+            label='Targets',
+            type='multiobject',
+            is_polymorphic=True,
         )
-        field.related_object_types.set([
-            ObjectType.objects.get(app_label='dcim', model='site'),
-            ObjectType.objects.get(app_label='ipam', model='prefix'),
-        ])
+        field.related_object_types.set(
+            [
+                ObjectType.objects.get(app_label='dcim', model='site'),
+                ObjectType.objects.get(app_label='ipam', model='prefix'),
+            ]
+        )
         self.model = self.cot.get_model()
         self.through = self.model().targets._get_through_model()
         self.site = Site.objects.create(name='Site', slug='site')
@@ -211,9 +236,7 @@ class PolymorphicManyToManyManagerWriteTestCase(TransactionCleanupMixin, CustomO
         self.obj = self.model.objects.create(name='one')
 
     def _linked(self):
-        return set(
-            self.through.objects.filter(source_id=self.obj.pk).values_list('content_type_id', 'object_id')
-        )
+        return set(self.through.objects.filter(source_id=self.obj.pk).values_list('content_type_id', 'object_id'))
 
     def _key(self, obj):
         return ObjectType.objects.get_for_model(obj).pk, obj.pk
@@ -295,8 +318,13 @@ class PolymorphicManyToManyManagerWriteTestCase(TransactionCleanupMixin, CustomO
         self.obj.targets.add(self.site, self.site2)
         with _SignalRecorder(self.through) as rec:
             self.obj.targets.set([self.site2, self.prefix])
-        self.assertEqual(rec.calls, [
-            ('pre_remove', {self.site.pk}), ('post_remove', {self.site.pk}),
-            ('pre_add', {self.prefix.pk}), ('post_add', {self.prefix.pk}),
-        ])
+        self.assertEqual(
+            rec.calls,
+            [
+                ('pre_remove', {self.site.pk}),
+                ('post_remove', {self.site.pk}),
+                ('pre_add', {self.prefix.pk}),
+                ('post_add', {self.prefix.pk}),
+            ],
+        )
         self.assertEqual(self._linked(), {self._key(self.site2), self._key(self.prefix)})

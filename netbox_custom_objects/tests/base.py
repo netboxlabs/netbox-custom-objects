@@ -30,6 +30,7 @@ def create_token(user):
     try:
         # NetBox >= 4.5
         from users.choices import TokenVersionChoices
+
         token = Token(version=TokenVersionChoices.V1, user=user)
         token.save()
         return token.token
@@ -41,7 +42,7 @@ def create_token(user):
 
 
 def _grant_perm(user, action, model_class, name=None):
-    perm = ObjectPermission(name=name or f"poly-test-{action}", actions=[action])
+    perm = ObjectPermission(name=name or f'poly-test-{action}', actions=[action])
     perm.save()
     perm.users.add(user)
     perm.object_types.add(ObjectType.objects.get_for_model(model_class))
@@ -107,6 +108,7 @@ def _purge_stale_generated_models():
         # ``_meta._relation_tree`` snapshots taken by Django outside this
         # plugin survive — they need explicit expiry.
         from django.contrib.contenttypes.models import ContentType  # noqa: PLC0415
+
         ContentType._meta._expire_cache(forward=False)
         for app_models in django_apps.all_models.values():
             for model in app_models.values():
@@ -114,7 +116,7 @@ def _purge_stale_generated_models():
         django_apps.clear_cache()
 
 
-_DYNAMIC_TABLE_PREFIX = "custom_objects_"
+_DYNAMIC_TABLE_PREFIX = 'custom_objects_'
 
 
 def _drop_branch_schemas():
@@ -231,7 +233,8 @@ def _drop_dynamic_tables():
     # rows still in the DB would be immediately re-registered, undoing this cleanup.
     app_models = django_apps.all_models.get(APP_LABEL, {})
     stale_names = [
-        name for name, model in list(app_models.items())
+        name
+        for name, model in list(app_models.items())
         if hasattr(model, '_meta') and model._meta.db_table.startswith(_DYNAMIC_TABLE_PREFIX)
     ]
     for name in stale_names:
@@ -295,6 +298,7 @@ def _reverse_descriptors():
         PolymorphicMultiObjectReverseDescriptor,
         PolymorphicObjectReverseDescriptor,
     )
+
     return {
         (model, name)
         for model in django_apps.get_models()
@@ -316,6 +320,7 @@ def create_api_token(user):
     """Create an API token for *user*, handling the NetBox ≥ 4.5 version field."""
     try:
         from users.choices import TokenVersionChoices  # noqa: PLC0415
+
         token = Token(version=TokenVersionChoices.V1, user=user)
     except ImportError:
         token = Token(user=user)
@@ -378,7 +383,9 @@ class TransactionCleanupMixin:
                 cot.delete()
             except Exception:
                 logger.warning(
-                    'tearDown could not delete COT %s', cot.pk, exc_info=True,
+                    'tearDown could not delete COT %s',
+                    cot.pk,
+                    exc_info=True,
                 )
         # Remove any ObjectChange records created during the test (merge/revert creates
         # them in main with the test user's ID).  If left in place, the serialized_rollback
@@ -434,6 +441,7 @@ class CustomObjectsTestCase:
         """Set up test data."""
         from django.apps import apps as django_apps
         from netbox_custom_objects.constants import APP_LABEL
+
         self.user = create_test_user('testuser')
         self.client = Client()
         self.client.force_login(self.user)
@@ -446,8 +454,7 @@ class CustomObjectsTestCase:
         # later tests.
         app_models = django_apps.all_models.get(APP_LABEL, {})
         self._plugin_model_snapshot = {
-            name: frozenset(f.column for f in model._meta.local_fields)
-            for name, model in app_models.items()
+            name: frozenset(f.column for f in model._meta.local_fields) for name, model in app_models.items()
         }
         self._reverse_descriptor_snapshot = _reverse_descriptors()
 
@@ -456,6 +463,7 @@ class CustomObjectsTestCase:
         from django.apps import apps as django_apps
         from django.contrib.contenttypes.models import ContentType
         from netbox_custom_objects.constants import APP_LABEL
+
         CustomObjectType.clear_model_cache()
         # Identify plugin models that were added or mutated during this test.
         # Both through-models (new entries) and COT main models that gained new
@@ -497,6 +505,7 @@ class CustomObjectsTestCase:
         from django.apps import apps as django_apps
         from django.contrib.contenttypes.models import ContentType
         from netbox_custom_objects.constants import APP_LABEL
+
         # After tearDownClass the class-level savepoint rolls back, dropping
         # all COT tables created by setUpTestData.  Remove dynamic models from
         # the registry first so the cascade collector never tries to query those
@@ -505,9 +514,9 @@ class CustomObjectsTestCase:
         _remove_reverse_descriptors()
         app_models = django_apps.all_models.get(APP_LABEL, {})
         dynamic = [
-            name for name, model in list(app_models.items())
-            if hasattr(model, '_meta')
-            and model._meta.db_table.startswith(_DYNAMIC_TABLE_PREFIX)
+            name
+            for name, model in list(app_models.items())
+            if hasattr(model, '_meta') and model._meta.db_table.startswith(_DYNAMIC_TABLE_PREFIX)
         ]
         if dynamic:
             for name in dynamic:
@@ -534,7 +543,7 @@ class CustomObjectsTestCase:
             'custom_object_type': custom_object_type,
             'name': 'test_field',
             'label': 'Test Field',
-            'type': 'text'
+            'type': 'text',
         }
         defaults.update(kwargs)
         return CustomObjectTypeField.objects.create(**defaults)
@@ -548,7 +557,7 @@ class CustomObjectsTestCase:
                 ['choice1', 'Choice 1'],
                 ['choice2', 'Choice 2'],
                 ['choice3', 'Choice 3'],
-            ]
+            ],
         }
         defaults.update(kwargs)
         return CustomFieldChoiceSet.objects.create(**defaults)
@@ -586,12 +595,7 @@ class CustomObjectsTestCase:
     def _db_columns(self, model):
         """Return the set of actual DB column names for a generated model's table."""
         with connection.cursor() as cursor:
-            return {
-                col.name
-                for col in connection.introspection.get_table_description(
-                    cursor, model._meta.db_table
-                )
-            }
+            return {col.name for col in connection.introspection.get_table_description(cursor, model._meta.db_table)}
 
     def create_simple_custom_object_type(self, **kwargs):
         """Create a simple custom object type with basic fields."""
@@ -599,21 +603,12 @@ class CustomObjectsTestCase:
 
         # Add a text field as primary
         CustomObjectsTestCase.create_custom_object_type_field(
-            custom_object_type,
-            name="name",
-            label="Name",
-            type="text",
-            primary=True,
-            required=True
+            custom_object_type, name='name', label='Name', type='text', primary=True, required=True
         )
 
         # Add a description field
         CustomObjectsTestCase.create_custom_object_type_field(
-            custom_object_type,
-            name="description",
-            label="Description",
-            type="text",
-            required=False
+            custom_object_type, name='description', label='Description', type='text', required=False
         )
 
         return custom_object_type
@@ -627,58 +622,41 @@ class CustomObjectsTestCase:
 
         # Primary text field
         CustomObjectsTestCase.create_custom_object_type_field(
-            custom_object_type,
-            name="name",
-            label="Name",
-            type="text",
-            primary=True,
-            required=True
+            custom_object_type, name='name', label='Name', type='text', primary=True, required=True
         )
 
         # Integer field
         CustomObjectsTestCase.create_custom_object_type_field(
             custom_object_type,
-            name="count",
-            label="Count",
-            type="integer",
+            name='count',
+            label='Count',
+            type='integer',
             validation_minimum=0,
-            validation_maximum=100
+            validation_maximum=100,
         )
 
         # Boolean field
         CustomObjectsTestCase.create_custom_object_type_field(
-            custom_object_type,
-            name="active",
-            label="Active",
-            type="boolean",
-            default=True
+            custom_object_type, name='active', label='Active', type='boolean', default=True
         )
 
         # Select field
         CustomObjectsTestCase.create_custom_object_type_field(
-            custom_object_type,
-            name="status",
-            label="Status",
-            type="select",
-            choice_set=choice_set
+            custom_object_type, name='status', label='Status', type='select', choice_set=choice_set
         )
 
         # Object field (device)
         CustomObjectsTestCase.create_custom_object_type_field(
-            custom_object_type,
-            name="device",
-            label="Device",
-            type="object",
-            related_object_type=device_object_type
+            custom_object_type, name='device', label='Device', type='object', related_object_type=device_object_type
         )
 
         # Multi-Object field (devices)
         CustomObjectsTestCase.create_custom_object_type_field(
             custom_object_type,
-            name="devices",
-            label="Devices",
-            type="multiobject",
-            related_object_type=device_object_type
+            name='devices',
+            label='Devices',
+            type='multiobject',
+            related_object_type=device_object_type,
         )
 
         return custom_object_type
@@ -689,12 +667,7 @@ class CustomObjectsTestCase:
 
         # Primary text field
         CustomObjectsTestCase.create_custom_object_type_field(
-            custom_object_type,
-            name="name",
-            label="Name",
-            type="text",
-            primary=True,
-            required=True
+            custom_object_type, name='name', label='Name', type='text', primary=True, required=True
         )
 
         return custom_object_type
@@ -707,30 +680,21 @@ class CustomObjectsTestCase:
 
         # Primary text field
         CustomObjectsTestCase.create_custom_object_type_field(
-            custom_object_type,
-            name="name",
-            label="Name",
-            type="text",
-            primary=True,
-            required=True
+            custom_object_type, name='name', label='Name', type='text', primary=True, required=True
         )
 
         # Multi-object field (devices)
         CustomObjectsTestCase.create_custom_object_type_field(
             custom_object_type,
-            name="devices",
-            label="Devices",
-            type="multiobject",
-            related_object_type=device_object_type
+            name='devices',
+            label='Devices',
+            type='multiobject',
+            related_object_type=device_object_type,
         )
 
         # Multi-object field (sites)
         CustomObjectsTestCase.create_custom_object_type_field(
-            custom_object_type,
-            name="sites",
-            label="Sites",
-            type="multiobject",
-            related_object_type=site_object_type
+            custom_object_type, name='sites', label='Sites', type='multiobject', related_object_type=site_object_type
         )
 
         return custom_object_type
