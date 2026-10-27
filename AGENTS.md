@@ -83,14 +83,22 @@ Defer all version pins to `pyproject.toml` and `netbox_custom_objects/__init__.p
 │       └── test_views.py                   — Web views.
 ├── docs/
 │   ├── branching.md
+│   ├── config-context.md
+│   ├── configuration.md
 │   ├── field-attributes.md
 │   ├── graphql.md
+│   ├── import-export.md
 │   ├── index.md
 │   ├── installation.md
+│   ├── models/                         — Model pages: the in-app "Help" pages (built by mkdocs.models.yml) and the Data Model section.
+│   ├── permissions.md
 │   ├── portable-schema.md
+│   ├── related-objects-tab.md
 │   ├── releases.md                     — Changelog.
-│   └── rest-api.md
-├── docs/models/                     — Model pages: the in-app "Help" pages (built by mkdocs.models.yml) and the docs site's Data Model section.
+│   ├── rest-api.md
+│   ├── troubleshooting.md
+│   ├── uninstalling.md
+│   └── upgrading.md
 ├── testing/
 │   ├── configuration.py            — NetBox config used by the test workflow.
 │   └── configuration_branching.py  — The same, with netbox-branching installed.

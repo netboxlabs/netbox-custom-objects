@@ -48,14 +48,24 @@ markdown_extensions:
 
 nav:
   - Introduction: index.md
-  - Installation: installation.md
-  - Field Attributes: field-attributes.md
-  - Branching Support: branching.md
+  - Setup:
+      - Installation: installation.md
+      - Configuration: configuration.md
+      - Permissions: permissions.md
+      - Upgrading: upgrading.md
+      - Uninstalling: uninstalling.md
+  - Using Custom Objects:
+      - Field Attributes: field-attributes.md
+      - Import and Export: import-export.md
+      - Custom Objects Tab: related-objects-tab.md
+      - Config Context and Templates: config-context.md
+      - Branching Support: branching.md
+      - Portable Schema: portable-schema.md
   - REST API: rest-api.md
   - GraphQL API: graphql.md
-  - Portable Schema: portable-schema.md
   - Data Model:
       - Custom Object Type: models/netbox_custom_objects/customobjecttype.md
       - Custom Object Type Field: models/netbox_custom_objects/customobjecttypefield.md
       - Custom Object Type Constraint: models/netbox_custom_objects/customobjecttypeconstraint.md
+  - Troubleshooting: troubleshooting.md
   - Releases: releases.md
