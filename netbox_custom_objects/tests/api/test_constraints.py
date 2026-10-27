@@ -6,11 +6,11 @@ from django.db import connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
-
 from rest_framework import status
 from rest_framework.test import APIClient
 
 from netbox_custom_objects.models import CustomObjectTypeConstraint
+
 from ..base import CustomObjectsTestCase, create_token
 
 
@@ -33,7 +33,8 @@ class CustomObjectTypeConstraintAPITestCase(CustomObjectsTestCase, TestCase):
         return self.client.post(
             reverse(self.constraint_list_url),
             {'custom_object_type': self.cot.pk, 'name': 'vendor_serial', 'fields': fields, **extra},
-            format='json', **self.header,
+            format='json',
+            **self.header,
         )
 
     def test_create_and_enforce(self):
@@ -81,9 +82,15 @@ class CustomObjectTypeConstraintAPITestCase(CustomObjectsTestCase, TestCase):
         rule = [{'field': end.pk, 'lookup': 'gt', 'value': {'field': start.pk}}]
         response = self.client.post(
             reverse(self.constraint_list_url),
-            {'custom_object_type': self.cot.pk, 'name': 'dates', 'type': 'check', 'rule': rule,
-             'error_message': 'The end date must be after the start date.'},
-            format='json', **self.header,
+            {
+                'custom_object_type': self.cot.pk,
+                'name': 'dates',
+                'type': 'check',
+                'rule': rule,
+                'error_message': 'The end date must be after the start date.',
+            },
+            format='json',
+            **self.header,
         )
         self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.content)
         self.assertEqual(
@@ -151,9 +158,7 @@ class CustomObjectTypeConstraintAPITestCase(CustomObjectsTestCase, TestCase):
             reverse(self.constraint_list_url), {'custom_object_type_id': other.pk}, **self.header
         )
         self.assertEqual(response.data['count'], 0)
-        response = self.client.get(
-            reverse(self.constraint_list_url), {'custom_object_type': 'assets'}, **self.header
-        )
+        response = self.client.get(reverse(self.constraint_list_url), {'custom_object_type': 'assets'}, **self.header)
         self.assertEqual(response.data['count'], 1)
 
     def test_list_query_count_does_not_grow_with_constraints(self):
@@ -173,7 +178,9 @@ class CustomObjectTypeConstraintAPITestCase(CustomObjectsTestCase, TestCase):
         condition = [{'field': self.vendor.schema_id, 'lookup': 'isnull', 'value': False}]
         for name, fields in (('c2', (self.vendor, model_field)), ('c3', (self.serial, model_field))):
             CustomObjectTypeConstraint.objects.create(
-                custom_object_type=self.cot, name=name, field_schema_ids=[f.schema_id for f in fields],
+                custom_object_type=self.cot,
+                name=name,
+                field_schema_ids=[f.schema_id for f in fields],
                 condition=condition,
             )
         self.assertEqual(list_queries(), one)

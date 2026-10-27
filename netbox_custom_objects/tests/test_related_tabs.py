@@ -23,15 +23,14 @@ import warnings
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core.models import ObjectType
 from django.apps import apps
 from django.db.models import Q
 from django.test import TestCase
+
+from core.models import ObjectType
+from dcim.models import Site
 from extras.choices import CustomFieldTypeChoices
 from netbox.registry import registry
-
-from dcim.models import Site
-
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.models import CustomObjectType
 from netbox_custom_objects.related_tabs.registry import _public_host_model_classes
@@ -196,10 +195,14 @@ class RegisterTabsAppInitWarningTestCase(TestCase):
 
     def test_register_tabs_suppresses_branching_routing_warning(self):
         """netbox-branching warns about routing that query when it's loaded after this plugin."""
+
         def routed_query():
             warnings.warn_explicit(
                 'Routing database query before branching support is initialized.',
-                UserWarning, 'database.py', 1, module='netbox_branching.database',
+                UserWarning,
+                'database.py',
+                1,
+                module='netbox_branching.database',
             )
 
         target = 'netbox_custom_objects.related_tabs.registry.register_tabs'
@@ -409,6 +412,7 @@ class CombinedTabQueryTestCase(CustomObjectsTestCase, TestCase):
     def test_rows_and_badge_are_restricted_per_user(self):
         from django.contrib.auth import get_user_model
         from django.test import RequestFactory
+
         from netbox.context import current_request
 
         site = Site.objects.create(name='Perm Site', slug='perm-site')

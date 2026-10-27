@@ -28,8 +28,9 @@ def _inject_co_urls():
     ``plugins:netbox_custom_objects:customobject_custom_objects``.
     """
     try:
-        import netbox_custom_objects.urls as co_urls
         from django.urls import path as url_path
+
+        import netbox_custom_objects.urls as co_urls
     except ImportError:
         return
 
@@ -38,9 +39,7 @@ def _inject_co_urls():
         return
 
     full_path = f'<str:custom_object_type>/<int:pk>/{_CO_COMBINED_PATH}/'
-    co_urls.urlpatterns.append(
-        url_path(full_path, make_co_combined_view().as_view(), name=CO_COMBINED_URL_NAME)
-    )
+    co_urls.urlpatterns.append(url_path(full_path, make_co_combined_view().as_view(), name=CO_COMBINED_URL_NAME))
     logger.debug("injected URL pattern '%s'", CO_COMBINED_URL_NAME)
 
 
@@ -57,8 +56,9 @@ def _public_host_model_classes():
     Returns ``[]`` if the database isn't usable yet (fresh install before
     ``migrate``); registration is retried on the next process start.
     """
-    from core.models import ObjectType
     from django.db.utils import OperationalError, ProgrammingError
+
+    from core.models import ObjectType
 
     try:
         object_types = list(ObjectType.objects.public().exclude(app_label=APP_LABEL))
@@ -77,7 +77,9 @@ def _public_host_model_classes():
         except Exception:
             logger.exception(
                 'skipping ObjectType pk=%s (%s.%s): error resolving its model class',
-                ot.pk, ot.app_label, ot.model,
+                ot.pk,
+                ot.app_label,
+                ot.model,
             )
             continue
         if model is None:
@@ -86,7 +88,9 @@ def _public_host_model_classes():
             logger.debug(
                 'skipping ObjectType pk=%s (%s.%s): no installed model — likely a stale row from an '
                 'uninstalled plugin or a deleted Custom Object Type',
-                ot.pk, ot.app_label, ot.model,
+                ot.pk,
+                ot.app_label,
+                ot.model,
             )
             continue
         key = (model._meta.app_label, model._meta.model_name)

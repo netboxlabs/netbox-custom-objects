@@ -11,21 +11,21 @@ import decimal
 from typing import Optional
 
 import strawberry_django
-from core.graphql.filter_mixins import ChangeLoggingMixin
 from django.apps import apps as django_apps
 from django.db.models import Q, QuerySet
-from extras.choices import CustomFieldTypeChoices
-from extras.graphql.filter_mixins import ConfigContextFilterMixin, JournalEntriesFilterMixin, TagsFilterMixin
-from extras.models import ConfigContextModel
-from netbox.graphql.filter_lookups import JSONFilter, StringArrayLookup
-from netbox.graphql.filters import BaseModelFilter
-from netbox.graphql.scalars import BigInt
 from strawberry import ID
 from strawberry.types import Info
 from strawberry_django import BaseFilterLookup, ComparisonFilterLookup, DateFilterLookup, DatetimeFilterLookup
 from strawberry_django.filters import lookup_name_conversion_map, process_filters
 from strawberry_django.utils.typing import get_django_definition
 
+from core.graphql.filter_mixins import ChangeLoggingMixin
+from extras.choices import CustomFieldTypeChoices
+from extras.graphql.filter_mixins import ConfigContextFilterMixin, JournalEntriesFilterMixin, TagsFilterMixin
+from extras.models import ConfigContextModel
+from netbox.graphql.filter_lookups import JSONFilter, StringArrayLookup
+from netbox.graphql.filters import BaseModelFilter
+from netbox.graphql.scalars import BigInt
 from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
 from netbox_custom_objects.constants import APP_LABEL
 
@@ -41,11 +41,11 @@ except ImportError:
     StrFilterLookup = FilterLookup
 
 __all__ = (
-    "build_filter_class",
-    "coordinates_filter_annotations",
-    "polymorphic_filter_fields",
-    "relationship_filter_annotations",
-    "scalar_filter_annotation",
+    'build_filter_class',
+    'coordinates_filter_annotations',
+    'polymorphic_filter_fields',
+    'relationship_filter_annotations',
+    'scalar_filter_annotation',
 )
 
 
@@ -56,7 +56,7 @@ def _lookup(lookup_cls, value_type):
     COMPAT(netbox<4.6.3): the string, date and datetime lookup classes are generic
     in the strawberry-django releases these NetBox versions pin, and concrete after.
     """
-    if getattr(lookup_cls, "__parameters__", ()):
+    if getattr(lookup_cls, '__parameters__', ()):
         return lookup_cls[value_type]
     return lookup_cls
 
@@ -82,7 +82,7 @@ SCALAR_FILTER_ANNOTATIONS = {
 def _filter_class_for_type(gql_type):
     """Return the filter class a strawberry_django output type was declared with, or ``None``."""
     definition = get_django_definition(gql_type)
-    return getattr(definition, "filters", None) if definition is not None else None
+    return getattr(definition, 'filters', None) if definition is not None else None
 
 
 def relationship_filter_annotations(field, members):
@@ -103,22 +103,22 @@ def relationship_filter_annotations(field, members):
         if target_filter is not None:
             annotations[field.name] = target_filter
     if field.type == CustomFieldTypeChoices.TYPE_OBJECT:
-        annotations[f"{field.name}_id"] = ID
+        annotations[f'{field.name}_id'] = ID
     return annotations
 
 
 def coordinates_filter_annotations(field):
     """Return the ``<field>_latitude`` and ``<field>_longitude`` filters of a coordinates field."""
     return {
-        f"{field.name}_latitude": ComparisonFilterLookup[decimal.Decimal],
-        f"{field.name}_longitude": ComparisonFilterLookup[decimal.Decimal],
+        f'{field.name}_latitude': ComparisonFilterLookup[decimal.Decimal],
+        f'{field.name}_longitude': ComparisonFilterLookup[decimal.Decimal],
     }
 
 
 def _target_pks(value, model, info):
     """Primary keys of the ``model`` objects matching the nested filter ``value``."""
     targets, q = process_filters(value, model.objects.all(), info)
-    return targets.filter(q).values("pk")
+    return targets.filter(q).values('pk')
 
 
 def _resolver_filter_field(name, annotation, resolve):
@@ -149,32 +149,38 @@ def polymorphic_filter_fields(field, targets):
         model = content_type.model_class()
         if model is None:
             continue
-        name = f"{field.name}_{content_type.app_label}_{content_type.model}"
+        name = f'{field.name}_{content_type.app_label}_{content_type.model}'
         target_filter = _filter_class_for_type(gql_type) if gql_type is not None else None
 
         if is_multi:
+
             def match(pks, prefix, _ct=content_type.pk, _through=field.through_model_name):
                 through = django_apps.get_model(APP_LABEL, _through)
-                sources = through.objects.filter(content_type_id=_ct, object_id__in=pks).values("source_id")
-                return Q(**{f"{prefix}pk__in": sources})
+                sources = through.objects.filter(content_type_id=_ct, object_id__in=pks).values('source_id')
+                return Q(**{f'{prefix}pk__in': sources})
         else:
+
             def match(pks, prefix, _ct=content_type.pk, _gfk=field.name):
-                lookup = "in" if isinstance(pks, QuerySet) else "exact"
-                return Q(**{
-                    f"{prefix}{_gfk}_content_type_id": _ct,
-                    f"{prefix}{_gfk}_object_id__{lookup}": pks,
-                })
+                lookup = 'in' if isinstance(pks, QuerySet) else 'exact'
+                return Q(
+                    **{
+                        f'{prefix}{_gfk}_content_type_id': _ct,
+                        f'{prefix}{_gfk}_object_id__{lookup}': pks,
+                    }
+                )
 
         if target_filter is not None:
             fields[name] = _resolver_filter_field(
-                name, Optional[target_filter],
+                name,
+                Optional[target_filter],
                 lambda info, value, prefix, _model=model, _match=match: _match(
                     _target_pks(value, _model, info), prefix
                 ),
             )
         if not is_multi:
-            fields[f"{name}_id"] = _resolver_filter_field(
-                f"{name}_id", Optional[ID],
+            fields[f'{name}_id'] = _resolver_filter_field(
+                f'{name}_id',
+                Optional[ID],
                 lambda info, value, prefix, _match=match: _match(value, prefix),
             )
     return fields
@@ -190,9 +196,9 @@ def _aliased_filter_field(name, annotation):
     """
 
     def resolver(self, info: Info, queryset: QuerySet, value: annotation, prefix: str):
-        if hasattr(value, "__strawberry_definition__"):
-            return process_filters(value, queryset, info, prefix=f"{prefix}{name}__")
-        return queryset, Q(**{f"{prefix}{name}": value})
+        if hasattr(value, '__strawberry_definition__'):
+            return process_filters(value, queryset, info, prefix=f'{prefix}{name}__')
+        return queryset, Q(**{f'{prefix}{name}': value})
 
     resolver.__name__ = name
     return strawberry_django.filter_field(resolver)
@@ -210,17 +216,17 @@ def build_filter_class(model, field_annotations, filter_fields=None):
     if issubclass(model, ConfigContextModel):
         bases.insert(0, ConfigContextFilterMixin)
 
-    namespace = {"__annotations__": {}}
+    namespace = {'__annotations__': {}}
     for name, annotation in field_annotations.items():
         if name in lookup_name_conversion_map:
             namespace[name] = _aliased_filter_field(name, annotation)
             continue
-        namespace["__annotations__"][name] = Optional[annotation]
+        namespace['__annotations__'][name] = Optional[annotation]
         namespace[name] = strawberry_django.filter_field()
     for name, filter_field in (filter_fields or {}).items():
         namespace.setdefault(name, filter_field)
 
-    name = f"{model.__name__}Filter"
+    name = f'{model.__name__}Filter'
     cls = type(name, tuple(bases), namespace)
     return strawberry_django.filter_type(model, name=name, lookups=True)(cls)
 

@@ -1,28 +1,52 @@
+# See PEP 517 / PEP 621 for the spec of this file.
+#
+# This pyproject.toml is generated from the NetBox Labs plugin scaffold.
+# The NetBox version range this plugin supports lives in PluginConfig
+# (see netbox_custom_objects/__init__.py: min_version / max_version),
+# not here. Update both places when you bump the supported range.
+#
+# [tool.*] sections are sorted alphabetically by top-level tool name.
+# Keep [tool.ruff] in this file; do not introduce a separate ruff.toml
+# or .ruff.toml. Sub-tables under each tool (e.g. [tool.ruff.lint.*],
+# [tool.setuptools.packages.find]) preserve their natural reading order.
+
+[build-system]
+requires = ["setuptools>=77.0.3"]
+build-backend = "setuptools.build_meta"
+
 [project]
+# Distribution name is already published; it must not be renamed to match
+# repo_slug. The scaffold derives `netbox-custom-objects` from repo_slug.
 name = "netboxlabs-netbox-custom-objects"
 version = "0.7.1"
 description = "A plugin to manage custom objects in NetBox"
-readme = "README.md"
-requires-python = ">=3.10"
-license = { text = "NetBox Limited Use License 1.0" }
+readme = { file = "README.md", content-type = "text/markdown" }
+license-files = ["LICENSE.md"]
+requires-python = ">=3.12"
 authors = [
-    { name = "NetBox Labs", email = "support@netboxlabs.com" }
+    { name = "NetBox Labs", email = "support@netboxlabs.com" },
 ]
 maintainers = [
-    { name = "NetBox Labs", email = "support@netboxlabs.com" }
+    { name = "NetBox Labs", email = "support@netboxlabs.com" },
 ]
-
+keywords = ["netbox", "netbox-plugin"]
 classifiers = [
     "Development Status :: 4 - Beta",
+    "Framework :: Django",
+    "Framework :: Django :: 5.2",
     "Intended Audience :: Developers",
-    "Topic :: Software Development :: Build Tools",
-    "Programming Language :: Python :: 3",
+    "Intended Audience :: System Administrators",
+    "Intended Audience :: Telecommunications Industry",
+    "License :: Other/Proprietary License",
+    "Natural Language :: English",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
     "Programming Language :: Python :: 3 :: Only",
-    'Programming Language :: Python :: 3.10',
-    'Programming Language :: Python :: 3.11',
-    'Programming Language :: Python :: 3.12',
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: System :: Networking",
 ]
-
 dependencies = [
     "Django",
     "jsonschema",
@@ -30,39 +54,345 @@ dependencies = [
     "PyYAML",
 ]
 
+[project.urls]
+Homepage = "https://github.com/netboxlabs/netbox-custom-objects"
+Documentation = "https://netboxlabs.com/docs/extensions/custom-objects/"
+Source = "https://github.com/netboxlabs/netbox-custom-objects"
+Issues = "https://github.com/netboxlabs/netbox-custom-objects/issues"
+Changelog = "https://github.com/netboxlabs/netbox-custom-objects/releases"
+
 [project.optional-dependencies]
-dev = ["check-manifest", "mkdocs>=1.6,<2", "mkdocs-material>=9.7,<10", "ruff"]
-test = ["coverage", "pytest", "pytest-cov"]
+# Pinned for reproducible CI; items 4 and 5 may extend each group.
+dev = [
+    "build==1.2.2",
+    "pre-commit==4.7.0",
+    # Same version as the ruff-pre-commit hook in .pre-commit-config.yaml.
+    "ruff==0.15.14",
+    "twine==6.1.0",
+]
+test = [
+    "check-manifest==0.51",
+    # Recent releases measure with sys.monitoring on Python 3.14. 7.6 used its
+    # slower settrace tracer there, which pushed the coverage leg past its timeout.
+    "coverage[toml]==7.17.0",
+    "tblib==3.2.2",
+]
+docs = [
+    "mkdocs==1.6.1",
+    "mkdocs-material==9.7.6",
+    # Keep in step with the zensical pin in test.yml and release.yaml.
+    "zensical==0.0.43",
+]
 # Install with `pip install "netboxlabs-netbox-custom-objects[branching]"` when
 # pairing this plugin with netbox-branching.  Note: this extra also implies a
 # stricter NetBox version requirement (>= 4.6.2), which is enforced at startup
 # by netbox_custom_objects.checks rather than declared here.
-branching = ["netbox-branching>=1.0.4"]
+branching = ["netboxlabs-netbox-branching>=1.0.4"]
 
-[project.urls]
-"Homepage" = "https://netboxlabs.com/"
-
-[project.scripts]
-
-[tool.setuptools]
-packages = [
-    "netbox_custom_objects",
+[tool.check-manifest]
+# Files tracked in git but intentionally excluded from sdist/wheel.
+# These are dev-tooling / project-meta files, not Python distribution content.
+ignore = [
+    ".copier-answers.yml",
+    ".pre-commit-config.yaml",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "COMPATIBILITY.md",
+    "SECURITY.md",
+    "docs/*.md",
+    "docs/models/*.md",
+    "docs/development/*.md",
+    "mkdocs.yml",
+    "testing/configuration.py",
+    "testing/configuration_branching.py",
+    # The test suite lives inside the package but is excluded from the dist
+    # (see [tool.setuptools.packages.find] exclude). CI installs editable, so
+    # the suite still resolves from the source tree.
+    "netbox_custom_objects/tests/*",
+    "netbox_custom_objects/tests/*/*",
+    # In-app model help pages: built from docs_models/ by mkdocs.models.yml before
+    # packaging, so they ship in the dist but are not tracked in git.
+    "netbox_custom_objects/static/*",
+    "docs_models/*/*",
+    "mkdocs.models.yml",
+    "docs/media/*/*",
+    ".yamllint",
+    ".git-blame-ignore-revs",
+    ".claude/*",
+    ".claude/skills/*/*",
+    # Per-view query-count baseline: test-only tooling, not distribution content.
+    "netbox_custom_objects/tests/query_counts.json",
+    "uv.lock",
+    ".github/ISSUE_TEMPLATE/*.yaml",
+    ".github/ISSUE_TEMPLATE/config.yml",
+    ".github/labels.yml",
+    ".github/PULL_REQUEST_TEMPLATE.md",
+    ".github/workflows/*.yml",
+    ".github/workflows/*.yaml",
 ]
-package-data = { "netbox_custom_objects" = ["**/*", "templates/**"] }
-exclude-package-data = { netbox_custom_objects = ["tests/*"] }
-license-files = ["LICENSE.md"]
+
+[tool.codespell]
+# Path patterns relative to repo root; extend as needed per plugin.
+skip = "*.po,*.lock,*.svg,*.min.js,*.min.css,docs/_build,site,build,dist,.git"
+# Add comma-separated tokens here when a plugin needs to whitelist false-positives.
+# Leave commented when empty: codespell's pyproject parser rejects ignore-words-list = "".
+# `ot` (an ObjectType) and `fo` (a field object) are local variable names.
+ignore-words-list = "fo,ot"
+count = true
+
+[tool.coverage.run]
+source = ["netbox_custom_objects"]
+omit = [
+    "*/migrations/*",
+    "*/tests/*",
+]
+concurrency = ["multiprocessing"]
+parallel = true
+sigterm = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+]
+
+[tool.djlint]
+# NetBox templates follow Django conventions.
+profile = "django"
+indent = 2
+max_line_length = 120
+# Conservative ignore set; document each addition with a one-line comment.
+# H006: image without explicit height/width (NetBox UI conventions).
+# H013: image without alt attribute (NetBox icon helpers often omit).
+# H023: entity-encoded characters in templates (intentional in NetBox).
+# H030: meta description tag (NetBox sets at base template).
+# H031: meta keywords tag (NetBox sets at base template).
+# H021: inline styles; the delete-confirmation modals copy NetBox core's markup.
+# T002: single-quoted tag arguments, matching NetBox core templates and this
+#       project's single-quote Python style.
+# T003: unnamed {% endblock %}; NetBox core does not name them either.
+ignore = "H006,H013,H021,H023,H030,H031,T002,T003"
 
 [tool.ruff]
+exclude = [
+    ".eggs",
+    ".git",
+    ".pyenv",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    ".vscode",
+    "__pypackages__",
+    "_build",
+    "build",
+    "dist",
+    "node_modules",
+    "site-packages",
+    "venv",
+]
+
+# Enforce line length and indentation width.
 line-length = 120
+indent-width = 4
+
+# Ignore files and directories listed in .gitignore.
+respect-gitignore = true
+
+# Generate and lint against the lowest-supported Python (python_version prompt).
+target-version = "py312"
 
 [tool.ruff.lint]
-extend-select = ["E1", "E2", "E3", "E501", "W"]
-ignore = ["F403", "F405"]
+# Pin the effective default rule set used with `preview = true` to match Ruff 0.15.1.
+# Ruff 0.15.2 changed the preview defaults:
+# https://github.com/astral-sh/ruff/releases/tag/0.15.2
+# Keeping this explicit makes Ruff deterministic instead of inheriting future preview-default changes.
+select = [
+    "E4",  # pycodestyle: import/module-level errors from Ruff's historical default set.
+    "E7",  # pycodestyle: statement/style errors from Ruff's historical default set.
+    "E9",  # pycodestyle: syntax/runtime-adjacent errors from Ruff's historical default set.
+    "F",   # pyflakes: undefined names, unused imports, and other likely bugs.
+]
+
+extend-select = [
+    # Baseline style and modernization checks.
+    "E1",    # pycodestyle: indentation errors.
+    "E2",    # pycodestyle: whitespace around operators and delimiters.
+    "E3",    # pycodestyle: blank-line spacing around definitions.
+    "E501",  # pycodestyle: line length for Python code.
+    "W",     # pycodestyle warnings: tabs, invalid escapes, and other warning-level style issues.
+    "W505",  # pycodestyle: documentation/comment line length; enabled by `lint.pycodestyle.max-doc-length`.
+    "I",     # isort: keep imports grouped and sorted consistently.
+    "UP",    # pyupgrade: use modern Python syntax supported by `target-version`.
+    "C4",    # flake8-comprehensions: remove unnecessary or misleading comprehension patterns.
+    "ISC",   # flake8-implicit-str-concat: catch accidental implicit/explicit string concatenation.
+    "RET",   # flake8-return: keep return paths explicit and consistent.
+    "SIM",   # flake8-simplify: catch straightforward simplification opportunities.
+    "PTH",   # flake8-use-pathlib: prefer pathlib APIs over os/os.path where practical.
+
+    # Django/i18n safety. These pair well with NetBox's UP032 ignore because translation
+    # strings should remain statically extractable rather than being interpolated first.
+    "INT",   # flake8-gettext: prevent f-string, .format(), and %-formatting inside gettext calls.
+
+    # Accidental debug code.
+    "T100",  # flake8-debugger: catch breakpoint(), pdb, and similar debug statements before merge.
+
+    # Executable/shebang hygiene for scripts.
+    "EXE001",  # flake8-executable: shebang is present but the file is not executable.
+    "EXE002",  # flake8-executable: file is executable but no shebang is present.
+    "EXE004",  # flake8-executable: shebang has leading whitespace.
+    "EXE005",  # flake8-executable: shebang is not on the first line.
+
+    # Logging correctness.
+    "G010",    # flake8-logging-format: replace deprecated logging.warn() with logging.warning().
+    "G101",    # flake8-logging-format: prevent logging extra= keys from clashing with LogRecord fields.
+    "G201",    # flake8-logging-format: prefer logging.exception() over logging.error(..., exc_info=True).
+    "G202",    # flake8-logging-format: avoid redundant exc_info=True with logging.exception().
+    "LOG001",  # flake8-logging: avoid direct Logger construction; use logging.getLogger().
+    "LOG002",  # flake8-logging: require a valid logging.getLogger() argument.
+    "LOG014",  # flake8-logging: avoid exc_info= outside exception handlers.
+    "LOG015",  # flake8-logging: avoid root logger calls; use module loggers.
+    "PLE1205", # Pylint: too many arguments supplied to a logging format string.
+    "PLE1206", # Pylint: too few arguments supplied to a logging format string.
+
+    # Timezone-aware datetime usage. This is especially relevant in a Django app.
+    "DTZ003",  # flake8-datetimez: avoid datetime.utcnow(); prefer aware UTC datetimes.
+    "DTZ005",  # flake8-datetimez: avoid datetime.now() without a timezone.
+    "DTZ006",  # flake8-datetimez: avoid datetime.fromtimestamp() without a timezone.
+    "DTZ901",  # flake8-datetimez: avoid naive datetime.min/datetime.max sentinels.
+
+    # Bugbear correctness checks.
+    "B002",  # flake8-bugbear: catch ++x/--x, which do not increment/decrement in Python.
+    "B004",  # flake8-bugbear: avoid unreliable callable checks based on __call__.
+    "B005",  # flake8-bugbear: catch likely misuse of str.strip() with multi-character strings.
+    "B006",  # flake8-bugbear: prevent mutable default arguments.
+    "B008",  # flake8-bugbear: prevent function calls in default arguments.
+    "B012",  # flake8-bugbear: avoid return/break/continue inside finally blocks.
+    "B013",  # flake8-bugbear: catch redundant tuples in exception handlers.
+    "B014",  # flake8-bugbear: catch duplicate exception classes in handlers.
+    "B016",  # flake8-bugbear: catch invalid raise of literals.
+    "B018",  # flake8-bugbear: catch useless expressions that are likely forgotten code.
+    "B020",  # flake8-bugbear: catch loop variables that override the iterator variable.
+    "B023",  # flake8-bugbear: catch late-binding loop-variable closures.
+    "B025",  # flake8-bugbear: catch duplicate exceptions across try/except handlers.
+    "B029",  # flake8-bugbear: catch except () handlers, which catch nothing.
+    "B030",  # flake8-bugbear: catch except handlers using non-exception classes.
+    "B033",  # flake8-bugbear: catch duplicate values where uniqueness is expected.
+    "B035",  # flake8-bugbear: catch dict comprehensions with static keys.
+    "B039",  # flake8-bugbear: prevent mutable defaults for context variables.
+
+    # Ruff-specific correctness and maintenance checks.
+    # RUF009 is intentionally not selected: Strawberry Django uses calls such as
+    # strawberry_django.filter_field() as dataclass field metadata, not as shared mutable defaults.
+    "RUF008",  # Ruff: prevent mutable dataclass defaults.
+    "RUF016",  # Ruff: catch invalid index types.
+    "RUF018",  # Ruff: catch assignment expressions inside assert statements.
+    "RUF022",  # Ruff: keep __all__ lists sorted.
+    "RUF024",  # Ruff: prevent shared mutable values from dict.fromkeys().
+    "RUF026",  # Ruff: catch suspicious default_factory usage.
+    "RUF028",  # Ruff: catch invalid formatter suppression comments.
+    "RUF030",  # Ruff: avoid print() calls as assert messages.
+    "RUF032",  # Ruff: avoid constructing Decimal from float literals.
+    "RUF040",  # Ruff: catch invalid assert message literal arguments.
+    "RUF041",  # Ruff: remove unnecessary nested Literal types.
+    "RUF046",  # Ruff: remove unnecessary int() casts.
+    "RUF051",  # Ruff: prefer dict.pop() over key-in-dict followed by del.
+    "RUF057",  # Ruff: remove unnecessary round() calls on integers.
+    "RUF059",  # Ruff: catch unused unpacked variables that should be named "_".
+    "RUF100",  # Ruff: keep noqa comments from going stale.
+    "RUF101",  # Ruff: catch noqa comments that target redirected or renamed rules.
+    "RUF200",  # Ruff: validate pyproject.toml metadata against the relevant PEP schemas.
+
+    # Security-adjacent control-flow checks. These may need targeted noqa comments in
+    # rare intentional cases, but silent failure and dynamic execution should be explicit.
+    "S102",  # flake8-bandit: flag exec(); intentional dynamic execution should be documented.
+    "S110",  # flake8-bandit: flag try/except/pass; silent failure should be visible.
+    "S112",  # flake8-bandit: flag try/except/continue; silent failure in loops should be visible.
+
+    # Test/mock correctness.
+    "PGH005",  # pygrep-hooks: catch invalid access to mock attributes.
+
+    # Note: SLF is intentionally not selected for now. NetBox has legitimate internal
+    # and test code that reaches into framework/private members, and SLF currently maps
+    # to the very broad private-member-access rule.
+]
+
+# If you add a rule to `ignore`, document the rationale inline below AND in the
+# plugin's developer-facing docs so reviewers can see why the exception was granted.
+ignore = [
+    "F403",    # pyflakes: `from ... import *` used; unable to detect undefined names.
+    "F405",    # pyflakes: name may be undefined or defined from star imports.
+    "RET504",  # flake8-return: allow assigning to a named variable before returning for readability.
+    "SIM102",  # flake8-simplify: allow nested if-statements where they make control flow clearer.
+    "SIM114",  # flake8-simplify: allow separate if-branches when separate branches aid readability.
+    "UP032",   # pyupgrade: keep str.format(...) available, especially for translation strings.
+]
+
 preview = true
 
+[tool.ruff.lint.pycodestyle]
+# Required for W505. Keep documentation/comment line length aligned with the overall
+# line length unless the plugin's style guide adopts a separate docstring limit.
+max-doc-length = 120
+
+[tool.ruff.lint.isort]
+known-first-party = [
+    "account",
+    "circuits",
+    "core",
+    "dcim",
+    "extras",
+    "ipam",
+    "netbox",
+    "tenancy",
+    "users",
+    "utilities",
+    "virtualization",
+    "vpn",
+    "wireless",
+    "netbox_custom_objects",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"template_code.py" = ["E501"]  # Generated/template code may exceed normal line length.
+"**/migrations/*.py" = ["D", "E501", "I"]  # Django-generated migrations: no docstring coverage; long generated values; emitted in non-isort-canonical order.
+"**/tests/*.py" = ["D"]  # Tests do not require docstring coverage by default.
+"**/__init__.py" = ["D104"]  # Package marker files do not require public package docstrings.
+# The GraphQL types and filters build Strawberry annotations at runtime from objects (lazy types,
+# forward references) that do not all support `X | None`, so they keep `Optional[X]`.
+"netbox_custom_objects/graphql/*.py" = ["UP045"]
+
 [tool.ruff.format]
+# Use single quotes for strings.
 quote-style = "single"
 
-[build-system]
-requires = ["setuptools>=43.0.0", "wheel"]
-build-backend = "setuptools.build_meta"
+# Indent with spaces, rather than tabs.
+indent-style = "space"
+
+# Enforce UNIX line endings.
+line-ending = "lf"
+
+# Skip auto-format on Django-emitted migrations; their generated layout
+# (multi-arg call wrapping, dict-in-call) is not Ruff-canonical and
+# reformatting them produces noisy diffs without semantic value. This is
+# additive over the top-level Ruff exclude defaults.
+exclude = ["**/migrations/*.py"]
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["netbox_custom_objects*"]
+# The test suite runs from a source checkout and is not shipped in the wheel.
+exclude = ["netbox_custom_objects.tests*"]
+
+[tool.setuptools.package-data]
+"netbox_custom_objects" = [
+    "templates/**",
+    "static/**",
+    "locale/**/*.mo",
+    # The portable schema format's JSON Schema, loaded at runtime by the schema validator.
+    "schema/*.json",
+]

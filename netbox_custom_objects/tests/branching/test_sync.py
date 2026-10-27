@@ -1,6 +1,7 @@
 """
 Syncing changes made in main into a branch, including changes made on both sides.
 """
+
 import unittest
 
 from django.db import connections
@@ -12,15 +13,16 @@ from netbox_custom_objects.models import (
 
 from .base import (
     HAS_BRANCHING,
-    _make_request,
-    _TestBase,
-    _provision_branch,
     BranchingTestBase,
+    _make_request,
+    _provision_branch,
+    _TestBase,
 )
 
 if HAS_BRANCHING:
-    from netbox.context_managers import event_tracking
     from netbox_branching.utilities import activate_branch
+
+    from netbox.context_managers import event_tracking
 
 
 # ── Sync test ─────────────────────────────────────────────────────────────────
@@ -98,6 +100,7 @@ class BranchSyncTestCase(BranchingTestBase, _TestBase):
 
 # ── Concurrent-edit tests (both main and branch modified before sync/merge) ───
 
+
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
 class ConcurrentEditSyncTestCase(BranchingTestBase, _TestBase):
     """
@@ -132,7 +135,10 @@ class ConcurrentEditSyncTestCase(BranchingTestBase, _TestBase):
         with event_tracking(request):
             cot = CustomObjectType.objects.create(name='sync_co_cot', slug='sync-co-cot')
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='notes', label='Notes', type='text',
+                custom_object_type=cot,
+                name='notes',
+                label='Notes',
+                type='text',
             )
             Model = cot.get_model()
             co_shared = Model.objects.create(notes='original shared')
@@ -173,11 +179,13 @@ class ConcurrentEditSyncTestCase(BranchingTestBase, _TestBase):
             # CO modified in main must reflect main's value.
             self.assertEqual(SM.objects.get(pk=co_main_only_pk).notes, 'modified in main')
             # CO created in main must be visible in branch after sync.
-            self.assertTrue(SM.objects.filter(pk=main_new_pk).exists(),
-                            'CO created in main must appear in branch after sync')
+            self.assertTrue(
+                SM.objects.filter(pk=main_new_pk).exists(), 'CO created in main must appear in branch after sync'
+            )
             # CO created in branch was not deleted by sync.
-            self.assertTrue(SM.objects.filter(pk=branch_new_pk).exists(),
-                            'CO created in branch must still exist after sync')
+            self.assertTrue(
+                SM.objects.filter(pk=branch_new_pk).exists(), 'CO created in branch must still exist after sync'
+            )
 
     def test_field_rename_in_branch_co_add_in_main_sync(self):
         """
@@ -207,7 +215,10 @@ class ConcurrentEditSyncTestCase(BranchingTestBase, _TestBase):
         with event_tracking(request):
             cot = CustomObjectType.objects.create(name='sync_rename_cot', slug='sync-rename-cot')
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='alpha', label='Alpha', type='text',
+                custom_object_type=cot,
+                name='alpha',
+                label='Alpha',
+                type='text',
             )
             cot.get_model().objects.create(alpha='original')
 
@@ -236,11 +247,9 @@ class ConcurrentEditSyncTestCase(BranchingTestBase, _TestBase):
             cot_b = CustomObjectType.objects.get(pk=cot.pk)
             field_b = CustomObjectTypeField.objects.get(custom_object_type=cot_b)
             # Branch field rename must be preserved (main did not rename).
-            self.assertEqual(field_b.name, 'branch_alpha',
-                             'Branch field rename must be preserved after sync')
+            self.assertEqual(field_b.name, 'branch_alpha', 'Branch field rename must be preserved after sync')
             BM = cot_b.get_model()
-            self.assertTrue(BM.objects.filter(pk=branch_new_pk).exists(),
-                            'CO created in branch must survive sync')
+            self.assertTrue(BM.objects.filter(pk=branch_new_pk).exists(), 'CO created in branch must survive sync')
 
     def test_concurrent_field_rename_sync_no_crash(self):
         """
@@ -272,7 +281,10 @@ class ConcurrentEditSyncTestCase(BranchingTestBase, _TestBase):
         with event_tracking(request):
             cot = CustomObjectType.objects.create(name='confl_sync_cot', slug='confl-sync-cot')
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='alpha', label='Alpha', type='text',
+                custom_object_type=cot,
+                name='alpha',
+                label='Alpha',
+                type='text',
             )
 
         branch = _provision_branch('Conflict Sync Branch', 'iterative', self.user)
@@ -307,7 +319,8 @@ class ConcurrentEditSyncTestCase(BranchingTestBase, _TestBase):
             branch_cols = {
                 col.name
                 for col in branch_conn.introspection.get_table_description(
-                    cursor, cot.get_database_table_name(),
+                    cursor,
+                    cot.get_database_table_name(),
                 )
             }
         self.assertIn('main_alpha', branch_cols, 'Branch column must converge to main_alpha after sync')

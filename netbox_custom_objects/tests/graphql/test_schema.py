@@ -14,10 +14,9 @@ from django.test import TestCase
 
 from core.models import ObjectType
 from dcim.models import Device, Site
-
 from netbox_custom_objects.graphql import live as live_module
 from netbox_custom_objects.graphql import schema as schema_module
-from netbox_custom_objects.graphql.schema import build_query_classes, _query_field_name
+from netbox_custom_objects.graphql.schema import _query_field_name, build_query_classes
 from netbox_custom_objects.graphql.types import build_object_type
 
 from ..base import CustomObjectsTestCase
@@ -34,46 +33,44 @@ class GraphQLSchemaGenerationTestCase(CustomObjectsTestCase, TestCase):
 
         from netbox_custom_objects.graphql.types import _build_gfk_prefetch_fallback
 
-        prefetch_fn = _build_gfk_prefetch_fallback("target", [Site, Device])
+        prefetch_fn = _build_gfk_prefetch_fallback('target', [Site, Device])
         result = prefetch_fn(info=None)
         self.assertIsInstance(result, GenericPrefetch)
-        self.assertEqual(result.prefetch_through, "target")
+        self.assertEqual(result.prefetch_through, 'target')
         self.assertEqual(len(result.querysets), 2)
         self.assertEqual({qs.model for qs in result.querysets}, {Site, Device})
 
     def test_query_field_name_sanitizes_and_namespaces_slug(self):
         used = set()
-        cot = self.create_custom_object_type(name="Widget", slug="my-widget")
+        cot = self.create_custom_object_type(name='Widget', slug='my-widget')
         name = _query_field_name(cot, used)
         # Hyphens sanitised to underscores, and namespaced with the prefix so the
         # field can never collide with a core/plugin root query field.
-        self.assertEqual(name, "custom_objects_my_widget")
+        self.assertEqual(name, 'custom_objects_my_widget')
 
     def test_query_field_name_dedupes_collisions(self):
         used = set()
-        a = self.create_custom_object_type(name="A", slug="a-b")
-        b = self.create_custom_object_type(name="B", slug="a_b", verbose_name_plural="Bs")
+        a = self.create_custom_object_type(name='A', slug='a-b')
+        b = self.create_custom_object_type(name='B', slug='a_b', verbose_name_plural='Bs')
         first = _query_field_name(a, used)
         second = _query_field_name(b, used)
-        self.assertEqual(first, "custom_objects_a_b")
-        self.assertEqual(second, f"custom_objects_a_b_{b.id}")
+        self.assertEqual(first, 'custom_objects_a_b')
+        self.assertEqual(second, f'custom_objects_a_b_{b.id}')
 
     def test_query_field_name_avoids_list_suffix_collision(self):
         # A type whose slug sanitizes to '<other>_list' must not claim the same
         # GraphQL field as another type's auto-generated '<name>_list' list field.
         used = set()
-        a = self.create_custom_object_type(name="Foo", slug="foo")
-        b = self.create_custom_object_type(
-            name="Foo List", slug="foo-list", verbose_name_plural="Foo Lists"
-        )
+        a = self.create_custom_object_type(name='Foo', slug='foo')
+        b = self.create_custom_object_type(name='Foo List', slug='foo-list', verbose_name_plural='Foo Lists')
         name_a = _query_field_name(a, used)
         name_b = _query_field_name(b, used)
-        self.assertEqual(name_a, "custom_objects_foo")
+        self.assertEqual(name_a, 'custom_objects_foo')
         # 'custom_objects_foo_list' is already reserved as A's list field, so B is
         # disambiguated.
-        self.assertNotEqual(name_b, "custom_objects_foo_list")
+        self.assertNotEqual(name_b, 'custom_objects_foo_list')
         # All four generated names (singular + list for each type) stay distinct.
-        all_fields = {name_a, f"{name_a}_list", name_b, f"{name_b}_list"}
+        all_fields = {name_a, f'{name_a}_list', name_b, f'{name_b}_list'}
         self.assertEqual(len(all_fields), 4)
 
     def test_build_object_type_is_cached_per_structure(self):
@@ -84,11 +81,11 @@ class GraphQLSchemaGenerationTestCase(CustomObjectsTestCase, TestCase):
         types_module.clear_type_cache()
         self.addCleanup(types_module.clear_type_cache)
 
-        cot = self.create_simple_custom_object_type(name="Cached", slug="cached")
+        cot = self.create_simple_custom_object_type(name='Cached', slug='cached')
         first = build_object_type(cot)
         self.assertIs(first, build_object_type(cot))
 
-        self.create_custom_object_type_field(cot, name="extra", label="Extra", type="text")
+        self.create_custom_object_type_field(cot, name='extra', label='Extra', type='text')
         cot.refresh_from_db()
         self.assertIsNot(first, build_object_type(cot))
 
@@ -109,10 +106,9 @@ class GraphQLSchemaGenerationTestCase(CustomObjectsTestCase, TestCase):
         # exposing the expected per-type fields.
         from strawberry.schema.config import StrawberryConfig
 
-        self.create_simple_custom_object_type(name="Gadget", slug="gadget")
+        self.create_simple_custom_object_type(name='Gadget', slug='gadget')
         with mock.patch(
-            "netbox_custom_objects.CustomObjectsPluginConfig."
-            "should_skip_dynamic_model_creation",
+            'netbox_custom_objects.CustomObjectsPluginConfig.should_skip_dynamic_model_creation',
             return_value=False,
         ):
             classes = build_query_classes()
@@ -120,13 +116,11 @@ class GraphQLSchemaGenerationTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(len(classes), 1)
         # Assemble exactly as NetBox does: the contributed class as a base of the
         # root Query type.
-        query_cls = strawberry.type(type("Query", (classes[0],), {}))
-        built = strawberry.Schema(
-            query=query_cls, config=StrawberryConfig(auto_camel_case=False)
-        )
+        query_cls = strawberry.type(type('Query', (classes[0],), {}))
+        built = strawberry.Schema(query=query_cls, config=StrawberryConfig(auto_camel_case=False))
         sdl = str(built)
-        self.assertIn("custom_objects_gadget", sdl)
-        self.assertIn("custom_objects_gadget_list", sdl)
+        self.assertIn('custom_objects_gadget', sdl)
+        self.assertIn('custom_objects_gadget_list', sdl)
 
     def test_self_referential_object_field_does_not_recurse(self):
         # A self-referential OBJECT field (FK to the same COT) must not send
@@ -139,16 +133,14 @@ class GraphQLSchemaGenerationTestCase(CustomObjectsTestCase, TestCase):
         types_module.clear_type_cache()
         self.addCleanup(types_module.clear_type_cache)
 
-        cot = self.create_custom_object_type(name="Node", slug="node")
-        self.create_custom_object_type_field(
-            cot, name="label", label="Label", type="text", primary=True, required=True
-        )
+        cot = self.create_custom_object_type(name='Node', slug='node')
+        self.create_custom_object_type_field(cot, name='label', label='Label', type='text', primary=True, required=True)
         self_ot = ObjectType.objects.get(
-            app_label="netbox_custom_objects",
+            app_label='netbox_custom_objects',
             model=cot.get_table_model_name(cot.id).lower(),
         )
         self.create_custom_object_type_field(
-            cot, name="parent", label="Parent", type="object", related_object_type=self_ot
+            cot, name='parent', label='Parent', type='object', related_object_type=self_ot
         )
         cot.refresh_from_db()
 
@@ -171,40 +163,40 @@ class GraphQLSchemaGenerationTestCase(CustomObjectsTestCase, TestCase):
 
         from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 
-        cot = self.create_custom_object_type(name="Pf", slug="pf")
-        self.create_custom_object_type_field(
-            cot, name="name", label="Name", type="text", primary=True, required=True
-        )
+        cot = self.create_custom_object_type(name='Pf', slug='pf')
+        self.create_custom_object_type_field(cot, name='name', label='Name', type='text', primary=True, required=True)
         # Non-polymorphic object field → exercises the related_object_type FK.
         self.create_custom_object_type_field(
-            cot, name="single", label="Single", type="object",
+            cot,
+            name='single',
+            label='Single',
+            type='object',
             related_object_type=self.get_site_object_type(),
         )
         # Polymorphic object field → exercises the related_object_types M2M.
         self.create_polymorphic_field(
-            cot, [self.get_site_object_type(), self.get_device_object_type()],
-            name="poly", type="object",
+            cot,
+            [self.get_site_object_type(), self.get_device_object_type()],
+            name='poly',
+            type='object',
         )
 
         # The exact prefetch build_query_classes uses.
-        fields_qs = (
-            CustomObjectTypeField.objects
-            .select_related("related_object_type")
-            .prefetch_related("related_object_types")
+        fields_qs = CustomObjectTypeField.objects.select_related('related_object_type').prefetch_related(
+            'related_object_types'
         )
-        loaded = CustomObjectType.objects.prefetch_related(
-            Prefetch("fields", queryset=fields_qs)
-        ).get(pk=cot.pk)
+        loaded = CustomObjectType.objects.prefetch_related(Prefetch('fields', queryset=fields_qs)).get(pk=cot.pk)
 
         with CaptureQueriesContext(connection) as ctx:
-            for field in loaded.fields.all():           # fields iteration (no query)
+            for field in loaded.fields.all():  # fields iteration (no query)
                 if field.related_object_type_id:
-                    _ = field.related_object_type        # FK — select_related
+                    _ = field.related_object_type  # FK — select_related
                 if field.is_polymorphic:
                     list(field.related_object_types.all())  # M2M — prefetch_related
         self.assertEqual(
-            len(ctx.captured_queries), 0,
-            f"prefetch missed an access: {[q['sql'] for q in ctx.captured_queries]}",
+            len(ctx.captured_queries),
+            0,
+            f'prefetch missed an access: {[q["sql"] for q in ctx.captured_queries]}',
         )
 
     def test_related_repr_degrades_on_broken_str(self):
@@ -217,18 +209,18 @@ class GraphQLSchemaGenerationTestCase(CustomObjectsTestCase, TestCase):
             pk = 7
 
             class _meta:
-                label_lower = "app.broken"
+                label_lower = 'app.broken'
 
             def __str__(self):
-                raise ValueError("boom")
+                raise ValueError('boom')
 
             def get_absolute_url(self):
-                raise ValueError("no url")
+                raise ValueError('no url')
 
         rep = _related_repr(Broken())
         self.assertEqual(rep.id, 7)
-        self.assertEqual(rep.object_type, "app.broken")
-        self.assertEqual(rep.display, "app.broken:7")  # fallback, not an exception
+        self.assertEqual(rep.object_type, 'app.broken')
+        self.assertEqual(rep.display, 'app.broken:7')  # fallback, not an exception
         self.assertIsNone(rep.url)
 
 
@@ -245,8 +237,7 @@ class GraphQLLiveSchemaTestCase(CustomObjectsTestCase, TestCase):
         super().setUp()
         live_module.reset_cache()
         patcher = mock.patch(
-            "netbox_custom_objects.CustomObjectsPluginConfig."
-            "should_skip_dynamic_model_creation",
+            'netbox_custom_objects.CustomObjectsPluginConfig.should_skip_dynamic_model_creation',
             return_value=False,
         )
         patcher.start()
@@ -257,14 +248,14 @@ class GraphQLLiveSchemaTestCase(CustomObjectsTestCase, TestCase):
 
     def test_signature_changes_when_type_added(self):
         sig_before = live_module.schema_signature()
-        self.create_simple_custom_object_type(name="Sig", slug="sig")
+        self.create_simple_custom_object_type(name='Sig', slug='sig')
         sig_after = live_module.schema_signature()
         self.assertNotEqual(sig_before, sig_after)
 
     def test_signature_changes_when_field_added(self):
-        cot = self.create_simple_custom_object_type(name="Sig2", slug="sig2")
+        cot = self.create_simple_custom_object_type(name='Sig2', slug='sig2')
         sig_before = live_module.schema_signature()
-        self.create_custom_object_type_field(cot, name="extra", label="Extra", type="text")
+        self.create_custom_object_type_field(cot, name='extra', label='Extra', type='text')
         sig_after = live_module.schema_signature()
         self.assertNotEqual(sig_before, sig_after)
 
@@ -272,19 +263,19 @@ class GraphQLLiveSchemaTestCase(CustomObjectsTestCase, TestCase):
         # A type that does not exist yet must not be in the schema...
         first = live_module.get_live_schema(self.user)
         self.assertIsNotNone(first)
-        self.assertNotIn("custom_objects_runtime_thing", str(first))
+        self.assertNotIn('custom_objects_runtime_thing', str(first))
 
         # ...and must appear after creation, with no restart and without manually
         # clearing the cache (the signature change drives the rebuild).
-        self.create_simple_custom_object_type(name="Runtime Thing", slug="runtime_thing")
+        self.create_simple_custom_object_type(name='Runtime Thing', slug='runtime_thing')
         second = live_module.get_live_schema(self.user)
         self.assertIsNot(first, second)
         sdl = str(second)
-        self.assertIn("custom_objects_runtime_thing", sdl)
-        self.assertIn("custom_objects_runtime_thing_list", sdl)
+        self.assertIn('custom_objects_runtime_thing', sdl)
+        self.assertIn('custom_objects_runtime_thing_list', sdl)
 
     def test_get_live_schema_cached_when_unchanged(self):
-        self.create_simple_custom_object_type(name="Stable", slug="stable")
+        self.create_simple_custom_object_type(name='Stable', slug='stable')
         a = live_module.get_live_schema(self.user)
         b = live_module.get_live_schema(self.user)
         # No DB change between calls → same cached object, no rebuild.
@@ -293,28 +284,29 @@ class GraphQLLiveSchemaTestCase(CustomObjectsTestCase, TestCase):
     def test_live_schema_drops_deleted_type(self):
         from netbox_custom_objects.models import CustomObjectType
 
-        cot = self.create_simple_custom_object_type(name="Temp", slug="temp_type")
-        self.assertIn("custom_objects_temp_type", str(live_module.get_live_schema(self.user)))
+        cot = self.create_simple_custom_object_type(name='Temp', slug='temp_type')
+        self.assertIn('custom_objects_temp_type', str(live_module.get_live_schema(self.user)))
         # Delete via the queryset rather than cot.delete(): the schema-drop
         # behaviour only depends on the row being gone (which changes the
         # signature and triggers a rebuild), and this avoids the unrelated COT
         # teardown machinery.
         CustomObjectType.objects.filter(pk=cot.pk).delete()
-        self.assertNotIn("custom_objects_temp_type", str(live_module.get_live_schema(self.user)))
+        self.assertNotIn('custom_objects_temp_type', str(live_module.get_live_schema(self.user)))
 
     def test_get_live_schema_without_get_schema_extensions(self):
         # NetBox < 4.6.1 has no get_schema_extensions(); its extensions are inline.
-        import netbox.graphql.schema as ngs
         from strawberry.extensions import MaxAliasesLimiter
         from strawberry_django.optimizer import DjangoOptimizerExtension
 
+        import netbox.graphql.schema as ngs
+
         with mock.patch.dict(ngs.__dict__):
-            ngs.__dict__.pop("get_schema_extensions", None)
-            self.create_simple_custom_object_type(name="Legacy NetBox", slug="legacy_netbox")
+            ngs.__dict__.pop('get_schema_extensions', None)
+            self.create_simple_custom_object_type(name='Legacy NetBox', slug='legacy_netbox')
             schema = live_module.get_live_schema(self.user)
 
         self.assertIsNotNone(schema)
-        self.assertIn("custom_objects_legacy_netbox", str(schema))
+        self.assertIn('custom_objects_legacy_netbox', str(schema))
         self.assertEqual(
             {type(ext) for ext in schema.extensions},
             {DjangoOptimizerExtension, MaxAliasesLimiter},
@@ -324,7 +316,7 @@ class GraphQLLiveSchemaTestCase(CustomObjectsTestCase, TestCase):
         import netbox.graphql.schema as ngs
 
         with mock.patch.dict(ngs.__dict__):
-            ngs.__dict__.pop("get_schema_extensions", None)
+            ngs.__dict__.pop('get_schema_extensions', None)
             first = live_module._schema_extensions()
             second = live_module._schema_extensions()
 
@@ -353,10 +345,11 @@ class GraphQLSignalRegistrationTestCase(TestCase):
         registration, this removes it without affecting the assertion.
         """
         from django.db.models.signals import post_delete
-        was_registered = post_delete.disconnect(dispatch_uid="nco_graphql_evict_branch")
+
+        was_registered = post_delete.disconnect(dispatch_uid='nco_graphql_evict_branch')
         self.assertFalse(
             was_registered,
-            "Branch eviction handler must not be registered when branching is not enabled",
+            'Branch eviction handler must not be registered when branching is not enabled',
         )
 
     def test_branching_installed_but_not_enabled_does_not_crash(self):
@@ -370,11 +363,11 @@ class GraphQLSignalRegistrationTestCase(TestCase):
 
         # Remove any pre-existing registration (e.g. from ready()) so the test
         # is self-contained regardless of the environment.
-        post_delete.disconnect(dispatch_uid="nco_graphql_evict_branch")
+        post_delete.disconnect(dispatch_uid='nco_graphql_evict_branch')
 
         with mock.patch(
-            "django.apps.apps.is_installed",
-            side_effect=lambda app: app != "netbox_branching",
+            'django.apps.apps.is_installed',
+            side_effect=lambda app: app != 'netbox_branching',
         ):
             # Must not raise — previously raised RuntimeError here.
             connect_signature_invalidation()

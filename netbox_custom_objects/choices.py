@@ -1,4 +1,5 @@
 from django.utils.translation import gettext_lazy as _
+
 from extras.choices import CustomFieldTypeChoices
 from utilities.choices import ChoiceSet
 
@@ -9,72 +10,75 @@ class CustomObjectFieldTypeChoices(CustomFieldTypeChoices):
     objects. All existing ``CustomFieldTypeChoices.TYPE_*`` members remain valid.
     """
 
-    TYPE_COORDINATES = "coordinates"
-    TYPE_ARRAY = "array"
-    TYPE_COLOR = "color"
-    TYPE_MAC_ADDRESS = "mac_address"
+    TYPE_COORDINATES = 'coordinates'
+    TYPE_ARRAY = 'array'
+    TYPE_COLOR = 'color'
+    TYPE_MAC_ADDRESS = 'mac_address'
 
     CHOICES = CustomFieldTypeChoices.CHOICES + (
-        (TYPE_COORDINATES, _("Coordinates")),
-        (TYPE_ARRAY, _("Array")),
-        (TYPE_COLOR, _("Color")),
-        (TYPE_MAC_ADDRESS, _("MAC address")),
+        (TYPE_COORDINATES, _('Coordinates')),
+        (TYPE_ARRAY, _('Array')),
+        (TYPE_COLOR, _('Color')),
+        (TYPE_MAC_ADDRESS, _('MAC address')),
     )
 
 
 class ArrayElementTypeChoices(ChoiceSet):
     """The type of each value in an array field."""
-    TEXT = "text"
-    INTEGER = "integer"
-    DECIMAL = "decimal"
-    BOOLEAN = "boolean"
-    DATE = "date"
-    DATETIME = "datetime"
+
+    TEXT = 'text'
+    INTEGER = 'integer'
+    DECIMAL = 'decimal'
+    BOOLEAN = 'boolean'
+    DATE = 'date'
+    DATETIME = 'datetime'
 
     CHOICES = (
-        (TEXT, _("Text")),
-        (INTEGER, _("Integer")),
-        (DECIMAL, _("Decimal")),
-        (BOOLEAN, _("Boolean")),
-        (DATE, _("Date")),
-        (DATETIME, _("Date & time")),
+        (TEXT, _('Text')),
+        (INTEGER, _('Integer')),
+        (DECIMAL, _('Decimal')),
+        (BOOLEAN, _('Boolean')),
+        (DATE, _('Date')),
+        (DATETIME, _('Date & time')),
     )
 
 
 class ObjectFieldOnDeleteChoices(ChoiceSet):
     """Controls what happens to a Custom Object when the referenced object is deleted."""
-    CASCADE = "cascade"
-    SET_NULL = "set_null"
-    PROTECT = "protect"
+
+    CASCADE = 'cascade'
+    SET_NULL = 'set_null'
+    PROTECT = 'protect'
 
     CHOICES = (
-        (SET_NULL, _("Set null (clear the field, keep this object)")),
-        (CASCADE, _("Cascade (delete this object too)")),
-        (PROTECT, _("Protect (prevent deletion of the referenced object)")),
+        (SET_NULL, _('Set null (clear the field, keep this object)')),
+        (CASCADE, _('Cascade (delete this object too)')),
+        (PROTECT, _('Protect (prevent deletion of the referenced object)')),
     )
 
 
 class MappingFieldTypeChoices(ChoiceSet):
-    CHAR = "char"
-    INTEGER = "integer"
-    BOOLEAN = "boolean"
-    DATE = "date"
-    DATETIME = "datetime"
-    OBJECT = "object"
+    CHAR = 'char'
+    INTEGER = 'integer'
+    BOOLEAN = 'boolean'
+    DATE = 'date'
+    DATETIME = 'datetime'
+    OBJECT = 'object'
 
     CHOICES = (
-        (CHAR, _("String"), "cyan"),
-        (INTEGER, _("Integer"), "orange"),
-        (BOOLEAN, _("Boolean"), "green"),
-        (DATE, _("Date"), "red"),
-        (DATETIME, _("DateTime"), "blue"),
-        (OBJECT, _("Object"), "orange"),
+        (CHAR, _('String'), 'cyan'),
+        (INTEGER, _('Integer'), 'orange'),
+        (BOOLEAN, _('Boolean'), 'green'),
+        (DATE, _('Date'), 'red'),
+        (DATETIME, _('DateTime'), 'blue'),
+        (OBJECT, _('Object'), 'orange'),
     )
 
 
 #
 # Search
 #
+
 
 class SearchWeightChoices(ChoiceSet):
     WEIGHT_NONE = 0
@@ -92,33 +96,35 @@ class SearchWeightChoices(ChoiceSet):
 
 class ConstraintTypeChoices(ChoiceSet):
     """The kinds of constraint a Custom Object Type can enforce on its objects."""
-    UNIQUE = "unique"
-    CHECK = "check"
+
+    UNIQUE = 'unique'
+    CHECK = 'check'
 
     CHOICES = (
-        (UNIQUE, _("Unique")),
-        (CHECK, _("Check")),
+        (UNIQUE, _('Unique')),
+        (CHECK, _('Check')),
     )
 
 
 class ConstraintLookupChoices(ChoiceSet):
     """How a constraint condition or rule compares a field's value."""
-    EXACT = "exact"
-    NOT_EQUAL = "n"
-    IN = "in"
-    ISNULL = "isnull"
-    GT = "gt"
-    GTE = "gte"
-    LT = "lt"
-    LTE = "lte"
+
+    EXACT = 'exact'
+    NOT_EQUAL = 'n'
+    IN = 'in'
+    ISNULL = 'isnull'
+    GT = 'gt'
+    GTE = 'gte'
+    LT = 'lt'
+    LTE = 'lte'
 
     CHOICES = (
-        (EXACT, _("Equals")),
-        (NOT_EQUAL, _("Does not equal (or is empty)")),
-        (IN, _("Is one of")),
-        (ISNULL, _("Is empty")),
-        (GT, _("Is greater than")),
-        (GTE, _("Is at least")),
-        (LT, _("Is less than")),
-        (LTE, _("Is at most")),
+        (EXACT, _('Equals')),
+        (NOT_EQUAL, _('Does not equal (or is empty)')),
+        (IN, _('Is one of')),
+        (ISNULL, _('Is empty')),
+        (GT, _('Is greater than')),
+        (GTE, _('Is at least')),
+        (LT, _('Is less than')),
+        (LTE, _('Is at most')),
     )

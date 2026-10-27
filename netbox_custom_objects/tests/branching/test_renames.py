@@ -1,9 +1,11 @@
 """
 Sequential field renames in main and a branch, through sync and merge.
 """
+
 import unittest
 
-from django.db import connection as main_conn, connections
+from django.db import connection as main_conn
+from django.db import connections
 
 from netbox_custom_objects.models import (
     CustomObjectType,
@@ -12,20 +14,22 @@ from netbox_custom_objects.models import (
 
 from .base import (
     HAS_BRANCHING,
-    _make_request,
-    _TestBase,
-    _provision_branch,
-    _close_branch_connections,
     BranchingTestBase,
+    _close_branch_connections,
+    _make_request,
+    _provision_branch,
+    _TestBase,
 )
 
 if HAS_BRANCHING:
-    from netbox.context_managers import event_tracking
     from netbox_branching.choices import BranchStatusChoices
     from netbox_branching.utilities import activate_branch
 
+    from netbox.context_managers import event_tracking
+
 
 # ── Sequential multi-rename tests ─────────────────────────────────────────────
+
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
 class SequentialRenameTestCase(BranchingTestBase, _TestBase):
@@ -56,7 +60,10 @@ class SequentialRenameTestCase(BranchingTestBase, _TestBase):
         with event_tracking(request):
             cot = CustomObjectType.objects.create(name=cot_name, slug=cot_slug)
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='alpha', label='Alpha', type='text',
+                custom_object_type=cot,
+                name='alpha',
+                label='Alpha',
+                type='text',
             )
             Model = cot.get_model()
             co_original = Model.objects.create(alpha='original value')
@@ -98,7 +105,10 @@ class SequentialRenameTestCase(BranchingTestBase, _TestBase):
         # ── main: add a new independent field + CO ────────────────────────
         with event_tracking(request):
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='extra', label='Extra', type='text',
+                custom_object_type=cot,
+                name='extra',
+                label='Extra',
+                type='text',
             )
             co_main = cot.get_model().objects.create(alpha='main added', extra='extra val')
         co_main_pk = co_main.pk
@@ -116,12 +126,13 @@ class SequentialRenameTestCase(BranchingTestBase, _TestBase):
 
         MergedModel = cot.get_model()
         self.assertEqual(MergedModel.objects.get(pk=co_original_pk).gamma, 'after rename to gamma')
-        self.assertTrue(MergedModel.objects.filter(pk=co_at_beta_pk).exists(),
-                        'CO created at beta step must survive merge')
-        self.assertTrue(MergedModel.objects.filter(pk=co_at_gamma_pk).exists(),
-                        'CO created at gamma step must survive merge')
-        self.assertTrue(MergedModel.objects.filter(pk=co_main_pk).exists(),
-                        'CO added in main must survive merge')
+        self.assertTrue(
+            MergedModel.objects.filter(pk=co_at_beta_pk).exists(), 'CO created at beta step must survive merge'
+        )
+        self.assertTrue(
+            MergedModel.objects.filter(pk=co_at_gamma_pk).exists(), 'CO created at gamma step must survive merge'
+        )
+        self.assertTrue(MergedModel.objects.filter(pk=co_main_pk).exists(), 'CO added in main must survive merge')
 
         # ── revert ────────────────────────────────────────────────────────
         branch.revert(user=self.user, commit=True)
@@ -131,8 +142,11 @@ class SequentialRenameTestCase(BranchingTestBase, _TestBase):
         self.assertNotIn('gamma', field_names_r, '"gamma" must be gone after revert')
 
         RevertedModel = cot.get_model()
-        self.assertEqual(RevertedModel.objects.get(pk=co_original_pk).alpha, 'original value',
-                         'Original CO value must be restored after revert')
+        self.assertEqual(
+            RevertedModel.objects.get(pk=co_original_pk).alpha,
+            'original value',
+            'Original CO value must be restored after revert',
+        )
         self.assertFalse(RevertedModel.objects.filter(pk=co_at_beta_pk).exists())
         self.assertFalse(RevertedModel.objects.filter(pk=co_at_gamma_pk).exists())
 
@@ -164,7 +178,10 @@ class SequentialRenameTestCase(BranchingTestBase, _TestBase):
         with event_tracking(request):
             cot = CustomObjectType.objects.create(name='seq_sync_cot', slug='seq-sync-cot')
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='alpha', label='Alpha', type='text',
+                custom_object_type=cot,
+                name='alpha',
+                label='Alpha',
+                type='text',
             )
             co = cot.get_model().objects.create(alpha='original')
 
@@ -227,7 +244,8 @@ class SequentialRenameTestCase(BranchingTestBase, _TestBase):
             branch_cols = {
                 col.name
                 for col in branch_conn.introspection.get_table_description(
-                    cursor, cot.get_database_table_name(),
+                    cursor,
+                    cot.get_database_table_name(),
                 )
             }
         self.assertIn('delta', branch_cols, 'Branch column must converge to delta after sync')
@@ -253,7 +271,10 @@ class SequentialRenameTestCase(BranchingTestBase, _TestBase):
         with event_tracking(request):
             cot = CustomObjectType.objects.create(name='seq_merge_cot', slug='seq-merge-cot')
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='alpha', label='Alpha', type='text',
+                custom_object_type=cot,
+                name='alpha',
+                label='Alpha',
+                type='text',
             )
             co = cot.get_model().objects.create(alpha='original')
 
@@ -307,7 +328,8 @@ class SequentialRenameTestCase(BranchingTestBase, _TestBase):
             main_cols = {
                 col.name
                 for col in main_conn.introspection.get_table_description(
-                    cursor, cot.get_database_table_name(),
+                    cursor,
+                    cot.get_database_table_name(),
                 )
             }
         self.assertIn('gamma', main_cols, 'Main column must be gamma after merge')
@@ -335,10 +357,14 @@ class SequentialRenameTestCase(BranchingTestBase, _TestBase):
         with event_tracking(request):
             cot = CustomObjectType.objects.create(name='url_rename_cot', slug='url-rename-cot')
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='site_link', label='Site Link', type='url',
+                custom_object_type=cot,
+                name='site_link',
+                label='Site Link',
+                type='url',
             )
             co = cot.get_model().objects.create(
-                site_link='https://old.example.com', site_link_title='Old Title',
+                site_link='https://old.example.com',
+                site_link_title='Old Title',
             )
 
         co_pk = co.pk
@@ -366,7 +392,8 @@ class SequentialRenameTestCase(BranchingTestBase, _TestBase):
             main_cols = {
                 col.name
                 for col in main_conn.introspection.get_table_description(
-                    cursor, cot.get_database_table_name(),
+                    cursor,
+                    cot.get_database_table_name(),
                 )
             }
         self.assertIn('external_link', main_cols)
@@ -385,7 +412,8 @@ class SequentialRenameTestCase(BranchingTestBase, _TestBase):
             main_cols_r = {
                 col.name
                 for col in main_conn.introspection.get_table_description(
-                    cursor, cot.get_database_table_name(),
+                    cursor,
+                    cot.get_database_table_name(),
                 )
             }
         self.assertIn('site_link', main_cols_r)
@@ -417,7 +445,10 @@ class SequentialRenameTestCase(BranchingTestBase, _TestBase):
         with event_tracking(request):
             cot = CustomObjectType.objects.create(name='url_conflict_cot', slug='url-conflict-cot')
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='alpha', label='Alpha', type='url',
+                custom_object_type=cot,
+                name='alpha',
+                label='Alpha',
+                type='url',
             )
             co = cot.get_model().objects.create(alpha='https://a.example.com', alpha_title='A')
 
@@ -467,12 +498,14 @@ class SequentialRenameTestCase(BranchingTestBase, _TestBase):
             main_cols = {
                 col.name
                 for col in main_conn.introspection.get_table_description(
-                    cursor, cot.get_database_table_name(),
+                    cursor,
+                    cot.get_database_table_name(),
                 )
             }
         self.assertIn('gamma', main_cols, 'Main URL column must be gamma after merge')
         self.assertIn(
-            'gamma_title', main_cols,
+            'gamma_title',
+            main_cols,
             'Main title column must converge to gamma_title, not be left as delta_title/stale',
         )
         for stale in ('alpha', 'beta', 'delta', 'alpha_title', 'beta_title', 'delta_title'):
@@ -487,6 +520,7 @@ class SequentialRenameTestCase(BranchingTestBase, _TestBase):
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
 class SequentialRenameSquashTestCase(SequentialRenameTestCase, _TestBase):
     """Run SequentialRenameTestCase with the squash merge strategy."""
+
     MERGE_STRATEGY = 'squash'
 
     def test_sequential_renames_alpha_beta_gamma_merge(self):

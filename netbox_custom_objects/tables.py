@@ -1,14 +1,18 @@
 import django_tables2 as tables
 from django.utils.translation import gettext_lazy as _
 from django_tables2.data import TableQuerysetData
-from netbox.tables import NetBoxTable, columns
 
+from netbox.tables import NetBoxTable, columns
 from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
-from netbox_custom_objects.models import (CustomObject, CustomObjectType, CustomObjectTypeConstraint,
-                                          CustomObjectTypeField)
+from netbox_custom_objects.models import (
+    CustomObject,
+    CustomObjectType,
+    CustomObjectTypeConstraint,
+    CustomObjectTypeField,
+)
 from netbox_custom_objects.utilities import polymorphic_m2m_field_names
 
-__all__ = ("CustomObjectTable", "CustomObjectTypeConstraintTable", "CustomObjectTypeFieldTable")
+__all__ = ('CustomObjectTable', 'CustomObjectTypeConstraintTable', 'CustomObjectTypeFieldTable')
 
 
 OBJECTCHANGE_FULL_NAME = """
@@ -70,35 +74,30 @@ class CustomObjectTypeTable(NetBoxTable):
     comments = columns.MarkdownColumn(
         verbose_name=_('Comments'),
     )
-    tags = columns.TagColumn(
-        url_name='plugins:netbox_custom_objects:customobjecttype_list'
-    )
-    name = tables.Column(
-        verbose_name=_('Name'),
-        linkify=True
-    )
+    tags = columns.TagColumn(url_name='plugins:netbox_custom_objects:customobjecttype_list')
+    name = tables.Column(verbose_name=_('Name'), linkify=True)
 
     class Meta(NetBoxTable.Meta):
         model = CustomObjectType
         fields = (
-            "pk",
-            "id",
-            "name",
-            "verbose_name",
-            "verbose_name_plural",
-            "slug",
+            'pk',
+            'id',
+            'name',
+            'verbose_name',
+            'verbose_name_plural',
+            'slug',
             'description',
             'comments',
             'tags',
-            "created",
-            "last_updated",
+            'created',
+            'last_updated',
         )
         default_columns = (
-            "pk",
-            "id",
-            "name",
-            "created",
-            "last_updated",
+            'pk',
+            'id',
+            'name',
+            'created',
+            'last_updated',
         )
 
 
@@ -106,6 +105,7 @@ class CustomObjectTagColumn(columns.TagColumn):
     """
     Custom TagColumn that generates tag filter URLs with the custom_object_type slug.
     """
+
     template_code = CUSTOM_OBJECT_TAGS
 
     def __init__(self):
@@ -134,12 +134,8 @@ class CustomObjectTypeFieldTable(NetBoxTable):
     name = tables.Column(
         verbose_name=_('Name'),
     )
-    unique = columns.BooleanColumn(
-        verbose_name=_('Unique')
-    )
-    is_cloneable = columns.BooleanColumn(
-        verbose_name=_('Cloneable')
-    )
+    unique = columns.BooleanColumn(verbose_name=_('Unique'))
+    is_cloneable = columns.BooleanColumn(verbose_name=_('Cloneable'))
     primary = columns.BooleanColumn()
     required = columns.BooleanColumn()
     default = FieldDefaultColumn(verbose_name=_('Default'))
@@ -147,76 +143,76 @@ class CustomObjectTypeFieldTable(NetBoxTable):
     class Meta(NetBoxTable.Meta):
         model = CustomObjectTypeField
         fields = (
-            "pk",
-            "id",
-            "name",
-            "type",
-            "primary",
-            "related_object_type",
-            "label",
-            "group_name",
-            "description",
-            "required",
-            "unique",
-            "search_weight",
-            "filter_logic",
-            "default",
-            "related_object_filter",
-            "weight",
-            "validation_minimum",
-            "validation_maximum",
-            "validation_regex",
-            "choice_set",
-            "ui_visible",
-            "ui_editable",
-            "is_cloneable",
-            "comments",
-            "tags",
-            "created",
-            "last_updated",
+            'pk',
+            'id',
+            'name',
+            'type',
+            'primary',
+            'related_object_type',
+            'label',
+            'group_name',
+            'description',
+            'required',
+            'unique',
+            'search_weight',
+            'filter_logic',
+            'default',
+            'related_object_filter',
+            'weight',
+            'validation_minimum',
+            'validation_maximum',
+            'validation_regex',
+            'choice_set',
+            'ui_visible',
+            'ui_editable',
+            'is_cloneable',
+            'comments',
+            'tags',
+            'created',
+            'last_updated',
         )
         default_columns = (
-            "id",
-            "name",
-            "type",
-            "primary",
-            "default",
-            "created",
-            "last_updated",
+            'id',
+            'name',
+            'type',
+            'primary',
+            'default',
+            'created',
+            'last_updated',
         )
 
 
 class CustomObjectTable(NetBoxTable):
     pk = columns.ToggleColumn(visible=False)
-    id = tables.Column(linkify=True, verbose_name=_("ID"))
+    id = tables.Column(linkify=True, verbose_name=_('ID'))
     actions = columns.ActionsColumn()
     tags = CustomObjectTagColumn()
 
     class Meta(NetBoxTable.Meta):
         model = CustomObject
         fields = (
-            "pk",
-            "id",
-            "name",
-            "custom_object_type",
-            "created",
-            "last_updated",
-            "tags",
+            'pk',
+            'id',
+            'name',
+            'custom_object_type',
+            'created',
+            'last_updated',
+            'tags',
         )
         default_columns = (
-            "pk",
-            "id",
-            "name",
-            "custom_object_type",
-            "created",
-            "last_updated",
+            'pk',
+            'id',
+            'name',
+            'custom_object_type',
+            'created',
+            'last_updated',
         )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         # COMPAT(netbox<4.5.4): NetBoxTable has no _apply_prefetching(), and prefetches the
         # default columns in __init__() instead.
-        if not hasattr(NetBoxTable, "_apply_prefetching"):
+        if not hasattr(NetBoxTable, '_apply_prefetching'):
             self._prefetch_polymorphic_m2m()
 
     def _apply_prefetching(self, columns=None):
@@ -228,7 +224,8 @@ class CustomObjectTable(NetBoxTable):
         if not isinstance(self.data, TableQuerysetData):
             return
         names = [
-            name for name in polymorphic_m2m_field_names(self._meta.model)
+            name
+            for name in polymorphic_m2m_field_names(self._meta.model)
             if name in self.columns and (self.columns[name].visible if columns is None else name in columns)
         ]
         if names:
@@ -244,12 +241,8 @@ class CustomObjectTypeConstraintTable(NetBoxTable):
         template_code='{{ record.get_fields|join:", "|placeholder }}',
         orderable=False,
     )
-    case_insensitive = columns.BooleanColumn(
-        verbose_name=_('Case-insensitive')
-    )
-    nulls_distinct = columns.BooleanColumn(
-        verbose_name=_('Empty values distinct')
-    )
+    case_insensitive = columns.BooleanColumn(verbose_name=_('Case-insensitive'))
+    nulls_distinct = columns.BooleanColumn(verbose_name=_('Empty values distinct'))
     condition = tables.TemplateColumn(
         verbose_name=_('Condition'),
         template_code='{{ record.get_condition_display|placeholder }}',
@@ -264,27 +257,27 @@ class CustomObjectTypeConstraintTable(NetBoxTable):
     class Meta(NetBoxTable.Meta):
         model = CustomObjectTypeConstraint
         fields = (
-            "pk",
-            "id",
-            "name",
-            "type",
-            "constrained_fields",
-            "case_insensitive",
-            "nulls_distinct",
-            "condition",
-            "rule",
-            "error_message",
-            "description",
-            "created",
-            "last_updated",
+            'pk',
+            'id',
+            'name',
+            'type',
+            'constrained_fields',
+            'case_insensitive',
+            'nulls_distinct',
+            'condition',
+            'rule',
+            'error_message',
+            'description',
+            'created',
+            'last_updated',
         )
         default_columns = (
-            "name",
-            "type",
-            "constrained_fields",
-            "case_insensitive",
-            "nulls_distinct",
-            "condition",
-            "rule",
-            "description",
+            'name',
+            'type',
+            'constrained_fields',
+            'case_insensitive',
+            'nulls_distinct',
+            'condition',
+            'rule',
+            'description',
         )

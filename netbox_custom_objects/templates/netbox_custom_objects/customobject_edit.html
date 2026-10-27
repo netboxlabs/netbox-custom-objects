@@ -2,12 +2,8 @@
 {% load form_helpers %}
 {% load i18n %}
 {% load custom_object_utils %}
-
 {% block form %}
   {# Render hidden fields #}
-  {% for field in form.hidden_fields %}
-    {{ field }}
-  {% endfor %}
-
+  {% for field in form.hidden_fields %}{{ field }}{% endfor %}
   {% include 'netbox_custom_objects/inc/edit_fields.html' %}
 {% endblock form %}

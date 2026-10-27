@@ -1,6 +1,7 @@
 """
 Tests for schema changes to custom object tables.
 """
+
 import sys
 from io import StringIO
 from unittest import expectedFailure
@@ -45,7 +46,7 @@ class SchemaOperationsTestCase(CustomObjectsTestCase, TestCase):
 
         self.assertFalse(
             CustomField.objects.filter(pk=cf.pk).exists(),
-            "The referencing CustomField must be deleted along with the COT.",
+            'The referencing CustomField must be deleted along with the COT.',
         )
 
     # ------------------------------------------------------------------
@@ -61,7 +62,7 @@ class SchemaOperationsTestCase(CustomObjectsTestCase, TestCase):
             call_command('migrate', '--check', verbosity=0, stdout=out, stderr=out)
         except SystemExit as exc:
             # If we reach here, migrate --check found unapplied migrations or the plugin crashed.
-            self.fail(f"migrate --check exited with code {exc.code}: {out.getvalue()}")
+            self.fail(f'migrate --check exited with code {exc.code}: {out.getvalue()}')
 
     # ------------------------------------------------------------------
     # Coordinates fields expand into two backing columns; verify the schema
@@ -72,10 +73,17 @@ class SchemaOperationsTestCase(CustomObjectsTestCase, TestCase):
         """Renaming a coordinates field renames both backing DB columns."""
         cot = self.create_custom_object_type(name='coordrename', slug='coord-rename')
         self.create_custom_object_type_field(
-            cot, name='name', label='Name', type='text', primary=True,
+            cot,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
         )
         field = self.create_custom_object_type_field(
-            cot, name='location', label='Location', type='coordinates',
+            cot,
+            name='location',
+            label='Location',
+            type='coordinates',
         )
 
         columns = self._db_columns(cot.get_model())
@@ -98,10 +106,17 @@ class SchemaOperationsTestCase(CustomObjectsTestCase, TestCase):
         """Deleting a coordinates field drops both backing DB columns."""
         cot = self.create_custom_object_type(name='coorddelete', slug='coord-delete')
         self.create_custom_object_type_field(
-            cot, name='name', label='Name', type='text', primary=True,
+            cot,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
         )
         field = self.create_custom_object_type_field(
-            cot, name='location', label='Location', type='coordinates',
+            cot,
+            name='location',
+            label='Location',
+            type='coordinates',
         )
 
         columns = self._db_columns(cot.get_model())
@@ -118,10 +133,17 @@ class SchemaOperationsTestCase(CustomObjectsTestCase, TestCase):
         """Renaming a url field renames both backing DB columns."""
         cot = self.create_custom_object_type(name='urlrename', slug='url-rename')
         self.create_custom_object_type_field(
-            cot, name='name', label='Name', type='text', primary=True,
+            cot,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
         )
         field = self.create_custom_object_type_field(
-            cot, name='website', label='Website', type='url',
+            cot,
+            name='website',
+            label='Website',
+            type='url',
         )
 
         columns = self._db_columns(cot.get_model())
@@ -144,10 +166,17 @@ class SchemaOperationsTestCase(CustomObjectsTestCase, TestCase):
         """Deleting a url field drops both backing DB columns."""
         cot = self.create_custom_object_type(name='urldelete', slug='url-delete')
         self.create_custom_object_type_field(
-            cot, name='name', label='Name', type='text', primary=True,
+            cot,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
         )
         field = self.create_custom_object_type_field(
-            cot, name='website', label='Website', type='url',
+            cot,
+            name='website',
+            label='Website',
+            type='url',
         )
 
         columns = self._db_columns(cot.get_model())
@@ -197,17 +226,27 @@ class OwnerFieldNameCollisionTestCase(CustomObjectsTestCase, TestCase):
 
     def _make_owner_collision_cot(self, slug):
         from core.models import ObjectType
+
         contact_ot = ObjectType.objects.get(app_label='tenancy', model='contact')
 
         cot = self.create_custom_object_type(name=slug, slug=slug)
         self.create_custom_object_type_field(
-            cot, name='name', label='Name', type='text', primary=True, required=True,
+            cot,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
+            required=True,
         )
         # .objects.create() bypasses the reserved-name check in clean().  The FK
         # constraint is added on commit, as in production.
         with self.captureOnCommitCallbacks(execute=True):
             field = self.create_custom_object_type_field(
-                cot, name='owner', label='Owner', type='object', related_object_type=contact_ot,
+                cot,
+                name='owner',
+                label='Owner',
+                type='object',
+                related_object_type=contact_ot,
             )
         return cot, field
 

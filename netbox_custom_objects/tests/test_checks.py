@@ -7,6 +7,7 @@ is installed, so every branch is exercised by mocking its three inputs:
 ``apps.is_installed``, ``settings.RELEASE``, and the importlib.metadata
 ``version`` lookup.  No database is required, hence ``SimpleTestCase``.
 """
+
 from importlib.metadata import PackageNotFoundError
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -21,13 +22,10 @@ def _run(*, branching_installed=True, netbox_version='4.6.2', branching_version=
 
     ``netbox_version`` / ``branching_version`` may be a version string, or an
     Exception instance/class to simulate the failure paths (a missing
-    ``settings.RELEASE``, an unparseable version, or ``PackageNotFoundError``).
+    ``settings.RELEASE``, an unparsable version, or ``PackageNotFoundError``).
     """
-    if isinstance(netbox_version, str):
-        release = SimpleNamespace(version=netbox_version)
-    else:
-        # No RELEASE attribute -> accessing settings.RELEASE raises AttributeError.
-        release = None
+    # With no RELEASE attribute, accessing settings.RELEASE raises AttributeError.
+    release = SimpleNamespace(version=netbox_version) if isinstance(netbox_version, str) else None
 
     def fake_pkg_version(_name):
         if isinstance(branching_version, str):
@@ -38,9 +36,11 @@ def _run(*, branching_installed=True, netbox_version='4.6.2', branching_version=
     if release is not None:
         settings_stub.RELEASE = release
 
-    with patch.object(checks.apps, 'is_installed', return_value=branching_installed), \
-         patch.object(checks, 'settings', settings_stub), \
-         patch.object(checks, '_pkg_version', fake_pkg_version):
+    with (
+        patch.object(checks.apps, 'is_installed', return_value=branching_installed),
+        patch.object(checks, 'settings', settings_stub),
+        patch.object(checks, '_pkg_version', fake_pkg_version),
+    ):
         return checks.check_branching_compatibility(app_configs=None)
 
 
@@ -77,7 +77,7 @@ class CheckBranchingCompatibilityTestCase(SimpleTestCase):
         errors = _run(netbox_version=AttributeError, branching_version='1.0.3')
         self.assertEqual(_ids(errors), {'netbox_custom_objects.E002'})
 
-    def test_unparseable_netbox_version_skips_netbox_check(self):
+    def test_unparsable_netbox_version_skips_netbox_check(self):
         errors = _run(netbox_version='not-a-version', branching_version='1.0.4')
         self.assertEqual(errors, [])
 

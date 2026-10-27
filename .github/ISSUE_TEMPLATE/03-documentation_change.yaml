@@ -1,5 +1,6 @@
 ---
 name: 📖 Documentation Change
+type: Documentation
 description: Suggest an addition or modification to the plugin's documentation
 labels: ["app: custom objects", "type: documentation", "status: needs triage"]
 body:
@@ -18,6 +19,8 @@ body:
   - type: textarea
     attributes:
       label: Proposed Changes
-      description: Describe the proposed changes and explain why they are necessary.
+      description: >
+        Describe the proposed changes and explain why they are
+        necessary.
     validations:
       required: true

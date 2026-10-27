@@ -1,14 +1,15 @@
 """
 Changes in a branch, and deleting it, leave main alone.
 """
+
 import unittest
 
-from core.models import ObjectType
-from dcim.models import Site
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection as main_conn
 
+from core.models import ObjectType
+from dcim.models import Site
 from netbox_custom_objects.models import (
     CustomObjectType,
     CustomObjectTypeField,
@@ -16,19 +17,21 @@ from netbox_custom_objects.models import (
 
 from .base import (
     HAS_BRANCHING,
-    _make_request,
-    _TestBase,
-    _provision_branch,
     BranchingTestBase,
+    _make_request,
+    _provision_branch,
+    _TestBase,
 )
 
 if HAS_BRANCHING:
-    from netbox.context_managers import event_tracking
     from netbox_branching.models import Branch
     from netbox_branching.utilities import activate_branch
 
+    from netbox.context_managers import event_tracking
+
 
 # ── Branch deletion (abandon without merge) ───────────────────────────────────
+
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
 class BranchDeletionTestCase(BranchingTestBase, _TestBase):
@@ -66,8 +69,11 @@ class BranchDeletionTestCase(BranchingTestBase, _TestBase):
                 type='text',
             )
             multi_field = CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='multi', label='Multi',
-                type='multiobject', related_object_type=site_ot,
+                custom_object_type=cot,
+                name='multi',
+                label='Multi',
+                type='multiobject',
+                related_object_type=site_ot,
             )
             co = cot.get_model().objects.create(label='only in branch')
             co.multi.set([site])
@@ -123,11 +129,13 @@ class BranchDeletionTestCase(BranchingTestBase, _TestBase):
         )
         main_tables_post = main_conn.introspection.table_names()
         self.assertNotIn(
-            branch_co_table, main_tables_post,
+            branch_co_table,
+            main_tables_post,
             'Branch-only CO table must not appear in main after delete',
         )
         self.assertNotIn(
-            branch_multi_through, main_tables_post,
+            branch_multi_through,
+            main_tables_post,
             'Branch-only through-table must not appear in main after delete',
         )
 
@@ -157,19 +165,31 @@ class BranchContextDeletionTestCase(BranchingTestBase, _TestBase):
         site_ot = ObjectType.objects.get(app_label='dcim', model='site')
         target_cot = CustomObjectType.objects.create(name='ctx_target', slug='ctx-target')
         CustomObjectTypeField.objects.create(
-            custom_object_type=target_cot, name='label', label='Label', type='text',
+            custom_object_type=target_cot,
+            name='label',
+            label='Label',
+            type='text',
         )
         source_cot = CustomObjectType.objects.create(name='ctx_source', slug='ctx-source')
         CustomObjectTypeField.objects.create(
-            custom_object_type=source_cot, name='label', label='Label', type='text',
+            custom_object_type=source_cot,
+            name='label',
+            label='Label',
+            type='text',
         )
         for name, field_type in (('ref', 'object'), ('refs', 'multiobject')):
             CustomObjectTypeField.objects.create(
-                custom_object_type=source_cot, name=name, label=name, type=field_type,
+                custom_object_type=source_cot,
+                name=name,
+                label=name,
+                type=field_type,
                 related_object_type=target_cot.object_type,
             )
         poly = CustomObjectTypeField.objects.create(
-            custom_object_type=source_cot, name='poly', label='poly', type='multiobject',
+            custom_object_type=source_cot,
+            name='poly',
+            label='poly',
+            type='multiobject',
             is_polymorphic=True,
         )
         poly.related_object_types.set([target_cot.object_type, site_ot])
@@ -232,7 +252,10 @@ class InboundRelationBranchIsolationTestCase(BranchingTestBase, _TestBase):
             foo = CustomObjectType.objects.create(name='foo', slug='foos')
             for name, field_type in (('bar', 'object'), ('bars', 'multiobject')):
                 CustomObjectTypeField.objects.create(
-                    custom_object_type=foo, name=name, label=name, type=field_type,
+                    custom_object_type=foo,
+                    name=name,
+                    label=name,
+                    type=field_type,
                     related_object_type=bar.object_type,
                 )
 
@@ -268,7 +291,10 @@ class BranchCOTDeletionIsolationTestCase(BranchingTestBase, _TestBase):
             cot = CustomObjectType.objects.create(name='doomed', slug='doomed')
             CustomObjectTypeField.objects.create(custom_object_type=cot, name='name', label='Name', type='text')
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='sites', label='Sites', type='multiobject',
+                custom_object_type=cot,
+                name='sites',
+                label='Sites',
+                type='multiobject',
                 related_object_type=ObjectType.objects.get(app_label='dcim', model='site'),
             )
 
@@ -319,14 +345,23 @@ class BranchCOTDeletionIsolationTestCase(BranchingTestBase, _TestBase):
         with event_tracking(self.request):
             target = CustomObjectType.objects.create(name='target', slug='target')
             CustomObjectTypeField.objects.create(
-                custom_object_type=target, name='name', label='Name', type='text',
+                custom_object_type=target,
+                name='name',
+                label='Name',
+                type='text',
             )
             source = CustomObjectType.objects.create(name='source', slug='source')
             CustomObjectTypeField.objects.create(
-                custom_object_type=source, name='name', label='Name', type='text',
+                custom_object_type=source,
+                name='name',
+                label='Name',
+                type='text',
             )
             CustomObjectTypeField.objects.create(
-                custom_object_type=source, name='targets', label='Targets', type='multiobject',
+                custom_object_type=source,
+                name='targets',
+                label='Targets',
+                type='multiobject',
                 related_object_type=target.object_type,
             )
 
@@ -348,7 +383,8 @@ class BranchCOTDeletionIsolationTestCase(BranchingTestBase, _TestBase):
         self.assertIs(CustomObjectType.get_cached_through_model(source.pk, main_through.__name__), main_through)
         source_model = CustomObjectType.objects.get(pk=source.pk).get_model()
         self.assertEqual(
-            list(source_model.objects.get(name='src').targets.values_list('name', flat=True)), ['linked'],
+            list(source_model.objects.get(name='src').targets.values_list('name', flat=True)),
+            ['linked'],
         )
 
     def test_branch_only_self_referencing_delete_unregisters_replacement(self):
@@ -357,7 +393,10 @@ class BranchCOTDeletionIsolationTestCase(BranchingTestBase, _TestBase):
         with event_tracking(self.request):
             keeper = CustomObjectType.objects.create(name='keeper', slug='keeper')
             CustomObjectTypeField.objects.create(
-                custom_object_type=keeper, name='name', label='Name', type='text',
+                custom_object_type=keeper,
+                name='name',
+                label='Name',
+                type='text',
             )
         keeper_model = CustomObjectType.objects.get(pk=keeper.pk).get_model()
         keeper_key = keeper_model.__name__.lower()
@@ -366,10 +405,16 @@ class BranchCOTDeletionIsolationTestCase(BranchingTestBase, _TestBase):
         with activate_branch(branch), event_tracking(_make_request(self.user)):
             cot = CustomObjectType.objects.create(name='selfref', slug='selfref')
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='name', label='Name', type='text',
+                custom_object_type=cot,
+                name='name',
+                label='Name',
+                type='text',
             )
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='parent', label='Parent', type='object',
+                custom_object_type=cot,
+                name='parent',
+                label='Parent',
+                type='object',
                 related_object_type=cot.object_type,
             )
             model_key = cot.get_model().__name__.lower()
@@ -396,14 +441,21 @@ class PolymorphicReverseAccessorBranchTestCase(BranchingTestBase, _TestBase):
         with event_tracking(self.request):
             self.cot = CustomObjectType.objects.create(name='holder', slug='holder')
             CustomObjectTypeField.objects.create(
-                custom_object_type=self.cot, name='name', label='Name', type='text',
+                custom_object_type=self.cot,
+                name='name',
+                label='Name',
+                type='text',
             )
             self.site = Site.objects.create(name='Reverse Site', slug='reverse-site')
 
     def _add_field(self, type_, name, related_name):
         field = CustomObjectTypeField.objects.create(
-            custom_object_type=self.cot, name=name, label=name, type=type_,
-            is_polymorphic=True, related_name=related_name,
+            custom_object_type=self.cot,
+            name=name,
+            label=name,
+            type=type_,
+            is_polymorphic=True,
+            related_name=related_name,
         )
         field.related_object_types.set([self.site_ot])
         return field
@@ -415,17 +467,25 @@ class PolymorphicReverseAccessorBranchTestCase(BranchingTestBase, _TestBase):
         with event_tracking(self.request):
             self._add_field('object', 'target', 'holders_by_target')
             main_co = self._model().objects.create(
-                name='main-co', target_content_type=self.site_ct, target_object_id=self.site.pk,
+                name='main-co',
+                target_content_type=self.site_ct,
+                target_object_id=self.site.pk,
             )
 
         branch = _provision_branch('Reverse OBJ Branch', user=self.user)
         with activate_branch(branch), event_tracking(_make_request(self.user)):
             CustomObjectTypeField.objects.create(
-                custom_object_type=self.cot, name='note', label='Note', type='text',
+                custom_object_type=self.cot,
+                name='note',
+                label='Note',
+                type='text',
             )
             branch_model = self._model()
             branch_co = branch_model.objects.create(
-                name='branch-co', note='hi', target_content_type=self.site_ct, target_object_id=self.site.pk,
+                name='branch-co',
+                note='hi',
+                target_content_type=self.site_ct,
+                target_object_id=self.site.pk,
             )
             result = list(self.site.holders_by_target.all())
             self.assertEqual({type(co) for co in result}, {branch_model})
@@ -444,7 +504,10 @@ class PolymorphicReverseAccessorBranchTestCase(BranchingTestBase, _TestBase):
         branch = _provision_branch('Reverse M2M Branch', user=self.user)
         with activate_branch(branch), event_tracking(_make_request(self.user)):
             CustomObjectTypeField.objects.create(
-                custom_object_type=self.cot, name='note', label='Note', type='text',
+                custom_object_type=self.cot,
+                name='note',
+                label='Note',
+                type='text',
             )
             branch_model = self._model()
             result = list(self.site.holders_by_targets.all())
@@ -470,7 +533,9 @@ class PolymorphicReverseAccessorBranchTestCase(BranchingTestBase, _TestBase):
         with event_tracking(self.request):
             field = self._add_field('object', 'target', 'holders_by_target')
             co = self._model().objects.create(
-                name='main-co', target_content_type=self.site_ct, target_object_id=self.site.pk,
+                name='main-co',
+                target_content_type=self.site_ct,
+                target_object_id=self.site.pk,
             )
 
         branch = _provision_branch('Reverse Delete Branch', user=self.user)
@@ -499,5 +564,6 @@ class PolymorphicReverseAccessorBranchTestCase(BranchingTestBase, _TestBase):
         # the branch delete drops main's through table.
         self.assertIn('holders_by_targets', Site.__dict__)
         self.assertEqual(
-            CustomObjectTypeField.objects.get(pk=field.pk).related_name, 'holders_by_targets',
+            CustomObjectTypeField.objects.get(pk=field.pk).related_name,
+            'holders_by_targets',
         )

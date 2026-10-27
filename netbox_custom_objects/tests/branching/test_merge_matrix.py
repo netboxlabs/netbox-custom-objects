@@ -2,16 +2,18 @@
 Merge and revert of custom object types, fields and objects made in a branch, under
 both merge strategies, and of the field types the strategy matrix leaves out.
 """
+
 import datetime
 import decimal
 import unittest
 
+from django.contrib.contenttypes.models import ContentType
+from django.db import IntegrityError, transaction
+from django.db import connection as main_conn
+
 from core.models import ObjectType
 from dcim.models import Site
-from django.contrib.contenttypes.models import ContentType
-from django.db import IntegrityError, connection as main_conn, transaction
 from extras.models import CustomFieldChoiceSet
-
 from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
 from netbox_custom_objects.models import (
     USER_TABLE_DATABASE_NAME_PREFIX,
@@ -22,19 +24,21 @@ from netbox_custom_objects.models import (
 
 from .base import (
     HAS_BRANCHING,
-    _make_request,
-    _TestBase,
-    _provision_branch,
     BranchingTestBase,
+    _make_request,
+    _provision_branch,
+    _TestBase,
 )
 
 if HAS_BRANCHING:
-    from netbox.context_managers import event_tracking
     from netbox_branching.choices import BranchStatusChoices
     from netbox_branching.utilities import activate_branch
 
+    from netbox.context_managers import event_tracking
+
 
 # ── Shared merge/revert tests (strategy-agnostic) ────────────────────────────
+
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
 class BaseBranchingTestCase(BranchingTestBase):
@@ -183,7 +187,7 @@ class BaseBranchingTestCase(BranchingTestBase):
         field_pks = {}
         co_pk = None
 
-        test_dt = datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=datetime.timezone.utc)
+        test_dt = datetime.datetime(2024, 6, 15, 12, 0, 0, tzinfo=datetime.UTC)
         test_decimal = decimal.Decimal('3.14')
 
         # ── create inside branch ──────────────────────────────────────────
@@ -271,7 +275,8 @@ class BaseBranchingTestCase(BranchingTestBase):
         self.assertEqual(co_main.obj_field_id, site.pk)
         self.assertEqual(co_main.url_field, 'https://example.com/path')
         self.assertEqual(
-            co_main.url_field_title, 'Example Path',
+            co_main.url_field_title,
+            'Example Path',
             'Title value must survive replay alongside the URL value',
         )
         self.assertEqual(
@@ -608,15 +613,24 @@ class BaseBranchingTestCase(BranchingTestBase):
         with event_tracking(self.request):
             cot = CustomObjectType.objects.create(name='extend_cot', slug='extend-cot')
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='main_text', label='Main Text', type='text',
+                custom_object_type=cot,
+                name='main_text',
+                label='Main Text',
+                type='text',
             )
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='main_obj', label='Main Obj',
-                type='object', related_object_type=site_ot,
+                custom_object_type=cot,
+                name='main_obj',
+                label='Main Obj',
+                type='object',
+                related_object_type=site_ot,
             )
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='main_multi', label='Main Multi',
-                type='multiobject', related_object_type=site_ot,
+                custom_object_type=cot,
+                name='main_multi',
+                label='Main Multi',
+                type='multiobject',
+                related_object_type=site_ot,
             )
             MainModel = cot.get_model()
             co_main = MainModel.objects.create(
@@ -634,15 +648,24 @@ class BaseBranchingTestCase(BranchingTestBase):
         # ── branch: add new fields of each type, then create a CO with all ─
         with activate_branch(branch), event_tracking(branch_request):
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='branch_text', label='Branch Text', type='text',
+                custom_object_type=cot,
+                name='branch_text',
+                label='Branch Text',
+                type='text',
             )
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='branch_obj', label='Branch Obj',
-                type='object', related_object_type=site_ot,
+                custom_object_type=cot,
+                name='branch_obj',
+                label='Branch Obj',
+                type='object',
+                related_object_type=site_ot,
             )
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='branch_multi', label='Branch Multi',
-                type='multiobject', related_object_type=site_ot,
+                custom_object_type=cot,
+                name='branch_multi',
+                label='Branch Multi',
+                type='multiobject',
+                related_object_type=site_ot,
             )
             BranchModel = cot.get_model()
             co_branch = BranchModel.objects.create(
@@ -711,9 +734,7 @@ class BaseBranchingTestCase(BranchingTestBase):
         branch.revert(user=self.user, commit=True)
 
         # Branch fields gone; main fields still present.
-        names_after_revert = set(
-            cot_main.fields(manager='objects').values_list('name', flat=True)
-        )
+        names_after_revert = set(cot_main.fields(manager='objects').values_list('name', flat=True))
         self.assertEqual(names_after_revert, {'main_text', 'main_obj', 'main_multi'})
 
         RevertedModel = cot_main.get_model()
@@ -787,9 +808,7 @@ class BaseBranchingTestCase(BranchingTestBase):
 
         branch.revert(user=self.user, commit=True)
         self.assertFalse(CustomObjectTypeConstraint.objects.filter(pk__in=[constraint.pk, check.pk]).exists())
-        self.assertFalse(
-            CustomObjectTypeField.objects.filter(pk__in=[serial.pk, status.pk, low.pk, high.pk]).exists()
-        )
+        self.assertFalse(CustomObjectTypeField.objects.filter(pk__in=[serial.pk, status.pk, low.pk, high.pk]).exists())
         self.assertNotIn(constraint.db_name, db_constraint_names())
         self.assertNotIn(check.db_name, db_constraint_names())
 
@@ -844,15 +863,24 @@ class BaseBranchingTestCase(BranchingTestBase):
         with event_tracking(self.request):
             cot = CustomObjectType.objects.create(name='doomed_cot', slug='doomed-cot')
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='note', label='Note', type='text',
+                custom_object_type=cot,
+                name='note',
+                label='Note',
+                type='text',
             )
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='site_ref', label='Site',
-                type='object', related_object_type=site_ot,
+                custom_object_type=cot,
+                name='site_ref',
+                label='Site',
+                type='object',
+                related_object_type=site_ot,
             )
             multi_field = CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='sites', label='Sites',
-                type='multiobject', related_object_type=site_ot,
+                custom_object_type=cot,
+                name='sites',
+                label='Sites',
+                type='multiobject',
+                related_object_type=site_ot,
             )
             Model = cot.get_model()
             co = Model.objects.create(note='hello', site_ref_id=site.pk)
@@ -891,11 +919,13 @@ class BaseBranchingTestCase(BranchingTestBase):
         )
         main_tables = main_conn.introspection.table_names()
         self.assertNotIn(
-            co_table, main_tables,
+            co_table,
+            main_tables,
             f'Main CO table {co_table!r} must be dropped after merge',
         )
         self.assertNotIn(
-            through_table, main_tables,
+            through_table,
+            main_tables,
             f'Through-table {through_table!r} must be dropped after merge',
         )
 
@@ -964,8 +994,11 @@ class BaseBranchingTestCase(BranchingTestBase):
         with event_tracking(self.request):
             cot = CustomObjectType.objects.create(name='m2m_rename_cot', slug='m2m-rename-cot')
             field = CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='tags_old', label='Tags',
-                type='multiobject', related_object_type=site_ot,
+                custom_object_type=cot,
+                name='tags_old',
+                label='Tags',
+                type='multiobject',
+                related_object_type=site_ot,
             )
             MainModel = cot.get_model()
             co = MainModel.objects.create()
@@ -992,13 +1025,12 @@ class BaseBranchingTestCase(BranchingTestBase):
         renamed_field = CustomObjectTypeField.objects.get(pk=field_pk)
         # Field name in main hasn't applied yet (still 'tags_old' there) — we
         # need the *branch's* current name, which is what the rename target is.
-        new_through = (
-            f"custom_objects_{renamed_field.custom_object_type_id}_tags_new"
-        )
+        new_through = f'custom_objects_{renamed_field.custom_object_type_id}_tags_new'
 
         # Before merge: main still sees the old field/through-table.
         self.assertEqual(
-            CustomObjectTypeField.objects.get(pk=field_pk).name, 'tags_old',
+            CustomObjectTypeField.objects.get(pk=field_pk).name,
+            'tags_old',
         )
         main_tables_before = main_conn.introspection.table_names()
         self.assertIn(old_through, main_tables_before)
@@ -1012,15 +1044,18 @@ class BaseBranchingTestCase(BranchingTestBase):
         # After merge: field name is updated; old through-table is gone, new
         # through-table is present, and its rows survived the rename.
         self.assertEqual(
-            CustomObjectTypeField.objects.get(pk=field_pk).name, 'tags_new',
+            CustomObjectTypeField.objects.get(pk=field_pk).name,
+            'tags_new',
         )
         main_tables_after = main_conn.introspection.table_names()
         self.assertNotIn(
-            old_through, main_tables_after,
+            old_through,
+            main_tables_after,
             f'Old through-table {old_through!r} must be gone after rename merge',
         )
         self.assertIn(
-            new_through, main_tables_after,
+            new_through,
+            main_tables_after,
             f'New through-table {new_through!r} must exist after rename merge',
         )
 
@@ -1043,15 +1078,18 @@ class BaseBranchingTestCase(BranchingTestBase):
 
         # Field name restored, through-table restored, rows intact.
         self.assertEqual(
-            CustomObjectTypeField.objects.get(pk=field_pk).name, 'tags_old',
+            CustomObjectTypeField.objects.get(pk=field_pk).name,
+            'tags_old',
         )
         main_tables_reverted = main_conn.introspection.table_names()
         self.assertIn(
-            old_through, main_tables_reverted,
+            old_through,
+            main_tables_reverted,
             f'Old through-table {old_through!r} must be restored after revert',
         )
         self.assertNotIn(
-            new_through, main_tables_reverted,
+            new_through,
+            main_tables_reverted,
             f'New through-table {new_through!r} must be gone after revert',
         )
 
@@ -1081,14 +1119,23 @@ class BaseBranchingTestCase(BranchingTestBase):
             site = Site.objects.create(name='Field-Delete Site', slug='field-delete-site')
             cot = CustomObjectType.objects.create(name='field_delete_cot', slug='field-delete-cot')
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='keep_me', label='Keep', type='text',
+                custom_object_type=cot,
+                name='keep_me',
+                label='Keep',
+                type='text',
             )
             scalar_field = CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='drop_me', label='Drop', type='integer',
+                custom_object_type=cot,
+                name='drop_me',
+                label='Drop',
+                type='integer',
             )
             multi_field = CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='drop_m2m', label='Drop M2M',
-                type='multiobject', related_object_type=site_ot,
+                custom_object_type=cot,
+                name='drop_m2m',
+                label='Drop M2M',
+                type='multiobject',
+                related_object_type=site_ot,
             )
             Model = cot.get_model()
             co = Model.objects.create(keep_me='hello', drop_me=7)
@@ -1103,9 +1150,7 @@ class BaseBranchingTestCase(BranchingTestBase):
 
         # Sanity: column + through table exist in main before the merge.
         with main_conn.cursor() as cursor:
-            cols_before = {
-                c.name for c in main_conn.introspection.get_table_description(cursor, co_table)
-            }
+            cols_before = {c.name for c in main_conn.introspection.get_table_description(cursor, co_table)}
         self.assertIn('drop_me', cols_before)
         self.assertIn(through_table, main_conn.introspection.table_names())
 
@@ -1129,13 +1174,12 @@ class BaseBranchingTestCase(BranchingTestBase):
         self.assertFalse(CustomObjectTypeField.objects.filter(pk=scalar_field_pk).exists())
         self.assertFalse(CustomObjectTypeField.objects.filter(pk=multi_field_pk).exists())
         with main_conn.cursor() as cursor:
-            cols_after = {
-                c.name for c in main_conn.introspection.get_table_description(cursor, co_table)
-            }
+            cols_after = {c.name for c in main_conn.introspection.get_table_description(cursor, co_table)}
         self.assertNotIn('drop_me', cols_after, 'drop_me column must be removed from main')
         self.assertIn('keep_me', cols_after, 'keep_me column must remain in main')
         self.assertNotIn(
-            through_table, main_conn.introspection.table_names(),
+            through_table,
+            main_conn.introspection.table_names(),
             f'Through-table {through_table!r} must be dropped after merge',
         )
 
@@ -1151,12 +1195,11 @@ class BaseBranchingTestCase(BranchingTestBase):
         self.assertTrue(CustomObjectTypeField.objects.filter(pk=scalar_field_pk).exists())
         self.assertTrue(CustomObjectTypeField.objects.filter(pk=multi_field_pk).exists())
         with main_conn.cursor() as cursor:
-            cols_reverted = {
-                c.name for c in main_conn.introspection.get_table_description(cursor, co_table)
-            }
+            cols_reverted = {c.name for c in main_conn.introspection.get_table_description(cursor, co_table)}
         self.assertIn('drop_me', cols_reverted, 'drop_me column must be restored after revert')
         self.assertIn(
-            through_table, main_conn.introspection.table_names(),
+            through_table,
+            main_conn.introspection.table_names(),
             f'Through-table {through_table!r} must be restored after revert',
         )
 
@@ -1341,7 +1384,8 @@ class BaseBranchingTestCase(BranchingTestBase):
         self.assertEqual(branch.status, BranchStatusChoices.MERGED)
 
         self.assertIn(
-            through_table, main_conn.introspection.table_names(),
+            through_table,
+            main_conn.introspection.table_names(),
             'Polymorphic through-table must exist in main after merge',
         )
 
@@ -1356,7 +1400,8 @@ class BaseBranchingTestCase(BranchingTestBase):
             )
             rows = [r[0] for r in cursor.fetchall()]
         self.assertEqual(
-            rows, sorted([site_a.pk, site_b.pk]),
+            rows,
+            sorted([site_a.pk, site_b.pk]),
             'Polymorphic M2M rows added in branch must land in main after merge',
         )
 
@@ -1365,7 +1410,8 @@ class BaseBranchingTestCase(BranchingTestBase):
         self.assertFalse(CustomObjectType.objects.filter(pk=cot_pk).exists())
         self.assertFalse(CustomObjectTypeField.objects.filter(pk=field_pk).exists())
         self.assertNotIn(
-            through_table, main_conn.introspection.table_names(),
+            through_table,
+            main_conn.introspection.table_names(),
             'Polymorphic through-table must be dropped after revert',
         )
 
@@ -1387,11 +1433,17 @@ class BaseBranchingTestCase(BranchingTestBase):
                 model=cot.get_table_model_name(cot.id).lower(),
             )
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='label', label='Label', type='text',
+                custom_object_type=cot,
+                name='label',
+                label='Label',
+                type='text',
             )
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='parent', label='Parent',
-                type='object', related_object_type=self_ot,
+                custom_object_type=cot,
+                name='parent',
+                label='Parent',
+                type='object',
+                related_object_type=self_ot,
             )
             Model = cot.get_model()
             root = Model.objects.create(label='root')
@@ -1431,11 +1483,17 @@ class BaseBranchingTestCase(BranchingTestBase):
                 model=cot.get_table_model_name(cot.id).lower(),
             )
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='label', label='Label', type='text',
+                custom_object_type=cot,
+                name='label',
+                label='Label',
+                type='text',
             )
             field = CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='peers', label='Peers',
-                type='multiobject', related_object_type=self_ot,
+                custom_object_type=cot,
+                name='peers',
+                label='Peers',
+                type='multiobject',
+                related_object_type=self_ot,
             )
             Model = cot.get_model()
             a = Model.objects.create(label='a')
@@ -1476,8 +1534,12 @@ class BaseBranchingTestCase(BranchingTestBase):
         with event_tracking(request):
             cot = CustomObjectType.objects.create(name='array_cot', slug='array-cot')
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='points', label='Points', type='array',
-                array_element_type='integer', array_tuple_size=2,
+                custom_object_type=cot,
+                name='points',
+                label='Points',
+                type='array',
+                array_element_type='integer',
+                array_tuple_size=2,
             )
             co = cot.get_model().objects.create(points=[[0, 0]])
 
@@ -1489,7 +1551,11 @@ class BaseBranchingTestCase(BranchingTestBase):
             branch_co.points = [[1, 2], [3, 4]]
             branch_co.save()
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='days', label='Days', type='array', array_element_type='date',
+                custom_object_type=cot,
+                name='days',
+                label='Days',
+                type='array',
+                array_element_type='date',
             )
             new_co = cot.get_model().objects.create(points=[[5, 6]], days=[datetime.date(2026, 1, 1)])
         new_pk = new_co.pk
@@ -1521,7 +1587,10 @@ class BaseBranchingTestCase(BranchingTestBase):
         with activate_branch(branch), event_tracking(branch_request):
             cot_b = CustomObjectType.objects.create(name='cross_b_cot', slug='cross-b-cot')
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot_b, name='b_label', label='B Label', type='text',
+                custom_object_type=cot_b,
+                name='b_label',
+                label='B Label',
+                type='text',
             )
             b_ot = ObjectType.objects.get(
                 app_label='netbox_custom_objects',
@@ -1530,11 +1599,17 @@ class BaseBranchingTestCase(BranchingTestBase):
 
             cot_a = CustomObjectType.objects.create(name='cross_a_cot', slug='cross-a-cot')
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot_a, name='a_label', label='A Label', type='text',
+                custom_object_type=cot_a,
+                name='a_label',
+                label='A Label',
+                type='text',
             )
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot_a, name='b_ref', label='B Ref',
-                type='object', related_object_type=b_ot,
+                custom_object_type=cot_a,
+                name='b_ref',
+                label='B Ref',
+                type='object',
+                related_object_type=b_ot,
             )
 
             BModel = cot_b.get_model()
@@ -1563,19 +1638,23 @@ class BaseBranchingTestCase(BranchingTestBase):
 
 # ── Concrete test classes (one per merge strategy) ────────────────────────────
 
+
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
 class IterativeBranchingTestCase(BaseBranchingTestCase, _TestBase):
     """Run BaseBranchingTestCase with the iterative merge strategy."""
+
     MERGE_STRATEGY = 'iterative'
 
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
 class SquashBranchingTestCase(BaseBranchingTestCase, _TestBase):
     """Run BaseBranchingTestCase with the squash merge strategy."""
+
     MERGE_STRATEGY = 'squash'
 
 
 # ── Missing field-type coverage (iterative only) ──────────────────────────────
+
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
 class MissingFieldTypesTestCase(BranchingTestBase, _TestBase):
@@ -1602,20 +1681,35 @@ class MissingFieldTypesTestCase(BranchingTestBase, _TestBase):
         with activate_branch(branch), event_tracking(branch_request):
             cot = CustomObjectType.objects.create(name='extra_types_cot', slug='extra-types-cot')
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='longtext_field', label='Long Text', type='longtext',
+                custom_object_type=cot,
+                name='longtext_field',
+                label='Long Text',
+                type='longtext',
             )
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='date_field', label='Date', type='date',
+                custom_object_type=cot,
+                name='date_field',
+                label='Date',
+                type='date',
             )
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='url_field', label='URL', type='url',
+                custom_object_type=cot,
+                name='url_field',
+                label='URL',
+                type='url',
             )
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='json_field', label='JSON', type='json',
+                custom_object_type=cot,
+                name='json_field',
+                label='JSON',
+                type='json',
             )
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='multiselect_field', label='Multi',
-                type='multiselect', choice_set=choice_set,
+                custom_object_type=cot,
+                name='multiselect_field',
+                label='Multi',
+                type='multiselect',
+                choice_set=choice_set,
             )
             Model = cot.get_model()
             co = Model.objects.create(

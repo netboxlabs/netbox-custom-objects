@@ -19,6 +19,7 @@ import copy
 
 from django.test import SimpleTestCase, TestCase
 
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint
 from netbox_custom_objects.schema.comparator import (
     COTDiff,
     FieldChange,
@@ -31,24 +32,23 @@ from netbox_custom_objects.schema.executor import (
     DestructiveChangesError,
     InvalidConstraintError,
     InvalidRelatedNameError,
-    UnsupportedFieldChangeError,
     UnknownChoiceSetError,
     UnknownFieldTypeError,
     UnknownObjectTypeError,
+    UnsupportedFieldChangeError,
     UnsupportedTypeChangeError,
     _build_dep_order,
-    apply_document,
     apply_diffs,
+    apply_document,
 )
 from netbox_custom_objects.schema.exporter import export_cot
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint
 
 from ..base import CustomObjectsTestCase
-
 
 # ---------------------------------------------------------------------------
 # Pure-logic tests (no DB required)
 # ---------------------------------------------------------------------------
+
 
 class ExecutorBuildDepOrderTestCase(SimpleTestCase):
     """Unit tests for _build_dep_order — no DB access."""
@@ -62,102 +62,114 @@ class ExecutorBuildDepOrderTestCase(SimpleTestCase):
         """
         field_changes = []
         for i, rot in enumerate(rot_refs or [], start=1):
-            field_changes.append(FieldChange(
-                op=FieldOp.ADD,
-                schema_id=i,
-                db_name=None,
-                schema_def={"id": i, "name": f"f{i}", "type": "object", "related_object_type": rot},
-            ))
+            field_changes.append(
+                FieldChange(
+                    op=FieldOp.ADD,
+                    schema_id=i,
+                    db_name=None,
+                    schema_def={'id': i, 'name': f'f{i}', 'type': 'object', 'related_object_type': rot},
+                )
+            )
         return COTDiff(name=slug, slug=slug, is_new=is_new, field_changes=field_changes)
 
     def test_empty_list_returns_empty(self):
         self.assertEqual(_build_dep_order([]), [])
 
     def test_single_diff_returned_unchanged(self):
-        diff = self._make_diff("alpha")
+        diff = self._make_diff('alpha')
         result = _build_dep_order([diff])
-        self.assertEqual([d.slug for d in result], ["alpha"])
+        self.assertEqual([d.slug for d in result], ['alpha'])
 
     def test_no_dependencies_preserves_any_valid_order(self):
-        diffs = [self._make_diff("x"), self._make_diff("y"), self._make_diff("z")]
+        diffs = [self._make_diff('x'), self._make_diff('y'), self._make_diff('z')]
         result = _build_dep_order(diffs)
-        self.assertEqual(set(d.slug for d in result), {"x", "y", "z"})
+        self.assertEqual({d.slug for d in result}, {'x', 'y', 'z'})
 
     def test_dependency_orders_dep_before_dependent(self):
         # b references a → a must come before b
-        a = self._make_diff("a")
-        b = self._make_diff("b", rot_refs=["custom-objects/a"])
+        a = self._make_diff('a')
+        b = self._make_diff('b', rot_refs=['custom-objects/a'])
         result = _build_dep_order([b, a])
         slugs = [d.slug for d in result]
-        self.assertLess(slugs.index("a"), slugs.index("b"))
+        self.assertLess(slugs.index('a'), slugs.index('b'))
 
     def test_chain_dependency_a_b_c(self):
         # c → b → a
-        a = self._make_diff("a")
-        b = self._make_diff("b", rot_refs=["custom-objects/a"])
-        c = self._make_diff("c", rot_refs=["custom-objects/b"])
+        a = self._make_diff('a')
+        b = self._make_diff('b', rot_refs=['custom-objects/a'])
+        c = self._make_diff('c', rot_refs=['custom-objects/b'])
         result = _build_dep_order([c, b, a])
         slugs = [d.slug for d in result]
-        self.assertLess(slugs.index("a"), slugs.index("b"))
-        self.assertLess(slugs.index("b"), slugs.index("c"))
+        self.assertLess(slugs.index('a'), slugs.index('b'))
+        self.assertLess(slugs.index('b'), slugs.index('c'))
 
     def test_circular_dependency_raises(self):
-        a = self._make_diff("a", rot_refs=["custom-objects/b"])
-        b = self._make_diff("b", rot_refs=["custom-objects/a"])
+        a = self._make_diff('a', rot_refs=['custom-objects/b'])
+        b = self._make_diff('b', rot_refs=['custom-objects/a'])
         with self.assertRaises(CircularDependencyError):
             _build_dep_order([a, b])
 
     def test_self_reference_not_treated_as_cycle(self):
         # A self-referential COT (object field pointing to itself) is not a cycle.
-        a = self._make_diff("a", rot_refs=["custom-objects/a"])
+        a = self._make_diff('a', rot_refs=['custom-objects/a'])
         result = _build_dep_order([a])
         self.assertEqual(len(result), 1)
 
     def test_reference_to_existing_cot_not_in_diffs_ignored(self):
         # "existing" is not in the diffs list so its slug is not in new_slugs → ignored.
-        a = self._make_diff("a", rot_refs=["custom-objects/existing"])
+        a = self._make_diff('a', rot_refs=['custom-objects/existing'])
         result = _build_dep_order([a])
-        self.assertEqual([d.slug for d in result], ["a"])
+        self.assertEqual([d.slug for d in result], ['a'])
 
     def test_builtin_rot_not_treated_as_dependency(self):
         # "dcim/device" is a built-in reference, not a custom-objects slug.
-        a = self._make_diff("a", rot_refs=["dcim/device"])
-        b = self._make_diff("b")
+        a = self._make_diff('a', rot_refs=['dcim/device'])
+        b = self._make_diff('b')
         result = _build_dep_order([a, b])
-        self.assertEqual(set(d.slug for d in result), {"a", "b"})
+        self.assertEqual({d.slug for d in result}, {'a', 'b'})
 
     def test_polymorphic_rot_list_dependency_ordering(self):
         # b is listed in poly_a's related_object_types → b must come first.
-        a = COTDiff(name="a", slug="a", is_new=True, field_changes=[
-            FieldChange(
-                op=FieldOp.ADD,
-                schema_id=1,
-                db_name=None,
-                schema_def={
-                    "id": 1, "name": "poly_f", "type": "multiobject",
-                    "is_polymorphic": True,
-                    "related_object_types": ["custom-objects/b", "dcim/device"],
-                },
-            )
-        ])
-        b = self._make_diff("b")
+        a = COTDiff(
+            name='a',
+            slug='a',
+            is_new=True,
+            field_changes=[
+                FieldChange(
+                    op=FieldOp.ADD,
+                    schema_id=1,
+                    db_name=None,
+                    schema_def={
+                        'id': 1,
+                        'name': 'poly_f',
+                        'type': 'multiobject',
+                        'is_polymorphic': True,
+                        'related_object_types': ['custom-objects/b', 'dcim/device'],
+                    },
+                )
+            ],
+        )
+        b = self._make_diff('b')
         result = _build_dep_order([a, b])
         slugs = [d.slug for d in result]
-        self.assertLess(slugs.index("b"), slugs.index("a"))
+        self.assertLess(slugs.index('b'), slugs.index('a'))
 
 
 # ---------------------------------------------------------------------------
 # Helper base for DDL tests
 # ---------------------------------------------------------------------------
 
+
 class _ExecutorTestBase(CustomObjectsTestCase, TestCase):
     """Common base for executor integration tests that touch the DB."""
+
     pass
 
 
 # ---------------------------------------------------------------------------
 # Destructive-guard tests
 # ---------------------------------------------------------------------------
+
 
 class ExecutorDestructiveGuardTestCase(_ExecutorTestBase):
     """apply_document raises DestructiveChangesError for REMOVE without allow_destructive."""
@@ -166,32 +178,30 @@ class ExecutorDestructiveGuardTestCase(_ExecutorTestBase):
         super().setUp()
         self.cot = self.create_custom_object_type(name='guardtest', slug='guard-test')
         self.field = self.create_custom_object_type_field(
-            self.cot, name='victim', type='text',
+            self.cot,
+            name='victim',
+            type='text',
         )
         self.schema_id = self.field.schema_id
 
     def _schema_with_removal(self):
         type_def = export_cot(self.cot)
-        type_def["fields"] = [
-            f for f in type_def.get("fields", []) if f["name"] != "victim"
-        ]
-        type_def.setdefault("removed_fields", []).append(
-            {"id": self.schema_id, "name": "victim", "type": "text"}
-        )
-        return {"schema_version": "1", "types": [type_def]}
+        type_def['fields'] = [f for f in type_def.get('fields', []) if f['name'] != 'victim']
+        type_def.setdefault('removed_fields', []).append({'id': self.schema_id, 'name': 'victim', 'type': 'text'})
+        return {'schema_version': '1', 'types': [type_def]}
 
     def test_raises_without_allow_destructive(self):
         schema_doc = self._schema_with_removal()
         with self.assertRaises(DestructiveChangesError) as ctx:
             apply_document(schema_doc)
-        self.assertIn("guard-test", str(ctx.exception))
+        self.assertIn('guard-test', str(ctx.exception))
 
     def test_diffs_attribute_populated_on_error(self):
         schema_doc = self._schema_with_removal()
         with self.assertRaises(DestructiveChangesError) as ctx:
             apply_document(schema_doc)
         self.assertEqual(len(ctx.exception.diffs), 1)
-        self.assertEqual(ctx.exception.diffs[0].slug, "guard-test")
+        self.assertEqual(ctx.exception.diffs[0].slug, 'guard-test')
 
     def test_succeeds_with_allow_destructive(self):
         schema_doc = self._schema_with_removal()
@@ -210,53 +220,54 @@ class ExecutorDestructiveGuardTestCase(_ExecutorTestBase):
 # New COT creation
 # ---------------------------------------------------------------------------
 
+
 class ExecutorNewCOTTestCase(_ExecutorTestBase):
     """Executor creates new CustomObjectType records and their backing tables."""
 
     def _new_cot_schema(self, **overrides):
         td = {
-            "name": "brandnew",
-            "slug": "brand-new",
-            "version": "1.0.0",
-            "verbose_name": "Brand New",
-            "verbose_name_plural": "Brand News",
-            "description": "Test COT",
-            "fields": [
-                {"id": 1, "name": "label", "type": "text", "required": True},
-                {"id": 2, "name": "count", "type": "integer"},
+            'name': 'brandnew',
+            'slug': 'brand-new',
+            'version': '1.0.0',
+            'verbose_name': 'Brand New',
+            'verbose_name_plural': 'Brand News',
+            'description': 'Test COT',
+            'fields': [
+                {'id': 1, 'name': 'label', 'type': 'text', 'required': True},
+                {'id': 2, 'name': 'count', 'type': 'integer'},
             ],
         }
         td.update(overrides)
-        return {"schema_version": "1", "types": [td]}
+        return {'schema_version': '1', 'types': [td]}
 
     def test_new_cot_is_created(self):
         apply_document(self._new_cot_schema())
-        self.assertTrue(CustomObjectType.objects.filter(slug="brand-new").exists())
+        self.assertTrue(CustomObjectType.objects.filter(slug='brand-new').exists())
 
     def test_new_cot_attrs_set_correctly(self):
         apply_document(self._new_cot_schema())
-        cot = CustomObjectType.objects.get(slug="brand-new")
-        self.assertEqual(cot.name, "brandnew")
-        self.assertEqual(cot.version, "1.0.0")
-        self.assertEqual(cot.verbose_name, "Brand New")
-        self.assertEqual(cot.description, "Test COT")
+        cot = CustomObjectType.objects.get(slug='brand-new')
+        self.assertEqual(cot.name, 'brandnew')
+        self.assertEqual(cot.version, '1.0.0')
+        self.assertEqual(cot.verbose_name, 'Brand New')
+        self.assertEqual(cot.description, 'Test COT')
 
     def test_new_cot_fields_created(self):
         apply_document(self._new_cot_schema())
-        cot = CustomObjectType.objects.get(slug="brand-new")
+        cot = CustomObjectType.objects.get(slug='brand-new')
         self.assertEqual(cot.fields.count(), 2)
 
     def test_new_cot_field_attrs_set_correctly(self):
         apply_document(self._new_cot_schema())
-        cot = CustomObjectType.objects.get(slug="brand-new")
-        label_field = cot.fields.get(name="label")
-        self.assertEqual(label_field.type, "text")
+        cot = CustomObjectType.objects.get(slug='brand-new')
+        label_field = cot.fields.get(name='label')
+        self.assertEqual(label_field.type, 'text')
         self.assertTrue(label_field.required)
         self.assertEqual(label_field.schema_id, 1)
 
     def test_new_cot_next_schema_id_synced(self):
         apply_document(self._new_cot_schema())
-        cot = CustomObjectType.objects.get(slug="brand-new")
+        cot = CustomObjectType.objects.get(slug='brand-new')
         # next_schema_id should be ≥ highest field id in the schema (2).
         cot.refresh_from_db()
         self.assertGreaterEqual(cot.next_schema_id, 2)
@@ -264,24 +275,22 @@ class ExecutorNewCOTTestCase(_ExecutorTestBase):
     def test_new_cot_schema_document_persisted(self):
         schema_doc = self._new_cot_schema()
         apply_document(schema_doc)
-        cot = CustomObjectType.objects.get(slug="brand-new")
+        cot = CustomObjectType.objects.get(slug='brand-new')
         cot.refresh_from_db()
         self.assertIsNotNone(cot.schema_document)
-        self.assertIn("types", cot.schema_document)
+        self.assertIn('types', cot.schema_document)
 
     def test_returned_diffs_include_new_cot(self):
         schema_doc = self._new_cot_schema()
         diffs = apply_document(schema_doc)
         self.assertEqual(len(diffs), 1)
         self.assertTrue(diffs[0].is_new)
-        self.assertEqual(diffs[0].slug, "brand-new")
+        self.assertEqual(diffs[0].slug, 'brand-new')
 
     def test_new_cot_with_no_fields(self):
-        schema_doc = {"schema_version": "1", "types": [
-            {"name": "empty_cot", "slug": "empty-cot"}
-        ]}
+        schema_doc = {'schema_version': '1', 'types': [{'name': 'empty_cot', 'slug': 'empty-cot'}]}
         apply_document(schema_doc)
-        cot = CustomObjectType.objects.get(slug="empty-cot")
+        cot = CustomObjectType.objects.get(slug='empty-cot')
         self.assertEqual(cot.fields.count(), 0)
 
 
@@ -289,47 +298,52 @@ class ExecutorNewCOTTestCase(_ExecutorTestBase):
 # COT attribute updates
 # ---------------------------------------------------------------------------
 
+
 class ExecutorCOTAttrsTestCase(_ExecutorTestBase):
     """Executor updates top-level COT attributes when they differ from the schema."""
 
     def setUp(self):
         super().setUp()
         self.cot = self.create_custom_object_type(
-            name='attrtest', slug='attr-test', version='1.0.0',
-            description='Old description', verbose_name='Old VN',
+            name='attrtest',
+            slug='attr-test',
+            version='1.0.0',
+            description='Old description',
+            verbose_name='Old VN',
         )
 
     def test_description_updated(self):
         type_def = export_cot(self.cot)
-        type_def["description"] = "New description"
-        apply_document({"schema_version": "1", "types": [type_def]})
+        type_def['description'] = 'New description'
+        apply_document({'schema_version': '1', 'types': [type_def]})
         self.cot.refresh_from_db()
-        self.assertEqual(self.cot.description, "New description")
+        self.assertEqual(self.cot.description, 'New description')
 
     def test_version_updated(self):
         type_def = export_cot(self.cot)
-        type_def["version"] = "2.0.0"
-        apply_document({"schema_version": "1", "types": [type_def]})
+        type_def['version'] = '2.0.0'
+        apply_document({'schema_version': '1', 'types': [type_def]})
         self.cot.refresh_from_db()
-        self.assertEqual(self.cot.version, "2.0.0")
+        self.assertEqual(self.cot.version, '2.0.0')
 
     def test_verbose_name_updated(self):
         type_def = export_cot(self.cot)
-        type_def["verbose_name"] = "New Verbose Name"
-        apply_document({"schema_version": "1", "types": [type_def]})
+        type_def['verbose_name'] = 'New Verbose Name'
+        apply_document({'schema_version': '1', 'types': [type_def]})
         self.cot.refresh_from_db()
-        self.assertEqual(self.cot.verbose_name, "New Verbose Name")
+        self.assertEqual(self.cot.verbose_name, 'New Verbose Name')
 
     def test_no_changes_leaves_cot_unchanged(self):
         type_def = export_cot(self.cot)
-        apply_document({"schema_version": "1", "types": [type_def]})
+        apply_document({'schema_version': '1', 'types': [type_def]})
         self.cot.refresh_from_db()
-        self.assertEqual(self.cot.description, "Old description")
+        self.assertEqual(self.cot.description, 'Old description')
 
 
 # ---------------------------------------------------------------------------
 # Field ADD
 # ---------------------------------------------------------------------------
+
 
 class ExecutorFieldAddTestCase(_ExecutorTestBase):
     """Executor adds new fields to existing COTs."""
@@ -344,115 +358,137 @@ class ExecutorFieldAddTestCase(_ExecutorTestBase):
     def test_field_added_to_existing_cot(self):
         type_def = export_cot(self.cot)
         next_id = self.cot.next_schema_id + 1
-        type_def["fields"].append({"id": next_id, "name": "newfield", "type": "integer"})
-        apply_document({"schema_version": "1", "types": [type_def]})
-        self.assertTrue(self.cot.fields.filter(name="newfield").exists())
+        type_def['fields'].append({'id': next_id, 'name': 'newfield', 'type': 'integer'})
+        apply_document({'schema_version': '1', 'types': [type_def]})
+        self.assertTrue(self.cot.fields.filter(name='newfield').exists())
 
     def test_added_field_schema_id_correct(self):
         type_def = export_cot(self.cot)
         next_id = self.cot.next_schema_id + 1
-        type_def["fields"].append({"id": next_id, "name": "newfield", "type": "integer"})
-        apply_document({"schema_version": "1", "types": [type_def]})
-        field = self.cot.fields.get(name="newfield")
+        type_def['fields'].append({'id': next_id, 'name': 'newfield', 'type': 'integer'})
+        apply_document({'schema_version': '1', 'types': [type_def]})
+        field = self.cot.fields.get(name='newfield')
         self.assertEqual(field.schema_id, next_id)
 
     def test_added_color_field(self):
         type_def = export_cot(self.cot)
         next_id = self.cot.next_schema_id + 1
-        type_def["fields"].append({"id": next_id, "name": "shade", "type": "color", "default": "00ff00"})
-        apply_document({"schema_version": "1", "types": [type_def]})
-        field = self.cot.fields.get(name="shade")
-        self.assertEqual((field.type, field.default), ("color", "00ff00"))
-        self.assertEqual(export_cot(self.cot)["fields"][-1], {"id": next_id, "name": "shade", "type": "color",
-                                                               "default": "00ff00"})
+        type_def['fields'].append({'id': next_id, 'name': 'shade', 'type': 'color', 'default': '00ff00'})
+        apply_document({'schema_version': '1', 'types': [type_def]})
+        field = self.cot.fields.get(name='shade')
+        self.assertEqual((field.type, field.default), ('color', '00ff00'))
+        self.assertEqual(
+            export_cot(self.cot)['fields'][-1], {'id': next_id, 'name': 'shade', 'type': 'color', 'default': '00ff00'}
+        )
 
     def test_added_mac_address_field(self):
         type_def = export_cot(self.cot)
         next_id = self.cot.next_schema_id + 1
-        type_def["fields"].append({"id": next_id, "name": "mac", "type": "mac_address", "default": "001a2b3c4d5e"})
-        apply_document({"schema_version": "1", "types": [type_def]})
-        self.assertEqual(self.cot.fields.get(name="mac").type, "mac_address")
+        type_def['fields'].append({'id': next_id, 'name': 'mac', 'type': 'mac_address', 'default': '001a2b3c4d5e'})
+        apply_document({'schema_version': '1', 'types': [type_def]})
+        self.assertEqual(self.cot.fields.get(name='mac').type, 'mac_address')
         self.cot.refresh_from_db()
         obj = self.cot.get_model().objects.create()
         obj.refresh_from_db()
-        self.assertEqual(str(obj.mac), "00:1A:2B:3C:4D:5E")
+        self.assertEqual(str(obj.mac), '00:1A:2B:3C:4D:5E')
 
     def test_added_coordinates_field_round_trips(self):
         type_def = export_cot(self.cot)
         next_id = self.cot.next_schema_id + 1
-        type_def["fields"].append({"id": next_id, "name": "location", "type": "coordinates"})
-        apply_document({"schema_version": "1", "types": [type_def]})
-        self.assertEqual(self.cot.fields.get(name="location").type, "coordinates")
+        type_def['fields'].append({'id': next_id, 'name': 'location', 'type': 'coordinates'})
+        apply_document({'schema_version': '1', 'types': [type_def]})
+        self.assertEqual(self.cot.fields.get(name='location').type, 'coordinates')
         model = self.cot.get_model()
-        self.assertTrue(hasattr(model, "location_latitude") and hasattr(model, "location_longitude"))
+        self.assertTrue(hasattr(model, 'location_latitude') and hasattr(model, 'location_longitude'))
         self.assertFalse(diff_cot(export_cot(self.cot)).has_changes)
 
     def test_added_select_field_resolves_choice_set(self):
         cs = self.create_choice_set(name='Colours')
         type_def = export_cot(self.cot)
         next_id = self.cot.next_schema_id + 1
-        type_def["fields"].append({
-            "id": next_id, "name": "colour", "type": "select", "choice_set": "Colours",
-        })
-        apply_document({"schema_version": "1", "types": [type_def]})
-        field = self.cot.fields.select_related("choice_set").get(name="colour")
+        type_def['fields'].append(
+            {
+                'id': next_id,
+                'name': 'colour',
+                'type': 'select',
+                'choice_set': 'Colours',
+            }
+        )
+        apply_document({'schema_version': '1', 'types': [type_def]})
+        field = self.cot.fields.select_related('choice_set').get(name='colour')
         self.assertEqual(field.choice_set, cs)
 
     def test_added_object_field_resolves_related_object_type(self):
         device_ot = self.get_device_object_type()
         type_def = export_cot(self.cot)
         next_id = self.cot.next_schema_id + 1
-        type_def["fields"].append({
-            "id": next_id, "name": "device", "type": "object",
-            "related_object_type": "dcim/device",
-        })
-        apply_document({"schema_version": "1", "types": [type_def]})
-        field = self.cot.fields.select_related("related_object_type").get(name="device")
+        type_def['fields'].append(
+            {
+                'id': next_id,
+                'name': 'device',
+                'type': 'object',
+                'related_object_type': 'dcim/device',
+            }
+        )
+        apply_document({'schema_version': '1', 'types': [type_def]})
+        field = self.cot.fields.select_related('related_object_type').get(name='device')
         self.assertEqual(field.related_object_type, device_ot)
 
     def test_unknown_choice_set_raises(self):
         type_def = export_cot(self.cot)
         next_id = self.cot.next_schema_id + 1
-        type_def["fields"].append({
-            "id": next_id, "name": "flavour", "type": "select",
-            "choice_set": "NoSuchChoiceSet",
-        })
+        type_def['fields'].append(
+            {
+                'id': next_id,
+                'name': 'flavour',
+                'type': 'select',
+                'choice_set': 'NoSuchChoiceSet',
+            }
+        )
         with self.assertRaises(UnknownChoiceSetError):
-            apply_document({"schema_version": "1", "types": [type_def]})
+            apply_document({'schema_version': '1', 'types': [type_def]})
 
     def test_unknown_object_type_raises(self):
         type_def = export_cot(self.cot)
         next_id = self.cot.next_schema_id + 1
-        type_def["fields"].append({
-            "id": next_id, "name": "ghost", "type": "object",
-            "related_object_type": "does/notexist",
-        })
+        type_def['fields'].append(
+            {
+                'id': next_id,
+                'name': 'ghost',
+                'type': 'object',
+                'related_object_type': 'does/notexist',
+            }
+        )
         with self.assertRaises(UnknownObjectTypeError):
-            apply_document({"schema_version": "1", "types": [type_def]})
+            apply_document({'schema_version': '1', 'types': [type_def]})
 
     def test_unknown_field_type_raises(self):
         type_def = export_cot(self.cot)
         next_id = self.cot.next_schema_id + 1
-        type_def["fields"].append({"id": next_id, "name": "bad", "type": "nosuchtype"})
+        type_def['fields'].append({'id': next_id, 'name': 'bad', 'type': 'nosuchtype'})
         with self.assertRaises(UnknownFieldTypeError):
-            apply_document({"schema_version": "1", "types": [type_def]})
+            apply_document({'schema_version': '1', 'types': [type_def]})
 
     def test_malformed_related_object_type_raises(self):
         """A rot_str with no '/' raises UnknownObjectTypeError, not ValueError."""
         type_def = export_cot(self.cot)
         next_id = self.cot.next_schema_id + 1
-        type_def["fields"].append({
-            "id": next_id, "name": "bad", "type": "object",
-            "related_object_type": "nodslash",
-        })
+        type_def['fields'].append(
+            {
+                'id': next_id,
+                'name': 'bad',
+                'type': 'object',
+                'related_object_type': 'nodslash',
+            }
+        )
         with self.assertRaises(UnknownObjectTypeError):
-            apply_document({"schema_version": "1", "types": [type_def]})
+            apply_document({'schema_version': '1', 'types': [type_def]})
 
     def test_next_schema_id_updated_after_add(self):
         type_def = export_cot(self.cot)
         next_id = self.cot.next_schema_id + 1
-        type_def["fields"].append({"id": next_id, "name": "newfield", "type": "text"})
-        apply_document({"schema_version": "1", "types": [type_def]})
+        type_def['fields'].append({'id': next_id, 'name': 'newfield', 'type': 'text'})
+        apply_document({'schema_version': '1', 'types': [type_def]})
         self.cot.refresh_from_db()
         self.assertGreaterEqual(self.cot.next_schema_id, next_id)
 
@@ -461,6 +497,7 @@ class ExecutorFieldAddTestCase(_ExecutorTestBase):
 # Field ALTER
 # ---------------------------------------------------------------------------
 
+
 class ExecutorFieldAlterTestCase(_ExecutorTestBase):
     """Executor applies attribute changes to existing fields."""
 
@@ -468,48 +505,52 @@ class ExecutorFieldAlterTestCase(_ExecutorTestBase):
         super().setUp()
         self.cot = self.create_custom_object_type(name='altertest', slug='alter-test')
         self.field = self.create_custom_object_type_field(
-            self.cot, name='target', type='text',
-            description='Old desc', weight=100,
+            self.cot,
+            name='target',
+            type='text',
+            description='Old desc',
+            weight=100,
         )
 
     def test_alter_description(self):
         type_def = export_cot(self.cot)
-        for f in type_def["fields"]:
-            if f["name"] == "target":
-                f["description"] = "New desc"
-        apply_document({"schema_version": "1", "types": [type_def]})
+        for f in type_def['fields']:
+            if f['name'] == 'target':
+                f['description'] = 'New desc'
+        apply_document({'schema_version': '1', 'types': [type_def]})
         self.field.refresh_from_db()
-        self.assertEqual(self.field.description, "New desc")
+        self.assertEqual(self.field.description, 'New desc')
 
     def test_alter_weight(self):
         type_def = export_cot(self.cot)
-        for f in type_def["fields"]:
-            if f["name"] == "target":
-                f["weight"] = 50
-        apply_document({"schema_version": "1", "types": [type_def]})
+        for f in type_def['fields']:
+            if f['name'] == 'target':
+                f['weight'] = 50
+        apply_document({'schema_version': '1', 'types': [type_def]})
         self.field.refresh_from_db()
         self.assertEqual(self.field.weight, 50)
 
     def test_rename_field(self):
         schema_id = self.field.schema_id
         type_def = export_cot(self.cot)
-        for f in type_def["fields"]:
-            if f["name"] == "target":
-                f["name"] = "renamed_target"
-        apply_document({"schema_version": "1", "types": [type_def]})
+        for f in type_def['fields']:
+            if f['name'] == 'target':
+                f['name'] = 'renamed_target'
+        apply_document({'schema_version': '1', 'types': [type_def]})
         # Old name gone, new name present with same schema_id.
-        self.assertFalse(self.cot.fields.filter(name="target").exists())
-        self.assertTrue(self.cot.fields.filter(name="renamed_target").exists())
+        self.assertFalse(self.cot.fields.filter(name='target').exists())
+        self.assertTrue(self.cot.fields.filter(name='renamed_target').exists())
         self.assertEqual(
-            self.cot.fields.get(name="renamed_target").schema_id, schema_id,
+            self.cot.fields.get(name='renamed_target').schema_id,
+            schema_id,
         )
 
     def test_alter_required_flag(self):
         type_def = export_cot(self.cot)
-        for f in type_def["fields"]:
-            if f["name"] == "target":
-                f["required"] = True
-        apply_document({"schema_version": "1", "types": [type_def]})
+        for f in type_def['fields']:
+            if f['name'] == 'target':
+                f['required'] = True
+        apply_document({'schema_version': '1', 'types': [type_def]})
         self.field.refresh_from_db()
         self.assertTrue(self.field.required)
 
@@ -517,31 +558,34 @@ class ExecutorFieldAlterTestCase(_ExecutorTestBase):
         coords = self.create_custom_object_type_field(self.cot, name='location', type='coordinates')
         cases = [(self.field, 'coordinates'), (coords, 'text'), (self.field, 'url')]
         for field, new_type in cases:
-            with self.subTest(f"{field.type} -> {new_type}"):
+            with self.subTest(f'{field.type} -> {new_type}'):
                 type_def = export_cot(self.cot)
-                for f in type_def["fields"]:
-                    if f["name"] == field.name:
-                        f["type"] = new_type
+                for f in type_def['fields']:
+                    if f['name'] == field.name:
+                        f['type'] = new_type
                 with self.assertRaises(UnsupportedTypeChangeError):
-                    apply_document({"schema_version": "1", "types": [type_def]})
+                    apply_document({'schema_version': '1', 'types': [type_def]})
                 field.refresh_from_db()
                 self.assertNotEqual(field.type, new_type)
         # Nothing half-applied: the table still matches the fields.
         self.cot.refresh_from_db()
-        self.cot.get_model().objects.create(target="x", location_latitude=1, location_longitude=2)
+        self.cot.get_model().objects.create(target='x', location_latitude=1, location_longitude=2)
 
     def test_alter_validation_minimum(self):
         # First change the field to integer type directly in the DB so we
         # can then test altering validation_minimum via the executor.
         int_cot = self.create_custom_object_type(name='intalter', slug='int-alter')
         int_field = self.create_custom_object_type_field(
-            int_cot, name='qty', type='integer', validation_minimum=0,
+            int_cot,
+            name='qty',
+            type='integer',
+            validation_minimum=0,
         )
         type_def = export_cot(int_cot)
-        for f in type_def["fields"]:
-            if f["name"] == "qty":
-                f["validation_minimum"] = 10
-        apply_document({"schema_version": "1", "types": [type_def]})
+        for f in type_def['fields']:
+            if f['name'] == 'qty':
+                f['validation_minimum'] = 10
+        apply_document({'schema_version': '1', 'types': [type_def]})
         int_field.refresh_from_db()
         self.assertEqual(int_field.validation_minimum, 10)
 
@@ -550,13 +594,16 @@ class ExecutorFieldAlterTestCase(_ExecutorTestBase):
         cs_b = self.create_choice_set(name='Status B')
         sel_cot = self.create_custom_object_type(name='seltest', slug='sel-test')
         sel_field = self.create_custom_object_type_field(
-            sel_cot, name='status', type='select', choice_set=cs_a,
+            sel_cot,
+            name='status',
+            type='select',
+            choice_set=cs_a,
         )
         type_def = export_cot(sel_cot)
-        for f in type_def["fields"]:
-            if f["name"] == "status":
-                f["choice_set"] = "Status B"
-        apply_document({"schema_version": "1", "types": [type_def]})
+        for f in type_def['fields']:
+            if f['name'] == 'status':
+                f['choice_set'] = 'Status B'
+        apply_document({'schema_version': '1', 'types': [type_def]})
         sel_field.refresh_from_db()
         self.assertEqual(sel_field.choice_set, cs_b)
 
@@ -565,57 +612,67 @@ class ExecutorFieldAlterTestCase(_ExecutorTestBase):
         site_ot = self.get_site_object_type()
         obj_cot = self.create_custom_object_type(name='objtest', slug='obj-test')
         obj_field = self.create_custom_object_type_field(
-            obj_cot, name='thing', type='object', related_object_type=device_ot,
+            obj_cot,
+            name='thing',
+            type='object',
+            related_object_type=device_ot,
         )
         type_def = export_cot(obj_cot)
-        for f in type_def["fields"]:
-            if f["name"] == "thing":
-                f["related_object_type"] = "dcim/site"
-        apply_document({"schema_version": "1", "types": [type_def]})
+        for f in type_def['fields']:
+            if f['name'] == 'thing':
+                f['related_object_type'] = 'dcim/site'
+        apply_document({'schema_version': '1', 'types': [type_def]})
         obj_field.refresh_from_db()
         self.assertEqual(
-            obj_field.related_object_type, site_ot,
+            obj_field.related_object_type,
+            site_ot,
         )
 
     def test_array_field(self):
         cot = self.create_custom_object_type(name='zone', slug='zone')
         cot.refresh_from_db()
         type_def = export_cot(cot)
-        type_def.setdefault("fields", []).append({
-            "id": cot.next_schema_id + 1, "name": "points", "type": "array", "array_element_type": "integer",
-            "array_tuple_size": 3, "array_min_length": 2,
-        })
-        apply_document({"schema_version": "1", "types": [type_def]})
-        field = cot.fields.get(name="points")
+        type_def.setdefault('fields', []).append(
+            {
+                'id': cot.next_schema_id + 1,
+                'name': 'points',
+                'type': 'array',
+                'array_element_type': 'integer',
+                'array_tuple_size': 3,
+                'array_min_length': 2,
+            }
+        )
+        apply_document({'schema_version': '1', 'types': [type_def]})
+        field = cot.fields.get(name='points')
         self.assertEqual(
             (field.type, field.array_element_type, field.array_tuple_size, field.array_min_length),
-            ("array", "integer", 3, 2),
+            ('array', 'integer', 3, 2),
         )
         model = CustomObjectType.objects.get(pk=cot.pk).get_model()
         model.objects.create(points=[[0, 0, 0], [1, 2, 3]])
 
         # The length limits can change.
         type_def = export_cot(cot)
-        type_def["fields"][-1]["array_max_length"] = 10
-        apply_document({"schema_version": "1", "types": [type_def]})
+        type_def['fields'][-1]['array_max_length'] = 10
+        apply_document({'schema_version': '1', 'types': [type_def]})
         field.refresh_from_db()
         self.assertEqual(field.array_max_length, 10)
 
         # The element type, tuple size and the type itself can't.
         changes = {
-            "element type": {"array_element_type": "decimal"},
-            "tuple size": {"array_tuple_size": 2},
-            "type": {"type": "text", "array_element_type": None},
+            'element type': {'array_element_type': 'decimal'},
+            'tuple size': {'array_tuple_size': 2},
+            'type': {'type': 'text', 'array_element_type': None},
         }
         for label, change in changes.items():
             with self.subTest(label):
                 type_def = export_cot(cot)
-                type_def["fields"][-1].update(change)
-                type_def["fields"][-1] = {k: v for k, v in type_def["fields"][-1].items() if v is not None}
+                type_def['fields'][-1].update(change)
+                type_def['fields'][-1] = {k: v for k, v in type_def['fields'][-1].items() if v is not None}
                 with self.assertRaises(UnsupportedFieldChangeError):
-                    apply_document({"schema_version": "1", "types": [type_def]})
+                    apply_document({'schema_version': '1', 'types': [type_def]})
         field.refresh_from_db()
-        self.assertEqual((field.type, field.array_element_type, field.array_tuple_size), ("array", "integer", 3))
+        self.assertEqual((field.type, field.array_element_type, field.array_tuple_size), ('array', 'integer', 3))
 
     def test_related_name(self):
         from dcim.models import Device
@@ -623,54 +680,69 @@ class ExecutorFieldAlterTestCase(_ExecutorTestBase):
         obj_cot = self.create_custom_object_type(name='named', slug='named')
         obj_cot.refresh_from_db()
         type_def = export_cot(obj_cot)
-        type_def.setdefault("fields", []).append({
-            "id": obj_cot.next_schema_id + 1, "name": "device", "type": "object",
-            "related_object_type": "dcim/device", "related_name": "widgets",
-        })
-        apply_document({"schema_version": "1", "types": [type_def]})
-        field = obj_cot.fields.get(name="device")
-        self.assertEqual(field.related_name, "widgets")
+        type_def.setdefault('fields', []).append(
+            {
+                'id': obj_cot.next_schema_id + 1,
+                'name': 'device',
+                'type': 'object',
+                'related_object_type': 'dcim/device',
+                'related_name': 'widgets',
+            }
+        )
+        apply_document({'schema_version': '1', 'types': [type_def]})
+        field = obj_cot.fields.get(name='device')
+        self.assertEqual(field.related_name, 'widgets')
         obj_cot.get_model()
-        self.assertTrue(hasattr(Device, "widgets"))
-        self.assertEqual(export_cot(obj_cot)["fields"][-1]["related_name"], "widgets")
+        self.assertTrue(hasattr(Device, 'widgets'))
+        self.assertEqual(export_cot(obj_cot)['fields'][-1]['related_name'], 'widgets')
 
         type_def = export_cot(obj_cot)
-        type_def["fields"][-1]["related_name"] = "gadgets"
-        apply_document({"schema_version": "1", "types": [type_def]})
+        type_def['fields'][-1]['related_name'] = 'gadgets'
+        apply_document({'schema_version': '1', 'types': [type_def]})
         field.refresh_from_db()
-        self.assertEqual(field.related_name, "gadgets")
+        self.assertEqual(field.related_name, 'gadgets')
         CustomObjectType.objects.get(pk=obj_cot.pk).get_model()
-        self.assertTrue(hasattr(Device, "gadgets"))
+        self.assertTrue(hasattr(Device, 'gadgets'))
 
     def test_related_name_already_used(self):
         device_ot = self.get_device_object_type()
         self.create_custom_object_type_field(
-            self.cot, name='device', type='object', related_object_type=device_ot, related_name='widgets',
+            self.cot,
+            name='device',
+            type='object',
+            related_object_type=device_ot,
+            related_name='widgets',
         )
         other = self.create_custom_object_type(name='other', slug='other')
         other.refresh_from_db()
         type_def = export_cot(other)
-        type_def.setdefault("fields", []).append({
-            "id": other.next_schema_id + 1, "name": "device", "type": "object",
-            "related_object_type": "dcim/device", "related_name": "widgets",
-        })
-        with self.assertRaisesRegex(InvalidRelatedNameError, "already used by field"):
-            apply_document({"schema_version": "1", "types": [type_def]})
+        type_def.setdefault('fields', []).append(
+            {
+                'id': other.next_schema_id + 1,
+                'name': 'device',
+                'type': 'object',
+                'related_object_type': 'dcim/device',
+                'related_name': 'widgets',
+            }
+        )
+        with self.assertRaisesRegex(InvalidRelatedNameError, 'already used by field'):
+            apply_document({'schema_version': '1', 'types': [type_def]})
         self.assertFalse(other.fields.exists())
 
     def test_alter_field_type(self):
         type_def = export_cot(self.cot)
-        for f in type_def["fields"]:
-            if f["name"] == "target":
-                f["type"] = "longtext"
-        apply_document({"schema_version": "1", "types": [type_def]})
+        for f in type_def['fields']:
+            if f['name'] == 'target':
+                f['type'] = 'longtext'
+        apply_document({'schema_version': '1', 'types': [type_def]})
         self.field.refresh_from_db()
-        self.assertEqual(self.field.type, "longtext")
+        self.assertEqual(self.field.type, 'longtext')
 
 
 # ---------------------------------------------------------------------------
 # Field REMOVE
 # ---------------------------------------------------------------------------
+
 
 class ExecutorFieldRemoveTestCase(_ExecutorTestBase):
     """Executor removes (tombstoned) fields from existing COTs."""
@@ -679,48 +751,47 @@ class ExecutorFieldRemoveTestCase(_ExecutorTestBase):
         super().setUp()
         self.cot = self.create_custom_object_type(name='removetest', slug='remove-test')
         self.field_a = self.create_custom_object_type_field(
-            self.cot, name='keeper', type='text',
+            self.cot,
+            name='keeper',
+            type='text',
         )
         self.field_b = self.create_custom_object_type_field(
-            self.cot, name='goner', type='text',
+            self.cot,
+            name='goner',
+            type='text',
         )
         self.goner_schema_id = self.field_b.schema_id
 
     def _removal_schema(self):
         type_def = export_cot(self.cot)
-        type_def["fields"] = [
-            f for f in type_def.get("fields", []) if f["name"] != "goner"
-        ]
-        type_def.setdefault("removed_fields", []).append(
-            {"id": self.goner_schema_id, "name": "goner", "type": "text"}
-        )
-        return {"schema_version": "1", "types": [type_def]}
+        type_def['fields'] = [f for f in type_def.get('fields', []) if f['name'] != 'goner']
+        type_def.setdefault('removed_fields', []).append({'id': self.goner_schema_id, 'name': 'goner', 'type': 'text'})
+        return {'schema_version': '1', 'types': [type_def]}
 
     def test_field_removed_from_db(self):
         apply_document(self._removal_schema(), allow_destructive=True)
-        self.assertFalse(
-            self.cot.fields.filter(schema_id=self.goner_schema_id).exists()
-        )
+        self.assertFalse(self.cot.fields.filter(schema_id=self.goner_schema_id).exists())
 
     def test_surviving_field_unaffected(self):
         apply_document(self._removal_schema(), allow_destructive=True)
-        self.assertTrue(self.cot.fields.filter(name="keeper").exists())
+        self.assertTrue(self.cot.fields.filter(name='keeper').exists())
 
     def test_tombstone_persisted_in_schema_document(self):
         apply_document(self._removal_schema(), allow_destructive=True)
         self.cot.refresh_from_db()
         doc = self.cot.schema_document
         self.assertIsNotNone(doc)
-        type_defs = doc.get("types", [])
+        type_defs = doc.get('types', [])
         self.assertEqual(len(type_defs), 1)
-        removed = type_defs[0].get("removed_fields", [])
-        removed_ids = [r["id"] for r in removed]
+        removed = type_defs[0].get('removed_fields', [])
+        removed_ids = [r['id'] for r in removed]
         self.assertIn(self.goner_schema_id, removed_ids)
 
 
 # ---------------------------------------------------------------------------
 # schema_document persistence
 # ---------------------------------------------------------------------------
+
 
 class ExecutorSchemaDocumentTestCase(_ExecutorTestBase):
     """schema_document is always persisted after a successful apply."""
@@ -729,7 +800,7 @@ class ExecutorSchemaDocumentTestCase(_ExecutorTestBase):
         cot = self.create_custom_object_type(name='doctest', slug='doc-test')
         self.create_custom_object_type_field(cot, name='x', type='text')
         type_def = export_cot(cot)
-        schema_doc = {"schema_version": "1", "types": [type_def]}
+        schema_doc = {'schema_version': '1', 'types': [type_def]}
         apply_document(schema_doc)
         cot.refresh_from_db()
         self.assertIsNotNone(cot.schema_document)
@@ -737,43 +808,53 @@ class ExecutorSchemaDocumentTestCase(_ExecutorTestBase):
     def test_schema_document_contains_correct_slug(self):
         cot = self.create_custom_object_type(name='doctest2', slug='doc-test-2')
         type_def = export_cot(cot)
-        schema_doc = {"schema_version": "1", "types": [type_def]}
+        schema_doc = {'schema_version': '1', 'types': [type_def]}
         apply_document(schema_doc)
         cot.refresh_from_db()
-        types = cot.schema_document.get("types", [])
+        types = cot.schema_document.get('types', [])
         self.assertEqual(len(types), 1)
-        self.assertEqual(types[0]["slug"], "doc-test-2")
+        self.assertEqual(types[0]['slug'], 'doc-test-2')
 
     def test_schema_document_schema_version_correct(self):
         cot = self.create_custom_object_type(name='doctest3', slug='doc-test-3')
         type_def = export_cot(cot)
-        apply_document({"schema_version": "1", "types": [type_def]})
+        apply_document({'schema_version': '1', 'types': [type_def]})
         cot.refresh_from_db()
-        self.assertEqual(cot.schema_document.get("schema_version"), "1")
+        self.assertEqual(cot.schema_document.get('schema_version'), '1')
 
     def test_base_columns_kept_for_new_type(self):
-        apply_document({"schema_version": "1", "types": [{
-            "name": "fresh", "slug": "fresh", "fields": [{"id": 1, "name": "name", "type": "text", "primary": True}],
-        }]})
-        cot = CustomObjectType.objects.get(slug="fresh")
-        self.assertEqual(cot.schema_document["schema_version"], "1")
-        self.assertIn("id", [c["name"] for c in cot.schema_document["base_columns"]])
+        apply_document(
+            {
+                'schema_version': '1',
+                'types': [
+                    {
+                        'name': 'fresh',
+                        'slug': 'fresh',
+                        'fields': [{'id': 1, 'name': 'name', 'type': 'text', 'primary': True}],
+                    }
+                ],
+            }
+        )
+        cot = CustomObjectType.objects.get(slug='fresh')
+        self.assertEqual(cot.schema_document['schema_version'], '1')
+        self.assertIn('id', [c['name'] for c in cot.schema_document['base_columns']])
 
     def test_base_columns_kept_when_type_changes(self):
         cot = self.create_custom_object_type(name='doctest4', slug='doc-test-4')
         cot.refresh_from_db()
-        base_columns = cot.schema_document["base_columns"]
+        base_columns = cot.schema_document['base_columns']
         type_def = export_cot(cot)
-        type_def.setdefault("fields", []).append({"id": cot.next_schema_id + 1, "name": "added", "type": "text"})
-        apply_document({"schema_version": "1", "types": [type_def]})
+        type_def.setdefault('fields', []).append({'id': cot.next_schema_id + 1, 'name': 'added', 'type': 'text'})
+        apply_document({'schema_version': '1', 'types': [type_def]})
         cot.refresh_from_db()
-        self.assertEqual(cot.schema_document["types"][0]["fields"][-1]["name"], "added")
-        self.assertEqual(cot.schema_document["base_columns"], base_columns)
+        self.assertEqual(cot.schema_document['types'][0]['fields'][-1]['name'], 'added')
+        self.assertEqual(cot.schema_document['base_columns'], base_columns)
 
 
 # ---------------------------------------------------------------------------
 # Cross-COT dependency ordering
 # ---------------------------------------------------------------------------
+
 
 class ExecutorDependencyTestCase(_ExecutorTestBase):
     """
@@ -783,26 +864,26 @@ class ExecutorDependencyTestCase(_ExecutorTestBase):
 
     def _two_cot_schema(self):
         return {
-            "schema_version": "1",
-            "types": [
+            'schema_version': '1',
+            'types': [
                 {
-                    "name": "cot_a",
-                    "slug": "cot-a",
-                    "fields": [
-                        {"id": 1, "name": "title", "type": "text"},
+                    'name': 'cot_a',
+                    'slug': 'cot-a',
+                    'fields': [
+                        {'id': 1, 'name': 'title', 'type': 'text'},
                         {
-                            "id": 2,
-                            "name": "related_b",
-                            "type": "object",
-                            "related_object_type": "custom-objects/cot-b",
+                            'id': 2,
+                            'name': 'related_b',
+                            'type': 'object',
+                            'related_object_type': 'custom-objects/cot-b',
                         },
                     ],
                 },
                 {
-                    "name": "cot_b",
-                    "slug": "cot-b",
-                    "fields": [
-                        {"id": 1, "name": "name", "type": "text"},
+                    'name': 'cot_b',
+                    'slug': 'cot-b',
+                    'fields': [
+                        {'id': 1, 'name': 'name', 'type': 'text'},
                     ],
                 },
             ],
@@ -810,31 +891,32 @@ class ExecutorDependencyTestCase(_ExecutorTestBase):
 
     def test_both_cots_created(self):
         apply_document(self._two_cot_schema())
-        self.assertTrue(CustomObjectType.objects.filter(slug="cot-a").exists())
-        self.assertTrue(CustomObjectType.objects.filter(slug="cot-b").exists())
+        self.assertTrue(CustomObjectType.objects.filter(slug='cot-a').exists())
+        self.assertTrue(CustomObjectType.objects.filter(slug='cot-b').exists())
 
     def test_cot_a_has_object_field_referencing_cot_b(self):
         apply_document(self._two_cot_schema())
-        cot_a = CustomObjectType.objects.get(slug="cot-a")
-        field = cot_a.fields.select_related("related_object_type").get(name="related_b")
-        self.assertEqual(field.type, "object")
+        cot_a = CustomObjectType.objects.get(slug='cot-a')
+        field = cot_a.fields.select_related('related_object_type').get(name='related_b')
+        self.assertEqual(field.type, 'object')
         # The related ObjectType should point to the cot-b table.
-        cot_b = CustomObjectType.objects.get(slug="cot-b")
+        cot_b = CustomObjectType.objects.get(slug='cot-b')
         expected_model = CustomObjectType.get_table_model_name(cot_b.id).lower()
         self.assertEqual(field.related_object_type.model, expected_model)
 
     def test_document_in_reversed_order_also_works(self):
         # Even if cot-b is listed AFTER cot-a, the executor must create b first.
         schema = self._two_cot_schema()
-        schema["types"] = list(reversed(schema["types"]))
+        schema['types'] = list(reversed(schema['types']))
         apply_document(schema)
-        self.assertTrue(CustomObjectType.objects.filter(slug="cot-a").exists())
-        self.assertTrue(CustomObjectType.objects.filter(slug="cot-b").exists())
+        self.assertTrue(CustomObjectType.objects.filter(slug='cot-a').exists())
+        self.assertTrue(CustomObjectType.objects.filter(slug='cot-b').exists())
 
 
 # ---------------------------------------------------------------------------
 # Transaction atomicity
 # ---------------------------------------------------------------------------
+
 
 class ExecutorAtomicityTestCase(_ExecutorTestBase):
     """A failure inside apply_diffs rolls back the entire transaction."""
@@ -846,28 +928,28 @@ class ExecutorAtomicityTestCase(_ExecutorTestBase):
         created in Phase 1.
         """
         schema_doc = {
-            "schema_version": "1",
-            "types": [{
-                "name": "rollback_cot",
-                "slug": "rollback-cot",
-                "fields": [
-                    {"id": 1, "name": "ok_field", "type": "text"},
-                    {
-                        "id": 2,
-                        "name": "bad_field",
-                        "type": "object",
-                        "related_object_type": "does/notexist",
-                    },
-                ],
-            }],
+            'schema_version': '1',
+            'types': [
+                {
+                    'name': 'rollback_cot',
+                    'slug': 'rollback-cot',
+                    'fields': [
+                        {'id': 1, 'name': 'ok_field', 'type': 'text'},
+                        {
+                            'id': 2,
+                            'name': 'bad_field',
+                            'type': 'object',
+                            'related_object_type': 'does/notexist',
+                        },
+                    ],
+                }
+            ],
         }
         with self.assertRaises(UnknownObjectTypeError):
             apply_document(schema_doc)
 
         # The COT must not exist after the rollback.
-        self.assertFalse(
-            CustomObjectType.objects.filter(slug="rollback-cot").exists()
-        )
+        self.assertFalse(CustomObjectType.objects.filter(slug='rollback-cot').exists())
 
     def test_failed_add_field_to_existing_cot_rolls_back(self):
         """
@@ -881,16 +963,18 @@ class ExecutorAtomicityTestCase(_ExecutorTestBase):
         cot.refresh_from_db()  # next_schema_id updated by field creation via update()
         next_id = cot.next_schema_id + 1
         # Add one good field and one bad field.
-        type_def["fields"].append({"id": next_id, "name": "good_new", "type": "text"})
-        type_def["fields"].append({
-            "id": next_id + 1,
-            "name": "bad_new",
-            "type": "object",
-            "related_object_type": "does/notexist",
-        })
+        type_def['fields'].append({'id': next_id, 'name': 'good_new', 'type': 'text'})
+        type_def['fields'].append(
+            {
+                'id': next_id + 1,
+                'name': 'bad_new',
+                'type': 'object',
+                'related_object_type': 'does/notexist',
+            }
+        )
 
         with self.assertRaises(UnknownObjectTypeError):
-            apply_document({"schema_version": "1", "types": [type_def]})
+            apply_document({'schema_version': '1', 'types': [type_def]})
 
         cot.refresh_from_db()
         # Field count unchanged — both the good and bad new fields are absent.
@@ -900,6 +984,7 @@ class ExecutorAtomicityTestCase(_ExecutorTestBase):
 # ---------------------------------------------------------------------------
 # apply_diffs low-level interface
 # ---------------------------------------------------------------------------
+
 
 class ExecutorApplyDiffsTestCase(_ExecutorTestBase):
     """Tests targeting apply_diffs directly (pre-computed diffs)."""
@@ -914,14 +999,14 @@ class ExecutorApplyDiffsTestCase(_ExecutorTestBase):
         type_def = export_cot(cot)
         cot.refresh_from_db()
         next_id = cot.next_schema_id + 1
-        type_def["fields"].append({"id": next_id, "name": "beta", "type": "text"})
-        schema_doc = {"schema_version": "1", "types": [type_def]}
+        type_def['fields'].append({'id': next_id, 'name': 'beta', 'type': 'text'})
+        schema_doc = {'schema_version': '1', 'types': [type_def]}
 
         diffs = diff_document(schema_doc)
-        type_defs_by_slug = {td["slug"]: td for td in schema_doc["types"]}
+        type_defs_by_slug = {td['slug']: td for td in schema_doc['types']}
         apply_diffs(diffs, type_defs_by_slug)
 
-        self.assertTrue(cot.fields.filter(name="beta").exists())
+        self.assertTrue(cot.fields.filter(name='beta').exists())
 
     def test_apply_diffs_raises_destructive_without_flag(self):
         from netbox_custom_objects.schema.comparator import diff_document
@@ -931,12 +1016,12 @@ class ExecutorApplyDiffsTestCase(_ExecutorTestBase):
         sid = f.schema_id
 
         type_def = export_cot(cot)
-        type_def["fields"] = []
-        type_def["removed_fields"] = [{"id": sid, "name": "bye", "type": "text"}]
-        schema_doc = {"schema_version": "1", "types": [type_def]}
+        type_def['fields'] = []
+        type_def['removed_fields'] = [{'id': sid, 'name': 'bye', 'type': 'text'}]
+        schema_doc = {'schema_version': '1', 'types': [type_def]}
 
         diffs = diff_document(schema_doc)
-        type_defs_by_slug = {td["slug"]: td for td in schema_doc["types"]}
+        type_defs_by_slug = {td['slug']: td for td in schema_doc['types']}
 
         with self.assertRaises(DestructiveChangesError):
             apply_diffs(diffs, type_defs_by_slug)
@@ -945,6 +1030,7 @@ class ExecutorApplyDiffsTestCase(_ExecutorTestBase):
 # ---------------------------------------------------------------------------
 # Polymorphic field ADD and ALTER
 # ---------------------------------------------------------------------------
+
 
 class ExecutorPolymorphicFieldTestCase(_ExecutorTestBase):
     """Executor correctly handles polymorphic object/multiobject field ADD and ALTER."""
@@ -958,27 +1044,28 @@ class ExecutorPolymorphicFieldTestCase(_ExecutorTestBase):
     def test_add_polymorphic_object_field(self):
         cot = self.create_custom_object_type(name='polyadd', slug='poly-add')
         schema_doc = {
-            "schema_version": "1",
-            "types": [{
-                "name": "polyadd",
-                "slug": "poly-add",
-                "fields": [{
-                    "id": 1,
-                    "name": "poly_obj",
-                    "type": "object",
-                    "is_polymorphic": True,
-                    "related_object_types": ["dcim/device", "dcim/site"],
-                }],
-            }],
+            'schema_version': '1',
+            'types': [
+                {
+                    'name': 'polyadd',
+                    'slug': 'poly-add',
+                    'fields': [
+                        {
+                            'id': 1,
+                            'name': 'poly_obj',
+                            'type': 'object',
+                            'is_polymorphic': True,
+                            'related_object_types': ['dcim/device', 'dcim/site'],
+                        }
+                    ],
+                }
+            ],
         }
         apply_document(schema_doc)
-        field = cot.fields.prefetch_related("related_object_types").get(name="poly_obj")
+        field = cot.fields.prefetch_related('related_object_types').get(name='poly_obj')
         self.assertTrue(field.is_polymorphic)
-        encoded = sorted(
-            f"{rot.app_label}/{rot.model}"
-            for rot in field.related_object_types.all()
-        )
-        self.assertEqual(encoded, ["dcim/device", "dcim/site"])
+        encoded = sorted(f'{rot.app_label}/{rot.model}' for rot in field.related_object_types.all())
+        self.assertEqual(encoded, ['dcim/device', 'dcim/site'])
 
     def test_add_polymorphic_field_with_related_name(self):
         from dcim.models import Device, Site
@@ -986,23 +1073,38 @@ class ExecutorPolymorphicFieldTestCase(_ExecutorTestBase):
         cot = self.create_custom_object_type(name='polynamed', slug='poly-named')
 
         def document(related_name):
-            return {"schema_version": "1", "types": [{"name": "polynamed", "slug": "poly-named", "fields": [{
-                "id": 1, "name": "poly_obj", "type": "object", "is_polymorphic": True,
-                "related_object_types": ["dcim/device", "dcim/site"], "related_name": related_name,
-            }]}]}
+            return {
+                'schema_version': '1',
+                'types': [
+                    {
+                        'name': 'polynamed',
+                        'slug': 'poly-named',
+                        'fields': [
+                            {
+                                'id': 1,
+                                'name': 'poly_obj',
+                                'type': 'object',
+                                'is_polymorphic': True,
+                                'related_object_types': ['dcim/device', 'dcim/site'],
+                                'related_name': related_name,
+                            }
+                        ],
+                    }
+                ],
+            }
 
         # Device already has an "interfaces" attribute; the field isn't created.
-        with self.assertRaisesRegex(InvalidRelatedNameError, "conflicts with an existing attribute"):
-            apply_document(document("interfaces"))
+        with self.assertRaisesRegex(InvalidRelatedNameError, 'conflicts with an existing attribute'):
+            apply_document(document('interfaces'))
         self.assertFalse(cot.fields.exists())
-        self.assertEqual(type(Device.interfaces).__name__, "ReverseManyToOneDescriptor")
+        self.assertEqual(type(Device.interfaces).__name__, 'ReverseManyToOneDescriptor')
         # Nor is the reverse relation added to the other target, which a rollback wouldn't undo.
-        self.assertFalse(hasattr(Site, "interfaces"))
+        self.assertFalse(hasattr(Site, 'interfaces'))
 
-        apply_document(document("poly_widgets"))
-        self.assertEqual(cot.fields.get(name="poly_obj").related_name, "poly_widgets")
-        self.assertTrue(hasattr(Device, "poly_widgets"))
-        self.assertTrue(hasattr(Site, "poly_widgets"))
+        apply_document(document('poly_widgets'))
+        self.assertEqual(cot.fields.get(name='poly_obj').related_name, 'poly_widgets')
+        self.assertTrue(hasattr(Device, 'poly_widgets'))
+        self.assertTrue(hasattr(Site, 'poly_widgets'))
 
     def test_alter_polymorphic_types_with_taken_related_name(self):
         from ipam.models import Prefix
@@ -1010,58 +1112,55 @@ class ExecutorPolymorphicFieldTestCase(_ExecutorTestBase):
         cot = self.create_custom_object_type(name='polytaken', slug='poly-taken')
         field = self.create_polymorphic_field(cot, [self.site_ot], name='poly_obj', related_name='interfaces')
         type_def = export_cot(cot)
-        type_def["fields"][-1]["related_object_types"] = ["dcim/device", "ipam/prefix"]
+        type_def['fields'][-1]['related_object_types'] = ['dcim/device', 'ipam/prefix']
 
         # Device already has an "interfaces" attribute; the types aren't changed.
-        with self.assertRaisesRegex(InvalidRelatedNameError, "conflicts with an existing attribute"):
-            apply_document({"schema_version": "1", "types": [type_def]})
+        with self.assertRaisesRegex(InvalidRelatedNameError, 'conflicts with an existing attribute'):
+            apply_document({'schema_version': '1', 'types': [type_def]})
         self.assertEqual(list(field.related_object_types.all()), [self.site_ot])
-        self.assertFalse(hasattr(Prefix, "interfaces"))
+        self.assertFalse(hasattr(Prefix, 'interfaces'))
 
     def test_add_polymorphic_multiobject_field(self):
         cot = self.create_custom_object_type(name='polyadd2', slug='poly-add-2')
         schema_doc = {
-            "schema_version": "1",
-            "types": [{
-                "name": "polyadd2",
-                "slug": "poly-add-2",
-                "fields": [{
-                    "id": 1,
-                    "name": "poly_multi",
-                    "type": "multiobject",
-                    "is_polymorphic": True,
-                    "related_object_types": ["dcim/device", "dcim/site"],
-                }],
-            }],
+            'schema_version': '1',
+            'types': [
+                {
+                    'name': 'polyadd2',
+                    'slug': 'poly-add-2',
+                    'fields': [
+                        {
+                            'id': 1,
+                            'name': 'poly_multi',
+                            'type': 'multiobject',
+                            'is_polymorphic': True,
+                            'related_object_types': ['dcim/device', 'dcim/site'],
+                        }
+                    ],
+                }
+            ],
         }
         apply_document(schema_doc)
-        field = cot.fields.prefetch_related("related_object_types").get(name="poly_multi")
+        field = cot.fields.prefetch_related('related_object_types').get(name='poly_multi')
         self.assertTrue(field.is_polymorphic)
         self.assertEqual(field.related_object_types.count(), 2)
 
     def test_alter_polymorphic_related_object_types(self):
         cot = self.create_custom_object_type(name='polyalter', slug='poly-alter')
-        self.create_polymorphic_field(
-            cot, [self.device_ot, self.site_ot], name='poly_f', type='object'
-        )
+        self.create_polymorphic_field(cot, [self.device_ot, self.site_ot], name='poly_f', type='object')
         type_def = export_cot(cot)
-        for f in type_def.get("fields", []):
-            if f["name"] == "poly_f":
-                f["related_object_types"] = ["dcim/device", "ipam/prefix"]
-        apply_document({"schema_version": "1", "types": [type_def]})
-        field = cot.fields.prefetch_related("related_object_types").get(name="poly_f")
-        encoded = sorted(
-            f"{rot.app_label}/{rot.model}"
-            for rot in field.related_object_types.all()
-        )
-        self.assertEqual(encoded, ["dcim/device", "ipam/prefix"])
+        for f in type_def.get('fields', []):
+            if f['name'] == 'poly_f':
+                f['related_object_types'] = ['dcim/device', 'ipam/prefix']
+        apply_document({'schema_version': '1', 'types': [type_def]})
+        field = cot.fields.prefetch_related('related_object_types').get(name='poly_f')
+        encoded = sorted(f'{rot.app_label}/{rot.model}' for rot in field.related_object_types.all())
+        self.assertEqual(encoded, ['dcim/device', 'ipam/prefix'])
 
     def test_round_trip_polymorphic_field_no_changes(self):
         cot = self.create_custom_object_type(name='polyrt', slug='poly-rt')
-        self.create_polymorphic_field(
-            cot, [self.device_ot, self.site_ot], name='poly_rt', type='object'
-        )
-        schema_doc = {"schema_version": "1", "types": [export_cot(cot)]}
+        self.create_polymorphic_field(cot, [self.device_ot, self.site_ot], name='poly_rt', type='object')
+        schema_doc = {'schema_version': '1', 'types': [export_cot(cot)]}
         diffs = apply_document(schema_doc)
         self.assertFalse(diffs[0].has_changes)
 
@@ -1070,34 +1169,37 @@ class ExecutorPolymorphicFieldTestCase(_ExecutorTestBase):
         _build_dep_order must respect polymorphic references via related_object_types.
         """
         schema_doc = {
-            "schema_version": "1",
-            "types": [
+            'schema_version': '1',
+            'types': [
                 {
-                    "name": "cot_poly_a",
-                    "slug": "cot-poly-a",
-                    "fields": [{
-                        "id": 1,
-                        "name": "multi_ref",
-                        "type": "multiobject",
-                        "is_polymorphic": True,
-                        "related_object_types": ["custom-objects/cot-poly-b", "dcim/device"],
-                    }],
+                    'name': 'cot_poly_a',
+                    'slug': 'cot-poly-a',
+                    'fields': [
+                        {
+                            'id': 1,
+                            'name': 'multi_ref',
+                            'type': 'multiobject',
+                            'is_polymorphic': True,
+                            'related_object_types': ['custom-objects/cot-poly-b', 'dcim/device'],
+                        }
+                    ],
                 },
                 {
-                    "name": "cot_poly_b",
-                    "slug": "cot-poly-b",
-                    "fields": [{"id": 1, "name": "title", "type": "text"}],
+                    'name': 'cot_poly_b',
+                    'slug': 'cot-poly-b',
+                    'fields': [{'id': 1, 'name': 'title', 'type': 'text'}],
                 },
             ],
         }
         apply_document(schema_doc)
-        self.assertTrue(CustomObjectType.objects.filter(slug="cot-poly-a").exists())
-        self.assertTrue(CustomObjectType.objects.filter(slug="cot-poly-b").exists())
+        self.assertTrue(CustomObjectType.objects.filter(slug='cot-poly-a').exists())
+        self.assertTrue(CustomObjectType.objects.filter(slug='cot-poly-b').exists())
 
 
 # ---------------------------------------------------------------------------
 # Constraints
 # ---------------------------------------------------------------------------
+
 
 class ExecutorConstraintTestCase(_ExecutorTestBase):
     """Constraints are exported, diffed by name, and applied around field changes."""
@@ -1110,28 +1212,35 @@ class ExecutorConstraintTestCase(_ExecutorTestBase):
 
     def _document(self, **changes):
         type_def = {**export_cot(self.cot), **changes}
-        return {"schema_version": "1", "types": [type_def]}
+        return {'schema_version': '1', 'types': [type_def]}
 
     def _constraint_def(self, **kwargs):
-        return {"name": "vendor_serial", "fields": [self.vendor.schema_id, self.serial.schema_id], **kwargs}
+        return {'name': 'vendor_serial', 'fields': [self.vendor.schema_id, self.serial.schema_id], **kwargs}
 
     def test_new_cot_with_constraint(self):
-        apply_document({"schema_version": "1", "types": [{
-            "name": "fresh",
-            "slug": "fresh",
-            "fields": [{"id": 1, "name": "a", "type": "text"}, {"id": 2, "name": "b", "type": "text"}],
-            "constraints": [{"name": "a_b", "fields": [1, 2], "case_insensitive": True}],
-        }]})
-        constraint = CustomObjectTypeConstraint.objects.get(custom_object_type__slug="fresh")
+        apply_document(
+            {
+                'schema_version': '1',
+                'types': [
+                    {
+                        'name': 'fresh',
+                        'slug': 'fresh',
+                        'fields': [{'id': 1, 'name': 'a', 'type': 'text'}, {'id': 2, 'name': 'b', 'type': 'text'}],
+                        'constraints': [{'name': 'a_b', 'fields': [1, 2], 'case_insensitive': True}],
+                    }
+                ],
+            }
+        )
+        constraint = CustomObjectTypeConstraint.objects.get(custom_object_type__slug='fresh')
         self.assertEqual(constraint.field_schema_ids, [1, 2])
         self.assertTrue(constraint.case_insensitive)
 
     def test_add_export_and_round_trip(self):
-        apply_document(self._document(constraints=[self._constraint_def(description="Serials")]))
+        apply_document(self._document(constraints=[self._constraint_def(description='Serials')]))
         self.cot.refresh_from_db()
         self.assertEqual(
-            export_cot(self.cot)["constraints"],
-            [{**self._constraint_def(), "description": "Serials"}],
+            export_cot(self.cot)['constraints'],
+            [{**self._constraint_def(), 'description': 'Serials'}],
         )
         # Re-applying the export changes nothing.
         diff = diff_document(self._document())[0]
@@ -1141,12 +1250,12 @@ class ExecutorConstraintTestCase(_ExecutorTestBase):
         apply_document(self._document(constraints=[self._constraint_def()]))
         diff = apply_document(self._document(constraints=[self._constraint_def(nulls_distinct=False)]))[0]
         self.assertEqual(diff.constraint_changes[0].op, FieldOp.ALTER)
-        self.assertEqual(diff.constraint_changes[0].changed_attrs, {"nulls_distinct": (True, False)})
+        self.assertEqual(diff.constraint_changes[0].changed_attrs, {'nulls_distinct': (True, False)})
         self.assertFalse(CustomObjectTypeConstraint.objects.get().nulls_distinct)
 
     @property
     def _serial_only(self):
-        return {"name": "vendor_serial", "fields": [self.serial.schema_id], "case_insensitive": True}
+        return {'name': 'vendor_serial', 'fields': [self.serial.schema_id], 'case_insensitive': True}
 
     def test_alter_keeps_the_primary_key(self):
         """An altered constraint is re-created after the field changes, with the primary key it had."""
@@ -1160,56 +1269,59 @@ class ExecutorConstraintTestCase(_ExecutorTestBase):
     def test_alter_checks_existing_objects(self):
         apply_document(self._document(constraints=[self._constraint_def()]))
         model = self.cot.get_model()
-        model.objects.create(vendor="acme", serial="1")
-        model.objects.create(vendor="other", serial="1")
-        with self.assertRaisesMessage(InvalidConstraintError, "already have duplicate values"):
+        model.objects.create(vendor='acme', serial='1')
+        model.objects.create(vendor='other', serial='1')
+        with self.assertRaisesMessage(InvalidConstraintError, 'already have duplicate values'):
             apply_document(self._document(constraints=[self._serial_only]))
         self.assertEqual(
-            CustomObjectTypeConstraint.objects.get().field_schema_ids, [self.vendor.schema_id, self.serial.schema_id],
+            CustomObjectTypeConstraint.objects.get().field_schema_ids,
+            [self.vendor.schema_id, self.serial.schema_id],
         )
 
     def test_condition(self):
-        condition = [{"field": self.vendor.schema_id, "lookup": "isnull", "value": False}]
-        constraint_def = {"name": "serial_if_vendor", "fields": [self.serial.schema_id], "condition": condition}
+        condition = [{'field': self.vendor.schema_id, 'lookup': 'isnull', 'value': False}]
+        constraint_def = {'name': 'serial_if_vendor', 'fields': [self.serial.schema_id], 'condition': condition}
         apply_document(self._document(constraints=[constraint_def]))
         self.assertEqual(CustomObjectTypeConstraint.objects.get().condition, condition)
         self.cot.refresh_from_db()
-        self.assertEqual(export_cot(self.cot)["constraints"], [constraint_def])
+        self.assertEqual(export_cot(self.cot)['constraints'], [constraint_def])
         self.assertEqual(diff_document(self._document())[0].constraint_changes, [])
 
-        changed = [{**condition[0], "value": True}]
-        diff = apply_document(self._document(constraints=[{**constraint_def, "condition": changed}]))[0]
-        self.assertEqual(diff.constraint_changes[0].changed_attrs, {"condition": (condition, changed)})
+        changed = [{**condition[0], 'value': True}]
+        diff = apply_document(self._document(constraints=[{**constraint_def, 'condition': changed}]))[0]
+        self.assertEqual(diff.constraint_changes[0].changed_attrs, {'condition': (condition, changed)})
         self.assertEqual(CustomObjectTypeConstraint.objects.get().condition, changed)
 
     def test_check(self):
-        rule = [{"field": self.serial.schema_id, "lookup": "n", "value": {"field": self.vendor.schema_id}}]
-        constraint_def = {"name": "serial_not_vendor", "type": "check", "rule": rule}
+        rule = [{'field': self.serial.schema_id, 'lookup': 'n', 'value': {'field': self.vendor.schema_id}}]
+        constraint_def = {'name': 'serial_not_vendor', 'type': 'check', 'rule': rule}
         apply_document(self._document(constraints=[constraint_def]))
         constraint = CustomObjectTypeConstraint.objects.get()
-        self.assertEqual((constraint.type, constraint.field_schema_ids, constraint.rule), ("check", [], rule))
+        self.assertEqual((constraint.type, constraint.field_schema_ids, constraint.rule), ('check', [], rule))
         self.cot.refresh_from_db()
-        self.assertEqual(export_cot(self.cot)["constraints"], [constraint_def])
+        self.assertEqual(export_cot(self.cot)['constraints'], [constraint_def])
         self.assertEqual(diff_document(self._document())[0].constraint_changes, [])
 
-        changed = {**constraint_def, "error_message": "Serial can't match vendor."}
+        changed = {**constraint_def, 'error_message': "Serial can't match vendor."}
         diff = apply_document(self._document(constraints=[changed]))[0]
         self.assertEqual(
-            diff.constraint_changes[0].changed_attrs, {"error_message": ("", "Serial can't match vendor.")}
+            diff.constraint_changes[0].changed_attrs, {'error_message': ('', "Serial can't match vendor.")}
         )
         self.assertEqual(CustomObjectTypeConstraint.objects.get().error_message, "Serial can't match vendor.")
 
     def test_mac_address_values_compare_normalized(self):
         mac = self.create_custom_object_type_field(self.cot, name='mac', type='mac_address')
-        condition = [{"field": mac.schema_id, "lookup": "exact", "value": "00-1a-2b-3c-4d-5e"}]
-        rule = [{"field": mac.schema_id, "lookup": "in", "value": ["001a.2b3c.4d5e", "aa:bb:cc:dd:ee:ff"]}]
-        document = self._document(constraints=[
-            self._constraint_def(condition=condition),
-            {"name": "known_mac", "type": "check", "rule": rule},
-        ])
+        condition = [{'field': mac.schema_id, 'lookup': 'exact', 'value': '00-1a-2b-3c-4d-5e'}]
+        rule = [{'field': mac.schema_id, 'lookup': 'in', 'value': ['001a.2b3c.4d5e', 'aa:bb:cc:dd:ee:ff']}]
+        document = self._document(
+            constraints=[
+                self._constraint_def(condition=condition),
+                {'name': 'known_mac', 'type': 'check', 'rule': rule},
+            ]
+        )
         apply_document(copy.deepcopy(document))
-        stored = CustomObjectTypeConstraint.objects.get(name="known_mac").rule
-        self.assertEqual(stored[0]["value"], ["00:1A:2B:3C:4D:5E", "AA:BB:CC:DD:EE:FF"])
+        stored = CustomObjectTypeConstraint.objects.get(name='known_mac').rule
+        self.assertEqual(stored[0]['value'], ['00:1A:2B:3C:4D:5E', 'AA:BB:CC:DD:EE:FF'])
         # The same document, spelling the addresses differently, is no change.
         self.assertEqual(diff_document(document)[0].constraint_changes, [])
 
@@ -1218,46 +1330,46 @@ class ExecutorConstraintTestCase(_ExecutorTestBase):
 
         diff = apply_document(self._document(constraints=[]))[0]
         self.assertEqual(diff.constraint_changes, [])
-        self.assertTrue(any("vendor_serial" in w for w in diff.warnings))
+        self.assertTrue(any('vendor_serial' in w for w in diff.warnings))
         self.assertTrue(CustomObjectTypeConstraint.objects.exists())
 
-        diff = apply_document(self._document(constraints=[], removed_constraints=["vendor_serial"]))[0]
+        diff = apply_document(self._document(constraints=[], removed_constraints=['vendor_serial']))[0]
         self.assertEqual(diff.constraint_changes[0].op, FieldOp.REMOVE)
         self.assertFalse(diff.has_destructive_changes)
         self.assertFalse(CustomObjectTypeConstraint.objects.exists())
         self.cot.refresh_from_db()
-        self.assertEqual(export_cot(self.cot)["removed_constraints"], ["vendor_serial"])
+        self.assertEqual(export_cot(self.cot)['removed_constraints'], ['vendor_serial'])
 
     def test_constraint_on_field_added_in_same_document(self):
         doc = self._document()
-        doc["types"][0]["fields"].append({"id": 50, "name": "model", "type": "text"})
-        doc["types"][0]["constraints"] = [{"name": "vendor_model", "fields": [self.vendor.schema_id, 50]}]
+        doc['types'][0]['fields'].append({'id': 50, 'name': 'model', 'type': 'text'})
+        doc['types'][0]['constraints'] = [{'name': 'vendor_model', 'fields': [self.vendor.schema_id, 50]}]
         apply_document(doc)
         self.assertEqual(CustomObjectTypeConstraint.objects.get().field_schema_ids, [self.vendor.schema_id, 50])
 
     def test_type_change_of_constrained_field_rejected(self):
         apply_document(self._document(constraints=[self._constraint_def()]))
         doc = self._document()
-        serial = next(f for f in doc["types"][0]["fields"] if f["name"] == "serial")
-        serial["type"] = "integer"
-        with self.assertRaisesMessage(InvalidConstraintError, "vendor_serial"):
+        serial = next(f for f in doc['types'][0]['fields'] if f['name'] == 'serial')
+        serial['type'] = 'integer'
+        with self.assertRaisesMessage(InvalidConstraintError, 'vendor_serial'):
             apply_document(doc, allow_destructive=True)
         self.serial.refresh_from_db()
-        self.assertEqual(self.serial.type, "text")
+        self.assertEqual(self.serial.type, 'text')
 
         # Removing the constraint in the same document allows the change.
-        doc["types"][0].update(constraints=[], removed_constraints=["vendor_serial"])
+        doc['types'][0].update(constraints=[], removed_constraints=['vendor_serial'])
         apply_document(doc, allow_destructive=True)
         self.serial.refresh_from_db()
-        self.assertEqual(self.serial.type, "integer")
+        self.assertEqual(self.serial.type, 'integer')
 
     def test_invalid_constraint_rolls_back(self):
         model = self.cot.get_model()
-        model.objects.create(vendor="acme", serial="1")
-        model.objects.create(vendor="acme", serial="1")
-        doc = self._document(description="changed", constraints=[self._constraint_def()])
+        model.objects.create(vendor='acme', serial='1')
+        model.objects.create(vendor='acme', serial='1')
+        doc = self._document(description='changed', constraints=[self._constraint_def()])
         with self.assertRaises(InvalidConstraintError):
             apply_document(doc)
         self.assertFalse(CustomObjectTypeConstraint.objects.exists())
         self.cot.refresh_from_db()
-        self.assertEqual(self.cot.description, "A test custom object type")
+        self.assertEqual(self.cot.description, 'A test custom object type')

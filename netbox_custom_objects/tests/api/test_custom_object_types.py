@@ -5,15 +5,15 @@ Tests for the Custom Object Type REST API endpoint.
 from django.db import connection
 from django.test import TestCase
 from django.urls import reverse
-
-from utilities.testing import create_test_user
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
-from ..base import CustomObjectsTestCase, create_token
 from core.models import ObjectType
+from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from users.models import ObjectPermission
+from utilities.testing import create_test_user
+
+from ..base import CustomObjectsTestCase, create_token
 
 
 class CustomObjectTypeAPITestCase(CustomObjectsTestCase, TestCase):
@@ -31,10 +31,7 @@ class CustomObjectTypeAPITestCase(CustomObjectsTestCase, TestCase):
         self.header = {'HTTP_AUTHORIZATION': f'Token {token_key}'}
 
         # Add object-level permission
-        obj_perm = ObjectPermission(
-            name='Test permission',
-            actions=['add']
-        )
+        obj_perm = ObjectPermission(name='Test permission', actions=['add'])
         obj_perm.save()
         obj_perm.users.add(self.user)
         obj_perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
@@ -134,7 +131,9 @@ class CustomObjectTypeAPITestCase(CustomObjectsTestCase, TestCase):
         """The current value is readable via the API detail endpoint."""
         self._add_view_permission()
         cot = CustomObjectType.objects.create(
-            name='cc_detail', slug='cc-detail', config_context_enabled=True,
+            name='cc_detail',
+            slug='cc-detail',
+            config_context_enabled=True,
         )
         url = reverse(
             'plugins-api:netbox_custom_objects-api:customobjecttype-detail',
@@ -150,7 +149,9 @@ class CustomObjectTypeAPITestCase(CustomObjectsTestCase, TestCase):
         """Changing config_context_enabled via PATCH is rejected (create-only)."""
         self._add_change_permission()
         cot = CustomObjectType.objects.create(
-            name='cc_immut', slug='cc-immut', config_context_enabled=False,
+            name='cc_immut',
+            slug='cc-immut',
+            config_context_enabled=False,
         )
         url = reverse(
             'plugins-api:netbox_custom_objects-api:customobjecttype-detail',
@@ -159,7 +160,10 @@ class CustomObjectTypeAPITestCase(CustomObjectsTestCase, TestCase):
         # APIClient honours format='json' on PATCH (the plain Django client sends
         # octet-stream → 415).
         response = APIClient().patch(
-            url, {'config_context_enabled': True}, format='json', **self.header,
+            url,
+            {'config_context_enabled': True},
+            format='json',
+            **self.header,
         )
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
@@ -373,6 +377,7 @@ class CustomObjectTypeAndFieldFilteringBulkAPITestCase(CustomObjectsTestCase, Te
 # PEP 440 version string validation — API layer
 # ---------------------------------------------------------------------------
 
+
 class Pep440APIValidationTestCase(CustomObjectsTestCase, TestCase):
     """
     Verify that ``validate_pep440`` surfaces as a 400 at the API layer for
@@ -397,7 +402,8 @@ class Pep440APIValidationTestCase(CustomObjectsTestCase, TestCase):
         add_cot_perm.object_types.add(ObjectType.objects.get_for_model(CustomObjectType))
 
         # Permission to change CustomObjectTypeField records.
-        from netbox_custom_objects.models import CustomObjectTypeField  # noqa: PLC0415
+        from netbox_custom_objects.models import CustomObjectTypeField
+
         change_field_perm = ObjectPermission(name='pep440_change_field', actions=['add', 'change'])
         change_field_perm.save()
         change_field_perm.users.add(self.user)

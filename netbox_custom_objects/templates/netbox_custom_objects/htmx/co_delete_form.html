@@ -1,12 +1,9 @@
 {% load form_helpers %}
 {% load helpers %}
 {% load i18n %}
-
 <form action="{{ form_url }}" method="post">
   {% csrf_token %}
-  {% for field in form.hidden_fields %}
-    {{ field }}
-  {% endfor %}
+  {% for field in form.hidden_fields %}{{ field }}{% endfor %}
   <div class="modal-header">
     <h5 class="modal-title">{% trans "Confirm Deletion" %}</h5>
   </div>
@@ -17,14 +14,17 @@
       {% endblocktrans %}
     </p>
     {% if dependent_objects %}
-      <p>
-        {% trans "The following objects will be deleted as a result of this action." %}
-      </p>
+      <p>{% trans "The following objects will be deleted as a result of this action." %}</p>
       <div class="accordion mb-3" id="deleteAccordion">
         {% for model, instances in dependent_objects.items %}
           <div class="accordion-item">
             <h2 class="accordion-header h4" id="deleteheading{{ forloop.counter }}">
-              <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapse{{ forloop.counter }}" aria-expanded="false" aria-controls="collapse{{ forloop.counter }}">
+              <button class="accordion-button collapsed"
+                      type="button"
+                      data-bs-toggle="collapse"
+                      data-bs-target="#collapse{{ forloop.counter }}"
+                      aria-expanded="false"
+                      aria-controls="collapse{{ forloop.counter }}">
                 {% with object_count=instances|length %}
                   {{ object_count }}
                   {% if object_count == 1 %}
@@ -35,12 +35,16 @@
                 {% endwith %}
               </button>
             </h2>
-            <div id="collapse{{ forloop.counter }}" class="accordion-collapse collapse" aria-labelledby="deleteheading{{ forloop.counter }}" data-bs-parent="#deleteAccordion">
+            <div id="collapse{{ forloop.counter }}"
+                 class="accordion-collapse collapse"
+                 aria-labelledby="deleteheading{{ forloop.counter }}"
+                 data-bs-parent="#deleteAccordion">
               <div class="accordion-body p-0">
                 <div class="list-group list-group-flush">
                   {% for instance in instances %}
                     {% with url=instance.get_absolute_url %}
-                      <a {% if url %}href="{{ url }}" {% endif %}class="list-group-item list-group-item-action">{{ instance }}</a>
+                      <a {% if url %}href="{{ url }}"{% endif %}
+                         class="list-group-item list-group-item-action">{{ instance }}</a>
                     {% endwith %}
                   {% endfor %}
                 </div>
@@ -60,7 +64,9 @@
     {% if return_url %}
       <a href="{{ return_url }}" class="btn btn-outline-secondary">{% trans "Cancel" %}</a>
     {% else %}
-      <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">{% trans "Cancel" %}</button>
+      <button type="button"
+              class="btn btn-outline-secondary"
+              data-bs-dismiss="modal">{% trans "Cancel" %}</button>
     {% endif %}
     <button type="submit" class="btn btn-danger">{% trans "Delete" %}</button>
   </div>

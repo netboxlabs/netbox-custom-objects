@@ -1,7 +1,6 @@
 {% load form_helpers %}
 {% load i18n %}
 {% load custom_object_utils %}
-
 {# Render all visible form fields with poly grouping headings. #}
 {# Used by both the bulk edit page and the HTMX partial reload. #}
 {% for field in form.visible_fields %}
@@ -41,7 +40,11 @@
       <div class="row mb-3">
         <div class="col offset-3">
           <div class="form-check my-1">
-            <input type="checkbox" class="form-check-input" name="_nullify" value="{{ group_info.2 }}" id="nullify_{{ group_info.2 }}">
+            <input type="checkbox"
+                   class="form-check-input"
+                   name="_nullify"
+                   value="{{ group_info.2 }}"
+                   id="nullify_{{ group_info.2 }}">
             <label for="nullify_{{ group_info.2 }}" class="form-check-label">{% trans "Set Null" %}</label>
           </div>
         </div>
@@ -55,7 +58,6 @@
     {% render_field field %}
   {% endif %}
 {% endfor %}
-
 {% if form.owner %}
   <div class="field-group mb-5">
     <div class="row">

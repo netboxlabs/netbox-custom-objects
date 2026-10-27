@@ -1,6 +1,7 @@
 """
 The GraphQL schema and endpoint follow the active branch.
 """
+
 import json
 import unittest
 from unittest import mock
@@ -19,16 +20,17 @@ from netbox_custom_objects.tests.base import (
 
 from .base import (
     HAS_BRANCHING,
+    BranchingTestBase,
     User,
     _make_request,
-    _TestBase,
     _provision_branch,
-    BranchingTestBase,
+    _TestBase,
 )
 
 if HAS_BRANCHING:
-    from netbox.context_managers import event_tracking
     from netbox_branching.utilities import activate_branch
+
+    from netbox.context_managers import event_tracking
 
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
@@ -44,6 +46,7 @@ class GraphQLBranchIsolationTestCase(BranchingTestBase, _TestBase):
     def setUp(self):
         super().setUp()
         from netbox_custom_objects.graphql import live as live_module
+
         self.live = live_module
         live_module.reset_cache()
         self.addCleanup(live_module.reset_cache)
@@ -52,8 +55,7 @@ class GraphQLBranchIsolationTestCase(BranchingTestBase, _TestBase):
         # The startup guard returns True during the test run; patch it off so the
         # live schema machinery runs exactly as it does in production.
         patcher = mock.patch(
-            'netbox_custom_objects.CustomObjectsPluginConfig.'
-            'should_skip_dynamic_model_creation',
+            'netbox_custom_objects.CustomObjectsPluginConfig.should_skip_dynamic_model_creation',
             return_value=False,
         )
         patcher.start()
@@ -68,12 +70,14 @@ class GraphQLBranchIsolationTestCase(BranchingTestBase, _TestBase):
         branch = _provision_branch('GraphQL Sig Branch', user=self.user)
         branch_request = _make_request(self.user)
         with activate_branch(branch), event_tracking(branch_request):
-            cot = CustomObjectType.objects.create(
-                name='branch_only_sig', slug='branch-only-sig'
-            )
+            cot = CustomObjectType.objects.create(name='branch_only_sig', slug='branch-only-sig')
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='name', label='Name', type='text',
-                primary=True, required=True,
+                custom_object_type=cot,
+                name='name',
+                label='Name',
+                type='text',
+                primary=True,
+                required=True,
             )
             self.assertNotEqual(main_sig, self.live.schema_signature())
 
@@ -91,22 +95,20 @@ class GraphQLBranchIsolationTestCase(BranchingTestBase, _TestBase):
         branch = _provision_branch('GraphQL Branch Schema', user=self.user)
         branch_request = _make_request(self.user)
         with activate_branch(branch), event_tracking(branch_request):
-            cot = CustomObjectType.objects.create(
-                name='branch only', slug='branch-only'
-            )
+            cot = CustomObjectType.objects.create(name='branch only', slug='branch-only')
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='name', label='Name', type='text',
-                primary=True, required=True,
+                custom_object_type=cot,
+                name='name',
+                label='Name',
+                type='text',
+                primary=True,
+                required=True,
             )
             # The branch's own schema gains the branch-only type...
-            self.assertIn(
-                'custom_objects_branch_only', str(self.live.get_live_schema(self.superuser))
-            )
+            self.assertIn('custom_objects_branch_only', str(self.live.get_live_schema(self.superuser)))
 
         # ...but main never does (the branch isn't merged).
-        self.assertNotIn(
-            'custom_objects_branch_only', str(self.live.get_live_schema(self.superuser))
-        )
+        self.assertNotIn('custom_objects_branch_only', str(self.live.get_live_schema(self.superuser)))
 
     def test_branch_deletion_evicts_cached_schema(self):
         # Building a branch's schema caches it under the branch pk; deleting the
@@ -116,8 +118,12 @@ class GraphQLBranchIsolationTestCase(BranchingTestBase, _TestBase):
         with activate_branch(branch), event_tracking(branch_request):
             cot = CustomObjectType.objects.create(name='evict me', slug='evict-me')
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name='name', label='Name', type='text',
-                primary=True, required=True,
+                custom_object_type=cot,
+                name='name',
+                label='Name',
+                type='text',
+                primary=True,
+                required=True,
             )
             self.assertIsNotNone(self.live.get_live_schema(self.superuser))
 
@@ -147,14 +153,14 @@ class GraphQLBranchEndpointTestCase(BranchingTestBase, _TestBase):
     def setUp(self):
         super().setUp()
         from netbox_custom_objects.graphql import live as live_module
+
         self.live = live_module
         live_module.reset_cache()
         self.addCleanup(live_module.reset_cache)
         # The startup guard returns True during the test run; patch it off so the
         # live schema machinery runs exactly as it does in production.
         patcher = mock.patch(
-            'netbox_custom_objects.CustomObjectsPluginConfig.'
-            'should_skip_dynamic_model_creation',
+            'netbox_custom_objects.CustomObjectsPluginConfig.should_skip_dynamic_model_creation',
             return_value=False,
         )
         patcher.start()
@@ -180,9 +186,7 @@ class GraphQLBranchEndpointTestCase(BranchingTestBase, _TestBase):
                 # The ?_branch= query param the UI uses — another branch source
                 # netbox-branching honours for any request.
                 url = f'{self.url}?_branch={branch.schema_id}'
-        response = self.client.post(
-            url, data={'query': query}, format='json', **headers
-        )
+        response = self.client.post(url, data={'query': query}, format='json', **headers)
         return json.loads(response.content)
 
     def _data(self, query, branch=None, via='header'):
@@ -199,8 +203,12 @@ class GraphQLBranchEndpointTestCase(BranchingTestBase, _TestBase):
         # --- main: COT 'server' (field 'name') with one instance ---
         server = CustomObjectType.objects.create(name='server', slug='server')
         CustomObjectTypeField.objects.create(
-            custom_object_type=server, name='name', label='Name', type='text',
-            primary=True, required=True,
+            custom_object_type=server,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
+            required=True,
         )
         server.get_model().objects.create(name='main-server')
 
@@ -211,14 +219,20 @@ class GraphQLBranchEndpointTestCase(BranchingTestBase, _TestBase):
         with activate_branch(branch), event_tracking(branch_request):
             widget = CustomObjectType.objects.create(name='widget', slug='widget')
             CustomObjectTypeField.objects.create(
-                custom_object_type=widget, name='name', label='Name', type='text',
-                primary=True, required=True,
+                custom_object_type=widget,
+                name='name',
+                label='Name',
+                type='text',
+                primary=True,
+                required=True,
             )
             widget.get_model().objects.create(name='branch-widget')
 
             server_in_branch = CustomObjectType.objects.get(pk=server.pk)
             CustomObjectTypeField.objects.create(
-                custom_object_type=server_in_branch, name='note', label='Note',
+                custom_object_type=server_in_branch,
+                name='note',
+                label='Note',
                 type='text',
             )
             server_in_branch.get_model().objects.create(name='branch-server', note='hi')
@@ -228,7 +242,8 @@ class GraphQLBranchEndpointTestCase(BranchingTestBase, _TestBase):
         # --- MAIN (no header): only main's schema and data ---
         main = self._data('{ custom_objects_server_list { name } }')
         self.assertEqual(
-            [r['name'] for r in main['custom_objects_server_list']], ['main-server'],
+            [r['name'] for r in main['custom_objects_server_list']],
+            ['main-server'],
             'main must not see the branch-only server row',
         )
         # The branch-added 'note' field is absent from main's schema.
@@ -238,8 +253,7 @@ class GraphQLBranchEndpointTestCase(BranchingTestBase, _TestBase):
 
         # --- BRANCH (header): branch schema (note + widget) and branch data ---
         data = self._data(
-            '{ custom_objects_server_list { name note } '
-            'custom_objects_widget_list { name } }',
+            '{ custom_objects_server_list { name note } custom_objects_widget_list { name } }',
             branch=branch,
         )
         servers = {r['name']: r['note'] for r in data['custom_objects_server_list']}
@@ -248,7 +262,8 @@ class GraphQLBranchEndpointTestCase(BranchingTestBase, _TestBase):
         self.assertIn('main-server', servers)
         self.assertEqual(servers.get('branch-server'), 'hi')
         self.assertEqual(
-            [r['name'] for r in data['custom_objects_widget_list']], ['branch-widget'],
+            [r['name'] for r in data['custom_objects_widget_list']],
+            ['branch-widget'],
         )
 
         # --- BRANCH via ?_branch= query param (no header): the UI's branch source
@@ -256,14 +271,18 @@ class GraphQLBranchEndpointTestCase(BranchingTestBase, _TestBase):
         # not just the header — if it didn't, this would fall back to main and reject
         # the branch-only 'widget' field. ---
         via_param = self._data(
-            '{ custom_objects_widget_list { name } }', branch=branch, via='query',
+            '{ custom_objects_widget_list { name } }',
+            branch=branch,
+            via='query',
         )
         self.assertEqual(
-            [r['name'] for r in via_param['custom_objects_widget_list']], ['branch-widget'],
+            [r['name'] for r in via_param['custom_objects_widget_list']],
+            ['branch-widget'],
         )
 
         # --- MAIN again: still unchanged by the unmerged branch ---
         main_again = self._data('{ custom_objects_server_list { name } }')
         self.assertEqual(
-            [r['name'] for r in main_again['custom_objects_server_list']], ['main-server'],
+            [r['name'] for r in main_again['custom_objects_server_list']],
+            ['main-server'],
         )

@@ -1,25 +1,30 @@
+import contextlib
 from copy import deepcopy
-from django.urls import include, path, NoReverseMatch
+
+from django.urls import NoReverseMatch, include, path
 from rest_framework.response import Response
 from rest_framework.reverse import reverse
 from rest_framework.views import APIView
+
 from netbox.api.routers import NetBoxRouter
 from netbox_custom_objects.models import CustomObjectType
 from netbox_custom_objects.utilities import visible_custom_object_type_ids
 
 from . import views
 
-custom_object_list = views.CustomObjectViewSet.as_view({
-    "get": "list",
-    "post": "create",
-    # Matches NetBoxRouter's own bulk-operation mapping (netbox.api.routers.NetBoxRouter),
-    # since this list route is wired up manually rather than via that router.
-    "put": "bulk_update",
-    "patch": "bulk_partial_update",
-    "delete": "bulk_destroy",
-})
+custom_object_list = views.CustomObjectViewSet.as_view(
+    {
+        'get': 'list',
+        'post': 'create',
+        # Matches NetBoxRouter's own bulk-operation mapping (netbox.api.routers.NetBoxRouter),
+        # since this list route is wired up manually rather than via that router.
+        'put': 'bulk_update',
+        'patch': 'bulk_partial_update',
+        'delete': 'bulk_destroy',
+    }
+)
 custom_object_detail = views.CustomObjectViewSet.as_view(
-    {"get": "retrieve", "put": "update", "patch": "partial_update", "delete": "destroy"}
+    {'get': 'retrieve', 'put': 'update', 'patch': 'partial_update', 'delete': 'destroy'}
 )
 
 
@@ -28,8 +33,9 @@ class CustomObjectsAPIRootView(APIView):
     This is the root of the NetBox Custom Objects plugin API. Custom Object Types defined at application startup
     are listed by lowercased name; e.g. `/api/plugins/custom-objects/cat/`.
     """
+
     def get_view_name(self):
-        return "Custom Objects API Root"
+        return 'Custom Objects API Root'
 
     _ignore_model_permissions = True
     schema = None  # exclude from schema
@@ -44,13 +50,7 @@ class CustomObjectsAPIRootView(APIView):
             if namespace:
                 url_name = namespace + ':' + url_name
             try:
-                ret[key] = reverse(
-                    url_name,
-                    args=args,
-                    kwargs=kwargs,
-                    request=request,
-                    format=kwargs.get('format')
-                )
+                ret[key] = reverse(url_name, args=args, kwargs=kwargs, request=request, format=kwargs.get('format'))
             except NoReverseMatch:
                 # Don't bail out if eg. no list routes exist, only detail routes.
                 continue
@@ -59,16 +59,10 @@ class CustomObjectsAPIRootView(APIView):
         linked_url_name = 'linked-objects'
         if namespace:
             linked_url_name = namespace + ':' + linked_url_name
-        try:
+        with contextlib.suppress(NoReverseMatch):
             ret['linked-objects'] = reverse(
-                linked_url_name,
-                args=args,
-                kwargs=kwargs,
-                request=request,
-                format=kwargs.get('format')
+                linked_url_name, args=args, kwargs=kwargs, request=request, format=kwargs.get('format')
             )
-        except NoReverseMatch:
-            pass
 
         # Extra logic to populate roots for custom object type lists, listing only the
         # types whose definitions the user may see.
@@ -81,11 +75,7 @@ class CustomObjectsAPIRootView(APIView):
             if namespace:
                 url_name = namespace + ':' + url_name
             ret[cot_name] = reverse(
-                url_name,
-                args=args,
-                kwargs=local_kwargs,
-                request=request,
-                format=local_kwargs.get('format')
+                url_name, args=args, kwargs=local_kwargs, request=request, format=local_kwargs.get('format')
             )
 
         return Response(ret)
@@ -93,19 +83,19 @@ class CustomObjectsAPIRootView(APIView):
 
 router = NetBoxRouter()
 router.APIRootView = CustomObjectsAPIRootView
-router.register("custom-object-types", views.CustomObjectTypeViewSet)
-router.register("custom-object-type-fields", views.CustomObjectTypeFieldViewSet)
-router.register("custom-object-type-constraints", views.CustomObjectTypeConstraintViewSet)
+router.register('custom-object-types', views.CustomObjectTypeViewSet)
+router.register('custom-object-type-fields', views.CustomObjectTypeFieldViewSet)
+router.register('custom-object-type-constraints', views.CustomObjectTypeConstraintViewSet)
 
 urlpatterns = [
-    path("", include(router.urls)),
-    path("linked-objects/", views.LinkedObjectsView.as_view(), name="linked-objects"),
-    path("schema/preview/", views.SchemaPreviewView.as_view(), name="schema-preview"),
-    path("schema/apply/", views.SchemaApplyView.as_view(), name="schema-apply"),
-    path("<str:custom_object_type>/", custom_object_list, name="customobject-list"),
+    path('', include(router.urls)),
+    path('linked-objects/', views.LinkedObjectsView.as_view(), name='linked-objects'),
+    path('schema/preview/', views.SchemaPreviewView.as_view(), name='schema-preview'),
+    path('schema/apply/', views.SchemaApplyView.as_view(), name='schema-apply'),
+    path('<str:custom_object_type>/', custom_object_list, name='customobject-list'),
     path(
-        "<str:custom_object_type>/<int:pk>/",
+        '<str:custom_object_type>/<int:pk>/',
         custom_object_detail,
-        name="customobject-detail",
+        name='customobject-detail',
     ),
 ]

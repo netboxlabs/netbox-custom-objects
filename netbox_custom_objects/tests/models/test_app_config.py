@@ -1,6 +1,7 @@
 """
 Tests for the plugin's app config.
 """
+
 import importlib.abc
 import sys
 from unittest.mock import patch
@@ -12,9 +13,9 @@ from django.test import TestCase
 
 import netbox_custom_objects as nco
 import netbox_custom_objects.models as nco_models
-
 from netbox_custom_objects.graphql.live import _active_branch_key
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
+
 from ..base import CustomObjectsTestCase
 
 
@@ -34,16 +35,19 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
 
     def test_get_model_raises_lookup_error_when_skipping(self):
         """get_model() raises LookupError instead of querying DB when should_skip returns True."""
-        model_name = "table99996model"  # not in the app registry, so get_model() would look it up
+        model_name = 'table99996model'  # not in the app registry, so get_model() would look it up
 
-        with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=True):
-            with self.assertNumQueries(0), self.assertRaises(LookupError):
-                self.config.get_model(model_name)
+        with (
+            patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=True),
+            self.assertNumQueries(0),
+            self.assertRaises(LookupError),
+        ):
+            self.config.get_model(model_name)
 
     def test_get_model_returns_model_when_not_skipping(self):
         """get_model() successfully returns the dynamic model when migrations are up to date."""
-        cot = self.create_custom_object_type(name="MigrateTest2", slug="migrate-test-2")
-        model_name = f"table{cot.pk}model"
+        cot = self.create_custom_object_type(name='MigrateTest2', slug='migrate-test-2')
+        model_name = f'table{cot.pk}model'
 
         with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
             model = self.config.get_model(model_name)
@@ -51,7 +55,7 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
 
     def test_get_model_skips_db_with_migrate_in_argv(self):
         """get_model() raises LookupError when 'migrate' is in sys.argv (pre-migration state)."""
-        model_name = "table99995model"  # not in the app registry, so get_model() would look it up
+        model_name = 'table99995model'  # not in the app registry, so get_model() would look it up
 
         original_argv = sys.argv[:]
         try:
@@ -76,26 +80,28 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
         already in the app registry; this ensures we reach the objects.get() call
         that needs to be guarded.
         """
-        model_name = "table99998model"  # no such COT — not in the app registry
+        model_name = 'table99998model'  # no such COT — not in the app registry
 
-        with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
-            with patch.object(CustomObjectType.objects, 'get',
-                              side_effect=ProgrammingError("column does not exist")):
-                with self.assertRaises(LookupError):
-                    self.config.get_model(model_name)
+        with (
+            patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False),
+            patch.object(CustomObjectType.objects, 'get', side_effect=ProgrammingError('column does not exist')),
+            self.assertRaises(LookupError),
+        ):
+            self.config.get_model(model_name)
 
     def test_get_model_converts_operational_error_to_lookup_error(self):
         """
         get_model() must convert OperationalError (e.g. table missing entirely)
         to LookupError for the same reason as ProgrammingError above.
         """
-        model_name = "table99999model"  # no such COT — not in the app registry
+        model_name = 'table99999model'  # no such COT — not in the app registry
 
-        with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
-            with patch.object(CustomObjectType.objects, 'get',
-                              side_effect=OperationalError("no such table")):
-                with self.assertRaises(LookupError):
-                    self.config.get_model(model_name)
+        with (
+            patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False),
+            patch.object(CustomObjectType.objects, 'get', side_effect=OperationalError('no such table')),
+            self.assertRaises(LookupError),
+        ):
+            self.config.get_model(model_name)
 
     def test_ready_survives_programming_error(self):
         """
@@ -103,18 +109,20 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
         Calling ready() a second time is safe — signals are re-connected idempotently
         and the dynamic model loop is the only part that can raise here.
         """
-        with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
-            with patch.object(CustomObjectType.objects, 'all',
-                              side_effect=ProgrammingError("column does not exist")):
-                # Must not raise — bad schema should be silently skipped.
-                self.config.ready()
+        with (
+            patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False),
+            patch.object(CustomObjectType.objects, 'all', side_effect=ProgrammingError('column does not exist')),
+        ):
+            # Must not raise — bad schema should be silently skipped.
+            self.config.ready()
 
     def test_ready_survives_operational_error(self):
         """ready() must not propagate OperationalError from a missing table."""
-        with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
-            with patch.object(CustomObjectType.objects, 'all',
-                              side_effect=OperationalError("no such table")):
-                self.config.ready()
+        with (
+            patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False),
+            patch.object(CustomObjectType.objects, 'all', side_effect=OperationalError('no such table')),
+        ):
+            self.config.ready()
 
     def test_get_models_survives_programming_error(self):
         """
@@ -122,18 +130,20 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
         incomplete.  The DB-driven portion yields nothing; static models already
         in the app registry are still returned via super().get_models().
         """
-        with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
-            with patch.object(CustomObjectType.objects, 'all',
-                              side_effect=ProgrammingError("column does not exist")):
-                # Consuming the generator must not raise.
-                list(self.config.get_models())
+        with (
+            patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False),
+            patch.object(CustomObjectType.objects, 'all', side_effect=ProgrammingError('column does not exist')),
+        ):
+            # Consuming the generator must not raise.
+            list(self.config.get_models())
 
     def test_get_models_survives_operational_error(self):
         """get_models() must not propagate OperationalError from a missing table."""
-        with patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False):
-            with patch.object(CustomObjectType.objects, 'all',
-                              side_effect=OperationalError("no such table")):
-                list(self.config.get_models())
+        with (
+            patch.object(self.config.__class__, 'should_skip_dynamic_model_creation', return_value=False),
+            patch.object(CustomObjectType.objects, 'all', side_effect=OperationalError('no such table')),
+        ):
+            list(self.config.get_models())
 
     def test_should_skip_returns_true_on_programming_error(self):
         """
@@ -145,8 +155,9 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
         original_checked = nco._migrations_checked
         nco._migrations_checked = None  # force the migration-loader path
         try:
-            with patch('netbox_custom_objects.MigrationLoader',
-                       side_effect=ProgrammingError("relation does not exist")):
+            with patch(
+                'netbox_custom_objects.MigrationLoader', side_effect=ProgrammingError('relation does not exist')
+            ):
                 result = self.config.should_skip_dynamic_model_creation()
             self.assertTrue(result)
             # Must not be cached so the next call retries once the DB is ready.
@@ -162,8 +173,10 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
         original_checked = nco._migrations_checked
         nco._migrations_checked = None
         try:
-            with patch('netbox_custom_objects.MigrationLoader',
-                       side_effect=OperationalError("no such table: django_migrations")):
+            with patch(
+                'netbox_custom_objects.MigrationLoader',
+                side_effect=OperationalError('no such table: django_migrations'),
+            ):
                 result = self.config.should_skip_dynamic_model_creation()
             self.assertTrue(result)
             self.assertIsNone(nco._migrations_checked)
@@ -195,7 +208,7 @@ class _BranchingImportBlocker(importlib.abc.MetaPathFinder):
     def find_spec(self, name, path, target=None):
         if name == 'netbox_branching' or name.startswith('netbox_branching.'):
             raise AssertionError(f'{name} was imported while netbox-branching is not enabled')
-        return None
+        return
 
 
 class BranchingInstalledNotEnabledTestCase(CustomObjectsTestCase, TestCase):

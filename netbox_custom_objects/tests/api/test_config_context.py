@@ -6,16 +6,16 @@ from django.db import connection
 from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
-
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from netbox_custom_objects.models import CustomObjectType
-from ..base import CustomObjectsTestCase, create_token
 from core.models import ObjectType
 from dcim.models import Site
 from extras.models import ConfigContext, Tag
+from netbox_custom_objects.models import CustomObjectType
 from users.models import ObjectPermission
+
+from ..base import CustomObjectsTestCase, create_token
 
 
 class ConfigContextAPITestCase(CustomObjectsTestCase, TestCase):
@@ -24,10 +24,17 @@ class ConfigContextAPITestCase(CustomObjectsTestCase, TestCase):
     def setUp(self):
         super().setUp()
         self.cot = CustomObjectType.objects.create(
-            name='cc_api', slug='cc-api', config_context_enabled=True,
+            name='cc_api',
+            slug='cc-api',
+            config_context_enabled=True,
         )
         self.create_custom_object_type_field(
-            self.cot, name='name', label='Name', type='text', primary=True, required=True,
+            self.cot,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
+            required=True,
         )
         self.model = self.cot.get_model()
         token = create_token(self.user)
@@ -84,7 +91,12 @@ class ConfigContextAPITestCase(CustomObjectsTestCase, TestCase):
         """A type without config context support must not expose local_context_data."""
         cot = CustomObjectType.objects.create(name='cc_off', slug='cc-off')
         self.create_custom_object_type_field(
-            cot, name='name', label='Name', type='text', primary=True, required=True,
+            cot,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
+            required=True,
         )
         model = cot.get_model()
         obj = model.objects.create(name='x')
@@ -105,7 +117,11 @@ class ConfigContextAPITestCase(CustomObjectsTestCase, TestCase):
 
     def _add_site_field(self):
         self.create_custom_object_type_field(
-            self.cot, name='site', label='Site', type='object', related_object_type=self.get_site_object_type(),
+            self.cot,
+            name='site',
+            label='Site',
+            type='object',
+            related_object_type=self.get_site_object_type(),
         )
         self.model = self.cot.get_model()
 
@@ -136,14 +152,20 @@ class ConfigContextAPITestCase(CustomObjectsTestCase, TestCase):
         self._add_perm('change')
 
         response = self.client.patch(
-            self._detail_url(obj.pk), {'config_context': {'x': 1}}, format='json', **self.header,
+            self._detail_url(obj.pk),
+            {'config_context': {'x': 1}},
+            format='json',
+            **self.header,
         )
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['config_context'], {})
 
     def test_custom_field_named_config_context_takes_precedence(self):
         self.create_custom_object_type_field(
-            self.cot, name='config_context', label='Config context', type='text',
+            self.cot,
+            name='config_context',
+            label='Config context',
+            type='text',
         )
         model = self.cot.get_model()
         obj = model.objects.create(name='obj-1', config_context='custom value')

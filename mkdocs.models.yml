@@ -1,8 +1,20 @@
+# Built with zensical, as NetBox's own docs are: zensical build -f mkdocs.models.yml
 site_name: NetBox Custom Objects Model Documentation
 docs_dir: docs_models
 site_dir: netbox_custom_objects/static/docs/models
 theme:
-  name: mkdocs
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/lightbulb-outline
+        name: Switch to Dark Mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/lightbulb
+        name: Switch to Light Mode
 plugins: []
 nav:
   - netbox_custom_objects:

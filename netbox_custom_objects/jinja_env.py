@@ -35,6 +35,7 @@ Both of these hooks (the ``jinja_filters`` plugin resource and
 COMPAT(netbox<4.7): this module is never consulted by core, so it degrades to a no-op
 (see ``CustomObjectsPluginConfig.ready()`` for the startup log message).
 """
+
 import logging
 
 from jinja2 import pass_context
@@ -104,7 +105,7 @@ class EmptyCustomObjectsQuerySet:
     def get(self, *args, **kwargs):
         # Matches real QuerySet.get() semantics: "no matching object" is a
         # genuine, expected condition to raise on, not something to paper over.
-        raise LookupError("No matching object (Custom Object Type is unresolved).")
+        raise LookupError('No matching object (Custom Object Type is unresolved).')
 
     def first(self):
         return None
@@ -130,7 +131,7 @@ class EmptyCustomObjectsQuerySet:
     def __getitem__(self, item):
         if isinstance(item, slice):
             return self
-        raise IndexError("EmptyCustomObjectsQuerySet index out of range")
+        raise IndexError('EmptyCustomObjectsQuerySet index out of range')
 
     def __repr__(self):
         return '<EmptyCustomObjectsQuerySet>'
@@ -139,11 +140,12 @@ class EmptyCustomObjectsQuerySet:
 def _resolve_custom_object_type(name):
     """Look up a Custom Object Type by name; return None (warning logged once per name) if unresolved."""
     from netbox_custom_objects.models import CustomObjectType
+
     try:
         return CustomObjectType.objects.get(name=name)
     except CustomObjectType.DoesNotExist:
         if name not in _warned_unknown_names:
-            logger.warning("custom_objects: no Custom Object Type named %r", name)
+            logger.warning('custom_objects: no Custom Object Type named %r', name)
             _warned_unknown_names.add(name)
         return None
 

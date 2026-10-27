@@ -27,16 +27,16 @@ from django.db.utils import OperationalError, ProgrammingError
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name
 
-logger = logging.getLogger("netbox_custom_objects.stale_models")
+logger = logging.getLogger('netbox_custom_objects.stale_models')
 
 __all__ = (
-    "connect_stale_model_eviction",
-    "evict_deleted_custom_object_types",
-    "signal_custom_object_type_deleted",
+    'connect_stale_model_eviction',
+    'evict_deleted_custom_object_types',
+    'signal_custom_object_type_deleted',
 )
 
-_TOKEN_CACHE_KEY = "netbox_custom_objects.deleted_types_token"
-_DELETED_TYPE_CACHE_KEY = "netbox_custom_objects.deleted_type.{}"
+_TOKEN_CACHE_KEY = 'netbox_custom_objects.deleted_types_token'
+_DELETED_TYPE_CACHE_KEY = 'netbox_custom_objects.deleted_type.{}'
 
 # The token this process last acted on.  A random token rather than a counter, so a
 # cache flush or restart can't make a later delete look like one already seen.
@@ -50,8 +50,8 @@ def signal_custom_object_type_deleted(cot_id):
         # token also sees the mark.
         cache.set(_DELETED_TYPE_CACHE_KEY.format(cot_id), True, None)
         cache.set(_TOKEN_CACHE_KEY, uuid.uuid4().hex, None)
-    except Exception:  # noqa: BLE001 - cache down: other workers keep the stale model until restart
-        logger.warning("Could not signal a Custom Object Type deletion to other workers", exc_info=True)
+    except Exception:  # cache down: other workers keep the stale model until restart
+        logger.warning('Could not signal a Custom Object Type deletion to other workers', exc_info=True)
 
 
 def evict_deleted_custom_object_types(**kwargs):
@@ -62,7 +62,7 @@ def evict_deleted_custom_object_types(**kwargs):
     global _seen_token
     try:
         token = cache.get(_TOKEN_CACHE_KEY)
-    except Exception:  # noqa: BLE001 - cache down: nothing to act on
+    except Exception:  # cache down: nothing to act on
         return
     if token is None or token == _seen_token:
         return
@@ -76,14 +76,14 @@ def evict_deleted_custom_object_types(**kwargs):
             registered[int(cot_id)] = (model_name, model)
     try:
         marked = cache.get_many([_DELETED_TYPE_CACHE_KEY.format(cot_id) for cot_id in registered])
-    except Exception:  # noqa: BLE001 - cache down: try again next time
+    except Exception:  # cache down: try again next time
         return
     deleted = {cot_id for cot_id in registered if _DELETED_TYPE_CACHE_KEY.format(cot_id) in marked}
 
     if deleted:
         # A mark outlives a database restore, after which the ID can be reused.
         try:
-            deleted -= set(CustomObjectType.objects.filter(pk__in=deleted).values_list("pk", flat=True))
+            deleted -= set(CustomObjectType.objects.filter(pk__in=deleted).values_list('pk', flat=True))
         except (OperationalError, ProgrammingError):
             return  # database not ready (e.g. before migrations); try again next time
 
@@ -91,7 +91,7 @@ def evict_deleted_custom_object_types(**kwargs):
         model_name, model = registered[cot_id]
         CustomObjectType.clear_model_cache(cot_id, all_branches=True)
         CustomObjectType.unregister_model(model)
-        logger.debug("Unregistered model %s of a deleted Custom Object Type", model_name)
+        logger.debug('Unregistered model %s of a deleted Custom Object Type', model_name)
 
     _seen_token = token
 
@@ -106,12 +106,17 @@ def connect_stale_model_eviction():
     ``CustomObjectsPluginConfig.ready()``; ``dispatch_uid`` makes repeat calls
     idempotent.
     """
-    from core.signals import job_start
     from django.core.signals import request_started
 
+    from core.signals import job_start
+
     request_started.connect(
-        evict_deleted_custom_object_types, dispatch_uid="nco_evict_deleted_types_request", weak=False,
+        evict_deleted_custom_object_types,
+        dispatch_uid='nco_evict_deleted_types_request',
+        weak=False,
     )
     job_start.connect(
-        evict_deleted_custom_object_types, dispatch_uid="nco_evict_deleted_types_job", weak=False,
+        evict_deleted_custom_object_types,
+        dispatch_uid='nco_evict_deleted_types_job',
+        weak=False,
     )

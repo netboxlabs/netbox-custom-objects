@@ -2,6 +2,7 @@
 Tests for on_delete_behavior on polymorphic Object fields: what happens to custom objects when
 the object their polymorphic field points at is deleted.
 """
+
 from django.contrib.contenttypes.models import ContentType
 from django.db import connection
 from django.db.models import ProtectedError
@@ -36,7 +37,10 @@ class PolymorphicOnDeleteTestCase(CustomObjectsTestCase, TestCase):
         cot = self.create_custom_object_type(name=slug, slug=slug, verbose_name_plural=f'{slug}s')
         self.create_custom_object_type_field(cot, name='name', type='text', primary=True, required=True)
         self.create_polymorphic_field(
-            cot, targets or [self.site_ot, self.prefix_ot], name='target', on_delete_behavior=on_delete,
+            cot,
+            targets or [self.site_ot, self.prefix_ot],
+            name='target',
+            on_delete_behavior=on_delete,
         )
         return cot.get_model()
 
@@ -87,7 +91,10 @@ class PolymorphicOnDeleteTestCase(CustomObjectsTestCase, TestCase):
         self._make_type(ObjectFieldOnDeleteChoices.PROTECT)
         cot = CustomObjectTypeField.objects.get(custom_object_type__slug='widget', name='target').custom_object_type
         self.create_custom_object_type_field(
-            cot, name='site', type='object', related_object_type=self.site_ot,
+            cot,
+            name='site',
+            type='object',
+            related_object_type=self.site_ot,
             on_delete_behavior=ObjectFieldOnDeleteChoices.CASCADE,
         )
         cot.refresh_from_db()
@@ -111,7 +118,8 @@ class PolymorphicOnDeleteTestCase(CustomObjectsTestCase, TestCase):
         obj = model.objects.create(name='w1')
         # Point at a prefix whose pk matches the site's; only the content type tells them apart.
         model.objects.filter(pk=obj.pk).update(
-            target_content_type=self.prefix_ot.pk, target_object_id=self.site.pk,
+            target_content_type=self.prefix_ot.pk,
+            target_object_id=self.site.pk,
         )
 
         self.site.delete()
@@ -217,7 +225,10 @@ class PolymorphicOnDeleteRequestTestCase(CustomObjectsTestCase, TestCase):
 
     def _add_field(self, on_delete):
         self.create_polymorphic_field(
-            self.cot, [ObjectType.objects.get_for_model(Site)], name='target', on_delete_behavior=on_delete,
+            self.cot,
+            [ObjectType.objects.get_for_model(Site)],
+            name='target',
+            on_delete_behavior=on_delete,
         )
         self.cot.refresh_from_db()
         return self.cot.get_model()
@@ -245,9 +256,7 @@ class PolymorphicOnDeleteRequestTestCase(CustomObjectsTestCase, TestCase):
     def _changes(self, *objects):
         """The change log entries for *objects*, oldest first, as (action, object)."""
         lookup = {(ContentType.objects.get_for_model(obj).pk, obj.pk): obj for obj in objects}
-        changes = ObjectChange.objects.filter(
-            changed_object_id__in=[obj.pk for obj in objects]
-        ).order_by('time', 'pk')
+        changes = ObjectChange.objects.filter(changed_object_id__in=[obj.pk for obj in objects]).order_by('time', 'pk')
         return [
             (change.action, lookup[key])
             for change in changes

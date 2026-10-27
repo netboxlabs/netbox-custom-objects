@@ -1,14 +1,14 @@
 import copy
-import django_filters
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
-from typing import Any, Dict, Optional, Type
+from typing import Any
 
+import django_filters
 from django import forms as django_forms
 from django.apps import apps as django_apps
-from django.db.models import QuerySet, Q
+from django.db.models import Q, QuerySet
 from django.utils.dateparse import parse_date, parse_datetime
-from django.utils.timezone import make_aware, is_aware
+from django.utils.timezone import is_aware, make_aware
 from django.utils.translation import gettext_lazy as _
 
 from core.models import ObjectType
@@ -23,16 +23,16 @@ from .constants import APP_LABEL
 from .models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
 
 __all__ = (
-    "ArrayContainsFilter",
-    "CustomObjectTypeConstraintFilterSet",
-    "CustomObjectTypeFieldFilterSet",
-    "CustomObjectTypeFilterSet",
-    "NonPolymorphicMultiObjectFilter",
-    "NonPolymorphicObjectFilter",
-    "NonPolymorphicObjectIdFilter",
-    "PolymorphicMultiObjectFilter",
-    "PolymorphicObjectFilter",
-    "get_filterset_class",
+    'ArrayContainsFilter',
+    'CustomObjectTypeConstraintFilterSet',
+    'CustomObjectTypeFieldFilterSet',
+    'CustomObjectTypeFilterSet',
+    'NonPolymorphicMultiObjectFilter',
+    'NonPolymorphicObjectFilter',
+    'NonPolymorphicObjectIdFilter',
+    'PolymorphicMultiObjectFilter',
+    'PolymorphicObjectFilter',
+    'get_filterset_class',
 )
 
 
@@ -44,18 +44,18 @@ class _IntegerListField(django_forms.Field):
     """
 
     def to_python(self, value):
-        if value in (None, "", [], ()):
+        if value in (None, '', [], ()):
             return []
         if not isinstance(value, (list, tuple)):
             value = [value]
         result = []
         for v in value:
-            if v in ("", None):
+            if v in ('', None):
                 continue
             try:
                 result.append(int(v))
             except (TypeError, ValueError):
-                raise django_forms.ValidationError(f"Invalid integer: {v!r}")
+                raise django_forms.ValidationError(f'Invalid integer: {v!r}')
         return result
 
     def validate(self, value):
@@ -88,16 +88,18 @@ class PolymorphicObjectFilter(django_filters.Filter):
     def __init__(self, *, content_type_id, gfk_field_name, **kwargs):
         self.content_type_id = content_type_id
         self.gfk_field_name = gfk_field_name
-        kwargs.setdefault("required", False)
+        kwargs.setdefault('required', False)
         super().__init__(**kwargs)
 
     def filter(self, qs, value):
         if value is None:
             return qs
-        return qs.filter(**{
-            f"{self.gfk_field_name}_content_type_id": self.content_type_id,
-            f"{self.gfk_field_name}_object_id": value,
-        })
+        return qs.filter(
+            **{
+                f'{self.gfk_field_name}_content_type_id': self.content_type_id,
+                f'{self.gfk_field_name}_object_id': value,
+            }
+        )
 
 
 class PolymorphicMultiObjectFilter(django_filters.Filter):
@@ -117,7 +119,7 @@ class PolymorphicMultiObjectFilter(django_filters.Filter):
     def __init__(self, *, content_type_id, through_model_name, **kwargs):
         self.content_type_id = content_type_id
         self.through_model_name = through_model_name
-        kwargs.setdefault("required", False)
+        kwargs.setdefault('required', False)
         super().__init__(**kwargs)
 
     def filter(self, qs, value):
@@ -130,7 +132,7 @@ class PolymorphicMultiObjectFilter(django_filters.Filter):
         source_ids = through.objects.filter(
             content_type_id=self.content_type_id,
             object_id__in=value,
-        ).values_list("source_id", flat=True)
+        ).values_list('source_id', flat=True)
         return qs.filter(pk__in=source_ids).distinct()
 
 
@@ -149,7 +151,7 @@ class ArrayContainsFilter(django_filters.MultipleChoiceFilter):
             return qs
         q = Q()
         for v in value:
-            q |= Q(**{f"{self.field_name}__contains": [v]})
+            q |= Q(**{f'{self.field_name}__contains': [v]})
         return qs.filter(q).distinct()
 
 
@@ -187,13 +189,13 @@ class ArrayValuesFilter(django_filters.Filter):
         super().__init__(*args, **kwargs)
 
     def filter(self, qs, value):
-        values = [v.strip() for v in (value or "").split(",") if v.strip()]
+        values = [v.strip() for v in (value or '').split(',') if v.strip()]
         if not values:
             return qs
         lookup = array_contains_lookup(self.custom_field, values)
         if lookup is None:
             return qs.none()
-        return qs.filter(**{f"{self.field_name}__contains": lookup})
+        return qs.filter(**{f'{self.field_name}__contains': lookup})
 
 
 class NonPolymorphicObjectFilter(django_filters.Filter):
@@ -214,13 +216,13 @@ class NonPolymorphicObjectFilter(django_filters.Filter):
     field_class = django_forms.ModelChoiceField
 
     def __init__(self, *args, queryset, **kwargs):
-        kwargs.setdefault("required", False)
+        kwargs.setdefault('required', False)
         super().__init__(*args, queryset=queryset, **kwargs)
 
     def filter(self, qs, value):
         if value is None:
             return qs
-        return qs.filter(**{f"{self.field_name}_id": value.pk})
+        return qs.filter(**{f'{self.field_name}_id': value.pk})
 
 
 class NonPolymorphicObjectIdFilter(django_filters.Filter):
@@ -243,13 +245,13 @@ class NonPolymorphicObjectIdFilter(django_filters.Filter):
     field_class = django_forms.IntegerField
 
     def __init__(self, **kwargs):
-        kwargs.setdefault("required", False)
+        kwargs.setdefault('required', False)
         super().__init__(**kwargs)
 
     def filter(self, qs, value):
         if value is None:
             return qs
-        return qs.filter(**{f"{self.field_name}": value})
+        return qs.filter(**{f'{self.field_name}': value})
 
 
 class NonPolymorphicMultiObjectFilter(django_filters.Filter):
@@ -268,14 +270,14 @@ class NonPolymorphicMultiObjectFilter(django_filters.Filter):
     field_class = django_forms.ModelMultipleChoiceField
 
     def __init__(self, *args, queryset, **kwargs):
-        kwargs.setdefault("required", False)
+        kwargs.setdefault('required', False)
         super().__init__(*args, queryset=queryset, **kwargs)
 
     def filter(self, qs, value):
         if not value:
             return qs
-        pks = list(value.values_list("pk", flat=True))
-        return qs.filter(**{f"{self.field_name}__in": pks}).distinct()
+        pks = list(value.values_list('pk', flat=True))
+        return qs.filter(**{f'{self.field_name}__in': pks}).distinct()
 
 
 @dataclass
@@ -284,27 +286,26 @@ class FilterSpec:
     Declarative specification describing how a custom field type
     should be translated into a django-filter Filter instance.
     """
-    filter_class: Type[django_filters.Filter]
-    lookup_expr: Optional[str] = None
-    extra_kwargs: Optional[Dict[str, Any]] = None
 
-    def build(
-        self, field_name: str, label: str, queryset: Optional[QuerySet] = None, **kwargs
-        ) -> django_filters.Filter:
+    filter_class: type[django_filters.Filter]
+    lookup_expr: str | None = None
+    extra_kwargs: dict[str, Any] | None = None
+
+    def build(self, field_name: str, label: str, queryset: QuerySet | None = None, **kwargs) -> django_filters.Filter:
         """
         Instantiate and return a django-filter Filter.
         Allows overriding defaults via **kwargs.
         """
         filter_kwargs = {
-            "field_name": field_name,
-            "label": label,
+            'field_name': field_name,
+            'label': label,
         }
 
         if self.lookup_expr:
-            filter_kwargs["lookup_expr"] = self.lookup_expr
+            filter_kwargs['lookup_expr'] = self.lookup_expr
 
         if queryset is not None:
-            filter_kwargs["queryset"] = queryset
+            filter_kwargs['queryset'] = queryset
 
         # Callers (build_filter_for_field) resolve extra_kwargs callables and pass
         # the results here as **kwargs; merge them directly.
@@ -314,22 +315,20 @@ class FilterSpec:
 
 
 FIELD_TYPE_FILTERS = {
-    CustomFieldTypeChoices.TYPE_TEXT: FilterSpec(django_filters.CharFilter, lookup_expr="icontains"),
-    CustomFieldTypeChoices.TYPE_LONGTEXT: FilterSpec(django_filters.CharFilter, lookup_expr="icontains"),
-    CustomFieldTypeChoices.TYPE_INTEGER: FilterSpec(django_filters.NumberFilter, lookup_expr="exact"),
-    CustomFieldTypeChoices.TYPE_DECIMAL: FilterSpec(django_filters.NumberFilter, lookup_expr="exact"),
+    CustomFieldTypeChoices.TYPE_TEXT: FilterSpec(django_filters.CharFilter, lookup_expr='icontains'),
+    CustomFieldTypeChoices.TYPE_LONGTEXT: FilterSpec(django_filters.CharFilter, lookup_expr='icontains'),
+    CustomFieldTypeChoices.TYPE_INTEGER: FilterSpec(django_filters.NumberFilter, lookup_expr='exact'),
+    CustomFieldTypeChoices.TYPE_DECIMAL: FilterSpec(django_filters.NumberFilter, lookup_expr='exact'),
     CustomFieldTypeChoices.TYPE_BOOLEAN: FilterSpec(django_filters.BooleanFilter),
-    CustomFieldTypeChoices.TYPE_DATE: FilterSpec(django_filters.DateFilter, lookup_expr="exact"),
-    CustomFieldTypeChoices.TYPE_DATETIME: FilterSpec(django_filters.DateTimeFilter, lookup_expr="exact"),
-    CustomFieldTypeChoices.TYPE_URL: FilterSpec(django_filters.CharFilter, lookup_expr="icontains"),
-    CustomFieldTypeChoices.TYPE_JSON: FilterSpec(django_filters.CharFilter, lookup_expr="icontains"),
+    CustomFieldTypeChoices.TYPE_DATE: FilterSpec(django_filters.DateFilter, lookup_expr='exact'),
+    CustomFieldTypeChoices.TYPE_DATETIME: FilterSpec(django_filters.DateTimeFilter, lookup_expr='exact'),
+    CustomFieldTypeChoices.TYPE_URL: FilterSpec(django_filters.CharFilter, lookup_expr='icontains'),
+    CustomFieldTypeChoices.TYPE_JSON: FilterSpec(django_filters.CharFilter, lookup_expr='icontains'),
     CustomFieldTypeChoices.TYPE_SELECT: FilterSpec(
-        django_filters.MultipleChoiceFilter,
-        extra_kwargs={"choices": lambda f: f.choices}
+        django_filters.MultipleChoiceFilter, extra_kwargs={'choices': lambda f: f.choices}
     ),
     CustomFieldTypeChoices.TYPE_MULTISELECT: FilterSpec(
-        ArrayContainsFilter,
-        extra_kwargs={"choices": lambda f: f.choices}
+        ArrayContainsFilter, extra_kwargs={'choices': lambda f: f.choices}
     ),
     CustomFieldTypeChoices.TYPE_OBJECT: FilterSpec(NonPolymorphicObjectFilter),
     # NonPolymorphicMultiObjectFilter uses field__in=pks, which Django's ORM
@@ -353,16 +352,16 @@ class CustomObjectTypeFilterSet(NetBoxModelFilterSet):
     class Meta:
         model = CustomObjectType
         fields = (
-            "id",
-            "name",
-            "slug",
-            "group_name",
-            "verbose_name",
-            "verbose_name_plural",
-            "description",
-            "version",
-            "display_expression",
-            "config_context_enabled",
+            'id',
+            'name',
+            'slug',
+            'group_name',
+            'verbose_name',
+            'verbose_name_plural',
+            'description',
+            'version',
+            'display_expression',
+            'config_context_enabled',
         )
 
     def search(self, queryset, name, value):
@@ -378,20 +377,20 @@ class CustomObjectTypeFilterSet(NetBoxModelFilterSet):
 
 class CustomObjectTypeFieldFilterSet(ChangeLoggedModelFilterSet):
     q = django_filters.CharFilter(
-        method="search",
-        label=_("Search"),
+        method='search',
+        label=_('Search'),
     )
     custom_object_type_id = django_filters.ModelMultipleChoiceFilter(
         queryset=CustomObjectType.objects.all(),
         distinct=False,
-        label=_("Custom object type (ID)"),
+        label=_('Custom object type (ID)'),
     )
     custom_object_type = django_filters.ModelMultipleChoiceFilter(
-        field_name="custom_object_type__slug",
+        field_name='custom_object_type__slug',
         queryset=CustomObjectType.objects.all(),
         distinct=False,
-        to_field_name="slug",
-        label=_("Custom object type (slug)"),
+        to_field_name='slug',
+        label=_('Custom object type (slug)'),
     )
     type = django_filters.MultipleChoiceFilter(
         choices=CustomObjectFieldTypeChoices,
@@ -399,83 +398,79 @@ class CustomObjectTypeFieldFilterSet(ChangeLoggedModelFilterSet):
     )
     related_object_type_id = django_filters.ModelMultipleChoiceFilter(
         queryset=ObjectType.objects.all(),
-        field_name="related_object_type",
+        field_name='related_object_type',
         distinct=False,
-        label=_("Related object type (ID)"),
+        label=_('Related object type (ID)'),
     )
     # Polymorphic object/multiobject fields store their targets on this M2M rather
     # than on related_object_type.
     related_object_types_id = django_filters.ModelMultipleChoiceFilter(
         queryset=ObjectType.objects.all(),
-        field_name="related_object_types",
-        label=_("Polymorphic related object type (ID)"),
+        field_name='related_object_types',
+        label=_('Polymorphic related object type (ID)'),
     )
     choice_set_id = django_filters.ModelMultipleChoiceFilter(
         queryset=CustomFieldChoiceSet.objects.all(),
         distinct=False,
-        label=_("Choice set (ID)"),
+        label=_('Choice set (ID)'),
     )
 
     class Meta:
         model = CustomObjectTypeField
         fields = (
-            "id",
-            "name",
-            "label",
-            "group_name",
-            "description",
-            "required",
-            "unique",
-            "primary",
-            "context",
-            "is_polymorphic",
-            "search_weight",
-            "filter_logic",
-            "ui_visible",
-            "ui_editable",
-            "weight",
-            "is_cloneable",
-            "related_name",
-            "on_delete_behavior",
-            "validation_minimum",
-            "validation_maximum",
-            "validation_regex",
-            "array_element_type",
-            "array_tuple_size",
-            "array_min_length",
-            "array_max_length",
-            "schema_id",
-            "deprecated",
-            "deprecated_since",
-            "scheduled_removal",
+            'id',
+            'name',
+            'label',
+            'group_name',
+            'description',
+            'required',
+            'unique',
+            'primary',
+            'context',
+            'is_polymorphic',
+            'search_weight',
+            'filter_logic',
+            'ui_visible',
+            'ui_editable',
+            'weight',
+            'is_cloneable',
+            'related_name',
+            'on_delete_behavior',
+            'validation_minimum',
+            'validation_maximum',
+            'validation_regex',
+            'array_element_type',
+            'array_tuple_size',
+            'array_min_length',
+            'array_max_length',
+            'schema_id',
+            'deprecated',
+            'deprecated_since',
+            'scheduled_removal',
         )
 
     def search(self, queryset, name, value):
         if not value.strip():
             return queryset
-        return queryset.filter(
-            Q(name__icontains=value)
-            | Q(label__icontains=value)
-            | Q(description__icontains=value)
-        )
+        return queryset.filter(Q(name__icontains=value) | Q(label__icontains=value) | Q(description__icontains=value))
 
 
 class CustomObjectTypeConstraintFilterSet(ChangeLoggedModelFilterSet):
     q = django_filters.CharFilter(
-        method="search",
-        label=_("Search"),
+        method='search',
+        label=_('Search'),
     )
     custom_object_type_id = django_filters.ModelMultipleChoiceFilter(
         queryset=CustomObjectType.objects.all(),
         distinct=False,
-        label=_("Custom object type (ID)"),
+        label=_('Custom object type (ID)'),
     )
     custom_object_type = django_filters.ModelMultipleChoiceFilter(
-        field_name="custom_object_type__slug",
+        field_name='custom_object_type__slug',
         queryset=CustomObjectType.objects.all(),
         distinct=False,
-        to_field_name="slug",
-        label=_("Custom object type (slug)"),
+        to_field_name='slug',
+        label=_('Custom object type (slug)'),
     )
     type = django_filters.MultipleChoiceFilter(
         choices=ConstraintTypeChoices,
@@ -485,11 +480,11 @@ class CustomObjectTypeConstraintFilterSet(ChangeLoggedModelFilterSet):
     class Meta:
         model = CustomObjectTypeConstraint
         fields = (
-            "id",
-            "name",
-            "description",
-            "case_insensitive",
-            "nulls_distinct",
+            'id',
+            'name',
+            'description',
+            'case_insensitive',
+            'nulls_distinct',
         )
 
     def search(self, queryset, name, value):
@@ -508,8 +503,8 @@ def _build_polymorphic_filters(field) -> dict:
         model_class = ot.model_class()
         if model_class is None:
             continue
-        filter_name = f"{field.name}_{ot.app_label}_{ot.model}"
-        label = f"{base_label} ({model_class._meta.verbose_name})"
+        filter_name = f'{field.name}_{ot.app_label}_{ot.model}'
+        label = f'{base_label} ({model_class._meta.verbose_name})'
         if is_multi:
             filters[filter_name] = PolymorphicMultiObjectFilter(
                 content_type_id=ot.id,
@@ -549,11 +544,11 @@ def build_filter_for_field(field) -> dict:
     if field.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
         base_label = field.label or field.name
         return {
-            f"{field.name}_latitude": django_filters.NumberFilter(
-                field_name=f"{field.name}_latitude", label=f"{base_label} (latitude)"
+            f'{field.name}_latitude': django_filters.NumberFilter(
+                field_name=f'{field.name}_latitude', label=f'{base_label} (latitude)'
             ),
-            f"{field.name}_longitude": django_filters.NumberFilter(
-                field_name=f"{field.name}_longitude", label=f"{base_label} (longitude)"
+            f'{field.name}_longitude': django_filters.NumberFilter(
+                field_name=f'{field.name}_longitude', label=f'{base_label} (longitude)'
             ),
         }
 
@@ -561,8 +556,8 @@ def build_filter_for_field(field) -> dict:
         label = field.label or field.name
         return {
             field.name: ArrayValuesFilter(field_name=field.name, label=label, custom_field=field),
-            f"{field.name}__len": django_filters.NumberFilter(
-                field_name=field.name, lookup_expr="len", label=f"{label} (length)"
+            f'{field.name}__len': django_filters.NumberFilter(
+                field_name=field.name, lookup_expr='len', label=f'{label} (length)'
             ),
         }
 
@@ -575,7 +570,7 @@ def build_filter_for_field(field) -> dict:
         CustomFieldTypeChoices.TYPE_OBJECT,
         CustomFieldTypeChoices.TYPE_MULTIOBJECT,
     ):
-        related_object_type = getattr(field, "related_object_type", None)
+        related_object_type = getattr(field, 'related_object_type', None)
         if not related_object_type:
             # Defensive guard: if data integrity is compromised and the related object type
             # is missing, skip building a filter for this field rather than raising.
@@ -597,9 +592,9 @@ def build_filter_for_field(field) -> dict:
         # filters like __isw -- it only augments a small fixed set of lookup_exprs,
         # and "icontains" isn't one of them.
         if field.filter_logic == CustomFieldFilterLogicChoices.FILTER_EXACT:
-            extra_kwargs["lookup_expr"] = None
+            extra_kwargs['lookup_expr'] = None
         else:
-            extra_kwargs["lookup_expr"] = "icontains"
+            extra_kwargs['lookup_expr'] = 'icontains'
 
     filters = {
         field.name: spec.build(
@@ -615,8 +610,8 @@ def build_filter_for_field(field) -> dict:
     # form (e.g. ?tenant_id=5), so without this the links return unfiltered
     # results even though the filter name is present in the URL (issue #561).
     if field.type == CustomFieldTypeChoices.TYPE_OBJECT and not field.is_polymorphic:
-        filters[f"{field.name}_id"] = NonPolymorphicObjectIdFilter(
-            field_name=f"{field.name}_id",
+        filters[f'{field.name}_id'] = NonPolymorphicObjectIdFilter(
+            field_name=f'{field.name}_id',
             label=field.label or field.name,
         )
 
@@ -631,11 +626,11 @@ def get_filterset_class(model):
     # core FilterSets); every other filter is added explicitly below via
     # build_filter_for_field, so there are no shadowed duplicates.
     meta = type(
-        "Meta",
+        'Meta',
         (),
         {
-            "model": model,
-            "fields": ["id"],
+            'model': model,
+            'fields': ['id'],
         },
     )
 
@@ -652,43 +647,45 @@ def get_filterset_class(model):
                 CustomFieldTypeChoices.TYPE_SELECT,
                 CustomObjectFieldTypeChoices.TYPE_MAC_ADDRESS,
             ]:
-                q |= Q(**{f"{field.name}__icontains": value})
+                q |= Q(**{f'{field.name}__icontains': value})
             elif field.type == CustomFieldTypeChoices.TYPE_MULTISELECT:
                 # ArrayField does not support icontains; use array containment
                 # to check whether the searched value is an element in the array.
-                q |= Q(**{f"{field.name}__contains": [value]})
+                q |= Q(**{f'{field.name}__contains': [value]})
             elif field.type == CustomObjectFieldTypeChoices.TYPE_ARRAY:
                 # Arrays holding the searched value as an element.
                 lookup = array_contains_lookup(field, [value])
                 if lookup is not None:
-                    q |= Q(**{f"{field.name}__contains": lookup})
+                    q |= Q(**{f'{field.name}__contains': lookup})
             elif field.type in [
                 CustomFieldTypeChoices.TYPE_INTEGER,
                 CustomFieldTypeChoices.TYPE_DECIMAL,
             ]:
                 try:
                     numeric = int(value) if field.type == CustomFieldTypeChoices.TYPE_INTEGER else Decimal(value)
-                    q |= Q(**{f"{field.name}__exact": numeric})
+                    q |= Q(**{f'{field.name}__exact': numeric})
                 except (ValueError, TypeError, InvalidOperation):
                     pass
             elif field.type == CustomFieldTypeChoices.TYPE_DATE:
                 parsed = parse_date(value)
                 if parsed is not None:
-                    q |= Q(**{f"{field.name}__exact": parsed})
+                    q |= Q(**{f'{field.name}__exact': parsed})
             elif field.type == CustomFieldTypeChoices.TYPE_DATETIME:
                 parsed = parse_datetime(value)
                 if parsed is not None:
                     if not is_aware(parsed):
                         parsed = make_aware(parsed)
-                    q |= Q(**{f"{field.name}__exact": parsed})
+                    q |= Q(**{f'{field.name}__exact': parsed})
         if model.custom_object_type.display_expression:
             # The rendered display_expression can draw on related objects, so match it via
             # the search cache rather than the table (see CustomObject._display).
-            q |= Q(pk__in=CachedValue.objects.filter(
-                object_type=ObjectType.objects.get_for_model(model),
-                field='_display',
-                value__icontains=value,
-            ).values('object_id'))
+            q |= Q(
+                pk__in=CachedValue.objects.filter(
+                    object_type=ObjectType.objects.get_for_model(model),
+                    field='_display',
+                    value__icontains=value,
+                ).values('object_id')
+            )
         if not q:
             return queryset.none()
         return queryset.filter(q)
@@ -699,16 +696,16 @@ def get_filterset_class(model):
         return queryset.filter(owner__group__in=value)
 
     attrs = {
-        "Meta": meta,
-        "__module__": "netbox_custom_objects.filtersets",
-        "search": search,
-        "filter_owner_group_id": filter_owner_group_id,
-        "owner_id": django_filters.ModelMultipleChoiceFilter(
+        'Meta': meta,
+        '__module__': 'netbox_custom_objects.filtersets',
+        'search': search,
+        'filter_owner_group_id': filter_owner_group_id,
+        'owner_id': django_filters.ModelMultipleChoiceFilter(
             field_name='owner',
             queryset=Owner.objects.all(),
             label='Owner (ID)',
         ),
-        "owner_group_id": django_filters.ModelMultipleChoiceFilter(
+        'owner_group_id': django_filters.ModelMultipleChoiceFilter(
             queryset=OwnerGroup.objects.all(),
             method='filter_owner_group_id',
             label='Owner Group (ID)',
@@ -751,7 +748,7 @@ def get_filterset_class(model):
     attrs['get_filters'] = classmethod(get_filters)
 
     return type(
-        f"{model._meta.object_name}FilterSet",
+        f'{model._meta.object_name}FilterSet',
         (NetBoxModelFilterSet,),
         attrs,
     )

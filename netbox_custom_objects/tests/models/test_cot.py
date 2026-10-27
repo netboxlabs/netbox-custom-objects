@@ -1,6 +1,7 @@
 """
 Tests for the CustomObjectType model.
 """
+
 from unittest.mock import patch
 
 from django.apps import apps as django_apps
@@ -10,13 +11,13 @@ from django.db.utils import ProgrammingError
 from django.test import TestCase
 from django.urls import reverse
 
-
 from core.models import ObjectType
 from dcim.models import Site
 from netbox.search import registry
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.field_types import ObjectFieldType, TextFieldType
 from netbox_custom_objects.models import CustomObjectType
+
 from ..base import CustomObjectsTestCase
 
 
@@ -26,57 +27,56 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
     def test_custom_object_type_creation(self):
         """Test creating a CustomObjectType."""
         custom_object_type = self.create_custom_object_type(
-            name="TestObject",
-            description="A test custom object type",
-            verbose_name_plural="Test Objects",
-            slug="test-objects",
+            name='TestObject',
+            description='A test custom object type',
+            verbose_name_plural='Test Objects',
+            slug='test-objects',
         )
 
-        self.assertEqual(custom_object_type.name, "TestObject")
-        self.assertEqual(custom_object_type.description, "A test custom object type")
-        self.assertEqual(custom_object_type.verbose_name_plural, "Test Objects")
-        self.assertEqual(custom_object_type.slug, "test-objects")
-        self.assertEqual(str(custom_object_type), "TestObject")
+        self.assertEqual(custom_object_type.name, 'TestObject')
+        self.assertEqual(custom_object_type.description, 'A test custom object type')
+        self.assertEqual(custom_object_type.verbose_name_plural, 'Test Objects')
+        self.assertEqual(custom_object_type.slug, 'test-objects')
+        self.assertEqual(str(custom_object_type), 'TestObject')
 
     def test_custom_object_type_name_validation(self):
         """COT name must match the schema identifier pattern (no leading/trailing/double underscores)."""
         invalid_names = [
-            "test-type",    # hyphen not allowed
-            "test__type",   # double underscore not allowed
-            "_test_type",   # leading underscore not allowed
-            "test_type_",   # trailing underscore not allowed
+            'test-type',  # hyphen not allowed
+            'test__type',  # double underscore not allowed
+            '_test_type',  # leading underscore not allowed
+            'test_type_',  # trailing underscore not allowed
         ]
         for invalid_name in invalid_names:
-            with self.assertRaises(ValidationError, msg=f"Expected ValidationError for name={invalid_name!r}"):
-                cot = CustomObjectType(name=invalid_name, slug=f"slug-{invalid_name}")
+            with self.assertRaises(ValidationError, msg=f'Expected ValidationError for name={invalid_name!r}'):
+                cot = CustomObjectType(name=invalid_name, slug=f'slug-{invalid_name}')
                 cot.full_clean()
 
     def test_custom_object_type_unique_name_constraint(self):
         """Test that custom object type names must be unique (case-insensitive)."""
-        self.create_custom_object_type(name="TestObject")
+        self.create_custom_object_type(name='TestObject')
 
         # Should not allow duplicate name (case-insensitive)
         with self.assertRaises(Exception):
-            self.create_custom_object_type(name="testobject")
+            self.create_custom_object_type(name='testobject')
 
     def test_custom_object_type_get_absolute_url(self):
         """Test get_absolute_url method."""
-        custom_object_type = self.create_custom_object_type(name="TestObject")
-        expected_url = reverse("plugins:netbox_custom_objects:customobjecttype", args=[custom_object_type.pk])
+        custom_object_type = self.create_custom_object_type(name='TestObject')
+        expected_url = reverse('plugins:netbox_custom_objects:customobjecttype', args=[custom_object_type.pk])
         self.assertEqual(custom_object_type.get_absolute_url(), expected_url)
 
     def test_custom_object_type_get_list_url(self):
         """Test get_list_url method."""
-        custom_object_type = self.create_custom_object_type(name="TestObject")
+        custom_object_type = self.create_custom_object_type(name='TestObject')
         expected_url = reverse(
-            "plugins:netbox_custom_objects:customobject_list",
-            kwargs={"custom_object_type": custom_object_type.slug}
+            'plugins:netbox_custom_objects:customobject_list', kwargs={'custom_object_type': custom_object_type.slug}
         )
         self.assertEqual(custom_object_type.get_list_url(), expected_url)
 
     def test_custom_object_type_get_model_without_fields(self):
         """Test get_model method when no fields are defined."""
-        custom_object_type = self.create_custom_object_type(name="TestObject")
+        custom_object_type = self.create_custom_object_type(name='TestObject')
 
         model = custom_object_type.get_model()
         # Base fields: id, created, last_updated, owner
@@ -84,16 +84,11 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
 
     def test_custom_object_type_get_model_with_primary_field(self):
         """Test get_model method with a primary field."""
-        custom_object_type = self.create_custom_object_type(name="TestObject")
+        custom_object_type = self.create_custom_object_type(name='TestObject')
 
         # Add a primary field
         self.create_custom_object_type_field(
-            custom_object_type,
-            name="name",
-            label="Name",
-            type="text",
-            primary=True,
-            required=True
+            custom_object_type, name='name', label='Name', type='text', primary=True, required=True
         )
 
         # Get the dynamic model
@@ -106,33 +101,24 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
 
     def test_custom_object_type_get_model_with_multiple_fields(self):
         """Test get_model method with multiple fields of different types."""
-        custom_object_type = self.create_custom_object_type(name="TestObject")
+        custom_object_type = self.create_custom_object_type(name='TestObject')
 
         # Add various field types
         self.create_custom_object_type_field(
-            custom_object_type,
-            name="name",
-            label="Name",
-            type="text",
-            primary=True,
-            required=True
+            custom_object_type, name='name', label='Name', type='text', primary=True, required=True
         )
 
         self.create_custom_object_type_field(
             custom_object_type,
-            name="count",
-            label="Count",
-            type="integer",
+            name='count',
+            label='Count',
+            type='integer',
             validation_minimum=0,
-            validation_maximum=100
+            validation_maximum=100,
         )
 
         self.create_custom_object_type_field(
-            custom_object_type,
-            name="active",
-            label="Active",
-            type="boolean",
-            default=True
+            custom_object_type, name='active', label='Active', type='boolean', default=True
         )
 
         # Get the dynamic model
@@ -145,16 +131,11 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
 
     def test_custom_object_type_save_creates_table(self):
         """Test that saving a custom object type creates the database table."""
-        custom_object_type = self.create_custom_object_type(name="TestObject")
+        custom_object_type = self.create_custom_object_type(name='TestObject')
 
         # Add a primary field
         self.create_custom_object_type_field(
-            custom_object_type,
-            name="name",
-            label="Name",
-            type="text",
-            primary=True,
-            required=True
+            custom_object_type, name='name', label='Name', type='text', primary=True, required=True
         )
 
         # Save to trigger table creation
@@ -163,7 +144,7 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         # Check if the table exists
         with connection.cursor() as cursor:
             tables = connection.introspection.table_names(cursor)
-            expected_table = f"custom_objects_{custom_object_type.id}"
+            expected_table = f'custom_objects_{custom_object_type.id}'
             self.assertIn(expected_table, tables)
 
     def test_register_search_index_skips_object_field_absent_from_stub_model(self):
@@ -177,12 +158,20 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         does not have the OBJECT field, but self.fields.filter(search_weight__gt=0)
         still returns it from the database.
         """
-        cot = self.create_custom_object_type(name="StubSearchTest", slug="stub-search-test")
+        cot = self.create_custom_object_type(name='StubSearchTest', slug='stub-search-test')
         self.create_custom_object_type_field(
-            cot, name="name", label="Name", type="text", primary=True, search_weight=1000,
+            cot,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
+            search_weight=1000,
         )
         self.create_custom_object_type_field(
-            cot, name="ref_site", label="Site", type="object",
+            cot,
+            name='ref_site',
+            label='Site',
+            type='object',
             related_object_type=self.get_site_object_type(),
             search_weight=500,
         )
@@ -191,12 +180,10 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         # full model here.  Clear it to force generation of a fresh stub.
         cot.clear_model_cache(cot.id)
         stub_model = cot.get_model(skip_object_fields=True)
-        model_field_names = (
-            {f.name for f in stub_model._meta.local_fields}
-            | {f.name for f in stub_model._meta.local_many_to_many}
-        )
-        self.assertNotIn("ref_site", model_field_names,
-                         "OBJECT field must be absent from stub model")
+        model_field_names = {f.name for f in stub_model._meta.local_fields} | {
+            f.name for f in stub_model._meta.local_many_to_many
+        }
+        self.assertNotIn('ref_site', model_field_names, 'OBJECT field must be absent from stub model')
         # Must not raise FieldDoesNotExist, RecursionError, or any other exception.
         cot.register_custom_object_search_index(stub_model)
 
@@ -204,21 +191,30 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         """Fields marked context=True surface as display_attrs, so
         NetBox's global search shows them as supplementary "attributes" alongside
         each result, the same as any other model's SearchIndex.display_attrs."""
-        cot = self.create_custom_object_type(name="ContextSearchTest", slug="context-search-test")
+        cot = self.create_custom_object_type(name='ContextSearchTest', slug='context-search-test')
         self.create_custom_object_type_field(
-            cot, name="name", label="Name", type="text", primary=True, search_weight=1000,
+            cot,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
+            search_weight=1000,
         )
         self.create_custom_object_type_field(
-            cot, name="status", label="Status", type="text", context=True,
+            cot,
+            name='status',
+            label='Status',
+            type='text',
+            context=True,
         )
         cot.clear_model_cache(cot.id)
         model = cot.get_model()
         cot.register_custom_object_search_index(model)
 
-        label = f"{APP_LABEL}.{cot.get_table_model_name(cot.id).lower()}"
-        search_index = registry["search"][label]
-        self.assertIn("status", search_index.display_attrs)
-        self.assertNotIn("name", search_index.display_attrs)
+        label = f'{APP_LABEL}.{cot.get_table_model_name(cot.id).lower()}'
+        search_index = registry['search'][label]
+        self.assertIn('status', search_index.display_attrs)
+        self.assertNotIn('name', search_index.display_attrs)
 
     def test_register_search_index_includes_object_context_fields(self):
         """A context field of type object (a single real FK, unlike multiobject's
@@ -226,21 +222,30 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         instance directly, not a manager, so NetBox's generic renderer handles it
         correctly. Confirms the TYPE_MULTIOBJECT exclusion is scoped to just that
         one type, not object fields generally."""
-        cot = self.create_custom_object_type(name="ContextObjectTest", slug="context-object-test")
+        cot = self.create_custom_object_type(name='ContextObjectTest', slug='context-object-test')
         self.create_custom_object_type_field(
-            cot, name="name", label="Name", type="text", primary=True, search_weight=1000,
+            cot,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
+            search_weight=1000,
         )
         self.create_custom_object_type_field(
-            cot, name="related_site", label="Related Site", type="object",
-            related_object_type=self.get_site_object_type(), context=True,
+            cot,
+            name='related_site',
+            label='Related Site',
+            type='object',
+            related_object_type=self.get_site_object_type(),
+            context=True,
         )
         cot.clear_model_cache(cot.id)
         model = cot.get_model()
         cot.register_custom_object_search_index(model)
 
-        label = f"{APP_LABEL}.{cot.get_table_model_name(cot.id).lower()}"
-        search_index = registry["search"][label]
-        self.assertIn("related_site", search_index.display_attrs)
+        label = f'{APP_LABEL}.{cot.get_table_model_name(cot.id).lower()}'
+        search_index = registry['search'][label]
+        self.assertIn('related_site', search_index.display_attrs)
 
     def test_register_search_index_excludes_multiobject_context_fields(self):
         """A context field of type multiobject must not reach display_attrs.
@@ -252,21 +257,30 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         of the related objects. Excluding multiobject context fields here avoids
         surfacing that.
         """
-        cot = self.create_custom_object_type(name="ContextM2MTest", slug="context-m2m-test")
+        cot = self.create_custom_object_type(name='ContextM2MTest', slug='context-m2m-test')
         self.create_custom_object_type_field(
-            cot, name="name", label="Name", type="text", primary=True, search_weight=1000,
+            cot,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
+            search_weight=1000,
         )
         self.create_custom_object_type_field(
-            cot, name="related_sites", label="Related Sites", type="multiobject",
-            related_object_type=self.get_site_object_type(), context=True,
+            cot,
+            name='related_sites',
+            label='Related Sites',
+            type='multiobject',
+            related_object_type=self.get_site_object_type(),
+            context=True,
         )
         cot.clear_model_cache(cot.id)
         model = cot.get_model()
         cot.register_custom_object_search_index(model)
 
-        label = f"{APP_LABEL}.{cot.get_table_model_name(cot.id).lower()}"
-        search_index = registry["search"][label]
-        self.assertNotIn("related_sites", search_index.display_attrs)
+        label = f'{APP_LABEL}.{cot.get_table_model_name(cot.id).lower()}'
+        search_index = registry['search'][label]
+        self.assertNotIn('related_sites', search_index.display_attrs)
 
     def test_skipped_object_field_with_stale_content_type_logs_warning(self):
         """When get_model_field raises NotImplementedError for an object field whose
@@ -274,20 +288,22 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         be emitted — not just DEBUG — so operators can identify the broken field.
         Regression test for the fix in _fetch_and_generate_field_attrs.
         """
-        cot = self.create_custom_object_type(name="StaleCtTest", slug="stale-ct-test")
+        cot = self.create_custom_object_type(name='StaleCtTest', slug='stale-ct-test')
         self.create_custom_object_type_field(
             cot,
-            name="device",
-            label="Device",
-            type="object",
+            name='device',
+            label='Device',
+            type='object',
             related_object_type=self.get_device_object_type(),
         )
         CustomObjectType.clear_model_cache(cot.id)
         # Simulate a stale ContentType: get_model_field raises NotImplementedError
         # while related_object_type_id is still set (non-null).
-        with patch.object(ObjectFieldType, 'get_model_field', side_effect=NotImplementedError):
-            with self.assertLogs('netbox_custom_objects.models', level='WARNING') as cm:
-                cot.get_model()
+        with (
+            patch.object(ObjectFieldType, 'get_model_field', side_effect=NotImplementedError),
+            self.assertLogs('netbox_custom_objects.models', level='WARNING') as cm,
+        ):
+            cot.get_model()
         self.assertTrue(
             any('device' in msg for msg in cm.output),
             f"Expected WARNING mentioning field name 'device'; got: {cm.output}",
@@ -301,14 +317,12 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         Collector discovers the stale model class, tries to query the dropped table
         and raises "relation '<table>' does not exist".
         """
-        custom_object_type = self.create_custom_object_type(
-            name="RegTestObject", slug="reg-test-object"
-        )
+        custom_object_type = self.create_custom_object_type(name='RegTestObject', slug='reg-test-object')
         self.create_custom_object_type_field(
             custom_object_type,
-            name="name",
-            label="Name",
-            type="text",
+            name='name',
+            label='Name',
+            type='text',
             primary=True,
             required=True,
         )
@@ -385,10 +399,7 @@ class CustomObjectTypeConfigContextTestCase(CustomObjectsTestCase, TestCase):
     @staticmethod
     def _table_columns(table_name):
         with connection.cursor() as cursor:
-            return {
-                col.name
-                for col in connection.introspection.get_table_description(cursor, table_name)
-            }
+            return {col.name for col in connection.introspection.get_table_description(cursor, table_name)}
 
     def test_enabled_model_is_config_context_subclass_with_column(self):
         """A config-context-enabled type generates a ConfigContextModel subclass
@@ -396,67 +407,93 @@ class CustomObjectTypeConfigContextTestCase(CustomObjectsTestCase, TestCase):
         from extras.models import ConfigContextModel
 
         cot = self.create_custom_object_type(
-            name="cc_enabled", slug="cc-enabled", config_context_enabled=True,
+            name='cc_enabled',
+            slug='cc-enabled',
+            config_context_enabled=True,
         )
         self.create_custom_object_type_field(
-            cot, name="name", label="Name", type="text", primary=True, required=True,
+            cot,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
+            required=True,
         )
         model = cot.get_model(no_cache=True)
         self.assertTrue(issubclass(model, ConfigContextModel))
-        self.assertIn("local_context_data", self._table_columns(cot.get_database_table_name()))
+        self.assertIn('local_context_data', self._table_columns(cot.get_database_table_name()))
 
     def test_disabled_model_has_no_config_context(self):
         """The default (flag False) type is not a ConfigContextModel and has no
         local_context_data column."""
         from extras.models import ConfigContextModel
 
-        cot = self.create_custom_object_type(name="cc_disabled", slug="cc-disabled")
+        cot = self.create_custom_object_type(name='cc_disabled', slug='cc-disabled')
         self.assertFalse(cot.config_context_enabled)
         self.create_custom_object_type_field(
-            cot, name="name", label="Name", type="text", primary=True, required=True,
+            cot,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
+            required=True,
         )
         model = cot.get_model(no_cache=True)
         self.assertFalse(issubclass(model, ConfigContextModel))
-        self.assertNotIn("local_context_data", self._table_columns(cot.get_database_table_name()))
+        self.assertNotIn('local_context_data', self._table_columns(cot.get_database_table_name()))
 
     def test_local_context_data_round_trips_and_get_config_context(self):
         """An instance stores local_context_data and get_config_context() returns
         it without touching the org-dimension aggregation that custom objects lack."""
         cot = self.create_custom_object_type(
-            name="cc_roundtrip", slug="cc-roundtrip", config_context_enabled=True,
+            name='cc_roundtrip',
+            slug='cc-roundtrip',
+            config_context_enabled=True,
         )
         self.create_custom_object_type_field(
-            cot, name="name", label="Name", type="text", primary=True, required=True,
+            cot,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
+            required=True,
         )
         model = cot.get_model(no_cache=True)
 
-        obj = model(name="obj-1", local_context_data={"ntp_servers": ["10.0.0.1"]})
+        obj = model(name='obj-1', local_context_data={'ntp_servers': ['10.0.0.1']})
         obj.save()
         obj.refresh_from_db()
-        self.assertEqual(obj.local_context_data, {"ntp_servers": ["10.0.0.1"]})
+        self.assertEqual(obj.local_context_data, {'ntp_servers': ['10.0.0.1']})
         # Safe override: returns the local data, never raises on missing site/tenant/role.
-        self.assertEqual(obj.get_config_context(), {"ntp_servers": ["10.0.0.1"]})
+        self.assertEqual(obj.get_config_context(), {'ntp_servers': ['10.0.0.1']})
 
-        empty = model(name="obj-2")
+        empty = model(name='obj-2')
         empty.save()
         self.assertEqual(empty.get_config_context(), {})
 
     def test_clean_rejects_non_dict_local_context_data(self):
         """The inherited ConfigContextModel.clean() validator rejects non-object JSON."""
         cot = self.create_custom_object_type(
-            name="cc_clean", slug="cc-clean", config_context_enabled=True,
+            name='cc_clean',
+            slug='cc-clean',
+            config_context_enabled=True,
         )
         self.create_custom_object_type_field(
-            cot, name="name", label="Name", type="text", primary=True, required=True,
+            cot,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
+            required=True,
         )
         model = cot.get_model(no_cache=True)
-        obj = model(name="bad", local_context_data=["not", "a", "dict"])
+        obj = model(name='bad', local_context_data=['not', 'a', 'dict'])
         with self.assertRaises(ValidationError):
             obj.clean()
 
     def test_config_context_enabled_immutable_in_clean(self):
         """full_clean() rejects flipping config_context_enabled on an existing type."""
-        cot = self.create_custom_object_type(name="cc_clean_immut", slug="cc-clean-immut")
+        cot = self.create_custom_object_type(name='cc_clean_immut', slug='cc-clean-immut')
         self.assertFalse(cot.config_context_enabled)
         cot.config_context_enabled = True
         with self.assertRaises(ValidationError):
@@ -465,9 +502,11 @@ class CustomObjectTypeConfigContextTestCase(CustomObjectsTestCase, TestCase):
     def test_config_context_enabled_clean_allows_unchanged(self):
         """Re-validating without changing the flag must not raise."""
         cot = self.create_custom_object_type(
-            name="cc_clean_ok", slug="cc-clean-ok", config_context_enabled=True,
+            name='cc_clean_ok',
+            slug='cc-clean-ok',
+            config_context_enabled=True,
         )
-        cot.description = "edited"
+        cot.description = 'edited'
         cot.full_clean()  # should not raise
 
     # --- Source-context aggregation via field-naming convention ---
@@ -476,10 +515,18 @@ class CustomObjectTypeConfigContextTestCase(CustomObjectsTestCase, TestCase):
         """Config-context-enabled COT with a primary name field and a `site` object field."""
         cot = self.create_custom_object_type(name=name, slug=slug, config_context_enabled=True)
         self.create_custom_object_type_field(
-            cot, name="name", label="Name", type="text", primary=True, required=True,
+            cot,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
+            required=True,
         )
         self.create_custom_object_type_field(
-            cot, name="site", label="Site", type="object",
+            cot,
+            name='site',
+            label='Site',
+            type='object',
             related_object_type=self.get_site_object_type(),
         )
         return cot
@@ -489,124 +536,158 @@ class CustomObjectTypeConfigContextTestCase(CustomObjectsTestCase, TestCase):
         with local_context_data merged on top."""
         from extras.models import ConfigContext
 
-        site = Site.objects.create(name="CC Site", slug="cc-site")
-        cc = ConfigContext.objects.create(name="cc-site-ctx", weight=1000, is_active=True,
-                                          data={"ntp": "10.0.0.1", "dns": "8.8.8.8"})
+        site = Site.objects.create(name='CC Site', slug='cc-site')
+        cc = ConfigContext.objects.create(
+            name='cc-site-ctx', weight=1000, is_active=True, data={'ntp': '10.0.0.1', 'dns': '8.8.8.8'}
+        )
         cc.sites.add(site)
 
-        cot = self._site_cot("cc_agg_site", "cc-agg-site")
+        cot = self._site_cot('cc_agg_site', 'cc-agg-site')
         model = cot.get_model(no_cache=True)
-        obj = model.objects.create(name="o1", site=site, local_context_data={"dns": "1.1.1.1"})
+        obj = model.objects.create(name='o1', site=site, local_context_data={'dns': '1.1.1.1'})
 
         rendered = obj.get_config_context()
-        self.assertEqual(rendered["ntp"], "10.0.0.1")        # from source context
-        self.assertEqual(rendered["dns"], "1.1.1.1")         # local overrides source
+        self.assertEqual(rendered['ntp'], '10.0.0.1')  # from source context
+        self.assertEqual(rendered['dns'], '1.1.1.1')  # local overrides source
 
     def test_renderer_shares_source_data_without_leaking_local_overrides(self):
         """Objects sharing source contexts don't see each other's nested local overrides."""
         from extras.models import ConfigContext
-
         from netbox_custom_objects.models import ConfigContextRenderer
 
-        site = Site.objects.create(name="CC Shared", slug="cc-shared")
-        cc = ConfigContext.objects.create(name="cc-shared-ctx", weight=1000, is_active=True,
-                                          data={"ntp": {"primary": "10.0.0.1", "secondary": "10.0.0.2"}})
+        site = Site.objects.create(name='CC Shared', slug='cc-shared')
+        cc = ConfigContext.objects.create(
+            name='cc-shared-ctx',
+            weight=1000,
+            is_active=True,
+            data={'ntp': {'primary': '10.0.0.1', 'secondary': '10.0.0.2'}},
+        )
         cc.sites.add(site)
-        cot = self._site_cot("cc_shared", "cc-shared")
+        cot = self._site_cot('cc_shared', 'cc-shared')
         model = cot.get_model(no_cache=True)
-        overridden = model.objects.create(name="o1", site=site, local_context_data={"ntp": {"primary": "local"}})
-        plain = model.objects.create(name="o2", site=site)
+        overridden = model.objects.create(name='o1', site=site, local_context_data={'ntp': {'primary': 'local'}})
+        plain = model.objects.create(name='o2', site=site)
 
         renderer = ConfigContextRenderer()
-        self.assertEqual(renderer.render(overridden)["ntp"], {"primary": "local", "secondary": "10.0.0.2"})
-        self.assertEqual(renderer.render(plain)["ntp"], {"primary": "10.0.0.1", "secondary": "10.0.0.2"})
+        self.assertEqual(renderer.render(overridden)['ntp'], {'primary': 'local', 'secondary': '10.0.0.2'})
+        self.assertEqual(renderer.render(plain)['ntp'], {'primary': '10.0.0.1', 'secondary': '10.0.0.2'})
 
     def test_no_convention_field_returns_local_only(self):
         """Without a convention-named dimension field, no source aggregation happens."""
         from extras.models import ConfigContext
 
         # A global (unassigned) active context that WOULD match a dimensionful object.
-        ConfigContext.objects.create(name="global-ctx", weight=1000, is_active=True, data={"g": 1})
+        ConfigContext.objects.create(name='global-ctx', weight=1000, is_active=True, data={'g': 1})
 
-        cot = self.create_custom_object_type(name="cc_nodim", slug="cc-nodim", config_context_enabled=True)
+        cot = self.create_custom_object_type(name='cc_nodim', slug='cc-nodim', config_context_enabled=True)
         self.create_custom_object_type_field(
-            cot, name="name", label="Name", type="text", primary=True, required=True,
+            cot,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
+            required=True,
         )
         model = cot.get_model(no_cache=True)
-        obj = model.objects.create(name="o1", local_context_data={"local": 2})
+        obj = model.objects.create(name='o1', local_context_data={'local': 2})
 
-        self.assertEqual(obj.get_config_context(), {"local": 2})
+        self.assertEqual(obj.get_config_context(), {'local': 2})
 
     def test_misnamed_field_is_ignored(self):
         """A `site`-named field pointing at the wrong model must not feed the site dimension."""
         from extras.models import ConfigContext
 
-        site = Site.objects.create(name="CC Site 2", slug="cc-site-2")
-        cc = ConfigContext.objects.create(name="cc-site-ctx-2", weight=1000, is_active=True, data={"x": 1})
+        site = Site.objects.create(name='CC Site 2', slug='cc-site-2')
+        cc = ConfigContext.objects.create(name='cc-site-ctx-2', weight=1000, is_active=True, data={'x': 1})
         cc.sites.add(site)
 
         # Field named `site` but pointing at Prefix (wrong model) → ignored.
-        cot = self.create_custom_object_type(name="cc_wrong", slug="cc-wrong", config_context_enabled=True)
+        cot = self.create_custom_object_type(name='cc_wrong', slug='cc-wrong', config_context_enabled=True)
         self.create_custom_object_type_field(
-            cot, name="name", label="Name", type="text", primary=True, required=True,
+            cot,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
+            required=True,
         )
         self.create_custom_object_type_field(
-            cot, name="site", label="Site", type="object",
+            cot,
+            name='site',
+            label='Site',
+            type='object',
             related_object_type=self.get_prefix_object_type(),
         )
         model = cot.get_model(no_cache=True)
-        obj = model.objects.create(name="o1", local_context_data={"only": "local"})
+        obj = model.objects.create(name='o1', local_context_data={'only': 'local'})
 
-        self.assertEqual(obj.get_config_context(), {"only": "local"})
+        self.assertEqual(obj.get_config_context(), {'only': 'local'})
 
     def test_aggregates_referenced_tenant_config_context(self):
         """The `tenant` dimension (a direct obj.tenant read in get_for_object) works."""
         from extras.models import ConfigContext
         from tenancy.models import Tenant
 
-        tenant = Tenant.objects.create(name="CC Tenant", slug="cc-tenant")
-        cc = ConfigContext.objects.create(name="cc-tenant-ctx", weight=1000, is_active=True, data={"t": 1})
+        tenant = Tenant.objects.create(name='CC Tenant', slug='cc-tenant')
+        cc = ConfigContext.objects.create(name='cc-tenant-ctx', weight=1000, is_active=True, data={'t': 1})
         cc.tenants.add(tenant)
 
-        cot = self.create_custom_object_type(name="cc_tenant", slug="cc-tenant", config_context_enabled=True)
+        cot = self.create_custom_object_type(name='cc_tenant', slug='cc-tenant', config_context_enabled=True)
         self.create_custom_object_type_field(
-            cot, name="name", label="Name", type="text", primary=True, required=True,
+            cot,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
+            required=True,
         )
         self.create_custom_object_type_field(
-            cot, name="tenant", label="Tenant", type="object",
-            related_object_type=ObjectType.objects.get(app_label="tenancy", model="tenant"),
+            cot,
+            name='tenant',
+            label='Tenant',
+            type='object',
+            related_object_type=ObjectType.objects.get(app_label='tenancy', model='tenant'),
         )
         model = cot.get_model(no_cache=True)
-        obj = model.objects.create(name="o1", tenant=tenant)
+        obj = model.objects.create(name='o1', tenant=tenant)
 
-        self.assertEqual(obj.get_config_context(), {"t": 1})
+        self.assertEqual(obj.get_config_context(), {'t': 1})
 
     def test_aggregates_referenced_role_config_context(self):
         """The `role` dimension (a direct obj.role read + get_ancestors) works."""
         from dcim.models import DeviceRole
         from extras.models import ConfigContext
 
-        role = DeviceRole.objects.create(name="CC Role", slug="cc-role", color="ff0000")
-        cc = ConfigContext.objects.create(name="cc-role-ctx", weight=1000, is_active=True, data={"r": 1})
+        role = DeviceRole.objects.create(name='CC Role', slug='cc-role', color='ff0000')
+        cc = ConfigContext.objects.create(name='cc-role-ctx', weight=1000, is_active=True, data={'r': 1})
         cc.roles.add(role)
 
-        cot = self.create_custom_object_type(name="cc_role", slug="cc-role", config_context_enabled=True)
+        cot = self.create_custom_object_type(name='cc_role', slug='cc-role', config_context_enabled=True)
         self.create_custom_object_type_field(
-            cot, name="name", label="Name", type="text", primary=True, required=True,
+            cot,
+            name='name',
+            label='Name',
+            type='text',
+            primary=True,
+            required=True,
         )
         self.create_custom_object_type_field(
-            cot, name="role", label="Role", type="object",
-            related_object_type=ObjectType.objects.get(app_label="dcim", model="devicerole"),
+            cot,
+            name='role',
+            label='Role',
+            type='object',
+            related_object_type=ObjectType.objects.get(app_label='dcim', model='devicerole'),
         )
         model = cot.get_model(no_cache=True)
-        obj = model.objects.create(name="o1", role=role)
+        obj = model.objects.create(name='o1', role=role)
 
-        self.assertEqual(obj.get_config_context(), {"r": 1})
+        self.assertEqual(obj.get_config_context(), {'r': 1})
 
 
 # ---------------------------------------------------------------------------
 # Semver / version string validation
 # ---------------------------------------------------------------------------
+
 
 class SemverValidationTestCase(CustomObjectsTestCase, TestCase):
     """Validate that version-string fields reject non-PEP-440 values."""
@@ -630,7 +711,7 @@ class SemverValidationTestCase(CustomObjectsTestCase, TestCase):
         cot = self.create_custom_object_type(name='semver_cot3', slug='semver-cot-3')
         for bad in ('not-a-version', '1.x.0', 'latest', '!!invalid!!'):
             cot.version = bad
-            with self.assertRaises(ValidationError, msg=f"Expected ValidationError for version={bad!r}"):
+            with self.assertRaises(ValidationError, msg=f'Expected ValidationError for version={bad!r}'):
                 cot.full_clean()
 
     # ------------------------------------------------------------------
@@ -654,7 +735,7 @@ class SemverValidationTestCase(CustomObjectsTestCase, TestCase):
         field = self.create_custom_object_type_field(cot, name='gamma', type='text')
         for bad in ('not-a-version', '1.x.0', 'latest', '!!invalid!!'):
             field.deprecated_since = bad
-            with self.assertRaises(ValidationError, msg=f"Expected ValidationError for deprecated_since={bad!r}"):
+            with self.assertRaises(ValidationError, msg=f'Expected ValidationError for deprecated_since={bad!r}'):
                 field.full_clean()
 
     # ------------------------------------------------------------------
@@ -678,7 +759,7 @@ class SemverValidationTestCase(CustomObjectsTestCase, TestCase):
         field = self.create_custom_object_type_field(cot, name='zeta', type='text')
         for bad in ('v-bad', '1.x.0', 'latest', '!!invalid!!'):
             field.scheduled_removal = bad
-            with self.assertRaises(ValidationError, msg=f"Expected ValidationError for scheduled_removal={bad!r}"):
+            with self.assertRaises(ValidationError, msg=f'Expected ValidationError for scheduled_removal={bad!r}'):
                 field.full_clean()
 
 
@@ -691,7 +772,9 @@ class DisplayExpressionTestCase(CustomObjectsTestCase, TestCase):
 
     def _make_cot(self, expression=''):
         cot = self.create_custom_object_type(
-            name='ExprTest', slug='expr-test', display_expression=expression,
+            name='ExprTest',
+            slug='expr-test',
+            display_expression=expression,
         )
         self.create_custom_object_type_field(cot, name='make', label='Make', type='text', primary=True, required=True)
         self.create_custom_object_type_field(cot, name='model', label='Model', type='text', required=False)
@@ -734,9 +817,15 @@ class DisplayExpressionTestCase(CustomObjectsTestCase, TestCase):
     def test_bad_field_value_renders_empty(self):
         cot = self._make_cot('{{ make }}/{{ model }}')
         instance = cot.get_model().objects.create(make='Ubiquiti', model='USW')
-        with patch.object(TextFieldType, 'get_display_value', autospec=True, side_effect=[
-            'Ubiquiti', ObjectDoesNotExist('gone'),
-        ]):
+        with patch.object(
+            TextFieldType,
+            'get_display_value',
+            autospec=True,
+            side_effect=[
+                'Ubiquiti',
+                ObjectDoesNotExist('gone'),
+            ],
+        ):
             self.assertEqual(str(instance), 'Ubiquiti/')
 
     def test_database_error_propagates(self):
@@ -744,9 +833,11 @@ class DisplayExpressionTestCase(CustomObjectsTestCase, TestCase):
         cot = self._make_cot('{{ make }}')
         instance = cot.get_model().objects.create(make='Extreme')
         # Only the expression's value fails, so swallowing the error would fall back to the primary field.
-        with patch.object(TextFieldType, 'get_display_value', side_effect=[DatabaseError('aborted'), 'Extreme']):
-            with self.assertRaises(DatabaseError):
-                str(instance)
+        with (
+            patch.object(TextFieldType, 'get_display_value', side_effect=[DatabaseError('aborted'), 'Extreme']),
+            self.assertRaises(DatabaseError),
+        ):
+            str(instance)
 
     def test_clean_rejects_invalid_syntax(self):
         for expression in ('{% invalid jinja %}', '{% if make %}{{ make }}', '{{ make', DEEPLY_NESTED_EXPRESSION):
@@ -774,35 +865,56 @@ class DisplayExpressionTestCase(CustomObjectsTestCase, TestCase):
         # separator unless the template guards it.  Verify both behaviours so
         # the documented {% if %} pattern is regression-tested.
         cot_bare = self.create_custom_object_type(
-            name='SepBare', slug='sep-bare',
+            name='SepBare',
+            slug='sep-bare',
             display_expression='{{ make }} / {{ model }}',
         )
         self.create_custom_object_type_field(
-            cot_bare, name='make', label='Make', type='text', primary=True, required=True,
+            cot_bare,
+            name='make',
+            label='Make',
+            type='text',
+            primary=True,
+            required=True,
         )
         self.create_custom_object_type_field(
-            cot_bare, name='model', label='Model', type='text', required=False,
+            cot_bare,
+            name='model',
+            label='Model',
+            type='text',
+            required=False,
         )
 
         guarded_expr = '{{ make }}{% if model %} / {{ model }}{% endif %}'
         cot_guarded = self.create_custom_object_type(
-            name='SepGuarded', slug='sep-guarded', display_expression=guarded_expr,
+            name='SepGuarded',
+            slug='sep-guarded',
+            display_expression=guarded_expr,
         )
         self.create_custom_object_type_field(
-            cot_guarded, name='make', label='Make', type='text', primary=True, required=True,
+            cot_guarded,
+            name='make',
+            label='Make',
+            type='text',
+            primary=True,
+            required=True,
         )
         self.create_custom_object_type_field(
-            cot_guarded, name='model', label='Model', type='text', required=False,
+            cot_guarded,
+            name='model',
+            label='Model',
+            type='text',
+            required=False,
         )
 
         model_bare = cot_bare.get_model()
         model_guarded = cot_guarded.get_model()
 
-        bare_instance = model_bare.objects.create(make='Arista')       # model is blank
+        bare_instance = model_bare.objects.create(make='Arista')  # model is blank
         guarded_instance = model_guarded.objects.create(make='Arista')  # model is blank
 
-        self.assertEqual(str(bare_instance), 'Arista /')       # trailing separator
-        self.assertEqual(str(guarded_instance), 'Arista')      # cleaned up with {% if %}
+        self.assertEqual(str(bare_instance), 'Arista /')  # trailing separator
+        self.assertEqual(str(guarded_instance), 'Arista')  # cleaned up with {% if %}
 
         # With model populated, both render identically.
         bare_full = model_bare.objects.create(make='Cisco', model='ASR')
@@ -816,6 +928,7 @@ class DisplayExpressionFormValidationTestCase(CustomObjectsTestCase, TestCase):
 
     def _form(self, expression):
         from netbox_custom_objects.forms import CustomObjectTypeForm
+
         data = {
             'name': 'validtest',
             'slug': 'validtest',

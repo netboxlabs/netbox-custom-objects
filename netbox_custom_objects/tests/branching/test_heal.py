@@ -1,10 +1,12 @@
 """
 Healing branch schemas after a plugin upgrade (``mixin_migration.heal_branch``).
 """
+
 import unittest
 from unittest import mock
 
-from django.db import connection as main_conn, connections
+from django.db import connection as main_conn
+from django.db import connections
 
 from netbox_custom_objects.models import (
     CustomObjectType,
@@ -13,19 +15,21 @@ from netbox_custom_objects.models import (
 
 from .base import (
     HAS_BRANCHING,
-    _make_request,
-    _TestBase,
-    _provision_branch,
     BranchingTestBase,
+    _make_request,
+    _provision_branch,
+    _TestBase,
 )
 
 if HAS_BRANCHING:
-    from netbox.context_managers import event_tracking
     from netbox_branching.choices import BranchStatusChoices
     from netbox_branching.models import Branch
 
+    from netbox.context_managers import event_tracking
+
 
 # ── Branch upgrade heal (mixin_migration.heal_branch) ──────────────────────────
+
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
 class BranchUpgradeHealTestCase(BranchingTestBase, _TestBase):
@@ -56,7 +60,10 @@ class BranchUpgradeHealTestCase(BranchingTestBase, _TestBase):
         with event_tracking(request):
             cot = CustomObjectType.objects.create(name=cot_name, slug=cot_slug)
             CustomObjectTypeField.objects.create(
-                custom_object_type=cot, name=field_name, label=field_name.title(), type='url',
+                custom_object_type=cot,
+                name=field_name,
+                label=field_name.title(),
+                type='url',
             )
 
         branch = _provision_branch(f'{cot_name} branch', None, self.user)
@@ -68,17 +75,16 @@ class BranchUpgradeHealTestCase(BranchingTestBase, _TestBase):
 
         def _columns(conn):
             with conn.cursor() as cursor:
-                return {
-                    col.name
-                    for col in conn.introspection.get_table_description(cursor, table_name)
-                }
+                return {col.name for col in conn.introspection.get_table_description(cursor, table_name)}
 
         self.assertNotIn(
-            f'{field_name}_title', _columns(branch_conn),
+            f'{field_name}_title',
+            _columns(branch_conn),
             'Precondition: title column must be absent from the branch schema',
         )
         self.assertIn(
-            f'{field_name}_title', _columns(main_conn),
+            f'{field_name}_title',
+            _columns(main_conn),
             'Precondition: title column must still be present in main',
         )
         return cot, branch, table_name, branch_conn, _columns
@@ -91,18 +97,20 @@ class BranchUpgradeHealTestCase(BranchingTestBase, _TestBase):
         """
         from netbox_custom_objects.mixin_migration import heal_branch
 
-        cot, branch, table_name, branch_conn, _columns = (
-            self._setup_branch_with_dropped_title_column('heal_cot', 'heal-cot', 'site_link')
+        _cot, branch, _table_name, branch_conn, _columns = self._setup_branch_with_dropped_title_column(
+            'heal_cot', 'heal-cot', 'site_link'
         )
 
         result = heal_branch(branch)
 
         self.assertIn(
-            'site_link_title', _columns(branch_conn),
+            'site_link_title',
+            _columns(branch_conn),
             'heal_branch() must add the missing title column to the branch schema',
         )
         self.assertIn(
-            'site_link_title', _columns(main_conn),
+            'site_link_title',
+            _columns(main_conn),
             "heal_branch() must not have touched main's schema",
         )
         self.assertEqual(result['healed'], 1)
@@ -119,19 +127,20 @@ class BranchUpgradeHealTestCase(BranchingTestBase, _TestBase):
         """
         from django.core.management import call_command
 
-        cot, branch, table_name, branch_conn, _columns = (
-            self._setup_branch_with_dropped_title_column('heal_cmd_cot', 'heal-cmd-cot', 'site_link')
+        _cot, _branch, _table_name, branch_conn, _columns = self._setup_branch_with_dropped_title_column(
+            'heal_cmd_cot', 'heal-cmd-cot', 'site_link'
         )
 
         call_command('upgrade_custom_objects', verbosity=0)
 
         self.assertIn(
-            'site_link_title', _columns(branch_conn),
-            "'manage.py upgrade_custom_objects' must heal the branch's schema too, "
-            'not just main\'s',
+            'site_link_title',
+            _columns(branch_conn),
+            "'manage.py upgrade_custom_objects' must heal the branch's schema too, not just main's",
         )
         self.assertIn(
-            'site_link_title', _columns(main_conn),
+            'site_link_title',
+            _columns(main_conn),
             "the command must not have broken main's already-healthy schema",
         )
 
@@ -147,8 +156,8 @@ class BranchUpgradeHealTestCase(BranchingTestBase, _TestBase):
         """
         from netbox_custom_objects.mixin_migration import heal_all_branches
 
-        cot, branch, table_name, branch_conn, _columns = (
-            self._setup_branch_with_dropped_title_column('heal_missing', 'heal-missing', 'site_link')
+        _cot, branch, _table_name, branch_conn, _columns = self._setup_branch_with_dropped_title_column(
+            'heal_missing', 'heal-missing', 'site_link'
         )
         branch_conn.close()
         with main_conn.cursor() as cursor:
@@ -163,7 +172,8 @@ class BranchUpgradeHealTestCase(BranchingTestBase, _TestBase):
         self.assertEqual(result['healed'], 0)
         self.assertGreaterEqual(result['warnings'], 1)
         self.assertIn(
-            'site_link_title', _columns(main_conn),
+            'site_link_title',
+            _columns(main_conn),
             "main's own schema must be unaffected by a branch with no schema",
         )
 
@@ -177,8 +187,8 @@ class BranchUpgradeHealTestCase(BranchingTestBase, _TestBase):
         """
         from netbox_custom_objects.mixin_migration import heal_all_branches
 
-        cot, branch, table_name, branch_conn, _columns = (
-            self._setup_branch_with_dropped_title_column('heal_pending', 'heal-pending', 'site_link')
+        _cot, _branch, _table_name, branch_conn, _columns = self._setup_branch_with_dropped_title_column(
+            'heal_pending', 'heal-pending', 'site_link'
         )
 
         with mock.patch(
@@ -190,8 +200,9 @@ class BranchUpgradeHealTestCase(BranchingTestBase, _TestBase):
 
         self.assertEqual(result['healed'], 0)
         self.assertNotIn(
-            'site_link_title', _columns(branch_conn),
-            "a branch with pending migrations must not be healed yet",
+            'site_link_title',
+            _columns(branch_conn),
+            'a branch with pending migrations must not be healed yet',
         )
 
     def test_heal_all_branches_continues_after_one_branch_fails(self):
@@ -202,8 +213,8 @@ class BranchUpgradeHealTestCase(BranchingTestBase, _TestBase):
         from netbox_custom_objects import mixin_migration
         from netbox_custom_objects.mixin_migration import heal_all_branches
 
-        cot, branch1, table_name, branch1_conn, _columns = (
-            self._setup_branch_with_dropped_title_column('heal_multi_a', 'heal-multi-a', 'site_link')
+        cot, branch1, _table_name, branch1_conn, _columns = self._setup_branch_with_dropped_title_column(
+            'heal_multi_a', 'heal-multi-a', 'site_link'
         )
         branch2 = _provision_branch('heal_multi_b branch', None, self.user)
         table_name2 = cot.get_database_table_name()
@@ -223,11 +234,13 @@ class BranchUpgradeHealTestCase(BranchingTestBase, _TestBase):
             result = heal_all_branches(verbosity=0)
 
         self.assertNotIn(
-            'site_link_title', _columns(branch1_conn),
+            'site_link_title',
+            _columns(branch1_conn),
             'branch1 was never healed (its heal_branch() call raised)',
         )
         self.assertIn(
-            'site_link_title', _columns(branch2_conn),
+            'site_link_title',
+            _columns(branch2_conn),
             "branch2 must still be healed despite branch1's failure",
         )
         self.assertGreaterEqual(result['warnings'], 1)
@@ -243,8 +256,8 @@ class BranchUpgradeHealTestCase(BranchingTestBase, _TestBase):
         """
         from netbox_custom_objects.mixin_migration import heal_all_branches
 
-        cot, branch, table_name, branch_conn, _columns = (
-            self._setup_branch_with_dropped_title_column('heal_close', 'heal-close', 'site_link')
+        _cot, _branch, _table_name, branch_conn, _columns = self._setup_branch_with_dropped_title_column(
+            'heal_close', 'heal-close', 'site_link'
         )
         branch2 = _provision_branch('heal_close_pending branch', None, self.user)
         branch2_conn = connections[branch2.connection_name]

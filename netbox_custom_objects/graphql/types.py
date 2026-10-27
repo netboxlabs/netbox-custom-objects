@@ -26,21 +26,20 @@ no registered GraphQL type, the field falls back to a lightweight, uniform
 import logging
 import re
 import threading
-from typing import Annotated, List, Optional, Union
+from typing import Annotated, Optional, Union
 
 import strawberry
 import strawberry_django
+from strawberry.types import Info
+
 from core.graphql.mixins import ChangelogMixin
 from extras.choices import CustomFieldFilterLogicChoices, CustomFieldTypeChoices
 from extras.graphql.mixins import JournalEntriesMixin, TagsMixin
 from extras.models import ConfigContextModel
 from netbox.graphql.scalars import BigInt
 from netbox.graphql.types import BaseObjectType
-from strawberry.types import Info
-from users.graphql.mixins import OwnerMixin
-
-from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
+from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.graphql.filters import (
     build_filter_class,
     coordinates_filter_annotations,
@@ -49,8 +48,9 @@ from netbox_custom_objects.graphql.filters import (
     scalar_filter_annotation,
 )
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name, restrict_to_viewable
+from users.graphql.mixins import OwnerMixin
 
-logger = logging.getLogger("netbox_custom_objects.graphql")
+logger = logging.getLogger('netbox_custom_objects.graphql')
 
 
 def _build_gfk_prefetch_fallback(lookup, models):
@@ -60,6 +60,7 @@ def _build_gfk_prefetch_fallback(lookup, models):
 
     def prefetch(info):
         return GenericPrefetch(lookup, [model.objects.all() for model in models])
+
     return prefetch
 
 
@@ -70,14 +71,14 @@ except ImportError:
     build_gfk_prefetch = _build_gfk_prefetch_fallback
 
 __all__ = (
-    "CustomObjectObjectType",
-    "CustomObjectRelatedObjectType",
-    "build_object_type",
-    "clear_type_cache",
-    "graphql_safe_name",
-    "reset_build_state",
-    "set_cot_map",
-    "set_visible_cot_ids",
+    'CustomObjectObjectType',
+    'CustomObjectRelatedObjectType',
+    'build_object_type',
+    'clear_type_cache',
+    'graphql_safe_name',
+    'reset_build_state',
+    'set_cot_map',
+    'set_visible_cot_ids',
 )
 
 # Per-rebuild memoization of built GraphQL types, keyed by (cot id,
@@ -179,7 +180,7 @@ class CustomObjectRelatedObjectType:
     id: BigInt
     object_type: str
     display: str
-    url: Optional[str]
+    url: str | None
 
 
 @strawberry.type
@@ -197,11 +198,11 @@ class CustomObjectObjectType(ChangelogMixin, JournalEntriesMixin, TagsMixin, Bas
 
 def graphql_safe_name(value):
     """Replace any character not valid in a GraphQL name with an underscore."""
-    return re.sub(r"[^0-9a-zA-Z_]", "_", value or "")
+    return re.sub(r'[^0-9a-zA-Z_]', '_', value or '')
 
 
 def _in_progress_stack():
-    stack = getattr(_building, "cot_stack", None)
+    stack = getattr(_building, 'cot_stack', None)
     if stack is None:
         stack = []
         _building.cot_stack = stack
@@ -209,7 +210,7 @@ def _in_progress_stack():
 
 
 def _cycle_tainted_set():
-    tainted = getattr(_building, "cycle_tainted", None)
+    tainted = getattr(_building, 'cycle_tainted', None)
     if tainted is None:
         tainted = set()
         _building.cycle_tainted = tainted
@@ -218,8 +219,8 @@ def _cycle_tainted_set():
 
 def _request_user(info):
     """Best-effort extraction of the requesting user from the GraphQL info context."""
-    request = getattr(getattr(info, "context", None), "request", None)
-    return getattr(request, "user", None)
+    request = getattr(getattr(info, 'context', None), 'request', None)
+    return getattr(request, 'user', None)
 
 
 def _filter_viewable(user, objects):
@@ -239,15 +240,15 @@ def _related_repr(obj):
         return None
     try:
         url = obj.get_absolute_url()
-    except Exception:  # noqa: BLE001 - URL resolution is best-effort
+    except Exception:  # URL resolution is best-effort
         url = None
     try:
         display = str(obj)
-    except Exception:  # noqa: BLE001 - a broken __str__ must not fail the whole field
+    except Exception:  # a broken __str__ must not fail the whole field
         # Degrade to a stable identifier so one unrenderable object becomes a
         # placeholder rather than erroring the entire (possibly multi-object) field;
         # pk and _meta are safe even when __str__ raises.
-        display = f"{obj._meta.label_lower}:{obj.pk}"
+        display = f'{obj._meta.label_lower}:{obj.pk}'
     return CustomObjectRelatedObjectType(
         id=obj.pk,
         object_type=obj._meta.label_lower,
@@ -276,13 +277,13 @@ def _build_model_type_registry():
         if app_config.label == APP_LABEL:
             # Custom-object types are resolved dynamically, not from a module.
             continue
-        module_name = f"{app_config.name}.graphql.types"
+        module_name = f'{app_config.name}.graphql.types'
         try:
             module = import_module(module_name)
         except ModuleNotFoundError:
             continue
-        except Exception:  # noqa: BLE001 - a broken app module must not break the schema
-            logger.debug("Could not import %s for the GraphQL type registry", module_name, exc_info=True)
+        except Exception:  # a broken app module must not break the schema
+            logger.debug('Could not import %s for the GraphQL type registry', module_name, exc_info=True)
             continue
         for value in vars(module).values():
             if not isinstance(value, type):
@@ -293,7 +294,7 @@ def _build_model_type_registry():
             # Only index GraphQL *output* object types. Filters and inputs also
             # carry a django definition (and a model), but using one as a field's
             # type would break the schema.
-            sb_definition = getattr(value, "__strawberry_definition__", None)
+            sb_definition = getattr(value, '__strawberry_definition__', None)
             if sb_definition is None or sb_definition.is_input or sb_definition.is_interface:
                 continue
             registry.setdefault(definition.model, value)
@@ -321,7 +322,7 @@ def _custom_object_graphql_type(model_name):
     # stack holds ints, so coerce before the membership test or it never matches.
     cot_id = int(cot_id)
     stack = _in_progress_stack()
-    visible = getattr(_building, "visible_cot_ids", None)
+    visible = getattr(_building, 'visible_cot_ids', None)
     if visible is not None and cot_id not in visible:
         # Hidden from this schema's user: the field uses the stub, not the type's definition.
         return None
@@ -337,7 +338,7 @@ def _custom_object_graphql_type(model_name):
     # Resolve from the rebuild's preloaded (prefetched) map when available, so a
     # cross-COT reference doesn't issue a query per edge; fall back to a lookup for
     # direct callers (e.g. tests) that didn't register a map.
-    cot_map = getattr(_building, "cot_map", None)
+    cot_map = getattr(_building, 'cot_map', None)
     cot = cot_map.get(cot_id) if cot_map else None
     if cot is None:
         cot = CustomObjectType.objects.filter(pk=cot_id).first()
@@ -345,10 +346,8 @@ def _custom_object_graphql_type(model_name):
         return None
     try:
         return build_object_type(cot)
-    except Exception:  # noqa: BLE001
-        logger.warning(
-            "Failed to build related custom-object GraphQL type for %r", model_name, exc_info=True
-        )
+    except Exception:
+        logger.warning('Failed to build related custom-object GraphQL type for %r', model_name, exc_info=True)
         return None
 
 
@@ -402,16 +401,17 @@ def _resolve_relationship_members(field):
 def _relationship_union_name(field):
     """A schema-unique, GraphQL-safe name for a polymorphic field's union type."""
     base = graphql_safe_name(field.name)
-    return f"CustomObject{field.custom_object_type_id}_{base}_Related"
+    return f'CustomObject{field.custom_object_type_id}_{base}_Related'
 
 
 def _relationship_annotation(members, is_list, union_name):
     """Build the resolver return annotation from the resolved member types."""
-    if len(members) == 1:
+    if len(members) == 1:  # noqa: SIM108 - keeps the noqa below on its own line
         inner = members[0]
     else:
-        inner = Annotated[Union[tuple(members)], strawberry.union(union_name)]
-    return List[inner] if is_list else Optional[inner]
+        # Union[] of a runtime tuple of types; the `X | Y` form can't be built from one.
+        inner = Annotated[Union[tuple(members)], strawberry.union(union_name)]  # noqa: UP007
+    return list[inner] if is_list else Optional[inner]
 
 
 def _coerce_related(obj, native_models):
@@ -459,14 +459,13 @@ def _make_relationship_resolver(field, members, native_models):
     # MULTIOBJECT field's manager (field_types.py) already implements Django's
     # get_prefetch_querysets() protocol, so a bare string hint works for it.
     target_models = [
-        model for model in (
-            content_type.model_class() for content_type in _field_target_content_types(field)
-        )
+        model
+        for model in (content_type.model_class() for content_type in _field_target_content_types(field))
         if model is not None
     ]
 
     if is_list:
-        hint = {"prefetch_related": field_name} if target_models else {}
+        hint = {'prefetch_related': field_name} if target_models else {}
         description = f"Related objects referenced by '{field_name}'"
     elif field.is_polymorphic:
         # `only` is required alongside the prefetch: without it the GFK's two
@@ -474,14 +473,15 @@ def _make_relationship_resolver(field, members, native_models):
         # fetched with its own deferred-field query per row.
         hint = (
             {
-                "prefetch_related": build_gfk_prefetch(field_name, target_models),
-                "only": [f"{field_name}_content_type", f"{field_name}_object_id"],
+                'prefetch_related': build_gfk_prefetch(field_name, target_models),
+                'only': [f'{field_name}_content_type', f'{field_name}_object_id'],
             }
-            if target_models else {}
+            if target_models
+            else {}
         )
         description = f"Related object referenced by '{field_name}'"
     else:
-        hint = {"select_related": field_name}
+        hint = {'select_related': field_name}
         description = f"Related object referenced by '{field_name}'"
 
     def resolver(self, info: Info):
@@ -492,15 +492,10 @@ def _make_relationship_resolver(field, members, native_models):
                 return []
             try:
                 related = list(value.all())
-            except Exception:  # noqa: BLE001 - never let one field break the query
-                logger.warning(
-                    "Failed to resolve multi-object GraphQL field %r", field_name, exc_info=True
-                )
+            except Exception:  # never let one field break the query
+                logger.warning('Failed to resolve multi-object GraphQL field %r', field_name, exc_info=True)
                 return []
-            return [
-                _coerce_related(obj, native_models)
-                for obj in _filter_viewable(user, related)
-            ]
+            return [_coerce_related(obj, native_models) for obj in _filter_viewable(user, related)]
         if value is None:
             return None
         viewable = _filter_viewable(user, [value])
@@ -508,7 +503,7 @@ def _make_relationship_resolver(field, members, native_models):
             return None
         return _coerce_related(viewable[0], native_models)
 
-    resolver.__annotations__ = {"info": Info, "return": annotation}
+    resolver.__annotations__ = {'info': Info, 'return': annotation}
     return strawberry_django.field(description=description, **hint)(resolver), None
 
 
@@ -522,7 +517,7 @@ def _make_declarative_multiobject_field(field, gql_type):
         prefetch_related=[field_name],
         description=f"Related objects referenced by '{field_name}'",
     )
-    return value, List[gql_type]
+    return value, list[gql_type]
 
 
 def _make_config_context_field(cot_fields):
@@ -541,8 +536,8 @@ def _make_config_context_field(cot_fields):
     def resolver(self, info: Info) -> strawberry.scalars.JSON:
         from netbox_custom_objects.models import ConfigContextRenderer
 
-        request = getattr(info.context, "request", None)
-        renderer = getattr(request, "_custom_objects_config_context_renderer", None)
+        request = getattr(info.context, 'request', None)
+        renderer = getattr(request, '_custom_objects_config_context_renderer', None)
         if renderer is None:
             renderer = ConfigContextRenderer()
             if request is not None:
@@ -550,10 +545,10 @@ def _make_config_context_field(cot_fields):
         return renderer.render(self)
 
     return strawberry_django.field(
-        description="Rendered config context",
-        only=["local_context_data"],
+        description='Rendered config context',
+        only=['local_context_data'],
         select_related=dimension_fields,
-        prefetch_related=["tags"],
+        prefetch_related=['tags'],
     )(resolver)
 
 
@@ -585,16 +580,13 @@ def _make_choice_resolver(field):
         if is_list:
             if not value:
                 return []
-            return [
-                CustomObjectChoiceType(value=v, label=field.get_choice_label(v))
-                for v in value
-            ]
+            return [CustomObjectChoiceType(value=v, label=field.get_choice_label(v)) for v in value]
         if value is None:
             return None
         return CustomObjectChoiceType(value=value, label=field.get_choice_label(value))
 
-    annotation = List[CustomObjectChoiceType] if is_list else Optional[CustomObjectChoiceType]
-    resolver.__annotations__ = {"return": annotation}
+    annotation = list[CustomObjectChoiceType] if is_list else Optional[CustomObjectChoiceType]
+    resolver.__annotations__ = {'return': annotation}
     return strawberry_django.field(description=f"Choice value for '{field_name}'")(resolver)
 
 
@@ -658,11 +650,11 @@ def build_object_type(custom_object_type):
 
 def _build_object_type(custom_object_type, model):
     """Construct a fresh Strawberry type for ``custom_object_type`` (uncached)."""
-    type_name = f"{model.__name__}Type"
+    type_name = f'{model.__name__}Type'
 
     namespace = {
-        "__doc__": f"Custom object type '{custom_object_type.name}'.",
-        "__annotations__": {},
+        '__doc__': f"Custom object type '{custom_object_type.name}'.",
+        '__annotations__': {},
     }
 
     filter_annotations = {}
@@ -678,7 +670,7 @@ def _build_object_type(custom_object_type, model):
             if value is not None:
                 namespace[field_name] = value
                 if class_annotation is not None:
-                    namespace["__annotations__"][field_name] = class_annotation
+                    namespace['__annotations__'][field_name] = class_annotation
                 if filterable:
                     for name, annotation in relationship_filter_annotations(field, members).items():
                         # A "<field>_id" filter must not override a custom field of that name.
@@ -706,29 +698,29 @@ def _build_object_type(custom_object_type, model):
         annotation = _scalar_annotation_for(field)
         if annotation is None:
             logger.debug(
-                "Skipping custom field %r of unsupported GraphQL type %r",
+                'Skipping custom field %r of unsupported GraphQL type %r',
                 field_name,
                 field.type,
             )
             continue
         # Every custom field is nullable at the database level.
-        namespace["__annotations__"][field_name] = Optional[annotation]
+        namespace['__annotations__'][field_name] = Optional[annotation]
 
     # A custom field named "config_context" takes precedence over the rendered context,
     # even one GraphQL can't expose, matching the REST serializer.
-    if issubclass(model, ConfigContextModel) and not any(field.name == "config_context" for field in cot_fields):
-        namespace["config_context"] = _make_config_context_field(cot_fields)
+    if issubclass(model, ConfigContextModel) and not any(field.name == 'config_context' for field in cot_fields):
+        namespace['config_context'] = _make_config_context_field(cot_fields)
 
     # Legacy schemas may define a custom "owner" field that shadows the inherited FK.
     bases = (CustomObjectObjectType,)
-    if not any(field.name == "owner" for field in cot_fields):
+    if not any(field.name == 'owner' for field in cot_fields):
         bases = (OwnerMixin, CustomObjectObjectType)
 
     cls = type(type_name, bases, namespace)
 
-    fields = ["id", "created", "last_updated"]
+    fields = ['id', 'created', 'last_updated']
     if issubclass(model, ConfigContextModel):
-        fields.append("local_context_data")
+        fields.append('local_context_data')
 
     return strawberry_django.type(
         model,

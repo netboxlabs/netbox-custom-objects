@@ -7,10 +7,12 @@ Covers:
 - schema_document and version fields on CustomObjectType
 - JSON Schema document validation via cot_schema_v1.json
 """
+
 import json
 import unittest
 from pathlib import Path
 
+from django.core.exceptions import FieldDoesNotExist
 from django.db import IntegrityError, transaction
 from django.db.models.fields import NOT_PROVIDED
 from django.test import TestCase
@@ -18,8 +20,8 @@ from django.test import TestCase
 from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
 from netbox_custom_objects.models import CustomObjectTypeConstraint, CustomObjectTypeField
 from netbox_custom_objects.schema.format import (
-    CONSTRAINT_DEFAULTS,
     CHOICES_TO_SCHEMA_TYPE,
+    CONSTRAINT_DEFAULTS,
     FIELD_DEFAULTS,
     SCHEMA_FORMAT_VERSION,
     SCHEMA_TYPE_TO_CHOICES,
@@ -32,18 +34,18 @@ from ..base import CustomObjectsTestCase
 # ---------------------------------------------------------------------------
 try:
     import jsonschema
+
     HAS_JSONSCHEMA = True
 except ImportError:
     HAS_JSONSCHEMA = False
 
-_SCHEMA_PATH = (
-    Path(__file__).resolve().parent.parent.parent / "schema" / "cot_schema_v1.json"
-)
+_SCHEMA_PATH = Path(__file__).resolve().parent.parent.parent / 'schema' / 'cot_schema_v1.json'
 
 
 # ===========================================================================
 # schema_id / deprecated model field tests
 # ===========================================================================
+
 
 class SchemaIdAutoAssignmentTestCase(CustomObjectsTestCase, TestCase):
     """schema_id is auto-assigned on field creation and never reused."""
@@ -53,7 +55,7 @@ class SchemaIdAutoAssignmentTestCase(CustomObjectsTestCase, TestCase):
         cot = self.create_custom_object_type(name='schidtest', slug='sch-id-test')
         field = self.create_custom_object_type_field(cot, name='label', type='text')
 
-        self.assertIsNotNone(field.schema_id, "schema_id must be set after save.")
+        self.assertIsNotNone(field.schema_id, 'schema_id must be set after save.')
         self.assertGreaterEqual(field.schema_id, 1)
 
     def test_schema_ids_are_sequential(self):
@@ -64,8 +66,9 @@ class SchemaIdAutoAssignmentTestCase(CustomObjectsTestCase, TestCase):
         f3 = self.create_custom_object_type_field(cot, name='third', type='text')
 
         ids = sorted([f1.schema_id, f2.schema_id, f3.schema_id])
-        self.assertEqual(ids, list(range(ids[0], ids[0] + 3)),
-                         "schema_ids must form a contiguous sequence within the COT.")
+        self.assertEqual(
+            ids, list(range(ids[0], ids[0] + 3)), 'schema_ids must form a contiguous sequence within the COT.'
+        )
 
     def test_schema_id_scoped_to_cot(self):
         """Two different COTs can have fields with the same schema_id."""
@@ -76,32 +79,24 @@ class SchemaIdAutoAssignmentTestCase(CustomObjectsTestCase, TestCase):
         fb = self.create_custom_object_type_field(cot_b, name='label', type='text')
 
         # Both are assigned ID 1 — that is fine because uniqueness is per-COT.
-        self.assertEqual(fa.schema_id, fb.schema_id,
-                         "First field in each COT should both receive schema_id=1.")
+        self.assertEqual(fa.schema_id, fb.schema_id, 'First field in each COT should both receive schema_id=1.')
 
     def test_explicit_schema_id_is_respected(self):
         """A field created with an explicit schema_id keeps that value."""
         cot = self.create_custom_object_type(name='schexpl', slug='sch-expl')
-        field = self.create_custom_object_type_field(
-            cot, name='label', type='text', schema_id=42
-        )
+        field = self.create_custom_object_type_field(cot, name='label', type='text', schema_id=42)
         self.assertEqual(field.schema_id, 42)
 
     def test_duplicate_schema_id_within_cot_raises(self):
         """Assigning the same schema_id to two fields in the same COT is rejected."""
         cot = self.create_custom_object_type(name='schdup', slug='sch-dup')
-        self.create_custom_object_type_field(
-            cot, name='first', type='text', schema_id=7
-        )
+        self.create_custom_object_type_field(cot, name='first', type='text', schema_id=7)
         # Wrap in transaction.atomic() so that when IntegrityError is raised and caught
         # by assertRaises, the savepoint is rolled back cleanly. Without this, PostgreSQL
         # leaves the connection in an aborted-transaction state and all subsequent SQL
         # calls (including tearDown) fail with "connection is closed".
-        with self.assertRaises(IntegrityError):
-            with transaction.atomic():
-                self.create_custom_object_type_field(
-                    cot, name='second', type='text', schema_id=7
-                )
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            self.create_custom_object_type_field(cot, name='second', type='text', schema_id=7)
 
     def test_schema_id_gap_after_deletion(self):
         """
@@ -117,7 +112,8 @@ class SchemaIdAutoAssignmentTestCase(CustomObjectsTestCase, TestCase):
 
         f3 = self.create_custom_object_type_field(cot, name='third', type='text')
         self.assertGreater(
-            f3.schema_id, id_before_delete,
+            f3.schema_id,
+            id_before_delete,
             "Auto-assigned schema_id must not reuse a previously deleted field's ID.",
         )
 
@@ -166,6 +162,7 @@ class DeprecationFieldsTestCase(CustomObjectsTestCase, TestCase):
 # schema_document and version field tests (plain TestCase — no DDL needed)
 # ===========================================================================
 
+
 class SchemaDocumentFieldTestCase(CustomObjectsTestCase, TestCase):
     """schema_document and version fields on CustomObjectType."""
 
@@ -184,12 +181,12 @@ class SchemaDocumentFieldTestCase(CustomObjectsTestCase, TestCase):
     def test_schema_document_can_store_json(self):
         cot = self.create_custom_object_type(name='schemadoc2', slug='schema-doc-2')
         document = {
-            "schema_version": "1",
-            "name": "schemadoc2",
-            "slug": "schema-doc-2",
-            "version": "1.0.0",
-            "fields": [],
-            "removed_fields": [],
+            'schema_version': '1',
+            'name': 'schemadoc2',
+            'slug': 'schema-doc-2',
+            'version': '1.0.0',
+            'fields': [],
+            'removed_fields': [],
         }
         cot.schema_document = document
         cot.save()
@@ -199,9 +196,7 @@ class SchemaDocumentFieldTestCase(CustomObjectsTestCase, TestCase):
 
     def test_version_field_accepts_long_semver(self):
         """version field max_length=50 accommodates pre-release semver strings."""
-        cot = self.create_custom_object_type(
-            name='semvertest', slug='semver-test', version='10.200.300-alpha.1'
-        )
+        cot = self.create_custom_object_type(name='semvertest', slug='semver-test', version='10.200.300-alpha.1')
         cot.refresh_from_db()
         self.assertEqual(cot.version, '10.200.300-alpha.1')
 
@@ -214,6 +209,7 @@ class SchemaDocumentFieldTestCase(CustomObjectsTestCase, TestCase):
 # ===========================================================================
 # schema_format.py constants tests
 # ===========================================================================
+
 
 class FieldDefaultsConsistencyTestCase(TestCase):
     """
@@ -229,32 +225,32 @@ class FieldDefaultsConsistencyTestCase(TestCase):
     # Fields that are blank=True / null=True without an explicit default are
     # tracked in _NO_MODEL_DEFAULT_SENTINELS below.
     _MODEL_DEFAULT_FIELDS = {
-        "primary": "primary",
-        "required": "required",
-        "unique": "unique",
-        "weight": "weight",
-        "search_weight": "search_weight",
-        "filter_logic": "filter_logic",
-        "ui_visible": "ui_visible",
-        "ui_editable": "ui_editable",
-        "is_cloneable": "is_cloneable",
-        "deprecated": "deprecated",
+        'primary': 'primary',
+        'required': 'required',
+        'unique': 'unique',
+        'weight': 'weight',
+        'search_weight': 'search_weight',
+        'filter_logic': 'filter_logic',
+        'ui_visible': 'ui_visible',
+        'ui_editable': 'ui_editable',
+        'is_cloneable': 'is_cloneable',
+        'deprecated': 'deprecated',
     }
 
     # Fields where the model has no explicit default (blank/null only).
     # FIELD_DEFAULTS should use "" or None as the schema-level sentinel.
     _NO_MODEL_DEFAULT_SENTINELS = {
-        "label": "",
-        "description": "",
-        "group_name": "",
-        "deprecated_since": "",
-        "scheduled_removal": "",
-        "validation_regex": "",
-        "validation_minimum": None,
-        "validation_maximum": None,
-        "related_object_filter": None,
-        "related_name": "",
-        "default": None,
+        'label': '',
+        'description': '',
+        'group_name': '',
+        'deprecated_since': '',
+        'scheduled_removal': '',
+        'validation_regex': '',
+        'validation_minimum': None,
+        'validation_maximum': None,
+        'related_object_filter': None,
+        'related_name': '',
+        'default': None,
     }
 
     def test_field_defaults_match_model_defaults(self):
@@ -265,15 +261,15 @@ class FieldDefaultsConsistencyTestCase(TestCase):
                 self.assertIsNot(
                     model_field.default,
                     NOT_PROVIDED,
-                    f"{model_field_name} no longer has a model default — "
-                    f"move {schema_key!r} to _NO_MODEL_DEFAULT_SENTINELS.",
+                    f'{model_field_name} no longer has a model default — '
+                    f'move {schema_key!r} to _NO_MODEL_DEFAULT_SENTINELS.',
                 )
                 self.assertEqual(
                     model_field.default,
                     FIELD_DEFAULTS[schema_key],
-                    f"FIELD_DEFAULTS[{schema_key!r}] is {FIELD_DEFAULTS[schema_key]!r} "
-                    f"but {model_field_name}.default is {model_field.default!r}. "
-                    f"Update schema_format.FIELD_DEFAULTS to match the model.",
+                    f'FIELD_DEFAULTS[{schema_key!r}] is {FIELD_DEFAULTS[schema_key]!r} '
+                    f'but {model_field_name}.default is {model_field.default!r}. '
+                    f'Update schema_format.FIELD_DEFAULTS to match the model.',
                 )
 
     def test_no_model_default_sentinels_are_correct(self):
@@ -283,21 +279,20 @@ class FieldDefaultsConsistencyTestCase(TestCase):
                 self.assertEqual(
                     FIELD_DEFAULTS[schema_key],
                     expected_sentinel,
-                    f"FIELD_DEFAULTS[{schema_key!r}] should be {expected_sentinel!r} "
-                    f"(no model default exists for this field).",
+                    f'FIELD_DEFAULTS[{schema_key!r}] should be {expected_sentinel!r} '
+                    f'(no model default exists for this field).',
                 )
                 # Also verify the model field genuinely has no explicit default.
                 try:
                     model_field = CustomObjectTypeField._meta.get_field(schema_key)
-                    self.assertIs(
-                        model_field.default,
-                        NOT_PROVIDED,
-                        f"{schema_key} now has a model default — "
-                        f"move it to _MODEL_DEFAULT_FIELDS.",
-                    )
-                except Exception:
+                except FieldDoesNotExist:
                     # Field may not exist on the model (type-specific virtual attrs).
-                    pass
+                    continue
+                self.assertIs(
+                    model_field.default,
+                    NOT_PROVIDED,
+                    f'{schema_key} now has a model default — move it to _MODEL_DEFAULT_FIELDS.',
+                )
 
     def test_constraint_defaults_match_model_defaults(self):
         """CONSTRAINT_DEFAULTS must match the CustomObjectTypeConstraint model defaults."""
@@ -306,7 +301,7 @@ class FieldDefaultsConsistencyTestCase(TestCase):
                 model_default = CustomObjectTypeConstraint._meta.get_field(attr).default
                 if model_default is not NOT_PROVIDED and callable(model_default):
                     model_default = model_default()
-                self.assertEqual("" if model_default is NOT_PROVIDED else model_default, default)
+                self.assertEqual('' if model_default is NOT_PROVIDED else model_default, default)
 
 
 class SchemaFormatConstantsTestCase(TestCase):
@@ -314,14 +309,15 @@ class SchemaFormatConstantsTestCase(TestCase):
 
     def test_format_version_is_string(self):
         self.assertIsInstance(SCHEMA_FORMAT_VERSION, str)
-        self.assertEqual(SCHEMA_FORMAT_VERSION, "1")
+        self.assertEqual(SCHEMA_FORMAT_VERSION, '1')
 
     def test_type_mapping_is_bijective(self):
         """CHOICES_TO_SCHEMA_TYPE and SCHEMA_TYPE_TO_CHOICES must be inverses."""
         for choices_val, schema_name in CHOICES_TO_SCHEMA_TYPE.items():
             self.assertEqual(
-                SCHEMA_TYPE_TO_CHOICES[schema_name], choices_val,
-                f"Round-trip failed for {choices_val!r} ↔ {schema_name!r}",
+                SCHEMA_TYPE_TO_CHOICES[schema_name],
+                choices_val,
+                f'Round-trip failed for {choices_val!r} ↔ {schema_name!r}',
             )
 
     def test_all_field_types_are_mapped(self):
@@ -330,8 +326,9 @@ class SchemaFormatConstantsTestCase(TestCase):
             if attr.startswith('TYPE_'):
                 value = getattr(CustomObjectFieldTypeChoices, attr)
                 self.assertIn(
-                    value, CHOICES_TO_SCHEMA_TYPE,
-                    f"CustomObjectFieldTypeChoices.{attr} ({value!r}) is missing from CHOICES_TO_SCHEMA_TYPE",
+                    value,
+                    CHOICES_TO_SCHEMA_TYPE,
+                    f'CustomObjectFieldTypeChoices.{attr} ({value!r}) is missing from CHOICES_TO_SCHEMA_TYPE',
                 )
 
 
@@ -339,14 +336,15 @@ class SchemaFormatConstantsTestCase(TestCase):
 # JSON Schema structural validation tests
 # ===========================================================================
 
-@unittest.skipUnless(HAS_JSONSCHEMA, "jsonschema library not installed")
+
+@unittest.skipUnless(HAS_JSONSCHEMA, 'jsonschema library not installed')
 class COTJsonSchemaTestCase(TestCase):
     """Validate that cot_schema_v1.json correctly accepts/rejects documents."""
 
     @classmethod
     def setUpClass(cls):
         super().setUpClass()
-        with open(_SCHEMA_PATH) as fh:
+        with Path(_SCHEMA_PATH).open() as fh:
             cls.schema = json.load(fh)
         cls.validator_cls = jsonschema.Draft202012Validator
         cls.validator_cls.check_schema(cls.schema)
@@ -358,15 +356,15 @@ class COTJsonSchemaTestCase(TestCase):
 
     def _assert_valid(self, document):
         errors = self._validate(document)
-        self.assertEqual(errors, [], f"Expected valid document but got errors: {errors}")
+        self.assertEqual(errors, [], f'Expected valid document but got errors: {errors}')
 
     def _assert_invalid(self, document):
         errors = self._validate(document)
-        self.assertGreater(len(errors), 0, "Expected invalid document but it passed validation.")
+        self.assertGreater(len(errors), 0, 'Expected invalid document but it passed validation.')
 
     def test_field_type_enum_matches_mapping(self):
         """The JSON schema accepts exactly the field types the format maps."""
-        self.assertEqual(set(self.schema["$defs"]["field_type"]["enum"]), set(CHOICES_TO_SCHEMA_TYPE.values()))
+        self.assertEqual(set(self.schema['$defs']['field_type']['enum']), set(CHOICES_TO_SCHEMA_TYPE.values()))
 
     # ------------------------------------------------------------------
     # Valid documents
@@ -374,68 +372,76 @@ class COTJsonSchemaTestCase(TestCase):
 
     def test_minimal_valid_document(self):
         """A document with only the required fields is valid."""
-        self._assert_valid({
-            "schema_version": "1",
-            "types": [
-                {"name": "widget", "slug": "widget"}
-            ],
-        })
+        self._assert_valid(
+            {
+                'schema_version': '1',
+                'types': [{'name': 'widget', 'slug': 'widget'}],
+            }
+        )
 
     def test_full_valid_document(self):
         """A document exercising all field types passes validation."""
-        self._assert_valid({
-            "schema_version": "1",
-            "types": [
-                {
-                    "name": "circuit_endpoint",
-                    "slug": "circuit-endpoint",
-                    "version": "1.2.0",
-                    "verbose_name": "Circuit Endpoint",
-                    "verbose_name_plural": "Circuit Endpoints",
-                    "description": "One end of a circuit",
-                    "group_name": "Circuits",
-                    "fields": [
-                        {"id": 1, "name": "label", "type": "text", "primary": True, "required": True},
-                        {"id": 2, "name": "notes", "type": "longtext"},
-                        {"id": 3, "name": "speed", "type": "integer", "validation_minimum": 0},
-                        {"id": 4, "name": "ratio", "type": "decimal"},
-                        {"id": 5, "name": "active", "type": "boolean"},
-                        {"id": 6, "name": "install_date", "type": "date"},
-                        {"id": 7, "name": "last_seen", "type": "datetime"},
-                        {"id": 8, "name": "docs_url", "type": "url"},
-                        {"id": 9, "name": "metadata", "type": "json"},
-                        {"id": 10, "name": "status", "type": "select", "choice_set": "endpoint_statuses"},
-                        {"id": 11, "name": "tags", "type": "multiselect", "choice_set": "endpoint_tags"},
-                        {"id": 12, "name": "device", "type": "object", "related_object_type": "dcim/device"},
-                        {"id": 13, "name": "sites", "type": "multiobject", "related_object_type": "dcim/site"},
-                        {"id": 14, "name": "shade", "type": "color", "default": "00ff00"},
-                        {"id": 15, "name": "mac", "type": "mac_address", "unique": True},
-                    ],
-                    "removed_fields": [
-                        {"id": 16, "name": "old_code", "type": "text", "removed_in": "1.1.0"}
-                    ],
-                }
-            ],
-        })
+        self._assert_valid(
+            {
+                'schema_version': '1',
+                'types': [
+                    {
+                        'name': 'circuit_endpoint',
+                        'slug': 'circuit-endpoint',
+                        'version': '1.2.0',
+                        'verbose_name': 'Circuit Endpoint',
+                        'verbose_name_plural': 'Circuit Endpoints',
+                        'description': 'One end of a circuit',
+                        'group_name': 'Circuits',
+                        'fields': [
+                            {'id': 1, 'name': 'label', 'type': 'text', 'primary': True, 'required': True},
+                            {'id': 2, 'name': 'notes', 'type': 'longtext'},
+                            {'id': 3, 'name': 'speed', 'type': 'integer', 'validation_minimum': 0},
+                            {'id': 4, 'name': 'ratio', 'type': 'decimal'},
+                            {'id': 5, 'name': 'active', 'type': 'boolean'},
+                            {'id': 6, 'name': 'install_date', 'type': 'date'},
+                            {'id': 7, 'name': 'last_seen', 'type': 'datetime'},
+                            {'id': 8, 'name': 'docs_url', 'type': 'url'},
+                            {'id': 9, 'name': 'metadata', 'type': 'json'},
+                            {'id': 10, 'name': 'status', 'type': 'select', 'choice_set': 'endpoint_statuses'},
+                            {'id': 11, 'name': 'tags', 'type': 'multiselect', 'choice_set': 'endpoint_tags'},
+                            {'id': 12, 'name': 'device', 'type': 'object', 'related_object_type': 'dcim/device'},
+                            {'id': 13, 'name': 'sites', 'type': 'multiobject', 'related_object_type': 'dcim/site'},
+                            {'id': 14, 'name': 'shade', 'type': 'color', 'default': '00ff00'},
+                            {'id': 15, 'name': 'mac', 'type': 'mac_address', 'unique': True},
+                        ],
+                        'removed_fields': [{'id': 16, 'name': 'old_code', 'type': 'text', 'removed_in': '1.1.0'}],
+                    }
+                ],
+            }
+        )
 
     def test_array_field(self):
         def document(field):
-            return {"schema_version": "1", "types": [{"name": "zone", "slug": "zone", "fields": [field]}]}
+            return {'schema_version': '1', 'types': [{'name': 'zone', 'slug': 'zone', 'fields': [field]}]}
 
-        points = {"id": 1, "name": "points", "type": "array", "array_element_type": "integer"}
+        points = {'id': 1, 'name': 'points', 'type': 'array', 'array_element_type': 'integer'}
         self._assert_valid(document(points))
-        self._assert_valid(document({
-            **points, "array_tuple_size": 3, "array_min_length": 2, "array_max_length": 10, "validation_minimum": 0,
-        }))
-        self._assert_valid(document({**points, "array_element_type": "text", "validation_regex": "^a$"}))
+        self._assert_valid(
+            document(
+                {
+                    **points,
+                    'array_tuple_size': 3,
+                    'array_min_length': 2,
+                    'array_max_length': 10,
+                    'validation_minimum': 0,
+                }
+            )
+        )
+        self._assert_valid(document({**points, 'array_element_type': 'text', 'validation_regex': '^a$'}))
         invalid = {
-            "no element type": {"id": 1, "name": "points", "type": "array"},
-            "unknown element type": {**points, "array_element_type": "json"},
-            "tuple size of one": {**points, "array_tuple_size": 1},
-            "zero minimum length": {**points, "array_min_length": 0},
-            "zero maximum length": {**points, "array_max_length": 0},
-            "unknown attribute": {**points, "choice_set": "x"},
-            "array attribute on a text field": {"id": 1, "name": "label", "type": "text", "array_element_type": "text"},
+            'no element type': {'id': 1, 'name': 'points', 'type': 'array'},
+            'unknown element type': {**points, 'array_element_type': 'json'},
+            'tuple size of one': {**points, 'array_tuple_size': 1},
+            'zero minimum length': {**points, 'array_min_length': 0},
+            'zero maximum length': {**points, 'array_max_length': 0},
+            'unknown attribute': {**points, 'choice_set': 'x'},
+            'array attribute on a text field': {'id': 1, 'name': 'label', 'type': 'text', 'array_element_type': 'text'},
         }
         for label, field in invalid.items():
             with self.subTest(label):
@@ -443,19 +449,19 @@ class COTJsonSchemaTestCase(TestCase):
 
     def test_related_name(self):
         def document(field):
-            return {"schema_version": "1", "types": [{"name": "widget", "slug": "widget", "fields": [field]}]}
+            return {'schema_version': '1', 'types': [{'name': 'widget', 'slug': 'widget', 'fields': [field]}]}
 
-        device = {"id": 1, "name": "device", "type": "object", "related_object_type": "dcim/device"}
-        sites = {"id": 1, "name": "sites", "type": "multiobject", "related_object_type": "dcim/site"}
-        self._assert_valid(document({**device, "related_name": "widgets"}))
-        self._assert_valid(document({**sites, "related_name": "site_widgets"}))
-        self._assert_valid(document({**device, "related_name": ""}))
+        device = {'id': 1, 'name': 'device', 'type': 'object', 'related_object_type': 'dcim/device'}
+        sites = {'id': 1, 'name': 'sites', 'type': 'multiobject', 'related_object_type': 'dcim/site'}
+        self._assert_valid(document({**device, 'related_name': 'widgets'}))
+        self._assert_valid(document({**sites, 'related_name': 'site_widgets'}))
+        self._assert_valid(document({**device, 'related_name': ''}))
         invalid = {
-            "uppercase": {**device, "related_name": "Widgets"},
-            "double underscore": {**device, "related_name": "my__widgets"},
-            "too long": {**device, "related_name": "w" * 101},
-            "not a string": {**device, "related_name": 1},
-            "on a text field": {"id": 1, "name": "label", "type": "text", "related_name": "widgets"},
+            'uppercase': {**device, 'related_name': 'Widgets'},
+            'double underscore': {**device, 'related_name': 'my__widgets'},
+            'too long': {**device, 'related_name': 'w' * 101},
+            'not a string': {**device, 'related_name': 1},
+            'on a text field': {'id': 1, 'name': 'label', 'type': 'text', 'related_name': 'widgets'},
         }
         for label, field in invalid.items():
             with self.subTest(label):
@@ -463,235 +469,273 @@ class COTJsonSchemaTestCase(TestCase):
 
     def test_constraints(self):
         type_def = {
-            "name": "asset",
-            "slug": "asset",
-            "fields": [
-                {"id": 1, "name": "vendor", "type": "text"},
-                {"id": 2, "name": "serial", "type": "text"},
+            'name': 'asset',
+            'slug': 'asset',
+            'fields': [
+                {'id': 1, 'name': 'vendor', 'type': 'text'},
+                {'id': 2, 'name': 'serial', 'type': 'text'},
             ],
-            "constraints": [
-                {"name": "vendor_serial", "fields": [1, 2]},
-                {"name": "serial_ci", "type": "unique", "fields": [2], "case_insensitive": True,
-                 "nulls_distinct": False, "description": "Serial, ignoring case"},
-                {"name": "serial_if_vendor", "fields": [2], "condition": [
-                    {"field": 1, "lookup": "isnull", "value": False},
-                    {"field": 1, "lookup": "in", "value": ["acme", "globex"]},
-                ]},
-                {"name": "serial_not_vendor", "type": "check", "rule": [
-                    {"field": 2, "lookup": "n", "value": {"field": 1}},
-                ], "condition": [{"field": 1, "lookup": "gte", "value": "a"}], "error_message": "No"},
+            'constraints': [
+                {'name': 'vendor_serial', 'fields': [1, 2]},
+                {
+                    'name': 'serial_ci',
+                    'type': 'unique',
+                    'fields': [2],
+                    'case_insensitive': True,
+                    'nulls_distinct': False,
+                    'description': 'Serial, ignoring case',
+                },
+                {
+                    'name': 'serial_if_vendor',
+                    'fields': [2],
+                    'condition': [
+                        {'field': 1, 'lookup': 'isnull', 'value': False},
+                        {'field': 1, 'lookup': 'in', 'value': ['acme', 'globex']},
+                    ],
+                },
+                {
+                    'name': 'serial_not_vendor',
+                    'type': 'check',
+                    'rule': [
+                        {'field': 2, 'lookup': 'n', 'value': {'field': 1}},
+                    ],
+                    'condition': [{'field': 1, 'lookup': 'gte', 'value': 'a'}],
+                    'error_message': 'No',
+                },
             ],
-            "removed_constraints": ["old_constraint"],
+            'removed_constraints': ['old_constraint'],
         }
-        self._assert_valid({"schema_version": "1", "types": [type_def]})
-        empty = {"field": 1, "lookup": "isnull", "value": True}
+        self._assert_valid({'schema_version': '1', 'types': [type_def]})
+        empty = {'field': 1, 'lookup': 'isnull', 'value': True}
         invalid = {
-            "missing fields": {"name": "c"},
-            "empty fields": {"name": "c", "fields": []},
-            "unknown type": {"name": "c", "fields": [1], "type": "exclusion"},
-            "unknown key": {"name": "c", "fields": [1], "check": "x"},
-            "check without rule": {"name": "c", "type": "check"},
-            "check with empty rule": {"name": "c", "type": "check", "rule": []},
-            "check with fields": {"name": "c", "type": "check", "fields": [1], "rule": [empty]},
-            "unique with rule": {"name": "c", "fields": [1], "rule": [empty]},
-            "unique with error message": {"name": "c", "fields": [1], "error_message": "No"},
-            "condition not a list": {"name": "c", "fields": [1], "condition": {}},
-            "predicate without lookup": {"name": "c", "fields": [1], "condition": [{"field": 1}]},
-            "unknown lookup": {"name": "c", "fields": [1], "condition": [{"field": 1, "lookup": "lk", "value": 1}]},
-            "predicate unknown key": {
-                "name": "c", "fields": [1], "condition": [{"field": 1, "lookup": "exact", "value": 1, "not": True}]
+            'missing fields': {'name': 'c'},
+            'empty fields': {'name': 'c', 'fields': []},
+            'unknown type': {'name': 'c', 'fields': [1], 'type': 'exclusion'},
+            'unknown key': {'name': 'c', 'fields': [1], 'check': 'x'},
+            'check without rule': {'name': 'c', 'type': 'check'},
+            'check with empty rule': {'name': 'c', 'type': 'check', 'rule': []},
+            'check with fields': {'name': 'c', 'type': 'check', 'fields': [1], 'rule': [empty]},
+            'unique with rule': {'name': 'c', 'fields': [1], 'rule': [empty]},
+            'unique with error message': {'name': 'c', 'fields': [1], 'error_message': 'No'},
+            'condition not a list': {'name': 'c', 'fields': [1], 'condition': {}},
+            'predicate without lookup': {'name': 'c', 'fields': [1], 'condition': [{'field': 1}]},
+            'unknown lookup': {'name': 'c', 'fields': [1], 'condition': [{'field': 1, 'lookup': 'lk', 'value': 1}]},
+            'predicate unknown key': {
+                'name': 'c',
+                'fields': [1],
+                'condition': [{'field': 1, 'lookup': 'exact', 'value': 1, 'not': True}],
             },
         }
         for label, constraint in invalid.items():
             with self.subTest(label):
-                self._assert_invalid(
-                    {"schema_version": "1", "types": [{**type_def, "constraints": [constraint]}]}
-                )
+                self._assert_invalid({'schema_version': '1', 'types': [{**type_def, 'constraints': [constraint]}]})
 
     def test_cot_reference_to_another_cot(self):
         """related_object_type using 'custom-objects/<slug>' format is valid."""
-        self._assert_valid({
-            "schema_version": "1",
-            "types": [
-                {
-                    "name": "endpoint",
-                    "slug": "endpoint",
-                    "fields": [
-                        {
-                            "id": 1,
-                            "name": "circuit",
-                            "type": "object",
-                            "related_object_type": "custom-objects/circuit",
-                        }
-                    ],
-                }
-            ],
-        })
+        self._assert_valid(
+            {
+                'schema_version': '1',
+                'types': [
+                    {
+                        'name': 'endpoint',
+                        'slug': 'endpoint',
+                        'fields': [
+                            {
+                                'id': 1,
+                                'name': 'circuit',
+                                'type': 'object',
+                                'related_object_type': 'custom-objects/circuit',
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
 
     def test_deprecated_field_is_valid(self):
-        self._assert_valid({
-            "schema_version": "1",
-            "types": [
-                {
-                    "name": "widget",
-                    "slug": "widget",
-                    "fields": [
-                        {
-                            "id": 1,
-                            "name": "legacy_code",
-                            "type": "text",
-                            "deprecated": True,
-                            "deprecated_since": "2.0.0",
-                            "scheduled_removal": "3.0.0",
-                        }
-                    ],
-                }
-            ],
-        })
+        self._assert_valid(
+            {
+                'schema_version': '1',
+                'types': [
+                    {
+                        'name': 'widget',
+                        'slug': 'widget',
+                        'fields': [
+                            {
+                                'id': 1,
+                                'name': 'legacy_code',
+                                'type': 'text',
+                                'deprecated': True,
+                                'deprecated_since': '2.0.0',
+                                'scheduled_removal': '3.0.0',
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
 
     def test_multi_type_export(self):
         """Multiple COT definitions in a single document are valid."""
-        self._assert_valid({
-            "schema_version": "1",
-            "types": [
-                {"name": "circuit", "slug": "circuit"},
-                {"name": "endpoint", "slug": "endpoint"},
-            ],
-        })
+        self._assert_valid(
+            {
+                'schema_version': '1',
+                'types': [
+                    {'name': 'circuit', 'slug': 'circuit'},
+                    {'name': 'endpoint', 'slug': 'endpoint'},
+                ],
+            }
+        )
 
     # ------------------------------------------------------------------
     # Invalid documents
     # ------------------------------------------------------------------
 
     def test_missing_schema_version_is_invalid(self):
-        self._assert_invalid({
-            "types": [{"name": "widget", "slug": "widget"}],
-        })
+        self._assert_invalid(
+            {
+                'types': [{'name': 'widget', 'slug': 'widget'}],
+            }
+        )
 
     def test_wrong_schema_version_is_invalid(self):
-        self._assert_invalid({
-            "schema_version": "99",
-            "types": [{"name": "widget", "slug": "widget"}],
-        })
+        self._assert_invalid(
+            {
+                'schema_version': '99',
+                'types': [{'name': 'widget', 'slug': 'widget'}],
+            }
+        )
 
     def test_missing_types_is_invalid(self):
-        self._assert_invalid({"schema_version": "1"})
+        self._assert_invalid({'schema_version': '1'})
 
     def test_empty_types_list_is_invalid(self):
-        self._assert_invalid({"schema_version": "1", "types": []})
+        self._assert_invalid({'schema_version': '1', 'types': []})
 
     def test_field_missing_id_is_invalid(self):
-        self._assert_invalid({
-            "schema_version": "1",
-            "types": [
-                {
-                    "name": "widget",
-                    "slug": "widget",
-                    "fields": [{"name": "label", "type": "text"}],
-                }
-            ],
-        })
+        self._assert_invalid(
+            {
+                'schema_version': '1',
+                'types': [
+                    {
+                        'name': 'widget',
+                        'slug': 'widget',
+                        'fields': [{'name': 'label', 'type': 'text'}],
+                    }
+                ],
+            }
+        )
 
     def test_field_missing_name_is_invalid(self):
-        self._assert_invalid({
-            "schema_version": "1",
-            "types": [
-                {
-                    "name": "widget",
-                    "slug": "widget",
-                    "fields": [{"id": 1, "type": "text"}],
-                }
-            ],
-        })
+        self._assert_invalid(
+            {
+                'schema_version': '1',
+                'types': [
+                    {
+                        'name': 'widget',
+                        'slug': 'widget',
+                        'fields': [{'id': 1, 'type': 'text'}],
+                    }
+                ],
+            }
+        )
 
     def test_field_missing_type_is_invalid(self):
-        self._assert_invalid({
-            "schema_version": "1",
-            "types": [
-                {
-                    "name": "widget",
-                    "slug": "widget",
-                    "fields": [{"id": 1, "name": "label"}],
-                }
-            ],
-        })
+        self._assert_invalid(
+            {
+                'schema_version': '1',
+                'types': [
+                    {
+                        'name': 'widget',
+                        'slug': 'widget',
+                        'fields': [{'id': 1, 'name': 'label'}],
+                    }
+                ],
+            }
+        )
 
     def test_select_field_missing_choice_set_is_invalid(self):
-        self._assert_invalid({
-            "schema_version": "1",
-            "types": [
-                {
-                    "name": "widget",
-                    "slug": "widget",
-                    "fields": [{"id": 1, "name": "status", "type": "select"}],
-                }
-            ],
-        })
+        self._assert_invalid(
+            {
+                'schema_version': '1',
+                'types': [
+                    {
+                        'name': 'widget',
+                        'slug': 'widget',
+                        'fields': [{'id': 1, 'name': 'status', 'type': 'select'}],
+                    }
+                ],
+            }
+        )
 
     def test_object_field_missing_related_object_type_is_invalid(self):
-        self._assert_invalid({
-            "schema_version": "1",
-            "types": [
-                {
-                    "name": "widget",
-                    "slug": "widget",
-                    "fields": [{"id": 1, "name": "device", "type": "object"}],
-                }
-            ],
-        })
+        self._assert_invalid(
+            {
+                'schema_version': '1',
+                'types': [
+                    {
+                        'name': 'widget',
+                        'slug': 'widget',
+                        'fields': [{'id': 1, 'name': 'device', 'type': 'object'}],
+                    }
+                ],
+            }
+        )
 
     def test_unknown_field_type_is_invalid(self):
-        self._assert_invalid({
-            "schema_version": "1",
-            "types": [
-                {
-                    "name": "widget",
-                    "slug": "widget",
-                    "fields": [{"id": 1, "name": "thing", "type": "frobnitz"}],
-                }
-            ],
-        })
+        self._assert_invalid(
+            {
+                'schema_version': '1',
+                'types': [
+                    {
+                        'name': 'widget',
+                        'slug': 'widget',
+                        'fields': [{'id': 1, 'name': 'thing', 'type': 'frobnitz'}],
+                    }
+                ],
+            }
+        )
 
     def test_invalid_filter_logic_value_is_invalid(self):
-        self._assert_invalid({
-            "schema_version": "1",
-            "types": [
-                {
-                    "name": "widget",
-                    "slug": "widget",
-                    "fields": [
-                        {"id": 1, "name": "label", "type": "text", "filter_logic": "fuzzy"}
-                    ],
-                }
-            ],
-        })
+        self._assert_invalid(
+            {
+                'schema_version': '1',
+                'types': [
+                    {
+                        'name': 'widget',
+                        'slug': 'widget',
+                        'fields': [{'id': 1, 'name': 'label', 'type': 'text', 'filter_logic': 'fuzzy'}],
+                    }
+                ],
+            }
+        )
 
     def test_removed_field_with_extra_properties_is_invalid(self):
         """removed_field uses additionalProperties: false, so unknown keys are rejected."""
-        self._assert_invalid({
-            "schema_version": "1",
-            "types": [
-                {
-                    "name": "widget",
-                    "slug": "widget",
-                    "removed_fields": [
-                        {"id": 5, "name": "old", "type": "text", "unexpected_key": True}
-                    ],
-                }
-            ],
-        })
+        self._assert_invalid(
+            {
+                'schema_version': '1',
+                'types': [
+                    {
+                        'name': 'widget',
+                        'slug': 'widget',
+                        'removed_fields': [{'id': 5, 'name': 'old', 'type': 'text', 'unexpected_key': True}],
+                    }
+                ],
+            }
+        )
 
     def test_active_field_with_unknown_key_is_invalid(self):
         """Active fields use unevaluatedProperties: false, so unknown keys are rejected."""
-        self._assert_invalid({
-            "schema_version": "1",
-            "types": [
-                {
-                    "name": "widget",
-                    "slug": "widget",
-                    "fields": [
-                        {"id": 1, "name": "label", "type": "text", "unexpected_key": True}
-                    ],
-                }
-            ],
-        })
+        self._assert_invalid(
+            {
+                'schema_version': '1',
+                'types': [
+                    {
+                        'name': 'widget',
+                        'slug': 'widget',
+                        'fields': [{'id': 1, 'name': 'label', 'type': 'text', 'unexpected_key': True}],
+                    }
+                ],
+            }
+        )

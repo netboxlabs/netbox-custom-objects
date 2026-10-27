@@ -38,6 +38,7 @@ _REF_TABLE = 'django_content_type'  # always present; provides a real FK target
 
 class _FakeSchemaEditor:
     """Minimal stand-in for the schema_editor argument in RunPython functions."""
+
     connection = connection
 
 
@@ -88,6 +89,7 @@ def _add_nondeferrable_fk(table_name, constraint_name, column_name, ref_table=_R
 # Base TestCase
 # ---------------------------------------------------------------------------
 
+
 class _MigrationTestCase(TestCase):
     """
     Base for migration tests that need ephemeral custom_objects_* tables.
@@ -101,9 +103,7 @@ class _MigrationTestCase(TestCase):
         """CREATE TABLE with nullable integer columns."""
         col_defs = ', '.join(f'"{c}" INTEGER' for c in columns)
         with connection.cursor() as cursor:
-            cursor.execute(
-                f'CREATE TABLE "{table_name}" (id SERIAL PRIMARY KEY, {col_defs})'
-            )
+            cursor.execute(f'CREATE TABLE "{table_name}" (id SERIAL PRIMARY KEY, {col_defs})')
 
 
 # ===========================================================================
@@ -133,9 +133,7 @@ class SchemaIdBackfillTestCase(CustomObjectsTestCase, TestCase):
         f1 = self.create_custom_object_type_field(cot, name='alpha', type='text')
         f2 = self.create_custom_object_type_field(cot, name='beta', type='text')
         # Force both to NULL (simulate pre-feature state)
-        CustomObjectTypeField.objects.filter(
-            custom_object_type=cot
-        ).update(schema_id=None)
+        CustomObjectTypeField.objects.filter(custom_object_type=cot).update(schema_id=None)
 
         _m0008.assign_schema_ids(apps, None)
 
@@ -146,20 +144,12 @@ class SchemaIdBackfillTestCase(CustomObjectsTestCase, TestCase):
 
     def test_assigned_ids_are_sequential_from_one(self):
         cot = self.create_custom_object_type(name='bf2', slug='bf-2')
-        [
-            self.create_custom_object_type_field(cot, name=f'f{i}', type='text')
-            for i in range(1, 4)
-        ]
-        CustomObjectTypeField.objects.filter(
-            custom_object_type=cot
-        ).update(schema_id=None)
+        [self.create_custom_object_type_field(cot, name=f'f{i}', type='text') for i in range(1, 4)]
+        CustomObjectTypeField.objects.filter(custom_object_type=cot).update(schema_id=None)
 
         _m0008.assign_schema_ids(apps, None)
 
-        ids = sorted(
-            CustomObjectTypeField.objects.filter(custom_object_type=cot)
-            .values_list('schema_id', flat=True)
-        )
+        ids = sorted(CustomObjectTypeField.objects.filter(custom_object_type=cot).values_list('schema_id', flat=True))
         self.assertEqual(ids, [1, 2, 3])
 
     def test_existing_schema_ids_are_not_changed(self):
@@ -176,9 +166,9 @@ class SchemaIdBackfillTestCase(CustomObjectsTestCase, TestCase):
 
         f_existing.refresh_from_db()
         f_new.refresh_from_db()
-        self.assertEqual(f_existing.schema_id, existing_id, "Pre-existing ID must not change")
+        self.assertEqual(f_existing.schema_id, existing_id, 'Pre-existing ID must not change')
         self.assertIsNotNone(f_new.schema_id)
-        self.assertGreater(f_new.schema_id, existing_id, "New ID must follow existing max")
+        self.assertGreater(f_new.schema_id, existing_id, 'New ID must follow existing max')
 
     def test_backfill_continues_from_existing_max(self):
         """New IDs start after the highest already-assigned ID."""
@@ -197,13 +187,12 @@ class SchemaIdBackfillTestCase(CustomObjectsTestCase, TestCase):
 
     def test_next_schema_id_updated_on_cot(self):
         from netbox_custom_objects.models import CustomObjectType
+
         cot = self.create_custom_object_type(name='bf5', slug='bf-5')
         for i in range(1, 4):
             self.create_custom_object_type_field(cot, name=f'g{i}', type='text')
         # Force all to NULL and reset counter
-        CustomObjectTypeField.objects.filter(
-            custom_object_type=cot
-        ).update(schema_id=None)
+        CustomObjectTypeField.objects.filter(custom_object_type=cot).update(schema_id=None)
         CustomObjectType.objects.filter(pk=cot.pk).update(next_schema_id=0)
 
         _m0008.assign_schema_ids(apps, None)
@@ -214,6 +203,7 @@ class SchemaIdBackfillTestCase(CustomObjectsTestCase, TestCase):
     def test_next_schema_id_never_decreases(self):
         """If next_schema_id is already high, the backfill must not lower it."""
         from netbox_custom_objects.models import CustomObjectType
+
         cot = self.create_custom_object_type(name='bf6', slug='bf-6')
         f = self.create_custom_object_type_field(cot, name='only', type='text')
         CustomObjectTypeField.objects.filter(pk=f.pk).update(schema_id=None)
@@ -229,17 +219,12 @@ class SchemaIdBackfillTestCase(CustomObjectsTestCase, TestCase):
         cot = self.create_custom_object_type(name='bf7', slug='bf-7')
         for i in range(1, 6):
             self.create_custom_object_type_field(cot, name=f'h{i}', type='text')
-        CustomObjectTypeField.objects.filter(
-            custom_object_type=cot
-        ).update(schema_id=None)
+        CustomObjectTypeField.objects.filter(custom_object_type=cot).update(schema_id=None)
 
         _m0008.assign_schema_ids(apps, None)
 
-        ids = list(
-            CustomObjectTypeField.objects.filter(custom_object_type=cot)
-            .values_list('schema_id', flat=True)
-        )
-        self.assertEqual(len(ids), len(set(ids)), "All schema_ids must be unique within COT")
+        ids = list(CustomObjectTypeField.objects.filter(custom_object_type=cot).values_list('schema_id', flat=True))
+        self.assertEqual(len(ids), len(set(ids)), 'All schema_ids must be unique within COT')
 
     def test_ids_scoped_per_cot(self):
         """Two different COTs both start their IDs from 1."""
@@ -249,6 +234,7 @@ class SchemaIdBackfillTestCase(CustomObjectsTestCase, TestCase):
         fb = self.create_custom_object_type_field(cotB, name='x', type='text')
         CustomObjectTypeField.objects.filter(pk__in=[fa.pk, fb.pk]).update(schema_id=None)
         from netbox_custom_objects.models import CustomObjectType
+
         CustomObjectType.objects.filter(pk__in=[cotA.pk, cotB.pk]).update(next_schema_id=0)
 
         _m0008.assign_schema_ids(apps, None)
@@ -263,20 +249,20 @@ class SchemaIdBackfillTestCase(CustomObjectsTestCase, TestCase):
         cot = self.create_custom_object_type(name='bfIdem', slug='bf-idem')
         for i in range(1, 4):
             self.create_custom_object_type_field(cot, name=f'i{i}', type='text')
-        CustomObjectTypeField.objects.filter(
-            custom_object_type=cot
-        ).update(schema_id=None)
+        CustomObjectTypeField.objects.filter(custom_object_type=cot).update(schema_id=None)
 
         _m0008.assign_schema_ids(apps, None)
         ids_after_first = list(
             CustomObjectTypeField.objects.filter(custom_object_type=cot)
-            .order_by('id').values_list('schema_id', flat=True)
+            .order_by('id')
+            .values_list('schema_id', flat=True)
         )
 
         _m0008.assign_schema_ids(apps, None)
         ids_after_second = list(
             CustomObjectTypeField.objects.filter(custom_object_type=cot)
-            .order_by('id').values_list('schema_id', flat=True)
+            .order_by('id')
+            .values_list('schema_id', flat=True)
         )
 
         self.assertEqual(ids_after_first, ids_after_second)
@@ -300,72 +286,68 @@ class BackfillBaseColumnsTestCase(CustomObjectsTestCase, TestCase):
     def _clear_base_columns(self, cot):
         """Remove base_columns from schema_document to simulate pre-feature state."""
         doc = cot.schema_document or {}
-        doc.pop("base_columns", None)
+        doc.pop('base_columns', None)
         # Use None if dict is now empty, to match real pre-feature state
-        CustomObjectType.objects.filter(pk=cot.pk).update(
-            schema_document=doc if doc else None
-        )
+        CustomObjectType.objects.filter(pk=cot.pk).update(schema_document=doc if doc else None)
         cot.refresh_from_db()
 
     def test_backfill_populates_base_columns(self):
         """COTs without base_columns must get them after backfill."""
-        cot = self.create_custom_object_type(name="bf_pop", slug="bf-pop")
+        cot = self.create_custom_object_type(name='bf_pop', slug='bf-pop')
         self._clear_base_columns(cot)
-        self.assertFalse(
-            cot.schema_document and "base_columns" in (cot.schema_document or {})
-        )
+        self.assertFalse(cot.schema_document and 'base_columns' in (cot.schema_document or {}))
 
         _m0010.backfill_base_columns(apps, None)
 
         cot.refresh_from_db()
-        self.assertIn("base_columns", cot.schema_document)
-        self.assertTrue(len(cot.schema_document["base_columns"]) > 0)
+        self.assertIn('base_columns', cot.schema_document)
+        self.assertTrue(len(cot.schema_document['base_columns']) > 0)
 
     def test_backfill_includes_mandatory_base_columns(self):
         """id, created, and last_updated must appear after backfill."""
-        cot = self.create_custom_object_type(name="bf_mandatory", slug="bf-mandatory")
+        cot = self.create_custom_object_type(name='bf_mandatory', slug='bf-mandatory')
         self._clear_base_columns(cot)
 
         _m0010.backfill_base_columns(apps, None)
 
         cot.refresh_from_db()
-        names = {c["name"] for c in cot.schema_document["base_columns"]}
-        self.assertIn("id", names)
-        self.assertIn("created", names)
-        self.assertIn("last_updated", names)
+        names = {c['name'] for c in cot.schema_document['base_columns']}
+        self.assertIn('id', names)
+        self.assertIn('created', names)
+        self.assertIn('last_updated', names)
 
     def test_backfill_excludes_user_fields(self):
         """User-defined field columns must not appear in the backfilled base_columns."""
-        cot = self.create_custom_object_type(name="bf_excl", slug="bf-excl")
-        self.create_custom_object_type_field(cot, name="custom_col", type="text")
+        cot = self.create_custom_object_type(name='bf_excl', slug='bf-excl')
+        self.create_custom_object_type_field(cot, name='custom_col', type='text')
         self._clear_base_columns(cot)
 
         _m0010.backfill_base_columns(apps, None)
 
         cot.refresh_from_db()
-        names = {c["name"] for c in cot.schema_document["base_columns"]}
-        self.assertNotIn("custom_col", names)
+        names = {c['name'] for c in cot.schema_document['base_columns']}
+        self.assertNotIn('custom_col', names)
 
     def test_backfill_is_idempotent(self):
         """Running backfill twice must not alter an already-backfilled snapshot."""
-        cot = self.create_custom_object_type(name="bf_idem", slug="bf-idem")
+        cot = self.create_custom_object_type(name='bf_idem', slug='bf-idem')
         self._clear_base_columns(cot)
 
         _m0010.backfill_base_columns(apps, None)
         cot.refresh_from_db()
-        first_snapshot = cot.schema_document["base_columns"]
+        first_snapshot = cot.schema_document['base_columns']
 
         _m0010.backfill_base_columns(apps, None)
         cot.refresh_from_db()
-        second_snapshot = cot.schema_document["base_columns"]
+        second_snapshot = cot.schema_document['base_columns']
 
         self.assertEqual(first_snapshot, second_snapshot)
 
     def test_backfill_skips_cot_with_existing_base_columns(self):
         """A COT that already has base_columns must not be modified."""
-        cot = self.create_custom_object_type(name="bf_skip", slug="bf-skip")
+        cot = self.create_custom_object_type(name='bf_skip', slug='bf-skip')
         # Plant a sentinel value in base_columns
-        sentinel_doc = {"base_columns": [{"name": "sentinel", "field_class": "TextField", "null": True}]}
+        sentinel_doc = {'base_columns': [{'name': 'sentinel', 'field_class': 'TextField', 'null': True}]}
         CustomObjectType.objects.filter(pk=cot.pk).update(schema_document=sentinel_doc)
         cot.refresh_from_db()
 
@@ -373,17 +355,14 @@ class BackfillBaseColumnsTestCase(CustomObjectsTestCase, TestCase):
 
         cot.refresh_from_db()
         self.assertEqual(
-            cot.schema_document["base_columns"],
-            sentinel_doc["base_columns"],
-            "Pre-existing base_columns must not be overwritten",
+            cot.schema_document['base_columns'],
+            sentinel_doc['base_columns'],
+            'Pre-existing base_columns must not be overwritten',
         )
 
     def test_backfill_handles_multiple_cots(self):
         """Backfill must process all COTs in one pass."""
-        cots = [
-            self.create_custom_object_type(name=f"bf_multi{i}", slug=f"bf-multi{i}")
-            for i in range(3)
-        ]
+        cots = [self.create_custom_object_type(name=f'bf_multi{i}', slug=f'bf-multi{i}') for i in range(3)]
         for cot in cots:
             self._clear_base_columns(cot)
 
@@ -392,22 +371,23 @@ class BackfillBaseColumnsTestCase(CustomObjectsTestCase, TestCase):
         for cot in cots:
             cot.refresh_from_db()
             self.assertIn(
-                "base_columns", cot.schema_document,
-                f"COT {cot.pk} missing base_columns after backfill",
+                'base_columns',
+                cot.schema_document,
+                f'COT {cot.pk} missing base_columns after backfill',
             )
 
     def test_backfill_each_entry_has_required_keys(self):
         """Every entry in the backfilled base_columns must have name, field_class, and null."""
-        cot = self.create_custom_object_type(name="bf_keys", slug="bf-keys")
+        cot = self.create_custom_object_type(name='bf_keys', slug='bf-keys')
         self._clear_base_columns(cot)
 
         _m0010.backfill_base_columns(apps, None)
 
         cot.refresh_from_db()
-        for entry in cot.schema_document["base_columns"]:
-            self.assertIn("name", entry, f"Entry missing 'name': {entry}")
-            self.assertIn("field_class", entry, f"Entry missing 'field_class': {entry}")
-            self.assertIn("null", entry, f"Entry missing 'null': {entry}")
+        for entry in cot.schema_document['base_columns']:
+            self.assertIn('name', entry, f"Entry missing 'name': {entry}")
+            self.assertIn('field_class', entry, f"Entry missing 'field_class': {entry}")
+            self.assertIn('null', entry, f"Entry missing 'null': {entry}")
 
 
 # ===========================================================================
@@ -448,7 +428,8 @@ class BasicConversionTestCase(_Migration0011TestCase):
         self.assertTrue(constraints, 'Expected at least one FK constraint after migration')
         for name, deferrable in constraints.items():
             self.assertEqual(
-                deferrable, 'NO',
+                deferrable,
+                'NO',
                 f'Constraint {name!r} should be non-DEFERRABLE but is_deferrable={deferrable!r}',
             )
 
@@ -508,7 +489,8 @@ class LongTableNameTestCase(_Migration0011TestCase):
         self._run_migration()
         for name in _get_fk_constraints(self.TABLE):
             self.assertLessEqual(
-                len(name), 63,
+                len(name),
+                63,
                 f'Constraint name {name!r} ({len(name)} chars) exceeds PostgreSQL 63-char limit',
             )
 
@@ -596,14 +578,9 @@ class WidenIntegerColumnsTestCase(CustomObjectsTestCase, TestCase):
     @classmethod
     def setUpTestData(cls):
         super().setUpTestData()
-        cls.custom_object_type = cls.create_custom_object_type(name="TestObject")
+        cls.custom_object_type = cls.create_custom_object_type(name='TestObject')
         cls.create_custom_object_type_field(
-            cls.custom_object_type,
-            name="name",
-            label="Name",
-            type="text",
-            primary=True,
-            required=True
+            cls.custom_object_type, name='name', label='Name', type='text', primary=True, required=True
         )
 
     def test_integer_field_upgrade_widens_existing_32bit_column(self):
@@ -618,15 +595,15 @@ class WidenIntegerColumnsTestCase(CustomObjectsTestCase, TestCase):
         """
         field = self.create_custom_object_type_field(
             self.custom_object_type,
-            name="legacy_count",
-            label="Legacy Count",
-            type="integer",
+            name='legacy_count',
+            label='Legacy Count',
+            type='integer',
         )
 
         # Realize the backing model/table/column.
         model = self.custom_object_type.get_model()
 
-        table_name = f"custom_objects_{self.custom_object_type.pk}"
+        table_name = f'custom_objects_{self.custom_object_type.pk}'
         column_name = field.name
 
         def column_data_type():
@@ -644,10 +621,8 @@ class WidenIntegerColumnsTestCase(CustomObjectsTestCase, TestCase):
 
         # Mimic a legacy install: force the column back to a 32-bit integer.
         with connection.cursor() as cursor:
-            cursor.execute(
-                f'ALTER TABLE "{table_name}" ALTER COLUMN "{column_name}" TYPE integer'
-            )
-        self.assertEqual(column_data_type(), "integer")
+            cursor.execute(f'ALTER TABLE "{table_name}" ALTER COLUMN "{column_name}" TYPE integer')
+        self.assertEqual(column_data_type(), 'integer')
 
         # Run the migration's data function against the legacy column.
         # widen_integer_columns only reads stable CustomObjectTypeField columns
@@ -658,8 +633,8 @@ class WidenIntegerColumnsTestCase(CustomObjectsTestCase, TestCase):
             _m0016.widen_integer_columns(apps, schema_editor)
 
         # Column is widened, and a value beyond the 32-bit range round-trips.
-        self.assertEqual(column_data_type(), "bigint")
+        self.assertEqual(column_data_type(), 'bigint')
         big_value = 9_000_000_000  # > 2**31 - 1 (2_147_483_647)
-        instance = model.objects.create(name="Test", legacy_count=big_value)
+        instance = model.objects.create(name='Test', legacy_count=big_value)
         instance.refresh_from_db()
         self.assertEqual(instance.legacy_count, big_value)

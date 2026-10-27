@@ -1,20 +1,21 @@
 """
 Tests for the linked-objects REST API endpoint.
 """
+
 import uuid
 
 from django.test import TestCase
 from django.urls import reverse
-
-from utilities.testing import create_test_user
 from rest_framework import status
 
-from netbox_custom_objects.models import CustomObjectType
-from ..base import CustomObjectsTestCase, create_token
 from core.models import ObjectType
 from dcim.models import Device, DeviceRole, DeviceType, Manufacturer, Site
 from extras.models import Dashboard
+from netbox_custom_objects.models import CustomObjectType
 from users.models import ObjectPermission
+from utilities.testing import create_test_user
+
+from ..base import CustomObjectsTestCase, create_token
 
 
 class LinkedObjectsAPITestCase(CustomObjectsTestCase, TestCase):
@@ -35,19 +36,11 @@ class LinkedObjectsAPITestCase(CustomObjectsTestCase, TestCase):
         self.model = self.cot.get_model()
 
         # Create a device to link against
-        manufacturer = Manufacturer.objects.create(
-            name='LO Manufacturer', slug='lo-manufacturer'
-        )
-        device_type = DeviceType.objects.create(
-            manufacturer=manufacturer, model='LO Type', slug='lo-type'
-        )
-        role = DeviceRole.objects.create(
-            name='LO Role', slug='lo-role', color='ffffff'
-        )
+        manufacturer = Manufacturer.objects.create(name='LO Manufacturer', slug='lo-manufacturer')
+        device_type = DeviceType.objects.create(manufacturer=manufacturer, model='LO Type', slug='lo-type')
+        role = DeviceRole.objects.create(name='LO Role', slug='lo-role', color='ffffff')
         site = Site.objects.create(name='LO Site', slug='lo-site')
-        self.device = Device.objects.create(
-            device_type=device_type, role=role, name='LO Device', site=site
-        )
+        self.device = Device.objects.create(device_type=device_type, role=role, name='LO Device', site=site)
         self._grant(Device)
         self._grant(self.model)
 
@@ -81,8 +74,7 @@ class LinkedObjectsAPITestCase(CustomObjectsTestCase, TestCase):
         results = response.data['results']
         fk_results = [r for r in results if r['field_name'] == 'device']
         self.assertTrue(
-            any(r['object']['id'] == linked.pk for r in fk_results),
-            "Linked FK object not found in results"
+            any(r['object']['id'] == linked.pk for r in fk_results), 'Linked FK object not found in results'
         )
 
     def test_m2m_field_linked_object_appears(self):
@@ -99,8 +91,7 @@ class LinkedObjectsAPITestCase(CustomObjectsTestCase, TestCase):
         results = response.data['results']
         m2m_results = [r for r in results if r['field_name'] == 'devices']
         self.assertTrue(
-            any(r['object']['id'] == linked.pk for r in m2m_results),
-            "Linked M2M object not found in results"
+            any(r['object']['id'] == linked.pk for r in m2m_results), 'Linked M2M object not found in results'
         )
 
     def test_no_linked_objects_returns_empty(self):
@@ -131,9 +122,7 @@ class LinkedObjectsAPITestCase(CustomObjectsTestCase, TestCase):
 
     def test_polymorphic_gfk_field_linked_object_appears(self):
         """An object linked via a polymorphic GFK object field appears in the results."""
-        cot = CustomObjectsTestCase.create_custom_object_type(
-            name='PolyLOTest', slug='poly-lo-test'
-        )
+        cot = CustomObjectsTestCase.create_custom_object_type(name='PolyLOTest', slug='poly-lo-test')
         CustomObjectsTestCase.create_custom_object_type_field(
             cot, name='name', label='Name', type='text', primary=True, required=True
         )
@@ -157,14 +146,12 @@ class LinkedObjectsAPITestCase(CustomObjectsTestCase, TestCase):
         results = response.data['results']
         self.assertTrue(
             any(r['field_name'] == 'target' and r['object']['id'] == linked.pk for r in results),
-            "Polymorphic GFK-linked object not found in linked-objects results"
+            'Polymorphic GFK-linked object not found in linked-objects results',
         )
 
     def test_polymorphic_m2m_field_linked_object_appears(self):
         """An object linked via a polymorphic multiobject field appears in the results."""
-        cot = CustomObjectsTestCase.create_custom_object_type(
-            name='PolyM2MLOTest', slug='poly-m2m-lo-test'
-        )
+        cot = CustomObjectsTestCase.create_custom_object_type(name='PolyM2MLOTest', slug='poly-m2m-lo-test')
         CustomObjectsTestCase.create_custom_object_type_field(
             cot, name='name', label='Name', type='text', primary=True, required=True
         )
@@ -189,7 +176,7 @@ class LinkedObjectsAPITestCase(CustomObjectsTestCase, TestCase):
         results = response.data['results']
         self.assertTrue(
             any(r['field_name'] == 'targets' and r['object']['id'] == linked.pk for r in results),
-            "Polymorphic M2M-linked object not found in linked-objects results"
+            'Polymorphic M2M-linked object not found in linked-objects results',
         )
 
     def test_unviewable_custom_objects_omitted(self):

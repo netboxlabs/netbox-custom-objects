@@ -4,7 +4,6 @@ import logging
 from pathlib import Path
 
 import jsonschema
-
 from django.apps import apps as django_apps
 from django.contrib.contenttypes.models import ContentType
 from django.db.models import Q
@@ -12,22 +11,19 @@ from django.http import Http404
 from django.utils.translation import gettext_lazy as _
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiParameter, extend_schema
-from extras.choices import CustomFieldTypeChoices
 from rest_framework import status
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.parsers import JSONParser
 from rest_framework.renderers import JSONRenderer
 from rest_framework.response import Response
 from rest_framework.routers import APIRootView
 from rest_framework.views import APIView
-from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from core.signals import clear_events
+from extras.choices import CustomFieldTypeChoices
 from netbox.api.authentication import IsAuthenticatedOrLoginNotRequired, TokenWritePermission
 from netbox.api.renderers import FormlessBrowsableAPIRenderer
 from netbox.api.viewsets import NetBoxModelViewSet
-from utilities.permissions import get_permission_for_model
-
-
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.filtersets import (
     CustomObjectTypeConstraintFilterSet,
@@ -37,21 +33,23 @@ from netbox_custom_objects.filtersets import (
 )
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeConstraint, CustomObjectTypeField
 from netbox_custom_objects.schema.comparator import FieldOp, diff_document
-from netbox_custom_objects.schema.format import CUSTOM_OBJECTS_APP_LABEL_SLUG
-from netbox_custom_objects.utilities import polymorphic_m2m_field_names
 from netbox_custom_objects.schema.executor import (
-    apply_diffs,
-    schema_transaction,
     CircularDependencyError,
     DestructiveChangesError,
     InvalidConstraintError,
     InvalidRelatedNameError,
     UnknownChoiceSetError,
-    UnsupportedFieldChangeError,
     UnknownFieldTypeError,
     UnknownObjectTypeError,
+    UnsupportedFieldChangeError,
     UnsupportedTypeChangeError,
+    apply_diffs,
+    schema_transaction,
 )
+from netbox_custom_objects.schema.format import CUSTOM_OBJECTS_APP_LABEL_SLUG
+from netbox_custom_objects.utilities import polymorphic_m2m_field_names
+from utilities.permissions import get_permission_for_model
+
 from . import serializers
 from .parsers import YAMLParser
 from .renderers import YAMLRenderer
@@ -62,7 +60,7 @@ logger = logging.getLogger(__name__)
 # Schema document helpers
 # ---------------------------------------------------------------------------
 
-_SCHEMA_FILE = Path(__file__).parent.parent / "schema" / "cot_schema_v1.json"
+_SCHEMA_FILE = Path(__file__).parent.parent / 'schema' / 'cot_schema_v1.json'
 
 # Schema preview/apply accept and can return either format (#665); YAML is the
 # documented default for new integrations. JSONRenderer stays first so that a
@@ -75,7 +73,7 @@ _SCHEMA_RENDERER_CLASSES = [JSONRenderer, YAMLRenderer, FormlessBrowsableAPIRend
 @functools.lru_cache(maxsize=1)
 def _get_validator():
     """Load the COT JSON Schema file and return a validator. Cached after first call."""
-    with open(_SCHEMA_FILE) as f:
+    with Path(_SCHEMA_FILE).open() as f:
         schema = json.load(f)
     return jsonschema.Draft202012Validator(schema)
 
@@ -88,52 +86,48 @@ def _validate_schema_doc(schema_doc: dict) -> None:
     validator = _get_validator()
     errors = sorted(validator.iter_errors(schema_doc), key=lambda e: list(e.path))
     if errors:
-        raise ValidationError({
-            "schema_errors": [
-                {"path": list(e.path), "message": e.message}
-                for e in errors[:10]  # cap at 10 to avoid overwhelming responses
-            ]
-        })
+        raise ValidationError(
+            {
+                'schema_errors': [
+                    {'path': list(e.path), 'message': e.message}
+                    for e in errors[:10]  # cap at 10 to avoid overwhelming responses
+                ]
+            }
+        )
 
 
 def _serialize_field_change(fc) -> dict:
     result = {
-        "op": fc.op.value,
-        "schema_id": fc.schema_id,
-        "db_name": fc.db_name,
-        "schema_def": fc.schema_def,
+        'op': fc.op.value,
+        'schema_id': fc.schema_id,
+        'db_name': fc.db_name,
+        'schema_def': fc.schema_def,
     }
     if fc.changed_attrs:
         # Tuples are not JSON-serialisable; convert to lists.
-        result["changed_attrs"] = {k: list(v) for k, v in fc.changed_attrs.items()}
+        result['changed_attrs'] = {k: list(v) for k, v in fc.changed_attrs.items()}
     return result
 
 
 def _serialize_constraint_change(cc) -> dict:
     result = {
-        "op": cc.op.value,
-        "name": cc.name,
-        "schema_def": cc.schema_def,
+        'op': cc.op.value,
+        'name': cc.name,
+        'schema_def': cc.schema_def,
     }
     if cc.changed_attrs:
-        result["changed_attrs"] = {k: list(v) for k, v in cc.changed_attrs.items()}
+        result['changed_attrs'] = {k: list(v) for k, v in cc.changed_attrs.items()}
     return result
 
 
 def _fields_by_op(diffs, *ops):
     """``(type slug, field schema_id)`` for each field the diffs change with one of ``ops``."""
-    return [
-        (diff.slug, change.schema_id)
-        for diff in diffs for change in diff.field_changes if change.op in ops
-    ]
+    return [(diff.slug, change.schema_id) for diff in diffs for change in diff.field_changes if change.op in ops]
 
 
 def _constraints_by_op(diffs, *ops):
     """``(type slug, constraint name)`` for each constraint the diffs change with one of ``ops``."""
-    return [
-        (diff.slug, change.name)
-        for diff in diffs for change in diff.constraint_changes if change.op in ops
-    ]
+    return [(diff.slug, change.name) for diff in diffs for change in diff.constraint_changes if change.op in ops]
 
 
 def _constraint_lookup(pairs):
@@ -161,36 +155,36 @@ def _check_apply_permissions(user, diffs):
     """
     new_slugs = {d.slug for d in diffs if d.is_new}
     existing_slugs = {d.slug for d in diffs if not d.is_new}
-    if existing_slugs and _restricted_count(
-        CustomObjectType, user, "change", slug__in=existing_slugs
-    ) != len(existing_slugs):
-        raise PermissionDenied(_("You do not have permission to change one or more of these Custom Object Types."))
-    if new_slugs and not user.has_perm("netbox_custom_objects.add_customobjecttype"):
-        raise PermissionDenied(_("You do not have permission to add Custom Object Types."))
+    if existing_slugs and _restricted_count(CustomObjectType, user, 'change', slug__in=existing_slugs) != len(
+        existing_slugs
+    ):
+        raise PermissionDenied(_('You do not have permission to change one or more of these Custom Object Types.'))
+    if new_slugs and not user.has_perm('netbox_custom_objects.add_customobjecttype'):
+        raise PermissionDenied(_('You do not have permission to add Custom Object Types.'))
 
-    if _fields_by_op(diffs, FieldOp.ADD) and not user.has_perm("netbox_custom_objects.add_customobjecttypefield"):
-        raise PermissionDenied(_("You do not have permission to add Custom Object Type fields."))
-    for op, action in ((FieldOp.ALTER, "change"), (FieldOp.REMOVE, "delete")):
+    if _fields_by_op(diffs, FieldOp.ADD) and not user.has_perm('netbox_custom_objects.add_customobjecttypefield'):
+        raise PermissionDenied(_('You do not have permission to add Custom Object Type fields.'))
+    for op, action in ((FieldOp.ALTER, 'change'), (FieldOp.REMOVE, 'delete')):
         pairs = _fields_by_op(diffs, op)
-        if pairs and CustomObjectTypeField.objects.restrict(user, action).filter(
-            _field_lookup(pairs)
-        ).count() != len(pairs):
+        if pairs and CustomObjectTypeField.objects.restrict(user, action).filter(_field_lookup(pairs)).count() != len(
+            pairs
+        ):
             raise PermissionDenied(
-                _("You do not have permission to {action} one or more of these fields.").format(action=action)
+                _('You do not have permission to {action} one or more of these fields.').format(action=action)
             )
 
     # An altered constraint is re-created, but for the user it's a change, as for a field.
     if _constraints_by_op(diffs, FieldOp.ADD) and not user.has_perm(
-        "netbox_custom_objects.add_customobjecttypeconstraint"
+        'netbox_custom_objects.add_customobjecttypeconstraint'
     ):
-        raise PermissionDenied(_("You do not have permission to add Custom Object Type constraints."))
-    for op, action in ((FieldOp.ALTER, "change"), (FieldOp.REMOVE, "delete")):
+        raise PermissionDenied(_('You do not have permission to add Custom Object Type constraints.'))
+    for op, action in ((FieldOp.ALTER, 'change'), (FieldOp.REMOVE, 'delete')):
         pairs = _constraints_by_op(diffs, op)
         if pairs and CustomObjectTypeConstraint.objects.restrict(user, action).filter(
             _constraint_lookup(pairs)
         ).count() != len(pairs):
             raise PermissionDenied(
-                _("You do not have permission to {action} one or more of these constraints.").format(action=action)
+                _('You do not have permission to {action} one or more of these constraints.').format(action=action)
             )
 
 
@@ -201,20 +195,20 @@ def _check_related_types_visible(user, diffs):
     the types a document names.  Related types the document itself names are the
     caller's own input; refusing those would only reveal whether such a type exists.
     """
-    prefix = f"{CUSTOM_OBJECTS_APP_LABEL_SLUG}/"
+    prefix = f'{CUSTOM_OBJECTS_APP_LABEL_SLUG}/'
     slugs = set()
     for diff in diffs:
         for change in diff.field_changes:
-            for attr in ("related_object_type", "related_object_types"):
+            for attr in ('related_object_type', 'related_object_types'):
                 if attr not in (change.changed_attrs or {}):
                     continue
                 stored = change.changed_attrs[attr][0]
                 for value in stored if isinstance(stored, (list, tuple)) else [stored]:
                     if isinstance(value, str) and value.startswith(prefix):
-                        slugs.add(value[len(prefix):])
-    viewable = CustomObjectType.objects.restrict(user, "view")
+                        slugs.add(value[len(prefix) :])
+    viewable = CustomObjectType.objects.restrict(user, 'view')
     if slugs and CustomObjectType.objects.filter(slug__in=slugs).exclude(pk__in=viewable).exists():
-        raise PermissionDenied(_("You do not have permission to view one or more of these Custom Object Types."))
+        raise PermissionDenied(_('You do not have permission to view one or more of these Custom Object Types.'))
 
 
 def _check_applied_permissions(user, diffs):
@@ -222,43 +216,43 @@ def _check_applied_permissions(user, diffs):
     After applying, raise ``PermissionDenied`` (rolling the apply back) unless every created
     or changed object still falls within the user's constraints, as core's edit views check.
     """
-    for is_new, action in ((True, "add"), (False, "change")):
+    for is_new, action in ((True, 'add'), (False, 'change')):
         slugs = {d.slug for d in diffs if d.is_new == is_new}
         if slugs and _restricted_count(CustomObjectType, user, action, slug__in=slugs) != len(slugs):
-            raise PermissionDenied(_("The result would violate your Custom Object Type permission constraints."))
-    for op, action in ((FieldOp.ADD, "add"), (FieldOp.ALTER, "change")):
+            raise PermissionDenied(_('The result would violate your Custom Object Type permission constraints.'))
+    for op, action in ((FieldOp.ADD, 'add'), (FieldOp.ALTER, 'change')):
         pairs = _fields_by_op(diffs, op)
-        if pairs and CustomObjectTypeField.objects.restrict(user, action).filter(
-            _field_lookup(pairs)
-        ).count() != len(pairs):
-            raise PermissionDenied(_("The result would violate your field permission constraints."))
-    for op, action in ((FieldOp.ADD, "add"), (FieldOp.ALTER, "change")):
+        if pairs and CustomObjectTypeField.objects.restrict(user, action).filter(_field_lookup(pairs)).count() != len(
+            pairs
+        ):
+            raise PermissionDenied(_('The result would violate your field permission constraints.'))
+    for op, action in ((FieldOp.ADD, 'add'), (FieldOp.ALTER, 'change')):
         pairs = _constraints_by_op(diffs, op)
         if pairs and CustomObjectTypeConstraint.objects.restrict(user, action).filter(
             _constraint_lookup(pairs)
         ).count() != len(pairs):
             raise PermissionDenied(
-                _("The result would violate your permission constraints for Custom Object Type constraints.")
+                _('The result would violate your permission constraints for Custom Object Type constraints.')
             )
 
 
 def _serialize_diff(diff) -> dict:
     return {
-        "slug": diff.slug,
-        "name": diff.name,
-        "is_new": diff.is_new,
-        "has_changes": diff.has_changes,
-        "has_destructive_changes": diff.has_destructive_changes,
-        "cot_changes": {k: list(v) for k, v in diff.cot_changes.items()},
-        "field_changes": [_serialize_field_change(fc) for fc in diff.field_changes],
-        "constraint_changes": [_serialize_constraint_change(cc) for cc in diff.constraint_changes],
-        "warnings": diff.warnings,
+        'slug': diff.slug,
+        'name': diff.name,
+        'is_new': diff.is_new,
+        'has_changes': diff.has_changes,
+        'has_destructive_changes': diff.has_destructive_changes,
+        'cot_changes': {k: list(v) for k, v in diff.cot_changes.items()},
+        'field_changes': [_serialize_field_change(fc) for fc in diff.field_changes],
+        'constraint_changes': [_serialize_constraint_change(cc) for cc in diff.constraint_changes],
+        'warnings': diff.warnings,
     }
 
 
 class RootView(APIRootView):
     def get_view_name(self):
-        return "CustomObjects"
+        return 'CustomObjects'
 
 
 class CustomObjectTypeViewSet(NetBoxModelViewSet):
@@ -281,12 +275,16 @@ class CustomObjectTypeConstraintViewSet(NetBoxModelViewSet):
     filterset_class = CustomObjectTypeConstraintFilterSet
 
 
-@extend_schema(parameters=[
-    OpenApiParameter(
-        "custom_object_type", OpenApiTypes.STR, OpenApiParameter.PATH,
-        description="Slug of the Custom Object Type",
-    ),
-])
+@extend_schema(
+    parameters=[
+        OpenApiParameter(
+            'custom_object_type',
+            OpenApiTypes.STR,
+            OpenApiParameter.PATH,
+            description='Slug of the Custom Object Type',
+        ),
+    ]
+)
 class CustomObjectViewSet(NetBoxModelViewSet):
     """
     Custom objects of the Custom Object Type identified by its slug in the URL.
@@ -304,7 +302,7 @@ class CustomObjectViewSet(NetBoxModelViewSet):
         # drf-spectacular builds the schema from a request-less "fake" view, so no
         # Custom Object Type (and no dynamic model) can be resolved: describe the
         # shape every custom object shares instead.
-        return getattr(self, "swagger_fake_view", False)
+        return getattr(self, 'swagger_fake_view', False)
 
     @property
     def queryset(self):
@@ -340,7 +338,8 @@ class CustomObjectViewSet(NetBoxModelViewSet):
         fields = self.field_kwargs.get('fields')
         omit = self.field_kwargs.get('omit') or ()
         polymorphic_m2m_fields = [
-            name for name in polymorphic_m2m_field_names(self.model)
+            name
+            for name in polymorphic_m2m_field_names(self.model)
             if (fields is None or name in fields) and name not in omit
         ]
         if polymorphic_m2m_fields:
@@ -353,9 +352,7 @@ class CustomObjectViewSet(NetBoxModelViewSet):
         # run yet, and that would leak slug existence to an unauthenticated caller.
         if self.model is None:
             try:
-                custom_object_type = CustomObjectType.objects.get(
-                    slug=self.kwargs["custom_object_type"]
-                )
+                custom_object_type = CustomObjectType.objects.get(slug=self.kwargs['custom_object_type'])
                 self.model = custom_object_type.get_model_with_serializer()
                 self.queryset = self.model.objects.all()
             except CustomObjectType.DoesNotExist:
@@ -371,9 +368,7 @@ class CustomObjectViewSet(NetBoxModelViewSet):
     def _enqueue_bulk_job(self, request, action, payload, action_kwargs=None):
         # AsyncAPIJob instantiates a fresh viewset without the URL kwargs and never calls
         # initial(), so it can't resolve this viewset's per-request dynamic model.
-        raise ValidationError(
-            _("Background processing is not supported for custom objects.")
-        )
+        raise ValidationError(_('Background processing is not supported for custom objects.'))
 
 
 class LinkedObjectsView(APIView):
@@ -410,23 +405,17 @@ class LinkedObjectsView(APIView):
         object_id = request.query_params.get('object_id')
 
         if not object_type_str or not object_id:
-            raise ValidationError(
-                _("Both 'object_type' and 'object_id' query parameters are required.")
-            )
+            raise ValidationError(_("Both 'object_type' and 'object_id' query parameters are required."))
 
         try:
             app_label, model_name = object_type_str.split('.', 1)
         except ValueError:
-            raise ValidationError(
-                _("'object_type' must be in the format 'app_label.model'.")
-            )
+            raise ValidationError(_("'object_type' must be in the format 'app_label.model'."))
 
         try:
             content_type = ContentType.objects.get(app_label=app_label, model=model_name)
         except ContentType.DoesNotExist:
-            raise ValidationError(
-                _("Object type '%(object_type)s' does not exist.") % {'object_type': object_type_str}
-            )
+            raise ValidationError(_("Object type '%(object_type)s' does not exist.") % {'object_type': object_type_str})
 
         model_class = content_type.model_class()
         manager = model_class._default_manager
@@ -469,28 +458,32 @@ class LinkedObjectsView(APIView):
                 else:
                     m2m_field = custom_object_model._meta.get_field(field.name)
                     through_model = m2m_field.remote_field.through
-                    linked_ids = through_model.objects.filter(
-                        target_id=target_obj.pk
-                    ).values_list('source_id', flat=True)
+                    linked_ids = through_model.objects.filter(target_id=target_obj.pk).values_list(
+                        'source_id', flat=True
+                    )
                 linked_objects = viewable.filter(pk__in=linked_ids)
             else:
                 if field.is_polymorphic:
-                    linked_objects = viewable.filter(**{
-                        f"{field.name}_content_type_id": content_type.id,
-                        f"{field.name}_object_id": target_obj.pk,
-                    })
+                    linked_objects = viewable.filter(
+                        **{
+                            f'{field.name}_content_type_id': content_type.id,
+                            f'{field.name}_object_id': target_obj.pk,
+                        }
+                    )
                 else:
                     linked_objects = viewable.filter(**{field.name: target_obj})
 
             serializer_class = serializers.get_serializer_class(custom_object_model)
             for linked_obj in linked_objects:
-                results.append({
-                    'custom_object_type': serializers.CustomObjectTypeSerializer(
-                        field.custom_object_type, nested=True, context=context
-                    ).data,
-                    'field_name': field.name,
-                    'object': serializer_class(linked_obj, context=context).data,
-                })
+                results.append(
+                    {
+                        'custom_object_type': serializers.CustomObjectTypeSerializer(
+                            field.custom_object_type, nested=True, context=context
+                        ).data,
+                        'field_name': field.name,
+                        'object': serializer_class(linked_obj, context=context).data,
+                    }
+                )
 
         return Response({'count': len(results), 'results': results})
 
@@ -539,25 +532,25 @@ class SchemaPreviewView(APIView):
         # The diff describes existing types, so it needs the same permission as reading them.
         if not request.user.has_perm('netbox_custom_objects.view_customobjecttype'):
             raise PermissionDenied(
-                "You do not have permission to preview a schema document. "
-                "View permission on CustomObjectType is required."
+                'You do not have permission to preview a schema document. '
+                'View permission on CustomObjectType is required.'
             )
 
         if not isinstance(request.data, dict):
-            raise ValidationError({"non_field_errors": [_("Request body must be a JSON/YAML object.")]})
+            raise ValidationError({'non_field_errors': [_('Request body must be a JSON/YAML object.')]})
 
         schema_doc = request.data
         _validate_schema_doc(schema_doc)
 
         # Under a constrained permission, refuse documents naming existing types the user can't view.
-        slugs = {type_def.get("slug") for type_def in schema_doc.get("types", [])}
-        viewable = CustomObjectType.objects.restrict(request.user, "view")
+        slugs = {type_def.get('slug') for type_def in schema_doc.get('types', [])}
+        viewable = CustomObjectType.objects.restrict(request.user, 'view')
         if CustomObjectType.objects.filter(slug__in=slugs).exclude(pk__in=viewable).exists():
-            raise PermissionDenied("You do not have permission to view one or more of these Custom Object Types.")
+            raise PermissionDenied('You do not have permission to view one or more of these Custom Object Types.')
 
         diffs = diff_document(schema_doc)
         _check_related_types_visible(request.user, diffs)
-        return Response({"diffs": [_serialize_diff(d) for d in diffs]})
+        return Response({'diffs': [_serialize_diff(d) for d in diffs]})
 
 
 class SchemaApplyView(APIView):
@@ -622,25 +615,23 @@ class SchemaApplyView(APIView):
         # See ``_schema_add_field`` / ``_schema_remove_field`` / ``_schema_alter_field``
         # and ``CustomObjectType.save`` for the routing details.
         if not (
-            request.user.has_perm('netbox_custom_objects.add_customobjecttype') and
-            request.user.has_perm('netbox_custom_objects.change_customobjecttype')
+            request.user.has_perm('netbox_custom_objects.add_customobjecttype')
+            and request.user.has_perm('netbox_custom_objects.change_customobjecttype')
         ):
             raise PermissionDenied(
-                "You do not have permission to apply a schema document. "
-                "Both add and change permissions on CustomObjectType are required."
+                'You do not have permission to apply a schema document. '
+                'Both add and change permissions on CustomObjectType are required.'
             )
 
         if not isinstance(request.data, dict):
-            raise ValidationError({"non_field_errors": [_("Request body must be a JSON/YAML object.")]})
+            raise ValidationError({'non_field_errors': [_('Request body must be a JSON/YAML object.')]})
 
-        allow_destructive = request.data.get("allow_destructive", False)
+        allow_destructive = request.data.get('allow_destructive', False)
         if not isinstance(allow_destructive, bool):
-            raise ValidationError({"allow_destructive": _("'allow_destructive' must be a boolean.")})
-        schema_doc = request.data.get("schema")
+            raise ValidationError({'allow_destructive': _("'allow_destructive' must be a boolean.")})
+        schema_doc = request.data.get('schema')
         if not isinstance(schema_doc, dict):
-            raise ValidationError(
-                {"schema": _("A 'schema' object containing the COT schema document is required.")}
-            )
+            raise ValidationError({'schema': _("A 'schema' object containing the COT schema document is required.")})
 
         _validate_schema_doc(schema_doc)
 
@@ -648,7 +639,7 @@ class SchemaApplyView(APIView):
         _check_apply_permissions(request.user, diffs)
         # The response reports the diff too.
         _check_related_types_visible(request.user, diffs)
-        type_defs_by_slug = {type_def["slug"]: type_def for type_def in schema_doc.get("types", [])}
+        type_defs_by_slug = {type_def['slug']: type_def for type_def in schema_doc.get('types', [])}
 
         try:
             with schema_transaction():
@@ -663,41 +654,41 @@ class SchemaApplyView(APIView):
         except DestructiveChangesError as exc:
             return Response(
                 {
-                    "error": "destructive_changes",
-                    "detail": str(exc),
-                    "destructive_slugs": [d.slug for d in exc.diffs],
+                    'error': 'destructive_changes',
+                    'detail': str(exc),
+                    'destructive_slugs': [d.slug for d in exc.diffs],
                 },
                 status=status.HTTP_409_CONFLICT,
             )
         except CircularDependencyError as exc:
             return Response(
-                {"error": "circular_dependency", "detail": str(exc)},
+                {'error': 'circular_dependency', 'detail': str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         except (UnknownChoiceSetError, UnknownFieldTypeError, UnknownObjectTypeError) as exc:
             return Response(
-                {"error": "unresolvable_reference", "detail": str(exc)},
+                {'error': 'unresolvable_reference', 'detail': str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         except InvalidConstraintError as exc:
             return Response(
-                {"error": "invalid_constraint", "detail": str(exc)},
+                {'error': 'invalid_constraint', 'detail': str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         except UnsupportedFieldChangeError as exc:
             return Response(
-                {"error": "unsupported_field_change", "detail": str(exc)},
+                {'error': 'unsupported_field_change', 'detail': str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         except InvalidRelatedNameError as exc:
             return Response(
-                {"error": "invalid_related_name", "detail": str(exc)},
+                {'error': 'invalid_related_name', 'detail': str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         except UnsupportedTypeChangeError as exc:
             return Response(
-                {"error": "unsupported_type_change", "detail": str(exc)},
+                {'error': 'unsupported_type_change', 'detail': str(exc)},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        return Response({"applied": True, "diffs": [_serialize_diff(d) for d in diffs]})
+        return Response({'applied': True, 'diffs': [_serialize_diff(d) for d in diffs]})

@@ -33,11 +33,11 @@ Public API
 import logging
 from contextlib import contextmanager
 
-from core.models import ObjectType
 from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, transaction
-from extras.models import CustomFieldChoiceSet
 
+from core.models import ObjectType
+from extras.models import CustomFieldChoiceSet
 from netbox_custom_objects import constants
 from netbox_custom_objects.choices import CustomObjectFieldTypeChoices
 from netbox_custom_objects.models import (
@@ -65,6 +65,7 @@ logger = logging.getLogger(__name__)
 # Exceptions
 # ---------------------------------------------------------------------------
 
+
 class CircularDependencyError(Exception):
     """Raised when COT definitions contain circular object-field references."""
 
@@ -74,10 +75,10 @@ class DestructiveChangesError(Exception):
 
     def __init__(self, diffs):
         self.diffs = diffs
-        names = ", ".join(d.slug for d in diffs)
+        names = ', '.join(d.slug for d in diffs)
         super().__init__(
-            f"Schema contains destructive field removals for COT(s): {names}. "
-            "Pass allow_destructive=True to apply them."
+            f'Schema contains destructive field removals for COT(s): {names}. '
+            'Pass allow_destructive=True to apply them.'
         )
 
 
@@ -113,6 +114,7 @@ class UnsupportedTypeChangeError(Exception):
 # Dependency ordering
 # ---------------------------------------------------------------------------
 
+
 def _build_dep_order(diffs):
     """
     Return *diffs* in an order where new COTs that are referenced by other
@@ -124,7 +126,7 @@ def _build_dep_order(diffs):
 
     Raises :exc:`CircularDependencyError` if a dependency cycle is detected.
     """
-    prefix = CUSTOM_OBJECTS_APP_LABEL_SLUG + "/"
+    prefix = CUSTOM_OBJECTS_APP_LABEL_SLUG + '/'
     new_slugs = {d.slug for d in diffs if d.is_new}
 
     # Adjacency: slug → set of slugs it must wait for (within this document).
@@ -132,15 +134,15 @@ def _build_dep_order(diffs):
     for diff in diffs:
         for fc in diff.field_changes:
             # Non-polymorphic: single related_object_type string.
-            rot = fc.schema_def.get("related_object_type", "")
+            rot = fc.schema_def.get('related_object_type', '')
             if rot.startswith(prefix):
-                dep_slug = rot[len(prefix):]
+                dep_slug = rot[len(prefix) :]
                 if dep_slug in new_slugs and dep_slug != diff.slug:
                     deps[diff.slug].add(dep_slug)
             # Polymorphic: list of related_object_types strings.
-            for rot in fc.schema_def.get("related_object_types", []):
+            for rot in fc.schema_def.get('related_object_types', []):
                 if rot.startswith(prefix):
-                    dep_slug = rot[len(prefix):]
+                    dep_slug = rot[len(prefix) :]
                     if dep_slug in new_slugs and dep_slug != diff.slug:
                         deps[diff.slug].add(dep_slug)
 
@@ -153,9 +155,7 @@ def _build_dep_order(diffs):
         if slug in visited:
             return
         if slug in visiting:
-            raise CircularDependencyError(
-                f"Circular dependency detected involving COT {slug!r}."
-            )
+            raise CircularDependencyError(f'Circular dependency detected involving COT {slug!r}.')
         visiting.add(slug)
         for dep in sorted(deps.get(slug, set())):  # sorted for determinism
             _visit(dep)
@@ -174,6 +174,7 @@ def _build_dep_order(diffs):
 # Object-type and choice-set resolution
 # ---------------------------------------------------------------------------
 
+
 def _resolve_related_object_type(rot_str: str):
     """
     Resolve a schema ``related_object_type`` string to an ``ObjectType`` instance.
@@ -183,42 +184,35 @@ def _resolve_related_object_type(rot_str: str):
 
     Raises :exc:`UnknownObjectTypeError` if the target cannot be found.
     """
-    prefix = CUSTOM_OBJECTS_APP_LABEL_SLUG + "/"
+    prefix = CUSTOM_OBJECTS_APP_LABEL_SLUG + '/'
     if rot_str.startswith(prefix):
-        slug = rot_str[len(prefix):]
+        slug = rot_str[len(prefix) :]
         try:
             cot = CustomObjectType.objects.get(slug=slug)
         except CustomObjectType.DoesNotExist:
             raise UnknownObjectTypeError(
-                f"Custom Object Type with slug {slug!r} not found in DB. "
-                "Ensure it is created before adding fields that reference it."
+                f'Custom Object Type with slug {slug!r} not found in DB. '
+                'Ensure it is created before adding fields that reference it.'
             )
         model_name = CustomObjectType.get_table_model_name(cot.id).lower()
         try:
-            return ObjectType.objects.get(
-                app_label=constants.APP_LABEL, model=model_name
-            )
+            return ObjectType.objects.get(app_label=constants.APP_LABEL, model=model_name)
         except ObjectType.DoesNotExist:
-            raise UnknownObjectTypeError(
-                f"ObjectType for COT {slug!r} (model={model_name!r}) not found."
-            )
+            raise UnknownObjectTypeError(f'ObjectType for COT {slug!r} (model={model_name!r}) not found.')
     else:
-        if "/" not in rot_str:
-            raise UnknownObjectTypeError(
-                f"related_object_type {rot_str!r} is not in 'app_label/model' format."
-            )
-        app_label, model = rot_str.split("/", 1)
+        if '/' not in rot_str:
+            raise UnknownObjectTypeError(f"related_object_type {rot_str!r} is not in 'app_label/model' format.")
+        app_label, model = rot_str.split('/', 1)
         try:
             return ObjectType.objects.get(app_label=app_label, model=model)
         except ObjectType.DoesNotExist:
-            raise UnknownObjectTypeError(
-                f"ObjectType {rot_str!r} not found in DB."
-            )
+            raise UnknownObjectTypeError(f'ObjectType {rot_str!r} not found in DB.')
 
 
 # ---------------------------------------------------------------------------
 # Schema-field → model-field kwargs conversion
 # ---------------------------------------------------------------------------
+
 
 def _schema_def_to_field_kwargs(schema_def: dict) -> dict:
     """
@@ -231,17 +225,17 @@ def _schema_def_to_field_kwargs(schema_def: dict) -> dict:
     Raises :exc:`UnknownChoiceSetError` or :exc:`UnknownObjectTypeError` if
     FK targets cannot be resolved.
     """
-    schema_type = schema_def["type"]
+    schema_type = schema_def['type']
     if schema_type not in SCHEMA_TYPE_TO_CHOICES:
         raise UnknownFieldTypeError(
-            f"Unknown field type {schema_type!r} in field {schema_def.get('name')!r}. "
-            f"Valid types: {sorted(SCHEMA_TYPE_TO_CHOICES)}"
+            f'Unknown field type {schema_type!r} in field {schema_def.get("name")!r}. '
+            f'Valid types: {sorted(SCHEMA_TYPE_TO_CHOICES)}'
         )
     type_choice = SCHEMA_TYPE_TO_CHOICES[schema_type]
 
     kwargs: dict = {
-        "name": schema_def["name"],
-        "type": type_choice,
+        'name': schema_def['name'],
+        'type': type_choice,
     }
 
     # Base scalar attributes — use FIELD_DEFAULTS when absent from schema_def.
@@ -251,62 +245,56 @@ def _schema_def_to_field_kwargs(schema_def: dict) -> dict:
     # Type-specific attributes — only include those valid for this field type.
     type_specific = FIELD_TYPE_ATTRS.get(schema_type, set())
 
-    if "validation_regex" in type_specific:
-        kwargs["validation_regex"] = schema_def.get("validation_regex", "")
+    if 'validation_regex' in type_specific:
+        kwargs['validation_regex'] = schema_def.get('validation_regex', '')
 
-    if "validation_minimum" in type_specific:
-        kwargs["validation_minimum"] = schema_def.get("validation_minimum", None)
+    if 'validation_minimum' in type_specific:
+        kwargs['validation_minimum'] = schema_def.get('validation_minimum')
 
-    if "validation_maximum" in type_specific:
-        kwargs["validation_maximum"] = schema_def.get("validation_maximum", None)
+    if 'validation_maximum' in type_specific:
+        kwargs['validation_maximum'] = schema_def.get('validation_maximum')
 
-    for attr in ("array_element_type", "array_tuple_size", "array_min_length", "array_max_length"):
+    for attr in ('array_element_type', 'array_tuple_size', 'array_min_length', 'array_max_length'):
         if attr in type_specific:
             kwargs[attr] = schema_def.get(attr, FIELD_DEFAULTS[attr])
 
-    if "choice_set" in type_specific:
-        cs_name = schema_def.get("choice_set")
+    if 'choice_set' in type_specific:
+        cs_name = schema_def.get('choice_set')
         if not cs_name:
             raise UnknownChoiceSetError(
-                f"Field {schema_def['name']!r} is type {schema_type!r} but "
-                "has no choice_set specified in the schema."
+                f'Field {schema_def["name"]!r} is type {schema_type!r} but has no choice_set specified in the schema.'
             )
         try:
-            kwargs["choice_set"] = CustomFieldChoiceSet.objects.get(name=cs_name)
+            kwargs['choice_set'] = CustomFieldChoiceSet.objects.get(name=cs_name)
         except CustomFieldChoiceSet.DoesNotExist:
-            raise UnknownChoiceSetError(
-                f"Choice set {cs_name!r} not found in DB."
-            )
+            raise UnknownChoiceSetError(f'Choice set {cs_name!r} not found in DB.')
 
-    is_polymorphic = schema_def.get("is_polymorphic", False)
-    if "is_polymorphic" in type_specific:
-        kwargs["is_polymorphic"] = is_polymorphic
+    is_polymorphic = schema_def.get('is_polymorphic', False)
+    if 'is_polymorphic' in type_specific:
+        kwargs['is_polymorphic'] = is_polymorphic
 
-    if "related_object_type" in type_specific and not is_polymorphic:
-        rot_str = schema_def.get("related_object_type")
+    if 'related_object_type' in type_specific and not is_polymorphic:
+        rot_str = schema_def.get('related_object_type')
         if not rot_str:
             raise UnknownObjectTypeError(
-                f"Field {schema_def['name']!r} is type {schema_type!r} but "
-                "has no related_object_type specified."
+                f'Field {schema_def["name"]!r} is type {schema_type!r} but has no related_object_type specified.'
             )
-        kwargs["related_object_type"] = _resolve_related_object_type(rot_str)
+        kwargs['related_object_type'] = _resolve_related_object_type(rot_str)
 
     # related_object_types is M2M — cannot go in constructor kwargs.
     # Callers (_apply_field_add / _apply_field_alter) must call .set() after save().
 
-    if "related_object_filter" in type_specific:
-        kwargs["related_object_filter"] = schema_def.get(
-            "related_object_filter", FIELD_DEFAULTS.get("related_object_filter")
+    if 'related_object_filter' in type_specific:
+        kwargs['related_object_filter'] = schema_def.get(
+            'related_object_filter', FIELD_DEFAULTS.get('related_object_filter')
         )
 
-    if "related_name" in type_specific:
+    if 'related_name' in type_specific:
         # A new field without the key gets none; an existing one keeps its own (see the comparator).
-        kwargs["related_name"] = schema_def.get("related_name", FIELD_DEFAULTS["related_name"])
+        kwargs['related_name'] = schema_def.get('related_name', FIELD_DEFAULTS['related_name'])
 
-    if "on_delete_behavior" in type_specific:
-        kwargs["on_delete_behavior"] = schema_def.get(
-            "on_delete_behavior", FIELD_DEFAULTS.get("on_delete_behavior")
-        )
+    if 'on_delete_behavior' in type_specific:
+        kwargs['on_delete_behavior'] = schema_def.get('on_delete_behavior', FIELD_DEFAULTS.get('on_delete_behavior'))
 
     return kwargs
 
@@ -320,6 +308,7 @@ def _resolve_related_object_types(rot_list: list) -> list:
 # Per-operation helpers
 # ---------------------------------------------------------------------------
 
+
 def _validate_related_name(cot, field, object_types=None) -> None:
     """
     Raise InvalidRelatedNameError if *field*'s related_name is taken (see clean_related_name()).
@@ -332,17 +321,15 @@ def _validate_related_name(cot, field, object_types=None) -> None:
     try:
         field.clean_related_name(object_types)
     except ValidationError as exc:
-        raise InvalidRelatedNameError(
-            f"Field {field.name!r} on COT {cot.slug!r}: {' '.join(exc.messages)}"
-        ) from exc
+        raise InvalidRelatedNameError(f'Field {field.name!r} on COT {cot.slug!r}: {" ".join(exc.messages)}') from exc
 
 
 def _apply_field_add(cot, fc) -> None:
     """Create a new field on *cot* as described by the ADD FieldChange *fc*."""
     kwargs = _schema_def_to_field_kwargs(fc.schema_def)
-    kwargs["custom_object_type"] = cot
+    kwargs['custom_object_type'] = cot
     # Set schema_id explicitly so the auto-assign block in save() is skipped.
-    kwargs["schema_id"] = fc.schema_id
+    kwargs['schema_id'] = fc.schema_id
 
     # Wrap save + M2M assignment atomically: if the M2M step fails (unknown
     # type, signal rejection) the field row is cleaned up so we never leave an
@@ -351,8 +338,8 @@ def _apply_field_add(cot, fc) -> None:
     with transaction.atomic():
         field = CustomObjectTypeField(**kwargs)
         object_types = None
-        if fc.schema_def.get("is_polymorphic"):
-            object_types = _resolve_related_object_types(fc.schema_def.get("related_object_types", []))
+        if fc.schema_def.get('is_polymorphic'):
+            object_types = _resolve_related_object_types(fc.schema_def.get('related_object_types', []))
         _validate_related_name(cot, field, object_types)
         field.save()
 
@@ -361,8 +348,10 @@ def _apply_field_add(cot, fc) -> None:
             field.related_object_types.set(object_types)
 
     logger.debug(
-        "ADD field %r (schema_id=%s) on COT %r",
-        fc.schema_def["name"], fc.schema_id, cot.slug,
+        'ADD field %r (schema_id=%s) on COT %r',
+        fc.schema_def['name'],
+        fc.schema_id,
+        cot.slug,
     )
 
 
@@ -373,20 +362,16 @@ def _apply_field_alter(cot, fc) -> None:
     Only the attributes listed in *fc.changed_attrs* are mutated; everything
     else remains as-is in the DB.
     """
-    field = (
-        cot.fields
-        .select_related("choice_set", "related_object_type")
-        .get(schema_id=fc.schema_id)
-    )
+    field = cot.fields.select_related('choice_set', 'related_object_type').get(schema_id=fc.schema_id)
 
     # An array column's shape is fixed when it's created (see CustomObjectTypeField.clean()).
-    type_change = fc.changed_attrs.get("type")
+    type_change = fc.changed_attrs.get('type')
     if type_change and CustomObjectFieldTypeChoices.TYPE_ARRAY in type_change:
         raise UnsupportedFieldChangeError(
             f"Field {field.name!r} on COT {cot.slug!r}: a field's type can't change to or from array."
         )
     if field.type == CustomObjectFieldTypeChoices.TYPE_ARRAY:
-        for attr in ("array_element_type", "array_tuple_size"):
+        for attr in ('array_element_type', 'array_tuple_size'):
             if attr in fc.changed_attrs:
                 raise UnsupportedFieldChangeError(
                     f"Field {field.name!r} on COT {cot.slug!r}: an array's {attr} can't change after creation."
@@ -395,7 +380,7 @@ def _apply_field_alter(cot, fc) -> None:
     pending_m2m: dict[str, list] = {}
 
     for attr, (db_val, schema_val) in fc.changed_attrs.items():
-        if attr == "type":
+        if attr == 'type':
             # comparator stores CustomFieldTypeChoices values for type diffs.
             # save() can't add or drop backing columns, so reject what clean() rejects.
             if is_multi_column_type_change(field.type, schema_val):
@@ -404,39 +389,37 @@ def _apply_field_alter(cot, fc) -> None:
                     f"{schema_val!r}: coordinates and URL fields can't be converted to or from another type."
                 )
             field.type = schema_val
-        elif attr == "choice_set":
+        elif attr == 'choice_set':
             if schema_val is None:
                 field.choice_set = None
             else:
                 try:
                     field.choice_set = CustomFieldChoiceSet.objects.get(name=schema_val)
                 except CustomFieldChoiceSet.DoesNotExist:
-                    raise UnknownChoiceSetError(
-                        f"Choice set {schema_val!r} not found in DB."
-                    )
-        elif attr == "related_object_type":
+                    raise UnknownChoiceSetError(f'Choice set {schema_val!r} not found in DB.')
+        elif attr == 'related_object_type':
             if schema_val is None:
                 field.related_object_type = None
             else:
                 field.related_object_type = _resolve_related_object_type(schema_val)
-        elif attr == "related_object_types":
+        elif attr == 'related_object_types':
             # M2M — defer until after save().
-            pending_m2m["related_object_types"] = schema_val or []
+            pending_m2m['related_object_types'] = schema_val or []
         else:
             setattr(field, attr, schema_val)
 
     # Constraints the document removes or redefines are already gone (see _remove_constraints).
-    if {"type", "is_polymorphic"} & fc.changed_attrs.keys():
-        constraint_names = list(field.constraints.values_list("name", flat=True))
+    if {'type', 'is_polymorphic'} & fc.changed_attrs.keys():
+        constraint_names = list(field.constraints.values_list('name', flat=True))
         if constraint_names:
             raise InvalidConstraintError(
-                f"Field {field.name!r} on COT {cot.slug!r} is part of constraint(s) "
-                f"{', '.join(constraint_names)}; remove it from them before changing its type."
+                f'Field {field.name!r} on COT {cot.slug!r} is part of constraint(s) '
+                f'{", ".join(constraint_names)}; remove it from them before changing its type.'
             )
 
     object_types = None
-    if "related_object_types" in pending_m2m:
-        object_types = _resolve_related_object_types(pending_m2m["related_object_types"])
+    if 'related_object_types' in pending_m2m:
+        object_types = _resolve_related_object_types(pending_m2m['related_object_types'])
     _validate_related_name(cot, field, object_types)
     field.save()
 
@@ -444,8 +427,11 @@ def _apply_field_alter(cot, fc) -> None:
         field.related_object_types.set(object_types)
 
     logger.debug(
-        "ALTER field %r (schema_id=%s) on COT %r — changed: %s",
-        field.name, fc.schema_id, cot.slug, list(fc.changed_attrs.keys()),
+        'ALTER field %r (schema_id=%s) on COT %r — changed: %s',
+        field.name,
+        fc.schema_id,
+        cot.slug,
+        list(fc.changed_attrs.keys()),
     )
 
 
@@ -454,14 +440,17 @@ def _apply_field_remove(cot, fc) -> None:
     field = cot.fields.get(schema_id=fc.schema_id)
     field.delete()
     logger.debug(
-        "REMOVE field %r (schema_id=%s) from COT %r",
-        fc.db_name, fc.schema_id, cot.slug,
+        'REMOVE field %r (schema_id=%s) from COT %r',
+        fc.db_name,
+        fc.schema_id,
+        cot.slug,
     )
 
 
 # ---------------------------------------------------------------------------
 # schema_document and next_schema_id finalisation
 # ---------------------------------------------------------------------------
+
 
 def _update_schema_document(cot, type_def: dict) -> None:
     """
@@ -476,14 +465,14 @@ def _update_schema_document(cot, type_def: dict) -> None:
     not dispatched and the model cache is not prematurely invalidated.
     """
     # Read it from the database: creating the table stores the snapshot there, not on this instance.
-    current = CustomObjectType.objects.filter(pk=cot.pk).values_list("schema_document", flat=True).first()
+    current = CustomObjectType.objects.filter(pk=cot.pk).values_list('schema_document', flat=True).first()
     doc = {
         **(current or {}),
-        "schema_version": SCHEMA_FORMAT_VERSION,
-        "types": [type_def],
+        'schema_version': SCHEMA_FORMAT_VERSION,
+        'types': [type_def],
     }
     CustomObjectType.objects.filter(pk=cot.pk).update(schema_document=doc)
-    logger.debug("Persisted schema_document for COT %r", cot.slug)
+    logger.debug('Persisted schema_document for COT %r', cot.slug)
 
 
 def _sync_next_schema_id(cot, diff) -> None:
@@ -505,14 +494,13 @@ def _sync_next_schema_id(cot, diff) -> None:
 
     max_assigned = max(added_ids)
     # Conditional update avoids a write when counter is already sufficient.
-    CustomObjectType.objects.filter(
-        pk=cot.pk, next_schema_id__lt=max_assigned
-    ).update(next_schema_id=max_assigned)
+    CustomObjectType.objects.filter(pk=cot.pk, next_schema_id__lt=max_assigned).update(next_schema_id=max_assigned)
 
 
 # ---------------------------------------------------------------------------
 # Phase helpers
 # ---------------------------------------------------------------------------
+
 
 def _phase1_cots(ordered_diffs, type_defs_by_slug) -> dict:
     """
@@ -531,16 +519,16 @@ def _phase1_cots(ordered_diffs, type_defs_by_slug) -> dict:
 
         if diff.is_new:
             cot = CustomObjectType(
-                name=type_def["name"],
-                slug=type_def["slug"],
-                version=type_def.get("version", ""),
-                verbose_name=type_def.get("verbose_name", ""),
-                verbose_name_plural=type_def.get("verbose_name_plural", ""),
-                description=type_def.get("description", ""),
-                group_name=type_def.get("group_name", ""),
+                name=type_def['name'],
+                slug=type_def['slug'],
+                version=type_def.get('version', ''),
+                verbose_name=type_def.get('verbose_name', ''),
+                verbose_name_plural=type_def.get('verbose_name_plural', ''),
+                description=type_def.get('description', ''),
+                group_name=type_def.get('group_name', ''),
             )
             cot.save()
-            logger.info("Created new COT %r (slug=%r)", cot.name, cot.slug)
+            logger.info('Created new COT %r (slug=%r)', cot.name, cot.slug)
         else:
             cot = CustomObjectType.objects.get(slug=diff.slug)
             if diff.cot_changes:
@@ -548,8 +536,9 @@ def _phase1_cots(ordered_diffs, type_defs_by_slug) -> dict:
                     setattr(cot, attr, schema_val)
                 cot.save(update_fields=list(diff.cot_changes.keys()))
                 logger.info(
-                    "Updated COT %r attrs: %s",
-                    diff.slug, list(diff.cot_changes.keys()),
+                    'Updated COT %r attrs: %s',
+                    diff.slug,
+                    list(diff.cot_changes.keys()),
                 )
 
         cot_map[diff.slug] = cot
@@ -572,8 +561,8 @@ def _phase2_fields(ordered_diffs, cot_map, *, allow_destructive: bool) -> None:
             elif fc.op is FieldOp.REMOVE:
                 if not allow_destructive:
                     raise RuntimeError(
-                        "_phase2_fields called with a REMOVE op but allow_destructive=False; "
-                        "the pre-flight guard in apply_diffs should have prevented this."
+                        '_phase2_fields called with a REMOVE op but allow_destructive=False; '
+                        'the pre-flight guard in apply_diffs should have prevented this.'
                     )
                 _apply_field_remove(cot, fc)
             elif fc.op is FieldOp.ALTER:
@@ -601,7 +590,7 @@ def _remove_constraints(ordered_diffs, cot_map) -> dict:
             if constraint.name in altered:
                 altered_pks[(diff.slug, constraint.name)] = constraint.pk
             constraint.delete()
-            logger.info("Removed constraint %r from COT %r", constraint.name, diff.slug)
+            logger.info('Removed constraint %r from COT %r', constraint.name, diff.slug)
     return altered_pks
 
 
@@ -617,25 +606,26 @@ def _add_constraints(ordered_diffs, cot_map, altered_pks) -> None:
                 continue
             schema_def = cc.schema_def
             constraint = CustomObjectTypeConstraint(
-                pk=altered_pks.get((diff.slug, schema_def["name"])),
+                pk=altered_pks.get((diff.slug, schema_def['name'])),
                 custom_object_type=cot,
-                name=schema_def["name"],
-                field_schema_ids=list(schema_def.get("fields", [])),
+                name=schema_def['name'],
+                field_schema_ids=list(schema_def.get('fields', [])),
                 **{attr: schema_def.get(attr, default) for attr, default in CONSTRAINT_DEFAULTS.items()},
             )
             try:
                 constraint.full_clean()
             except ValidationError as exc:
                 raise InvalidConstraintError(
-                    f"Constraint {constraint.name!r} on COT {diff.slug!r}: {' '.join(exc.messages)}"
+                    f'Constraint {constraint.name!r} on COT {diff.slug!r}: {" ".join(exc.messages)}'
                 ) from exc
             constraint.save()
-            logger.info("Created constraint %r on COT %r", constraint.name, diff.slug)
+            logger.info('Created constraint %r on COT %r', constraint.name, diff.slug)
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 @contextmanager
 def schema_transaction():
@@ -700,7 +690,7 @@ def apply_diffs(
             # Also update when schema_document exists but was set only by the
             # base-column snapshot (lacks schema_version), so that the first
             # apply always writes a proper executor-managed document.
-            has_executor_doc = "schema_version" in (cot.schema_document or {})
+            has_executor_doc = 'schema_version' in (cot.schema_document or {})
             if diff.is_new or diff.has_changes or not has_executor_doc:
                 _update_schema_document(cot, type_defs_by_slug[diff.slug])
             _sync_next_schema_id(cot, diff)
@@ -722,8 +712,6 @@ def apply_document(
     changes).
     """
     diffs = diff_document(schema_doc)
-    type_defs_by_slug = {
-        td["slug"]: td for td in schema_doc.get("types", [])
-    }
+    type_defs_by_slug = {td['slug']: td for td in schema_doc.get('types', [])}
     apply_diffs(diffs, type_defs_by_slug, allow_destructive=allow_destructive)
     return diffs

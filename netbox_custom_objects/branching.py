@@ -124,11 +124,7 @@ def _constraint_field_refs(data, fields_by_schema_id):
             value = predicate.get('value')
             if isinstance(value, dict):
                 schema_ids.append(value.get('field'))
-    return {
-        fields_by_schema_id[(cot_id, sid)]
-        for sid in schema_ids
-        if (cot_id, sid) in fields_by_schema_id
-    }
+    return {fields_by_schema_id[(cot_id, sid)] for sid in schema_ids if (cot_id, sid) in fields_by_schema_id}
 
 
 def add_custom_object_dependencies(sender, collapsed_changes, **kwargs):
@@ -173,21 +169,19 @@ def add_custom_object_dependencies(sender, collapsed_changes, **kwargs):
         # squash dep-graph phase — the meta is None guard would silently skip
         # them).  Fall back to inspecting cc.key[0] which is always set.
         model_label = cc.key[0] if isinstance(cc.key, tuple) else None
-        is_co_model = (
-            meta is not None and meta.app_label == APP_LABEL
-        ) or (
-            meta is None
-            and model_label is not None
-            and model_label.startswith(f'{APP_LABEL}.')
+        is_co_model = (meta is not None and meta.app_label == APP_LABEL) or (
+            meta is None and model_label is not None and model_label.startswith(f'{APP_LABEL}.')
         )
         if not is_co_model:
             continue
         action = cc.final_action.value if cc.final_action else None
 
         if model_label == constraint_label:
+
             def collect_refs(data):
                 return _constraint_field_refs(data, fields_by_schema_id)
         else:
+
             def collect_refs(data, model_class=cc.model_class, model_label=model_label):
                 return _collect_co_refs(model_class, data, model_label=model_label)
 

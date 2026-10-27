@@ -8,6 +8,7 @@ netbox-community/netbox#22363, later renamed by #22436) are skipped on older
 NetBox, detected via the same registry check performed by
 CustomObjectsPluginConfig.ready().
 """
+
 from unittest.mock import patch
 
 import jinja2
@@ -29,6 +30,7 @@ def _jinja_hooks_available():
     anything under that key.
     """
     from netbox.registry import registry
+
     return 'custom_objects' in registry.get('plugins', {}).get('jinja_filters', {})
 
 
@@ -38,9 +40,17 @@ class EmptyCustomObjectsQuerySetTestCase(SimpleTestCase):
     def test_read_methods_are_chainable_and_stay_empty(self):
         qs = EmptyCustomObjectsQuerySet()
         chained = (
-            qs.filter(x=1).exclude(y=2).all().none().order_by('x')
-            .values('x').values_list('x').select_related('x')
-            .prefetch_related('x').distinct().annotate(x=1)
+            qs.filter(x=1)
+            .exclude(y=2)
+            .all()
+            .none()
+            .order_by('x')
+            .values('x')
+            .values_list('x')
+            .select_related('x')
+            .prefetch_related('x')
+            .distinct()
+            .annotate(x=1)
         )
         self.assertIsInstance(chained, EmptyCustomObjectsQuerySet)
         self.assertEqual(list(chained), [])
@@ -82,7 +92,12 @@ class CustomObjectsFilterTestCase(CustomObjectsTestCase, TestCase):
     def setUpTestData(cls):
         cls.cot = cls.create_custom_object_type(name='j2widget', slug='j2-widget')
         cls.create_custom_object_type_field(
-            cls.cot, name='label', label='Label', type='text', primary=True, required=True,
+            cls.cot,
+            name='label',
+            label='Label',
+            type='text',
+            primary=True,
+            required=True,
         )
 
     def test_returns_queryset_for_known_type(self):
@@ -127,7 +142,12 @@ class CustomObjectsNamespaceTestCase(CustomObjectsTestCase, TestCase):
     def setUpTestData(cls):
         cls.cot = cls.create_custom_object_type(name='j2widget', slug='j2-widget')
         cls.create_custom_object_type_field(
-            cls.cot, name='label', label='Label', type='text', primary=True, required=True,
+            cls.cot,
+            name='label',
+            label='Label',
+            type='text',
+            primary=True,
+            required=True,
         )
 
     def test_resolves_by_name_to_model_manager(self):
@@ -149,7 +169,12 @@ class CustomObjectsNamespaceTestCase(CustomObjectsTestCase, TestCase):
         """
         cot = self.create_custom_object_type(name='123widget', slug='123-widget')
         self.create_custom_object_type_field(
-            cot, name='label', label='Label', type='text', primary=True, required=True,
+            cot,
+            name='label',
+            label='Label',
+            type='text',
+            primary=True,
+            required=True,
         )
         model = cot.get_model()
         model.objects.create(label='alpha')
@@ -182,16 +207,16 @@ class CustomObjectsNamespaceTestCase(CustomObjectsTestCase, TestCase):
         """
         ns = CustomObjectsNamespace()
         with patch.object(CustomObjectType.objects, 'get', wraps=CustomObjectType.objects.get) as mock_get:
-            ns.j2widget
-            ns.j2widget
-            ns.j2widget
+            _ = ns.j2widget
+            _ = ns.j2widget
+            _ = ns.j2widget
         self.assertEqual(mock_get.call_count, 1)
 
     def test_cache_is_not_shared_across_namespace_instances(self):
         """Caching is per-render (per CustomObjectsNamespace instance), not global."""
-        CustomObjectsNamespace().j2widget
+        _ = CustomObjectsNamespace().j2widget
         with patch.object(CustomObjectType.objects, 'get', wraps=CustomObjectType.objects.get) as mock_get:
-            CustomObjectsNamespace().j2widget
+            _ = CustomObjectsNamespace().j2widget
         self.assertEqual(mock_get.call_count, 1)
 
     def test_unknown_name_warning_logged_once_per_process(self):
@@ -215,7 +240,12 @@ class PluginConfigJinjaHooksTestCase(CustomObjectsTestCase, TestCase):
     def setUpTestData(cls):
         cls.cot = cls.create_custom_object_type(name='j2widget', slug='j2-widget')
         cls.create_custom_object_type_field(
-            cls.cot, name='label', label='Label', type='text', primary=True, required=True,
+            cls.cot,
+            name='label',
+            label='Label',
+            type='text',
+            primary=True,
+            required=True,
         )
 
     def test_get_jinja_context_returns_custom_objects_namespace(self):
@@ -243,7 +273,12 @@ class JinjaHookIntegrationTestCase(CustomObjectsTestCase, TestCase):
     def setUpTestData(cls):
         cls.cot = cls.create_custom_object_type(name='j2widget', slug='j2-widget')
         cls.create_custom_object_type_field(
-            cls.cot, name='label', label='Label', type='text', primary=True, required=True,
+            cls.cot,
+            name='label',
+            label='Label',
+            type='text',
+            primary=True,
+            required=True,
         )
 
     def setUp(self):
@@ -256,6 +291,7 @@ class JinjaHookIntegrationTestCase(CustomObjectsTestCase, TestCase):
 
     def test_filter_syntax_available_in_render_jinja2(self):
         from utilities.jinja2 import render_jinja2
+
         model = self.cot.get_model()
         model.objects.create(label='alpha')
         result = render_jinja2("{{ 'j2widget' | custom_objects | list | length }}", {})
@@ -267,6 +303,7 @@ class JinjaHookIntegrationTestCase(CustomObjectsTestCase, TestCase):
         compile time, resolving the type an extra time before render.
         """
         from utilities.jinja2 import render_jinja2
+
         model = self.cot.get_model()
         model.objects.create(label='alpha')
         template_code = "{% for obj in 'j2widget' | custom_objects %}{{ obj.label }}{% endfor %}"
@@ -277,6 +314,7 @@ class JinjaHookIntegrationTestCase(CustomObjectsTestCase, TestCase):
 
     def test_context_namespace_available_in_config_template_render(self):
         from extras.models import ConfigTemplate
+
         model = self.cot.get_model()
         model.objects.create(label='alpha')
         tmpl = ConfigTemplate(
@@ -287,6 +325,7 @@ class JinjaHookIntegrationTestCase(CustomObjectsTestCase, TestCase):
 
     def test_unknown_type_name_in_filter_syntax_renders_empty(self):
         from utilities.jinja2 import render_jinja2
+
         result = render_jinja2("{{ 'no_such_type' | custom_objects | list | length }}", {})
         self.assertEqual(result, '0')
 
@@ -296,6 +335,7 @@ class JinjaHookIntegrationTestCase(CustomObjectsTestCase, TestCase):
         every documented example) must render no rows, not raise UndefinedError.
         """
         from extras.models import ConfigTemplate
+
         tmpl = ConfigTemplate(
             name='test-j2-unknown',
             template_code='{{ custom_objects.no_such_type.filter(label="x") | list | length }}',
@@ -305,9 +345,15 @@ class JinjaHookIntegrationTestCase(CustomObjectsTestCase, TestCase):
     def test_bracket_notation_in_config_template_render(self):
         """A leading-digit type name isn't valid dot-notation; use bracket notation."""
         from extras.models import ConfigTemplate
+
         cot = self.create_custom_object_type(name='123widget', slug='123-widget')
         self.create_custom_object_type_field(
-            cot, name='label', label='Label', type='text', primary=True, required=True,
+            cot,
+            name='label',
+            label='Label',
+            type='text',
+            primary=True,
+            required=True,
         )
         model = cot.get_model()
         model.objects.create(label='alpha')
