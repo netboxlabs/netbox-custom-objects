@@ -90,7 +90,7 @@ Defer all version pins to `pyproject.toml` and `netbox_custom_objects/__init__.p
 │   ├── portable-schema.md
 │   ├── releases.md                     — Changelog.
 │   └── rest-api.md
-├── docs_models/                    — In-app "Help" pages for the static models (built by mkdocs.models.yml).
+├── docs/models/                     — Model pages: the in-app "Help" pages (built by mkdocs.models.yml) and the docs site's Data Model section.
 ├── testing/
 │   ├── configuration.py            — NetBox config used by the test workflow.
 │   └── configuration_branching.py  — The same, with netbox-branching installed.
@@ -283,7 +283,7 @@ GitHub Actions workflows in `.github/workflows/`:
 3. Wire up the rest of the surface area: `filtersets.py`, the by-type modules under `forms/` (`model_forms`, `bulk_edit`, `bulk_import`, `filtersets`; each declares its own `__all__` and `forms/__init__.py` star-imports them), `tables.py`, `api/serializers.py`, `api/urls.py`, `urls.py`, `navigation.py`, and a template under `templates/netbox_custom_objects/`.
 4. Register a `SearchIndex` in `search.py` if the model should appear in NetBox's global search.
 5. Add tests covering model logic, API, filtersets, and views.
-6. If the model is a `NetBoxModel` (it has a "Help" link on its edit page via `docs_url`), add `docs_models/netbox_custom_objects/<model_name>.md` and a nav entry in `mkdocs.models.yml`, or the Help link will 404.
+6. If the model is a `NetBoxModel` (it has a "Help" link on its edit page via `docs_url`), add `docs/models/netbox_custom_objects/<model_name>.md` and nav entries in `mkdocs.models.yml` and `mkdocs.yml`, or the Help link will 404.
 
 ### Add a REST API endpoint
 
@@ -330,7 +330,7 @@ Where this repository deliberately differs from what the scaffold renders. Keep 
 - **Test matrix.** `test.yml` runs the suite serially rather than with `--parallel` (see [Testing](#testing)), and adds a NetBox `feature` leg, a netbox-branching leg using `testing/configuration_branching.py` (split by the `branching` test tag into two jobs, so neither nears the timeout), PostgreSQL tuning, and the in-app model docs build in the lint job.
 - **`PluginConfig`.** `__init__.py` keeps its own `ready()` (model registration, the `ObjectSelectorView` patch, signal and check wiring) and `get_model()` override; only the version metadata follows the scaffold.
 - **Django target.** `django_version` is `5.2`, the oldest Django the supported NetBox range runs on, so `django-upgrade` never rewrites code to idioms the NetBox v4.5.2 leg lacks.
-- **Docs.** The user docs keep their own pages and nav; the scaffold's placeholder Features, Quickstart, Configuration and Releasing pages are not used. The in-app model help pages (`docs_models/`, `mkdocs.models.yml`) have no scaffold counterpart.
+- **Docs.** The user docs keep their own pages and nav; the scaffold's placeholder Features, Quickstart, Configuration and Releasing pages are not used. The in-app model help pages (`docs/models/`, `mkdocs.models.yml`) have no scaffold counterpart.
 - **Issue label.** Issue templates use the existing `app: custom objects` label.
 
 ## Troubleshooting

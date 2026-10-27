@@ -54,4 +54,8 @@ nav:
   - REST API: rest-api.md
   - GraphQL API: graphql.md
   - Portable Schema: portable-schema.md
+  - Data Model:
+      - Custom Object Type: models/netbox_custom_objects/customobjecttype.md
+      - Custom Object Type Field: models/netbox_custom_objects/customobjecttypefield.md
+      - Custom Object Type Constraint: models/netbox_custom_objects/customobjecttypeconstraint.md
   - Releases: releases.md

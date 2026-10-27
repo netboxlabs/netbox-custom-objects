@@ -100,7 +100,7 @@ ignore = [
     "COMPATIBILITY.md",
     "SECURITY.md",
     "docs/*.md",
-    "docs/models/*.md",
+    "docs/models/*/*.md",
     "docs/development/*.md",
     "mkdocs.yml",
     "testing/configuration.py",
@@ -110,10 +110,9 @@ ignore = [
     # the suite still resolves from the source tree.
     "netbox_custom_objects/tests/*",
     "netbox_custom_objects/tests/*/*",
-    # In-app model help pages: built from docs_models/ by mkdocs.models.yml before
+    # In-app model help pages: built from docs/models/ by mkdocs.models.yml before
     # packaging, so they ship in the dist but are not tracked in git.
     "netbox_custom_objects/static/*",
-    "docs_models/*/*",
     "mkdocs.models.yml",
     "docs/media/*/*",
     ".yamllint",
