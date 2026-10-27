@@ -413,7 +413,7 @@ The response includes the created object with its assigned ID and standard metad
 For a Custom Object Type with config context support enabled, each object also
 includes `local_context_data` (writable) and `config_context` (read-only): the
 rendered context, as a Device or VM has. See
-[Config Context](index.md#config-context) for which source contexts apply.
+[Config Context](config-context.md) for which source contexts apply.
 Rendering costs extra queries, so leave it out with `?omit=config_context` when
 you don't need it.
 
