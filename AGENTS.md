@@ -218,7 +218,7 @@ After model changes, generate a migration with `python netbox/manage.py makemigr
 ## Testing
 
 - Tests use `django.test.TestCase`, **not** pytest. Suites live in `netbox_custom_objects/tests/`.
-- Run via NetBox's test runner: `python netbox/manage.py test netbox_custom_objects.tests --keepdb`. The `--keepdb` flag preserves the test database between runs for speed. CI runs with `--parallel`.
+- Run via NetBox's test runner: `python netbox/manage.py test netbox_custom_objects.tests --keepdb`. The `--keepdb` flag preserves the test database between runs for speed. CI runs serially: the GraphQL schema-cache and query-count tests are not yet safe with `--parallel`, whose workers share one Redis cache.
 - The runner uses NetBox's settings and creates a real PostgreSQL test database — dynamic table creation and schema operations run against a real database. Do not mock the database.
 - `tests/base.py` provides `CustomObjectsTestCase` (helper methods for creating `CustomObjectType` instances with fields) and `TransactionCleanupMixin` (for `TransactionTestCase` subclasses — deletes all COTs in `tearDown` so their backing tables are dropped before the DB flush).
 - Test modules:
@@ -262,7 +262,7 @@ GitHub Actions workflows in `.github/workflows/`:
 
 - **`test.yml`** — Runs on pull requests and pushes to `main`. Two jobs:
   - *Lint*: `pre-commit run --all-files`, then builds the in-app model help pages (`mkdocs.models.yml`) and checks they exist.
-  - *Test*: runs only if lint passes. Matrix of Python 3.12 / 3.13 / 3.14 × NetBox `v4.5.2` (the `min_version` floor), `v4.7.3` and `main`, plus NetBox `feature` and `main` with netbox-branching installed (`configuration_branching`). Coverage is collected on one leg. Spins up PostgreSQL + Redis services, installs the plugin editable, and runs `python netbox/manage.py test netbox_custom_objects.tests --parallel`.
+  - *Test*: runs only if lint passes. Matrix of Python 3.12 / 3.13 / 3.14 × NetBox `v4.5.2` (the `min_version` floor), `v4.7.3` and `main`, plus NetBox `feature` and `main` with netbox-branching installed (`configuration_branching`). Coverage is collected on one leg. Spins up PostgreSQL + Redis services, installs the plugin editable, and runs `python netbox/manage.py test netbox_custom_objects.tests`.
 - **`release.yaml`** — Runs on published GitHub releases. Builds the in-app model help pages, then sdist + wheel with `python -m build`, and publishes to PyPI using OIDC trusted publishing.
 - **`claude-review.yml`** — Claude Code automation hook; triggers on PR comments mentioning `@claude` from collaborators.
 - **`no-blank-issue.yml`** — Closes issues opened without one of the issue templates.
@@ -327,7 +327,7 @@ Where this repository deliberately differs from what the scaffold renders. Keep 
 
 - **PyPI, not CodeArtifact.** The distribution is `netboxlabs-netbox-custom-objects` on PyPI. `release.yaml` is kept and the scaffold's CodeArtifact `release.yml` is not used.
 - **Package data.** `schema/*.json` (the portable schema format's JSON Schema) ships in the wheel alongside templates and static files; the test suite does not.
-- **Test matrix.** `test.yml` adds a NetBox `feature` leg, a netbox-branching leg using `testing/configuration_branching.py`, PostgreSQL tuning, and the in-app model docs build in the lint job.
+- **Test matrix.** `test.yml` runs the suite serially rather than with `--parallel` (see [Testing](#testing)), and adds a NetBox `feature` leg, a netbox-branching leg using `testing/configuration_branching.py`, PostgreSQL tuning, and the in-app model docs build in the lint job.
 - **`PluginConfig`.** `__init__.py` keeps its own `ready()` (model registration, the `ObjectSelectorView` patch, signal and check wiring) and `get_model()` override; only the version metadata follows the scaffold.
 - **Django target.** `django_version` is `5.2`, the oldest Django the supported NetBox range runs on, so `django-upgrade` never rewrites code to idioms the NetBox v4.5.2 leg lacks.
 - **Docs.** The user docs keep their own pages and nav; the scaffold's placeholder Features, Quickstart, Configuration and Releasing pages are not used. The in-app model help pages (`docs_models/`, `mkdocs.models.yml`) have no scaffold counterpart.

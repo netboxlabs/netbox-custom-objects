@@ -16,8 +16,11 @@
 # Coverage:
 #   Collected on a SINGLE matrix leg (see the matrix `include`) and run as
 #   separate, individually-gated steps, mirroring NetBox core's CI:
-#   coverage run --parallel -> coverage combine -> coverage report. Other
-#   legs run plain `manage.py test --parallel`.
+#   coverage run -> coverage combine -> coverage report. Other legs run
+#   plain `manage.py test`.
+#
+# The suite runs serially: its GraphQL schema-cache and query-count tests
+# are not yet safe with `--parallel`, whose workers share one Redis cache.
 #
 # Plugin-specific legs (on top of the scaffold matrix):
 #   - NetBox `feature`, so the upcoming NetBox release is covered too.
@@ -176,14 +179,14 @@ jobs:
         working-directory: netbox
         run: >-
           python netbox/manage.py test
-          netbox_custom_objects.tests --parallel
+          netbox_custom_objects.tests
 
       - name: Run tests with coverage
         if: ${{ matrix.coverage }}
         working-directory: netbox
         run: >-
           coverage run netbox/manage.py test
-          netbox_custom_objects.tests --parallel
+          netbox_custom_objects.tests
 
       - name: Combine coverage data
         if: ${{ matrix.coverage }}
