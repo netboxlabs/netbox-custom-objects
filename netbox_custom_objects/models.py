@@ -1672,7 +1672,7 @@ class CustomObjectType(NetBoxModel):
         blank=True,
         null=True,
         help_text=_(
-            'The last applied or exported schema document for this Custom Object Type. '
+            'The last schema document applied to this Custom Object Type. '
             'Serves as the source of truth for schema history, including tombstoned fields.'
         ),
     )
@@ -3207,8 +3207,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         default=False,
         verbose_name=_('deprecated'),
         help_text=_(
-            'Mark this field as deprecated. Deprecated fields remain in the database but '
-            'are read-only in the UI and should not be used in new objects.'
+            'Mark this field as deprecated. Informational only: a deprecated field keeps working, '
+            'but should not be relied on for new data.'
         ),
     )
     deprecated_since = models.CharField(

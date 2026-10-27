@@ -1,6 +1,6 @@
-# Custom Object Field Attributes
+# Custom Object Type Field Attributes
 
-The following attributes are available when creating or editing a Custom Object Type Field.
+The following attributes are available when creating or editing a Custom Object Type Field. The deprecation attributes at the end of the table are the exception: they can only be set through the [REST API](rest-api.md) or a [portable schema](portable-schema.md) document.
 
 ## Available Field Types
 
@@ -28,30 +28,30 @@ The following attributes are available when creating or editing a Custom Object 
 
 | Attribute | Description |
 |-----------|-------------|
-| `Name` | Internal field name. Must be lowercase alphanumeric with underscores only (e.g. `rack_unit`). |
-| `Label` | Human-readable display name shown in the UI. Defaults to the field name. |
-| `Type` | Data type of the field (see above). |
+| `Name` | Internal field name, up to 50 characters. Must be lowercase alphanumeric with single underscores between words (e.g. `rack_unit`), and unique within the Custom Object Type. Some names are reserved because every custom object already uses them, such as `id`, `tags`, `owner`, `created` and `objects`. A name also can't clash with another field's extra columns, such as `<url field>_title` or `<coordinates field>_latitude`. A polymorphic field can't be renamed. |
+| `Label` | Human-readable display name shown in the UI, up to 50 characters. Defaults to the field name, with underscores replaced by spaces and the first letter capitalized. |
+| `Type` | Data type of the field (see above). A field's type can't be changed to or from `coordinates`, `url`, `array` or `multiobject`, or while the field is part of a constraint. |
 | `Description` | Help text shown below the field in forms. |
 | `Group name` | Fields sharing the same group name are displayed together. |
-| `Required` | When enabled, a value must be provided when creating or editing an object. |
-| `Must be unique` | When enabled, no two objects of this type may share the same value for this field. Not supported for `boolean` or `multiobject` fields. To make a combination of fields unique, add a [constraint](index.md#adding-constraints-to-the-custom-object-type) instead. |
-| `Primary name field` | When enabled, this field's value is used as the object's display name. |
+| `Required` | When enabled, a value must be provided when creating or editing an object. It can't be enabled while existing objects have no value for the field. |
+| `Must be unique` | When enabled, no two objects of this type may share the same value for this field. Not supported for `boolean`, `multiobject` or `coordinates` fields, and can't be enabled while existing objects share a value. To make a combination of fields unique, add a [constraint](index.md#adding-constraints-to-the-custom-object-type) instead. |
+| `Primary name field` | When enabled, this field's value is used as the object's display name, unless the type has a display expression. Only one field per type can be primary; enabling it on one field clears it on the others. A field can't be both primary and a context field. |
 | `Context field` | When enabled, this field's value is shown as context when this object is referenced by another object. |
-| `Default` | Default value pre-populated when creating a new object. Must be a valid JSON value. |
+| `Default` | Default value pre-populated when creating a new object. Must be a valid JSON value. Setting a default on a `multiobject` field also applies it to every existing object that has no value. |
 | `Display weight` | Controls the field's position in forms and detail views; higher weights appear lower. Default: `100`. |
 | `Search weight` | Relevance weight for full-text search. Lower values are more important; `0` disables search indexing for this field. Default: `500`. |
-| `Filter logic` | `Loose` (match any substring), `Exact` (match whole value), or `Disabled`. Default: `Loose`. |
+| `Filter logic` | `Loose` (match any substring), `Exact` (match whole value), or `Disabled` (no filter). Loose and Exact only differ for text, long text and URL fields. Default: `Loose`. |
 | `UI visible` | Controls visibility in detail views: `Always`, `If set`, or `Hidden`. Default: `Always`. |
 | `UI editable` | Controls editability in forms: `Yes`, `No` (read-only), or `Hidden`. Default: `Yes`. |
 | `Is cloneable` | When enabled, this field's value is copied when cloning an object. |
 | `Comments` | Free-form notes about this field (supports Markdown). |
-| `Deprecated` | Marks the field as read-only; new values cannot be entered. Use during a migration grace period. |
+| `Deprecated` | Marks the field as deprecated, e.g. during a grace period before it is removed. Informational only: the field keeps working, and values can still be entered. |
 | `Deprecated since` | [PEP 440](https://peps.python.org/pep-0440/) version string indicating the schema version in which the field was deprecated (e.g. `2.0.0`). |
 | `Scheduled removal` | [PEP 440](https://peps.python.org/pep-0440/) version string indicating the schema version in which the field is planned to be removed (e.g. `3.0.0`). |
 
 ## Text Fields
 
-Field types: `text`, `longtext`
+Field types: `text`, `longtext` (URL fields also take a validation regex)
 
 | Attribute | Description |
 |-----------|-------------|
@@ -75,7 +75,7 @@ Field types: `select`, `multiselect`
 
 | Attribute | Description |
 |-----------|-------------|
-| `Choice set` | A NetBox [Custom Field Choice Set](https://netboxlabs.com/docs/netbox/customization/custom-fields/#custom-field-choices) that defines the available options. Required. |
+| `Choice set` | A NetBox [Custom Field Choice Set](https://netboxlabs.com/docs/netbox/customization/custom-fields/#custom-selection-fields) that defines the available options. Required. |
 
 A choice value may be up to 100 characters long, for `select` and `multiselect` alike.
 
@@ -85,11 +85,11 @@ Field types: `object`, `multiobject`
 
 | Attribute | Description |
 |-----------|-------------|
-| `Related object type` | The type of object this field references. Used for non-polymorphic fields. May be any built-in NetBox object type or another Custom Object Type. |
+| `Related object type` | The type of object this field references. Used for non-polymorphic fields. May be any built-in NetBox object type or another Custom Object Type, including this one. Cannot be changed after the field is created. Two Custom Object Types can't reference each other in a cycle. |
 | `Polymorphic` | When enabled, the field may reference objects of more than one type (uses a generic foreign key). Cannot be changed after the field is created. |
 | `Related object types` | For polymorphic fields, the set of object types that may be referenced. Cannot be changed after the field is created. |
 | `Related object filter` | A JSON `query_params` dict used to filter the object selection drop-down (e.g. `{"status": "active"}`). |
-| `Reverse relation name` | Name for the reverse relation accessor on the related object. For example, setting this to `ssl_profiles` on a Certificate → SLB field allows `slb.ssl_profiles.all()` in export templates. |
+| `Reverse relation name` | Name for the reverse relation accessor on the related object. For example, setting this to `ssl_profiles` on a Certificate → SLB field allows `slb.ssl_profiles.all()` in export templates. If left blank, a non-polymorphic `object` field gets a generated name, and `multiobject` and polymorphic fields get no reverse relation. |
 | `On delete behavior` | What happens when the referenced object is deleted: `Set null` (clear the field, keep this object), `Cascade` (delete this object too), or `Protect` (prevent deletion of the referenced object). Default: `Set null`. Changing it applies only to later deletes; existing values that already point at a deleted object are left as they are. **Applies only to `object` fields, polymorphic or not, not `multiobject`.** |
 
 !!! note
@@ -106,15 +106,16 @@ native Site/Device coordinates (plain decimal columns — PostGIS is not require
 - `location_latitude` — decimal, range −90 to 90, up to 6 decimal places
 - `location_longitude` — decimal, range −180 to 180, up to 6 decimal places
 
-Behaviour:
+Behavior:
 
 - **Both-or-neither.** Latitude and longitude must either both be set or both be empty; setting
   only one is rejected in forms and via the REST API.
-- **REST API.** The pair is exposed as two flat fields, `<name>_latitude` and `<name>_longitude`
-  (matching NetBox core's serializers), not as a nested object.
+- **REST API and CSV import.** The pair is exposed as two flat fields, `<name>_latitude` and
+  `<name>_longitude` (matching NetBox core's serializers), not as a nested object.
+- **GraphQL.** Coordinates can be filtered on, but aren't returned as fields.
 - **Map link.** Detail views render the coordinates with a **Map** button that opens the location
   using NetBox's `MAPS_URL` configuration parameter (Google Maps by default).
-- `Must be unique` and `Default` are not supported for `coordinates` fields.
+- `Must be unique` and `Default` are not supported for `coordinates` fields, and their search weight is always `0`.
 
 ## Array Fields
 
@@ -131,11 +132,11 @@ An `array` field stores a list of values of one type in a single PostgreSQL arra
 | `Validation regex` | For text elements: a regular expression every value must match. |
 | `Minimum value` / `Maximum value` | For integer and decimal elements: the range every value must fall in. |
 
-For example, a `coordinates` field with element type `Integer`, tuple size `3` and minimum length
+For example, an `array` field with element type `Integer`, tuple size `3` and minimum length
 `2` accepts `[[0, 0, 0], [10, 0, 5]]`, and rejects `[[0, 0]]` (a tuple of the wrong size) and
 `[[0, 0, 0]]` (too few items).
 
-Behaviour:
+Behavior:
 
 - **Forms and CSV import.** Enter the value as JSON, e.g. `[1, 2, 3]` or `[[0, 0, 0], [10, 0, 5]]`;
   dates and times as strings, e.g. `["2026-01-01"]`. In a CSV file, quote the JSON as usual.
@@ -190,7 +191,7 @@ Adding one `url` field named `website` creates two backing columns:
 - `website` — the URL itself
 - `website_title` — optional display text shown in place of the raw URL
 
-Behaviour:
+Behavior:
 
 - **Detail page and list view.** The title, when set, is used as the visible link
   text both on the object's detail page and in its column in list/table views —
@@ -198,15 +199,8 @@ Behaviour:
   the raw URL as link text when no title is set.
 - **Optional independently.** The title has no relationship to the URL value —
   setting one without the other is allowed and harmless.
-- **REST API.** The pair is exposed as two flat fields, `<name>` and `<name>_title`.
+- **REST API and CSV import.** The pair is exposed as two flat fields, `<name>` and `<name>_title`.
+- **Validation regex.** As for text fields, a regular expression the URL must match.
 - `Must be unique` and `Default` continue to apply to the URL value itself, exactly
   as for any other `url` field.
-- **CSV import.** Bulk CSV import only populates the URL value; the title column is
-  not importable via CSV (the same limitation applies to `coordinates` fields' backing
-  columns).
-- **Upgrading from an older release.** Existing `url` fields gain the `<name>_title`
-  column automatically on the next `manage.py migrate` (or immediately via
-  `manage.py upgrade_custom_objects`) -- this also heals every existing NetBox
-  Branching branch's own schema, not just main's. A branch migrating on its own
-  afterward re-heals itself too, as a secondary safeguard, but isn't required for
-  the column to already be there.
+- **GraphQL.** Only the URL is returned; the title isn't available in GraphQL.
