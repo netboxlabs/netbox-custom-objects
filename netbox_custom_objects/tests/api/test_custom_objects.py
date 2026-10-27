@@ -556,7 +556,7 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, NetB
         )
 
     def test_create_with_tags_persists_to_db(self):
-        """Regression #371: tags submitted on POST must be saved to the DB, not just echoed."""
+        """Tags submitted on POST must be saved to the DB, not just echoed."""
         self._add_permission('add', 'Create with tags perm')
         self.add_permissions('extras.view_tag')
         tag = Tag.objects.get_or_create(name='api-create-tag', slug='api-create-tag')[0]
@@ -570,12 +570,12 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, NetB
         self.assertIn('tags', response.data)
         self.assertTrue(len(response.data['tags']) > 0, 'Response should include the submitted tag')
 
-        # Fetch fresh from the DB — the critical assertion that caught #371
+        # Fetch fresh from the DB — the critical assertion that caught the bug
         instance = self._get_queryset().get(pk=response.data['id'])
         self.assertIn(tag.name, list(instance.tags.names()), 'Tag must be persisted to the DB')
 
     def test_patch_with_tags_persists_to_db(self):
-        """Regression #371: tags submitted on PATCH must be saved to the DB, not just echoed."""
+        """Tags submitted on PATCH must be saved to the DB, not just echoed."""
         self._add_permission('view', 'View perm')
         self._add_permission('change', 'Patch with tags perm')
         self.add_permissions('extras.view_tag')
@@ -1044,7 +1044,7 @@ class ContextFieldApiTestCase(CustomObjectsTestCase, TestCase):
 class CrossCOTMultiObjectAPITest(CustomObjectsTestCase, TestCase):
     """
     Tests for API PATCH/PUT behaviour when a CO has a cross-COT multiobject
-    (non-polymorphic M2M) field pointing to another COT.  Covers issue #443.
+    (non-polymorphic M2M) field pointing to another COT.
     """
 
     def setUp(self):
@@ -1102,7 +1102,7 @@ class CrossCOTMultiObjectAPITest(CustomObjectsTestCase, TestCase):
         return perm
 
     def test_patch_updates_cross_cot_m2m_field(self):
-        """#443 – PATCH with a list of target PKs must update the M2M field."""
+        """PATCH with a list of target PKs must update the M2M field."""
         self._add_perm('change', self.model_source)
         self._add_perm('view', self.model_target)
 
@@ -1132,7 +1132,7 @@ class CrossCOTMultiObjectAPITest(CustomObjectsTestCase, TestCase):
         )
 
     def test_patch_clears_cross_cot_m2m_field(self):
-        """#443 – PATCH with an empty list must clear the M2M field."""
+        """PATCH with an empty list must clear the M2M field."""
         self._add_perm('change', self.model_source)
 
         response = self.client.patch(
@@ -1155,7 +1155,7 @@ class CrossCOTMultiObjectAPITest(CustomObjectsTestCase, TestCase):
         )
 
     def test_patch_scalar_field_preserves_m2m(self):
-        """#443 – PATCH a scalar field must not disturb existing M2M values."""
+        """PATCH a scalar field must not disturb existing M2M values."""
         self._add_perm('change', self.model_source)
 
         response = self.client.patch(
@@ -1175,7 +1175,7 @@ class CrossCOTMultiObjectAPITest(CustomObjectsTestCase, TestCase):
         )
 
     def test_put_updates_scalar_field(self):
-        """#443 – PUT must update scalar fields (issue title covers both PATCH and PUT)."""
+        """PUT must update scalar fields."""
         self._add_perm('change', self.model_source)
 
         # PUT requires the full object payload; supply name + empty refs.
@@ -1195,7 +1195,7 @@ class CrossCOTMultiObjectAPITest(CustomObjectsTestCase, TestCase):
         self.assertEqual(self.obj_source.name, 'Put Updated Name')
 
     def test_get_response_includes_cross_cot_m2m_field(self):
-        """#443 – GET must return the M2M field as a nested list."""
+        """GET must return the M2M field as a nested list."""
         self._add_perm('view', self.model_source)
 
         response = self.client.get(self._detail_url(self.obj_source), **self.header)
@@ -1206,7 +1206,7 @@ class CrossCOTMultiObjectAPITest(CustomObjectsTestCase, TestCase):
 
 
 class OwnerAPITest(CustomObjectsTestCase, TestCase):
-    """Tests for the owner field on custom object instances (#376)."""
+    """Tests for the owner field on custom object instances."""
 
     def setUp(self):
         super().setUp()
@@ -1360,7 +1360,7 @@ class OwnerAPITest(CustomObjectsTestCase, TestCase):
         self.assertNotIn(obj_y.pk, ids)
 
     def test_filter_by_id(self):
-        """Regression #628: ?id=<pk> must return only the matching instance."""
+        """?id=<pk> must return only the matching instance."""
         obj_a = self.model.objects.create()
         obj_b = self.model.objects.create()
         self._add_perm('view', self.model)

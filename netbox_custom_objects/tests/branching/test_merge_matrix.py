@@ -162,7 +162,7 @@ class BaseBranchingTests(BranchingTestBase):
                       drops it)
         coordinates — two backing columns (<name>_latitude, <name>_longitude)
                       and none named after the field itself, so a replay keyed
-                      on the bare field name drops both values (#770)
+                      on the bare field name drops both values
 
         This exercises every distinct schema-editor operation
         (add_field, add_FK, create_through_table) across a merge cycle and
@@ -1280,7 +1280,7 @@ class BaseBranchingTests(BranchingTestBase):
 
     def test_polymorphic_multiobject_long_field_name_merge_and_revert(self):
         """
-        Regression for #762: a field name long enough that the raw through-table
+        A field name long enough that the raw through-table
         name exceeds PostgreSQL's 63-char limit, so ``safe_table_name()`` hashes
         it.  Merge replay must target the hashed name, not the raw one.
         """

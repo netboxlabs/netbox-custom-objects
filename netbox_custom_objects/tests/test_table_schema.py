@@ -22,7 +22,7 @@ class SchemaOperationsTestCase(CustomObjectsTestCase, TestCase):
     """Test database schema operations on custom object tables."""
 
     def test_delete_cot_with_netbox_custom_field_referencing_object_type(self):
-        """#523 – Deleting a COT must not raise ProtectedError when a NetBox CustomField
+        """Deleting a COT must not raise ProtectedError when a NetBox CustomField
         has related_object_type pointing to the COT's underlying ObjectType."""
         from core.models import ObjectType
         from extras.choices import CustomFieldTypeChoices
@@ -53,7 +53,7 @@ class SchemaOperationsTestCase(CustomObjectsTestCase, TestCase):
     # ------------------------------------------------------------------
 
     def test_migration_with_call_command(self):
-        """#326 – Running migrate via call_command() should not raise."""
+        """Running migrate via call_command() should not raise."""
         out = StringIO()
         # --check exits with code 1 if unapplied migrations exist; any other
         # error (e.g. the plugin crashing during the migrate run) would raise.
@@ -125,7 +125,7 @@ class SchemaOperationsTestCase(CustomObjectsTestCase, TestCase):
         self.assertNotIn('location_longitude', columns)
 
     def test_url_field_rename_renames_both_columns(self):
-        """Renaming a url field renames both backing DB columns (issue #496)."""
+        """Renaming a url field renames both backing DB columns."""
         cot = self.create_custom_object_type(name='urlrename', slug='url-rename')
         self.create_custom_object_type_field(
             cot, name='name', label='Name', type='text', primary=True,
@@ -151,7 +151,7 @@ class SchemaOperationsTestCase(CustomObjectsTestCase, TestCase):
         self.assertIn('homepage_title', columns)
 
     def test_url_field_delete_drops_both_columns(self):
-        """Deleting a url field drops both backing DB columns (issue #496)."""
+        """Deleting a url field drops both backing DB columns."""
         cot = self.create_custom_object_type(name='urldelete', slug='url-delete')
         self.create_custom_object_type_field(
             cot, name='name', label='Name', type='text', primary=True,

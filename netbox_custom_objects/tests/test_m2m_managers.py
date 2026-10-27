@@ -1,6 +1,6 @@
 """
 Tests for the write paths (add / remove / set / clear) of CustomManyToManyManager
-and PolymorphicManyToManyManager (issue #764).
+and PolymorphicManyToManyManager.
 
 TransactionTestCase so the transaction tests run in autocommit mode: in a
 TestCase the per-test transaction would roll back partial writes on its own

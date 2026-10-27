@@ -1,5 +1,5 @@
 """
-Tests for the COT state comparator / diff engine (issue #387).
+Tests for the COT state comparator / diff engine.
 
 Covers:
 - No-change (clean) diff

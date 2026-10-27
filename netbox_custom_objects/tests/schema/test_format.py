@@ -1,5 +1,5 @@
 """
-Tests for the COT portable schema format (issue #386).
+Tests for the COT portable schema format.
 
 Covers:
 - schema_id auto-assignment and uniqueness on CustomObjectTypeField

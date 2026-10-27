@@ -258,7 +258,7 @@ class PolymorphicFieldUITest(CustomObjectsTestCase, TestCase):
         self.assertIsNone(obj.poly_obj)
 
     def test_submit_edit_form_hidden_poly_obj_with_stale_target(self):
-        """A hidden polymorphic field pointing at a deleted object must not block editing (#771).
+        """A hidden polymorphic field pointing at a deleted object must not block editing.
 
         The form has no field for the GFK backing columns, so a validation error keyed
         to them would raise ValueError in add_error() and the edit page would 500.
@@ -282,7 +282,7 @@ class PolymorphicFieldUITest(CustomObjectsTestCase, TestCase):
         self.assertEqual(obj.poly_obj_object_id, site2_pk)
 
     def test_submit_edit_form_hidden_poly_obj_with_null_content_type(self):
-        """As above when the target type was deleted: content type NULL, object ID still set (#771)."""
+        """As above when the target type was deleted: content type NULL, object ID still set."""
         self.gfk_field.ui_editable = "hidden"
         self.gfk_field.save()
         model = self.cot.get_model()
@@ -415,7 +415,7 @@ class PolymorphicFieldUITest(CustomObjectsTestCase, TestCase):
         self.assertIn(self.site1, obj2.poly_multi.all())
 
     def test_bulk_edit_leaves_stale_gfk_alone(self):
-        """Bulk editing an unrelated field must not fail on a GFK whose target is gone (#771).
+        """Bulk editing an unrelated field must not fail on a GFK whose target is gone.
 
         BulkEditView._update_objects() calls full_clean() with no exclude, so a stale
         reference would abort the whole operation.
@@ -492,11 +492,11 @@ class PolymorphicFieldUITest(CustomObjectsTestCase, TestCase):
         response = self.client.get(self._field_delete_url(self.gfk_field.pk))
         self.assertEqual(response.status_code, 200)
 
-    # --- CUSTOM_VALIDATORS visibility of polymorphic GFK values (#677) ---
+    # --- CUSTOM_VALIDATORS visibility of polymorphic GFK values ---
 
     def test_custom_validator_sees_gfk_value_on_create(self):
         """CUSTOM_VALIDATORS must see the submitted GFK value during form-based
-        create, not None (#677)."""
+        create, not None."""
         from django.contrib.contenttypes.models import ContentType
         from extras.validators import CustomValidator
 

@@ -139,7 +139,7 @@ class CustomObjectTypeFieldValidationAPITest(CustomObjectsTestCase, TestCase):
 
         self.parent_cot = CustomObjectType.objects.create(name='ParentObject', slug='parent-object')
 
-    @tag('regression')  # #761
+    @tag('regression')
     def test_related_name_colliding_with_target_attribute_returns_400(self):
         """A related_name that would overwrite an attribute on the target model must be rejected."""
         original_save = Site.save
@@ -232,7 +232,7 @@ class SchemaIdReadOnlyTest(CustomObjectsTestCase, TestCase):
 
     def test_deprecation_fields_writable_on_patch(self):
         """
-        Regression #625: deprecated/deprecated_since/scheduled_removal are excluded
+        deprecated/deprecated_since/scheduled_removal are excluded
         from CustomObjectTypeFieldForm (the web edit form) but must remain writable
         via the REST API -- this is how the portable-schema import mechanism applies
         them. Unlike schema_id, they must NOT be silently ignored here.

@@ -140,7 +140,7 @@ class ObjectFieldFiltersetTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(self._filterset({}).qs.count(), 3)
 
     def test_filter_by_id_suffix_returns_matching_object(self):
-        # Regression for #561: NetBox's Related Objects panel generates
+        # NetBox's Related Objects panel generates
         # ?<field>_id=N links; the filterset must honour the _id suffix form.
         pks = list(self._filterset({"device_id": self.device1.pk}).qs.values_list("pk", flat=True))
         self.assertIn(self.obj_d1.pk, pks)
@@ -486,13 +486,12 @@ class BuildFilterForFieldGuardsTestCase(TestCase):
 
 # ---------------------------------------------------------------------------
 # Regression: get_filterset_class must not raise after apps.clear_cache()
-# (issue #503)
 # ---------------------------------------------------------------------------
 
 
 class FiltersetAfterClearCacheTestCase(CustomObjectsTestCase, TestCase):
     """
-    Regression for #503: get_filterset_class() must not raise ValueError when
+    get_filterset_class() must not raise ValueError when
     apps.clear_cache() has cleared _meta._forward_fields_map on the model.
 
     When get_model() generates a fresh class it calls apps.clear_cache() at the
@@ -517,7 +516,7 @@ class FiltersetAfterClearCacheTestCase(CustomObjectsTestCase, TestCase):
         site_ot = ObjectType.objects.get(app_label="dcim", model="site")
 
         # COT with a non-polymorphic FK Object field (→ dcim.Manufacturer)
-        cls.cot_obj = cls.create_custom_object_type(name="C503Obj", slug="c503obj")
+        cls.cot_obj = cls.create_custom_object_type(name="ClearCacheObj", slug="clear-cache-obj")
         cls.create_custom_object_type_field(
             cls.cot_obj, name="name", label="Name", type="text", primary=True, required=True
         )
@@ -527,7 +526,7 @@ class FiltersetAfterClearCacheTestCase(CustomObjectsTestCase, TestCase):
         )
 
         # COT with a non-polymorphic M2M MultiObject field (→ dcim.Site)
-        cls.cot_m2m = cls.create_custom_object_type(name="C503M2m", slug="c503m2m")
+        cls.cot_m2m = cls.create_custom_object_type(name="ClearCacheM2m", slug="clear-cache-m2m")
         cls.create_custom_object_type_field(
             cls.cot_m2m, name="name", label="Name", type="text", primary=True, required=True
         )
@@ -611,7 +610,7 @@ class FiltersetAfterClearCacheTestCase(CustomObjectsTestCase, TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Typeahead search for non-text primary fields (issue #440)
+# Typeahead search for non-text primary fields
 # ---------------------------------------------------------------------------
 
 
@@ -906,7 +905,7 @@ class TextFieldFiltersetTestCase(ScalarFieldFiltersetTestCase, TestCase):
         self.assertEqual(self._filterset({}).qs.count(), 2)
 
     def test_filter_by_id_returns_only_matching_object(self):
-        """Regression #628: ?id=<pk> was silently ignored, returning every row."""
+        """?id=<pk> was silently ignored, returning every row."""
         pks = list(self._filterset({'id': [str(self.obj_match.pk)]}).qs.values_list('pk', flat=True))
         self.assertEqual(pks, [self.obj_match.pk])
 

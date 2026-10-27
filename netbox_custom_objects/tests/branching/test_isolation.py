@@ -387,7 +387,7 @@ class BranchCOTDeletionIsolationTestCase(BranchingTestBase, _TestBase):
 
 class PolymorphicReverseAccessorBranchTestCase(BranchingTestBase, _TestBase):
     """Reverse accessors live on target classes shared by every branch: only main
-    wires them, and they resolve the source model for the active branch (#766)."""
+    wires them, and they resolve the source model for the active branch."""
 
     def setUp(self):
         super().setUp()
@@ -434,7 +434,7 @@ class PolymorphicReverseAccessorBranchTestCase(BranchingTestBase, _TestBase):
         self.assertEqual(list(self.site.holders_by_target.all()), [main_co])
 
     def test_multiobject_accessor_uses_branch_model(self):
-        # Reads only: branch writes to a polymorphic through still land in main (#839).
+        # Reads only: branch writes to a polymorphic through still land in main.
         with event_tracking(self.request):
             self._add_field('multiobject', 'targets', 'holders_by_targets')
             main_model = self._model()
@@ -496,7 +496,7 @@ class PolymorphicReverseAccessorBranchTestCase(BranchingTestBase, _TestBase):
             self.assertEqual(self.site.holders_by_targets.count(), 0)
 
         # Main keeps its accessor until the branch merges.  Reading it would fail:
-        # the branch delete drops main's through table (#839).
+        # the branch delete drops main's through table.
         self.assertIn('holders_by_targets', Site.__dict__)
         self.assertEqual(
             CustomObjectTypeField.objects.get(pk=field.pk).related_name, 'holders_by_targets',

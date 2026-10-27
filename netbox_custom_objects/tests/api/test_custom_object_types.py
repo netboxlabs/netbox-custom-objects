@@ -225,7 +225,7 @@ class CustomObjectTypeAndFieldFilteringBulkAPITest(CustomObjectsTestCase, TestCa
     List filters on the type and field endpoints must narrow the result set, and bulk
     writes must touch only the listed ids. pynetbox's ``filter(...).update()`` and
     ``filter(...).delete()`` send a filtered GET and then a bulk write of the returned
-    ids, so an ignored filter would turn them into writes against every row (#584).
+    ids, so an ignored filter would turn them into writes against every row.
     """
 
     type_list_url = 'plugins-api:netbox_custom_objects-api:customobjecttype-list'
@@ -370,7 +370,7 @@ class CustomObjectTypeAndFieldFilteringBulkAPITest(CustomObjectsTestCase, TestCa
 
 
 # ---------------------------------------------------------------------------
-# PEP 440 version string validation — API layer (issue #392)
+# PEP 440 version string validation — API layer
 # ---------------------------------------------------------------------------
 
 class Pep440APIValidationTestCase(CustomObjectsTestCase, TestCase):

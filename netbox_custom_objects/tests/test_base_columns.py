@@ -1,5 +1,5 @@
 """
-Tests for the base-column snapshot feature (issue #391, Phase 1).
+Tests for the base-column snapshot feature.
 
 Covers:
 - _collect_base_columns() correctly identifies base vs user-defined columns

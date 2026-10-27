@@ -193,7 +193,7 @@ class TextFieldTypeTestCase(FieldTypeTestCase):
 
     def test_validation_regex_enforced_on_model_field(self):
         """
-        Regression #763: validation_regex is enforced by the generated model field itself,
+        validation_regex is enforced by the generated model field itself,
         so model validation (used by API writes and CSV import) rejects non-matching values.
         """
         for field_type, regex, valid, invalid in (
@@ -342,7 +342,7 @@ class IntegerFieldTypeTestCase(FieldTypeTestCase):
             model(name="Test", count=101).full_clean()
 
     def test_integer_field_is_64_bit(self):
-        """Integer fields use a 64-bit (bigint) column, not 32-bit (issue #532)."""
+        """Integer fields use a 64-bit (bigint) column, not 32-bit."""
         self.create_custom_object_type_field(
             self.custom_object_type,
             name="count",
@@ -428,7 +428,7 @@ class DecimalFieldTypeTestCase(FieldTypeTestCase):
             model(name="Test", price=Decimal("101.00")).full_clean()
 
     def test_decimal_precision_is_the_same_in_every_layer(self):
-        """The model, serializer and form all accept 16 digits with 4 decimal places (issue #769).
+        """The model, serializer and form all accept 16 digits with 4 decimal places.
 
         The column used to be numeric(8,2) while the form accepted 12/4, so the form
         took values the database then rejected.
@@ -485,7 +485,7 @@ def _alter_column_type(table_name, column_name, column_type):
 
 
 class WidenDecimalAndMultiSelectColumnsTestCase(FieldTypeTestCase):
-    """The 0019 migration widens pre-#769 decimal and multi-select columns in place.
+    """The 0019 migration widens older, narrower decimal and multi-select columns in place.
 
     New tables get numeric(16,4) and varchar(100)[] columns directly, but tables
     created earlier are managed=False and keep numeric(8,2) / varchar(50)[] until
@@ -509,7 +509,7 @@ class WidenDecimalAndMultiSelectColumnsTestCase(FieldTypeTestCase):
         return [q["sql"] for q in queries.captured_queries if q["sql"].startswith("ALTER TABLE")]
 
     def _create_legacy_fields(self):
-        """Create a decimal and a multi-select field, then narrow their columns to the pre-#769 types."""
+        """Create a decimal and a multi-select field, then narrow their columns to the old types."""
         self.create_custom_object_type_field(self.custom_object_type, name="price", label="Price", type="decimal")
         self.create_custom_object_type_field(
             self.custom_object_type, name="tags", label="Tags", type="multiselect", choice_set=self.choice_set,
@@ -1160,7 +1160,7 @@ class URLFieldTypeTestCase(FieldTypeTestCase):
     def test_url_field_model_generation(self):
         """
         Test URL field model generation. A url field expands into two backing
-        columns: the URL itself and an optional link title (issue #496).
+        columns: the URL itself and an optional link title.
         """
         self.create_custom_object_type_field(
             self.custom_object_type,
@@ -1699,7 +1699,7 @@ class MultiSelectFieldTypeTestCase(FieldTypeTestCase):
             field.validate(["choice1", "invalid_choice"])
 
     def test_multiselect_stores_choice_values_as_long_as_select_does(self):
-        """A choice value may be 100 characters, like a select column (issue #769)."""
+        """A choice value may be 100 characters, like a select column."""
         long_value = "v" * 100
         choice_set = self.create_choice_set(name="Long values", extra_choices=[[long_value, "Long"]])
         self.create_custom_object_type_field(
@@ -1851,7 +1851,7 @@ class ObjectFieldTypeTestCase(FieldTypeTestCase):
 
     def test_csv_import_field_uses_model_for_module_type(self):
         """get_form_field(for_csv_import=True) uses 'model' as to_field_name for
-        ModuleType, which has no 'name' field — regression for issue #406."""
+        ModuleType, which has no 'name' field."""
         self.assertEqual(_csv_import_to_field_name(ModuleType), 'model')
 
     def test_csv_import_field_uses_slug_before_model_for_device_type(self):
@@ -1952,7 +1952,7 @@ class MultiObjectFieldTypeTestCase(FieldTypeTestCase):
                          "ModuleType multi-object CSV import must use 'model', not 'name'")
 
     def test_get_form_field_for_cot_target_uses_full_cached_model(self):
-        """Regression #776: the form field must resolve a COT target with plain
+        """The form field must resolve a COT target with plain
         get_model() so the target's object fields are present and the generated
         model lands in the cache, rather than building an uncached partial model
         on every form render."""
@@ -2064,12 +2064,12 @@ class MultiObjectFieldTypeTestCase(FieldTypeTestCase):
 class PrimaryFieldChangeTestCase(FieldTypeTestCase):
     """Test changing which field is designated as the primary (display) field.
 
-    Issue #348: switching the primary flag to a different field while object
+    Switching the primary flag to a different field while object
     references exist must not break __str__ or queryset access.
     """
 
     def test_change_primary_field_updates_str(self):
-        """#348 – __str__ on existing instances reflects the new primary field after change."""
+        """__str__ on existing instances reflects the new primary field after change."""
         # The base FieldTypeTestCase already has a primary 'name' text field.
         # Add a second text field and then switch primary to it.
         second_field = self.create_custom_object_type_field(
@@ -2106,7 +2106,7 @@ class PrimaryFieldChangeTestCase(FieldTypeTestCase):
         self.assertIn("NewPrimary", str(refreshed))
 
     def test_change_primary_field_with_object_references(self):
-        """#348 – Changing the primary field does not break object fields that reference the COT."""
+        """Changing the primary field does not break object fields that reference the COT."""
         # Build a second COT that holds a reference to self.custom_object_type
         ref_cot = self.create_custom_object_type(name="RefHolder", slug="ref-holder")
         self.create_custom_object_type_field(
@@ -2172,7 +2172,7 @@ class PrimaryFieldChangeTestCase(FieldTypeTestCase):
         self.assertIn("T-001", str(refreshed_target))
 
     def test_str_post_delete_no_primary_field_does_not_contain_none(self):
-        """Regression #558: str() on a post-delete instance (pk=None, no primary
+        """str() on a post-delete instance (pk=None, no primary
         field value) must return the COT display name, not '<type> None'."""
         cot = self.create_custom_object_type(
             name="DeleteStrTest", slug="delete-str-test",

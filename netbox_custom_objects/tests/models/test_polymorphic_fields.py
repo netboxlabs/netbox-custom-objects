@@ -83,7 +83,7 @@ class ReferencedObjectDeletionTest(CustomObjectsTestCase, TestCase):
         self.assertIsNone(obj.poly_obj)
 
     def test_full_clean_flags_newly_assigned_gfk_pointing_at_deleted_object(self):
-        """A reference being set to an object that no longer exists is rejected (#771)."""
+        """A reference being set to an object that no longer exists is rejected."""
         site_pk = self.site.pk
         self.site.delete()
         obj = self.model(name="stale-gfk", poly_obj_content_type=self.site_ot, poly_obj_object_id=site_pk)
@@ -96,7 +96,7 @@ class ReferencedObjectDeletionTest(CustomObjectsTestCase, TestCase):
         obj.full_clean()
 
     def test_full_clean_leaves_stored_stale_gfk_alone(self):
-        """A saved reference whose target was deleted later is only re-validated once it changes (#771)."""
+        """A saved reference whose target was deleted later is only re-validated once it changes."""
         obj = self.model.objects.create(name="stored-stale")
         site_pk = self.site.pk
         self.site.delete()
@@ -113,7 +113,7 @@ class ReferencedObjectDeletionTest(CustomObjectsTestCase, TestCase):
         self.assertIn("poly_obj_object_id", cm.exception.error_dict)
 
     def test_full_clean_leaves_stored_half_set_gfk_alone(self):
-        """As above when the target type was deleted: content type NULL, object ID still set (#771)."""
+        """As above when the target type was deleted: content type NULL, object ID still set."""
         obj = self.model.objects.create(name="stored-half")
         self.model.objects.filter(pk=obj.pk).update(poly_obj_content_type=None, poly_obj_object_id=42)
         obj = self.model.objects.get(pk=obj.pk)
@@ -121,7 +121,7 @@ class ReferencedObjectDeletionTest(CustomObjectsTestCase, TestCase):
         obj.full_clean()
 
     def test_full_clean_rejects_half_set_gfk(self):
-        """A content type without an object ID (or vice versa) fails validation (#771)."""
+        """A content type without an object ID (or vice versa) fails validation."""
         obj = self.model(name="half-gfk")
         obj.poly_obj_content_type = self.site_ot
         with self.assertRaises(ValidationError) as cm:
@@ -135,7 +135,7 @@ class ReferencedObjectDeletionTest(CustomObjectsTestCase, TestCase):
         self.assertIn("poly_obj_content_type", cm.exception.error_dict)
 
     def test_full_clean_skips_gfk_columns_it_was_told_to_exclude(self):
-        """A bad reference is ignored when its backing columns are excluded, as a ModelForm does (#771)."""
+        """A bad reference is ignored when its backing columns are excluded, as a ModelForm does."""
         site_pk = self.site.pk
         self.site.delete()
         obj = self.model(name="stale-gfk-excluded", poly_obj_content_type=self.site_ot, poly_obj_object_id=site_pk)
@@ -144,7 +144,7 @@ class ReferencedObjectDeletionTest(CustomObjectsTestCase, TestCase):
         obj.full_clean(exclude=["poly_obj_content_type", "poly_obj_object_id"])
 
     def test_full_clean_flags_gfk_whose_model_is_not_installed(self):
-        """A content type with no installed model is reported on its column, not raised as AttributeError (#771)."""
+        """A content type with no installed model is reported on its column, not raised as AttributeError."""
         from django.contrib.contenttypes.models import ContentType
         gone = ContentType.objects.create(app_label="gone_plugin", model="widget")
         # get_for_id() caches the row process-wide; don't let it outlive the test.
@@ -226,7 +226,7 @@ class ReferencedObjectDeletionTest(CustomObjectsTestCase, TestCase):
         """
         remove_polymorphic_object_columns() must not raise
         "cannot ALTER TABLE because it has pending trigger events" when the
-        source row was deleted inside the same transaction (issue #595 regression).
+        source row was deleted inside the same transaction.
 
         The through-table created by the MULTIOBJECT field has a source_id FK:
             custom_objects_<id>_poly_multi.source_id → custom_objects_<id>.id
@@ -399,7 +399,7 @@ class PolymorphicCycleDetectionTest(CustomObjectsTestCase, TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Polymorphic reverse descriptor tests (issue #385 / PR #548)
+# Polymorphic reverse descriptor tests
 # ---------------------------------------------------------------------------
 
 class PolymorphicReverseDescriptorTest(CustomObjectsTestCase, TestCase):
@@ -919,7 +919,7 @@ class PolymorphicReverseDescriptorTest(CustomObjectsTestCase, TestCase):
 
     def test_gfk_accessor_regenerates_stale_cached_model(self):
         """A field change on another worker bumps cache_timestamp but leaves this
-        worker's cached model untouched; the accessor must regenerate it (#766)."""
+        worker's cached model untouched; the accessor must regenerate it."""
         self._create_gfk_field(related_name="co_gfk_stale")
         stale_model = self.cot.get_model()
         stale_entry = CustomObjectType._model_cache[(self.cot.pk, None)]

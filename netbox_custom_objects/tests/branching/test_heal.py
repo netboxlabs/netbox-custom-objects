@@ -32,7 +32,7 @@ class BranchUpgradeHealTestCase(BranchingTestBase, _TestBase):
     """
     Regression tests for upgrading a branch that already existed before a
     plugin release added a new base column (here, URLFieldType's
-    ``<name>_title`` column from issue #496).
+    ``<name>_title`` column).
 
     A schema change like this ships with no actual Django migration file
     (URLFieldType.get_model_field() just changes what columns a dynamically
@@ -48,7 +48,7 @@ class BranchUpgradeHealTestCase(BranchingTestBase, _TestBase):
     def _setup_branch_with_dropped_title_column(self, cot_name, cot_slug, field_name):
         """Shared fixture: a COT+url field in main, a branch with a full schema
         copy, then the title column dropped from *only* the branch's schema to
-        simulate a branch provisioned before #496 shipped.  Returns
+        simulate a branch provisioned before url fields had a title column.  Returns
         (cot, branch, table_name, branch_conn, _columns) where _columns(conn)
         introspects the live column set.
         """
@@ -139,7 +139,7 @@ class BranchUpgradeHealTestCase(BranchingTestBase, _TestBase):
         """
         A branch's schema can be gone even when its status doesn't obviously say
         so -- e.g. provisioning failed after the schema was created, or it was
-        since dropped (PR #641 review). Introspecting through that branch's own
+        since dropped. Introspecting through that branch's own
         connection wouldn't raise: its search path falls through to main, so it
         would silently report (and risk "healing") main's table instead. Confirm
         the branch is skipped instead -- no exception, main untouched, no COT
@@ -171,9 +171,9 @@ class BranchUpgradeHealTestCase(BranchingTestBase, _TestBase):
         """
         A branch with pending migrations has an ORM that may not match its
         actual (outdated) schema yet -- heal_cot() could misdiagnose drift
-        against columns the branch doesn't have for unrelated reasons (PR #641
-        review). Confirm such a branch is skipped rather than healed; it's
-        picked up later by the branch's own post_migrate hook once it migrates.
+        against columns the branch doesn't have for unrelated reasons. Confirm
+        such a branch is skipped rather than healed; it's picked up later by
+        the branch's own post_migrate hook once it migrates.
         """
         from netbox_custom_objects.mixin_migration import heal_all_branches
 
@@ -197,7 +197,7 @@ class BranchUpgradeHealTestCase(BranchingTestBase, _TestBase):
     def test_heal_all_branches_continues_after_one_branch_fails(self):
         """
         One branch failing unexpectedly during heal_branch() must not abort the
-        sweep for every other branch (PR #641 review).
+        sweep for every other branch.
         """
         from netbox_custom_objects import mixin_migration
         from netbox_custom_objects.mixin_migration import heal_all_branches
@@ -237,7 +237,7 @@ class BranchUpgradeHealTestCase(BranchingTestBase, _TestBase):
         pending_migrations (via MigrationExecutor) and heal_branch() both open a
         connection on branch.connection_name without closing it -- left open, these
         accumulate across every branch in the sweep, the same leak netbox_branching
-        fixed in its own per-branch migration sweep (issue #581). Confirm the
+        fixed in its own per-branch migration sweep. Confirm the
         connection is closed afterward, for both a healed branch and one skipped for
         pending migrations.
         """

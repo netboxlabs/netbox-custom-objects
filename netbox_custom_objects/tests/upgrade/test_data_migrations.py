@@ -414,7 +414,7 @@ class BackfillBaseColumnsTestCase(CustomObjectsTestCase, TestCase):
 # Migration 0011 — fix_deferrable_fk_constraints
 # ===========================================================================
 #
-# Covers three failure modes reported in #507:
+# Covers three reported failure modes:
 #   1. Truncation collision — long through-table names combined with column names
 #      can exceed PostgreSQL's 63-char identifier limit; two columns sharing the
 #      same truncated prefix would collide on ADD CONSTRAINT.
@@ -607,10 +607,10 @@ class WidenIntegerColumnsTestCase(CustomObjectsTestCase, TestCase):
         )
 
     def test_integer_field_upgrade_widens_existing_32bit_column(self):
-        """The 0016 migration widens pre-#532 32-bit integer columns to bigint.
+        """The 0016 migration widens older 32-bit integer columns to bigint.
 
         New tables already get a bigint column (test_integer_field_is_64_bit),
-        but custom_objects_* tables created before issue #532 have a 32-bit
+        but custom_objects_* tables created before that change have a 32-bit
         ``integer`` column that the field-type change alone does not alter --
         they are managed=False. This exercises that upgrade path: realize the
         column, force it back to 32-bit to mimic a legacy install, run the

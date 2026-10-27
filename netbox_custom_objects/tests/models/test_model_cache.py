@@ -23,7 +23,7 @@ class ModelCacheInvalidationTestCase(CustomObjectsTestCase, TestCase):
     the types its object fields point at."""
 
     def test_cache_invalidation_on_cotf_save(self):
-        """#340 – cache_timestamp on the parent COT is updated when a field is saved."""
+        """cache_timestamp on the parent COT is updated when a field is saved."""
         cot = self.create_custom_object_type(name='cachetest', slug='cache-test')
         # Capture the initial timestamp
         initial_timestamp = cot.cache_timestamp
@@ -212,7 +212,7 @@ class ModelRegistryTestCase(CustomObjectsTestCase, TestCase):
     """Generated models in Django's app registry, and the classes other contexts generate."""
 
     def test_model_registered_in_apps_after_cotf_save(self):
-        """#335 – The regenerated model is present in apps.get_models() after a field change."""
+        """The regenerated model is present in apps.get_models() after a field change."""
         cot = self.create_custom_object_type(name='regtest', slug='reg-test')
         self.create_custom_object_type_field(
             cot,
@@ -297,7 +297,7 @@ class ModelRegistryTestCase(CustomObjectsTestCase, TestCase):
         )
 
     def test_model_generated_in_another_context_leaves_main_classes_alone(self):
-        """Generating models for a branch must not rewire main's classes (#765).
+        """Generating models for a branch must not rewire main's classes.
 
         Main's object FK, multi-object through and polymorphic through must keep
         pointing at main's classes, so main can still assign related objects and
@@ -485,7 +485,7 @@ class FailedFieldChangeTestCase(CustomObjectsTestCase, TestCase):
 
     def test_field_changes_leave_the_class_in_use_alone(self):
         """DDL binds its fields to a throwaway class, so a request using the
-        current class mid-change never sees in-flight fields (#767)."""
+        current class mid-change never sees in-flight fields."""
         cot = self.create_custom_object_type(name='notouch', slug='no-touch')
         self.create_custom_object_type_field(cot, name='name', type='text', primary=True)
         field = self.create_custom_object_type_field(cot, name='coordinatescoordinates', type='text')
@@ -546,19 +546,19 @@ class FailedFieldChangeTestCase(CustomObjectsTestCase, TestCase):
         list(model.objects.all())
 
     def test_rollback_after_rename_rebuilds_the_cached_model(self):
-        """The saving instance's cache entry looks valid, since both carry the rolled-back timestamp (#767)."""
+        """The saving instance's cache entry looks valid, since both carry the rolled-back timestamp."""
         _cot, stale_cot = self._rename_then_roll_back()
         self._assert_fits_table(stale_cot.get_model())
 
     def test_rollback_after_rename_rebuilds_the_registered_model(self):
-        """Registry lookups (e.g. ContentType.model_class()) bypass get_model() and its cache check (#767)."""
+        """Registry lookups (e.g. ContentType.model_class()) bypass get_model() and its cache check."""
         cot, _stale_cot = self._rename_then_roll_back()
         self._assert_fits_table(apps.get_model(APP_LABEL, cot.get_table_model_name(cot.pk)))
 
     def test_rollback_after_rename_is_seen_from_a_later_transaction(self):
         """The connection that rolled back serves the next request too, so a lookup
         from inside that request's transaction must not mistake it for the one the
-        class was built in (#767)."""
+        class was built in."""
         cot, stale_cot = self._rename_then_roll_back()
         with transaction.atomic():
             self._assert_fits_table(stale_cot.get_model())
@@ -566,7 +566,7 @@ class FailedFieldChangeTestCase(CustomObjectsTestCase, TestCase):
 
 
 class PolymorphicReverseDescriptorRecursionTestCase(CustomObjectsTestCase, TestCase):
-    """Regression test for issue #686: generating a polymorphic field's
+    """Regression test: generating a polymorphic field's
     reverse descriptor raised RecursionError."""
 
     def test_get_model_with_polymorphic_related_name_does_not_recurse(self):

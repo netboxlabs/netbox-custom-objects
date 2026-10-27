@@ -68,7 +68,7 @@ class PluginConfigGetModelTestCase(CustomObjectsTestCase, TestCase):
         """
         Regression: get_model() must not let ProgrammingError escape when the DB
         schema is incomplete (e.g. a new column was added by a migration that
-        hasn't run yet).  Reproduces the failure reported in issue #456 where
+        hasn't run yet).  Reproduces the reported failure where
         upgrading from v0.4.6 to v0.4.7 aborted `manage.py migrate` with
         "column netbox_custom_objects_customobjecttype.group_name does not exist".
 

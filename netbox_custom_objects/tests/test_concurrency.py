@@ -27,11 +27,11 @@ from .base import CustomObjectsTestCase, TransactionCleanupMixin, _fk_constraint
 
 class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
     """
-    Regression tests for issue #658: creating a polymorphic multiobject field
+    Regression tests: creating a polymorphic multiobject field
     races registering its through-model class against a concurrent
     get_model() call, producing a class-identity mismatch that later surfaces
     as "ValueError: Cannot query 'X': Must be 'TableYModel' instance." or a
-    RecursionError (same symptom class as #477/#483).
+    RecursionError (the same symptom class as other stale-model bugs).
     """
 
     def setUp(self):
@@ -41,7 +41,7 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
     def test_field_creation_racing_concurrent_readers_yields_consistent_through_model(self):
         """
         Races field *creation* (real DB I/O) against 12 looping get_model()
-        readers -- the shape that reproduced #658 live. Rarely lands inside
+        readers -- the shape that reproduced the bug live. Rarely lands inside
         the actual race window in-process (see the deterministic version
         below), but exercises the same code path under real concurrency.
         """
@@ -87,7 +87,7 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
         )
 
         # get_model() and the through model's "source" FK must agree on which
-        # class is canonical -- a mismatch is the #477/#483-class staleness.
+        # class is canonical -- a mismatch is stale-model staleness.
         final_model = CustomObjectType.objects.get(pk=cot.pk).get_model()
         through_model = apps.get_model(APP_LABEL, field.through_model_name)
         source_field = through_model._meta.get_field('source')
@@ -126,8 +126,8 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
         start until W has repointed "source" -- the pause below just times
         out harmlessly. Without the fix, R runs inside the pause and the two
         threads' writes land in different orders, reliably producing the
-        mismatch asserted below. See #658 for the full analysis, including
-        why the lock can't simply span the rest of the call too.
+        mismatch asserted below. The history of this test has the full analysis,
+        including why the lock can't simply span the rest of the call too.
         """
         cot = self.create_simple_custom_object_type(name='polyforce', slug='poly-force')
         field = self.create_custom_object_type_field(
@@ -234,13 +234,13 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
         self.assertIs(
             source_field.remote_field.model, final_model,
             "the registered through model's source FK must point at the model class "
-            "get_model() currently returns -- a mismatch here is issue #658",
+            "get_model() currently returns -- a mismatch here is the stale-class bug",
         )
 
         obj = final_model.objects.create(name='Instance 1')
         obj.depends_on.set([Site.objects.create(name='Force Site', slug='force-site')])
 
-        # The delete-confirmation GET is the reported UI path (issue #640, step 4): obj.delete()
+        # The delete-confirmation GET is the reported UI path (step 4 of the original report): obj.delete()
         # below realigns each through's "source" FK to type(self) before Django's collector runs
         # (see CustomObject.delete()), which would silently paper over a lingering registry
         # mismatch. A GET here never calls delete() at all, so it exercises the raw, unrepaired
@@ -400,7 +400,7 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
         self.assertEqual(set(field.related_object_types.all()), {self_ot, other_ot})
 
         # get_model() and the through model's "source" FK must agree on which class is canonical
-        # -- a mismatch is the #477/#483-class staleness that issue #658 reported.
+        # -- a mismatch is the stale-model staleness this test guards against.
         final_model = CustomObjectType.objects.get(pk=cot.pk).get_model()
         through_model = apps.get_model(APP_LABEL, field.through_model_name)
         source_field = through_model._meta.get_field('source')

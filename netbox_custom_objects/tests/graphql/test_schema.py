@@ -235,7 +235,7 @@ class GraphQLSchemaGenerationTestCase(CustomObjectsTestCase, TestCase):
 class GraphQLLiveSchemaTestCase(CustomObjectsTestCase, TestCase):
     """
     The schema must reflect custom object types created/deleted at runtime
-    without a NetBox restart (issue #30 follow-up).
+    without a NetBox restart.
 
     ``should_skip_dynamic_model_creation`` returns True during the test run, so
     we patch it off for these tests and reset the per-process cache around each.

@@ -18,7 +18,7 @@ from users.models import ObjectPermission
 
 
 class ValidationRegexAPITest(CustomObjectsTestCase, TestCase):
-    """Regression #763: validation_regex must be enforced on REST API writes, not just in the UI form."""
+    """validation_regex must be enforced on REST API writes, not just in the UI form."""
 
     def setUp(self):
         self.user = create_test_user('regexapiuser')
@@ -412,7 +412,7 @@ class MACAddressFieldAPITest(CustomObjectsTestCase, NetBoxTestCase):
 
 
 class URLFieldLinkTitleAPITest(CustomObjectsTestCase, NetBoxTestCase):
-    """REST API behaviour for the url field type's link-title support (issue #496)."""
+    """REST API behaviour for the url field type's link-title support."""
 
     @classmethod
     def setUpTestData(cls):

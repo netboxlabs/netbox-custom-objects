@@ -173,7 +173,7 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         which calls apps.get_models() → our override → get_model() for every COT →
         infinite recursion when called during model registration.
 
-        Regression for PR #474: the stub model generated with skip_object_fields=True
+        The stub model generated with skip_object_fields=True
         does not have the OBJECT field, but self.fields.filter(search_weight__gt=0)
         still returns it from the database.
         """
@@ -201,7 +201,7 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         cot.register_custom_object_search_index(stub_model)
 
     def test_register_search_index_includes_context_fields_in_display_attrs(self):
-        """Fields marked context=True surface as display_attrs (issue #655), so
+        """Fields marked context=True surface as display_attrs, so
         NetBox's global search shows them as supplementary "attributes" alongside
         each result, the same as any other model's SearchIndex.display_attrs."""
         cot = self.create_custom_object_type(name="ContextSearchTest", slug="context-search-test")
@@ -272,7 +272,7 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
         """When get_model_field raises NotImplementedError for an object field whose
         related_object_type_id is non-null (stale/deleted ContentType), a WARNING must
         be emitted — not just DEBUG — so operators can identify the broken field.
-        Regression test for the fix in _fetch_and_generate_field_attrs (issue #353).
+        Regression test for the fix in _fetch_and_generate_field_attrs.
         """
         cot = self.create_custom_object_type(name="StaleCtTest", slug="stale-ct-test")
         self.create_custom_object_type_field(
@@ -326,7 +326,7 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
 
     def test_stale_registry_entry_causes_relation_error_on_related_object_delete(self):
         """
-        Demonstrates the failure mode for issue #429.
+        Demonstrates the failure mode.
 
         Re-registers the stale model class after deletion (simulating the pre-fix
         state) and confirms that deleting a related NetBox object then raises
@@ -380,7 +380,7 @@ class CustomObjectTypeTestCase(CustomObjectsTestCase, TestCase):
 
 
 class CustomObjectTypeConfigContextTestCase(CustomObjectsTestCase, TestCase):
-    """Config context support (issue #98) on custom object types."""
+    """Config context support on custom object types."""
 
     @staticmethod
     def _table_columns(table_name):
@@ -470,7 +470,7 @@ class CustomObjectTypeConfigContextTestCase(CustomObjectsTestCase, TestCase):
         cot.description = "edited"
         cot.full_clean()  # should not raise
 
-    # --- Source-context aggregation via field-naming convention (#98 phase 2) ---
+    # --- Source-context aggregation via field-naming convention ---
 
     def _site_cot(self, name, slug):
         """Config-context-enabled COT with a primary name field and a `site` object field."""
@@ -605,7 +605,7 @@ class CustomObjectTypeConfigContextTestCase(CustomObjectsTestCase, TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Semver / version string validation (issue #392)
+# Semver / version string validation
 # ---------------------------------------------------------------------------
 
 class SemverValidationTestCase(CustomObjectsTestCase, TestCase):

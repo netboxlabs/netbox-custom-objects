@@ -325,7 +325,7 @@ class PolymorphicFieldAPITest(CustomObjectsTestCase, TestCase):
         self.assertIsNone(obj.poly_obj)
 
     def test_patch_unrelated_field_with_stale_gfk_succeeds(self):
-        """PATCH of another field is not blocked by a stored reference whose target was deleted (#771)."""
+        """PATCH of another field is not blocked by a stored reference whose target was deleted."""
         _grant_perm(self.user, "change", self.model, "co-change-stale")
         obj = self.model.objects.create(name="gfk-stale-obj")
         site_pk = self.site.pk
@@ -345,7 +345,7 @@ class PolymorphicFieldAPITest(CustomObjectsTestCase, TestCase):
         self.assertEqual(obj.poly_obj_object_id, site_pk)
 
     def test_patch_gfk_to_deleted_object_rejected(self):
-        """PATCH pointing the reference at an object that no longer exists is a 400, not a 500 (#771)."""
+        """PATCH pointing the reference at an object that no longer exists is a 400, not a 500."""
         _grant_perm(self.user, "change", self.model, "co-change-deleted")
         from django.contrib.contenttypes.models import ContentType
         site_ct = ContentType.objects.get_for_model(Site)
@@ -365,7 +365,7 @@ class PolymorphicFieldAPITest(CustomObjectsTestCase, TestCase):
 
     def test_custom_validator_sees_gfk_value_on_api_create(self):
         """A CUSTOM_VALIDATORS validate() call during API create must see the
-        submitted polymorphic GFK value, not None (#677)."""
+        submitted polymorphic GFK value, not None."""
         from django.contrib.contenttypes.models import ContentType
         from extras.validators import CustomValidator
 
@@ -390,7 +390,7 @@ class PolymorphicFieldAPITest(CustomObjectsTestCase, TestCase):
 
     def test_custom_validator_sees_updated_gfk_value_on_api_update(self):
         """A CUSTOM_VALIDATORS validate() call during an API PATCH that changes the
-        polymorphic GFK value must see the new value, not the pre-update one (#677)."""
+        polymorphic GFK value must see the new value, not the pre-update one."""
         from django.contrib.contenttypes.models import ContentType
         from extras.validators import CustomValidator
 

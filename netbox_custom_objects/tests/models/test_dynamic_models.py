@@ -380,7 +380,7 @@ class CustomObjectTestCase(CustomObjectsTestCase, TestCase):
         propagating an AttributeError when get_display_value fails.  This can
         happen when the generated model class is missing an attribute for the
         primary field (e.g. the field was silently skipped during regeneration
-        due to a stale ContentType).  Regression test for issue #353.
+        due to a stale ContentType).
         """
         instance = self.model.objects.create(name="Test Instance")
         # Confirm normal __str__ works first.
@@ -423,7 +423,7 @@ class M2MSerializationRegressionTestCase(CustomObjectsTestCase, TestCase):
 
 class CrossCOTGetModelOutsideReadyTestCase(CustomObjectsTestCase, TestCase):
     """Regression tests for CustomObjectType.get_model() bypassing ready()'s two-pass
-    cross-COT FK resolution (#637)."""
+    cross-COT FK resolution."""
 
     def _make_cross_cot_pair(self, suffix):
         """Build a fresh target/source COT pair, uniquely named so registry
@@ -510,7 +510,7 @@ class CrossCOTGetModelOutsideReadyTestCase(CustomObjectsTestCase, TestCase):
     def test_get_model_keeps_core_model_field_when_unsafe(self):
         """A field targeting a core NetBox model (not another COT) can't dangle
         the way a cross-COT LazyForeignKey can, so it must not be dropped during
-        the unsafe window (review of #664)."""
+        the unsafe window."""
         source_type = CustomObjectType.objects.create(
             name="DnsZone637e", slug="dns-zone-637-e",
         )
@@ -557,7 +557,7 @@ class CrossCOTGetModelOutsideReadyTestCase(CustomObjectsTestCase, TestCase):
 
 
 class NestedCOTStartupOrderingTestCase(CustomObjectsTestCase, TestCase):
-    """Regression tests for issue #408: nested COT FK fields missing after restart.
+    """Regression tests: nested COT FK fields missing after restart.
 
     Three COTs are created with names chosen so alphabetical startup ordering
     (alpha_type < beta_type < gamma_type) processes the FK-source models before
@@ -777,7 +777,7 @@ class CycleDetectionFalsePositiveRegressionTest(CustomObjectsTestCase, TestCase)
 
 
 class StaleFKReferenceRegressionTest(CustomObjectsTestCase, TestCase):
-    """Regression test for issue #384: stale FK reference after COT model regeneration.
+    """Regression test: stale FK reference after COT model regeneration.
 
     When COT A's model is regenerated (cache miss, e.g. after a schema change
     on another worker bumps cache_timestamp), any other COT model (B) that has a
@@ -860,7 +860,7 @@ class StaleFKReferenceRegressionTest(CustomObjectsTestCase, TestCase):
     def test_b_fk_is_patched_after_a_regeneration(self):
         """After A is regenerated, B's FK field must reference the new A class.
 
-        This is the core regression for issue #384: the isinstance check in
+        This is the core regression: the isinstance check in
         ForeignKey.__set__ compares the assigned value against
         ``self.field.remote_field.model``.  If that attribute still points to the
         old A class after A is regenerated, assigning a new-A instance raises
@@ -895,7 +895,7 @@ class StaleFKReferenceRegressionTest(CustomObjectsTestCase, TestCase):
 
 
 class LazySerializerRegistrationTestCase(CustomObjectsTestCase, TestCase):
-    """Regression tests for issue #370: SerializerNotFound when a COT is
+    """Regression tests: SerializerNotFound when a COT is
     created after startup and a worker never served a custom-objects API request.
 
     Two related bugs:
@@ -945,7 +945,7 @@ class LazySerializerRegistrationTestCase(CustomObjectsTestCase, TestCase):
     def test_resolver_generates_serializer_on_demand(self):
         """serializer_resolver() must generate and return a serializer for any
         Table{N}Model whose serializer was never pre-registered (simulates a worker
-        that started before the COT was created — issue #370 Scenario A).
+        that started before the COT was created).
 
         NetBox calls this resolver from get_serializer_for_model() before falling
         back to an import-path lookup, so a missing startup-time registration can
@@ -974,7 +974,7 @@ class LazySerializerRegistrationTestCase(CustomObjectsTestCase, TestCase):
         """get_serializer_class(model, skip_object_fields=True) must not overwrite
         the full module-level serializer for that model.  The full serializer
         (registered via skip_object_fields=False) must remain accessible after
-        a partial serializer is built for the same model (issue #370 Bug 2)."""
+        a partial serializer is built for the same model."""
         import netbox_custom_objects.api.serializers as ser_module
         self._clear_serializer_registrations()
 
@@ -998,7 +998,7 @@ class LazySerializerRegistrationTestCase(CustomObjectsTestCase, TestCase):
 
     def test_child_serializer_does_not_clobber_parent_serializer(self):
         """Building child's serializer (which creates a nested partial for parent)
-        must leave the parent's full module-level serializer intact (issue #370)."""
+        must leave the parent's full module-level serializer intact."""
         import netbox_custom_objects.api.serializers as ser_module
         self._clear_serializer_registrations()
 
@@ -1023,7 +1023,7 @@ class LazySerializerRegistrationTestCase(CustomObjectsTestCase, TestCase):
 
 class DeferredCOFieldReplayOrderingTestCase(CustomObjectsTestCase, TestCase):
     """
-    Regression test (PR #641 review) for an ordering bug in the deferred CO
+    Regression test for an ordering bug in the deferred CO
     field replay: _apply_deferred_co_field() replays a url field's title value
     via a raw UPDATE against "<name>_title", but in CustomObjectTypeField.save()
     the title column used to be added *after* that call ran. A deferred title
@@ -1073,7 +1073,7 @@ class DeferredCOFieldReplayOrderingTestCase(CustomObjectsTestCase, TestCase):
 
 
 class CustomObjectBaseModelTestCase(CustomObjectsTestCase, TestCase):
-    """CustomObject inherits NetBox's BaseModel (#771)."""
+    """CustomObject inherits NetBox's BaseModel."""
 
     @classmethod
     def setUpTestData(cls):
@@ -1134,7 +1134,7 @@ class CustomObjectBaseModelTestCase(CustomObjectsTestCase, TestCase):
 
 class CoordinatesBackingColumnsTestCase(CustomObjectsTestCase, TestCase):
     """
-    Regression tests for #770: a coordinates field has no column matching its own
+    Regression tests: a coordinates field has no column matching its own
     name -- only ``<name>_latitude`` and ``<name>_longitude`` -- so any code path
     that derives columns from the bare field name silently skips it.  Two such
     paths: the deferred squash-merge replay (``_apply_deferred_co_field``) and the
@@ -1242,7 +1242,7 @@ class CoordinatesBackingColumnsTestCase(CustomObjectsTestCase, TestCase):
 
 
 class PhantomTaggedObjectsTestCase(CustomObjectsTestCase, TestCase):
-    """Regression tests for issue #629 (Phantom Tagged Objects): deleting a
+    """Regression tests for phantom tagged objects: deleting a
     tagged custom object left its TaggedItem row behind."""
 
     def setUp(self):

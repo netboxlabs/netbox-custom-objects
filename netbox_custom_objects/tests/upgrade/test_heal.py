@@ -1,5 +1,5 @@
 """
-Tests for the mixin column drift detection and repair (issue #391, Phase 2).
+Tests for the mixin column drift detection and repair.
 
 Covers:
 - _expected_base_fields(): returns the correct base fields, excludes user fields
@@ -349,11 +349,11 @@ class HealCotTestCase(CustomObjectsTestCase, TestCase):
 
 class BackingColumnCollisionTestCase(CustomObjectsTestCase, TestCase):
     """
-    Regression tests (PR #641 review) for pre-existing backing-column
+    Regression tests for pre-existing backing-column
     collisions: a plain field literally named "<url_field>_title" (or
     "<coord_field>_latitude"/"_longitude") could have been created before
     CustomObjectTypeField.clean()'s collision guard existed -- URLFieldType
-    didn't expand into a second backing column until #496, so nothing
+    didn't always expand into a second backing column, so nothing
     stopped a sibling field from claiming that name first.  clean() blocks
     this combination for any *new* field going forward, but heal_cot() must
     also detect it for a COT that already has the collision baked in, since
@@ -388,13 +388,13 @@ class BackingColumnCollisionTestCase(CustomObjectsTestCase, TestCase):
 
     def test_safe_rename_preserves_sibling_data_and_resolves_collision(self):
         """
-        Renaming the field identified by `safe_to_rename` (PR #641 review) must
+        Renaming the field identified by `safe_to_rename` must
         preserve that field's own data and leave the *other* field's column
         untouched -- proving the recovery guidance is actually safe to follow,
         not just that the collision is detected.
 
         save()'s rename path now calls heal_unmasked_fields() unconditionally
-        (merged from main's #391 Phase 2 work), so the url field's title
+        (merged from main's column drift repair work), so the url field's title
         sub-column is restored automatically in the same save() -- a separate
         manual heal_cot() call is no longer required, though still safe/idempotent.
         """
