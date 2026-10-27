@@ -62,7 +62,7 @@ def _statements(ctx, verb, table):
     return [q['sql'] for q in ctx.captured_queries if q['sql'].startswith(verb) and f'"{table}"' in q['sql']]
 
 
-class CustomManyToManyManagerWriteTest(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
+class CustomManyToManyManagerWriteTestCase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
 
     def setUp(self):
         super().setUp()
@@ -186,7 +186,7 @@ class CustomManyToManyManagerWriteTest(TransactionCleanupMixin, CustomObjectsTes
         self.assertEqual(self._linked(), {self.sites[1].pk, self.sites[2].pk})
 
 
-class PolymorphicManyToManyManagerWriteTest(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
+class PolymorphicManyToManyManagerWriteTestCase(TransactionCleanupMixin, CustomObjectsTestCase, TransactionTestCase):
 
     def setUp(self):
         super().setUp()

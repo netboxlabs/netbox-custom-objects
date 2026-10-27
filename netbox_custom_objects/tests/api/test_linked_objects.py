@@ -17,7 +17,7 @@ from extras.models import Dashboard
 from users.models import ObjectPermission
 
 
-class LinkedObjectsAPITest(CustomObjectsTestCase, TestCase):
+class LinkedObjectsAPITestCase(CustomObjectsTestCase, TestCase):
     """
     Tests for the GET /api/plugins/custom-objects/linked-objects/ endpoint.
     """

@@ -18,7 +18,7 @@ from netbox_custom_objects.models import CustomObjectType
 from .base import CustomObjectsTestCase, create_token
 
 
-class StaleModelEvictionTest(CustomObjectsTestCase, TestCase):
+class StaleModelEvictionTestCase(CustomObjectsTestCase, TestCase):
 
     def setUp(self):
         super().setUp()

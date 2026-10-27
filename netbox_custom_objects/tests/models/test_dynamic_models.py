@@ -665,7 +665,7 @@ class NestedCOTStartupOrderingTestCase(CustomObjectsTestCase, TestCase):
                       "beta_type (as FK target from alpha_type) must itself have FK to gamma_type")
 
 
-class CycleDetectionFalsePositiveRegressionTest(CustomObjectsTestCase, TestCase):
+class CycleDetectionFalsePositiveRegressionTestCase(CustomObjectsTestCase, TestCase):
     """Regression test for the false-positive in _has_circular_reference.
 
     When an intermediate COT has a self-referencing field (e.g. a multiobject
@@ -776,7 +776,7 @@ class CycleDetectionFalsePositiveRegressionTest(CustomObjectsTestCase, TestCase)
             field._check_recursion()
 
 
-class StaleFKReferenceRegressionTest(CustomObjectsTestCase, TestCase):
+class StaleFKReferenceRegressionTestCase(CustomObjectsTestCase, TestCase):
     """Regression test: stale FK reference after COT model regeneration.
 
     When COT A's model is regenerated (cache miss, e.g. after a schema change

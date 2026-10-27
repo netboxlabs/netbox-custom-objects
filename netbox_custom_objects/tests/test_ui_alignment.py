@@ -282,7 +282,7 @@ class EditFormTestCase(CustomObjectPageTestCase):
                     self.assertNotContains(response, "btn-float")
 
 
-class CombinedTabTestCase(CustomObjectPageTestCase):
+class CombinedTabPageTestCase(CustomObjectPageTestCase):
 
     def _tab(self):
         # Tabs aren't registered under the test runner, so call the view directly.

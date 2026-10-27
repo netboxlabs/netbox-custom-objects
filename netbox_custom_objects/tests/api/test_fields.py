@@ -16,7 +16,7 @@ from dcim.models import Site
 from users.models import ObjectPermission
 
 
-class CustomObjectTypeFieldObjectResolutionTest(CustomObjectsTestCase, TestCase):
+class CustomObjectTypeFieldObjectResolutionTestCase(CustomObjectsTestCase, TestCase):
     """
     Tests for app_label/model resolution in CustomObjectTypeFieldSerializer.validate().
 
@@ -122,7 +122,7 @@ class CustomObjectTypeFieldObjectResolutionTest(CustomObjectsTestCase, TestCase)
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
 
 
-class CustomObjectTypeFieldValidationAPITest(CustomObjectsTestCase, TestCase):
+class CustomObjectTypeFieldValidationAPITestCase(CustomObjectsTestCase, TestCase):
     """Field-level validation errors from CustomObjectTypeField.clean() surface as 400s via the API."""
 
     field_url = 'plugins-api:netbox_custom_objects-api:customobjecttypefield-list'
@@ -158,7 +158,7 @@ class CustomObjectTypeFieldValidationAPITest(CustomObjectsTestCase, TestCase):
         self.assertIs(Site.save, original_save)
 
 
-class SchemaIdReadOnlyTest(CustomObjectsTestCase, TestCase):
+class SchemaIdReadOnlyTestCase(CustomObjectsTestCase, TestCase):
     """
     schema_id on CustomObjectTypeField is read-only via the API.
     POSTing a value for it must be silently ignored; PATCHing an existing

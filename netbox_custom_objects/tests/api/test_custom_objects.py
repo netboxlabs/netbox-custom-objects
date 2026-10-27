@@ -106,7 +106,7 @@ class CustomObjectAPITestCaseMixin:
         self.assertHttpStatus(response, 403)
 
 
-class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, NetBoxTestCase):
+class CustomObjectAPITestCase(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, NetBoxTestCase):
     model = None  # Will be set in setUpTestData
     bulk_update_data = {
         'test_field': 'Updated test field',
@@ -222,7 +222,7 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, NetB
         cls.model = cls.custom_object_type1.get_model()
 
         # Set the model for the test class
-        CustomObjectTest.model = cls.model
+        CustomObjectAPITestCase.model = cls.model
 
         # Create test custom objects
         custom_objects = (
@@ -630,7 +630,7 @@ class CustomObjectTest(CustomObjectsTestCase, CustomObjectAPITestCaseMixin, NetB
         )
 
 
-class PolymorphicMultiObjectPrefetchTest(CustomObjectsTestCase, TestCase):
+class PolymorphicMultiObjectPrefetchTestCase(CustomObjectsTestCase, TestCase):
     """Polymorphic multi-object fields must be prefetched (flat query count) and
     must serialize each instance's own members correctly once prefetched."""
 
@@ -734,7 +734,7 @@ class PolymorphicMultiObjectPrefetchTest(CustomObjectsTestCase, TestCase):
         self.assertEqual(target_ids(by_name['PM2M Obj C']), [])
 
 
-class SerializerFieldCoverageTest(CustomObjectsTestCase, TestCase):
+class SerializerFieldCoverageTestCase(CustomObjectsTestCase, TestCase):
     """
     Verify that the dynamic serializer produced by get_serializer_class() exposes
     the expected fields in API responses.
@@ -1041,7 +1041,7 @@ class ContextFieldApiTestCase(CustomObjectsTestCase, TestCase):
         self.assertEqual(response.data['_context']['display'], 'Dave')
 
 
-class CrossCOTMultiObjectAPITest(CustomObjectsTestCase, TestCase):
+class CrossCOTMultiObjectAPITestCase(CustomObjectsTestCase, TestCase):
     """
     Tests for API PATCH/PUT behaviour when a CO has a cross-COT multiobject
     (non-polymorphic M2M) field pointing to another COT.
@@ -1205,7 +1205,7 @@ class CrossCOTMultiObjectAPITest(CustomObjectsTestCase, TestCase):
         self.assertIn(self.obj_target1.pk, ref_ids)
 
 
-class OwnerAPITest(CustomObjectsTestCase, TestCase):
+class OwnerAPITestCase(CustomObjectsTestCase, TestCase):
     """Tests for the owner field on custom object instances."""
 
     def setUp(self):
@@ -1376,7 +1376,7 @@ class OwnerAPITest(CustomObjectsTestCase, TestCase):
         self.assertNotIn(obj_b.pk, ids)
 
 
-class NullOptionalObjectFieldTest(CustomObjectsTestCase, TestCase):
+class NullOptionalObjectFieldTestCase(CustomObjectsTestCase, TestCase):
     """
     POST/PATCH with explicit null on a non-required object or multiobject field
     must succeed (201/200).  Before the fix, the serializer lacked allow_null=True

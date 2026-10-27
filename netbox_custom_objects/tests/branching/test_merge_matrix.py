@@ -37,7 +37,7 @@ if HAS_BRANCHING:
 # ── Shared merge/revert tests (strategy-agnostic) ────────────────────────────
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
-class BaseBranchingTests(BranchingTestBase):
+class BaseBranchingTestCase(BranchingTestBase):
     """
     Merge and revert tests that run against every merge strategy.
 
@@ -47,7 +47,7 @@ class BaseBranchingTests(BranchingTestBase):
 
     Example::
 
-        class IterativeBranchingTestCase(BaseBranchingTests, TransactionTestCase):
+        class IterativeBranchingTestCase(BaseBranchingTestCase, TransactionTestCase):
             MERGE_STRATEGY = 'iterative'
     """
 
@@ -1564,14 +1564,14 @@ class BaseBranchingTests(BranchingTestBase):
 # ── Concrete test classes (one per merge strategy) ────────────────────────────
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
-class IterativeBranchingTestCase(BaseBranchingTests, _TestBase):
-    """Run BaseBranchingTests with the iterative merge strategy."""
+class IterativeBranchingTestCase(BaseBranchingTestCase, _TestBase):
+    """Run BaseBranchingTestCase with the iterative merge strategy."""
     MERGE_STRATEGY = 'iterative'
 
 
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
-class SquashBranchingTestCase(BaseBranchingTests, _TestBase):
-    """Run BaseBranchingTests with the squash merge strategy."""
+class SquashBranchingTestCase(BaseBranchingTestCase, _TestBase):
+    """Run BaseBranchingTestCase with the squash merge strategy."""
     MERGE_STRATEGY = 'squash'
 
 

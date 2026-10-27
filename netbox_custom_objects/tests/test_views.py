@@ -1604,7 +1604,7 @@ class ObjectSelectorViewTestCase(TestCase):
         self.assertEqual(response.status_code, 200)
 
 
-class CoordinatesFieldViewTest(CustomObjectsTestCase, TestCase):
+class CoordinatesFieldViewTestCase(CustomObjectsTestCase, TestCase):
     """UI form behaviour for the coordinates field type."""
 
     @classmethod
@@ -1718,7 +1718,7 @@ class CoordinatesFieldViewTest(CustomObjectsTestCase, TestCase):
         self.assertIsNone(obj.location_longitude)
 
 
-class ArrayFieldViewTest(CustomObjectsTestCase, TestCase):
+class ArrayFieldViewTestCase(CustomObjectsTestCase, TestCase):
     """UI behaviour for the array field type: JSON input, CSV import and formatted display."""
 
     @classmethod
@@ -1866,7 +1866,7 @@ class ArrayFieldViewTest(CustomObjectsTestCase, TestCase):
         self.assertFalse(form.fields["array_max_length"].disabled)
 
 
-class ColorFieldViewTest(CustomObjectsTestCase, TestCase):
+class ColorFieldViewTestCase(CustomObjectsTestCase, TestCase):
     """UI behaviour for the color field type."""
 
     @classmethod
@@ -1972,7 +1972,7 @@ class ColorFieldViewTest(CustomObjectsTestCase, TestCase):
         self.assertEqual(self.model.objects.get(name="Imported").shade, "00ff00")
 
 
-class MACAddressFieldViewTest(CustomObjectsTestCase, TestCase):
+class MACAddressFieldViewTestCase(CustomObjectsTestCase, TestCase):
     """UI behaviour for the MAC address field type."""
 
     @classmethod
@@ -2044,7 +2044,7 @@ class MACAddressFieldViewTest(CustomObjectsTestCase, TestCase):
         self.assertContains(response, "Invalid MAC address format")
 
 
-class URLFieldLinkTitleViewTest(CustomObjectsTestCase, TestCase):
+class URLFieldLinkTitleViewTestCase(CustomObjectsTestCase, TestCase):
     """UI form behaviour for the url field type's link-title support."""
 
     @classmethod
@@ -2136,7 +2136,7 @@ class URLFieldLinkTitleViewTest(CustomObjectsTestCase, TestCase):
         self.assertNotContains(response, "Orphan Title")
 
 
-class ValidationRegexViewTest(CustomObjectsTestCase, TestCase):
+class ValidationRegexViewTestCase(CustomObjectsTestCase, TestCase):
     """The standard add/edit form must enforce validation_regex (via the UI form field)."""
 
     @classmethod

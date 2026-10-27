@@ -51,7 +51,7 @@ from netbox_custom_objects.related_tabs.views.combined import (
 from netbox_custom_objects.tests.base import CustomObjectsTestCase
 
 
-class ReferenceQTests(TestCase):
+class ReferenceQTestCase(TestCase):
     """
     ``reference_q()`` builds the correct filter per field kind, and — critically —
     returns an EMPTY Q (which callers must treat as "skip", never as match-all) for
@@ -88,7 +88,7 @@ class ReferenceQTests(TestCase):
         self.assertFalse(q.children)
 
 
-class GetBaseTemplateTests(TestCase):
+class GetBaseTemplateTestCase(TestCase):
     """
     ``_get_base_template()`` must fall back to ``generic/object.html`` for models
     without an ``{app}/{model}.html`` detail template — otherwise the tab template's ``{% extends base_template %}``
@@ -108,7 +108,7 @@ class GetBaseTemplateTests(TestCase):
         self.assertEqual(_get_base_template(instance), 'netbox_custom_objects/customobject.html')
 
 
-class PublicHostModelsTests(TestCase):
+class PublicHostModelsTestCase(TestCase):
     """
     ``_public_host_model_classes()`` is the Variant-B registration set: every
     public model a COT Object/Multi-object field can target, minus this plugin's
@@ -139,7 +139,7 @@ class PublicHostModelsTests(TestCase):
         self.assertTrue(any('uninstalled_plugin.gone' in line for line in logs.output))
 
 
-class RegisterCombinedTabsTests(TestCase):
+class RegisterCombinedTabsTestCase(TestCase):
     """
     ``register_combined_tabs()`` adds one ``custom_objects`` view per model to
     NetBox's process-global view registry, idempotently.
@@ -168,7 +168,7 @@ class RegisterCombinedTabsTests(TestCase):
         self.assertEqual(self._site_tab_names().count('custom_objects'), 1)
 
 
-class RegisterTabsAppInitWarningTests(TestCase):
+class RegisterTabsAppInitWarningTestCase(TestCase):
     """
     ``_register_tabs()`` runs from ``ready()``, before ``apps.ready`` is set, and
     queries ObjectType; it must suppress Django's RuntimeWarning about database
@@ -209,7 +209,7 @@ class RegisterTabsAppInitWarningTests(TestCase):
         self.assertIsNone(self.app_config._register_tabs_error)
 
 
-class BadgeGateTests(CustomObjectsTestCase, TestCase):
+class BadgeGateTestCase(CustomObjectsTestCase, TestCase):
     """
     ``_count_linked_custom_objects`` is both the tab badge and the display gate.
     It must return None (so hide_if_empty hides the tab, and the cheap .exists()
@@ -259,7 +259,7 @@ class _FieldLabel(_Label):
         self.custom_object_type = _Label(cot_label)
 
 
-class FilterLinkedObjectsTests(TestCase):
+class FilterLinkedObjectsTestCase(TestCase):
     """``_filter_linked_objects`` is a case-insensitive substring match across the
     object name, the custom object type, and the field label."""
 
@@ -286,7 +286,7 @@ class FilterLinkedObjectsTests(TestCase):
         self.assertEqual(_filter_linked_objects(self.linked, 'zzz'), [])
 
 
-class GetFieldValueTests(TestCase):
+class GetFieldValueTestCase(TestCase):
     """``_get_field_value`` reads OBJECT / MULTIOBJECT values for the Value column,
     fetching one extra MULTIOBJECT item so the template can flag truncation without
     a COUNT query."""
@@ -330,7 +330,7 @@ class GetFieldValueTests(TestCase):
         self.assertEqual(_get_field_value(SimpleNamespace(), field), [])
 
 
-class SortHeaderTests(TestCase):
+class SortHeaderTestCase(TestCase):
     """``_sort_header`` builds native-style sortable headers off a single ``?sort=``
     param (a ``-`` prefix means descending)."""
 
@@ -359,7 +359,7 @@ class SortHeaderTests(TestCase):
         self.assertEqual(h['clear_url'], '?q=x')
 
 
-class CombinedTabQueryTests(CustomObjectsTestCase, TestCase):
+class CombinedTabQueryTestCase(CustomObjectsTestCase, TestCase):
     """DB-backed coverage for reference resolution, per-row permission enforcement,
     and badge summation — the parts of the tab a mocked unit test can't reach."""
 

@@ -19,7 +19,7 @@ from netbox_custom_objects.tests.base import (
 )
 
 
-class PolymorphicFieldUITest(CustomObjectsTestCase, TestCase):
+class PolymorphicFieldUITestCase(CustomObjectsTestCase, TestCase):
     """
     UI tests for polymorphic fields on the custom object edit form.
     """

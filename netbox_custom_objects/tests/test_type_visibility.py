@@ -93,7 +93,7 @@ class APIRootTestCase(TypeVisibilityTestCase):
         self.assertNotIn("secret-projects", root)
 
 
-class SchemaPreviewTestCase(TypeVisibilityTestCase):
+class SchemaPreviewVisibilityTestCase(TypeVisibilityTestCase):
 
     def _preview(self, slug):
         doc = {"schema_version": "1", "types": [{"name": slug.replace("-", "_"), "slug": slug}]}

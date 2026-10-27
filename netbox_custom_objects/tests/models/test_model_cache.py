@@ -360,7 +360,7 @@ class ModelRegistryTestCase(CustomObjectsTestCase, TestCase):
         self.assertFalse(poly_through.objects.filter(source_id=source.pk).exists())
 
 
-class PolymorphicThroughModelRegistrationTest(CustomObjectsTestCase, TestCase):
+class PolymorphicThroughModelRegistrationTestCase(CustomObjectsTestCase, TestCase):
     """Verify the through model is re-registered on model regeneration (simulates restart)."""
 
     def setUp(self):

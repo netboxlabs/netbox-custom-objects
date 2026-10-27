@@ -22,7 +22,7 @@ from netbox_custom_objects.tests.base import (
 )
 
 
-class PolymorphicFieldAPITest(CustomObjectsTestCase, TestCase):
+class PolymorphicFieldAPITestCase(CustomObjectsTestCase, TestCase):
     """
     API tests for polymorphic Object and MultiObject fields.
     """

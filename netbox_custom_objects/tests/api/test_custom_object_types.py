@@ -16,7 +16,7 @@ from core.models import ObjectType
 from users.models import ObjectPermission
 
 
-class CustomObjectTypeAPITest(CustomObjectsTestCase, TestCase):
+class CustomObjectTypeAPITestCase(CustomObjectsTestCase, TestCase):
     """
     Test CustomObjectType API endpoint validation.
     """
@@ -201,7 +201,7 @@ class CustomObjectTypeAPITest(CustomObjectsTestCase, TestCase):
         self.assertEqual(cot.display_expression, '{{ name }}')
 
 
-class CustomObjectTypeAndFieldViewSetPermissionTest(CustomObjectsTestCase, TestCase):
+class CustomObjectTypeAndFieldViewSetPermissionTestCase(CustomObjectsTestCase, TestCase):
     """CustomObjectTypeViewSet/CustomObjectTypeFieldViewSet must enforce object-level permissions on LIST."""
 
     def setUp(self):
@@ -220,7 +220,7 @@ class CustomObjectTypeAndFieldViewSetPermissionTest(CustomObjectsTestCase, TestC
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
 
-class CustomObjectTypeAndFieldFilteringBulkAPITest(CustomObjectsTestCase, TestCase):
+class CustomObjectTypeAndFieldFilteringBulkAPITestCase(CustomObjectsTestCase, TestCase):
     """
     List filters on the type and field endpoints must narrow the result set, and bulk
     writes must touch only the listed ids. pynetbox's ``filter(...).update()`` and

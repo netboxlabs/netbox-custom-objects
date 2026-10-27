@@ -17,7 +17,7 @@ from netbox_custom_objects.tests.base import CustomObjectsTestCase
 # Referenced-object deletion
 # ---------------------------------------------------------------------------
 
-class ReferencedObjectDeletionTest(CustomObjectsTestCase, TestCase):
+class ReferencedObjectDeletionTestCase(CustomObjectsTestCase, TestCase):
     """
     Tests for the on_delete behaviour when a referenced object (e.g. a Site) or
     the CustomObjectType itself is deleted.
@@ -286,7 +286,7 @@ class ReferencedObjectDeletionTest(CustomObjectsTestCase, TestCase):
 # Cycle-detection: multi-hop polymorphic cycles
 # ---------------------------------------------------------------------------
 
-class PolymorphicCycleDetectionTest(CustomObjectsTestCase, TestCase):
+class PolymorphicCycleDetectionTestCase(CustomObjectsTestCase, TestCase):
     """
     Verifies that _has_circular_reference detects cycles that pass entirely
     through polymorphic legs.
@@ -402,7 +402,7 @@ class PolymorphicCycleDetectionTest(CustomObjectsTestCase, TestCase):
 # Polymorphic reverse descriptor tests
 # ---------------------------------------------------------------------------
 
-class PolymorphicReverseDescriptorTest(CustomObjectsTestCase, TestCase):
+class PolymorphicReverseDescriptorTestCase(CustomObjectsTestCase, TestCase):
     """Verify that polymorphic GFK and M2M fields with a related_name expose a working
     reverse accessor on target model instances."""
 
