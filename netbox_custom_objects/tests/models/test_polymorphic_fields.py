@@ -209,7 +209,6 @@ class ReferencedObjectDeletionTestCase(CustomObjectsTestCase, TestCase):
         Deleting a CustomObjectType drops its DB table, drops polymorphic through
         tables, and removes the model from Django's app registry.
         """
-
         main_table = self.cot.get_database_table_name()
         through_table = self.m2m_field.through_table_name
         through_model_name = self.m2m_field.through_model_name
@@ -257,7 +256,6 @@ class ReferencedObjectDeletionTestCase(CustomObjectsTestCase, TestCase):
         finds no FK violation and clears the pending event, allowing the ALTER
         TABLE to proceed.
         """
-
         # Create an instance with the MULTIOBJECT populated so the through-table
         # has a row referencing the source.
         obj = self.model.objects.create(name="revert-repro")
@@ -452,7 +450,6 @@ class PolymorphicReverseDescriptorTestCase(CustomObjectsTestCase, TestCase):
 
     def test_gfk_reverse_descriptor_returns_matching_instances(self):
         """site.related_name.all() returns CO instances whose GFK points at that site."""
-
         self._create_gfk_field(related_name="co_gfk_rev")
         model = self.cot.get_model()
 
@@ -575,7 +572,6 @@ class PolymorphicReverseDescriptorTestCase(CustomObjectsTestCase, TestCase):
 
     def test_m2m_reverse_descriptor_returns_matching_instances(self):
         """site.related_name.all() returns CO instances whose M2M includes that site."""
-
         self._create_m2m_field(related_name="co_m2m_rev")
         model = self.cot.get_model()
 
@@ -748,7 +744,6 @@ class PolymorphicReverseDescriptorTestCase(CustomObjectsTestCase, TestCase):
     def test_related_name_colliding_with_target_model_attribute_raises(self):
         """full_clean() must reject a related_name that clashes with a pre-existing attribute
         on the target model class, to prevent silently clobbering it."""
-
         # Use a controlled sentinel so the test is self-contained regardless of prior
         # test state (Site.__dict__ can be dirty after earlier tests run _wire).
         attr_name = "_co_collision_test_attr"
@@ -803,7 +798,6 @@ class PolymorphicReverseDescriptorTestCase(CustomObjectsTestCase, TestCase):
         """full_clean() must reject a related_name that shadows an inherited method on the
         target model (e.g. 'save'), not just directly-defined attributes.
         Regression for the __dict__.get vs getattr gap reported by Arthur."""
-
         field = CustomObjectTypeField(
             custom_object_type=self.cot,
             name="save_collision_obj",
@@ -885,7 +879,6 @@ class PolymorphicReverseDescriptorTestCase(CustomObjectsTestCase, TestCase):
     def test_source_model_deleted_returns_empty_queryset(self):
         """Accessing .all() on a stale reverse descriptor returns an empty queryset
         rather than raising DoesNotExist when the source COT has been deleted."""
-
         site = Site.objects.create(name="Stale Test Site", slug="stale-test-site")
         nonexistent_cot_pk = 999999
         field = self._create_gfk_field(related_name="co_stale_ref")
@@ -897,7 +890,6 @@ class PolymorphicReverseDescriptorTestCase(CustomObjectsTestCase, TestCase):
 
     def test_source_model_deleted_multiobject_returns_empty_queryset(self):
         """Same as above for the M2M (MultiObject) reverse manager."""
-
         site = Site.objects.create(name="Stale M2M Site", slug="stale-m2m-site")
         nonexistent_cot_pk = 999999
         manager = PolymorphicMultiObjectReverseManager(site, nonexistent_cot_pk, "NonExistentThrough")
@@ -1001,7 +993,6 @@ class PolymorphicReverseDescriptorTestCase(CustomObjectsTestCase, TestCase):
     def test_cross_type_related_name_collision_poly_vs_nonpoly_raises(self):
         """full_clean() must reject a polymorphic field whose related_name collides
         with a non-polymorphic field on the same target type."""
-
         # Create a non-polymorphic Object field with related_name on Site.
         CustomObjectTypeField.objects.create(
             custom_object_type=self.cot,
@@ -1037,7 +1028,6 @@ class PolymorphicReverseDescriptorTestCase(CustomObjectsTestCase, TestCase):
     def test_cross_type_related_name_collision_nonpoly_vs_poly_raises(self):
         """full_clean() must reject a non-polymorphic field whose related_name collides
         with a polymorphic field on the same target type."""
-
         # Create a polymorphic field on a second COT first.
         cot2 = CustomObjectType.objects.create(
             name="CrossTypeTest2", slug="cross-type-test-2",
@@ -1072,7 +1062,6 @@ class PolymorphicReverseDescriptorTestCase(CustomObjectsTestCase, TestCase):
     def test_unwire_does_not_remove_descriptor_owned_by_different_field(self):
         """Deleting a field that was blocked from wiring must not remove the descriptor
         that a different, still-active field owns at the same related_name."""
-
         # COT B wires co_shared_ref onto Site first.
         cot_b = CustomObjectType.objects.create(
             name="UnwireTestB", slug="unwire-test-b",

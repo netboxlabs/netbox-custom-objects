@@ -364,7 +364,6 @@ class PolymorphicFieldAPITestCase(CustomObjectsTestCase, TestCase):
     def test_custom_validator_sees_gfk_value_on_api_create(self):
         """A CUSTOM_VALIDATORS validate() call during API create must see the
         submitted polymorphic GFK value, not None."""
-
         _grant_perm(self.user, "add", self.model, "co-add-validator")
         seen = {}
 
@@ -387,7 +386,6 @@ class PolymorphicFieldAPITestCase(CustomObjectsTestCase, TestCase):
     def test_custom_validator_sees_updated_gfk_value_on_api_update(self):
         """A CUSTOM_VALIDATORS validate() call during an API PATCH that changes the
         polymorphic GFK value must see the new value, not the pre-update one."""
-
         _grant_perm(self.user, "change", self.model, "co-change-validator")
         obj = self.model.objects.create(name="validator-api-update-obj")
         obj.poly_obj = self.site
@@ -412,7 +410,6 @@ class PolymorphicFieldAPITestCase(CustomObjectsTestCase, TestCase):
         """PATCHing poly_obj to null must clear it on the instance validate() runs
         against, and the None restore after validate() must still round-trip
         correctly into update()."""
-
         _grant_perm(self.user, "change", self.model, "co-change-validator-null")
         obj = self.model.objects.create(name="validator-api-clear-obj")
         obj.poly_obj = self.site

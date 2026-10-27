@@ -87,7 +87,7 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
         )
 
         # get_model() and the through model's "source" FK must agree on which
-        # class is canonical -- a mismatch is stale-model staleness.
+        # class is canonical -- a mismatch means a stale model class was used.
         final_model = CustomObjectType.objects.get(pk=cot.pk).get_model()
         through_model = apps.get_model(APP_LABEL, field.through_model_name)
         source_field = through_model._meta.get_field('source')
@@ -400,7 +400,7 @@ class PolymorphicMultiObjectConcurrencyTestCase(TransactionCleanupMixin, CustomO
         self.assertEqual(set(field.related_object_types.all()), {self_ot, other_ot})
 
         # get_model() and the through model's "source" FK must agree on which class is canonical
-        # -- a mismatch is the stale-model staleness this test guards against.
+        # -- a mismatch means a stale model class was used.
         final_model = CustomObjectType.objects.get(pk=cot.pk).get_model()
         through_model = apps.get_model(APP_LABEL, field.through_model_name)
         source_field = through_model._meta.get_field('source')

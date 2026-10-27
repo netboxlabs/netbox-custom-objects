@@ -386,7 +386,6 @@ class PolymorphicThroughModelRegistrationTestCase(CustomObjectsTestCase, TestCas
 
     def test_through_model_registered_after_get_model(self):
         """After clearing the cache and calling get_model(), the through model is accessible."""
-
         # Simulate restart by clearing cache
         CustomObjectType.clear_model_cache()
 

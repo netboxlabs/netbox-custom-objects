@@ -320,7 +320,6 @@ class PolymorphicFieldUITestCase(CustomObjectsTestCase, TestCase):
         twice — once to get a PK and again to write the GFK attrs — producing a
         spurious UPDATE record immediately after the CREATE.
         """
-
         site_ct = ContentType.objects.get_for_model(Site)
         data = {
             "name": "single-change-obj",
@@ -494,7 +493,6 @@ class PolymorphicFieldUITestCase(CustomObjectsTestCase, TestCase):
     def test_custom_validator_sees_gfk_value_on_create(self):
         """CUSTOM_VALIDATORS must see the submitted GFK value during form-based
         create, not None."""
-
         seen = {}
 
         class _CaptureValidator(CustomValidator):
@@ -516,7 +514,6 @@ class PolymorphicFieldUITestCase(CustomObjectsTestCase, TestCase):
     def test_custom_validator_sees_updated_gfk_value_on_edit(self):
         """Editing an object and changing its polymorphic GFK value must be visible
         to CUSTOM_VALIDATORS during that same request, not the pre-edit value."""
-
         obj = self.model.objects.create(name="validator-edit-obj")
         obj.poly_obj = self.site1
         obj.save()
