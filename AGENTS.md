@@ -178,7 +178,7 @@ There is no Justfile/Makefile in this repo; commands are raw. Run them inside a 
 
 | Command | What it does |
 |---|---|
-| `pip install -e '.[dev,test]'` (from this repo) | Install the plugin in editable mode with dev + test extras |
+| `pip install -e '.[dev,test,docs]'` (from this repo) | Install the plugin in editable mode with the dev, test and docs extras (ruff, pre-commit, coverage, mkdocs, zensical) |
 | `python netbox/manage.py test netbox_custom_objects.tests --keepdb` | Run the full test suite |
 | `python netbox/manage.py test netbox_custom_objects.tests.models.test_cot --keepdb` | Run a single test module |
 | `python netbox/manage.py test netbox_custom_objects.tests.models.test_cot.CustomObjectTypeTestCase.test_name --keepdb` | Run a single test case |
@@ -207,7 +207,7 @@ NetBox plugins must run inside a NetBox checkout. The reproducible setup mirrors
    ```
 
 3. Install NetBox's requirements: `cd ../netbox && pip install -r requirements.txt`
-4. Install this plugin in editable mode: `pip install -e '.[dev,test]'`
+4. Install this plugin in editable mode: `pip install -e '.[dev,test,docs]'`
 5. Provision PostgreSQL (`netbox` / `netbox` / `netbox`) and Redis on localhost (default ports)
 6. Run migrations and start the dev server
 

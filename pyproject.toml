@@ -65,6 +65,9 @@ Changelog = "https://github.com/netboxlabs/netbox-custom-objects/releases"
 # Pinned for reproducible CI; items 4 and 5 may extend each group.
 dev = [
     "build==1.2.2",
+    "pre-commit==4.7.0",
+    # Same version as the ruff-pre-commit hook in .pre-commit-config.yaml.
+    "ruff==0.15.14",
     "twine==6.1.0",
 ]
 test = [
