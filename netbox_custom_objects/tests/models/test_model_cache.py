@@ -6,16 +6,17 @@ from unittest import mock
 from unittest.mock import patch
 
 from django.apps import apps
-from django.apps import apps as django_apps
 from django.db import connection, transaction
 from django.test import TestCase
 
+import netbox_custom_objects as nco_pkg
 from core.models import ObjectType
 from dcim.models import Site
 from netbox_custom_objects.choices import ObjectFieldOnDeleteChoices
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
 from netbox_custom_objects.tests.base import CustomObjectsTestCase
+from utilities.testing import create_test_user
 
 
 class ModelCacheInvalidationTestCase(CustomObjectsTestCase, TestCase):
@@ -321,7 +322,7 @@ class ModelRegistryTestCase(CustomObjectsTestCase, TestCase):
         model_source = cot_source.get_model()
         cot_target.refresh_from_db()
         model_target = cot_target.get_model()
-        main_poly_through = django_apps.get_model(APP_LABEL, poly_field.through_model_name)
+        main_poly_through = apps.get_model(APP_LABEL, poly_field.through_model_name)
 
         self.addCleanup(CustomObjectType.clear_model_cache)
         with mock.patch.object(CustomObjectType, '_active_branch_id', return_value=-1):
@@ -346,7 +347,7 @@ class ModelRegistryTestCase(CustomObjectsTestCase, TestCase):
         refs_through = model_source._meta.get_field('refs').remote_field.through
         self.assertIs(refs_through._meta.get_field('source').remote_field.model, model_source)
         self.assertIs(refs_through._meta.get_field('target').remote_field.model, model_target)
-        poly_through = django_apps.get_model(APP_LABEL, poly_field.through_model_name)
+        poly_through = apps.get_model(APP_LABEL, poly_field.through_model_name)
         self.assertIs(poly_through, main_poly_through)
         self.assertIs(poly_through._meta.get_field('source').remote_field.model, model_source)
 
@@ -365,7 +366,6 @@ class PolymorphicThroughModelRegistrationTestCase(CustomObjectsTestCase, TestCas
 
     def setUp(self):
         super().setUp()
-        from utilities.testing import create_test_user
         self.user = create_test_user("poly-reg-user")
         self.client.force_login(self.user)
 
@@ -386,8 +386,6 @@ class PolymorphicThroughModelRegistrationTestCase(CustomObjectsTestCase, TestCas
 
     def test_through_model_registered_after_get_model(self):
         """After clearing the cache and calling get_model(), the through model is accessible."""
-        from django.apps import apps as django_apps
-        from netbox_custom_objects.constants import APP_LABEL
 
         # Simulate restart by clearing cache
         CustomObjectType.clear_model_cache()
@@ -398,7 +396,7 @@ class PolymorphicThroughModelRegistrationTestCase(CustomObjectsTestCase, TestCas
         # The through model must be findable
         through_name = self.m2m_field.through_model_name
         try:
-            through = django_apps.get_model(APP_LABEL, through_name)
+            through = apps.get_model(APP_LABEL, through_name)
         except LookupError:
             self.fail(
                 f"Through model '{through_name}' not in app registry after get_model()."
@@ -570,12 +568,6 @@ class PolymorphicReverseDescriptorRecursionTestCase(CustomObjectsTestCase, TestC
     reverse descriptor raised RecursionError."""
 
     def test_get_model_with_polymorphic_related_name_does_not_recurse(self):
-        from unittest import mock
-
-        from django.apps import apps as django_apps
-
-        import netbox_custom_objects as nco_pkg
-
         site_ot = ObjectType.objects.get(app_label="dcim", model="site")
         prefix_ot = ObjectType.objects.get(app_label="ipam", model="prefix")
 
@@ -598,12 +590,12 @@ class PolymorphicReverseDescriptorRecursionTestCase(CustomObjectsTestCase, TestC
         # get_model() -> _after_model_generation() -> related_object_types.all()
         # hits the "first access" path that triggers apps.get_models().
         cot.clear_model_cache(cot.id)
-        django_apps.clear_cache()
+        apps.clear_cache()
 
         # should_skip_dynamic_model_creation() disables get_models()'s
         # CustomObjectType loop under `manage.py test`; bypass it so this test
         # exercises the real vulnerable code path.
-        app_config = django_apps.get_app_config('netbox_custom_objects')
+        app_config = apps.get_app_config('netbox_custom_objects')
         with (
             mock.patch.object(nco_pkg, '_app_ready', True),
             mock.patch.object(app_config, 'should_skip_dynamic_model_creation', return_value=False),
@@ -615,10 +607,10 @@ class PolymorphicReverseDescriptorRecursionTestCase(CustomObjectsTestCase, TestC
         # a nested get_models() call triggered mid-generation (as above) can
         # leave get_model()'s return value out of sync with what's actually
         # registered in the app registry.
-        registered_model = django_apps.get_model(APP_LABEL, model.__name__)
+        registered_model = apps.get_model(APP_LABEL, model.__name__)
         self.assertIn(
             registered_model,
-            django_apps.get_models(),
+            apps.get_models(),
             "Generated model should be returned by apps.get_models().",
         )
         self.assertTrue(
@@ -633,12 +625,6 @@ class GetModelCacheRegistryConsistencyTestCase(CustomObjectsTestCase, TestCase):
     _model_cache and apps.all_models pointing at two different classes."""
 
     def test_get_model_registers_the_same_class_it_returns_and_caches(self):
-        from unittest import mock
-
-        from django.apps import apps as django_apps
-
-        import netbox_custom_objects as nco_pkg
-
         site_ot = ObjectType.objects.get(app_label="dcim", model="site")
         prefix_ot = ObjectType.objects.get(app_label="ipam", model="prefix")
 
@@ -659,9 +645,9 @@ class GetModelCacheRegistryConsistencyTestCase(CustomObjectsTestCase, TestCase):
 
         # Same setup as the sibling recursion test, to force the re-entrant path.
         cot.clear_model_cache(cot.id)
-        django_apps.clear_cache()
+        apps.clear_cache()
 
-        app_config = django_apps.get_app_config('netbox_custom_objects')
+        app_config = apps.get_app_config('netbox_custom_objects')
         with (
             mock.patch.object(nco_pkg, '_app_ready', True),
             mock.patch.object(app_config, 'should_skip_dynamic_model_creation', return_value=False),
@@ -670,7 +656,7 @@ class GetModelCacheRegistryConsistencyTestCase(CustomObjectsTestCase, TestCase):
         self.assertFalse(nco_pkg._generating_models.get())
 
         cached_model = CustomObjectType.get_cached_model(cot.id)
-        registered_model = django_apps.get_model(APP_LABEL, model.__name__)
+        registered_model = apps.get_model(APP_LABEL, model.__name__)
 
         # Must be the exact same class object, not just an equal one.
         self.assertIs(cached_model, model, "get_cached_model() must return the same class get_model() returned")
@@ -681,6 +667,6 @@ class GetModelCacheRegistryConsistencyTestCase(CustomObjectsTestCase, TestCase):
         )
         self.assertIn(
             registered_model,
-            django_apps.get_models(),
+            apps.get_models(),
             "Generated model should be returned by apps.get_models().",
         )

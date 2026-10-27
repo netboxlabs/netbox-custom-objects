@@ -3,13 +3,16 @@ Polymorphic object and multi-object fields in the UI: the edit, bulk edit, detai
 delete pages and their forms.
 """
 
+from django.contrib.contenttypes.models import ContentType
 from django.test import TestCase
 from django.urls import reverse
 
-from core.models import ObjectType
+from core.models import ObjectChange, ObjectType
 from dcim.models import Site
+from extras.validators import CustomValidator
 from ipam.models import Prefix
 from ipam.choices import PrefixStatusChoices
+from utilities.testing import create_test_user
 
 from netbox_custom_objects.constants import APP_LABEL
 from netbox_custom_objects.models import CustomObjectType, CustomObjectTypeField
@@ -26,7 +29,6 @@ class PolymorphicFieldUITestCase(CustomObjectsTestCase, TestCase):
 
     def setUp(self):
         super().setUp()
-        from utilities.testing import create_test_user
         self.user = create_test_user("poly-ui-user")
         self.client.force_login(self.user)
 
@@ -216,7 +218,6 @@ class PolymorphicFieldUITestCase(CustomObjectsTestCase, TestCase):
 
     def test_edit_form_preselects_existing_gfk_value(self):
         """For an existing object, the ct and obj sub-fields are pre-populated."""
-        from django.contrib.contenttypes.models import ContentType
         site_ct = ContentType.objects.get_for_model(Site)
         obj = self.model.objects.create(name="prefill-test")
         obj.poly_obj = self.site1
@@ -231,7 +232,6 @@ class PolymorphicFieldUITestCase(CustomObjectsTestCase, TestCase):
 
     def test_submit_edit_form_sets_gfk_to_site(self):
         """POST the edit form with a type+object selection saves the GFK to that Site."""
-        from django.contrib.contenttypes.models import ContentType
         site_ct = ContentType.objects.get_for_model(Site)
         obj = self.model.objects.create(name="submit-gfk-obj")
         data = {
@@ -320,8 +320,6 @@ class PolymorphicFieldUITestCase(CustomObjectsTestCase, TestCase):
         twice — once to get a PK and again to write the GFK attrs — producing a
         spurious UPDATE record immediately after the CREATE.
         """
-        from django.contrib.contenttypes.models import ContentType
-        from core.models import ObjectChange
 
         site_ct = ContentType.objects.get_for_model(Site)
         data = {
@@ -381,7 +379,6 @@ class PolymorphicFieldUITestCase(CustomObjectsTestCase, TestCase):
 
     def test_bulk_edit_applies_gfk_to_all_selected_objects(self):
         """Bulk edit sets the GFK field on all selected objects."""
-        from django.contrib.contenttypes.models import ContentType
         site_ct = ContentType.objects.get_for_model(Site)
         obj1 = self.model.objects.create(name="bulk-gfk-1")
         obj2 = self.model.objects.create(name="bulk-gfk-2")
@@ -497,8 +494,6 @@ class PolymorphicFieldUITestCase(CustomObjectsTestCase, TestCase):
     def test_custom_validator_sees_gfk_value_on_create(self):
         """CUSTOM_VALIDATORS must see the submitted GFK value during form-based
         create, not None."""
-        from django.contrib.contenttypes.models import ContentType
-        from extras.validators import CustomValidator
 
         seen = {}
 
@@ -521,8 +516,6 @@ class PolymorphicFieldUITestCase(CustomObjectsTestCase, TestCase):
     def test_custom_validator_sees_updated_gfk_value_on_edit(self):
         """Editing an object and changing its polymorphic GFK value must be visible
         to CUSTOM_VALIDATORS during that same request, not the pre-edit value."""
-        from django.contrib.contenttypes.models import ContentType
-        from extras.validators import CustomValidator
 
         obj = self.model.objects.create(name="validator-edit-obj")
         obj.poly_obj = self.site1
