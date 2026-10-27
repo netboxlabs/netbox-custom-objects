@@ -583,6 +583,16 @@ class CustomObjectsTestCase:
         field.related_object_types.set(rot_list)
         return field
 
+    def _db_columns(self, model):
+        """Return the set of actual DB column names for a generated model's table."""
+        with connection.cursor() as cursor:
+            return {
+                col.name
+                for col in connection.introspection.get_table_description(
+                    cursor, model._meta.db_table
+                )
+            }
+
     def create_simple_custom_object_type(self, **kwargs):
         """Create a simple custom object type with basic fields."""
         custom_object_type = CustomObjectsTestCase.create_custom_object_type(**kwargs)

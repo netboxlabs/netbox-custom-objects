@@ -6,7 +6,7 @@ from unittest import mock
 from unittest.mock import patch
 
 from django.apps import apps
-from django.db import connection, transaction
+from django.db import transaction
 from django.test import TestCase
 
 import netbox_custom_objects as nco_pkg
@@ -407,16 +407,6 @@ class PolymorphicThroughModelRegistrationTestCase(CustomObjectsTestCase, TestCas
 class FailedFieldChangeTestCase(CustomObjectsTestCase, TestCase):
     """A field change that fails, or whose transaction rolls back, leaves the cached and registered
     models matching the table."""
-
-    def _db_columns(self, model):
-        """Return the set of actual DB column names for a generated model's table."""
-        with connection.cursor() as cursor:
-            return {
-                col.name
-                for col in connection.introspection.get_table_description(
-                    cursor, model._meta.db_table
-                )
-            }
 
     def _assert_model_matches_db(self, cot):
         cot.refresh_from_db()

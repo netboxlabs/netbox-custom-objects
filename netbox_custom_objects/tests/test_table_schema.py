@@ -68,16 +68,6 @@ class SchemaOperationsTestCase(CustomObjectsTestCase, TestCase):
     # editor manages both on rename and delete.
     # ------------------------------------------------------------------
 
-    def _db_columns(self, model):
-        """Return the set of actual DB column names for a generated model's table."""
-        with connection.cursor() as cursor:
-            return {
-                col.name
-                for col in connection.introspection.get_table_description(
-                    cursor, model._meta.db_table
-                )
-            }
-
     def test_coordinates_field_rename_renames_both_columns(self):
         """Renaming a coordinates field renames both backing DB columns."""
         cot = self.create_custom_object_type(name='coordrename', slug='coord-rename')
@@ -190,15 +180,6 @@ class OwnerFieldNameCollisionTestCase(CustomObjectsTestCase, TestCase):
     """A user field named 'owner' shadows CustomObject's own OwnerMixin.owner field.
     Renaming or deleting it must not crash on the unmasked mixin field's missing column.
     """
-
-    def _db_columns(self, model):
-        with connection.cursor() as cursor:
-            return {
-                col.name
-                for col in connection.introspection.get_table_description(
-                    cursor, model._meta.db_table
-                )
-            }
 
     def _fks(self, model, column):
         """(target table, ON DELETE action code) of each FK on *column*."""
