@@ -56,7 +56,7 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/netboxlabs/netbox-custom-objects"
-Documentation = "https://netboxlabs.github.io/netbox-custom-objects/"
+Documentation = "https://netboxlabs.com/docs/extensions/custom-objects/"
 Source = "https://github.com/netboxlabs/netbox-custom-objects"
 Issues = "https://github.com/netboxlabs/netbox-custom-objects/issues"
 Changelog = "https://github.com/netboxlabs/netbox-custom-objects/releases"
