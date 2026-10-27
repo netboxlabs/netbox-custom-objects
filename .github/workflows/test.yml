@@ -67,7 +67,7 @@ jobs:
         run: pip install '.[docs]'
       - name: Build in-app model documentation
         run: |
-          mkdocs build -f mkdocs.models.yml
+          zensical build -s -f mkdocs.models.yml
           for page in customobjecttype customobjecttypefield customobjecttypeconstraint; do
             test -f netbox_custom_objects/static/docs/models/netbox_custom_objects/$page/index.html
           done
