@@ -25,14 +25,17 @@
 # Plugin-specific legs (on top of the scaffold matrix):
 #   - NetBox `feature`, so the upcoming NetBox release is covered too.
 #   - `main` with netbox-branching installed: it changes model routing and
-#     wires extra hooks, and some tests run only when it's installed.
+#     wires extra hooks, and some tests run only when it's installed. It is
+#     split into two jobs, so neither comes near the timeout: the tests
+#     tagged `branching` (slow TransactionTestCases that provision branches)
+#     and the rest of the suite.
 
 name: Test
 
 "on":
   pull_request:
   push:
-    branches: [main]
+    branches: [main, feature]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -72,7 +75,7 @@ jobs:
   test:
     name: >-
       py${{ matrix.python-version }} / netbox-${{ matrix.netbox-ref }}${{
-      matrix.branching && ' (branching)' || '' }}${{
+      matrix.branching && format(' (branching, {0})', matrix.shard) || '' }}${{
       matrix.coverage && ' (coverage)' || '' }}
     needs: lint
     runs-on: ubuntu-latest
@@ -106,6 +109,13 @@ jobs:
           - python-version: '3.12'
             netbox-ref: 'main'
             branching: true
+            shard: 'branching tests'
+            test-args: '--tag branching'
+          - python-version: '3.12'
+            netbox-ref: 'main'
+            branching: true
+            shard: 'other tests'
+            test-args: '--exclude-tag branching'
     services:
       redis:
         image: redis
@@ -180,6 +190,7 @@ jobs:
         run: >-
           python netbox/manage.py test
           netbox_custom_objects.tests
+          ${{ matrix.test-args }}
 
       - name: Run tests with coverage
         if: ${{ matrix.coverage }}

@@ -17,7 +17,7 @@ import uuid
 
 from django.contrib.auth import get_user_model
 from django.db import connections
-from django.test import RequestFactory, TransactionTestCase
+from django.test import RequestFactory, TransactionTestCase, tag
 from django.urls import reverse
 
 from netbox_custom_objects.tests.base import (
@@ -99,6 +99,7 @@ def _close_branch_connections():
             )
 
 
+@tag('branching')
 class BranchingTestBase(TransactionCleanupMixin):
     """
     Common per-test lifecycle for branching-aware test classes.
@@ -111,6 +112,9 @@ class BranchingTestBase(TransactionCleanupMixin):
     not via this mixin) because branch schemas live in separate PostgreSQL
     schemas backed by distinct DB connections that can't be rolled back
     inside a single SAVEPOINT-based transaction.
+
+    Tagged ``branching`` (subclasses inherit the tag), so CI can run these slow
+    tests as a job of their own with ``--tag branching``.
     """
 
     def setUp(self):

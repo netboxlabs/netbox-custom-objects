@@ -5,7 +5,7 @@ Applying a schema document enforces object-level permissions, as the UI and REST
 import unittest
 from unittest import mock
 
-from django.test import TransactionTestCase
+from django.test import TransactionTestCase, tag
 from rest_framework import status
 
 from core.models import ObjectType
@@ -219,6 +219,7 @@ class SchemaApplyConstraintPermissionTestCase(_SchemaAPIBase):
         self.assertTrue(self.cot.constraints.filter(name='code_serial').exists())
 
 
+@tag('branching')
 @unittest.skipUnless(HAS_BRANCHING, 'netbox-branching is not installed')
 class SchemaApplyBranchTestCase(TransactionCleanupMixin, _SchemaAPIMixin, TransactionTestCase):
     """An apply inside a branch changes only the branch, and a rejected one not even that."""
