@@ -22,6 +22,7 @@ from extras.models import ConfigContext, JournalEntry
 from extras.tables import JournalEntryTable
 from netbox.forms import (
     NetBoxModelBulkEditForm,
+    NetBoxModelForm,
     NetBoxModelImportForm,
 )
 from netbox.forms.mixins import OwnerMixin as OwnerFormMixin
@@ -973,7 +974,7 @@ class CustomObjectEditView(RestrictedObjectMixin, generic.ObjectEditView):
 
         form_class = type(
             f"{model._meta.object_name}Form",
-            (OwnerFormMixin, forms.NetBoxModelForm,),
+            (OwnerFormMixin, NetBoxModelForm,),
             attrs,
         )
 
@@ -1079,7 +1080,7 @@ class CustomObjectEditView(RestrictedObjectMixin, generic.ObjectEditView):
                         )
 
             # Now call the parent __init__ with the modified kwargs
-            forms.NetBoxModelForm.__init__(self, *args, **kwargs)
+            NetBoxModelForm.__init__(self, *args, **kwargs)
 
             # After parent __init__, wire the object picker to the selected type.
             # This mirrors ScopedForm._set_scoped_values() in NetBox core.
@@ -1115,7 +1116,7 @@ class CustomObjectEditView(RestrictedObjectMixin, generic.ObjectEditView):
 
         # Create a custom save method to properly handle M2M fields
         def custom_save(self, commit=True):
-            instance = forms.NetBoxModelForm.save(self, commit=False)
+            instance = NetBoxModelForm.save(self, commit=False)
             is_new = instance.pk is None
 
             if commit:
@@ -1162,7 +1163,7 @@ class CustomObjectEditView(RestrictedObjectMixin, generic.ObjectEditView):
             # Call parent for side effects (custom field processing etc.).
             # CheckLastUpdatedMixin.clean() does not propagate its return value,
             # so the chain returns None; read self.cleaned_data directly instead.
-            forms.NetBoxModelForm.clean(self)
+            NetBoxModelForm.clean(self)
             # Scope-style single-object: require an object when a type is selected.
             for field_name, (ct_sub, obj_sub) in self.custom_object_type_poly_obj_fields.items():
                 ct_val = self.cleaned_data.get(ct_sub)

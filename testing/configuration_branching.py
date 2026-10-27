@@ -17,6 +17,10 @@ DATABASES = DynamicSchemaDict({
         'HOST': 'localhost',
         'PORT': '',
         'CONN_MAX_AGE': 300,
+        # Own test database, so concurrent suites of other projects never collide.
+        'TEST': {
+            'NAME': 'test_netbox_custom_objects',
+        },
     }
 })
 
@@ -45,6 +49,14 @@ REDIS = {
 }
 
 SECRET_KEY = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+API_TOKEN_PEPPERS = {
+    1: 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789',
+}
+
+# NetBox's manage.py makemigrations refuses to run in non-developer setups.
+# This testing config is dev/test only; safe to enable unconditionally.
+DEVELOPER = True
 
 DEBUG_TOOLBAR_CONFIG = {
     "IS_RUNNING_TESTS": False,

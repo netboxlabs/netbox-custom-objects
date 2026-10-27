@@ -1,3 +1,7 @@
+__author__ = 'NetBox Labs'
+__email__ = 'support@netboxlabs.com'
+__version__ = '0.7.1'
+
 import contextvars
 import logging
 import sys
@@ -324,11 +328,12 @@ def _patch_graphql_view():
 # Plugin Configuration
 class CustomObjectsPluginConfig(PluginConfig):
     name = "netbox_custom_objects"
+    label = "netbox_custom_objects"
     verbose_name = "Custom Objects"
     description = "A plugin to manage custom objects in NetBox"
-    version = "0.7.1"
-    author = 'Netbox Labs'
-    author_email = 'support@netboxlabs.com'
+    version = __version__
+    author = __author__
+    author_email = __email__
     base_url = "custom-objects"
     # Remember to update COMPATIBILITY.md when modifying the minimum/maximum supported NetBox versions.
     min_version = "4.5.2"

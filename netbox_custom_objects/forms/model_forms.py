@@ -2,13 +2,11 @@ from django import forms
 from django.utils.translation import gettext_lazy as _
 from extras.choices import CustomFieldTypeChoices
 from extras.forms import CustomFieldForm
-from netbox.forms import (NetBoxModelBulkEditForm, NetBoxModelFilterSetForm,
-                          NetBoxModelForm, NetBoxModelImportForm)
+from netbox.forms import (NetBoxModelForm)
 from netbox.forms.mixins import ChangelogMessageMixin
 from utilities.forms.fields import (CommentField, ContentTypeChoiceField,
                                     ContentTypeMultipleChoiceField,
-                                    DynamicModelChoiceField, JSONField, SlugField, TagFilterField)
-from utilities.forms.constants import BOOLEAN_WITH_BLANK_CHOICES
+                                    DynamicModelChoiceField, JSONField, SlugField)
 from utilities.forms.rendering import FieldSet
 from utilities.forms.utils import get_field_value
 from utilities.object_types import object_type_name
@@ -31,13 +29,9 @@ from netbox_custom_objects.models import (CONSTRAINT_FIELD_TYPES,
                                           CustomObjectTypeField)
 
 __all__ = (
-    "CustomObjectTypeForm",
-    "CustomObjectTypeBulkEditForm",
-    "CustomObjectTypeImportForm",
-    "CustomObjectTypeFilterForm",
-    "CustomObjectTypeFieldForm",
-    "CustomObjectTypeConstraintForm",
-    "CustomObjectType",
+    'CustomObjectTypeConstraintForm',
+    'CustomObjectTypeFieldForm',
+    'CustomObjectTypeForm',
 )
 
 
@@ -95,55 +89,6 @@ class CustomObjectTypeForm(NetBoxModelForm):
             self.fields["config_context_enabled"].help_text = _(
                 "Config context support cannot be changed after creation."
             )
-
-
-class CustomObjectTypeBulkEditForm(NetBoxModelBulkEditForm):
-    description = forms.CharField(
-        label=_("Description"), max_length=200, required=False
-    )
-    comments = CommentField()
-
-    model = CustomObjectType
-    fieldsets = (FieldSet("description"),)
-    nullable_fields = (
-        "description",
-        "comments",
-    )
-
-
-class CustomObjectTypeImportForm(NetBoxModelImportForm):
-
-    class Meta:
-        model = CustomObjectType
-        fields = (
-            "name",
-            "slug",
-            "verbose_name",
-            "verbose_name_plural",
-            "display_expression",
-            "group_name",
-            "description",
-            "comments",
-            "tags",
-        )
-
-
-class CustomObjectTypeFilterForm(NetBoxModelFilterSetForm):
-    model = CustomObjectType
-    fieldsets = (
-        FieldSet("q", "filter_id", "tag"),
-        FieldSet("group_name", "config_context_enabled", name=_("Attributes")),
-    )
-    group_name = forms.CharField(
-        label=_("Group name"),
-        required=False,
-    )
-    config_context_enabled = forms.NullBooleanField(
-        label=_("Config context support"),
-        required=False,
-        widget=forms.Select(choices=BOOLEAN_WITH_BLANK_CHOICES),
-    )
-    tag = TagFilterField(model)
 
 
 class CustomContentTypeChoiceField(ContentTypeChoiceField):

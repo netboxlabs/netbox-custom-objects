@@ -1,5 +1,6 @@
 ---
 name: 🏡 Housekeeping
+type: Task
 description: An internal change pertaining to the codebase itself
 labels: ["app: custom objects", "type: housekeeping"]
 body:
