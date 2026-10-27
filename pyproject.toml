@@ -113,6 +113,8 @@ ignore = [
 skip = "*.po,*.lock,*.svg,*.min.js,*.min.css,docs/_build,site,build,dist,.git"
 # Add comma-separated tokens here when a plugin needs to whitelist false-positives.
 # Leave commented when empty: codespell's pyproject parser rejects ignore-words-list = "".
+# `ot` (an ObjectType) and `fo` (a field object) are local variable names.
+ignore-words-list = "fo,ot"
 count = true
 
 [tool.coverage.run]
@@ -144,7 +146,11 @@ max_line_length = 120
 # H023: entity-encoded characters in templates (intentional in NetBox).
 # H030: meta description tag (NetBox sets at base template).
 # H031: meta keywords tag (NetBox sets at base template).
-ignore = "H006,H013,H023,H030,H031"
+# H021: inline styles; the delete-confirmation modals copy NetBox core's markup.
+# T002: single-quoted tag arguments, matching NetBox core templates and this
+#       project's single-quote Python style.
+# T003: unnamed {% endblock %}; NetBox core does not name them either.
+ignore = "H006,H013,H021,H023,H030,H031,T002,T003"
 
 [tool.ruff]
 exclude = [

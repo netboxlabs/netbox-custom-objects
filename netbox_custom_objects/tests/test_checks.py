@@ -22,7 +22,7 @@ def _run(*, branching_installed=True, netbox_version='4.6.2', branching_version=
 
     ``netbox_version`` / ``branching_version`` may be a version string, or an
     Exception instance/class to simulate the failure paths (a missing
-    ``settings.RELEASE``, an unparseable version, or ``PackageNotFoundError``).
+    ``settings.RELEASE``, an unparsable version, or ``PackageNotFoundError``).
     """
     if isinstance(netbox_version, str):
         release = SimpleNamespace(version=netbox_version)
@@ -80,7 +80,7 @@ class CheckBranchingCompatibilityTestCase(SimpleTestCase):
         errors = _run(netbox_version=AttributeError, branching_version='1.0.3')
         self.assertEqual(_ids(errors), {'netbox_custom_objects.E002'})
 
-    def test_unparseable_netbox_version_skips_netbox_check(self):
+    def test_unparsable_netbox_version_skips_netbox_check(self):
         errors = _run(netbox_version='not-a-version', branching_version='1.0.4')
         self.assertEqual(errors, [])
 

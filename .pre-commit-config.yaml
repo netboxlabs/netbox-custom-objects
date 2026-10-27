@@ -23,7 +23,8 @@ repos:
         args: [--fix=lf]
       - id: name-tests-test
         args: ["--django"]
-        exclude: '(^|/)tests/(?:.+/)?(base|plugin_testing)\.py$'
+        # combined_tab_urls.py is a URLconf the related-tab tests load, not a test module.
+        exclude: '(^|/)tests/(?:.+/)?(base|plugin_testing|combined_tab_urls)\.py$'
       - id: requirements-txt-fixer
       - id: trailing-whitespace
 

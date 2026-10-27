@@ -1466,7 +1466,7 @@ class CustomObjectBulkEditView(BackgroundJobURLKwargsMixin, CustomObjectTableMix
             for attr_name, value in poly_grouping_refs.items():
                 setattr(self, attr_name, value)
             # Wire up the obj picker for each poly obj pair: if a ct value was
-            # submitted (POST data) or pre-selected (HTMX GET initial), enable the
+            # submitted (POST data) or preselected (HTMX GET initial), enable the
             # field and set the correct queryset so Django accepts the value.
             for field_name, (ct_sub, obj_sub) in poly_obj_field_map_ref.items():
                 ct_pk_raw = _get_field_value(self, ct_sub)

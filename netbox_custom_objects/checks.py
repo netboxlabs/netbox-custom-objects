@@ -65,7 +65,7 @@ def check_branching_compatibility(app_configs, **kwargs):
                 )
             )
     except (AttributeError, InvalidVersion):
-        pass  # settings.RELEASE missing/unparseable — other checks surface it
+        pass  # settings.RELEASE missing/unparsable — other checks surface it
 
     try:
         branching_version = Version(_get_branching_version())
@@ -93,7 +93,7 @@ def check_branching_compatibility(app_configs, **kwargs):
             )
         )
     except InvalidVersion:
-        pass  # unparseable version string — skip rather than emit a confusing error
+        pass  # unparsable version string — skip rather than emit a confusing error
 
     return errors
 
