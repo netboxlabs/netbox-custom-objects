@@ -58,7 +58,8 @@ from netbox.tables.columns import BooleanColumn, ColorColumn
 
 from netbox_custom_objects.choices import (ArrayElementTypeChoices, CustomObjectFieldTypeChoices,
                                            ObjectFieldOnDeleteChoices)
-from netbox_custom_objects.constants import APP_LABEL
+from netbox_custom_objects.constants import (APP_LABEL, CHOICE_VALUE_MAX_LENGTH, DECIMAL_MAX_DIGITS,
+                                             DECIMAL_PLACES)
 from netbox_custom_objects.utilities import extract_cot_id_from_model_name, generate_model
 
 logger = logging.getLogger(__name__)
@@ -545,15 +546,15 @@ class DecimalFieldType(FieldType):
         return models.DecimalField(
             null=True,
             blank=not field.required,
-            max_digits=8,
-            decimal_places=2,
+            max_digits=DECIMAL_MAX_DIGITS,
+            decimal_places=DECIMAL_PLACES,
             **field_kwargs
         )
 
     def get_serializer_field(self, field, **kwargs):
         return drf_serializers.DecimalField(
-            max_digits=8,
-            decimal_places=2,
+            max_digits=DECIMAL_MAX_DIGITS,
+            decimal_places=DECIMAL_PLACES,
             required=field.required,
             allow_null=not field.required,
             min_value=field.validation_minimum,
@@ -564,8 +565,8 @@ class DecimalFieldType(FieldType):
         return forms.DecimalField(
             required=field.required,
             initial=field.default,
-            max_digits=12,
-            decimal_places=4,
+            max_digits=DECIMAL_MAX_DIGITS,
+            decimal_places=DECIMAL_PLACES,
             min_value=field.validation_minimum,
             max_value=field.validation_maximum,
         )
@@ -868,7 +869,7 @@ class SelectFieldType(FieldType):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
         return models.CharField(
-            max_length=100,
+            max_length=CHOICE_VALUE_MAX_LENGTH,
             choices=field.choices,
             null=True,
             blank=not field.required,
@@ -948,7 +949,7 @@ class MultiSelectFieldType(FieldType):
         field_kwargs = self._safe_kwargs(**kwargs)
         field_kwargs.update({"default": field.default, "unique": field.unique})
         return ArrayField(
-            base_field=models.CharField(max_length=50, choices=field.choices),
+            base_field=models.CharField(max_length=CHOICE_VALUE_MAX_LENGTH, choices=field.choices),
             null=True,
             blank=not field.required,
             **field_kwargs
@@ -1775,7 +1776,7 @@ class MultiObjectFieldType(FieldType):
                 )
             custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
 
-            model = custom_object_type.get_model(skip_object_fields=True)
+            model = custom_object_type.get_model()
             has_context = bool(getattr(model, '_context_field_ids', []))
         else:
             # This is a regular NetBox model

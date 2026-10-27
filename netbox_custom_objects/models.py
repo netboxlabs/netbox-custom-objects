@@ -43,7 +43,7 @@ from extras.models import ConfigContext, ConfigContextModel, CustomField, Custom
 from extras.models.customfields import SEARCH_TYPES
 from extras.utils import is_taggable, run_validators
 from netbox.config import get_config
-from netbox.models import ChangeLoggedModel, NetBoxModel
+from netbox.models import BaseModel, ChangeLoggedModel, NetBoxModel
 from netbox.models.mixins import OwnerMixin
 from netbox.models.features import (
     BookmarksMixin,
@@ -69,7 +69,6 @@ from jinja2 import Undefined as _JinjaUndefined
 from jinja2 import meta as _jinja_meta
 from jinja2.sandbox import SandboxedEnvironment as _JinjaSandbox
 from utilities.object_types import object_type_name
-from utilities.querysets import RestrictedQuerySet
 from utilities.serialization import deserialize_object as _deserialize_object
 from utilities.string import title
 from dcim.fields import MACAddressField
@@ -326,6 +325,10 @@ def _apply_deferred_co_field(field_instance):
     but the column is ``{name}_id``; TYPE_MULTIOBJECT has no parent-table
     column so it's skipped.  Historical names (rename history) are accepted
     as matches so a renamed field still picks up its pre-rename data.
+
+    Every backing column is replayed (see ``_occupied_columns``): url's
+    ``<name>_title`` and coordinates' ``<name>_latitude``/``<name>_longitude``
+    can each be set independently, so each is matched and applied on its own.
     """
     # No deferred data at all — fast path.
     deferred = _deferred_co_field_data.get()
@@ -342,29 +345,24 @@ def _apply_deferred_co_field(field_instance):
     if field_instance.type == CustomFieldTypeChoices.TYPE_MULTIOBJECT:
         return
 
-    # For TYPE_OBJECT the data key is the field name but the DB column ends with _id.
-    if field_instance.type == CustomFieldTypeChoices.TYPE_OBJECT:
-        col_name = f'{field_instance.name}_id'
-    else:
-        col_name = field_instance.name
-
-    # Candidate data keys: current name + all historical names.  pk may be None
-    # when called before the field row is persisted; in that case we skip the
-    # history lookup and only match by current name.
-    candidate_keys = {field_instance.name}
+    # Candidate field names: current name + all historical names.  pk may be
+    # None when called before the field row is persisted; in that case we skip
+    # the history lookup and only match by current name.
+    names = {field_instance.name}
     if field_instance.pk is not None:
-        candidate_keys.update(_historical_names_for_field(field_instance.pk))
+        names.update(_historical_names_for_field(field_instance.pk))
 
-    # A URL field has a second backing column (<name>_title) whose value must
-    # be replayed too, or it silently reverts to its default empty string —
-    # the URL and title can be set independently, so each is matched and
-    # applied on its own.
-    title_col_name = None
-    title_candidate_keys = set()
-    if field_instance.type == CustomFieldTypeChoices.TYPE_URL:
-        from netbox_custom_objects.field_types import URLFieldType  # noqa: PLC0415
-        title_col_name = URLFieldType.title_field_name(field_instance)
-        title_candidate_keys = {f'{k}_title' for k in candidate_keys}
+    # {db column: candidate data keys}, one entry per backing column.  A data key
+    # is the column name under any of the field's names; the column suffix ("",
+    # "_title", "_latitude", ...) is the same under every name.
+    columns = {}
+    for column in _occupied_columns(field_instance.name, field_instance.type):
+        suffix = column[len(field_instance.name):]
+        # For TYPE_OBJECT the data key is the field name but the DB column ends with _id.
+        if field_instance.type == CustomFieldTypeChoices.TYPE_OBJECT:
+            column = f'{column}_id'
+        columns[column] = {f'{name}{suffix}' for name in names}
+    all_candidate_keys = set().union(*columns.values())
 
     schema_conn = _get_schema_connection()
 
@@ -376,31 +374,25 @@ def _apply_deferred_co_field(field_instance):
     with schema_conn.cursor() as cursor:
         for co_pk, entry in per_table.items():
             data = entry['data']
-            # Distinguish "key absent" from "key present with NULL" — explicit
-            # None is a legitimate write and must reach the column.
-            matched = next((k for k in candidate_keys if k in data), None)
-            title_matched = next((k for k in title_candidate_keys if k in data), None)
-            if matched is None and title_matched is None:
-                continue
-            # table_name / col_name come from validated identifiers
-            # (^[a-z0-9_]+$ on field.name) — safe to interpolate.
-            if matched is not None:
+            for col_name, candidate_keys in columns.items():
+                # Distinguish "key absent" from "key present with NULL" — explicit
+                # None is a legitimate write and must reach the column.
+                matched = next((k for k in candidate_keys if k in data), None)
+                if matched is None:
+                    continue
                 value = data[matched]
                 if array_field is not None:
                     value = array_field.get_db_prep_value(array_field.to_python(value), schema_conn)
+                # table_name / col_name come from validated identifiers
+                # (^[a-z0-9_]+$ on field.name) — safe to interpolate.
                 cursor.execute(
                     f'UPDATE "{table_name}" SET "{col_name}" = %s WHERE id = %s',
                     [value, co_pk],
                 )
-            if title_matched is not None:
-                cursor.execute(
-                    f'UPDATE "{table_name}" SET "{title_col_name}" = %s WHERE id = %s',
-                    [data[title_matched], co_pk],
-                )
             # Pop consumed keys immediately so a mid-loop failure leaves
             # un-applied rows intact for retry but doesn't re-apply
             # rows that already succeeded.
-            for k in candidate_keys | title_candidate_keys:
+            for k in all_candidate_keys:
                 data.pop(k, None)
 
     exhausted = [pk for pk, entry in per_table.items() if not entry['data']]
@@ -433,14 +425,26 @@ def _occupied_columns(name, field_type):
     Single-column types occupy just {name}; multi-column types (coordinates,
     url) occupy more than one -- see MULTI_COLUMN_TYPES. Shared by
     CustomObjectTypeField.clean()'s collision guard (new/renamed fields going
-    forward) and detect_backing_column_collisions() (pre-existing fields at
-    heal time).
+    forward), detect_backing_column_collisions() (pre-existing fields at
+    heal time), _apply_deferred_co_field() (squash replay) and
+    _backing_column_renames() (audit-key rewrite on rename).
     """
     if field_type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
         return {f"{name}_latitude", f"{name}_longitude"}
     if field_type == CustomObjectFieldTypeChoices.TYPE_URL:
         return {name, f"{name}_title"}
     return {name}
+
+
+def _backing_column_renames(field_type, old_name, new_name):
+    """``[(old_column, new_column), ...]`` for renaming a field of *field_type*
+    from *old_name* to *new_name*: one pair per backing column, since a
+    multi-column type (coordinates, url) has no column named ``old_name``
+    itself to rewrite."""
+    return sorted(
+        (old_column, f'{new_name}{old_column[len(old_name):]}')
+        for old_column in _occupied_columns(old_name, field_type)
+    )
 
 
 def detect_backing_column_collisions(cot):
@@ -839,6 +843,127 @@ def _set_with_collision_preference(result, key, value):
     result[key] = value
 
 
+class _NullableUniqueCharsCompatMixin(models.Model):
+    """COMPAT(netbox<4.5.10): ``BaseModel`` only defines ``_coerce_nullable_unique_chars()`` from 4.5.10 on.
+
+    ``_BaseModelCleanMixin.clean()`` calls it on every version; this supplies the
+    method and the ``save()`` hook that 4.5.10+ ``BaseModel`` has built in.
+    """
+
+    class Meta:
+        abstract = True
+
+    def _coerce_nullable_unique_chars(self):
+        # Mirrors BaseModel's 4.5.10+ coercion of blank unique nullable CharFields to NULL.
+        for field in self._meta.concrete_fields:
+            if (
+                isinstance(field, models.CharField)
+                and field.null
+                and field.unique
+                and getattr(self, field.attname, None) == ''
+            ):
+                setattr(self, field.attname, None)
+
+    def save(self, *args, **kwargs):
+        self._coerce_nullable_unique_chars()
+        super().save(*args, **kwargs)
+
+
+_custom_object_compat_bases = (
+    () if hasattr(BaseModel, '_coerce_nullable_unique_chars') else (_NullableUniqueCharsCompatMixin,)
+)
+
+
+class _BaseModelCleanMixin(models.Model):
+    """Stand-in for ``BaseModel.clean()``; must sit directly before ``BaseModel`` in the bases.
+
+    ``BaseModel.clean()`` validates every GenericForeignKey, but it can't honour
+    ``full_clean(exclude=...)`` and it raises AttributeError when the stored content
+    type has no installed model (an uninstalled plugin). Polymorphic Object fields
+    are GFKs, and the UI forms always exclude their backing columns (the pickers are
+    separate ``<name>__ct`` / ``<name>__obj`` form fields; hidden fields have none),
+    so a stale reference would key a ValidationError to a column the form doesn't
+    have and 500 the edit page.
+
+    ``clean()`` therefore skips ``BaseModel.clean()`` and repeats what it does --
+    nullable-unique coercion and GFK validation -- with the exclude list captured
+    by ``full_clean()``. Keep this in step with ``BaseModel.clean()`` upstream.
+
+    Deleting a referenced object leaves the GFK columns pointing at it (there is no
+    DB-level FK), so a saved row can hold a stale reference through no fault of the
+    caller. Only a reference that differs from the saved row is validated; bulk
+    edit, scripts and API PATCH of unrelated fields therefore leave an existing
+    stale reference as it is instead of failing on a column they never touched.
+    """
+
+    class Meta:
+        abstract = True
+
+    def full_clean(self, exclude=None, **kwargs):
+        self._clean_exclude = set(exclude or ())
+        try:
+            super().full_clean(exclude=exclude, **kwargs)
+        finally:
+            self.__dict__.pop('_clean_exclude', None)
+
+    def clean(self):
+        # Skip BaseModel.clean() (see class docstring); the rest of the MRO still runs.
+        super(BaseModel, self).clean()
+        self._coerce_nullable_unique_chars()
+        self._clean_generic_foreign_keys(getattr(self, '_clean_exclude', ()))
+
+    def _clean_generic_foreign_keys(self, exclude):
+        gfk_fields = [
+            field
+            for field in self._meta.private_fields
+            if isinstance(field, GenericForeignKey) and field.ct_field not in exclude and field.fk_field not in exclude
+        ]
+        if not gfk_fields:
+            return
+        stored = self._stored_gfk_values(gfk_fields)
+        errors = {}
+        for field in gfk_fields:
+            ct_id = getattr(self, self._meta.get_field(field.ct_field).attname, None)
+            fk_value = getattr(self, field.fk_field, None)
+            if stored is not None and stored[field.name] == (ct_id, fk_value):
+                continue  # Unchanged since the row was saved; see class docstring.
+            if ct_id is None and fk_value is not None:
+                errors[field.ct_field] = _('This field cannot be null.')
+                continue
+            if fk_value is None and ct_id is not None:
+                errors[field.fk_field] = _('This field cannot be null.')
+                continue
+            if ct_id is None:
+                continue
+            try:
+                model = field.get_content_type(id=ct_id, using=self._state.db).model_class()
+            except ContentType.DoesNotExist:
+                model = None
+            if model is None:
+                errors[field.ct_field] = _('The referenced object type is not installed.')
+                continue
+            # Existence by PK only: for a custom object target, model_class() is main's class, whose
+            # column set may not match the active branch's schema, so selecting its columns can fail.
+            if not model._default_manager.filter(pk=fk_value).exists():
+                errors[field.fk_field] = _('Related object not found using the provided value: {value}.').format(
+                    value=fk_value
+                )
+        if errors:
+            raise ValidationError(errors)
+
+    def _stored_gfk_values(self, gfk_fields):
+        """Return ``{gfk name: (content type ID, object ID)}`` as saved, or ``None`` for an unsaved instance."""
+        if self._state.adding or self.pk is None:
+            return None
+        columns = []
+        for field in gfk_fields:
+            columns += [self._meta.get_field(field.ct_field).attname, field.fk_field]
+        row = type(self)._base_manager.db_manager(self._state.db).filter(pk=self.pk).values_list(*columns).first()
+        if row is None:
+            return None
+        return {field.name: (row[i], row[i + 1]) for i, field in zip(range(0, len(row), 2), gfk_fields)}
+
+
 class CustomObject(
     OwnerMixin,
     BookmarksMixin,
@@ -852,6 +977,9 @@ class CustomObject(
     NotificationsMixin,
     EventRulesMixin,
     TagsMixin,
+    *_custom_object_compat_bases,
+    _BaseModelCleanMixin,
+    BaseModel,
 ):
     """
     Base class for dynamically generated custom object models.
@@ -878,10 +1006,24 @@ class CustomObject(
         _generated_table_model (property): Indicates this is a generated table model
     """
 
-    objects = RestrictedQuerySet.as_manager()
-
     class Meta:
         abstract = True
+
+    def _coerce_nullable_unique_chars(self):
+        """Store blank unique text values as NULL so two blank objects don't collide.
+
+        ``BaseModel`` only coerces CharFields; longtext fields are TextFields, so
+        extend the check to those too.
+        """
+        super()._coerce_nullable_unique_chars()
+        for field in self._meta.concrete_fields:
+            if (
+                isinstance(field, models.TextField)
+                and field.null
+                and field.unique
+                and getattr(self, field.attname, None) == ''
+            ):
+                setattr(self, field.attname, None)
 
     @classmethod
     def resolve_field_aliases(cls, data):
@@ -3120,6 +3262,7 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
         self._original_on_delete_behavior = self.on_delete_behavior
         self._original_array_element_type = self.array_element_type
         self._original_array_tuple_size = self.array_tuple_size
+        self._original_search_weight = self.search_weight
 
     def __str__(self):
         return self.label or self.name.replace("_", " ").capitalize()
@@ -4269,10 +4412,14 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
             with schema_conn.schema_editor() as schema_editor:
                 if self._state.adding:
                     if self.type == CustomObjectFieldTypeChoices.TYPE_COORDINATES:
+                        # Flush pending DEFERRABLE FK trigger events before ALTER TABLE,
+                        # as _schema_add_field does.
+                        schema_editor.execute('SET CONSTRAINTS ALL IMMEDIATE')
                         # Coordinates expand into two concrete columns (latitude/longitude).
                         for column_name, model_field in field_type.get_model_field(self).items():
                             bind_for_ddl(model_field, model, column_name)
                             schema_editor.add_field(model, model_field)
+                        _apply_deferred_co_field(self)
                     elif self.is_polymorphic:
                         if self.type == CustomFieldTypeChoices.TYPE_OBJECT:
                             field_type.add_polymorphic_object_columns(self, model, schema_editor)
@@ -4359,13 +4506,8 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 and not self.is_polymorphic
                 and self._original_name != self.name
             ):
-                _rename_objectchange_field_key(self, self._original_name, self.name)
-                if self.type == CustomObjectFieldTypeChoices.TYPE_URL:
-                    _rename_objectchange_field_key(
-                        self,
-                        field_type.title_field_name(self.original),
-                        field_type.title_field_name(self),
-                    )
+                for old_column, new_column in _backing_column_renames(self.type, self._original_name, self.name):
+                    _rename_objectchange_field_key(self, old_column, new_column)
 
             # FK-constraint decision inside the atomic so a rollback discards it too.
             should_ensure_fk = False
@@ -4449,16 +4591,17 @@ class CustomObjectTypeField(CloningMixin, ExportTemplatesMixin, ChangeLoggedMode
                 _unwire_polymorphic_reverse_descriptors(self, related_name=old_name)
 
         # Reindex all objects of this type if search indexing was affected.
-        # self.original (backed by _original) is only set by from_db; the
-        # `not is_new` branch implies _state.adding is False, which implies
-        # the row came from the DB, so _original is guaranteed to exist.
+        # Compare against the __init__ snapshot: ``_original`` is only set by
+        # from_db(), so an instance created in-process and saved again has none.
         if is_new:
             needs_reindex = self.search_weight > 0
         else:
-            needs_reindex = self.search_weight != self.original.search_weight
+            needs_reindex = self.search_weight != self._original_search_weight
         if needs_reindex:
             _cot_id = self.custom_object_type_id
             transaction.on_commit(lambda: ReindexCustomObjectTypeJob.enqueue(cot_id=_cot_id))
+        # Refresh the snapshot so a later save of this instance compares against this one.
+        self._original_search_weight = self.search_weight
 
     def delete(self, *args, **kwargs):
         # Dropping the column would drop the database constraint anyway; delete the

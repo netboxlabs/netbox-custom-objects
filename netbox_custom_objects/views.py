@@ -1014,7 +1014,7 @@ class CustomObjectEditView(RestrictedObjectMixin, generic.ObjectEditView):
                                         f"got {content_type.model!r}"
                                     )
                                 custom_object_type = CustomObjectType.objects.get(pk=custom_object_type_id)
-                                related_model = custom_object_type.get_model(skip_object_fields=True)
+                                related_model = custom_object_type.get_model()
                             else:
                                 related_model = content_type.model_class()
                             try:

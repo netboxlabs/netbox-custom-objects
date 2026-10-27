@@ -324,6 +324,45 @@ class PolymorphicFieldAPITest(CustomObjectsTestCase, TestCase):
         obj.refresh_from_db()
         self.assertIsNone(obj.poly_obj)
 
+    def test_patch_unrelated_field_with_stale_gfk_succeeds(self):
+        """PATCH of another field is not blocked by a stored reference whose target was deleted (#771)."""
+        _grant_perm(self.user, "change", self.model, "co-change-stale")
+        obj = self.model.objects.create(name="gfk-stale-obj")
+        site_pk = self.site.pk
+        self.site.delete()
+        # Deleting the target now clears the reference, so write the stale one back as older data would have it.
+        self.model.objects.filter(pk=obj.pk).update(poly_obj_content_type=self.site_ot, poly_obj_object_id=site_pk)
+
+        response = self.client.patch(
+            self._obj_detail_url(obj.pk),
+            json.dumps({"name": "gfk-stale-renamed"}),
+            content_type="application/json",
+            **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.content)
+        obj.refresh_from_db()
+        self.assertEqual(obj.name, "gfk-stale-renamed")
+        self.assertEqual(obj.poly_obj_object_id, site_pk)
+
+    def test_patch_gfk_to_deleted_object_rejected(self):
+        """PATCH pointing the reference at an object that no longer exists is a 400, not a 500 (#771)."""
+        _grant_perm(self.user, "change", self.model, "co-change-deleted")
+        from django.contrib.contenttypes.models import ContentType
+        site_ct = ContentType.objects.get_for_model(Site)
+        obj = self.model.objects.create(name="gfk-deleted-target")
+        site_pk = self.site.pk
+        self.site.delete()
+
+        response = self.client.patch(
+            self._obj_detail_url(obj.pk),
+            json.dumps({"poly_obj": {"content_type_id": site_ct.pk, "object_id": site_pk}}),
+            content_type="application/json",
+            **self.header,
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.content)
+        obj.refresh_from_db()
+        self.assertIsNone(obj.poly_obj_object_id)
+
     def test_custom_validator_sees_gfk_value_on_api_create(self):
         """A CUSTOM_VALIDATORS validate() call during API create must see the
         submitted polymorphic GFK value, not None (#677)."""
